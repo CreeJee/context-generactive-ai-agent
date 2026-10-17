@@ -1,5 +1,36 @@
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index d9af021ccc6bfa8e3e504f18dfed032bb5b96c07..b9c00ee583858468df5598b5741f7e0d7f695b5a 100644
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -457,10 +457,18 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+             const error = new globalThis.Error(`Process interrupted due to receipt of signal: '${signal}'`);
+             return Effect.fail(toPlatformError("exitCode", error, cmd));
+           });
++          const exitStatus = Effect.map(Deferred.await(exitSignal), ([code, signal]) => Predicate.isNotNull(code) ? {
++            _tag: "Exited",
++            code: ExitCode(code)
++          } : {
++            _tag: "Signaled",
++            signal: signal ?? "unknown"
++          });
+           const kill = options => terminateProcessGroup(cmd, childProcess, exitSignal, options);
+           return makeHandle({
+             pid,
+             exitCode,
++            exitStatus,
+             isRunning,
+             kill,
+             stdin,
+@@ -541,6 +549,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+           return makeHandle({
+             pid: handle.pid,
+             exitCode: handle.exitCode,
++            exitStatus: handle.exitStatus,
+             isRunning: handle.isRunning,
+             kill,
+             stdin: handles[0].stdin,
 diff --git a/dist/NodeFileSystem.js b/dist/NodeFileSystem.js
-index b39db35c748e2fedfc938badcb36554f88043381..add487d26b0e158ceab16cfd6a7d779fe00f3979 100644
+index b39db35c748e2fedfc938badcb36554f88043381..113d6faf45623f664806c686f1a5af7cd405d53b 100644
 --- a/dist/NodeFileSystem.js
 +++ b/dist/NodeFileSystem.js
 @@ -357,6 +357,27 @@ const readDirectory = (path, options) => Effect.tryPromise({
@@ -55,10 +86,17 @@ index b39db35c748e2fedfc938badcb36554f88043381..add487d26b0e158ceab16cfd6a7d779f
  });
  const stat = /*#__PURE__*/(() => {
    const nodeStat = /*#__PURE__*/effectify(NFS.stat, /*#__PURE__*/handleErrnoException("FileSystem", "stat"), /*#__PURE__*/handleBadArgument("stat"));
-@@ -414,6 +437,11 @@ const stat = /*#__PURE__*/(() => {
+@@ -414,6 +437,18 @@ const stat = /*#__PURE__*/(() => {
      bigint: true
    }), makeFileInfo);
  })();
++// == statDescriptor
++const statDescriptor = /* @__PURE__ */(() => {
++  const nodeFstat = effectify(NFS.fstat, handleErrnoException("FileSystem", "statDescriptor"), handleBadArgument("statDescriptor"));
++  return fd => Effect.flatMap(nodeFstat(fd, {
++    bigint: true
++  }), info => makeFileInfo(info, "statDescriptor"));
++})();
 +// == lstat
 +const lstat = /* @__PURE__ */(() => {
 +  const nodeLstat = effectify(NFS.lstat, handleErrnoException("FileSystem", "lstat"), handleBadArgument("lstat"));
@@ -67,7 +105,7 @@ index b39db35c748e2fedfc938badcb36554f88043381..add487d26b0e158ceab16cfd6a7d779f
  // == symlink
  const symlink = /*#__PURE__*/(() => {
    const nodeSymlink = /*#__PURE__*/effectify(NFS.symlink, /*#__PURE__*/handleErrnoException("FileSystem", "symlink"), /*#__PURE__*/handleBadArgument("symlink"));
-@@ -509,12 +537,14 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
+@@ -509,12 +544,15 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
    makeTempFileScoped,
    open,
    readDirectory,
@@ -78,12 +116,69 @@ index b39db35c748e2fedfc938badcb36554f88043381..add487d26b0e158ceab16cfd6a7d779f
    remove,
    rename,
    stat,
++  statDescriptor,
 +  lstat,
    symlink,
    truncate,
    utimes,
+diff --git a/dist/internal/nodeChildProcessSpawner.js b/dist/internal/nodeChildProcessSpawner.js
+index 5da1d9acd81276fd3b7136e28c186b8efced89d2..7e810ade2605ad27cff54635217a9cb6f0eb513e 100644
+--- a/dist/internal/nodeChildProcessSpawner.js
++++ b/dist/internal/nodeChildProcessSpawner.js
+@@ -4,7 +4,8 @@ export const buildSpawnOptions = (options, base, platform) => {
+     ...base,
+     detached,
+     shell: options.shell,
+-    windowsHide: options.windowsHide ?? !detached
++    windowsHide: options.windowsHide ?? !detached,
++    windowsVerbatimArguments: options.windowsVerbatimArguments
+   };
+ };
+ //# sourceMappingURL=nodeChildProcessSpawner.js.map
+\ No newline at end of file
+diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
+index 20c21a8ad06b91d84a29b34a7df054c899594e10..8e53327329ee09364d87520c783a600b5af98155 100644
+--- a/src/NodeChildProcessSpawner.ts
++++ b/src/NodeChildProcessSpawner.ts
+@@ -42,6 +42,7 @@ import type { ChildProcessHandle } from "effect/process/ChildProcessSpawner"
+ import {
+   ChildProcessSpawner,
+   ExitCode,
++  type ExitStatus,
+   make as makeSpawner,
+   makeHandle,
+   ProcessId
+@@ -605,12 +606,20 @@ const make = Effect.gen(function*() {
+           const error = new globalThis.Error(`Process interrupted due to receipt of signal: '${signal}'`)
+           return Effect.fail(toPlatformError("exitCode", error, cmd))
+         })
++        const exitStatus = Effect.map(
++          Deferred.await(exitSignal),
++          ([code, signal]): ExitStatus =>
++            Predicate.isNotNull(code)
++              ? { _tag: "Exited", code: ExitCode(code) }
++              : { _tag: "Signaled", signal: signal ?? "unknown" }
++        )
+         const kill = (options?: ChildProcess.KillOptions | undefined) =>
+           terminateProcessGroup(cmd, childProcess, exitSignal, options)
+ 
+         return makeHandle({
+           pid,
+           exitCode,
++          exitStatus,
+           isRunning,
+           kill,
+           stdin,
+@@ -690,6 +699,7 @@ const make = Effect.gen(function*() {
+         return makeHandle({
+           pid: handle.pid,
+           exitCode: handle.exitCode,
++          exitStatus: handle.exitStatus,
+           isRunning: handle.isRunning,
+           kill,
+           stdin: handles[0].stdin,
 diff --git a/src/NodeFileSystem.ts b/src/NodeFileSystem.ts
-index d26dcd8929a26ed5a833e0412d5d6acacc919985..5e4244ff57b120f6587047f18f525ddbb9868a3e 100644
+index d26dcd8929a26ed5a833e0412d5d6acacc919985..2c1b6806d5bd9f808ec666d5467498eb8e1b4d9f 100644
 --- a/src/NodeFileSystem.ts
 +++ b/src/NodeFileSystem.ts
 @@ -519,6 +519,53 @@ const readDirectory: FileSystem.FileSystem["readDirectory"] = (path, options) =>
@@ -147,7 +242,7 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..5e4244ff57b120f6587047f18f525ddb
 -const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info, Error.PlatformError> =>
 +const makeFileInfo = (
 +  stat: NFS.BigIntStats,
-+  method: "stat" | "lstat" = "stat"
++  method: "stat" | "lstat" | "statDescriptor" = "stat"
 +): Effect.Effect<FileSystem.File.Info, Error.PlatformError> =>
    Effect.try({
      try: (): FileSystem.File.Info => ({
@@ -170,10 +265,22 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..5e4244ff57b120f6587047f18f525ddb
    })
  const stat = (() => {
    const nodeStat = effectify(
-@@ -614,6 +666,17 @@ const stat = (() => {
+@@ -614,6 +666,29 @@ const stat = (() => {
    return (path: string) => Effect.flatMap(nodeStat(path, { bigint: true }), makeFileInfo)
  })()
  
++// == statDescriptor
++
++const statDescriptor = (() => {
++  const nodeFstat = effectify(
++    NFS.fstat,
++    handleErrnoException("FileSystem", "statDescriptor"),
++    handleBadArgument("statDescriptor")
++  )
++  return (fd: number) =>
++    Effect.flatMap(nodeFstat(fd, { bigint: true }), (info) => makeFileInfo(info, "statDescriptor"))
++})()
++
 +// == lstat
 +
 +const lstat = (() => {
@@ -188,7 +295,7 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..5e4244ff57b120f6587047f18f525ddb
  // == symlink
  
  const symlink = (() => {
-@@ -747,12 +810,14 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
+@@ -747,12 +822,15 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
      makeTempFileScoped,
      open,
      readDirectory,
@@ -199,7 +306,21 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..5e4244ff57b120f6587047f18f525ddb
      remove,
      rename,
      stat,
++    statDescriptor,
 +    lstat,
      symlink,
      truncate,
      utimes,
+diff --git a/src/internal/nodeChildProcessSpawner.ts b/src/internal/nodeChildProcessSpawner.ts
+index e2e99c73e3291e3c2cbc6a298cc85515c6358096..e0574b667c36e1e93f46000dde2a9643967e5b1e 100644
+--- a/src/internal/nodeChildProcessSpawner.ts
++++ b/src/internal/nodeChildProcessSpawner.ts
+@@ -11,6 +11,7 @@ export const buildSpawnOptions = (
+     ...base,
+     detached,
+     shell: options.shell,
+-    windowsHide: options.windowsHide ?? !detached
++    windowsHide: options.windowsHide ?? !detached,
++    windowsVerbatimArguments: options.windowsVerbatimArguments
+   }
+ }

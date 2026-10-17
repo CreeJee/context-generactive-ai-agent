@@ -2,8 +2,6 @@ import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native
 import { nativeStream } from "../runtime/native-stream.ts";
 import { Result } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createServer } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
@@ -570,7 +568,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     const listenerScope = yield* Scope.make();
     const closeListener = Scope.close(listenerScope, Exit.void);
     const serverServices = yield* Layer.buildWithScope(
-      NodeHttpServer.layer(createServer, {
+      NodeHttpServer.layer(NodeHttpServer.createServer, {
         port: protocol.callbackPort ?? 0,
         host: protocol.callbackRedirectHost,
       }),

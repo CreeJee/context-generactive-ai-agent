@@ -1,5 +1,5 @@
 diff --git a/dist/FileSystem.d.ts b/dist/FileSystem.d.ts
-index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7ec4107fb8 100644
+index 238c6f70c5f4eaf086463311189f3191c7712044..c307d1d8ea12713bdde830aeb19c190691d3b88e 100644
 --- a/dist/FileSystem.d.ts
 +++ b/dist/FileSystem.d.ts
 @@ -192,6 +192,15 @@ export interface FileSystem {
@@ -18,10 +18,15 @@ index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7e
      /**
       * Read the contents of a file.
       */
-@@ -236,6 +245,11 @@ export interface FileSystem {
+@@ -236,6 +245,16 @@ export interface FileSystem {
       * Get information about a file at `path`. See `File.Info` for metadata limits.
       */
      readonly stat: (path: string) => Effect.Effect<File.Info, PlatformError>;
++    /**
++     * Get information about an already open file descriptor, such as one this
++     * process inherited. See `File.Info` for metadata limits.
++     */
++    readonly statDescriptor: (fd: number) => Effect.Effect<File.Info, PlatformError>;
 +    /**
 +     * Get information about the entry at `path` without following its final symbolic link.
 +     * A dangling symbolic link is reported as `SymbolicLink`. See `File.Info` for metadata limits.
@@ -30,7 +35,7 @@ index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7e
      /**
       * Create a readable `Stream` for the specified `path`.
       *
-@@ -603,6 +617,39 @@ export interface File {
+@@ -603,6 +622,39 @@ export interface File {
      readonly write: (buffer: Uint8Array) => Effect.Effect<number, PlatformError>;
      readonly writeAll: (buffer: Uint8Array) => Effect.Effect<void, PlatformError>;
  }
@@ -70,7 +75,7 @@ index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7e
  /**
   * Namespace containing types associated with open file handles, including file
   * descriptors, entry kinds, and stat information.
-@@ -670,6 +717,8 @@ export declare namespace File {
+@@ -670,6 +722,8 @@ export declare namespace File {
       *   mtime: Option.none(),
       *   atime: Option.none(),
       *   birthtime: Option.none(),
@@ -79,7 +84,7 @@ index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7e
       *   dev: 1,
       *   ino: Option.none(),
       *   mode: 0o644,
-@@ -702,6 +751,13 @@ export declare namespace File {
+@@ -702,6 +756,13 @@ export declare namespace File {
          readonly mtime: Option.Option<Date>;
          readonly atime: Option.Option<Date>;
          readonly birthtime: Option.Option<Date>;
@@ -94,7 +99,7 @@ index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7e
          readonly ino: Option.Option<number>;
          readonly mode: number;
 diff --git a/dist/FileSystem.js b/dist/FileSystem.js
-index 10a445717fcb63ad50846b2b34c3778326429df7..5677216155a1235828e14d15a9b0e6d75a65596e 100644
+index 10a445717fcb63ad50846b2b34c3778326429df7..65014930b392e39059ffa1cfd792092b79d2375a 100644
 --- a/dist/FileSystem.js
 +++ b/dist/FileSystem.js
 @@ -249,6 +249,9 @@ export const makeNoop = fileSystem => FileSystem.of({
@@ -107,18 +112,78 @@ index 10a445717fcb63ad50846b2b34c3778326429df7..5677216155a1235828e14d15a9b0e6d7
    readFile(path) {
      return Effect.fail(notFound("readFile", path));
    },
-@@ -273,6 +276,9 @@ export const makeNoop = fileSystem => FileSystem.of({
+@@ -273,6 +276,12 @@ export const makeNoop = fileSystem => FileSystem.of({
    stat(path) {
      return Effect.fail(notFound("stat", path));
    },
++  statDescriptor(fd) {
++    return Effect.fail(notFound("statDescriptor", String(fd)));
++  },
 +  lstat(path) {
 +    return Effect.fail(notFound("lstat", path));
 +  },
    stream(path) {
      return Stream.fail(notFound("stream", path));
    },
+diff --git a/dist/process/ChildProcess.d.ts b/dist/process/ChildProcess.d.ts
+index b3fa1a1d842451f613dcdb1efc913e1c00de2936..65a11828f51f9442f86e4dfd2337300497adf9be 100644
+--- a/dist/process/ChildProcess.d.ts
++++ b/dist/process/ChildProcess.d.ts
+@@ -353,6 +353,15 @@ export interface CommandOptions extends KillOptions {
+      * effect on non-Windows platforms.
+      */
+     readonly windowsHide?: boolean | undefined;
++    /**
++     * If set to `true`, passes the arguments to the process without quoting or
++     * escaping them on Windows, as `cmd.exe /d /s /c "..."` needs.
++     *
++     * **Details**
++     *
++     * This option has no effect on non-Windows platforms.
++     */
++    readonly windowsVerbatimArguments?: boolean | undefined;
+     /**
+      * Configuration options for the standard input stream for the child process.
+      */
+diff --git a/dist/process/ChildProcessSpawner.d.ts b/dist/process/ChildProcessSpawner.d.ts
+index 570684ee5495b3d9434784fb63b091641058aa29..aafad9090a6d5e2af89c6e1ce98e82225703174a 100644
+--- a/dist/process/ChildProcessSpawner.d.ts
++++ b/dist/process/ChildProcessSpawner.d.ts
+@@ -35,6 +35,20 @@ export type ExitCode = Brand.Branded<number, "ExitCode">;
+  * @since 4.0.0
+  */
+ export declare const ExitCode: Brand.Constructor<ExitCode>;
++/**
++ * How a child process ended: with an exit code, or by a signal.
++ *
++ * @stability unstable
++ * @category models
++ * @since 4.0.0
++ */
++export type ExitStatus = {
++    readonly _tag: "Exited";
++    readonly code: ExitCode;
++} | {
++    readonly _tag: "Signaled";
++    readonly signal: string;
++};
+ /**
+  * Branded number representing the operating system process identifier of a
+  * child process.
+@@ -86,6 +100,11 @@ export interface ChildProcessHandle {
+      * command that was run.
+      */
+     readonly exitCode: Effect.Effect<ExitCode, PlatformError.PlatformError>;
++    /**
++     * Waits for the child process to exit and returns how it ended, including
++     * the signal that stopped it.
++     */
++    readonly exitStatus: Effect.Effect<ExitStatus>;
+     /**
+      * Returns `true` if the child process is still running, otherwise returns
+      * `false`.
 diff --git a/src/FileSystem.ts b/src/FileSystem.ts
-index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0cfec51dd 100644
+index a4986d710017291e63139f9db817bb978e350751..033bfdcdef14774098d4b49b67b496d22bcecee0 100644
 --- a/src/FileSystem.ts
 +++ b/src/FileSystem.ts
 @@ -247,6 +247,17 @@ export interface FileSystem {
@@ -139,10 +204,17 @@ index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0
    /**
     * Read the contents of a file.
     */
-@@ -311,6 +322,13 @@ export interface FileSystem {
+@@ -311,6 +322,20 @@ export interface FileSystem {
    readonly stat: (
      path: string
    ) => Effect.Effect<File.Info, PlatformError>
++  /**
++   * Get information about an already open file descriptor, such as one this
++   * process inherited. See `File.Info` for metadata limits.
++   */
++  readonly statDescriptor: (
++    fd: number
++  ) => Effect.Effect<File.Info, PlatformError>
 +  /**
 +   * Get information about the entry at `path` without following its final symbolic link.
 +   * A dangling symbolic link is reported as `SymbolicLink`. See `File.Info` for metadata limits.
@@ -153,7 +225,7 @@ index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0
    /**
     * Create a readable `Stream` for the specified `path`.
     *
-@@ -692,6 +710,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
+@@ -692,6 +717,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
      readDirectory(path) {
        return Effect.fail(notFound("readDirectory", path))
      },
@@ -163,17 +235,20 @@ index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0
      readFile(path) {
        return Effect.fail(notFound("readFile", path))
      },
-@@ -716,6 +737,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
+@@ -716,6 +744,12 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
      stat(path) {
        return Effect.fail(notFound("stat", path))
      },
++    statDescriptor(fd) {
++      return Effect.fail(notFound("statDescriptor", String(fd)))
++    },
 +    lstat(path) {
 +      return Effect.fail(notFound("lstat", path))
 +    },
      stream(path) {
        return Stream.fail(notFound("stream", path))
      },
-@@ -905,6 +929,41 @@ export interface File {
+@@ -905,6 +939,41 @@ export interface File {
    readonly writeAll: (buffer: Uint8Array) => Effect.Effect<void, PlatformError>
  }
  
@@ -215,7 +290,7 @@ index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0
  /**
   * Namespace containing types associated with open file handles, including file
   * descriptors, entry kinds, and stat information.
-@@ -982,6 +1041,8 @@ export declare namespace File {
+@@ -982,6 +1051,8 @@ export declare namespace File {
     *   mtime: Option.none(),
     *   atime: Option.none(),
     *   birthtime: Option.none(),
@@ -224,7 +299,7 @@ index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0
     *   dev: 1,
     *   ino: Option.none(),
     *   mode: 0o644,
-@@ -1014,6 +1075,13 @@ export declare namespace File {
+@@ -1014,6 +1085,13 @@ export declare namespace File {
      readonly mtime: Option.Option<Date>
      readonly atime: Option.Option<Date>
      readonly birthtime: Option.Option<Date>
@@ -238,3 +313,57 @@ index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0
      readonly dev: number
      readonly ino: Option.Option<number>
      readonly mode: number
+diff --git a/src/process/ChildProcess.ts b/src/process/ChildProcess.ts
+index 4e337a8704aec04967179fd08e238eafe0f687ac..f97cdd443a9edbbcf2f67ac5097eaaa8fbf815d3 100644
+--- a/src/process/ChildProcess.ts
++++ b/src/process/ChildProcess.ts
+@@ -463,6 +463,15 @@ export interface CommandOptions extends KillOptions {
+    * effect on non-Windows platforms.
+    */
+   readonly windowsHide?: boolean | undefined
++  /**
++   * If set to `true`, passes the arguments to the process without quoting or
++   * escaping them on Windows, as `cmd.exe /d /s /c "..."` needs.
++   *
++   * **Details**
++   *
++   * This option has no effect on non-Windows platforms.
++   */
++  readonly windowsVerbatimArguments?: boolean | undefined
+   /**
+    * Configuration options for the standard input stream for the child process.
+    */
+diff --git a/src/process/ChildProcessSpawner.ts b/src/process/ChildProcessSpawner.ts
+index caed51a597a116ffe6eb45e6663c6e08772caec6..4203c91e8d8c5378040e9f4b5c7b38e579f39e34 100644
+--- a/src/process/ChildProcessSpawner.ts
++++ b/src/process/ChildProcessSpawner.ts
+@@ -39,6 +39,17 @@ export type ExitCode = Brand.Branded<number, "ExitCode">
+  */
+ export const ExitCode: Brand.Constructor<ExitCode> = Brand.nominal<ExitCode>()
+ 
++/**
++ * How a child process ended: with an exit code, or by a signal.
++ *
++ * @stability unstable
++ * @category models
++ * @since 4.0.0
++ */
++export type ExitStatus =
++  | { readonly _tag: "Exited"; readonly code: ExitCode }
++  | { readonly _tag: "Signaled"; readonly signal: string }
++
+ /**
+  * Branded number representing the operating system process identifier of a
+  * child process.
+@@ -94,6 +105,11 @@ export interface ChildProcessHandle {
+    * command that was run.
+    */
+   readonly exitCode: Effect.Effect<ExitCode, PlatformError.PlatformError>
++  /**
++   * Waits for the child process to exit and returns how it ended, including
++   * the signal that stopped it.
++   */
++  readonly exitStatus: Effect.Effect<ExitStatus>
+   /**
+    * Returns `true` if the child process is still running, otherwise returns
+    * `false`.

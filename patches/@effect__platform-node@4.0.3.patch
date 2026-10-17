@@ -1,0 +1,61 @@
+diff --git a/dist/NodeHttpServer.d.ts b/dist/NodeHttpServer.d.ts
+index fc6e28a50bfd96e478adf7475969c52b3f185fb7..706a154c53ad0393f914cf88bb458740ea2b6cb1 100644
+--- a/dist/NodeHttpServer.d.ts
++++ b/dist/NodeHttpServer.d.ts
+@@ -40,6 +40,15 @@ export interface Options extends Net.ListenOptions {
+      */
+     readonly websocket?: Omit<NodeWS.ServerOptions, "noServer" | "server" | "host" | "port" | "path"> | undefined;
+ }
++/**
++ * Node's `http.createServer`, to pass as the server factory of {@link make},
++ * {@link layer} and {@link layerServer}.
++ *
++ * @stability unstable
++ * @category constructors
++ * @since 4.0.0
++ */
++export declare const createServer: typeof Http.createServer;
+ /**
+  * Creates a scoped `HttpServer` from a Node `http.Server`, starts listening
+  * with the supplied options, registers request and upgrade handling, and closes
+diff --git a/dist/NodeHttpServer.js b/dist/NodeHttpServer.js
+index 0a1f105e245dcb4325e6965df7d794853ec76d98..7ddb1b561ecf0f1bba19d15bcd104d8b56963ae5 100644
+--- a/dist/NodeHttpServer.js
++++ b/dist/NodeHttpServer.js
+@@ -45,6 +45,15 @@ import * as NodeHttpPlatform from "./NodeHttpPlatform.js";
+ import * as NodeMultipart from "./NodeMultipart.js";
+ import * as NodeServices from "./NodeServices.js";
+ import { NodeWS } from "./NodeSocket.js";
++/**
++ * Node's `http.createServer`, to pass as the server factory of {@link make},
++ * {@link layer} and {@link layerServer}.
++ *
++ * @stability unstable
++ * @category constructors
++ * @since 4.0.0
++ */
++export const createServer = Http.createServer;
+ /**
+  * Creates a scoped `HttpServer` from a Node `http.Server`, starts listening
+  * with the supplied options, registers request and upgrade handling, and closes
+diff --git a/src/NodeHttpServer.ts b/src/NodeHttpServer.ts
+index 56d6b8291be3e1e1e63380e74dacf2edd2da61be..60d201cbea4fc293f8169e864a2c5bcbadcafc11 100644
+--- a/src/NodeHttpServer.ts
++++ b/src/NodeHttpServer.ts
+@@ -89,6 +89,16 @@ export interface Options extends Net.ListenOptions {
+     | undefined
+ }
+ 
++/**
++ * Node's `http.createServer`, to pass as the server factory of {@link make},
++ * {@link layer} and {@link layerServer}.
++ *
++ * @stability unstable
++ * @category constructors
++ * @since 4.0.0
++ */
++export const createServer: typeof Http.createServer = Http.createServer
++
+ /**
+  * Creates a scoped `HttpServer` from a Node `http.Server`, starts listening
+  * with the supplied options, registers request and upgrade handling, and closes

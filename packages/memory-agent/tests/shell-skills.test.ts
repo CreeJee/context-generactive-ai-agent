@@ -1,12 +1,23 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Cause, Effect, FileSystem, Option, Path } from "effect";
+import { HttpServerResponse } from "effect/http";
+import type { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { expect, test } from "vite-plus/test";
 import { builtinOverlap } from "../src/skills/shell-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
 import { sdk } from "./agents/agent-env.ts";
+
+const portOf = (address: NetAddress.SocketAddress) => {
+  switch (address._tag) {
+    case "InetAddressV4":
+    case "InetAddressV6":
+      return Effect.succeed(address.port);
+    case "UnixPathAddress":
+      return Effect.die("the test server listens on TCP");
+  }
+};
 
 const rejection = <A, R>(operation: Effect.Effect<A, Cause.UnknownError, R>) =>
   operation.pipe(
@@ -68,15 +79,12 @@ testAgent()("shell skills", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const [save, run] = (yield* ApprovedTools).forProject(project, "gate");
-        const server = yield* Effect.acquireRelease(
-          Effect.callback<Server>((resume) => {
-            const server = createServer((_, response) => response.end("reached"));
-            server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
-          }),
-          (server) => Effect.sync(() => server.close()),
-        );
-        // SAFETY: a server listening on a TCP port reports an AddressInfo, not a pipe name.
-        const { port } = server.address() as AddressInfo;
+        const server = yield* NodeHttpServer.make(NodeHttpServer.createServer, {
+          port: 0,
+          host: "127.0.0.1",
+        });
+        yield* server.serve(Effect.succeed(HttpServerResponse.text("reached")));
+        const port = yield* portOf(server.address);
         const fetch = (network: readonly string[], proxied: boolean) =>
           Effect.gen(function* () {
             yield* sdk(() =>

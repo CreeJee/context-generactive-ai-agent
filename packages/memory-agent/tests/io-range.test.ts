@@ -1,5 +1,4 @@
 // Real native handles and SQLite rows exercise the host boundary without module mocks.
-import { fstatSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
@@ -22,21 +21,26 @@ const resultStore = Effect.acquireRelease(
 );
 
 // /dev/fd is available on both macOS and Linux. A unique fixture inode avoids other tests' handles.
-// FileSystem has no fstat for an inherited descriptor number, and stat("/dev/fd/N") reports the
-// devfs device on macOS, so only that per-descriptor probe stays native.
+// stat("/dev/fd/N") reports the devfs device on macOS, so each descriptor is stat'ed directly.
 const handlesFor = Effect.fn("handlesFor")(function* (absolute: string) {
   const fs = yield* FileSystem.FileSystem;
   const target = yield* fs.stat(absolute);
   const descriptors = yield* fs.readDirectory("/dev/fd");
-  return descriptors.filter((name) => {
-    try {
-      const stat = fstatSync(Number(name));
-      return Option.getOrUndefined(target.ino) === stat.ino && stat.dev === target.dev;
-    } catch {
-      // The descriptor used by readDirectory has already closed.
-      return false;
-    }
-  }).length;
+  const matching = yield* Effect.filter(
+    descriptors,
+    (name) =>
+      fs.statDescriptor(Number(name)).pipe(
+        Effect.map(
+          (stat) =>
+            Option.getOrUndefined(target.ino) === Option.getOrUndefined(stat.ino) &&
+            stat.dev === target.dev,
+        ),
+        // The descriptor used by readDirectory has already closed.
+        Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+      ),
+    { concurrency: "unbounded" },
+  );
+  return matching.length;
 });
 
 layer(NodeServices.layer)((it) => {
