@@ -8,6 +8,7 @@ import {
   UpdatePlan,
   UpdateWorkflowProgress,
   WorkflowProgressRefused,
+  type WorkflowStorageError,
   Workflows,
   type PlanStep,
   type WorkflowPhase,
@@ -23,7 +24,9 @@ import {
   type PlanDependencyIssue,
 } from "./plan-schedule.ts";
 
-const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRefused, R>) =>
+const exposeProgressRefusal = <A, R>(
+  effect: Effect.Effect<A, WorkflowProgressRefused | WorkflowStorageError, R>,
+) =>
   effect.pipe(
     Effect.catchTag("WorkflowProgressRefused", (failure) =>
       Effect.succeed({

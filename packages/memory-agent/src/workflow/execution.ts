@@ -1,7 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import { Array as EffectArray, Clock, Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { planSchedule, stalledEvidence } from "./plan-schedule.ts";
 import { endedWithKnownEffectsSql } from "./run-bindings.ts";
 import type { WorkflowState } from "./workflow.ts";
@@ -72,25 +70,8 @@ export class WorkflowExecutionFailed extends Schema.TaggedError<WorkflowExecutio
   },
 ) {}
 
-const storage = <A>(operation: "read" | "write", evaluate: () => A) =>
-  Effect.try({
-    try: evaluate,
-    catch: (cause) => WorkflowExecutionFailed.make({ operation, cause }),
-  });
-
 const namespace = "memory-agent/workflow-execution";
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const encode = EffectFunction.flow(
-  Schema.encodeResult(Schema.fromJsonString(WorkflowExecutionState)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decode = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
-  ),
-  Result.getOrThrow,
-);
+const encode = Schema.encodeEffect(Schema.fromJsonString(WorkflowExecutionState));
 const progressOf = (
   state: WorkflowState,
   toolResults: readonly string[] = [],
@@ -113,42 +94,54 @@ const executable = (state: WorkflowState) =>
   state.plan.goalVersion === state.goal.version;
 
 const make = Effect.gen(function* () {
-  const { sqlite } = yield* Database;
-  const select = sqlite.prepare("SELECT value FROM chat_metadata WHERE namespace = ? AND key = ?");
-  const endedWithKnownEffects = sqlite.prepare(
-    `SELECT 1 AS ended FROM chat_runs r WHERE r.run_id = ? AND ${endedWithKnownEffectsSql("r")}`,
-  );
-  const upsert = sqlite.prepare(`INSERT INTO chat_metadata (namespace, key, value) VALUES (?, ?, ?)
-    ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`);
-  const read = (sessionId: string): WorkflowExecutionState => {
-    const row = select.get(namespace, sessionId);
-    return isTruthy(row) ? decode(row).value : { kind: "idle" };
-  };
-  const save = (sessionId: string, state: WorkflowExecutionState) => {
-    upsert.run(namespace, sessionId, encode(state));
+  const sql = yield* SqlClient.SqlClient;
+  const failed = (operation: "read" | "write") => (cause: unknown) =>
+    WorkflowExecutionFailed.make({ operation, cause });
+  /** Reads run as one statement sequence; writes read and replace the state in one transaction. */
+  const reading = <A, E>(effect: Effect.Effect<A, E>) => Effect.mapError(effect, failed("read"));
+  const writing = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.mapError(sql.withTransaction(effect), failed("write"));
+  const select = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
+    execute: (sessionId) =>
+      sql`SELECT value FROM chat_metadata WHERE namespace = ${namespace} AND key = ${sessionId}`,
+  });
+  const sessionsOf = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ key: Schema.String }),
+    execute: (kind) => sql`SELECT key FROM chat_metadata
+      WHERE namespace = ${namespace} AND json_extract(value, '$.kind') = ${kind}`,
+  });
+  const endedWithKnownEffects = (runId: string) =>
+    sql`SELECT 1 AS ended FROM chat_runs r
+      WHERE r.run_id = ${runId} AND ${sql.literal(endedWithKnownEffectsSql("r"))}`.pipe(
+      Effect.map((rows) => rows.length > 0),
+    );
+  const read = (sessionId: string) =>
+    select(sessionId).pipe(
+      Effect.map(
+        Option.match({
+          onNone: (): WorkflowExecutionState => ({ kind: "idle" }),
+          onSome: (row) => row.value,
+        }),
+      ),
+    );
+  const save = Effect.fnUntraced(function* (sessionId: string, state: WorkflowExecutionState) {
+    const value = yield* encode(state);
+    yield* sql`INSERT INTO chat_metadata (namespace, key, value) VALUES (${namespace}, ${sessionId}, ${value})
+      ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`;
     return state;
-  };
+  });
   const sessionsIn = (kind: WorkflowExecutionState["kind"]) =>
-    sqlite
-      .prepare(
-        "SELECT key FROM chat_metadata WHERE namespace = ? AND json_extract(value, '$.kind') = ?",
-      )
-      .all(namespace, kind)
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      .map(
-        (row) =>
-          EffectFunction.flow(
-            Schema.decodeUnknownResult(Schema.Struct({ key: Schema.String })),
-            Result.getOrThrow,
-          )(row).key,
-      );
-  const current = (
+    sessionsOf(kind).pipe(Effect.map((rows) => rows.map((row) => row.key)));
+  const current = Effect.fnUntraced(function* (
     sessionId: string,
     runId: string,
     state: WorkflowState,
     kind: "ready" | "retrying",
-  ) => {
-    const execution = read(sessionId);
+  ) {
+    const execution = yield* read(sessionId);
     return (
       execution.kind === kind &&
       execution.runId === runId &&
@@ -157,29 +150,33 @@ const make = Effect.gen(function* () {
       execution.planVersion === state.plan?.version &&
       planSchedule(state.plan.steps).kind !== "stalled"
     );
-  };
+  });
 
   return {
-    get: Effect.fn("WorkflowExecution.get")((sessionId: string) =>
-      storage("read", () => read(sessionId)),
-    ),
-    readySessions: Effect.fn("WorkflowExecution.readySessions")(() =>
-      storage("read", () => sessionsIn("ready")),
-    ),
+    get: Effect.fn("WorkflowExecution.get")((sessionId: string) => reading(read(sessionId))),
+    readySessions: Effect.fn("WorkflowExecution.readySessions")(() => reading(sessionsIn("ready"))),
 
     /** Sessions whose restarted run continues at its `retryAt`, with that run. */
     retryingSessions: Effect.fn("WorkflowExecution.retryingSessions")(() =>
-      storage("read", () =>
-        sessionsIn("retrying").flatMap((sessionId) => {
-          const execution = read(sessionId);
-          return execution.kind === "retrying" ? [{ sessionId, runId: execution.runId }] : [];
-        }),
+      reading(
+        sessionsIn("retrying").pipe(
+          Effect.flatMap((sessions) =>
+            Effect.forEach(sessions, (sessionId) =>
+              read(sessionId).pipe(
+                Effect.map((execution) =>
+                  execution.kind === "retrying" ? [{ sessionId, runId: execution.runId }] : [],
+                ),
+              ),
+            ),
+          ),
+          Effect.map((found) => found.flat()),
+        ),
       ),
     ),
 
     canContinue: Effect.fn("WorkflowExecution.canContinue")(
       (sessionId: string, runId: string, state: WorkflowState) =>
-        storage("read", () => current(sessionId, runId, state, "ready")),
+        reading(current(sessionId, runId, state, "ready")),
     ),
 
     /**
@@ -192,15 +189,17 @@ const make = Effect.gen(function* () {
       state: WorkflowState,
     ) {
       const now = yield* Clock.currentTimeMillis;
-      return yield* storage("read", () => {
-        const execution = read(sessionId);
-        return (
-          execution.kind === "retrying" &&
-          execution.retryAt <= now &&
-          current(sessionId, runId, state, "retrying") &&
-          endedWithKnownEffects.get(runId) !== undefined
-        );
-      });
+      return yield* reading(
+        Effect.gen(function* () {
+          const execution = yield* read(sessionId);
+          return (
+            execution.kind === "retrying" &&
+            execution.retryAt <= now &&
+            (yield* current(sessionId, runId, state, "retrying")) &&
+            (yield* endedWithKnownEffects(runId))
+          );
+        }),
+      );
     }),
 
     /**
@@ -215,44 +214,48 @@ const make = Effect.gen(function* () {
       resumeAt: number | undefined,
     ) {
       const now = yield* Clock.currentTimeMillis;
-      return yield* storage("write", () => {
-        const previous = read(sessionId);
-        if (previous.kind !== "running" || previous.runId !== runId) return previous;
-        return endedWithKnownEffects.get(runId) !== undefined
-          ? save(sessionId, { ...previous, kind: "retrying", retryAt: resumeAt ?? now })
-          : save(sessionId, {
-              kind: "blocked",
-              runId,
-              reason: "server_restarted",
-              detail:
-                "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
-              evidence: [
+      return yield* writing(
+        Effect.gen(function* () {
+          const previous = yield* read(sessionId);
+          if (previous.kind !== "running" || previous.runId !== runId) return previous;
+          return (yield* endedWithKnownEffects(runId))
+            ? yield* save(sessionId, { ...previous, kind: "retrying", retryAt: resumeAt ?? now })
+            : yield* save(sessionId, {
+                kind: "blocked",
                 runId,
-                "Owner tool operation without a recorded result before the restart",
-              ],
-            });
-      });
+                reason: "server_restarted",
+                detail:
+                  "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
+                evidence: [
+                  runId,
+                  "Owner tool operation without a recorded result before the restart",
+                ],
+              });
+        }),
+      );
     }),
 
     start: Effect.fn("WorkflowExecution.start")(
       (sessionId: string, runId: string, state: WorkflowState, userTurn: boolean) =>
-        storage("write", () => {
-          if (!executable(state) || state.goal === null || state.plan === null) return;
-          const previous = read(sessionId);
-          if (previous.kind === "running" && previous.runId === runId) return;
-          const continued = previous.kind === "ready" || previous.kind === "retrying";
-          save(sessionId, {
-            kind: "running",
-            runId,
-            goalVersion: state.goal.version,
-            planVersion: state.plan.version,
-            noProgressRuns: !userTurn && continued ? previous.noProgressRuns : 0,
-            progress: progressOf(
-              state,
-              !userTurn && continued ? previous.progress.toolResults : [],
-            ),
-          });
-        }),
+        writing(
+          Effect.gen(function* () {
+            if (!executable(state) || state.goal === null || state.plan === null) return;
+            const previous = yield* read(sessionId);
+            if (previous.kind === "running" && previous.runId === runId) return;
+            const continued = previous.kind === "ready" || previous.kind === "retrying";
+            yield* save(sessionId, {
+              kind: "running",
+              runId,
+              goalVersion: state.goal.version,
+              planVersion: state.plan.version,
+              noProgressRuns: !userTurn && continued ? previous.noProgressRuns : 0,
+              progress: progressOf(
+                state,
+                !userTurn && continued ? previous.progress.toolResults : [],
+              ),
+            });
+          }),
+        ),
     ),
 
     finish: Effect.fn("WorkflowExecution.finish")(
@@ -262,86 +265,99 @@ const make = Effect.gen(function* () {
         state: WorkflowState,
         toolResults: readonly string[] = [],
       ) =>
-        storage("write", () => {
-          const previous = read(sessionId);
-          if (previous.kind !== "running" || previous.runId !== runId) return;
-          if (
-            !executable(state) ||
-            state.goal?.version !== previous.goalVersion ||
-            state.plan?.version !== previous.planVersion
-          ) {
-            save(sessionId, {
-              kind: "stopped",
-              reason: state.goal?.status === "completed" ? "completed" : "workflow_changed",
-            });
-            return;
-          }
-          const progress = progressOf(
-            state,
-            EffectArray.dedupe([...previous.progress.toolResults, ...toolResults]),
-          );
-          const advanced =
-            progress.toolResults.some((item) => !previous.progress.toolResults.includes(item)) ||
-            progress.completedSteps.some((id) => !previous.progress.completedSteps.includes(id)) ||
-            progress.evidence.some((item) => !previous.progress.evidence.includes(item));
-          const noProgressRuns = advanced ? 0 : previous.noProgressRuns + 1;
-          const schedule = planSchedule(state.plan?.steps ?? []);
-          save(
-            sessionId,
-            schedule.kind === "stalled"
-              ? {
-                  kind: "blocked",
-                  runId,
-                  reason: "dependency_stalled",
-                  detail:
-                    "남은 단계가 모두 막혔거나 끝나지 않은 단계를 기다리고 있어 바로 시작할 단계가 없어요. 막힌 단계나 단계 의존 관계를 확인해 주세요.",
-                  evidence: stalledEvidence(schedule),
-                }
-              : noProgressRuns >= 2
+        writing(
+          Effect.gen(function* () {
+            const previous = yield* read(sessionId);
+            if (previous.kind !== "running" || previous.runId !== runId) return;
+            if (
+              !executable(state) ||
+              state.goal?.version !== previous.goalVersion ||
+              state.plan?.version !== previous.planVersion
+            ) {
+              yield* save(sessionId, {
+                kind: "stopped",
+                reason: state.goal?.status === "completed" ? "completed" : "workflow_changed",
+              });
+              return;
+            }
+            const progress = progressOf(
+              state,
+              EffectArray.dedupe([...previous.progress.toolResults, ...toolResults]),
+            );
+            const advanced =
+              progress.toolResults.some((item) => !previous.progress.toolResults.includes(item)) ||
+              progress.completedSteps.some(
+                (id) => !previous.progress.completedSteps.includes(id),
+              ) ||
+              progress.evidence.some((item) => !previous.progress.evidence.includes(item));
+            const noProgressRuns = advanced ? 0 : previous.noProgressRuns + 1;
+            const schedule = planSchedule(state.plan?.steps ?? []);
+            yield* save(
+              sessionId,
+              schedule.kind === "stalled"
                 ? {
                     kind: "blocked",
                     runId,
-                    reason: "repeated_failure",
+                    reason: "dependency_stalled",
                     detail:
-                      "두 턴 연속 완료된 단계, 새로운 진행 근거 또는 유의미한 도구 결과가 없어 자동 진행을 멈췄어요.",
-                    evidence: [
-                      previous.runId,
-                      "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
-                    ],
+                      "남은 단계가 모두 막혔거나 끝나지 않은 단계를 기다리고 있어 바로 시작할 단계가 없어요. 막힌 단계나 단계 의존 관계를 확인해 주세요.",
+                    evidence: stalledEvidence(schedule),
                   }
-                : { ...previous, kind: "ready", progress, noProgressRuns },
-          );
-        }),
+                : noProgressRuns >= 2
+                  ? {
+                      kind: "blocked",
+                      runId,
+                      reason: "repeated_failure",
+                      detail:
+                        "두 턴 연속 완료된 단계, 새로운 진행 근거 또는 유의미한 도구 결과가 없어 자동 진행을 멈췄어요.",
+                      evidence: [
+                        previous.runId,
+                        "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
+                      ],
+                    }
+                  : { ...previous, kind: "ready", progress, noProgressRuns },
+            );
+          }),
+        ),
     ),
 
     block: Effect.fn("WorkflowExecution.block")(
       (sessionId: string, runId: string, blocker: WorkflowBlocker) =>
-        storage("write", () => {
-          const current = read(sessionId);
-          if (current.kind !== "running" || current.runId !== runId)
-            return { error: "execution_not_running" as const };
-          return save(sessionId, { kind: "blocked", runId, ...blocker });
-        }),
+        writing(
+          Effect.gen(function* () {
+            const current = yield* read(sessionId);
+            if (current.kind !== "running" || current.runId !== runId)
+              return { error: "execution_not_running" as const };
+            return yield* save(sessionId, { kind: "blocked", runId, ...blocker });
+          }),
+        ),
     ),
 
     blockPending: Effect.fn("WorkflowExecution.blockPending")(
       (sessionId: string, runId: string, blocker: WorkflowBlocker) =>
-        storage("write", () => {
-          const current = read(sessionId);
-          if ((current.kind !== "ready" && current.kind !== "retrying") || current.runId !== runId)
-            return;
-          save(sessionId, { kind: "blocked", runId, ...blocker });
-        }),
+        writing(
+          Effect.gen(function* () {
+            const current = yield* read(sessionId);
+            if (
+              (current.kind !== "ready" && current.kind !== "retrying") ||
+              current.runId !== runId
+            )
+              return;
+            yield* save(sessionId, { kind: "blocked", runId, ...blocker });
+          }),
+        ),
     ),
 
     stop: Effect.fn("WorkflowExecution.stop")(
       (sessionId: string, reason: "user" | "run_failed" = "user", runId?: string) =>
-        storage("write", () => {
-          const current = read(sessionId);
-          if (runId !== undefined && (current.kind !== "running" || current.runId !== runId))
-            return;
-          save(sessionId, { kind: "stopped", reason });
-        }),
+        writing(
+          Effect.gen(function* () {
+            const current = yield* read(sessionId);
+            if (runId !== undefined && (current.kind !== "running" || current.runId !== runId))
+              return;
+            yield* save(sessionId, { kind: "stopped", reason });
+          }),
+        ),
     ),
   };
 });
