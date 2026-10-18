@@ -1,3 +1,4 @@
+import { chatRoute } from "../support/chat-route.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Cause, Deferred, Effect, FiberSet, MutableHashMap, Option } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
@@ -99,9 +100,7 @@ export const openTab = Effect.fnUntraced(function* (
             fetchClient: (input, init) =>
               run(
                 Effect.flatMap(agentChat, (agent) =>
-                  (init?.method ?? "GET") === "POST"
-                    ? agent.handle(new Request(input, init), sessionId)
-                    : agent.hydrate(new Request(input, init), sessionId),
+                  chatRoute(agent, new Request(input, init), sessionId),
                 ),
               ),
           }),

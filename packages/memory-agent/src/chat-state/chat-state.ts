@@ -6,11 +6,13 @@ import {
   type ModelMessage,
 } from "@tanstack/ai";
 import { reconstructChat, withPersistence, type MessagePage } from "@tanstack/ai-persistence";
-import { Clock, Context, Effect, Layer } from "effect";
+import { Clock, Context, Effect, Layer, MutableHashMap, Option } from "effect";
+import type { Attachment } from "../attachments/attachments.ts";
 import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { messageText } from "../messages/text.ts";
 import { Database } from "../db/database.ts";
+import { SqlClient } from "effect/sql";
 import { Nodes } from "../memory/nodes.ts";
 import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run-state.ts";
 import {
@@ -25,14 +27,27 @@ const make = Effect.gen(function* () {
 
   const database = yield* Database;
   const { sqlite, atomic } = database;
+  const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
 
   // Sessions recorded before chat state existed are migrated once from their durable evidence.
   // This keeps provider migration independent of any provider-side conversation state.
   const fallbackThread = (threadId: string) =>
-    convertMessagesToModelMessages(sessionMessages(nodes.session(threadId), attachments.forNode));
-  migrateLegacyChatThreads(sqlite, fallbackThread);
+    Effect.gen(function* () {
+      const session = nodes.session(threadId);
+      // Read the images first: the transcript is built in one synchronous pass.
+      const images = MutableHashMap.empty<string, readonly Attachment[]>();
+      for (const node of session)
+        if (node.kind === "user")
+          MutableHashMap.set(images, node.id, yield* attachments.forNode(node.id));
+      return convertMessagesToModelMessages(
+        sessionMessages(session, (nodeId) =>
+          Option.getOrElse(MutableHashMap.get(images, nodeId), () => []),
+        ),
+      );
+    });
+  yield* migrateLegacyChatThreads(fallbackThread);
   const persistence = ownedSqliteChatPersistence(database);
   const lastRun = latestChatRun(sqlite);
 
@@ -159,16 +174,18 @@ const make = Effect.gen(function* () {
      * The `GET` a reloaded page hydrates from: transcript, a still-running run to rejoin, and
      * pending approvals to show again. Only the session's own thread may be read.
      */
-    hydrate: (request: Request, sessionId: string) => {
-      // Imports may create sessions after this service's startup migration has already run.
-      if (migrateMissingChatThread(sqlite, sessionId, fallbackThread)) {
-        persistence.prepareThread(sessionId);
-      }
-      return reconstructChat(hydrationPersistence, request, {
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        authorize: (threadId) => Promise.resolve(threadId === sessionId),
-      });
-    },
+    hydrate: (request: Request, sessionId: string) =>
+      Effect.gen(function* () {
+        // Imports may create sessions after this service's startup migration has already run.
+        if (yield* migrateMissingChatThread(sessionId, fallbackThread))
+          persistence.prepareThread(sessionId);
+        return yield* nativePromise(() =>
+          reconstructChat(hydrationPersistence, request, {
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            authorize: (threadId) => Promise.resolve(threadId === sessionId),
+          }),
+        );
+      }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 
     /** The run record, when it belongs to the session. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.

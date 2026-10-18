@@ -149,7 +149,7 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
           thread.id,
         ),
       ).toBe(0);
-      expect(attachments.get(image.id)).toBeNull();
+      expect(yield* attachments.get(image.id)).toBeNull();
       expect(yield* (yield* FileSystem.FileSystem).exists(attachments.pathOf(image))).toBe(false);
       expect(yield* Effect.flip(btw.remove(thread.id))).toMatchObject({
         reason: { _tag: "BtwThreadNotFound" },

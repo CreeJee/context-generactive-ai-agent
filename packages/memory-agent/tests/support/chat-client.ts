@@ -1,3 +1,4 @@
+import { chatRoute } from "./chat-route.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Cause, Effect, Function as EffectFunction } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
@@ -71,11 +72,7 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
           connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
             fetchClient: (input, init) => {
               const request = new Request(input, init);
-              return runPromise(
-                request.method === "POST"
-                  ? agent.handle(request, sessionId)
-                  : agent.hydrate(request, sessionId),
-              );
+              return runPromise(chatRoute(agent, request, sessionId));
             },
           }),
         });

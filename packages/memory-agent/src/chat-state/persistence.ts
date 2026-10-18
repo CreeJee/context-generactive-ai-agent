@@ -13,7 +13,8 @@ import {
   type MessagePage,
   type RunRecord,
 } from "@tanstack/ai-persistence";
-import { MutableHashSet, DateTime, Schema } from "effect";
+import { Clock, MutableHashSet, DateTime, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import type { Database } from "../db/database.ts";
 import { nativeHistoryProjection, HistoryPageUnavailable } from "./history-projection-native.ts";
@@ -55,12 +56,6 @@ const decodeInterruptRow = EffectFunction.flow(
 const JsonText = Schema.Struct({ value: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeJsonText = EffectFunction.flow(Schema.decodeUnknownResult(JsonText), Result.getOrThrow);
-const LegacyThreadRow = Schema.Struct({ id: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeLegacyThreadRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(LegacyThreadRow),
-  Result.getOrThrow,
-);
 
 // Stored JSON was written by these stores from the same TanStack types, so parsing restores them.
 const parseMessages = (text: string): ModelMessage[] => JSON.parse(text);
@@ -68,76 +63,84 @@ const parseUsage = (text: string): TokenUsage => JSON.parse(text);
 const parsePayload = (text: string): Record<string, Json> => JSON.parse(text);
 const parseValue = (text: string): Json => JSON.parse(text);
 
+/** A session's transcript rebuilt from its durable evidence, for a session with no chat thread. */
+type FallbackThread<E> = (threadId: string) => Effect.Effect<ModelMessage[], E>;
+
+const MissingThread = Schema.Struct({ id: Schema.String });
+const NewThread = Schema.Struct({
+  threadId: Schema.String,
+  messages: Schema.fromJsonString(Schema.Array(Schema.Unknown)),
+  updatedAt: Schema.Finite,
+});
+
 /**
  * Materializes sessions created before TanStack chat persistence existed. Existing chat threads
  * are authoritative and are never overwritten. The session id remains the thread id, so titles,
  * memory nodes, attachments and URLs keep pointing at the same conversation after the provider
  * runtime migration.
  */
-export const migrateLegacyChatThreads: {
-  (
-    fallbackThread: (threadId: string) => ModelMessage[],
-  ): (sqlite: DatabaseSync) => ReturnType<typeof migrateLegacyChatThreadsBody>;
-} & typeof migrateLegacyChatThreadsBody = EffectFunction.dual(2, migrateLegacyChatThreadsBody);
-function migrateLegacyChatThreadsBody(
-  sqlite: DatabaseSync,
-  fallbackThread: (threadId: string) => ModelMessage[],
-) {
-  const rows = sqlite
-    .prepare(
-      `SELECT sessions.id
-       FROM sessions
-       LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
-       WHERE chat_threads.thread_id IS NULL
-       ORDER BY sessions.created_at, sessions.id`,
-    )
-    .all()
-    .map((row) => decodeLegacyThreadRow(row));
-  if (rows.length === 0) return 0;
-
-  const insert = sqlite.prepare(
-    "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)",
-  );
-  const migratedAt = DateTime.toEpochMillis(DateTime.nowUnsafe());
-  sqlite.exec("BEGIN IMMEDIATE");
-  try {
-    for (const { id } of rows) insert.run(id, JSON.stringify(fallbackThread(id)), migratedAt);
-    sqlite.exec("COMMIT");
-  } catch (error) {
-    sqlite.exec("ROLLBACK");
-    throw error;
-  }
-  return rows.length;
-}
+export const migrateLegacyChatThreads = Effect.fn("ChatPersistence.migrateLegacyChatThreads")(
+  function* <E>(fallbackThread: FallbackThread<E>) {
+    const sql = yield* SqlClient.SqlClient;
+    const missing = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: MissingThread,
+      execute: () => sql`
+        SELECT sessions.id FROM sessions
+        LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
+        WHERE chat_threads.thread_id IS NULL
+        ORDER BY sessions.created_at, sessions.id`,
+    });
+    const insert = SqlSchema.void({
+      Request: NewThread,
+      execute: (thread) => sql`
+        INSERT INTO chat_threads (thread_id, messages, updated_at)
+        VALUES (${thread.threadId}, ${thread.messages}, ${thread.updatedAt})`,
+    });
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const rows = yield* missing();
+        const updatedAt = yield* Clock.currentTimeMillis;
+        // Sessions are rebuilt one after another: each reads its own nodes and attachments.
+        yield* Effect.forEach(rows, ({ id }) =>
+          Effect.flatMap(fallbackThread(id), (messages) =>
+            insert({ threadId: id, messages, updatedAt }),
+          ),
+        );
+        return rows.length;
+      }),
+    );
+  },
+);
 
 /** Materializes a session imported after the chat-state service started, if still missing. */
-export const migrateMissingChatThread: {
-  (
-    threadId: string,
-    fallbackThread: (threadId: string) => ModelMessage[],
-  ): (sqlite: DatabaseSync) => ReturnType<typeof migrateMissingChatThreadBody>;
-} & typeof migrateMissingChatThreadBody = EffectFunction.dual(3, migrateMissingChatThreadBody);
-function migrateMissingChatThreadBody(
-  sqlite: DatabaseSync,
-  threadId: string,
-  fallbackThread: (threadId: string) => ModelMessage[],
-) {
-  const row = sqlite
-    .prepare(
-      `SELECT sessions.id FROM sessions
-       LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
-       WHERE sessions.id = ? AND chat_threads.thread_id IS NULL`,
-    )
-    .get(threadId);
-  if (!isTruthy(row)) return false;
-  const { id } = decodeLegacyThreadRow(row);
-  sqlite
-    .prepare(
-      "INSERT OR IGNORE INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)",
-    )
-    .run(id, JSON.stringify(fallbackThread(id)), DateTime.toEpochMillis(DateTime.nowUnsafe()));
-  return true;
-}
+export const migrateMissingChatThread = Effect.fn("ChatPersistence.migrateMissingChatThread")(
+  function* <E>(threadId: string, fallbackThread: FallbackThread<E>) {
+    const sql = yield* SqlClient.SqlClient;
+    const missing = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: MissingThread,
+      execute: (id) => sql`
+        SELECT sessions.id FROM sessions
+        LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
+        WHERE sessions.id = ${id} AND chat_threads.thread_id IS NULL`,
+    });
+    const insert = SqlSchema.void({
+      Request: NewThread,
+      execute: (thread) => sql`
+        INSERT OR IGNORE INTO chat_threads (thread_id, messages, updated_at)
+        VALUES (${thread.threadId}, ${thread.messages}, ${thread.updatedAt})`,
+    });
+    const row = yield* missing(threadId);
+    if (Option.isNone(row)) return false;
+    yield* insert({
+      threadId: row.value.id,
+      messages: yield* fallbackThread(row.value.id),
+      updatedAt: yield* Clock.currentTimeMillis,
+    });
+    return true;
+  },
+);
 
 /** Optional record fields are left off, not set to undefined, when their column is NULL. */
 function toRun(row: Record<string, SQLOutputValue>): RunRecord {

@@ -1477,16 +1477,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (queuedNext && !isTruthy(next)) return json(409, { error: "queued_message_not_next" });
         claimedNext = next?.id ?? null;
         const queuedId = next?.id;
+        const nextMessage = isTruthy(next) ? [yield* delivery.toUserMessage(next)] : [];
         const messages =
           internalFollowup !== null
             ? [
                 ...(yield* agentPromise("load-messages", () =>
                   chatState.persistence.stores.messages.loadThread(sessionId),
                 )),
-                ...(isTruthy(next) ? [delivery.toUserMessage(next)] : []),
+                ...nextMessage,
               ]
             : isTruthy(next)
-              ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
+              ? [...incomingMessages.slice(0, -1), ...nextMessage]
               : incomingMessages;
         const threadId = sessionId;
 
@@ -1498,9 +1499,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const lastMessage = messages.at(-1);
         if (turn !== null && isTruthy(lastMessage) && isEmptyUserText(lastMessage))
           return json(400, { error: "empty_message" });
-        const images = (turn?.imageUrls ?? []).map((url) => {
+        const images = yield* Effect.forEach(turn?.imageUrls ?? [], (url) => {
           const id = attachmentIdOf(url);
-          return isTruthy(id) ? attachments.get(id) : null;
+          return isTruthy(id) ? attachments.get(id) : Effect.succeed(null);
         });
         if (images.includes(null)) return json(400, { error: "unknown_attachment" });
         const attached = images.filter((image) => image !== null);
@@ -1519,18 +1520,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         let userNode = turn !== null ? null : nodes.latestOfKind(sessionId, "user");
         const keptTurn = turn !== null ? (yield* redactor.redactText(turn.text)).text : null;
-        const persistUserTurn = () => {
-          if (keptTurn !== null) {
-            userNode = nodes.append({ projectId, sessionId, kind: "user", text: keptTurn });
-            attachments.link(userNode.id, attached);
-            if (title === null) events.publishProject(projectId, "sessions");
-          }
-        };
+        const persistUserTurn = Effect.gen(function* () {
+          if (keptTurn === null) return;
+          const appended = nodes.append({ projectId, sessionId, kind: "user", text: keptTurn });
+          userNode = appended;
+          yield* attachments.link(appended.id, attached);
+          if (title === null) events.publishProject(projectId, "sessions");
+        });
         const userNodeId = () => {
           if (!isTruthy(userNode)) throw new Error("User evidence accessed before admission");
           return userNode.id;
         };
-        if (workerRevision === null) persistUserTurn();
+        if (workerRevision === null) yield* persistUserTurn;
         if (!isTruthy(userNode) && !(turn !== null)) return json(409, { error: "no_user_turn" });
 
         if (external !== null) {
@@ -2267,7 +2268,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 goal_instance_id: durableAdmission.result.value.goalInstanceId,
                 workflow_revision_id: durableAdmission.result.value.workflowRevisionId,
               };
-              persistUserTurn();
+              yield* persistUserTurn;
               break;
           }
         }
@@ -2489,8 +2490,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     hydrate: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        if (!isStreamJoin(request))
-          return yield* agentPromise("hydrate-chat", () => chatState.hydrate(request, sessionId));
+        if (!isStreamJoin(request)) return yield* chatState.hydrate(request, sessionId);
 
         const url = new URL(request.url);
         const runId = url.searchParams.get("runId");
@@ -2963,7 +2963,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
           return json(400, { error: "empty_message" });
-        if (attachmentIds.some((id) => !isTruthy(attachments.get(id))))
+        const known = yield* Effect.forEach(attachmentIds, attachments.get);
+        if (known.some((attachment) => !isTruthy(attachment)))
           return json(400, { error: "unknown_attachment" });
         if (!isTruthy(liveRuns.get(sessionId))) return json(409, { error: "not_running" });
         const message = yield* queue.add(sessionId, text, attachmentIds, mode === "steer");

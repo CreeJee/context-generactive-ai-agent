@@ -1,6 +1,6 @@
 import type { ChatMiddleware, ChatMiddlewareConfig, ModelMessage } from "@tanstack/ai";
 import { Effect, Function as EffectFunction, MutableHashMap, Option } from "effect";
-import type { AttachmentsApi } from "./attachments.ts";
+import type { Attachment, AttachmentsApi } from "./attachments.ts";
 import { attachmentIdOf } from "./urls.ts";
 
 /** Image inlining must never replace the already-compacted provider view with transcript history. */
@@ -27,7 +27,7 @@ function modelImagesBody(attachments: ImageAttachments, run: ImageRun): ChatMidd
           if (ctx.phase === "init") return;
           let changed = false;
           const inlineImage = Effect.fn("modelImages.inlineImage")(function* (
-            attachment: NonNullable<ReturnType<typeof attachments.get>>,
+            attachment: Attachment,
           ) {
             const image = yield* attachments.forModelEffect(attachment);
             const prefix = `data:${image.mimeType};base64,`;
@@ -55,7 +55,7 @@ function modelImagesBody(attachments: ImageAttachments, run: ImageRun): ChatMidd
                       const id = attachmentIdOf(part.source.value);
                       if (id === null) return part;
                       changed = true;
-                      const attachment = attachments.get(id);
+                      const attachment = yield* attachments.get(id);
                       if (attachment === null)
                         return {
                           type: "text" as const,

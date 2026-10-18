@@ -73,9 +73,9 @@ const make = Effect.gen(function* () {
     const turn = last !== undefined ? Option.getOrNull(incomingUserTurn(last)) : null;
     if (turn === null || last === undefined) return json(400, { error: "user_turn_required" });
     if (isEmptyUserText(last)) return json(400, { error: "empty_message" });
-    const images = turn.imageUrls.map((url) => {
+    const images = yield* Effect.forEach(turn.imageUrls, (url) => {
       const id = attachmentIdOf(url);
-      return id !== null ? attachments.get(id) : null;
+      return id !== null ? attachments.get(id) : Effect.succeed(null);
     });
     if (images.includes(null)) return json(400, { error: "unknown_attachment" });
     const attached = images.filter((image) => image !== null);

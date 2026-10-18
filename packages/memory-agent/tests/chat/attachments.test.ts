@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Path, Schema } from "effect";
+import type { SqlError } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
@@ -36,7 +37,12 @@ const centre = Effect.fnUntraced(function* (path: string) {
 });
 
 /** What a rejected save reports: the rejection reason, or the tag of any other failure. */
-const refusalOf = <A>(save: Effect.Effect<A, AttachmentRejected | AttachmentStorageFailed>) =>
+const refusalOf = <A>(
+  save: Effect.Effect<
+    A,
+    AttachmentRejected | AttachmentStorageFailed | SqlError.SqlError | Schema.SchemaError
+  >,
+) =>
   Effect.match(save, {
     onFailure: (error) => {
       switch (error._tag) {
@@ -44,6 +50,9 @@ const refusalOf = <A>(save: Effect.Effect<A, AttachmentRejected | AttachmentStor
           return error.reason;
         case "AttachmentStorageFailed":
           return `${error._tag}:${error.operation}`;
+        case "SqlError":
+        case "SchemaError":
+          return error._tag;
       }
     },
     onSuccess: () => "saved",
@@ -104,14 +113,13 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         kind: "user",
         text: "#1 이랑 #2 비교해줘",
       });
-      attachments.link(node.id, [first, animated]);
+      yield* attachments.link(node.id, [first, animated]);
       expect(first).toMatchObject({ mimeType: "image/png", bytes: tinyPng.length });
       expect(first.id).toMatch(/^[0-9a-f]{64}$/);
       expect(again.id).toBe(first.id);
-      expect(attachments.forNode(node.id).map((attachment) => attachment.mimeType)).toEqual([
-        "image/png",
-        "image/gif",
-      ]);
+      expect(
+        (yield* attachments.forNode(node.id)).map((attachment) => attachment.mimeType),
+      ).toEqual(["image/png", "image/gif"]);
       const stored = attachments.pathOf(first);
       expect(
         yield* sdk(() => attachments.dataUrl({ path: stored, mimeType: first.mimeType })),
@@ -216,8 +224,8 @@ testAgent({ testProvider: {} })("attachments", (it) => {
   it.effect("looks up malformed and unknown ids without touching the filesystem", () =>
     Effect.gen(function* () {
       const attachments = yield* Attachments;
-      expect(attachments.get("../agent.db")).toBeNull();
-      expect(attachments.get("0".repeat(64))).toBeNull();
+      expect(yield* attachments.get("../agent.db")).toBeNull();
+      expect(yield* attachments.get("0".repeat(64))).toBeNull();
     }),
   );
 
@@ -274,7 +282,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
         expect(result.preview?.mimeType).toBe("image/png");
         const attachments = yield* Attachments;
-        const picture = attachments.get(result.preview?.attachmentId ?? "");
+        const picture = yield* attachments.get(result.preview?.attachmentId ?? "");
         expect(picture).not.toBeNull();
         expect(yield* centre(attachments.pathOf(picture!))).toEqual([0, 0, 255]);
       }),
@@ -412,7 +420,7 @@ testAgent()("attachments across closing the agent", (it) => {
             kind: "user",
             text: "#1",
           });
-          attachments.link(node.id, [saved]);
+          yield* attachments.link(node.id, [saved]);
           return saved;
         }),
       );
