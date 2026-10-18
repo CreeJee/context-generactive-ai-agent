@@ -2,12 +2,11 @@ import { Effect, Option, Result, Schema } from "effect";
 import { KanbanConcurrency, KanbanSettings } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
+import { answerKanbanFailures } from "~/.server/kanban-failures";
 import type { Route } from "./+types/settings.kanban";
 
 /** A user value, or null to go back to the machine default. */
 const KanbanAction = Schema.Struct({ concurrency: Schema.NullOr(KanbanConcurrency) });
-
-const settingsFailed = () => Response.json({ error: "settings_failed" }, { status: 500 });
 
 const toJson = (setting: {
   readonly configured: Option.Option<number>;
@@ -24,7 +23,7 @@ export function loader() {
   return agent.runPromise(
     Effect.flatMap(KanbanSettings, (settings) => settings.concurrency).pipe(
       Effect.map(toJson),
-      Effect.catchTag("GlobalConfigFailed", () => Effect.succeed(settingsFailed())),
+      answerKanbanFailures,
     ),
   );
 }
@@ -49,12 +48,6 @@ export function action({ request }: Route.ActionArgs) {
           ? yield* settings.resetConcurrency
           : yield* settings.setConcurrency(concurrency),
       );
-    }).pipe(
-      Effect.catchTags({
-        GlobalConfigFailed: () => Effect.succeed(settingsFailed()),
-        SchemaError: () =>
-          Effect.succeed(Response.json({ error: "invalid_kanban_settings" }, { status: 400 })),
-      }),
-    ),
+    }).pipe(answerKanbanFailures),
   );
 }

@@ -11,10 +11,8 @@ import {
 } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
+import { answerKanbanFailures } from "~/.server/kanban-failures";
 import type { Route } from "./+types/sessions.$session.board";
-
-const sessionNotFound = () =>
-  Effect.succeed(Response.json({ error: "session_not_found" }, { status: 404 }));
 
 /** GET /api/sessions/:session/board — the Plan as cards, who changed them, and waiting changes. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -23,7 +21,7 @@ export function loader({ params }: Route.LoaderArgs) {
     Effect.gen(function* () {
       yield* (yield* Sessions).get(params.session);
       return yield* (yield* Boards).view(params.session);
-    }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+    }).pipe(answerKanbanFailures),
   );
 }
 
@@ -69,19 +67,6 @@ export function action({ request, params }: Route.ActionArgs) {
         case "Requested":
           return Response.json(result, { status: 202 });
       }
-    }).pipe(
-      Effect.catchTags({
-        SessionNotFound: sessionNotFound,
-        BoardEditRefused: (failure) =>
-          Effect.succeed(Response.json({ error: failure.reason }, { status: 409 })),
-        PlanDependenciesRejected: (failure) =>
-          Effect.succeed(
-            Response.json(
-              { error: "plan_dependencies_rejected", issues: failure.issues },
-              { status: 422 },
-            ),
-          ),
-      }),
-    ),
+    }).pipe(answerKanbanFailures),
   );
 }

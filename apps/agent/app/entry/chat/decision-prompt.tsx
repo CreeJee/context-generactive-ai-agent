@@ -118,6 +118,9 @@ const errorText = (code: ApiErrorCode) => {
       return "결정 요청을 찾을 수 없어요.";
     case "session_in_use":
       return "다른 창에서 이 대화를 쓰고 있어요.";
+    case "kanban_storage_failed":
+    case "workflow_storage_failed":
+      return "답을 기록하거나 카드를 옮기지 못했어요. 잠시 뒤 다시 시도해 주세요.";
     default:
       return "답을 보내지 못했어요.";
   }

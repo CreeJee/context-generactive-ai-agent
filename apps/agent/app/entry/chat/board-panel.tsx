@@ -60,6 +60,7 @@ import { boardColumns, cardStatusLabels, withPending, type PendingMove } from ".
 import { authorLabel, StatusIcon, type CardSignals } from "./board/card-face";
 import { CardPeek, type Peek } from "./board/card-peek";
 import { KanbanBoard } from "./board/kanban-board";
+import { holdReasonText, verdictText } from "./board/hold-reason";
 
 export { cardStatusLabels } from "./board/board-moves";
 export { authorLabel } from "./board/card-face";
@@ -106,10 +107,23 @@ const errorText = (code: ApiErrorCode) => {
     case "other_project":
     case "self_dependency":
       return "기다릴 수 없는 Goal이에요.";
+    case "queue_item_changed":
+      return "그사이 카드의 대기열 상태가 바뀌었어요. 최신 보드를 다시 확인해 주세요.";
+    case "worktree_in_use":
+      return "카드 작업 폴더를 다른 실행이 쓰고 있어요. 잠시 뒤 다시 시도해 주세요.";
+    case "worktree_failed":
+      return "카드 작업 폴더를 정리하지 못했어요.";
+    case "kanban_storage_failed":
+    case "workflow_storage_failed":
+    case "schedule_storage_failed":
+    case "storage_failed":
+      return "보드를 저장하거나 읽지 못했어요. 잠시 뒤 다시 시도해 주세요.";
     default:
       return "보드를 바꾸지 못했어요.";
   }
 };
+const holdText = (reason: Parameters<typeof holdReasonText>[0] | null) =>
+  reason === null ? null : holdReasonText(reason);
 const editErrorText = (error: Error) =>
   isApiError(error) ? errorText(error.code) : "보드를 바꾸지 못했어요.";
 
@@ -336,7 +350,7 @@ function BoardSheet({
     decisionPending: decisionsOf(cardId).length > 0,
     changePending: changePending(cardId),
     requesting: pending?.cardId === cardId,
-    reason: loopCard(cardId)?.reason ?? null,
+    reason: holdText(loopCard(cardId)?.reason ?? null),
     dependsOn: (cards.find(({ card }) => card.id === cardId)?.card.dependsOn ?? []).map(titleOf),
   });
   const refused = (error: Error) => setNotice(editErrorText(error));
@@ -596,7 +610,7 @@ export function mergeStateLabel(state: GoalMergeState | null): string {
     case "Verifying":
       return "Goal 전체를 검증하는 중";
     case "VerifyFailed":
-      return `Goal 검증 실패: ${state.reason}`;
+      return `Goal 검증 실패: ${verdictText(state.verdict)}`;
     case "WaitingWorktree":
       return `작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${state.worktree})`;
     case "TargetMoving":

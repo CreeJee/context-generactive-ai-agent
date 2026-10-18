@@ -35,7 +35,8 @@ it.effect("keeps a user value, refuses one out of range and resets to the defaul
       expect(yield* settings.concurrency).toEqual({ configured: Option.none(), effective: 3 });
       expect((yield* settings.setConcurrency(8)).effective).toBe(8);
       expect(yield* Effect.flip(settings.setConcurrency(0))).toMatchObject({
-        _tag: "SchemaError",
+        _tag: "KanbanSettingsRefused",
+        reason: "concurrency_out_of_range",
       });
       expect(yield* settings.concurrency).toEqual({ configured: Option.some(8), effective: 8 });
       expect((yield* settings.resetConcurrency).configured).toEqual(Option.none());

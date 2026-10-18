@@ -44,6 +44,8 @@ import {
   type HumanDecisionRequest,
 } from "./human-decision.ts";
 import { GoalSchedules } from "./goal-schedules.ts";
+import { failureCode, worktreeFailure, type CardFailure } from "./failures.ts";
+import { stopLogged } from "./background.ts";
 import { GoalMerges } from "./merge-queue.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 
@@ -125,7 +127,7 @@ type Integration =
   | { readonly _tag: "GoalAdvanced" }
   | { readonly _tag: "Synced" }
   | { readonly _tag: "Conflict"; readonly files: readonly string[] }
-  | { readonly _tag: "Failed"; readonly code: string };
+  | { readonly _tag: "Failed"; readonly failure: CardFailure };
 
 const make = (options: KanbanOrchestratorOptions) =>
   Effect.gen(function* () {
@@ -298,8 +300,9 @@ const make = (options: KanbanOrchestratorOptions) =>
       goal: KanbanGoal,
       cardId: string,
       from: CardStatus,
-      code: string,
+      failure: CardFailure,
     ) {
+      const code = failureCode(failure);
       const ladder = yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
         ...current,
         failureStreak: current.failureStreak + 1,
@@ -314,7 +317,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
             ...current,
             notBefore: now + Duration.toMillis(step.delay),
-            reason: `retry_backoff: ${code}`,
+            reason: { _tag: "RetryBackoff", failure },
           }));
           yield* move(
             goal,
@@ -327,7 +330,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         case "Replan":
           yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
             ...current,
-            reason: `replan_requested: ${code}`,
+            reason: { _tag: "ReplanRequested", failure },
           }));
           yield* move(
             goal,
@@ -340,7 +343,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         case "HumanDecision": {
           yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
             ...current,
-            reason: `repeated_failure: ${code}`,
+            reason: { _tag: "RepeatedFailure", failure },
           }));
           const attemptNo = yield* latestAttempt(goal, cardId);
           yield* askPerson(goal, cardId, from, `retry_exhausted:${attemptNo}`, {
@@ -367,7 +370,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           Effect.succeed<Integration>(
             failure.reason._tag === "GoalAdvanced"
               ? { _tag: "GoalAdvanced" }
-              : { _tag: "Failed", code: `CardWorktreeFailed.${failure.reason._tag}` },
+              : { _tag: "Failed", failure: worktreeFailure(failure) },
           ),
         ),
       );
@@ -378,10 +381,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           CardIntegrationConflict: (conflict) =>
             Effect.succeed<Integration>({ _tag: "Conflict", files: conflict.files }),
           CardWorktreeFailed: (failure) =>
-            Effect.succeed<Integration>({
-              _tag: "Failed",
-              code: `CardWorktreeFailed.${failure.reason._tag}`,
-            }),
+            Effect.succeed<Integration>({ _tag: "Failed", failure: worktreeFailure(failure) }),
         }),
       );
 
@@ -399,7 +399,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       if (ladder.resolutionOf !== null) {
         yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
           ...current,
-          reason: `merge_conflict: ${listed}`,
+          reason: { _tag: "MergeConflict", files },
         }));
         const attemptNo = yield* latestAttempt(goal, card.id);
         // A person who answered sends the card on; a conflict after that is a new occasion.
@@ -478,12 +478,10 @@ const make = (options: KanbanOrchestratorOptions) =>
         if ((yield* verifying) === undefined) return;
         switch (verdict._tag) {
           case "Failed":
-            return yield* failCard(
-              goal,
-              cardId,
-              "verify",
-              `verification_failed: ${verdict.reason}`,
-            );
+            return yield* failCard(goal, cardId, "verify", {
+              _tag: "Verification",
+              verdict: verdict.failure,
+            });
           case "Passed":
             break;
         }
@@ -516,10 +514,10 @@ const make = (options: KanbanOrchestratorOptions) =>
           case "Conflict":
             return yield* resolveConflict(goal, card, integration.files);
           case "Failed":
-            return yield* failCard(goal, cardId, "verify", integration.code);
+            return yield* failCard(goal, cardId, "verify", integration.failure);
         }
       }
-      return yield* failCard(goal, cardId, "verify", "goal_branch_kept_moving");
+      return yield* failCard(goal, cardId, "verify", { _tag: "GoalBranchKeptMoving" });
     });
 
     /** Runs a card's verification and integration once, beside the loop. */
@@ -528,9 +526,8 @@ const make = (options: KanbanOrchestratorOptions) =>
         integrations,
         `${goal.goalInstanceId}:${cardId}`,
         verifyAndIntegrate(goal, cardId, report).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Kanban card integration stopped", { cardId, cause }),
-          ),
+          // The card stays in verify and the next look starts its integration again.
+          stopLogged("Kanban card integration stopped", { cardId }),
           Effect.ensuring(PubSub.publish(pokes, goal.goalInstanceId)),
         ),
         { onlyIfMissing: true },
@@ -556,7 +553,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         case "Fenced":
           yield* attempts.updateLadder(goal.goalInstanceId, attempt.cardId, (current) => ({
             ...current,
-            reason: `uncertain_effect: run ${outcome.runId}`,
+            reason: { _tag: "UncertainEffect", runId: outcome.runId },
           }));
           yield* askPerson(
             goal,
@@ -567,7 +564,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           );
           break;
         case "Failed":
-          yield* failCard(goal, attempt.cardId, "in_progress", outcome.code);
+          yield* failCard(goal, attempt.cardId, "in_progress", outcome.failure);
           break;
         case "Completed":
           // Work done against an earlier Goal waits until the cards are classified against it.
@@ -658,7 +655,7 @@ const make = (options: KanbanOrchestratorOptions) =>
             case "replace":
               return attempts.updateLadder(goal.goalInstanceId, request.cardId, (current) => ({
                 ...current,
-                reason: "replan_requested: a person asked to replace this card",
+                reason: { _tag: "ReplanRequested", failure: null },
               }));
             case "stop":
               return Effect.void;
@@ -712,7 +709,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           if (Option.isNone(attempt) || attempt.value.handled) return;
           yield* attempts.updateLadder(goal.goalInstanceId, item.cardId, (current) => ({
             ...current,
-            reason: `dead_lettered: ${item.lastFailure ?? "unknown"}`,
+            reason: { _tag: "DeadLettered" },
           }));
           yield* move(
             goal,
@@ -778,8 +775,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       const replanning = steps
         .filter(
           (step) =>
-            step.status === "blocked" &&
-            ladders.get(step.id)?.reason?.startsWith("replan_requested"),
+            step.status === "blocked" && ladders.get(step.id)?.reason?._tag === "ReplanRequested",
         )
         .map((step) => step.id);
       if (replanning.length > 0) reasons.push("replan_requested");
@@ -878,8 +874,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       if (
         steps.some(
           (step) =>
-            step.status === "done" &&
-            ladders.get(step.id)?.reason?.startsWith("upstream_regressed") === true,
+            step.status === "done" && ladders.get(step.id)?.reason?._tag === "UpstreamRegressed",
         )
       )
         reasons.push("upstream_regressed");
@@ -923,12 +918,8 @@ const make = (options: KanbanOrchestratorOptions) =>
             const status = yield* looking
               .withPermits(1)(tick(goalInstanceId))
               .pipe(
-                Effect.catchCause((cause) =>
-                  Effect.as(
-                    Effect.logWarning("Kanban board look failed", { goalInstanceId, cause }),
-                    "running" as const,
-                  ),
-                ),
+                stopLogged("Kanban board look failed", { goalInstanceId }),
+                Effect.map((result) => result ?? ("running" as const)),
               );
             if (status === "stopped") return;
             yield* PubSub.take(wakeups).pipe(

@@ -24,6 +24,7 @@ import {
   type CardAttemptKey,
 } from "./card-attempts.ts";
 import { CardWorktrees, type CardWorktree } from "./worktree.ts";
+import { worktreeFailure, type CardFailure } from "./failures.ts";
 
 /**
  * Kanban card assignment on DurableQueue (docs/kanban-orchestration.md "큐: DurableQueue"). One
@@ -154,7 +155,7 @@ export class CardRuns extends Context.Service<
   );
 }
 
-const failedWith = (code: string): CardAttemptOutcome => ({ _tag: "Failed", code });
+const failedWith = (failure: CardFailure): CardAttemptOutcome => ({ _tag: "Failed", failure });
 
 /** Runs one delivery after the checks that keep it from replaying or running a stale card. */
 const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
@@ -221,11 +222,11 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
       if (Exit.isFailure(exit))
         return Cause.hasInterruptsOnly(exit.cause)
           ? ({ _tag: "Stopped", cardStatus: "in_progress" } satisfies CardAttemptOutcome)
-          : failedWith("Defect");
+          : failedWith({ _tag: "Defect" });
       const outcome = exit.value;
       switch (outcome._tag) {
         case "Failed":
-          return failedWith(outcome.code);
+          return failedWith(outcome.failure);
         case "Finished": {
           // The card's agent cannot write the repository's git metadata from its sandbox; the owner
           // commits its work to the card branch.
@@ -246,7 +247,7 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
     }),
   ).pipe(
     Effect.catchTag("CardWorktreeFailed", (failure) =>
-      Effect.succeed(failedWith(`CardWorktreeFailed.${failure.reason._tag}`)),
+      Effect.succeed(failedWith(worktreeFailure(failure))),
     ),
   );
 });
@@ -261,7 +262,9 @@ export const handleCardRun = Effect.fn("CardQueue.handle")(function* (payload: C
   if (Option.isSome(recorded) && recorded.value.outcome !== null) return recorded.value.outcome;
   const outcome = yield* deliver(payload).pipe(
     Effect.catchTag("WorkflowStorageError", (cause) =>
-      Effect.fail(KanbanStorageFailed.make({ operation: "card", cause })),
+      Effect.fail(
+        KanbanStorageFailed.make({ operation: "card", reason: { _tag: "Storage" }, cause }),
+      ),
     ),
   );
   yield* attempts.recordOutcome(payload, outcome);

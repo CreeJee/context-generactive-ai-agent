@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
+import { VerdictFailure } from "./failures.ts";
 
 /**
  * What the project scheduler stores about kanban Goals (docs/kanban-orchestration.md "프로젝트
@@ -29,7 +30,7 @@ export const GoalMergeState = Schema.Union([
   /** The Goal branch at `head` is being checked as a whole. */
   Schema.TaggedStruct("Verifying", { head: Schema.String }),
   /** The Goal-level check failed at `head`; a new Goal branch commit is checked again. */
-  Schema.TaggedStruct("VerifyFailed", { head: Schema.String, reason: Schema.String }),
+  Schema.TaggedStruct("VerifyFailed", { head: Schema.String, verdict: VerdictFailure }),
   /** The target is checked out with uncommitted changes there; the merge waits for them. */
   Schema.TaggedStruct("WaitingWorktree", { head: Schema.String, worktree: Schema.String }),
   /** The target kept moving while the merge ran; the next look tries again. */
@@ -101,13 +102,22 @@ export class GoalScheduleRefused extends Schema.TaggedError<GoalScheduleRefused>
       "self_dependency",
       "other_project",
       "dependency_cycle",
+      "invalid_branch",
     ]),
   },
 ) {}
 
 export class GoalScheduleStorageFailed extends Schema.TaggedError<GoalScheduleStorageFailed>()(
   "GoalScheduleStorageFailed",
-  { cause: Schema.Defect() },
+  {
+    reason: Schema.Union([
+      /** The database or a stored row failed; `cause` has the SQL or decode error. */
+      Schema.TaggedStruct("Storage", {}),
+      /** A value the owner made did not encode for storage. */
+      Schema.TaggedStruct("Encode", {}),
+    ]),
+    cause: Schema.Defect(),
+  },
 ) {}
 
 const ScheduleRow = Schema.Struct({
@@ -154,7 +164,9 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const now = Clock.currentTimeMillis;
   const failed = (cause: SqlError.SqlError | Schema.SchemaError) =>
-    GoalScheduleStorageFailed.make({ cause });
+    GoalScheduleStorageFailed.make({ reason: { _tag: "Storage" }, cause });
+  const unencoded = (cause: Schema.SchemaError) =>
+    GoalScheduleStorageFailed.make({ reason: { _tag: "Encode" }, cause });
   const rows =
     <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
     <E, R>(query: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
@@ -268,7 +280,8 @@ const make = Effect.gen(function* () {
       goalInstanceId: string,
       state: GoalMergeState | null,
     ) {
-      const json = state === null ? null : yield* encodeMerge(state).pipe(Effect.orDie);
+      const json =
+        state === null ? null : yield* encodeMerge(state).pipe(Effect.mapError(unencoded));
       yield* touch(
         (at) => sql`UPDATE kanban_goal_schedules SET merge_json = ${json}, updated_at = ${at}
             WHERE goal_instance_id = ${goalInstanceId}`,
@@ -302,8 +315,10 @@ const make = Effect.gen(function* () {
       projectId: string,
       branches: readonly string[],
     ) {
-      const checked = yield* Schema.decodeEffect(ProtectedBranches)([...new Set(branches)]);
-      const json = yield* encodeBranches(checked).pipe(Effect.orDie);
+      const checked = yield* Schema.decodeEffect(ProtectedBranches)([...new Set(branches)]).pipe(
+        Effect.mapError(() => GoalScheduleRefused.make({ reason: "invalid_branch" })),
+      );
+      const json = yield* encodeBranches(checked).pipe(Effect.mapError(unencoded));
       yield* sql`INSERT INTO kanban_project_settings (project_id, protected_branches_json)
           VALUES (${projectId}, ${json})
           ON CONFLICT(project_id) DO UPDATE SET protected_branches_json = excluded.protected_branches_json`.pipe(

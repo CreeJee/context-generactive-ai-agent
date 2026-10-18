@@ -843,7 +843,7 @@
 - 셸 샌드박스 안의 git은 주 저장소의 `.git/worktrees/*/index.lock`과 ref를 쓰지 못한다(`Operation not permitted`, 실측). 그래서 worktree 생성, 카드 커밋, squash·sync는 owner가 한다. 카드 에이전트에게는 커밋하지 말라고 지시하고, owner가 attempt가 끝난 뒤 `commitWork`로 카드 브랜치에 커밋한다.
 - 동시 실행 수는 큐 worker 수가 아니라 `take` 앞의 Semaphore로 제한한다. worker는 상한(32)만큼 띄우고, 설정이 바뀌면 `CardQueueGate.reconfigure`가 permit 수를 바로 바꾼다. 실행 중인 카드는 끊지 않는다. 동시 실행 수를 저장하는 경로는 저장 뒤 `reconfigure`를 불러야 한다.
 - DurableQueue는 handler 실패를 item 완료로 처리하므로, 전달 한도 3은 owner가 실행 도중 죽어 같은 item이 다시 전달되는 경우에만 쓰인다. 카드 실패(에이전트 실패, 검증 실패, 통합 실패)는 오케스트레이터의 실패 사다리로 다룬다: 첫 실패는 바로 다시, 두 번째는 backoff 뒤 다시, 세 번째는 replan 요청과 함께 `blocked`, replan 뒤 다시 세 번 실패하면 `human_decision`.
-- 한도를 다 쓴 item은 dead-letter가 되고, 루프가 카드를 `blocked`(`dead_lettered`)로 옮긴다. 보드의 "다시 대기열에"는 같은 item을 attempts 0으로 되살리고 attempt 기록을 다시 연다. 새 attempt 번호를 만들지 않으므로 이어가기다. requeue와 루프의 한 번 보기는 같은 Semaphore로 순서를 지킨다.
+- 한도를 다 쓴 item은 dead-letter가 되고, 루프가 카드를 `blocked`(사유 `DeadLettered`)로 옮긴다. 보드의 "다시 대기열에"는 같은 item을 attempts 0으로 되살리고 attempt 기록을 다시 연다. 새 attempt 번호를 만들지 않으므로 이어가기다. requeue와 루프의 한 번 보기는 같은 Semaphore로 순서를 지킨다.
 - attempt 결과는 handler가 `kanban_card_attempts`에 먼저 기록하고(첫 기록만 유효), 오케스트레이터는 workflow를 기다리지 않고 기록을 읽어 처리한다. 재시작한 owner는 저장된 보드와 기록에서 이어가고, 아무것도 replay하지 않는다.
 - 카드 run은 `kanban_card_runs`에 남고, fence는 결과가 불확실한 run이 있으면 에이전트를 부르지 않고 `Fenced`로 끝낸다. 사람이 판단한 뒤 이어가게 하려면 `acknowledged_at`을 채운다(슬라이스 D의 몫).
 - 통합: verify 통과 → squash. Goal 브랜치가 앞서 있으면 sync 후 같은 카드를 다시 verify한다(최대 3회). sync 충돌이면 그 카드를 해결 카드로 대체한다. 해결 카드는 원래 카드 브랜치를 읽기 전용으로 참고해 현재 Goal 브랜치에 같은 변경을 다시 적용한다. 해결 카드가 다시 충돌하면 `human_decision`이다.
@@ -911,6 +911,35 @@
 - 칸반 저장소(보드 조회 `Boards`, `human_decision` 닫힘 기록·inbox, Workflow의 작성자 기록·보드 변경 요청·보류·전이)는 공유 `SqlClient`로 쓴다. 한 세션의 보드 쓰기는 `Workflows`의 세션별 직렬화와 `withTransaction` 하나로 커밋되고, 변경 요청 id는 `RETURNING id`로 받는다.
 - 저장소 실패는 오류 채널에 남긴다. `Boards.view`와 `Workflows`의 칸반 경로는 `WorkflowStorageError`, `HumanDecisions`의 저장소 실패는 `KanbanStorageFailed("decision")`다. 카드 큐 handler는 `WorkflowStorageError`를 `KanbanStorageFailed("card")`로 바꿔 큐 오류 스키마에 맞춘다. 답을 카드에 반영하는 durable activity와 `HumanDecisionExecution`은 `WorkflowStorageError`를 오류 스키마로 가진다(전에는 동기 throw로 defect였다).
 - 기기 코어 수와 기본 worktree 위치의 홈 폴더는 `runtime/host-system.ts`의 Effect 값(`availableCores`, `homeDirectory`)으로 읽는다.
+
+### 칸반 typed error와 오류 코드 (2026-10-18)
+
+- 칸반 Effect의 예상 실패는 오류 채널에 남긴다. 저장소 오류(`KanbanStorageFailed`, `GoalScheduleStorageFailed`)는 리터럴 reason `Storage`(SQL·행 디코드, cause 보존)·`Encode`(owner가 만든 값의 인코딩)·`Missing`(방금 저장하거나 읽은 기록이 없음)을 가진다. 예전 `orDie`·`Effect.die`가 이 reason으로 바뀌었다. 판단 답의 카드 이동이 실패하면 `Effect.ignore`로 삼키지 않고 `WorkflowStorageError`로 돌려준다(답은 저장돼 있고 카드는 `human_decision`에 남는다). 보호 브랜치 이름이 틀리면 `GoalScheduleRefused("invalid_branch")`, 동시 실행 수가 범위 밖이면 `KanbanSettingsRefused("concurrency_out_of_range")`다.
+- `die`로 남기는 기준: 오류 채널이 없는 곳만 남긴다. 큐 item 정산(`persisted-queue-store.ts`의 `settle`)은 store 계약상 실패할 수 없는 Scope finalizer라 로그를 남긴 뒤 `orDie`한다. 행은 이 owner가 잡은 채로 남고 다음 시작 때 풀린다.
+- 백그라운드 단계(보드 한 번 보기, 카드 통합, merge queue 단계)는 typed 실패만 끝내고 다음 보기에서 다시 한다(`stopLogged`). 결함과 interruption은 덮지 않는다. 결함은 로그를 남기고 그 fiber의 exit에 남으므로, 결함이 난 보드 루프는 멈추고 owner 재시작이나 `Start`로 다시 돈다. 로그에는 오류 태그만 남기고 cause(경로·명령 출력·SQL)는 남기지 않는다.
+- 카드 보류 사유(`kanban_cards.reason`)와 실패는 닫힌 태그 유니온이다(`kanban/failures.ts`): `CardHoldReason`(RetryBackoff·ReplanRequested·RepeatedFailure·MergeConflict·UncertainEffect·DeadLettered·GoalChanged·UpstreamRegressed), `CardFailure`(Agent{code}·Worktree{reason}·Verification{verdict}·GoalBranchKeptMoving·Defect), `VerdictFailure`(Rejected{note}·NoVerdict·NotFinished·ModelSelectionRequired·Unavailable). 알 수 없는 원인은 `Defect` 하나로 모은다. 모델이 쓴 문장(검증 의견, Goal 변경 판단)은 `note`에만 두고 분기에 쓰지 않는다. 보드는 태그로 문구를 고르고 note는 "검증 의견"으로 따로 보인다. `reason.startsWith(...)` 분기는 태그 비교로 바꿨다. 칸반은 GitHub 릴리즈 전이라 컬럼 의미만 바꾸고 마이그레이션은 두지 않는다. `GoalMergeState.VerifyFailed`도 `verdict: VerdictFailure`를 가진다.
+- 칸반 route(`/api/sessions/:session/{kanban,board,decisions}`, `/api/projects/:project/{kanban,decisions}`, `/api/settings/kanban`)는 `.server/kanban-failures.ts`의 표 하나로 태그·reason을 HTTP 상태와 코드로 바꾼다. 표에 없는 오류 타입이 오류 채널에 있으면 타입 오류다. 응답에는 코드만 싣고 cause는 싣지 않는다.
+
+| 오류(태그·reason)                                                    | 상태        | 코드                                      |
+| -------------------------------------------------------------------- | ----------- | ----------------------------------------- |
+| `SessionNotFound`, `ProjectNotFound`                                 | 404         | `session_not_found`, `project_not_found`  |
+| `KanbanActionRefused`, `BoardEditRefused`, `KanbanStartRefused`      | 409         | 각 reason                                 |
+| `GoalScheduleRefused` (`invalid_branch`)                             | 400         | `invalid_kanban_settings`                 |
+| `GoalScheduleRefused` (그 밖)                                        | 409         | 각 reason                                 |
+| `HumanDecisionRefused`                                               | 404·400·409 | 각 reason (전과 같음)                     |
+| `PlanDependenciesRejected`                                           | 422         | `plan_dependencies_rejected`              |
+| `PersistedQueueItemsFailed` (`NotFound`·`NotDeadLettered`)           | 409         | `queue_item_changed`                      |
+| `CardWorktreeFailed` (`InUse`)                                       | 409         | `worktree_in_use`                         |
+| `KanbanSettingsRefused`, 요청 본문 읽기 실패                         | 400         | `invalid_kanban_settings`, `invalid_json` |
+| `CardWorktreeFailed` (그 밖)                                         | 500         | `worktree_failed`                         |
+| `KanbanStorageFailed`, `PersistedQueueItemsFailed` (`StorageFailed`) | 500         | `kanban_storage_failed`                   |
+| `WorkflowStorageError`                                               | 500         | `workflow_storage_failed`                 |
+| `GoalScheduleStorageFailed`                                          | 500         | `schedule_storage_failed`                 |
+| `GlobalConfigFailed`                                                 | 500         | `settings_failed`                         |
+| `SqlError`·`SchemaError`(세션·프로젝트 조회)                         | 500         | `storage_failed`                          |
+| `PlatformError`(카드 id 생성)                                        | 500         | `platform_failed`                         |
+
+- 보드·판단·설정 화면은 응답 코드(`ApiError.code`)로 문구를 고르고, 오류를 문자열로 바꿔 보이지 않는다.
 
 ## 기억·검색·평가
 

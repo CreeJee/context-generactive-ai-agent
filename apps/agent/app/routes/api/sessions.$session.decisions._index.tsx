@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { HumanDecisions, Sessions } from "memory-agent";
 import { agent } from "~/.server/agent";
+import { answerKanbanFailures } from "~/.server/kanban-failures";
 import type { Route } from "./+types/sessions.$session.decisions._index";
 
 /** GET /api/sessions/:session/decisions — the board's cards waiting for a person's decision. */
@@ -10,10 +11,6 @@ export function loader({ params }: Route.LoaderArgs) {
     Effect.gen(function* () {
       yield* (yield* Sessions).get(params.session);
       return Response.json(yield* (yield* HumanDecisions).pending(params.session));
-    }).pipe(
-      Effect.catchTag("SessionNotFound", () =>
-        Effect.succeed(Response.json({ error: "session_not_found" }, { status: 404 })),
-      ),
-    ),
+    }).pipe(answerKanbanFailures),
   );
 }

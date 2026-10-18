@@ -28,6 +28,7 @@ import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
 import { cardStatusLabels } from "./board-moves";
 import { authorLabel, riskLabels, StatusIcon } from "./card-face";
+import { holdReasonNote, holdReasonText } from "./hold-reason";
 
 type BoardCard = BoardView["cards"][number];
 type PlanStep = BoardCard["card"];
@@ -135,6 +136,8 @@ export function CardPeek({
   /** Resolves with an error message, or null once the change was accepted. */
   readonly onSubmit: (edit: BoardEdit) => Promise<string | null>;
 }) {
+  const hold = loopCard?.reason ?? null;
+  const holdNote = hold === null ? null : holdReasonNote(hold);
   const content = (): ReactNode => {
     switch (peek._tag) {
       case "New":
@@ -185,9 +188,14 @@ export function CardPeek({
                   disabled={disabled}
                 />
               ))}
-              {(isTruthy(loopCard?.reason) || changePending) && (
+              {(hold !== null || changePending) && (
                 <div className="space-y-2 rounded-md border border-dashed px-3 py-2" role="status">
-                  {isTruthy(loopCard?.reason) && <p>사유: {loopCard?.reason}</p>}
+                  {hold !== null && <p>사유: {holdReasonText(hold)}</p>}
+                  {holdNote !== null && (
+                    <p className="whitespace-pre-wrap text-muted-foreground">
+                      검증 의견: {holdNote}
+                    </p>
+                  )}
                   {changePending && <p>오케스트레이터가 이 카드의 변경 요청을 확인하고 있어요.</p>}
                   {loopCard?.requeueable === true && (
                     <Button

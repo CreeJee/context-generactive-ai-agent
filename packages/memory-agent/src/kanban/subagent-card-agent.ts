@@ -20,6 +20,7 @@ import {
   type GoalVerification,
 } from "./card-agent.ts";
 import { cardToolProject, type CardWorktree } from "./worktree.ts";
+import type { AgentFailureCode, VerdictFailure } from "./failures.ts";
 
 /**
  * Production card agents: each card attempt and each verification is a named session subagent
@@ -97,7 +98,11 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const failed = (code: string): CardAgentOutcome => ({ _tag: "Failed", code });
+  const failed = (code: AgentFailureCode): CardAgentOutcome => ({
+    _tag: "Failed",
+    failure: { _tag: "Agent", code },
+  });
+  const rejected = (failure: VerdictFailure): CardVerdict => ({ _tag: "Failed", failure });
 
   const agent = CardAgent.of({
     run: (run) =>
@@ -138,17 +143,25 @@ const make = Effect.gen(function* () {
           },
           (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
         );
-        if (outcome === null) return failed("subagent_not_started");
+        if (outcome === null) return failed("not_started");
         switch (outcome.status) {
           case "completed":
             return { _tag: "Finished", report: outcome.answer } satisfies CardAgentOutcome;
           case "failed":
-            return failed("subagent_failed");
+            return failed("failed");
           case "cancelled":
           case "interrupted":
-            return failed("subagent_cancelled");
+            return failed("cancelled");
         }
-      }).pipe(Effect.catch((error) => Effect.succeed(failed(error._tag)))),
+        // Its session, project or run records failed; the error stays in the logs only.
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logWarning("Kanban card agent unavailable", { error: error._tag }),
+            failed("unavailable"),
+          ),
+        ),
+      ),
   });
 
   /** One read-only verifier run that must record a verdict. */
@@ -167,8 +180,7 @@ const make = Effect.gen(function* () {
         input.projectId,
         input.worktree,
       );
-      if (Option.isNone(selection))
-        return { _tag: "Failed", reason: "model_selection_required" } satisfies CardVerdict;
+      if (Option.isNone(selection)) return rejected({ _tag: "ModelSelectionRequired" });
       const verdict = yield* Ref.make(Option.none<CardVerdict>());
       const runSync = Effect.runSyncWith(yield* Effect.context<never>());
       const record = toolDefinition({
@@ -184,7 +196,13 @@ const make = Effect.gen(function* () {
               Option.some<CardVerdict>(
                 input.passed
                   ? { _tag: "Passed", evidence: input.evidence }
-                  : { _tag: "Failed", reason: input.reason ?? input.evidence.join("; ") },
+                  : {
+                      _tag: "Failed",
+                      failure: {
+                        _tag: "Rejected",
+                        note: input.reason ?? input.evidence.join("; "),
+                      },
+                    },
               ),
             ),
             { recorded: true },
@@ -211,13 +229,15 @@ const make = Effect.gen(function* () {
         { agent: input.agent, message: input.message, instructions: input.instructions },
         () => Effect.void,
       );
-      return Option.getOrElse(yield* Ref.get(verdict), (): CardVerdict => ({
-        _tag: "Failed",
-        reason: outcome?.status === "completed" ? "no_verdict" : "verifier_did_not_finish",
-      }));
+      return Option.getOrElse(yield* Ref.get(verdict), () =>
+        rejected(outcome?.status === "completed" ? { _tag: "NoVerdict" } : { _tag: "NotFinished" }),
+      );
     }).pipe(
       Effect.catch((error) =>
-        Effect.succeed<CardVerdict>({ _tag: "Failed", reason: `verifier_${error._tag}` }),
+        Effect.as(
+          Effect.logWarning("Kanban verifier unavailable", { error: error._tag }),
+          rejected({ _tag: "Unavailable" }),
+        ),
       ),
     );
 

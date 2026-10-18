@@ -1,16 +1,16 @@
-import { Effect } from "effect";
+import { type Cause, Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
-import { type Project } from "../../api";
+import { isApiError, type ApiErrorCode, type Project } from "../../api";
 import { useKanbanSettingsQuery } from "../../queries/global";
 import { useKanbanSettingsMutation } from "../../queries/mutations/global";
 import { useProtectedBranchesMutation } from "../../queries/mutations/project";
 import { useSuspenseProjectKanbanQuery } from "../../queries/project";
-import { errorMessage, PageHeader, PageError } from "../shared";
+import { PageHeader, PageError } from "../shared";
 
 /** The most cards the user may let run at once (memory-agent `kanbanConcurrencyLimit`). */
 const maximumConcurrency = 32;
@@ -25,8 +25,24 @@ const branchList = (text: string) => [
   ...new Set(text.split(/[\s,]+/u).filter((branch) => branch.length > 0)),
 ];
 
-const failureText = (failure: { readonly cause?: unknown }) =>
-  errorMessage(failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)));
+const errorText = (code: ApiErrorCode) => {
+  switch (code) {
+    case "invalid_kanban_settings":
+      return "값이 올바르지 않아요. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있어요.";
+    case "project_not_found":
+      return "프로젝트를 찾을 수 없어요.";
+    case "settings_failed":
+    case "schedule_storage_failed":
+    case "storage_failed":
+      return "설정을 저장하지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+    default:
+      return "설정을 바꾸지 못했어요.";
+  }
+};
+
+/** The page's wording for a failed save, from the response's error code only. */
+const failureText = (failure: Cause.UnknownError) =>
+  isApiError(failure.cause) ? errorText(failure.cause.code) : "설정을 바꾸지 못했어요.";
 
 /** How many kanban cards run at once on this machine, across every Goal. */
 function ConcurrencyField() {

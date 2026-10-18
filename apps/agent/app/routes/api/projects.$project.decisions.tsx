@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { HumanDecisions, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
+import { answerKanbanFailures } from "~/.server/kanban-failures";
 import type { Route } from "./+types/projects.$project.decisions";
 
 /**
@@ -13,10 +14,6 @@ export function loader({ params }: Route.LoaderArgs) {
     Effect.gen(function* () {
       yield* (yield* Projects).get(params.project);
       return Response.json(yield* (yield* HumanDecisions).inbox(params.project));
-    }).pipe(
-      Effect.catchTag("ProjectNotFound", () =>
-        Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 })),
-      ),
-    ),
+    }).pipe(answerKanbanFailures),
   );
 }

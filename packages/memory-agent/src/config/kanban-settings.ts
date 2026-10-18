@@ -6,6 +6,11 @@ import { GlobalConfig, KanbanConcurrency } from "./global-config.ts";
 export const defaultKanbanConcurrency = (cores: number) =>
   Math.min(4, Math.max(1, Math.floor(cores / 2)));
 
+export class KanbanSettingsRefused extends Schema.TaggedError<KanbanSettingsRefused>()(
+  "KanbanSettingsRefused",
+  { reason: Schema.Literals(["concurrency_out_of_range"]) },
+) {}
+
 /** The user's choice when there is one, and the value cards actually run with. */
 export interface KanbanConcurrencySetting {
   readonly configured: Option.Option<number>;
@@ -29,7 +34,9 @@ const make = (cores: number) =>
       changes: PubSub.subscribe(changed),
       /** Saves a user value after checking its range; the card queue gate applies it at once. */
       setConcurrency: Effect.fn("KanbanSettings.setConcurrency")(function* (value: number) {
-        const checked = yield* Schema.decodeEffect(KanbanConcurrency)(value);
+        const checked = yield* Schema.decodeEffect(KanbanConcurrency)(value).pipe(
+          Effect.mapError(() => KanbanSettingsRefused.make({ reason: "concurrency_out_of_range" })),
+        );
         yield* config.update({ kanbanConcurrency: checked });
         return yield* announce;
       }),

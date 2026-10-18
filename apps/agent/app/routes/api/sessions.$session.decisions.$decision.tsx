@@ -8,6 +8,7 @@ import {
 } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
+import { answerKanbanFailures } from "~/.server/kanban-failures";
 import type { Route } from "./+types/sessions.$session.decisions.$decision";
 
 const Answer = Schema.Struct({
@@ -42,21 +43,6 @@ export function action({ request, params }: Route.ActionArgs) {
       // The answer moved the card; the board's loop takes it up now instead of at its next look.
       yield* (yield* KanbanOrchestrator).poke(answered.goalInstanceId);
       return Response.json(answered);
-    }).pipe(
-      Effect.catchTag("HumanDecisionRefused", (refused) => {
-        switch (refused.reason) {
-          case "request_missing":
-          case "request_mismatch":
-            return Effect.succeed(Response.json({ error: refused.reason }, { status: 404 }));
-          case "answer_invalid":
-            return Effect.succeed(Response.json({ error: refused.reason }, { status: 400 }));
-          case "card_missing":
-          case "goal_superseded":
-          case "request_closed":
-          case "answer_conflict":
-            return Effect.succeed(Response.json({ error: refused.reason }, { status: 409 }));
-        }
-      }),
-    ),
+    }).pipe(answerKanbanFailures),
   );
 }

@@ -16,6 +16,7 @@ import {
   type KanbanMode,
 } from "./card-attempts.ts";
 import { cardQueueName } from "./card-queue.ts";
+import type { CardHoldReason } from "./failures.ts";
 import { HumanDecisions, type DecisionCloseReason } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
 import { CardWorktrees } from "./worktree.ts";
@@ -77,8 +78,8 @@ export type GoalChangeVerdict = typeof GoalChangeVerdict.Type;
 export interface KanbanCardView {
   readonly cardId: string;
   readonly status: CardStatus;
-  /** Why the loop stopped or delayed the card, such as `dead_lettered: …`. */
-  readonly reason: string | null;
+  /** Why the loop stopped or delayed the card. */
+  readonly reason: CardHoldReason | null;
   readonly failures: number;
   readonly replans: number;
   /** The card a resolution card re-applies. */
@@ -153,7 +154,10 @@ const make = Effect.gen(function* () {
         const sessionId = kanban.value.sessionId;
         // A Goal its conversation replaced is not one to wait for.
         if ((yield* workflows.goalInstanceId(sessionId)) !== other.goalInstanceId) return [];
-        const session = yield* sessions.get(sessionId).pipe(Effect.option);
+        const session = yield* sessions.get(sessionId).pipe(
+          Effect.asSome,
+          Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
+        );
         return [
           {
             goalInstanceId: other.goalInstanceId,
@@ -184,6 +188,13 @@ const make = Effect.gen(function* () {
       Effect.mapError(() => refuse("not_kanban")),
     );
   });
+  /** The board when the session's Goal runs as one; storage failures still fail. */
+  const kanbanOf = (sessionId: string) =>
+    board(sessionId).pipe(
+      Effect.asSome,
+      // `board` refuses only with `not_kanban`.
+      Effect.catchTag("KanbanActionRefused", () => Effect.succeedNone),
+    );
   const cardOf = Effect.fnUntraced(function* (sessionId: string, cardId: string) {
     const step = (yield* workflows.get(sessionId)).plan?.steps.find((card) => card.id === cardId);
     return yield* Effect.fromOption(Option.fromUndefinedOr(step)).pipe(
@@ -293,8 +304,7 @@ const make = Effect.gen(function* () {
         ...current,
         failureStreak: 0,
         notBefore: null,
-        replans:
-          current.replans + (current.reason?.startsWith("replan_requested") === true ? 1 : 0),
+        replans: current.replans + (current.reason?._tag === "ReplanRequested" ? 1 : 0),
         reason: null,
       }));
     yield* orchestrator.poke(goal.goalInstanceId);
@@ -376,7 +386,7 @@ const make = Effect.gen(function* () {
     ) {
       const card = yield* cardOf(sessionId, intent.cardId);
       const planVersion = (yield* workflows.get(sessionId)).plan?.version ?? 0;
-      const kanban = yield* board(sessionId).pipe(Effect.option);
+      const kanban = yield* kanbanOf(sessionId);
       const poke = Option.match(kanban, {
         onNone: () => Effect.void,
         onSome: (goal) => orchestrator.poke(goal.goalInstanceId),
@@ -517,7 +527,7 @@ const make = Effect.gen(function* () {
             case "Stop":
               yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
                 ...current,
-                reason: `goal_changed: ${verdict.reason}`,
+                reason: { _tag: "GoalChanged", note: verdict.reason },
               }));
               yield* closeDecisions(goal, [card.id], "card_stopped");
               if (running(card))
@@ -556,7 +566,7 @@ const make = Effect.gen(function* () {
             case "NeedsDecision":
               yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
                 ...current,
-                reason: `goal_changed: ${verdict.question}`,
+                reason: { _tag: "GoalChanged", note: verdict.question },
               }));
               if (card.status === "done") return;
               // The request moves the card first, so a running attempt then ends as Stopped. One
@@ -590,7 +600,7 @@ const make = Effect.gen(function* () {
      * cards can be requeued. None when the session's Goal does not run as a board.
      */
     view: Effect.fn("KanbanBoardActions.view")(function* (sessionId: string) {
-      const goal = yield* board(sessionId).pipe(Effect.option);
+      const goal = yield* kanbanOf(sessionId);
       if (Option.isNone(goal)) return Option.none<KanbanBoardView>();
       const { goalInstanceId, mode, hold } = goal.value;
       const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];

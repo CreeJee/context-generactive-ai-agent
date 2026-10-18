@@ -11,6 +11,7 @@ import { GoalSchedules, mergeSettled, type GoalMergeState } from "./goal-schedul
 import { goalDecisionCardId, HumanDecisions, type DecisionKind } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 import { CardWorktrees, goalBranchName, type GoalRef } from "./worktree.ts";
+import { stopLogged } from "./background.ts";
 
 /**
  * The merge queue of the project scheduler (docs/kanban-orchestration.md "브랜치 흐름" 5,
@@ -270,7 +271,7 @@ const make = Effect.gen(function* () {
         );
         switch (verdict._tag) {
           case "Failed":
-            yield* setMerge(goal, { _tag: "VerifyFailed", head, reason: verdict.reason });
+            yield* setMerge(goal, { _tag: "VerifyFailed", head, verdict: verdict.failure });
             yield* scheduler.poke(goal.goalInstanceId);
             return;
           case "Passed":
@@ -351,8 +352,8 @@ const make = Effect.gen(function* () {
                   ...current,
                   reason:
                     verdict._tag === "Failed"
-                      ? `upstream_regressed: ${verdict.reason}`
-                      : current.reason?.startsWith("upstream_regressed") === true
+                      ? { _tag: "UpstreamRegressed", verdict: verdict.failure }
+                      : current.reason?._tag === "UpstreamRegressed"
                         ? null
                         : current.reason,
                 }));
@@ -367,7 +368,7 @@ const make = Effect.gen(function* () {
   });
 
   /** Runs `work` for the Goal beside its loop, once at a time per Goal and per target. */
-  const runFor = <E>(
+  const runFor = <E extends { readonly _tag: string }>(
     goal: KanbanGoal,
     name: string,
     work: Effect.Effect<void, E>,
@@ -380,13 +381,11 @@ const make = Effect.gen(function* () {
         `target:${goal.projectRoot}:${target ?? ""}`,
         serially(`goal:${goal.goalInstanceId}`, work),
       ).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Kanban merge queue step stopped", {
-            goalInstanceId: goal.goalInstanceId,
-            name,
-            cause,
-          }),
-        ),
+        // The stored merge state stays; the next look at the board runs the step again.
+        stopLogged("Kanban merge queue step stopped", {
+          goalInstanceId: goal.goalInstanceId,
+          name,
+        }),
         Effect.ensuring(scheduler.poke(goal.goalInstanceId)),
       ),
       { onlyIfMissing: true },

@@ -3,6 +3,7 @@ import { SqlClient, type SqlError } from "effect/sql";
 import { endedWithKnownEffectsSql } from "../workflow/run-bindings.ts";
 import { UserChange, UserChangeRequestStatus } from "../workflow/board-edit.ts";
 import { CardStatus } from "../workflow/card.ts";
+import { CardFailure, CardHoldReason } from "./failures.ts";
 
 /**
  * Durable kanban execution records on the owner connection: which Goal instances run as a board,
@@ -17,8 +18,8 @@ export const CardAttemptOutcome = Schema.Union([
     report: Schema.String,
     commit: Schema.NullOr(Schema.String),
   }),
-  /** The agent or the card's worktree failed. Only error tags are kept. */
-  Schema.TaggedStruct("Failed", { code: Schema.String }),
+  /** The agent or the card's worktree failed. */
+  Schema.TaggedStruct("Failed", { failure: CardFailure }),
   /** An earlier run of the card may have had an effect nobody knows; nothing ran. */
   Schema.TaggedStruct("Fenced", { runId: Schema.String }),
   /** The session moved to another Goal instance before the item ran; nothing ran. */
@@ -72,7 +73,7 @@ export interface CardLadder {
   readonly generation: number;
   /** Clock milliseconds before which the card is not assigned again. */
   readonly notBefore: number | null;
-  readonly reason: string | null;
+  readonly reason: CardHoldReason | null;
   readonly resolutionOf: string | null;
   /** Changes applied to the card that its next attempt is told about. */
   readonly notes: readonly string[];
@@ -81,7 +82,6 @@ export interface CardLadder {
 /** A card attempt whose queue item ran out of deliveries. */
 export interface DeadLetteredAttempt extends CardAttemptKey {
   readonly itemId: string;
-  readonly lastFailure: string | null;
 }
 
 export class KanbanStorageFailed extends Schema.TaggedError<KanbanStorageFailed>()(
@@ -96,7 +96,15 @@ export class KanbanStorageFailed extends Schema.TaggedError<KanbanStorageFailed>
       "change_request",
       "decision",
     ]),
-    cause: Schema.Defect(),
+    reason: Schema.Union([
+      /** The database or a stored row failed; `cause` has the SQL or decode error. */
+      Schema.TaggedStruct("Storage", {}),
+      /** A value the owner made did not encode for storage. */
+      Schema.TaggedStruct("Encode", {}),
+      /** A record the owner just stored or read is not there. */
+      Schema.TaggedStruct("Missing", {}),
+    ]),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -125,7 +133,7 @@ const CardRow = Schema.Struct({
   replans: Schema.Int,
   generation: Schema.Int,
   not_before: Schema.NullOr(Schema.Finite),
-  reason: Schema.NullOr(Schema.String),
+  reason: Schema.NullOr(Schema.fromJsonString(CardHoldReason)),
   resolution_of: Schema.NullOr(Schema.String),
   notes_json: Schema.fromJsonString(Schema.Array(Schema.String)),
 });
@@ -143,11 +151,11 @@ const DeadRow = Schema.Struct({
   goal_instance_id: Schema.NullOr(Schema.String),
   card_id: Schema.NullOr(Schema.String),
   attempt_no: Schema.NullOr(Schema.Int),
-  last_failure: Schema.NullOr(Schema.String),
 });
 const encodeOutcome = Schema.encodeEffect(Schema.fromJsonString(CardAttemptOutcome));
 const encodeHold = Schema.encodeEffect(Schema.fromJsonString(AssignmentHold));
 const encodeNotes = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+const encodeReason = Schema.encodeEffect(Schema.NullOr(Schema.fromJsonString(CardHoldReason)));
 
 const toGoal = (row: typeof GoalRow.Type): KanbanGoal => ({
   goalInstanceId: row.goal_instance_id,
@@ -187,7 +195,9 @@ const make = Effect.gen(function* () {
   const failed =
     (operation: KanbanStorageFailed["operation"]) =>
     (cause: SqlError.SqlError | Schema.SchemaError) =>
-      KanbanStorageFailed.make({ operation, cause });
+      KanbanStorageFailed.make({ operation, reason: { _tag: "Storage" }, cause });
+  const unencoded = (operation: KanbanStorageFailed["operation"]) => (cause: Schema.SchemaError) =>
+    KanbanStorageFailed.make({ operation, reason: { _tag: "Encode" }, cause });
   const rows =
     <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
     <E, R>(query: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
@@ -267,7 +277,8 @@ const make = Effect.gen(function* () {
       goalVersion: number,
     ) {
       const at = yield* now;
-      const json = hold === null ? null : yield* encodeHold(hold).pipe(Effect.orDie);
+      const json =
+        hold === null ? null : yield* encodeHold(hold).pipe(Effect.mapError(unencoded("goal")));
       yield* sql`UPDATE kanban_goals SET hold_json = ${json}, goal_version = ${goalVersion},
             updated_at = ${at} WHERE goal_instance_id = ${goalInstanceId}`.pipe(
         Effect.mapError(failed("goal")),
@@ -349,7 +360,7 @@ const make = Effect.gen(function* () {
       outcome: CardAttemptOutcome,
     ) {
       const at = yield* now;
-      const json = yield* encodeOutcome(outcome).pipe(Effect.orDie);
+      const json = yield* encodeOutcome(outcome).pipe(Effect.mapError(unencoded("attempt")));
       yield* sql`UPDATE kanban_card_attempts SET outcome_json = ${json}, updated_at = ${at}
           WHERE goal_instance_id = ${key.goalInstanceId} AND card_id = ${key.cardId}
             AND attempt_no = ${key.attemptNo} AND outcome_json IS NULL`.pipe(
@@ -447,12 +458,13 @@ const make = Effect.gen(function* () {
       change: (current: CardLadder) => CardLadder,
     ) {
       const next = change(yield* ladder(goalInstanceId, cardId));
-      const notes = yield* encodeNotes(next.notes).pipe(Effect.orDie);
+      const notes = yield* encodeNotes(next.notes).pipe(Effect.mapError(unencoded("card")));
+      const reason = yield* encodeReason(next.reason).pipe(Effect.mapError(unencoded("card")));
       yield* sql`INSERT INTO kanban_cards
           (goal_instance_id, card_id, failure_streak, replans, generation, not_before, reason,
            resolution_of, notes_json)
           VALUES (${goalInstanceId}, ${cardId}, ${next.failureStreak}, ${next.replans},
-            ${next.generation}, ${next.notBefore}, ${next.reason}, ${next.resolutionOf}, ${notes})
+            ${next.generation}, ${next.notBefore}, ${reason}, ${next.resolutionOf}, ${notes})
           ON CONFLICT(goal_instance_id, card_id) DO UPDATE SET
             failure_streak = excluded.failure_streak, replans = excluded.replans,
             generation = excluded.generation, not_before = excluded.not_before,
@@ -506,7 +518,7 @@ const make = Effect.gen(function* () {
 
     /** Dead-lettered items of a queue, named by the attempt their payload carries. */
     deadLettered: (queueName: string) =>
-      sql`SELECT id, last_failure,
+      sql`SELECT id,
             json_extract(element_json, '$.payload.goalInstanceId') AS goal_instance_id,
             json_extract(element_json, '$.payload.cardId') AS card_id,
             json_extract(element_json, '$.payload.attemptNo') AS attempt_no
@@ -523,7 +535,6 @@ const make = Effect.gen(function* () {
                     goalInstanceId: row.goal_instance_id,
                     cardId: row.card_id,
                     attemptNo: row.attempt_no,
-                    lastFailure: row.last_failure,
                   },
                 ],
           ),

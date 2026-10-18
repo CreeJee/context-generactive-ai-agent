@@ -365,7 +365,7 @@ export {
   ProjectRootRejected,
   Projects,
 } from "./projects/projects.ts";
-export { Session, Sessions } from "./sessions/sessions.ts";
+export { Session, SessionNotFound, Sessions } from "./sessions/sessions.ts";
 export { BtwChat } from "./btw/chat.ts";
 export { BtwThread, btwToolNames } from "./btw/contracts.ts";
 export {
@@ -385,6 +385,7 @@ export {
   WorkflowPhase,
   WorkflowState,
   WorkflowProgressRefused,
+  WorkflowStorageError,
   WorkflowTransitionRefused,
   Workflows,
   type UpdateGoal,
@@ -423,6 +424,16 @@ export {
   type HumanDecisionRequest,
 } from "./kanban/human-decision.ts";
 export { KanbanOrchestrator, KanbanStartRefused } from "./kanban/orchestrator.ts";
+export { KanbanStorageFailed } from "./kanban/card-attempts.ts";
+export { CardWorktreeFailed } from "./kanban/worktree.ts";
+export { PersistedQueueItemsFailed } from "./kanban/persisted-queue-store.ts";
+export {
+  AgentFailureCode,
+  CardFailure,
+  CardHoldReason,
+  VerdictFailure,
+  WorktreeFailureReason,
+} from "./kanban/failures.ts";
 export {
   KanbanActionRefused,
   KanbanBoardActions,
@@ -435,10 +446,11 @@ export {
   GoalMergeState,
   GoalPriority,
   GoalScheduleRefused,
+  GoalScheduleStorageFailed,
   GoalSchedules,
   ProtectedBranches,
 } from "./kanban/goal-schedules.ts";
-export { KanbanSettings } from "./config/kanban-settings.ts";
+export { KanbanSettings, KanbanSettingsRefused } from "./config/kanban-settings.ts";
 export { KanbanConcurrency } from "./config/global-config.ts";
 export { PlanDependenciesRejected, type PlanDependencyIssue } from "./workflow/plan-schedule.ts";
 export {

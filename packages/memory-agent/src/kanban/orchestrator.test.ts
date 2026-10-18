@@ -279,7 +279,7 @@ it.live(
           );
           const ladder = yield* (yield* CardAttempts).ladder(board.goalInstanceId, resolution);
           expect(ladder).toMatchObject({ resolutionOf: "b" });
-          expect(ladder.reason).toMatch(/^merge_conflict: a.txt/u);
+          expect(ladder.reason).toEqual({ _tag: "MergeConflict", files: ["a.txt"] });
           const [request] = yield* (yield* HumanDecisions).pending(board.sessionId);
           expect(request).toMatchObject({
             cardId: resolution,
@@ -363,6 +363,8 @@ it.live(
   gitTimeout,
 );
 
+const boom = { _tag: "Agent", code: "failed" } as const;
+
 it.live(
   "retries a failing card, backs off, asks for a replan, and sends it to a person after replanning",
   () =>
@@ -376,7 +378,7 @@ it.live(
           Effect.gen(function* () {
             yield* Ref.update(calls, (count) => count + 1);
             return (yield* Ref.get(failing))
-              ? ({ _tag: "Failed", code: "boom" } as const)
+              ? ({ _tag: "Failed", failure: boom } as const)
               : finished;
           }),
         yield* Effect.scope,
@@ -387,9 +389,10 @@ it.live(
           const attempts = yield* CardAttempts;
           yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "blocked");
           expect(yield* Ref.get(calls)).toBe(3);
-          expect((yield* attempts.ladder(board.goalInstanceId, "a")).reason).toBe(
-            "replan_requested: boom",
-          );
+          expect((yield* attempts.ladder(board.goalInstanceId, "a")).reason).toEqual({
+            _tag: "ReplanRequested",
+            failure: boom,
+          });
 
           yield* (yield* KanbanBoardActions).moveCard(
             board.sessionId,
@@ -400,7 +403,7 @@ it.live(
           expect(yield* Ref.get(calls)).toBe(6);
           expect(yield* attempts.ladder(board.goalInstanceId, "a")).toMatchObject({
             replans: 1,
-            reason: "repeated_failure: boom",
+            reason: { _tag: "RepeatedFailure", failure: boom },
           });
           const decisions = yield* HumanDecisions;
           // The request moves the card before its wait is stored.
@@ -472,9 +475,9 @@ it.live(
       yield* second(
         Effect.gen(function* () {
           yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "blocked");
-          expect((yield* (yield* CardAttempts).ladder(board.goalInstanceId, "a")).reason).toMatch(
-            /^dead_lettered: /u,
-          );
+          expect((yield* (yield* CardAttempts).ladder(board.goalInstanceId, "a")).reason).toEqual({
+            _tag: "DeadLettered",
+          });
           // Dragging the blocked card to ready puts the same item back on the queue.
           yield* (yield* KanbanBoardActions).applyIntent(
             board.sessionId,

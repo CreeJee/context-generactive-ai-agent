@@ -299,7 +299,11 @@ const make = Effect.gen(function* () {
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
   const stored = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.mapError(effect, (cause) => KanbanStorageFailed.make({ operation: "decision", cause }));
+    Effect.mapError(effect, (cause) =>
+      KanbanStorageFailed.make({ operation: "decision", reason: { _tag: "Storage" }, cause }),
+    );
+  /** A request or answer this owner just stored is not there to read back. */
+  const missing = KanbanStorageFailed.make({ operation: "decision", reason: { _tag: "Missing" } });
 
   const closureRow = SqlSchema.findOneOption({
     Request: Schema.String,
@@ -512,7 +516,7 @@ const make = Effect.gen(function* () {
         yield* events.publishSession(input.sessionId, "run-state");
         // A concurrent request with the same key may have admitted first; its payload wins.
         const admitted = yield* read(requestId);
-        if (Option.isNone(admitted)) return yield* Effect.die("human decision was not admitted");
+        if (Option.isNone(admitted)) return yield* missing;
         return yield* view(admitted.value.execution, admitted.value.payload);
       }),
 
@@ -536,13 +540,14 @@ const make = Effect.gen(function* () {
           return yield* HumanDecisionRefused.make({ reason: "answer_invalid" });
         const settle = Effect.gen(function* () {
           const answer = yield* storedAnswer(execution.executionId);
-          if (Option.isNone(answer)) return yield* Effect.die("answer not stored");
+          if (Option.isNone(answer)) return yield* missing;
           if (!sameAnswer(answer.value, input.answer))
             return yield* HumanDecisionRefused.make({ reason: "answer_conflict" });
-          // Joins the run, so the card has moved when the answer returns.
-          yield* provideEngine(HumanDecisionExecution.execute(payload)).pipe(Effect.ignore);
+          // Joins the run, so the card has moved when the answer returns. A failed move stays a
+          // failure: the answer is stored, but the card did not leave human_decision.
+          yield* provideEngine(HumanDecisionExecution.execute(payload));
           const current = yield* read(input.requestId);
-          if (Option.isNone(current)) return yield* Effect.die("human decision disappeared");
+          if (Option.isNone(current)) return yield* missing;
           return yield* view(current.value.execution, current.value.payload);
         });
         const state = yield* stateOf(execution);

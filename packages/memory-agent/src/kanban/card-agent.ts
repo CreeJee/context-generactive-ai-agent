@@ -1,6 +1,7 @@
 import { Context, type Effect } from "effect";
 import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
 import type { KanbanStorageFailed } from "./card-attempts.ts";
+import type { CardFailure, VerdictFailure } from "./failures.ts";
 import type { CardWorktree } from "./worktree.ts";
 
 /**
@@ -39,8 +40,7 @@ export interface CardAgentRun {
 
 export type CardAgentOutcome =
   | { readonly _tag: "Finished"; readonly report: string }
-  /** `code` is an error tag or status word, never provider text. */
-  | { readonly _tag: "Failed"; readonly code: string };
+  | { readonly _tag: "Failed"; readonly failure: CardFailure };
 
 /**
  * Runs one delivery of a card. Interrupting it stops the agent; the run's checkpoint settles
@@ -63,7 +63,7 @@ export interface CardVerification {
 
 export type CardVerdict =
   | { readonly _tag: "Passed"; readonly evidence: readonly string[] }
-  | { readonly _tag: "Failed"; readonly reason: string };
+  | { readonly _tag: "Failed"; readonly failure: VerdictFailure };
 
 /** Checks a finished card against its acceptance criteria and required evidence. */
 export class CardVerifier extends Context.Service<
