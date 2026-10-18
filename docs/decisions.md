@@ -2252,3 +2252,14 @@
 - CLI 인자는 `effect/cli`로 파싱한다. 내장 전역 플래그는 끄고(`CliConfig.builtIns: []`) 기존 옵션 이름·사용법 문구를 유지한다. `isDeepStrictEqual`은 `Equal.equals`로, 포트 점유 확인은 `NodeSocketServer`의 scoped bind로, 측정 시간은 `Clock`·`Effect.timed`로, 테스트 단언은 vitest `expect`로 바꾼다.
 - 홈 폴더·임시 폴더·전체 메모리는 Effect에 대응 서비스가 없어 `runtime/host-system.ts`만 `node:os`를 쓰고 나머지는 그 Effect 값을 읽는다.
 - 남기는 `node:*`와 이유: `sqlite`(Effect의 SQLite 드라이버는 별도 네이티브 패키지라 SEA 제약과 맞지 않아 자체 `SqlClient`가 `node:sqlite`를 감싼다), `sea`(실행 파일 자산), `module`(`createRequire`: SEA 본문은 네이티브 패키지를 require로만 부른다), `zlib`(설치본에는 HTTP 응답 압축만 있고 zstd 해제가 없다), 테스트의 `async_hooks`·모듈 로더 hook의 `url`(Effect 런타임 밖에서 동기로 돈다).
+
+## 저장소 전체 Effect 오류의 typed error 정리 (2026-10-18)
+
+- 사용자 요청: Effect 로직 전체에서 실패가 typed error로 드러나게 한다. 칸반 정리와 같은 기준을 칸반 밖 코드(`packages/memory-agent/src` 전체, `apps/agent/app`)에 적용했다.
+- 예상 실패는 `Data.TaggedError` 대신 `Schema.TaggedError`와 리터럴 reason으로 정의한다. `orDie`·`Effect.die`는 실제로 도달할 수 없는 불변식과, 오류 채널이 `never`인 상위 인터페이스(`effect/workflow`의 `WorkflowEngine`) 경계에만 남긴다.
+- 실패를 기록하고 끝내는 공용 헬퍼는 `runtime/logged-failures.ts` 한 모듈에 둔다(`stopLogged`·`fallbackLogged`·`logFailure`·`ignoreLogged`·`failureTags`). 로그에는 오류 태그와 reason 태그만 남기고, 원문 메시지·경로·명령 출력·공급자 본문은 남기지 않는다. 결함은 `Defect`로 표시하고, interruption은 그대로 통과시킨다.
+- 정리 작업의 실패가 원래 실패를 덮어쓰지 않게 한다. finalizer 안의 best-effort 정리(worker 종료, 임시 파일·snapshot 삭제, SDK iterator close, MCP shutdown)는 실패해도 결함으로 만들지 않고 태그만 로그한다.
+- 결함과 interruption을 typed 실패로 바꾸던 `catchCause`는 `catchTag`·`catchReason`으로 좁힌다. 결함은 결함으로 전파한다. 예외로 `catchCause`를 남기는 곳은 다음과 같다. 사용자가 대기·승인을 중단한 제품 취소 기록, 권한 분류의 fail-closed 처리, 경로·비밀이 모델로 새지 않게 막는 SDK 도구 경계의 redaction, 담당 모듈이 원문 없이 결함을 고정 코드로 정규화하는 경계(worker 실패의 `RUN_ERROR`, owner RPC ledger의 `uncertain` 정산).
+- route는 오류 태그·reason을 HTTP 상태와 안전한 코드로 바꾸는 표(`.server/kanban-failures.ts`, `.server/account-failures.ts`)를 거친다. 표에 없는 오류가 오류 채널에 있으면 컴파일되지 않는다. route에서 난 결함은 `answerDefect`로 500 `internal_error`를 응답하고 원문은 싣지 않는다.
+- 브라우저는 `refusalOf`로 `ApiError`만 골라 코드별 문구를 보이고, 그 밖의 실패에는 고정 문구를 보인다. 저장된 가져오기 실패·GPU 확인·RRSI·sandbox 설정 실패 사유는 알려진 코드에만 문구를 붙이고, 모르는 값(옛 원문 포함)은 일반 문구로 보인다.
+- 사용자 결정을 기다리는 동작은 이번 정리에서 바꾸지 않았다. 결함 뒤에도 계속 도는 루프(가져오기 감시, transcript pass, lease 갱신, 승인 중계), 외부 에이전트·MCP·ACP·채팅 스트림의 원문 오류 표시, 모델이 받는 읽기 도구 오류 원문, 채팅 스트림 종료 시 큐 정리 실패의 `orDie`가 여기에 해당한다.
