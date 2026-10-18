@@ -53,6 +53,8 @@ export {
   createOAuthAccountLoginManager,
   type AccountLoginState,
 } from "./oauth/account-login.ts";
+export { OAuthHarnessError } from "./oauth/validation-harness.ts";
+export { fallbackLogged, ignoreLogged, logFailure } from "./runtime/logged-failures.ts";
 export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
 export { ReportDelivery, ReportDeliveryError, maxReportBytes } from "./report/discord-webhook.ts";
 export {

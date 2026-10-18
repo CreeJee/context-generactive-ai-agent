@@ -1,4 +1,4 @@
-import { Function, Result, Schema } from "effect";
+import { Effect, Function, Result, Schema } from "effect";
 
 /**
  * Refuses state-changing requests from other sites (PRD R14). The app is local, but any web page
@@ -31,3 +31,15 @@ export const readJson: {
       Schema.decodeResult(Schema.fromJsonString(schema))(text.trim() === "" ? "{}" : text),
     ),
 );
+
+/**
+ * Answers a defect with a fixed 500 code. The defect is logged without its cause, which can hold
+ * paths, SQL or provider text; typed failures and interruptions pass through.
+ */
+export const answerDefect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.catchDefect(effect, () =>
+    Effect.as(
+      Effect.logError("route_defect"),
+      Response.json({ error: "internal_error" }, { status: 500 }),
+    ),
+  );

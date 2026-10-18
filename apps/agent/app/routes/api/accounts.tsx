@@ -5,14 +5,16 @@ import {
   OAuthAccountLogins,
   OAuthProfiles,
   SubscriptionAccountProvider,
+  logFailure,
 } from "memory-agent";
+import { accountLogin, answerAccountFailures } from "~/.server/account-failures";
 import { agent } from "~/.server/agent";
 import {
   CompatibleAccountCommand,
   compatibleAccountAction,
   compatibleAccounts,
 } from "~/.server/compatible-handlers";
-import { readJson, rejectCrossSite } from "~/.server/http";
+import { answerDefect, readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/accounts";
 
 const SubscriptionAction = Schema.Struct({
@@ -43,12 +45,16 @@ export function loader({ request }: Route.LoaderArgs) {
         return reply({ error: "invalid_provider" }, 400);
       return yield* Effect.gen(function* () {
         // Preserve existing auth even if OS keychain import fails. Subsequent requests retry.
-        yield* (yield* OAuthProfiles).importLegacy(provider).pipe(Effect.ignore);
+        yield* (yield* OAuthProfiles)
+          .importLegacy(provider)
+          .pipe(Effect.catch(logFailure("Legacy OAuth account import failed")));
         return reply(subscriptionView(yield* (yield* OAuthAccountLogins).profiles(provider)));
       }).pipe(
-        Effect.catchCause(() => Effect.succeed(reply({ error: "account_list_unavailable" }, 503))),
+        Effect.catchTag("OAuthProfileStoreFailed", () =>
+          Effect.succeed(reply({ error: "account_list_unavailable" }, 503)),
+        ),
       );
-    }),
+    }).pipe(answerDefect),
   );
 }
 
@@ -84,17 +90,20 @@ export function action({ request }: Route.ActionArgs) {
         const manager = yield* OAuthAccountLogins;
         const events = yield* AppEvents;
         if (intent === "add") {
-          const started = yield* Effect.tryPromise(() => manager.start(provider, label!));
+          const started = yield* accountLogin("start", () => manager.start(provider, label!));
           // The login finishes in another tab; pages hear it instead of polling.
           yield* Effect.forkDetach(
-            Effect.promise(() => manager.settled(provider)).pipe(
+            accountLogin("settle", () => manager.settled(provider)).pipe(
+              Effect.catch(logFailure("Account login did not settle")),
               Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
             ),
           );
           return reply(subscriptionView(started));
         }
         if (intent === "cancel")
-          return reply(subscriptionView(yield* Effect.tryPromise(() => manager.cancel(provider))));
+          return reply(
+            subscriptionView(yield* accountLogin("cancel", () => manager.cancel(provider))),
+          );
         switch (intent) {
           case "remove":
             yield* profiles.remove(provider, accountId!);
@@ -107,10 +116,11 @@ export function action({ request }: Route.ActionArgs) {
             break;
         }
         return reply(subscriptionView(yield* manager.profiles(provider)));
-      }).pipe(
-        // Never expose keychain/native OAuth errors or tokens to the browser.
-        Effect.catchCause(() => Effect.succeed(reply({ error: "account_action_failed" }, 409))),
-      );
-    }),
+      });
+    }).pipe(
+      // Never expose keychain/native OAuth errors or tokens to the browser.
+      answerAccountFailures,
+      answerDefect,
+    ),
   );
 }

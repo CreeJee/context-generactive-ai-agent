@@ -20,6 +20,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/component
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
 import {
+  type ApiError,
   isApiError,
   type AccountAction,
   type AccountsView,
@@ -514,13 +515,28 @@ export function AccountManagerList({
   );
 }
 
-const accountErrorMessage = (error: Error) => {
-  if (!isApiError(error)) return "계정 작업에 실패했어요.";
+const accountErrorMessage = (error: ApiError | null) => {
+  if (error === null) return "계정 작업에 실패했어요.";
   switch (error.code) {
     case "invalid_account_label":
+    case "invalid_oauth_profile":
       return "계정 이름은 1~80자로 입력하세요.";
     case "account_action_failed":
+    case "oauth_profile_in_use":
+    case "oauth_profile_removing":
       return "계정 작업을 완료하지 못했어요. 이 계정의 실행이 끝난 뒤 다시 시도하세요.";
+    case "oauth_profile_not_found":
+      return "계정을 찾을 수 없어요. 목록을 새로 고친 뒤 다시 시도하세요.";
+    case "oauth_profile_missing_credential":
+    case "oauth_profile_conflicting_credential":
+    case "oauth_profile_copy_unverified":
+      return "저장된 로그인 정보를 확인하지 못했어요. 계정을 다시 추가하세요.";
+    case "login_in_progress":
+      return "이미 진행 중인 로그인이 있어요. 그 로그인을 마치거나 취소한 뒤 다시 시도하세요.";
+    case "account_login_failed":
+      return "로그인을 시작하지 못했어요. 잠시 뒤 다시 시도하세요.";
+    case "account_store_unavailable":
+      return "계정 저장소를 열지 못했어요. 잠시 뒤 다시 시도하세요.";
     default:
       return "계정 작업에 실패했어요.";
   }
@@ -577,10 +593,7 @@ export function AccountManager({
             if (next.intent === "add" && view.login.status === "pending")
               window.open(view.login.authorizationUrl, "_blank", "noopener");
           },
-          (failure) =>
-            setError(
-              accountErrorMessage(failure instanceof Error ? failure : new Error(String(failure))),
-            ),
+          (failure) => setError(accountErrorMessage(isApiError(failure) ? failure : null)),
         );
       }}
     >

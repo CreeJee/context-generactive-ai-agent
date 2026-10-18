@@ -5,6 +5,7 @@ import {
   ProviderId,
   providerConnection,
   ProviderRegistry,
+  logFailure,
 } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -50,7 +51,7 @@ export function loader({ request }: Route.LoaderArgs) {
           case "subscription":
             yield* (yield* OAuthProfiles)
               .importLegacy(connection.accountProvider)
-              .pipe(Effect.ignore);
+              .pipe(Effect.catch(logFailure("Legacy OAuth account import failed")));
             break;
           case "compatible-endpoint":
             break;
@@ -107,13 +108,10 @@ export function action({ request }: Route.ActionArgs) {
                 yield* Effect.sleep("250 millis");
                 if ((yield* configured.auth.status).status !== "pending") break;
               }
-              events.publishGlobal("auth");
             }).pipe(
-              Effect.catchCause(() =>
-                Effect.sync(() => {
-                  events.publishGlobal("auth");
-                }),
-              ),
+              Effect.catch(logFailure("OAuth login status polling stopped")),
+              // Pages re-read the state however the wait ended.
+              Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
             ),
           );
         return Response.json(browserState(state));
