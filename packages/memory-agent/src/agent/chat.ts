@@ -3009,7 +3009,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
     /** The session's subagents. */
     subagents: (sessionId: string) =>
-      Effect.map(sessions.get(sessionId), () => json(200, subagents.list(sessionId))).pipe(
+      sessions.get(sessionId).pipe(
+        Effect.andThen(subagents.list(sessionId)),
+        Effect.map((list) => json(200, list)),
         Effect.catchTag("SessionNotFound", sessionNotFound),
       ),
 
