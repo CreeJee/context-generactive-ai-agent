@@ -159,11 +159,11 @@ const make = Effect.gen(function* () {
             const setup = {
               command,
               commandId: context?.toolCallId ?? randomUUID(),
-              ...sandboxPolicy({
+              ...(yield* sandboxPolicy({
                 projectRoot: project.root,
                 storageRoot: storage.path,
                 network: runnable.network,
-              }),
+              })),
             };
             // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
             // falls back to running the script as it is.

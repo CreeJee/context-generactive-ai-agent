@@ -1,10 +1,9 @@
 // Native host boundary: worker threads and a scratch folder for the sandbox runtime's sockets.
 import { NodeWorker } from "@effect/platform-node";
-// No Effect service reports the home or temp folder the policy names.
-import { homedir, tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
 import { Duration, Effect, FileSystem, Function as EffectFunction, Layer, Option } from "effect";
 import { RpcClient } from "effect/rpc";
+import { homeDirectory, temporaryDirectory } from "../runtime/host-system.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import type { CommandResult } from "./run.ts";
@@ -83,21 +82,19 @@ export const sandboxPolicy = (input: {
   readonly projectRoot: string;
   readonly storageRoot: string;
   readonly network: readonly string[];
-}) => {
-  const home = homedir();
-  return {
+}) =>
+  Effect.map(Effect.all([homeDirectory, temporaryDirectory]), ([home, temporary]) => ({
     network: input.network,
     allowLocalBinding: input.network.includes("localhost"),
     allowWrite: [
       input.projectRoot,
       "/tmp",
-      tmpdir(),
+      temporary,
       ...cacheHomePaths.map((entry) => path.join(home, entry)),
     ],
     denyRead: [...credentialHomePaths.map((entry) => path.join(home, entry)), input.storageRoot],
     denyWrite: [path.join(input.projectRoot, ".agents", "skills")],
-  };
-};
+  }));
 
 /** How long the worker gets to report what it blocked once the command has exited. */
 const finishTimeout = Duration.seconds(5);
