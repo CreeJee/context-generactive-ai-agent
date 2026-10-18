@@ -240,6 +240,9 @@ const make = (tuning: SearchTuning) =>
     });
 
     const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
+    const chunkSpanOf = sqlite.prepare(
+      "SELECT start_offset AS start, end_offset AS end FROM node_vector_chunks WHERE vector_id=? AND embedder=?",
+    );
     const projectName = (projectId: string) => {
       const row = nameOf.get(projectId);
       return isTruthy(row) ? decodeName(row).name : projectId;
@@ -305,23 +308,23 @@ const make = (tuning: SearchTuning) =>
           return yield* Effect.interrupt;
         case "success": {
           if (result.vectorUnavailable && !degraded.includes("vector")) degraded.unshift("vector");
+          // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
+          // span stored for a node wins.
           const spans = yield* Effect.try({
             try: () =>
-              result.vectorSeqs.flatMap((seq, index) => {
-                const row = sqlite
-                  .prepare(
-                    "SELECT start_offset AS start, end_offset AS end FROM node_vector_chunks WHERE vector_id=? AND embedder=?",
-                  )
-                  .get(seq, embedder.identity);
-                return row === undefined
-                  ? []
-                  : [
-                      {
-                        id: result.vectorIds[index]!,
-                        span: Result.getOrThrow(Schema.decodeUnknownResult(ChunkSpan)(row)),
-                      },
-                    ];
-              }),
+              result.vectorSeqs.reduce((spans, seq, index) => {
+                const id = result.vectorIds[index]!;
+                const row = MutableHashMap.has(spans, id)
+                  ? undefined
+                  : chunkSpanOf.get(seq, embedder.identity);
+                if (row !== undefined)
+                  MutableHashMap.set(
+                    spans,
+                    id,
+                    Result.getOrThrow(Schema.decodeUnknownResult(ChunkSpan)(row)),
+                  );
+                return spans;
+              }, MutableHashMap.empty<string, ChunkSpan>()),
             catch: () => NativeMemorySearchFailed.make({ reason: "read-failed" }),
           });
           return {
@@ -374,8 +377,8 @@ const make = (tuning: SearchTuning) =>
 
         const matches = yield* Effect.forEach(walk.visits.slice(0, limit), (visit) =>
           Effect.map(latest(visit.node.id), (latest): Match => {
-            const matched = spans.find((entry) => entry.id === visit.node.id);
-            const start = matched?.span.start ?? 0;
+            const matched = Option.getOrUndefined(MutableHashMap.get(spans, visit.node.id));
+            const start = matched?.start ?? 0;
             return {
               id: visit.node.id,
               kind: visit.node.kind,
@@ -385,7 +388,7 @@ const make = (tuning: SearchTuning) =>
               snippet: visit.node.text.slice(start, start + snippetLength),
               ...optionalProperty(
                 "matchedSpan",
-                matched === undefined ? undefined : { ...matched.span, unit: "utf16" as const },
+                matched === undefined ? undefined : { ...matched, unit: "utf16" as const },
               ),
               utility: Math.round(visit.utility * 1000) / 1000,
               foundBy:
