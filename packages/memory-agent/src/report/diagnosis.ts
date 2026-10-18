@@ -100,7 +100,7 @@ export class ReportDiagnoser extends Context.Service<
         const auth = yield* active.auth(selection);
         if (auth.status !== "signed-in") return yield* unavailable(null);
         const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
-        const threadId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+        const threadId = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
         const sourceSessionId = input.sourceSessionId;
         const answer = yield* Effect.tryPromise({
           try: (signal) =>

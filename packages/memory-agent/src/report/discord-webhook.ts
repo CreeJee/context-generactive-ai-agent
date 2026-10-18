@@ -205,10 +205,15 @@ const make = (options: ReportDeliveryOptions) =>
           return body.id;
         }
         if (httpStatus === 429) {
+          const headerRetryAfter = () => Number(response.headers["retry-after"] ?? Number.NaN);
           const retryAfter = yield* response.json.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(RateLimitBody)),
             Effect.map((body) => body.retry_after),
-            Effect.orElseSucceed(() => Number(response.headers["retry-after"] ?? Number.NaN)),
+            // An unreadable body falls back to the header Discord also sends.
+            Effect.catchTags({
+              HttpClientError: () => Effect.succeed(headerRetryAfter()),
+              SchemaError: () => Effect.succeed(headerRetryAfter()),
+            }),
           );
           return yield* Number.isFinite(retryAfter)
             ? ReportDeliveryError.make({
