@@ -44,6 +44,7 @@ import { KanbanTools } from "./kanban/tools.ts";
 import { ownerWorkflowEngineLayer } from "./workflow/owner-workflow-engine.ts";
 import { SecretStore } from "./config/secrets.ts";
 import { SubscriptionQuota, SubscriptionUsage } from "./oauth/subscription-quota.ts";
+import { defectReportsLayer } from "./report/defect-reports.ts";
 import { ReportDelivery } from "./report/discord-webhook.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
@@ -191,7 +192,12 @@ export const memoryAgentLayer: {
 function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOptions = {}) {
   // Each tier only depends on the tiers below it.
   // The settings are read by services in every tier above, the embedder among them.
+  // Defects anywhere above are reported through the webhook the report page uses, when one is set.
+  const defectReports = defectReportsLayer.pipe(
+    Layer.provide(Layer.merge(ReportDelivery.layer(), SecretRedactor.layer)),
+  );
   const foundation = OAuthProfiles.layer.pipe(
+    Layer.provideMerge(defectReports),
     Layer.provideMerge(
       GlobalConfig.layer.pipe(
         Layer.provideMerge(

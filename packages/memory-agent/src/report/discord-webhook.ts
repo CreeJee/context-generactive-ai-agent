@@ -113,6 +113,16 @@ const messageBody = (text: string) => {
   return form;
 };
 
+/** A short notice the server sends on its own: inline only, with no mentions and no file. */
+const noticeBody = (text: string) => {
+  const form = new FormData();
+  form.append(
+    "payload_json",
+    JSON.stringify({ content: text.slice(0, contentLimit), allowed_mentions: { parse: [] } }),
+  );
+  return form;
+};
+
 export interface ReportDeliveryOptions {
   /** Tests send to a local fake server instead of Discord. */
   readonly allowLoopback?: boolean;
@@ -174,13 +184,13 @@ const make = (options: ReportDeliveryOptions) =>
       }
     });
 
-    const post = (target: WebhookUrl, text: string) =>
+    const post = (target: WebhookUrl, body: FormData) =>
       Effect.gen(function* () {
         const response = yield* client
           .execute(
             HttpClientRequest.post(Redacted.value(target.url)).pipe(
               HttpClientRequest.setUrlParam("wait", "true"),
-              HttpClientRequest.bodyFormData(messageBody(text)),
+              HttpClientRequest.bodyFormData(body),
             ),
           )
           .pipe(
@@ -232,7 +242,7 @@ const make = (options: ReportDeliveryOptions) =>
       }).pipe(Effect.scoped);
 
     const postWithShortWaits = (target: WebhookUrl, text: string, retries: number) =>
-      post(target, text).pipe(
+      post(target, messageBody(text)).pipe(
         Effect.catchIf(
           (error): error is ReportDeliveryError =>
             error.reason === "rate_limited" &&
@@ -288,7 +298,16 @@ const make = (options: ReportDeliveryOptions) =>
       return { status: "delivered", messageId, deliveredAt };
     });
 
-    return { status, send };
+    /**
+     * Posts a notice the server composed itself, such as a defect report. It is not remembered: a
+     * caller that must not repeat itself limits how often it sends.
+     */
+    const sendNotice = Effect.fn("ReportDelivery.sendNotice")(function* (text: string) {
+      const target = yield* webhook;
+      yield* post(target, noticeBody(text));
+    });
+
+    return { status, send, sendNotice };
   });
 
 /**

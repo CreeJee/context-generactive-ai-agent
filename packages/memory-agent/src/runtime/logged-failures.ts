@@ -1,4 +1,5 @@
 import { Cause, Effect, Option, Schema } from "effect";
+import { DefectReporter } from "./defect-reporter.ts";
 
 /**
  * Helpers for expected failures an owner logs instead of propagating. Each one logs a failure by
@@ -42,13 +43,16 @@ export const ignoreLogged =
     );
 
 /**
- * Logs a defect by the `Defect` tag only. Every defect an owner records instead of letting it end
- * the process goes through here.
+ * Logs a defect by the `Defect` tag only and hands it to the defect reporter. Every defect an owner
+ * records instead of letting it end the process goes through here.
  */
 export const logDefect =
   (message: string, annotations: Annotations = {}) =>
-  (_cause: Cause.Cause<unknown>) =>
-    Effect.logError(message, { ...annotations, error: "Defect" });
+  (cause: Cause.Cause<unknown>) =>
+    Effect.gen(function* () {
+      yield* Effect.logError(message, { ...annotations, error: "Defect" });
+      yield* (yield* DefectReporter).report({ message, annotations, cause });
+    });
 
 const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
 const decodeReasonTag = Schema.decodeUnknownOption(

@@ -6,7 +6,12 @@ import type {
 } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
 import { koreanLocalTime } from "../shared/local-time";
-import { readDeliveryStatus, sendReport, type ReportRequestFailed } from "./report-client";
+import {
+  readDeliveryStatus,
+  sendReport,
+  setDefectReports,
+  type ReportRequestFailed,
+} from "./report-client";
 
 export type DeliveryOutcome =
   | { readonly status: "idle" }
@@ -110,6 +115,13 @@ export function ReportDelivery({ text }: { text: string }) {
     );
   };
 
+  const toggleDefectReports = (enabled: boolean) =>
+    run(
+      setDefectReports(enabled).pipe(
+        Effect.match({ onSuccess: setConfig, onFailure: () => setConfig("unavailable") }),
+      ),
+    );
+
   const message = deliveryOutcomeText(outcome);
   return (
     <div className="space-y-2 text-sm">
@@ -125,6 +137,14 @@ export function ReportDelivery({ text }: { text: string }) {
           <p className="text-muted-foreground">
             개발자 웹훅 …{config.webhookIdSuffix}. 위 최종 문안이 그대로 전송됩니다.
           </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={config.defectReports}
+              onChange={(event) => toggleDefectReports(event.currentTarget.checked)}
+            />
+            앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (대화·프롬프트·자격증명은 보내지 않음)
+          </label>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"

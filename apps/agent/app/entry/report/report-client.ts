@@ -98,11 +98,14 @@ export function makeReportClient(fetcher: typeof fetch) {
   });
 
   const DeliveryCommand = Schema.fromJsonString(
-    Schema.Struct({
-      action: Schema.Literal("send"),
-      text: Schema.String,
-      resend: Schema.Boolean,
-    }),
+    Schema.Union([
+      Schema.Struct({
+        action: Schema.Literal("send"),
+        text: Schema.String,
+        resend: Schema.Boolean,
+      }),
+      Schema.Struct({ action: Schema.Literal("defect_reports"), enabled: Schema.Boolean }),
+    ]),
   );
   const deliver = <S extends Schema.Constraint>(schema: S, command: typeof DeliveryCommand.Type) =>
     Effect.flatMap(Schema.encodeEffect(DeliveryCommand)(command), (body) =>
@@ -125,7 +128,12 @@ export function makeReportClient(fetcher: typeof fetch) {
     (resend: boolean): (text: string) => ReturnType<typeof sendReportBody>;
   } & typeof sendReportBody = EffectFunction.dual(2, sendReportBody);
 
+  /** Turns sending defects to the developer webhook on or off; answers the new status. */
+  const setDefectReports = (enabled: boolean) =>
+    deliver(ReportDeliveryStatus, { action: "defect_reports", enabled });
+
   return {
+    setDefectReports,
     openReportSession,
     readReportEvidence,
     readReportDetail,
@@ -141,4 +149,5 @@ export const {
   requestDiagnosis,
   readDeliveryStatus,
   sendReport,
+  setDefectReports,
 } = makeReportClient(appFetch);

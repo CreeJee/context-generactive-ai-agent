@@ -18,6 +18,7 @@ import { buildConfigLayer, type BuildServerConfig } from "./build-config.ts";
 type MemoryAgentLayer = ReturnType<typeof memoryAgentLayer>;
 let configuredStorageRoot: string | undefined;
 let configuredBuildConfig: BuildServerConfig = {};
+let configuredRelease = "0.0.0-dev";
 
 /** Called by the bundled server entry before the first request builds any agent service. */
 export function configureAgentBackend(options: {
@@ -25,9 +26,12 @@ export function configureAgentBackend(options: {
   readonly runtimeRoot: string | null;
   /** Settings embedded in the executable; the runtime environment overrides each of them. */
   readonly buildConfig: BuildServerConfig;
+  /** The release version this executable was built as; defect reports name it. */
+  readonly release: string;
 }): void {
   configuredStorageRoot = options.storageRoot;
   configuredBuildConfig = options.buildConfig;
+  configuredRelease = options.release;
   configureRuntimeRoot(options.runtimeRoot);
 }
 const agentLayer: Layer.Layer<
@@ -50,7 +54,11 @@ function createAgentRuntime(): AgentRuntime {
   // The server entry configures storage before the first request builds this layer.
   return ManagedRuntime.make(
     agentLayer.pipe(
-      Layer.provide(Layer.suspend(() => buildConfigLayer(configuredBuildConfig))),
+      Layer.provide(
+        Layer.suspend(() =>
+          buildConfigLayer({ ...configuredBuildConfig, CONTEXT_AGENT_RELEASE: configuredRelease }),
+        ),
+      ),
       Layer.provideMerge(NodeServices.layer),
     ),
   );

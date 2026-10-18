@@ -137,7 +137,7 @@ import {
 import { contextView, lastContextUsage, recordContextUsage } from "./context-usage.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
-import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
+import { fallbackLogged, logDefect, logFailure } from "../runtime/logged-failures.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
@@ -1179,9 +1179,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const quietly = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>) =>
       effect.pipe(
         Effect.catch(logFailure("Background indexing stopped")),
-        Effect.catchDefect(() =>
-          Effect.logWarning("Background indexing stopped", { error: "Defect" }),
-        ),
+        Effect.catchDefect((defect) => logDefect("Background indexing stopped")(Cause.die(defect))),
       );
     const index = () =>
       void runEffect(
@@ -2549,8 +2547,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               Effect.catch((error) =>
                 Effect.logError("Durable Goal execution settlement failed", { error: error._tag }),
               ),
-              Effect.catchDefect(() =>
-                Effect.logError("Durable Goal execution settlement failed", { error: "Defect" }),
+              Effect.catchDefect((defect) =>
+                logDefect("Durable Goal execution settlement failed")(Cause.die(defect)),
               ),
             ),
           ),
@@ -3243,8 +3241,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     }).pipe(
       // A later wakeup tries again; the loop that forked this follow-up never stops for it.
       Effect.catch(logFailure("Subagent notification follow-up deferred")),
-      Effect.catchDefect(() =>
-        Effect.logWarning("Subagent notification follow-up deferred", { error: "Defect" }),
+      Effect.catchDefect((defect) =>
+        logDefect("Subagent notification follow-up deferred")(Cause.die(defect)),
       ),
       Effect.onInterrupt(() =>
         Effect.gen(function* () {

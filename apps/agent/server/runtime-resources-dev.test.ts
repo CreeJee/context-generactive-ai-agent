@@ -32,7 +32,7 @@ it.live(
 import * as build from "virtual:react-router/server-build";
 import { createRequestHandler } from "react-router";
 import { runtimeRoot, runtimeWorkerOptions } from "memory-agent/runtime-resources";
-build.entry.module.configureAgentBackend({ storageRoot: ${encodedStorage}, runtimeRoot: null, buildConfig: {} });
+build.entry.module.configureAgentBackend({ storageRoot: ${encodedStorage}, runtimeRoot: null, buildConfig: {}, release: "0.0.0-dev" });
 const exportResult = { status: 0, html: "", root: null, workerRoot: null, marker: "" };
 try {
   const response = await createRequestHandler(build, "development")(

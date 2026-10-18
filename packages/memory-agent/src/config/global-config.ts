@@ -98,6 +98,8 @@ export const Settings = Schema.Struct({
   crossProjectRecall: Schema.optional(Schema.Boolean),
   /** Send matching memory to an external agent in a direct conversation. Off when unset. */
   externalAgentMemory: Schema.optional(Schema.Boolean),
+  /** Send defects to the developer's Discord webhook when one is set. On when unset. */
+  defectReports: Schema.optional(Schema.Boolean),
 });
 export type Settings = typeof Settings.Type;
 

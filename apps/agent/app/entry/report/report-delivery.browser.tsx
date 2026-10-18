@@ -10,7 +10,7 @@ describe("report review and delivery", () => {
   it.live("sends the reviewed text to the server's webhook and falls back on failure", () =>
     Effect.gen(function* () {
       const replies = [
-        Response.json({ configured: true, webhookIdSuffix: "5678" }),
+        Response.json({ configured: true, webhookIdSuffix: "5678", defectReports: true }),
         new Response(null, { status: 504 }),
         Response.json({ status: "uncertain_duplicate", attemptedAt: "2026-10-12T00:00:00.000Z" }),
       ];

@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { KanbanStorageFailed } from "../kanban/card-attempts.ts";
+import { DefectReporter } from "./defect-reporter.ts";
 import { superviseLoopStep, type LoopHealth } from "./loop-health.ts";
 
 const storageFailed = KanbanStorageFailed.make({ operation: "card", reason: { _tag: "Missing" } });
@@ -70,18 +71,24 @@ describe("superviseLoopStep", () => {
     }),
   );
 
-  it.effect("stops on a defect at once, without retrying", () =>
+  it.effect("stops on a defect at once, without retrying, and reports it", () =>
     Effect.gen(function* () {
       const { seen, runs, supervise } = yield* supervised;
+      const reported = yield* Ref.make<string[]>([]);
       const outcome = yield* supervise(
         Effect.andThen(
           Ref.update(runs, (n) => n + 1),
           Effect.die("bug"),
         ),
+      ).pipe(
+        Effect.provideService(DefectReporter, {
+          report: (event) => Ref.update(reported, (all) => [...all, event.message]),
+        }),
       );
       expect(outcome).toEqual({ _tag: "Stopped", health: { _tag: "Defected" } });
       expect(yield* Ref.get(runs)).toBe(1);
       expect(yield* Ref.get(seen)).toEqual([{ _tag: "Defected" }]);
+      expect(yield* Ref.get(reported)).toEqual(["loop step failed"]);
     }),
   );
 });
