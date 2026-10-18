@@ -4,7 +4,7 @@ import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
@@ -36,9 +36,10 @@ export interface Redaction {
   readonly hidden: number;
 }
 
-export class SecretRedactionFailed extends Data.TaggedError("SecretRedactionFailed")<{
-  readonly cause: unknown;
-}> {}
+export class SecretRedactionFailed extends Schema.TaggedError<SecretRedactionFailed>()(
+  "SecretRedactionFailed",
+  { cause: Schema.Defect() },
+) {}
 
 const credentialName =
   "(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|SESSION_?KEY|AUTH)";
@@ -173,7 +174,7 @@ const make = Effect.sync(() => {
     Effect.gen(function* (): Effect.fn.Return<RedactedView, SecretRedactionFailed> {
       if (text.length === 0) return { text, hidden: [] };
       const detected = yield* formatFindings(text).pipe(
-        Effect.mapError((failure) => new SecretRedactionFailed({ cause: failure.cause })),
+        Effect.mapError((failure) => SecretRedactionFailed.make({ cause: failure.cause })),
       );
       return replaceFindings(text, mergeFindings([...detected, ...assignmentFindings(text)]));
     });

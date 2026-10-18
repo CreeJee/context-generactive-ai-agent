@@ -3,6 +3,7 @@
 // concurrent runs from sharing an allowlist. The host spawns the wrapped command itself and keeps
 // this worker alive, serving the proxy, until the command has exited. In a checkout Node runs this
 // file as TypeScript; the executable ships it bundled (`scripts/package.ts`).
+import { ignoreLogged } from "../runtime/best-effort.ts";
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { workerData } from "node:worker_threads";
 import { Effect, Layer, Schema } from "effect";
@@ -65,7 +66,8 @@ const prepare = Effect.gen(function* () {
         }),
       catch: setupFailed,
     }),
-    () => Effect.ignore(Effect.tryPromise(() => SandboxManager.reset())),
+    () =>
+      Effect.tryPromise(() => SandboxManager.reset()).pipe(ignoreLogged("sandbox_reset_failed")),
   );
   const wrapped = yield* Effect.tryPromise({
     try: (signal) =>

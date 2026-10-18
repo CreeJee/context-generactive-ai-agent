@@ -150,7 +150,12 @@ function runSandboxedBody<E>(
       // Without the worker's report the command's own stderr stands.
       const stderr = yield* client.Finish({ stderr: result.stderr }).pipe(
         Effect.timeoutOption(finishTimeout),
-        Effect.orElseSucceed(() => Option.none<string>()),
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logDebug("sandbox_report_unavailable", { error: error._tag }),
+            Option.none<string>(),
+          ),
+        ),
         Effect.map(Option.getOrElse(() => result.stderr)),
       );
       return { ...result, stderr };
