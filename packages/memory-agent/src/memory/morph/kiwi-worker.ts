@@ -1,16 +1,15 @@
+import { NodeFileSystem, NodePath, NodeWorkerRunner } from "@effect/platform-node";
+import { Cause, Effect, FileSystem, HashSet, Layer, Path, Schema } from "effect";
+import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
-import { Effect, FileSystem, HashSet, Layer, Path } from "effect";
-import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { KiwiRpcs, KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
 // Kiwi (Korean morphological analyzer) in a worker thread: the WASM model needs ~850 MB, so it
 // lives here and the main thread can end the worker when it has been idle.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createRequire } from "node:module";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { parentPort, workerData } from "node:worker_threads";
+import { workerData } from "node:worker_threads";
 import { KiwiBuilder, type Kiwi } from "kiwi-nlp";
-
-if (!(parentPort !== null)) throw new Error("Kiwi entry requires a worker parent port");
-const parent = parentPort;
 
 /** Parts of speech worth searching by: nouns, numerals, verb/adjective stems, roots, Hanja. */
 const kept = HashSet.fromIterable(["NNG", "NNP", "NR", "VV", "VA", "XR", "SH"]);
@@ -37,11 +36,13 @@ const lightStems = HashSet.fromIterable([
  */
 const latinOrNumber = /[\p{Script=Latin}\p{Nd}]+/gu;
 
+const failure = (stage: KiwiWorkerFailed["stage"]) => (cause: unknown) =>
+  KiwiWorkerFailed.make({ stage, reason: String(nativeFailure(Cause.fail(cause)).cause) });
+
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const load = Effect.fn("KiwiWorker.load")(function* () {
-  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
-  const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
-  const paths = yield* Effect.provideContext(Path.Path, services);
+const load = Effect.fn("KiwiWorker.load")(function* (modelDirectory: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
   // Resolve beside this worker's own dependency so bundled callers retain the correct WASM path.
   const wasmPath = paths.join(
     paths.dirname(createRequire(import.meta.url).resolve("kiwi-nlp")),
@@ -49,8 +50,8 @@ const load = Effect.fn("KiwiWorker.load")(function* () {
   );
   const builder = yield* nativePromise(() => KiwiBuilder.create(wasmPath));
   const modelFiles: Record<string, Uint8Array> = {};
-  for (const name of yield* fs.readDirectory(workerData.modelDirectory)) {
-    const path = paths.join(workerData.modelDirectory, name);
+  for (const name of yield* fs.readDirectory(modelDirectory)) {
+    const path = paths.join(modelDirectory, name);
     // readdir's previous isFile contract excluded symbolic links, including dangling links.
     const link = yield* fs.readLink(path).pipe(Effect.result);
     if (link._tag === "Success") continue;
@@ -87,26 +88,37 @@ function termsOf(kiwi: Kiwi, input: string) {
   return terms.map((term) => term.toLowerCase());
 }
 
-const ready = runNativeEffect(Effect.scoped(load())).then(
-  (kiwi) => ({ kind: "ready" as const, kiwi }),
-  (error) => ({ kind: "failed" as const, error: String(error) }),
+const handlers = KiwiRpcs.toLayer(
+  Effect.gen(function* () {
+    const setup = yield* Schema.decodeUnknownEffect(KiwiWorkerData)(workerData).pipe(
+      Effect.mapError(failure("load")),
+    );
+    const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+    // Built once per worker; a failed build stays failed, and the host starts a new worker.
+    const kiwi = yield* Effect.cached(
+      load(setup.modelDirectory).pipe(
+        Effect.provideContext(services),
+        Effect.mapError(failure("load")),
+      ),
+    );
+    return KiwiRpcs.of({
+      Load: () => Effect.asVoid(kiwi),
+      Terms: ({ texts }) =>
+        Effect.flatMap(kiwi, (loaded) =>
+          Effect.try({
+            try: () => texts.map((text) => termsOf(loaded, text)),
+            catch: failure("run"),
+          }),
+        ),
+    });
+  }),
+).pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)));
+
+const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
+// One request at a time: tokenizing is synchronous, and the host bounds requests the same way.
+const server = RpcServer.layer(KiwiRpcs, { concurrency: 1 }).pipe(
+  Layer.provide(handlers),
+  Layer.provide(protocol),
 );
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-parent.on("message", ({ id, texts }: { id: number; texts: string[] }) => {
-  void runNativeEffect(
-    Effect.gen(function* () {
-      const state = yield* nativePromise(() => ready);
-      if (state.kind === "failed")
-        return parent.postMessage({ id, kind: "error", error: state.error });
-      const terms = texts.map((text) => termsOf(state.kiwi, text));
-      parent.postMessage({ id, kind: "terms", terms });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() => {
-          parent.postMessage({ id, kind: "error", error: String(nativeFailure(cause).cause) });
-        }),
-      ),
-    ),
-  );
-});
+await runNativeEffect(Layer.launch(server));

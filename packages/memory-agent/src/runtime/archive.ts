@@ -244,7 +244,8 @@ export const archiveHostLayer = Layer.effect(
   ),
 );
 
-const installerLayer = ArchiveInstaller.layer.pipe(
+/** The installer on the Node host, for Effect consumers. */
+export const archiveInstallerLayer = ArchiveInstaller.layer.pipe(
   Layer.provide(archiveHostLayer),
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
 );
@@ -278,7 +279,7 @@ function installArchiveBody(
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const context = yield* Layer.build(installerLayer);
+        const context = yield* Layer.build(archiveInstallerLayer);
         return yield* Effect.flatMap(ArchiveInstaller, (installer) =>
           installer.install({ archive, target }),
         ).pipe(

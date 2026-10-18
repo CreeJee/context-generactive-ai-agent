@@ -283,7 +283,7 @@ const make = (tuning: SearchTuning) =>
       const terms = yield* Effect.gen(function* () {
         if (!analyzer.ready()) {
           analyzer.warm();
-          return yield* new MorphAnalysisFailed({ reason: "not_ready" });
+          return yield* MorphAnalysisFailed.make({ reason: "not_ready" });
         }
         const [tokens = []] = yield* analyzer.terms([input.query]);
         return EffectArray.dedupe(tokens).filter((term) => term.length > 0);
