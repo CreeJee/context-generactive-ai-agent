@@ -1,34 +1,16 @@
 // Native host boundary: worker threads and a scratch folder for the sandbox runtime's sockets.
+import { NodeWorker } from "@effect/platform-node";
+// No Effect service reports the home or temp folder the policy names.
 import { homedir, tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
-import {
-  Cause,
-  Duration,
-  Effect,
-  FileSystem,
-  Function as EffectFunction,
-  Option,
-  Queue,
-  Schema,
-} from "effect";
+import { Duration, Effect, FileSystem, Function as EffectFunction, Layer, Option } from "effect";
+import { RpcClient } from "effect/rpc";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import type { CommandResult } from "./run.ts";
-import {
-  SandboxReply,
-  SandboxUnavailableReason,
-  type SandboxFinish,
-  type SandboxSetup,
-} from "./sandbox-protocol.ts";
+import { SandboxRpcs, SandboxUnavailable, type SandboxSetup } from "./sandbox-protocol.ts";
 
-export class SandboxUnavailable extends Schema.TaggedError<SandboxUnavailable>()(
-  "SandboxUnavailable",
-  { reason: SandboxUnavailableReason, detail: Schema.String },
-) {
-  override get message() {
-    return `sandbox_unavailable (${this.reason}): ${this.detail}`;
-  }
-}
+export { SandboxUnavailable } from "./sandbox-protocol.ts";
 
 /**
  * Credential stores under the home folder that scripts cannot read. The file tools' name-based
@@ -117,24 +99,6 @@ export const sandboxPolicy = (input: {
   };
 };
 
-/** What a worker's uncaught error carries that is safe to show. */
-const WorkerError = Schema.Struct({ message: Schema.String });
-
-/** The wrapped command line from the worker's first reply, or why the sandbox cannot run it. */
-const wrappedCommand = (
-  reply: SandboxReply,
-  unavailable: (detail: string) => SandboxUnavailable,
-): Effect.Effect<string, SandboxUnavailable> => {
-  switch (reply._tag) {
-    case "Wrapped":
-      return Effect.succeed(reply.command);
-    case "Unavailable":
-      return Effect.fail(SandboxUnavailable.make({ reason: reply.reason, detail: reply.detail }));
-    case "Finished":
-      return Effect.fail(unavailable("the sandbox worker finished before it started"));
-  }
-};
-
 /** How long the worker gets to report what it blocked once the command has exited. */
 const finishTimeout = Duration.seconds(5);
 
@@ -166,49 +130,33 @@ function runSandboxedBody<E>(
       const scratch = yield* fileSystem
         .makeTempDirectoryScoped({ prefix: "context-agent-sandbox-" })
         .pipe(Effect.mapError(() => unavailable("could not create the sandbox's scratch folder")));
-      const replies = yield* Queue.unbounded<SandboxReply, SandboxUnavailable>();
-      const lost = (detail: string) =>
-        Queue.failCauseUnsafe(replies, Cause.fail(unavailable(detail)));
-      const worker = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () =>
-            new Worker(runtimeWorker("sandbox-worker"), {
-              ...runtimeWorkerOptions({ sandbox: setup }),
-              env: { ...process.env, TMPDIR: scratch },
-            }),
-          catch: () => unavailable("could not start the sandbox worker"),
-        }),
-        (worker) => Effect.promise(() => worker.terminate()),
-      );
-      worker.on("message", (message) =>
-        Option.match(Schema.decodeUnknownOption(SandboxReply)(message), {
-          onNone: () => lost("invalid sandbox worker reply"),
-          onSome: (reply) => Queue.offerUnsafe(replies, reply),
-        }),
-      );
-      worker.on("error", (error) =>
-        lost(
-          Option.match(Schema.decodeUnknownOption(WorkerError)(error), {
-            onNone: () => "the sandbox worker failed",
-            onSome: ({ message }) => message,
+      const workers = NodeWorker.layer(
+        () =>
+          new Worker(runtimeWorker("sandbox-worker"), {
+            ...runtimeWorkerOptions({ sandbox: setup }),
+            env: { ...process.env, TMPDIR: scratch },
           }),
-        ),
       );
-      worker.on("exit", () => lost("the sandbox worker stopped"));
+      const protocol = yield* Layer.build(
+        RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
+      ).pipe(Effect.mapError(() => unavailable("could not start the sandbox worker")));
+      const client = yield* RpcClient.make(SandboxRpcs).pipe(Effect.provideContext(protocol));
 
-      const prepared = yield* Queue.take(replies);
-      const command = yield* wrappedCommand(prepared, unavailable);
+      const command = yield* client
+        .Prepare()
+        .pipe(
+          Effect.catchTag("RpcClientError", () =>
+            Effect.fail(unavailable("the sandbox worker stopped")),
+          ),
+        );
       const result = yield* run(command);
-      worker.postMessage({ _tag: "Finish", stderr: result.stderr } satisfies SandboxFinish);
-      const finished = yield* Queue.take(replies).pipe(
+      // Without the worker's report the command's own stderr stands.
+      const stderr = yield* client.Finish({ stderr: result.stderr }).pipe(
         Effect.timeoutOption(finishTimeout),
-        Effect.orElseSucceed(() => Option.none()),
+        Effect.orElseSucceed(() => Option.none<string>()),
+        Effect.map(Option.getOrElse(() => result.stderr)),
       );
-      const stderr = Option.match(finished, {
-        onNone: () => null,
-        onSome: (reply) => (reply._tag === "Finished" ? reply.stderr : null),
-      });
-      return { ...result, stderr: stderr ?? result.stderr };
+      return { ...result, stderr };
     }),
   );
 }
