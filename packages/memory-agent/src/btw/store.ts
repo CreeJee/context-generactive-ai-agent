@@ -1,24 +1,13 @@
-import type { SQLOutputValue } from "node:sqlite";
 import type { ModelMessage } from "@tanstack/ai";
 import {
   defineAIPersistence,
   defineMessageStore,
   type MessagePage,
 } from "@tanstack/ai-persistence";
-import {
-  Clock,
-  Context,
-  Crypto,
-  DateTime,
-  Effect,
-  Function as EffectFunction,
-  Layer,
-  Result,
-  Schema,
-} from "effect";
+import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Attachments } from "../attachments/attachments.ts";
-import { storePromise } from "../chat-state/persistence.ts";
-import { Database } from "../db/database.ts";
+import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { messageText } from "../messages/text.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -39,23 +28,11 @@ const ThreadRow = Schema.Struct({
   created_at: Schema.String,
   updated_at: Schema.Finite,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeThreadRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(ThreadRow),
-  Result.getOrThrow,
-);
-const MessagesRow = Schema.Struct({ messages: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeMessagesRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(MessagesRow),
-  Result.getOrThrow,
-);
 
 // Stored JSON was written by this store from the same TanStack types, so parsing restores them.
 const parseMessages = (text: string): ModelMessage[] => JSON.parse(text);
 
-function toThread(row: Record<string, SQLOutputValue>): BtwThread {
-  const decoded = decodeThreadRow(row);
+function toThread(decoded: typeof ThreadRow.Type): BtwThread {
   const firstQuestion = parseMessages(decoded.messages).find((message) => message.role === "user");
   return {
     id: decoded.id,
@@ -70,22 +47,32 @@ function toThread(row: Record<string, SQLOutputValue>): BtwThread {
 const threadNotFound = (threadId: string) =>
   BtwError.make({ reason: BtwThreadNotFound.make({ threadId }) });
 
-const selectThread = `SELECT t.*, s.project_id FROM btw_threads t
-  JOIN sessions s ON s.id = t.parent_session_id`;
-
 const make = Effect.gen(function* () {
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const sessions = yield* Sessions;
   const attachments = yield* Attachments;
   const crypto = yield* Crypto.Crypto;
-  const effectClock = yield* Clock.Clock;
+  const run = runNativeEffectWith(yield* Effect.context());
 
-  const getRow = sqlite.prepare(`${selectThread} WHERE t.id = ?`);
-  const selectMessages = sqlite.prepare("SELECT messages FROM btw_threads WHERE id = ?");
-  // An UPDATE, never an upsert: a run still finishing cannot bring a deleted thread back.
-  const updateMessages = sqlite.prepare(
-    "UPDATE btw_threads SET messages = ?, updated_at = ? WHERE id = ?",
-  );
+  const selectThread = sql.literal(`SELECT t.*, s.project_id FROM btw_threads t
+    JOIN sessions s ON s.id = t.parent_session_id`);
+  const getRow = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: ThreadRow,
+    execute: (threadId) => sql`${selectThread} WHERE t.id = ${threadId}`,
+  });
+  const listRows = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: ThreadRow,
+    execute: (parentSessionId) => sql`
+      ${selectThread} WHERE t.parent_session_id = ${parentSessionId}
+      ORDER BY t.created_at DESC, t.id`,
+  });
+  const selectMessages = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ messages: Schema.String }),
+    execute: (threadId) => sql`SELECT messages FROM btw_threads WHERE id = ${threadId}`,
+  });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   function loadThread(threadId: string): Promise<ModelMessage[]>;
@@ -96,19 +83,23 @@ const make = Effect.gen(function* () {
   ): Promise<ModelMessage[] | MessagePage>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
-    return storePromise(() => {
-      const row = selectMessages.get(threadId);
-      const stored = row !== undefined ? parseMessages(decodeMessagesRow(row).messages) : [];
-      if (options?.limit === undefined) return stored;
-      const messages = stored.map((message, index) =>
-        message.id === undefined ? { ...message, id: `btw:${threadId}:${index}` } : message,
-      );
-      const end =
-        options.before === undefined
-          ? messages.length
-          : messages.findIndex((message) => message.id === options.before);
-      return { messages: end < 0 ? [] : messages.slice(0, end), truncated: false };
-    });
+    return run(
+      Effect.map(selectMessages(threadId), (row) => {
+        const stored = Option.match(row, {
+          onNone: (): ModelMessage[] => [],
+          onSome: ({ messages }) => parseMessages(messages),
+        });
+        if (options?.limit === undefined) return stored;
+        const messages = stored.map((message, index) =>
+          message.id === undefined ? { ...message, id: `btw:${threadId}:${index}` } : message,
+        );
+        const end =
+          options.before === undefined
+            ? messages.length
+            : messages.findIndex((message) => message.id === options.before);
+        return { messages: end < 0 ? [] : messages.slice(0, end), truncated: false };
+      }),
+    );
   }
 
   /**
@@ -121,25 +112,28 @@ const make = Effect.gen(function* () {
         loadThread,
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         saveThread(threadId, next) {
-          return storePromise(() => {
-            updateMessages.run(
-              JSON.stringify(next.filter((message) => !isEmptyUserText(message))),
-              effectClock.currentTimeMillisUnsafe(),
-              threadId,
-            );
-          });
+          const messages = JSON.stringify(next.filter((message) => !isEmptyUserText(message)));
+          // An UPDATE, never an upsert: a run still finishing cannot bring a deleted thread back.
+          return run(
+            Effect.flatMap(Clock.currentTimeMillis, (updatedAt) =>
+              Effect.asVoid(sql`
+                UPDATE btw_threads SET messages = ${messages}, updated_at = ${updatedAt}
+                WHERE id = ${threadId}`),
+            ),
+          );
         },
       }),
     },
   });
 
   const get = (threadId: string) =>
-    Effect.suspend(() => {
-      const row = getRow.get(threadId);
-      return row !== undefined
-        ? Effect.succeed(toThread(row))
-        : Effect.fail(threadNotFound(threadId));
-    });
+    Effect.flatMap(
+      getRow(threadId),
+      Option.match({
+        onNone: () => Effect.fail(threadNotFound(threadId)),
+        onSome: (row) => Effect.succeed(toThread(row)),
+      }),
+    );
 
   return {
     persistence,
@@ -159,33 +153,28 @@ const make = Effect.gen(function* () {
           );
         const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
         const createdAt = yield* Clock.currentTimeMillis;
-        sqlite
-          .prepare(
-            "INSERT INTO btw_threads (id, parent_session_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
-          )
-          .run(id, parentSessionId, DateTime.formatIso(DateTime.makeUnsafe(createdAt)), createdAt);
+        yield* sql`
+          INSERT INTO btw_threads (id, parent_session_id, created_at, updated_at)
+          VALUES (${id}, ${parentSessionId}, ${DateTime.formatIso(DateTime.makeUnsafe(createdAt))},
+            ${createdAt})`;
         return yield* get(id);
       }),
 
     /** The main conversation's BTW threads, newest first. */
     list: (parentSessionId: string) =>
-      Effect.sync(() =>
-        sqlite
-          .prepare(`${selectThread} WHERE t.parent_session_id = ? ORDER BY t.created_at DESC, t.id`)
-          .all(parentSessionId)
-          .map(toThread),
-      ),
+      Effect.map(listRows(parentSessionId), (rows) => rows.map(toThread)),
 
     /** Keeps the images a BTW message carried until the thread is deleted. */
     link: (threadId: string, attachmentIds: readonly string[]) =>
-      Effect.sync(() => {
-        const insert = sqlite.prepare(
-          "INSERT OR IGNORE INTO btw_attachments (thread_id, attachment_id) VALUES (?, ?)",
-        );
-        atomic(() => {
-          for (const attachmentId of attachmentIds) insert.run(threadId, attachmentId);
-        });
-      }),
+      attachmentIds.length === 0
+        ? Effect.void
+        : Effect.asVoid(sql`
+            INSERT OR IGNORE INTO btw_attachments ${sql.insert(
+              attachmentIds.map((attachmentId) => ({
+                thread_id: threadId,
+                attachment_id: attachmentId,
+              })),
+            )}`),
 
     /**
      * Removes the thread with its messages, tool calls and results and attachment links in one
@@ -194,8 +183,8 @@ const make = Effect.gen(function* () {
      */
     remove: (threadId: string) =>
       Effect.gen(function* () {
-        const deleted = sqlite.prepare("DELETE FROM btw_threads WHERE id = ?").run(threadId);
-        if (deleted.changes === 0) return yield* threadNotFound(threadId);
+        const deleted = yield* sql`DELETE FROM btw_threads WHERE id = ${threadId} RETURNING id`;
+        if (deleted.length === 0) return yield* threadNotFound(threadId);
         yield* attachments.purgeOrphans.pipe(
           Effect.mapError(() =>
             BtwError.make({ reason: BtwStorageFailed.make({ operation: "purge_attachments" }) }),
