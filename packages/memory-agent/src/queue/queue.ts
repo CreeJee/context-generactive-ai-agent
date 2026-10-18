@@ -1,9 +1,16 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import type { SQLOutputValue } from "node:sqlite";
-import { MutableHashMap, Option, Clock, Context, Data, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import {
+  Clock,
+  Context,
+  Crypto,
+  Data,
+  Effect,
+  Layer,
+  MutableHashMap,
+  Option,
+  Schema,
+} from "effect";
+import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "./queue-state.ts";
 
 const Row = Schema.Struct({
@@ -19,11 +26,8 @@ const Row = Schema.Struct({
   steered: Schema.Literals([0, 1]),
   created_at: Schema.Finite,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRow = EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow);
 
-function toMessage(raw: Record<string, SQLOutputValue>): QueuedMessage {
-  const row = decodeRow(raw);
+function toMessage(row: typeof Row.Type): QueuedMessage {
   let state: QueueItemState;
   switch (row.state) {
     case "waiting":
@@ -59,219 +63,253 @@ export class QueueChangeRefused extends Data.TaggedError("QueueChangeRefused")<{
   readonly reason: "not_found" | "delivered" | "not_held" | "reserved";
 }> {}
 
-const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
+const SessionMessage = Schema.Struct({ sessionId: Schema.String, id: Schema.String });
 
-  const { sqlite } = yield* Database;
-  const now = () => effectClock.currentTimeMillisUnsafe();
-  // All queue methods and SQLite statements here are synchronous within this service instance.
+const make = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
+  const now = Clock.currentTimeMillis;
+  // Reservations are checked and changed without a yield in between, so no two fibres claim one.
   const reservations = MutableHashMap.empty<
     string,
     { readonly id: string; readonly holdOnRelease: boolean }
   >();
-  const get = (sessionId: string, id: string) => {
-    const row = sqlite
-      .prepare("SELECT * FROM queued_messages WHERE session_id = ? AND id = ?")
-      .get(sessionId, id);
-    return isTruthy(row) ? toMessage(row) : null;
-  };
+  const findOne = SqlSchema.findOneOption({
+    Request: SessionMessage,
+    Result: Row,
+    execute: ({ sessionId, id }) =>
+      sql`SELECT * FROM queued_messages WHERE session_id = ${sessionId} AND id = ${id}`,
+  });
+  const get = (sessionId: string, id: string) =>
+    findOne({ sessionId, id }).pipe(
+      Effect.map(Option.match({ onNone: () => null, onSome: toMessage })),
+    );
   /** The message, if it may still change (not delivered). */
-  const pending = (sessionId: string, id: string) =>
-    Effect.suspend(() => {
-      const message = get(sessionId, id);
-      if (!(message !== null))
-        return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
-      if (Option.getOrUndefined(MutableHashMap.get(reservations, sessionId))?.id === id)
-        return Effect.fail(new QueueChangeRefused({ id, reason: "reserved" }));
-      if (message.state.kind === "delivered")
-        return Effect.fail(new QueueChangeRefused({ id, reason: "delivered" }));
-      return Effect.succeed(message);
-    });
+  const pending = Effect.fnUntraced(function* (sessionId: string, id: string) {
+    const message = yield* get(sessionId, id);
+    if (message === null) return yield* new QueueChangeRefused({ id, reason: "not_found" });
+    if (Option.getOrUndefined(MutableHashMap.get(reservations, sessionId))?.id === id)
+      return yield* new QueueChangeRefused({ id, reason: "reserved" });
+    if (message.state.kind === "delivered")
+      return yield* new QueueChangeRefused({ id, reason: "delivered" });
+    return message;
+  });
   // Every change of state, editing included, takes a message off the steered path.
   const setState = (
     id: string,
     state: "waiting" | "editing" | "held" | "failed",
     fields: { text?: string; draft?: string | null; failure?: string | null } = {},
   ) =>
-    sqlite
-      .prepare(
-        "UPDATE queued_messages SET state = ?, text = coalesce(?, text), draft = ?, failure = ?, steered = 0, updated_at = ? WHERE id = ?",
-      )
-      .run(state, fields.text ?? null, fields.draft ?? null, fields.failure ?? null, now(), id);
+    Effect.flatMap(
+      now,
+      (at) => sql`
+        UPDATE queued_messages SET state = ${state}, text = coalesce(${fields.text ?? null}, text),
+          draft = ${fields.draft ?? null}, failure = ${fields.failure ?? null}, steered = 0,
+          updated_at = ${at}
+        WHERE id = ${id}`,
+    );
+  /** Checks the message and changes it in one transaction, then reads it back. */
+  const change = <A, E>(
+    sessionId: string,
+    id: string,
+    apply: (message: QueuedMessage) => Effect.Effect<A, E>,
+  ) =>
+    sql.withTransaction(
+      pending(sessionId, id).pipe(Effect.flatMap(apply), Effect.andThen(get(sessionId, id))),
+    );
+  const list = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: Schema.String, recentRunId: Schema.NullOr(Schema.String) }),
+    Result: Row,
+    execute: ({ sessionId, recentRunId }) => sql`
+      SELECT * FROM queued_messages
+      WHERE session_id = ${sessionId} AND (state != 'delivered' OR run_id = ${recentRunId})
+      ORDER BY seq`,
+  });
+  // The waiting prefix: waiting rows before the first message being edited or held.
+  const deliverable = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Row,
+    execute: (sessionId) => sql`
+      SELECT * FROM queued_messages
+      WHERE session_id = ${sessionId} AND state = 'waiting' AND seq < coalesce(
+        (SELECT min(seq) FROM queued_messages
+         WHERE session_id = ${sessionId} AND state IN ('editing', 'held')),
+        9007199254740991)
+      ORDER BY seq`,
+  });
+  // Only one row is needed for a next turn; do not materialize the whole waiting prefix.
+  const head = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Row,
+    execute: (sessionId) => sql`
+      SELECT * FROM queued_messages
+      WHERE session_id = ${sessionId} AND state IN ('waiting', 'editing', 'held')
+      ORDER BY seq LIMIT 1`,
+  });
+  const insert = SqlSchema.findOne({
+    Request: Schema.Struct({
+      id: Schema.String,
+      sessionId: Schema.String,
+      text: Schema.String,
+      attachmentIds: Schema.fromJsonString(Schema.Array(Schema.String)),
+      steered: Schema.Literals([0, 1]),
+      at: Schema.Finite,
+    }),
+    Result: Row,
+    execute: (row) => sql`
+      INSERT INTO queued_messages (id, session_id, seq, text, attachment_ids, state, steered, created_at, updated_at)
+      VALUES (${row.id}, ${row.sessionId},
+        (SELECT coalesce(max(seq), 0) + 1 FROM queued_messages WHERE session_id = ${row.sessionId}),
+        ${row.text}, ${row.attachmentIds}, 'waiting', ${row.steered}, ${row.at}, ${row.at})
+      RETURNING *`,
+  });
 
   // A new process has no page editing and no run to deliver into: what was still on its way is
   // restored for the user to confirm, with any unsaved edit kept as a draft.
-  sqlite
-    .prepare(
-      "UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ? WHERE state IN ('waiting', 'editing')",
-    )
-    .run(now());
+  yield* sql`
+    UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ${yield* now}
+    WHERE state IN ('waiting', 'editing')`;
+
+  const listMessages = (sessionId: string, recentRunId: string | null) =>
+    Effect.map(list({ sessionId, recentRunId }), (rows) => rows.map(toMessage));
 
   return {
     /**
      * Messages still to deliver, plus those delivered by `recentRunId` so a page can show them as
      * delivered until its transcript catches up.
      */
-    list(sessionId: string, recentRunId: string | null): QueuedMessage[] {
-      return sqlite
-        .prepare(
-          "SELECT * FROM queued_messages WHERE session_id = ? AND (state != 'delivered' OR run_id = ?) ORDER BY seq",
-        )
-        .all(sessionId, recentRunId)
-        .map(toMessage);
-    },
+    list: listMessages,
 
     /** Advisory snapshot; the delivery path always selects again from current queue state. */
-    snapshot(sessionId: string, recentRunId: string | null = null): QueueSnapshot {
-      const items = this.list(sessionId, recentRunId);
-      // Only the first nonterminal entry determines whether the page may request the next turn.
-      // Batch selection for a tool boundary happens separately against the latest queue state.
-      for (const item of items) {
-        switch (item.state.kind) {
-          case "failed":
-          case "delivered":
-            continue;
-          case "waiting":
-            return { items, nextDelivery: { kind: item.state.steered ? "server" : "ready" } };
-          case "editing":
-          case "held":
-            return {
-              items,
-              nextDelivery: { kind: "blocked", messageId: item.id, reason: item.state.kind },
-            };
+    snapshot: (sessionId: string, recentRunId: string | null = null) =>
+      Effect.map(listMessages(sessionId, recentRunId), (items): QueueSnapshot => {
+        // Only the first nonterminal entry determines whether the page may request the next turn.
+        // Batch selection for a tool boundary happens separately against the latest queue state.
+        for (const item of items) {
+          switch (item.state.kind) {
+            case "failed":
+            case "delivered":
+              continue;
+            case "waiting":
+              return { items, nextDelivery: { kind: item.state.steered ? "server" : "ready" } };
+            case "editing":
+            case "held":
+              return {
+                items,
+                nextDelivery: { kind: "blocked", messageId: item.id, reason: item.state.kind },
+              };
+          }
         }
-      }
-      return { items, nextDelivery: { kind: "empty" } };
-    },
+        return { items, nextDelivery: { kind: "empty" } };
+      }),
 
     /**
      * Adds a message at the end. A steered one takes the waiting messages before it along, since
      * it cannot reach the model ahead of them.
      */
-    add(
-      sessionId: string,
-      text: string,
-      attachmentIds: readonly string[],
-      steered: boolean,
-    ): QueuedMessage {
-      if (steered)
-        sqlite
-          .prepare(
-            "UPDATE queued_messages SET steered = 1 WHERE session_id = ? AND state = 'waiting'",
-          )
-          .run(sessionId);
-      const row = sqlite
-        .prepare(
-          `INSERT INTO queued_messages (id, session_id, seq, text, attachment_ids, state, steered, created_at, updated_at)
-           VALUES (?, ?, (SELECT coalesce(max(seq), 0) + 1 FROM queued_messages WHERE session_id = ?), ?, ?, 'waiting', ?, ?, ?)
-           RETURNING *`,
-        )
-        .get(
-          randomUUID(),
-          sessionId,
+    add: (sessionId: string, text: string, attachmentIds: readonly string[], steered: boolean) =>
+      Effect.gen(function* () {
+        const id = yield* crypto.randomUUIDv4();
+        const at = yield* now;
+        if (steered)
+          yield* sql`
+            UPDATE queued_messages SET steered = 1
+            WHERE session_id = ${sessionId} AND state = 'waiting'`;
+        const row = yield* insert({
+          id,
           sessionId,
           text,
-          JSON.stringify(attachmentIds),
-          steered ? 1 : 0,
-          now(),
-          now(),
-        );
-      if (!isTruthy(row)) throw new Error("Queued message insert returned no row");
-      return toMessage(row);
-    },
+          attachmentIds,
+          steered: steered ? 1 : 0,
+          at,
+        });
+        return toMessage(row);
+      }).pipe(sql.withTransaction),
 
     get,
 
     /** Stores unsaved edit text. A waiting message becomes editing; a held one stays held. */
     edit: (sessionId: string, id: string, draft: string) =>
-      Effect.map(pending(sessionId, id), (message) => {
-        setState(id, message.state.kind === "held" ? "held" : "editing", { draft });
-        return get(sessionId, id);
-      }),
+      change(sessionId, id, (message) =>
+        setState(id, message.state.kind === "held" ? "held" : "editing", { draft }),
+      ),
 
     save: (sessionId: string, id: string, text: string) =>
-      Effect.map(pending(sessionId, id), (message) => {
-        setState(id, message.state.kind === "held" ? "held" : "waiting", { text });
-        return get(sessionId, id);
-      }),
+      change(sessionId, id, (message) =>
+        setState(id, message.state.kind === "held" ? "held" : "waiting", { text }),
+      ),
 
     remove: (sessionId: string, id: string) =>
-      Effect.map(pending(sessionId, id), () => {
-        sqlite.prepare("DELETE FROM queued_messages WHERE id = ?").run(id);
-        return null;
-      }),
+      sql.withTransaction(
+        pending(sessionId, id).pipe(
+          Effect.andThen(sql`DELETE FROM queued_messages WHERE id = ${id}`),
+          Effect.as(null),
+        ),
+      ),
 
     confirm: (sessionId: string, id: string) =>
-      Effect.flatMap(pending(sessionId, id), (message) => {
-        switch (message.state.kind) {
-          case "held":
-          case "failed":
-            setState(id, "waiting");
-            return Effect.succeed(get(sessionId, id));
-          case "waiting":
-          case "editing":
-          case "delivered":
-            return Effect.fail(new QueueChangeRefused({ id, reason: "not_held" }));
-        }
-      }),
+      change(
+        sessionId,
+        id,
+        (message): Effect.Effect<void, QueueChangeRefused | SqlError.SqlError> => {
+          switch (message.state.kind) {
+            case "held":
+            case "failed":
+              return Effect.asVoid(setState(id, "waiting"));
+            case "waiting":
+            case "editing":
+            case "delivered":
+              return Effect.fail(new QueueChangeRefused({ id, reason: "not_held" }));
+          }
+        },
+      ),
 
     /**
      * The messages that may go out now: the waiting ones at the front of the queue. An edited or
      * held message stops delivery at its place, so the order is never changed.
      */
-    deliverable(sessionId: string): QueuedMessage[] {
-      // A tool boundary needs the whole waiting prefix. Stream pending rows in sequence order,
-      // stopping at the first edit/hold without decoding any later messages or terminal rows.
-      const ready: QueuedMessage[] = [];
-      const rows = sqlite
-        .prepare(
-          "SELECT * FROM queued_messages WHERE session_id = ? AND state IN ('waiting', 'editing', 'held') ORDER BY seq",
-        )
-        .iterate(sessionId);
-      for (const row of rows) {
-        if (row.state !== "waiting") break;
-        ready.push(toMessage(row));
-      }
-      return ready;
-    },
+    deliverable: (sessionId: string) =>
+      Effect.map(deliverable(sessionId), (rows): ReadonlyArray<QueuedMessage> =>
+        rows.map(toMessage),
+      ),
 
     /** Atomically select and reserve the current head until delivery or explicit release. */
-    claimNext(sessionId: string): QueuedMessage | null {
-      if (MutableHashMap.has(reservations, sessionId)) return null;
-      // Only one row is needed for a next turn; do not materialize the whole waiting prefix.
-      const row = sqlite
-        .prepare(
-          "SELECT * FROM queued_messages WHERE session_id = ? AND state IN ('waiting', 'editing', 'held') ORDER BY seq LIMIT 1",
-        )
-        .get(sessionId);
-      const message = isTruthy(row) && row.state === "waiting" ? toMessage(row) : null;
-      if (message !== null)
-        MutableHashMap.set(reservations, sessionId, { id: message.id, holdOnRelease: false });
-      return message;
-    },
+    claimNext: (sessionId: string) =>
+      MutableHashMap.has(reservations, sessionId)
+        ? Effect.succeed(null)
+        : Effect.map(head(sessionId), (row) => {
+            const message = Option.getOrNull(
+              Option.map(
+                Option.filter(row, (found) => found.state === "waiting"),
+                toMessage,
+              ),
+            );
+            // Checked again after the read: another fibre may have claimed the head meanwhile.
+            if (message === null || MutableHashMap.has(reservations, sessionId)) return null;
+            MutableHashMap.set(reservations, sessionId, { id: message.id, holdOnRelease: false });
+            return message;
+          }),
 
-    releaseNext(sessionId: string, id: string) {
-      const reservation = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
-      if (reservation?.id !== id) return;
-      MutableHashMap.remove(reservations, sessionId);
-      if (reservation.holdOnRelease) setState(id, "held");
-    },
+    releaseNext: (sessionId: string, id: string) =>
+      Effect.suspend(() => {
+        const reservation = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
+        if (reservation?.id !== id) return Effect.void;
+        MutableHashMap.remove(reservations, sessionId);
+        return reservation.holdOnRelease ? Effect.asVoid(setState(id, "held")) : Effect.void;
+      }),
 
-    markDelivered(id: string, via: Exclude<DeliveryVia, "steer">, runId: string | null) {
-      sqlite
-        .prepare(
-          "UPDATE queued_messages SET state = 'delivered', delivered_via = ?, run_id = ?, draft = NULL, updated_at = ? WHERE id = ?",
-        )
-        .run(via, runId, now(), id);
-      for (const [sessionId, reservation] of reservations)
-        if (reservation.id === id) {
-          MutableHashMap.remove(reservations, sessionId);
-        }
-    },
+    markDelivered: (id: string, via: Exclude<DeliveryVia, "steer">, runId: string | null) =>
+      Effect.gen(function* () {
+        yield* sql`
+          UPDATE queued_messages SET state = 'delivered', delivered_via = ${via}, run_id = ${runId},
+            draft = NULL, updated_at = ${yield* now}
+          WHERE id = ${id}`;
+        for (const [sessionId, reservation] of reservations)
+          if (reservation.id === id) MutableHashMap.remove(reservations, sessionId);
+      }),
 
-    markFailed(id: string, reason: string) {
-      setState(id, "failed", { failure: reason });
-    },
+    markFailed: (id: string, reason: string) =>
+      Effect.asVoid(setState(id, "failed", { failure: reason })),
 
     /**
      * After a cancel or a failed run, waiting messages are not sent on their own any more: they
@@ -279,18 +317,18 @@ const make = Effect.gen(function* () {
      * keep waiting, since the server sends those itself. Steering takes along every waiting message
      * before it, so the ones held here never stand in front of a steered one.
      */
-    holdWaiting(sessionId: string, cause: "stopped" | "pageLeft") {
-      // A selected next turn is locked until committed or released. Holding it here would allow a
-      // different state to be delivered from the content already selected for this request.
-      const reserved = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
-      if (isTruthy(reserved))
-        MutableHashMap.set(reservations, sessionId, { ...reserved, holdOnRelease: true });
-      sqlite
-        .prepare(
-          "UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ? AND (? OR steered = 0)",
-        )
-        .run(now(), sessionId, reserved?.id ?? "", cause === "stopped" ? 1 : 0);
-    },
+    holdWaiting: (sessionId: string, cause: "stopped" | "pageLeft") =>
+      Effect.gen(function* () {
+        // A selected next turn is locked until committed or released. Holding it here would allow
+        // a different state to be delivered from the content already selected for this request.
+        const reserved = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
+        if (reserved !== undefined)
+          MutableHashMap.set(reservations, sessionId, { ...reserved, holdOnRelease: true });
+        yield* sql`
+          UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ${yield* now}
+          WHERE session_id = ${sessionId} AND state = 'waiting' AND id != ${reserved?.id ?? ""}
+            AND (${cause === "stopped" ? 1 : 0} OR steered = 0)`;
+      }),
   };
 });
 
@@ -298,5 +336,5 @@ const make = Effect.gen(function* () {
 export class MessageQueue extends Context.Service<MessageQueue, Effect.Success<typeof make>>()(
   "memory-agent/queue/queue/MessageQueue",
 ) {
-  static readonly layer = Layer.effect(MessageQueue, make);
+  static readonly layer = Layer.effect(MessageQueue, make).pipe(Layer.provide(NodeCrypto.layer));
 }

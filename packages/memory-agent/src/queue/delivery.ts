@@ -1,7 +1,7 @@
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
-import { Array as Arr, Context, Effect, Layer, Option } from "effect";
+import { Array as Arr, Context, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import { Nodes } from "../memory/nodes.ts";
@@ -76,9 +76,9 @@ const make = Effect.gen(function* () {
             Effect.forEach(
               delivered,
               (message) =>
-                Effect.sync(() =>
-                  queue.markDelivered(message.id, "tool_boundary", binding.runId),
-                ).pipe(Effect.andThen(record(binding, message))),
+                queue
+                  .markDelivered(message.id, "tool_boundary", binding.runId)
+                  .pipe(Effect.andThen(record(binding, message))),
               { discard: true },
             ).pipe(
               Effect.andThen(
@@ -91,13 +91,13 @@ const make = Effect.gen(function* () {
               ),
             );
           return run(
-            Effect.sync((): ReadonlyArray<QueuedMessage> =>
-              ctx.phase === "beforeModel" && config.messages.at(-1)?.role === "tool"
-                ? queue.deliverable(binding.sessionId)
-                : [],
+            (ctx.phase === "beforeModel" && config.messages.at(-1)?.role === "tool"
+              ? queue.deliverable(binding.sessionId)
+              : Effect.succeed<ReadonlyArray<QueuedMessage>>([])
             ).pipe(
-              Effect.map(Option.liftPredicate(Arr.isReadonlyArrayNonEmpty)),
-              Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: deliver })),
+              Effect.flatMap((found) =>
+                Arr.isReadonlyArrayNonEmpty(found) ? deliver(found) : Effect.void,
+              ),
             ),
           );
         },
