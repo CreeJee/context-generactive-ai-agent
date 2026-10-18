@@ -179,7 +179,6 @@ import { localWorkflowRules } from "../workflow/sources.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { BackgroundTasks } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
-import { Database } from "../db/database.ts";
 import {
   initialReportEvidence,
   reportBinding,
@@ -573,7 +572,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const imageRouter = yield* ImageRouter;
   const providerToolRuntime = yield* ProviderToolRuntime;
   const sessions = yield* Sessions;
-  const { sqlite } = yield* Database;
   const runBindings = yield* workflowRunBindings;
   const uncertain = yield* uncertainRuns;
   const readRecovery = yield* OwnerReadRecovery;
@@ -584,6 +582,76 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const withSql = Effect.provideService(SqlClient.SqlClient, sql);
   const streamDurability = (input: Parameters<typeof sqliteStreamDurability>[0]) =>
     withSql(sqliteStreamDurability(input));
+  const persistedRunStatus = SqlSchema.findOneOption({
+    Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),
+    Result: Schema.Struct({
+      status: Schema.Literals(["running", "completed", "failed", "aborted", "interrupted"]),
+    }),
+    execute: ({ runId, sessionId }) =>
+      sql`SELECT status FROM chat_runs WHERE run_id = ${runId} AND thread_id = ${sessionId}`,
+  });
+  const unresolvedOperation = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ operation_id: Schema.Finite, status: Schema.String }),
+    execute: (runId) => sql`SELECT operation_id, status FROM owner_rpc_operations
+      WHERE run_id = ${runId} AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded'))
+      ORDER BY operation_id LIMIT 1`,
+  });
+  const acceptedNewGoals = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ run_id: Schema.String }),
+    execute: (sessionId) => sql`SELECT run_id FROM workflow_new_goal_requests
+      WHERE session_id = ${sessionId} AND status = 'accepted'`,
+  });
+  const runBinding = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({
+      session_id: Schema.String,
+      goal_instance_id: Schema.String,
+      workflow_revision_id: Schema.Finite,
+    }),
+    execute: (runId) => sql`SELECT session_id, goal_instance_id, workflow_revision_id
+      FROM workflow_run_bindings WHERE run_id = ${runId}`,
+  });
+  const unresolvedSessionBinding = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, resumeRunId: Schema.String }),
+    Result: Schema.Struct({ run_id: Schema.String }),
+    execute: ({ sessionId, resumeRunId }) => sql`
+      SELECT b.run_id FROM workflow_run_bindings b
+      LEFT JOIN chat_runs r ON r.run_id = b.run_id
+      WHERE b.session_id = ${sessionId} AND NOT ${sql.literal(acknowledgedRunSql("b"))}
+        AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
+        ${sql.literal(resolvedRunSql("b", "r"))}
+        OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
+        AND (r.run_id = ${resumeRunId} OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
+      ))) LIMIT 1`,
+  });
+  const latestRevision = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.NullOr(Schema.String) }),
+    execute: (sessionId) => sql`SELECT id, goal_instance_id FROM workflow_state_revisions
+      WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`,
+  });
+  const previousMainModel = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ provider: ProviderId, model: Schema.String }),
+    execute: (sessionId) => sql`SELECT provider, model FROM api_usage_responses
+      WHERE root_session_id = ${sessionId} AND thread_id = ${sessionId} AND purpose = 'main'
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+  });
+  const unsettledEffect = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ operation_id: Schema.Finite, status: Schema.String }),
+    execute: (runId) => sql`SELECT operation_id, status FROM owner_rpc_operations o
+      WHERE run_id = ${runId} AND ${sql.literal(toolOperationSql("o"))} AND status <> 'succeeded'
+      ORDER BY operation_id LIMIT 1`,
+  });
+  const abandonedRun = SqlSchema.findOneOption({
+    Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),
+    Result: Schema.Struct({ failed: Schema.Finite }),
+    execute: ({ runId, sessionId }) => sql`SELECT 1 AS failed FROM chat_runs
+      WHERE run_id = ${runId} AND thread_id = ${sessionId} AND status = 'failed'`,
+  });
   const latestRevisionId = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: Schema.Struct({ id: Schema.Finite }),
@@ -974,43 +1042,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const settle = Effect.suspend(() => {
       if (settled) return Effect.void;
       settled = true;
-      const row = sqlite
-        .prepare("SELECT status FROM chat_runs WHERE run_id = ? AND thread_id = ?")
-        .get(runId, sessionId);
-      const decoded = Schema.decodeUnknownResult(
-        Schema.UndefinedOr(
-          Schema.Struct({
-            status: Schema.Literals(["running", "completed", "failed", "aborted", "interrupted"]),
-          }),
-        ),
-      )(row);
-      if (Result.isFailure(decoded)) return Effect.die(decoded.failure);
-      const persistedStatus = decoded.success?.status;
-      if (
-        persistedStatus === "interrupted" ||
-        (terminalOutcome === "pending" &&
-          (persistedStatus === undefined || persistedStatus === "running"))
-      )
-        return Effect.void;
-      const unresolvedResult = Schema.decodeUnknownResult(
-        Schema.UndefinedOr(
-          Schema.Struct({
-            operation_id: Schema.Finite,
-            status: Schema.String,
-          }),
-        ),
-      )(
-        sqlite
-          .prepare(
-            `SELECT operation_id, status FROM owner_rpc_operations
-             WHERE run_id = ? AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded'))
-             ORDER BY operation_id LIMIT 1`,
-          )
-          .get(runId),
-      );
-      if (Result.isFailure(unresolvedResult)) return Effect.die(unresolvedResult.failure);
-      const unresolved = unresolvedResult.success;
       return Effect.gen(function* () {
+        const persistedStatus = Option.getOrUndefined(
+          yield* persistedRunStatus({ runId, sessionId }).pipe(Effect.orDie),
+        )?.status;
+        if (
+          persistedStatus === "interrupted" ||
+          (terminalOutcome === "pending" &&
+            (persistedStatus === undefined || persistedStatus === "running"))
+        )
+          return;
+        const unresolved = Option.getOrUndefined(
+          yield* unresolvedOperation(runId).pipe(Effect.orDie),
+        );
         const completed =
           terminalOutcome === "completed" &&
           persistedStatus !== "failed" &&
@@ -1322,13 +1366,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A process may exit after persistence commits a completed run but before its
         // asynchronous end callback applies a queued Goal. Recover only terminal runs;
         // running/interrupted ones remain pending and can never prove completion.
-        const pendingGoals = sqlite
-          .prepare(
-            "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted'",
-          )
-          .all(sessionId);
+        const pendingGoals = yield* acceptedNewGoals(sessionId);
         for (const pending of pendingGoals)
-          yield* workflows.settleNewGoalRequest(sessionId, String(pending.run_id));
+          yield* workflows.settleNewGoalRequest(sessionId, pending.run_id);
         // Repair stale persisted phases before choosing tools for the next turn. In particular, an
         // old Verify row with unfinished implementation must regain Execute capabilities.
         const workflow = yield* workflows.reconcile(sessionId);
@@ -1378,41 +1418,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A pre-bound run belongs to one owner session, even before the SDK creates chat_runs.
         // This check is not worker authorization: unbound requests remain on the legacy path.
         let workerCapability: GoalWorkerCapability | null = null;
-        let boundRun = yield* Schema.decodeUnknownEffect(
-          Schema.UndefinedOr(
-            Schema.Struct({
-              session_id: Schema.String,
-              goal_instance_id: Schema.String,
-              workflow_revision_id: Schema.Finite,
-            }),
-          ),
-        )(
-          sqlite
-            .prepare(
-              "SELECT session_id, goal_instance_id, workflow_revision_id FROM workflow_run_bindings WHERE run_id = ?",
-            )
-            .get(runId),
-        ).pipe(Effect.orDie);
+        let boundRun = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(boundRun) && boundRun.session_id !== sessionId)
           return json(409, { error: "run_id_conflict" });
         // Until automatic owner admission is atomic with execution, a reserved run with an
         // uncertain outcome must not be bypassed by presenting a different, unbound ID.
-        const unresolvedBinding = yield* Schema.decodeUnknownEffect(
-          Schema.UndefinedOr(Schema.Struct({ run_id: Schema.String })),
-        )(
-          sqlite
-            .prepare(`
-            SELECT b.run_id FROM workflow_run_bindings b
-            LEFT JOIN chat_runs r ON r.run_id = b.run_id
-            WHERE b.session_id = ? AND NOT ${acknowledgedRunSql("b")}
-              AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-              ${resolvedRunSql("b", "r")}
-              OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
-              AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
-            ))) LIMIT 1
-          `)
-            .get(sessionId, resumeRunId ?? ""),
-        ).pipe(Effect.orDie);
+        const unresolvedBinding = Option.getOrUndefined(
+          yield* unresolvedSessionBinding({ sessionId, resumeRunId: resumeRunId ?? "" }),
+        );
         if (isTruthy(unresolvedBinding) && unresolvedBinding.run_id !== runId)
           return json(409, { error: "run_outcome_uncertain" });
         // Run IDs are globally unique in chat_runs. Reject another session's ID before
@@ -1438,17 +1451,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A reserved but not yet started turn cannot silently inherit a changed Goal/Plan.
         // A continuation of an already-persisted run keeps its original pinned revision.
         if (isTruthy(boundRun) && !isTruthy(previousRun)) {
-          const latest = yield* Schema.decodeUnknownEffect(
-            Schema.UndefinedOr(
-              Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.NullOr(Schema.String) }),
-            ),
-          )(
-            sqlite
-              .prepare(
-                "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-              )
-              .get(sessionId),
-          ).pipe(Effect.orDie);
+          const latest = Option.getOrUndefined(yield* latestRevision(sessionId));
           if (
             !isTruthy(latest) ||
             latest.id !== boundRun.workflow_revision_id ||
@@ -1462,17 +1465,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         let goalExecutionPayload: GoalExecutionPayload | null = null;
         let workerAssets: GoalWorkerAssets.GoalExecutionAssets | undefined;
         if (!isTruthy(previousRun)) {
-          const latest = yield* Schema.decodeUnknownEffect(
-            Schema.UndefinedOr(
-              Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.NullOr(Schema.String) }),
-            ),
-          )(
-            sqlite
-              .prepare(
-                "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-              )
-              .get(sessionId),
-          ).pipe(Effect.orDie);
+          const latest = Option.getOrUndefined(yield* latestRevision(sessionId));
           if (isTruthy(latest?.goal_instance_id)) {
             if (!isTruthy(selection) || isTruthy(boundRun))
               return json(409, { error: "automatic_goal_admission_unavailable" });
@@ -1644,17 +1637,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ? boundRun.goal_instance_id
           : isTruthy(previousRun)
             ? null
-            : ((yield* Schema.decodeUnknownEffect(
-                Schema.UndefinedOr(
-                  Schema.Struct({ goal_instance_id: Schema.NullOr(Schema.String) }),
-                ),
-              )(
-                sqlite
-                  .prepare(
-                    "SELECT goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-                  )
-                  .get(sessionId),
-              ).pipe(Effect.orDie))?.goal_instance_id ?? null);
+            : (Option.getOrUndefined(yield* latestRevision(sessionId))?.goal_instance_id ?? null);
         if (implementationGoal !== null) {
           const loaded = yield* ownerNativeArtifacts.acquire(implementationGoal).pipe(
             Effect.provideService(Scope.Scope, scope),
@@ -1708,18 +1691,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           model: selection.model,
           provider: selection.provider,
           previous: Option.getOrUndefined(
-            Schema.decodeUnknownOption(
-              Schema.Struct({
-                provider: ProviderId,
-                model: Schema.String,
-              }),
-            )(
-              sqlite
-                .prepare(
-                  "SELECT provider, model FROM api_usage_responses WHERE root_session_id = ? AND thread_id = ? AND purpose = 'main' ORDER BY created_at DESC, id DESC LIMIT 1",
-                )
-                .get(sessionId, sessionId),
-            ),
+            yield* previousMainModel(sessionId).pipe(Effect.orElseSucceed(Option.none)),
           ),
           loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
           toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
@@ -2513,9 +2485,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // The SDK's Request constructor chooses a run from Last-Event-ID before ?runId.
         // Never authenticate the query run and then let an offset select a different log.
         const offset = request.headers.get("Last-Event-ID") || url.searchParams.get("offset");
-        const binding = sqlite
-          .prepare("SELECT session_id FROM workflow_run_bindings WHERE run_id = ?")
-          .get(runId);
+        const binding = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(binding)) {
           if (binding.session_id !== sessionId) return json(404, { error: "run_not_found" });
           if (
@@ -3156,14 +3126,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // marked it failed. Close its durable execution and continuation the same way, so only a side
   // effect that may have happened keeps the session from continuing the Plan. The run is not
   // replayed. An execution that cannot be closed stays fenced, as before.
-  const unsettledEffect = sqlite.prepare(
-    `SELECT operation_id, status FROM owner_rpc_operations o
-     WHERE run_id = ? AND ${toolOperationSql("o")} AND status <> 'succeeded'
-     ORDER BY operation_id LIMIT 1`,
-  );
-  const abandonedRun = sqlite.prepare(
-    "SELECT 1 AS failed FROM chat_runs WHERE run_id = ? AND thread_id = ? AND status = 'failed'",
-  );
   yield* Effect.forEach(
     yield* goalExecutions.unsettled.pipe(
       Effect.catch((error) =>
@@ -3173,10 +3135,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     (payload) =>
       Effect.gen(function* () {
         const { sessionId, runId } = payload.identity;
-        if (abandonedRun.get(runId, sessionId) === undefined) return;
-        const effect = yield* Schema.decodeUnknownEffect(
-          Schema.UndefinedOr(Schema.Struct({ operation_id: Schema.Finite, status: Schema.String })),
-        )(unsettledEffect.get(runId));
+        if (Option.isNone(yield* abandonedRun({ runId, sessionId }))) return;
+        const effect = Option.getOrUndefined(yield* unsettledEffect(runId));
         yield* goalExecutions.fail(
           payload,
           effect === undefined
