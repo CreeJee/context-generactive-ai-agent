@@ -21,7 +21,9 @@ describe("report review and delivery", () => {
         return Promise.resolve(replies.shift() ?? new Response(null, { status: 500 }));
       });
       yield* Effect.addFinalizer(() => Effect.sync(() => fetch.mockRestore()));
-      const screen = yield* sdkCall(() => render(<ReportDelivery text="# 제보 문안" />));
+      const screen = yield* sdkCall(() =>
+        render(<ReportDelivery text="# 제보 문안" evidence={null} />),
+      );
 
       yield* sdkCall(() => expect.element(screen.getByText(/개발자 웹훅 …5678/)).toBeVisible());
 
@@ -36,7 +38,9 @@ describe("report review and delivery", () => {
       yield* sdkCall(() =>
         expect.element(screen.getByRole("button", { name: "그래도 다시 보내기" })).toBeVisible(),
       );
-      expect(bodies.at(-1)).toBe('{"action":"send","text":"# 제보 문안","resend":false}');
+      expect(bodies.at(-1)).toBe(
+        '{"action":"send","text":"# 제보 문안","evidence":null,"resend":false}',
+      );
     }).pipe(Effect.scoped),
   );
 
@@ -50,7 +54,8 @@ describe("report review and delivery", () => {
               status: "ready",
               included: true,
               diagnosis: {
-                observations: [{ text: "승인 요청 3회", evidenceIds: ["approval:1"] }],
+                summary: "승인 응답이 저장되지 않았다.",
+                observations: [{ text: "승인 요청 3회", evidenceIds: ["run-2"] }],
                 hypotheses: [{ text: "응답 저장 누락 가능성" }],
               },
             }}
@@ -60,9 +65,11 @@ describe("report review and delivery", () => {
         ),
       );
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("group", { name: "관측 (증거에서 확인)" })).toBeVisible(),
+        expect
+          .element(screen.getByRole("group", { name: "관측 (증거 묶음에서 확인)" }))
+          .toBeVisible(),
       );
-      yield* sdkCall(() => expect.element(screen.getByText("근거: approval:1")).toBeVisible());
+      yield* sdkCall(() => expect.element(screen.getByText("근거: run-2")).toBeVisible());
       yield* sdkCall(() =>
         screen
           .getByRole("group", { name: "가설 (검증되지 않음)" })

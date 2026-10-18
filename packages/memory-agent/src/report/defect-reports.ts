@@ -14,7 +14,7 @@ import {
 import { Hex } from "effect/encoding";
 import { GlobalConfig } from "../config/global-config.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
-import { DefectReporter, type DefectEvent } from "../runtime/defect-reporter.ts";
+import { DefectReporter, type DefectEvent, type RecentDefect } from "../runtime/defect-reporter.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { ReportDelivery } from "./discord-webhook.ts";
@@ -24,6 +24,8 @@ export const fingerprintWindow = Duration.minutes(10);
 /** At most this many defect messages leave the process per minute, whatever their fingerprint. */
 export const messagesPerMinute = 5;
 const stackLines = 5;
+/** Distinct defects a user's report can list. */
+const maxRecentDefects = 20;
 const summaryLength = 300;
 const contentLimit = 2_000;
 /** Ids are sent as a short hash, enough to tell reports of one session apart. */
@@ -145,6 +147,8 @@ const make = Effect.gen(function* () {
   const platform = yield* hostPlatform;
   const configured = (yield* delivery.status).configured;
   const state = yield* Ref.make(noDefectsSent);
+  // Kept whether or not a webhook is set: a user's report carries them (newest first).
+  const recent = yield* Ref.make<readonly RecentDefect[]>([]);
   // Sending never holds up the owner that hit the defect; a full queue drops the newest.
   const outgoing = yield* Queue.dropping<Outgoing>(64);
 
@@ -189,6 +193,23 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
+  const remember = (facts: DefectFacts, now: number) =>
+    Ref.update(recent, (current) => {
+      const previous = current.find(
+        (item) => item.tag === facts.tag && item.location === facts.location,
+      );
+      const others = current.filter((item) => item !== previous);
+      return [
+        {
+          tag: facts.tag,
+          location: facts.location,
+          count: (previous?.count ?? 0) + 1,
+          lastAt: now,
+        },
+        ...others,
+      ].slice(0, maxRecentDefects);
+    });
+
   const report = (event: DefectEvent) =>
     Effect.gen(function* () {
       const span = yield* Effect.currentSpan.pipe(
@@ -197,6 +218,8 @@ const make = Effect.gen(function* () {
       );
       const facts = factsOf(event, span);
       const now = yield* Clock.currentTimeMillis;
+      yield* remember(facts, now);
+      if (!configured) return;
       const count = yield* Ref.modify(state, (current) => {
         const admitted = admitDefect(current, `${facts.tag}@${facts.location}`, now);
         return [admitted.count, admitted.state];
@@ -210,9 +233,9 @@ const make = Effect.gen(function* () {
         ({ key, value }) => Effect.map(hash(value), (hashed) => `${key} #${hashed}`),
       );
       yield* Queue.offer(outgoing, { facts, count: count.value, ids });
-    }).pipe(Effect.when(Effect.succeed(configured)), Effect.asVoid);
+    }).pipe(Effect.asVoid);
 
-  return { report };
+  return { report, recent: Ref.get(recent) };
 });
 
 /**

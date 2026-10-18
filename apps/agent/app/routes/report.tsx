@@ -1,8 +1,14 @@
 import { DateTime, Effect, Fiber } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { useEffect, useRef, useState } from "react";
-import type { ReportEvidence } from "../.server/report-evidence";
-import { ReportDraft, reportText, type ReportFields } from "../entry/report/report-draft";
+import {
+  ReportDraft,
+  reportText,
+  shareableText,
+  type DraftEvidence,
+  type ReportFields,
+} from "../entry/report/report-draft";
+import { ReportBundlePreview } from "../entry/report/report-bundle";
 import { copyReportText } from "../entry/report/report-copy";
 import { ReportDelivery } from "../entry/report/report-delivery";
 import {
@@ -16,12 +22,27 @@ import {
   diagnosisText,
   type DiagnosisState,
 } from "../entry/report/report-diagnosis";
-import {
-  ReportEvidenceReview,
-  evidenceGaps,
-  evidenceItems,
-  type ReviewSelection,
-} from "../entry/report/report-evidence";
+
+/** The evidence bundle on the page: collected on open when the report names a session. */
+type EvidenceState = DraftEvidence | { readonly status: "loading" };
+
+const draftEvidence = (state: EvidenceState): DraftEvidence => {
+  switch (state.status) {
+    case "loading":
+      return { status: "none" };
+    case "none":
+    case "failed":
+    case "collected":
+      return state;
+  }
+};
+
+const reportSource = () => {
+  const params = new URLSearchParams(window.location.search);
+  const project = params.get("project");
+  const session = params.get("session");
+  return isTruthy(project) && isTruthy(session) ? { project, session } : null;
+};
 
 export function meta() {
   return [{ title: "문제 제보 · Context Agent" }];
@@ -45,10 +66,9 @@ export default function ReportPage() {
       ),
     [],
   );
-  const [evidence, setEvidence] = useState<ReportEvidence | null>(null);
-  const [selected, setSelected] = useState<ReviewSelection>({});
-  const [status, setStatus] = useState("증거를 불러오지 않아도 제보할 수 있습니다.");
-  const [loading, setLoading] = useState(false);
+  const [evidence, setEvidence] = useState<EvidenceState>({ status: "none" });
+  const [evidenceRetry, setEvidenceRetry] = useState(0);
+  const [status, setStatus] = useState("세션 없이 열면 증상 설명만으로 제보합니다.");
   const [analysisSession, setAnalysisSession] = useState<{
     projectId: string;
     reportSessionId: string;
@@ -77,34 +97,43 @@ export default function ReportPage() {
       Effect.runFork(Fiber.interrupt(task));
     };
   }, [sessionRetry]);
-  const included = evidenceItems(evidence ?? emptyEvidence).filter((item) =>
-    Object.hasOwn(selected, item.id),
-  );
+  const bundle = evidence.status === "collected" ? evidence.bundle : null;
   const generatedText = reportText({
     fields,
     createdAt,
-    evidence: included.map((item) => ({
-      label: item.label,
-      source: item.source,
-      text: selected[item.id] ?? "",
-    })),
-    unavailable:
-      evidence !== null
-        ? evidenceGaps(evidence)
-        : ["원본 증거: 조회하지 않았거나 조회 실패 (확인되지 않음)"],
-    origin:
-      evidence !== null
-        ? { projectId: evidence.session.projectId, sessionId: evidence.session.id }
-        : undefined,
+    evidence: draftEvidence(evidence),
     diagnosis: diagnosisText(diagnosis),
   });
   const text = editedText ?? generatedText;
 
-  const evidenceTask = useRef<Fiber.Fiber<void> | null>(null);
+  // The whole bundle is collected on open; the user reviews it instead of picking items.
+  useEffect(() => {
+    const source = reportSource();
+    if (source === null) return;
+    setEvidence({ status: "loading" });
+    setStatus("세션의 증거 묶음을 모으는 중입니다. 증상은 계속 작성할 수 있습니다.");
+    const task = Effect.runFork(
+      readReportEvidence(source).pipe(
+        Effect.match({
+          onSuccess: (collected) => {
+            setEvidence({ status: "collected", bundle: collected });
+            setStatus("증거 묶음을 모았습니다. 아래에서 보낼 내용을 확인하세요.");
+          },
+          onFailure: () => {
+            setEvidence({ status: "failed" });
+            setStatus("증거 묶음을 모으지 못했습니다. 증상만으로도 제보할 수 있습니다.");
+          },
+        }),
+      ),
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(task));
+    };
+  }, [evidenceRetry]);
+
   const diagnosisTask = useRef<Fiber.Fiber<void> | null>(null);
   useEffect(
     () => () => {
-      if (evidenceTask.current !== null) Effect.runFork(Fiber.interrupt(evidenceTask.current));
       if (diagnosisTask.current !== null) Effect.runFork(Fiber.interrupt(diagnosisTask.current));
     },
     [],
@@ -118,12 +147,7 @@ export default function ReportPage() {
         symptom: fields.symptom.slice(0, 4_000),
         expected: fields.expected.slice(0, 2_000),
         actual: fields.actual.slice(0, 2_000),
-        evidence: included.slice(0, 20).map((item) => ({
-          id: item.id.slice(0, 256),
-          label: item.label.slice(0, 200),
-          source: item.source.slice(0, 500),
-          text: (selected[item.id] ?? "").slice(0, 6_000),
-        })),
+        bundle,
       }).pipe(
         Effect.match({
           onSuccess: (result) =>
@@ -133,42 +157,19 @@ export default function ReportPage() {
       ),
     );
   };
-  const loadEvidence = () => {
-    const params = new URLSearchParams(window.location.search);
-    const project = params.get("project");
-    const session = params.get("session");
-    if (!isTruthy(project) || !isTruthy(session)) {
-      setStatus("세션 정보가 없습니다. 증상만 작성해 제보할 수 있습니다.");
-      return;
-    }
-    setLoading(true);
-    setStatus("증거를 조회하는 중입니다. 증상 제보는 계속 작성할 수 있습니다.");
-    evidenceTask.current = Effect.runFork(
-      readReportEvidence({ project, session }).pipe(
-        Effect.match({
-          onSuccess: (result) => {
-            setEvidence(result);
-            setSelected({});
-            setStatus("증거를 불러왔습니다. 포함할 항목을 직접 선택하세요.");
-          },
-          onFailure: () =>
-            setStatus("증거 조회에 실패했습니다. 증상만으로도 제보문을 복사할 수 있습니다."),
-        }),
-        Effect.tap(() => Effect.sync(() => setLoading(false))),
-      ),
-    );
-  };
+  // Built only when used: the bundle can be hundreds of kilobytes.
+  const shared = () => shareableText(text, draftEvidence(evidence));
   const copy = () =>
-    copyReportText(text, (value) => navigator.clipboard.writeText(value)).then((copied) => {
+    copyReportText(shared(), (value) => navigator.clipboard.writeText(value)).then((copied) => {
       setStatus(
         copied
-          ? "제보문을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣으세요."
+          ? "제보문과 증거 묶음을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣으세요."
           : "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사하세요.",
       );
     });
 
   const download = () => {
-    const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([shared()], { type: "text/plain;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = "context-agent-report.txt";
@@ -214,41 +215,40 @@ export default function ReportPage() {
       {editedText !== null && (
         <div className="space-y-1 text-sm">
           <p>
-            문안을 직접 편집 중입니다. 위 증상이나 증거를 변경해도 현재 문안에는 자동 반영되지
-            않습니다.
+            문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나 증거 묶음이 도착해도 현재 문안에는
+            자동 반영되지 않습니다.
           </p>
           <button
             type="button"
             onClick={() => setEditedText(null)}
             className="text-primary underline"
           >
-            작성·선택한 항목으로 문안 다시 생성 (직접 편집한 내용 삭제)
+            설명·진단·증거 묶음으로 문안 다시 생성 (직접 편집한 내용 삭제)
           </button>
         </div>
       )}
+      <section className="space-y-2" aria-label="AI 진단">
+        <h2 className="text-sm font-medium">오류 진단과 제보 초안</h2>
+        <ReportDiagnosisReview state={diagnosis} onRequest={runDiagnosis} onChange={setDiagnosis} />
+      </section>
       <section className="space-y-3" aria-label="증거 수집">
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => loadEvidence()}
-          className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
-        >
-          최근 증거 불러오기 (선택)
-        </button>
         <p role="status" className="text-sm text-muted-foreground">
           {status}
         </p>
-        {evidence && (
-          <ReportEvidenceReview data={evidence} selected={selected} onChange={setSelected} />
+        {evidence.status === "failed" && (
+          <button
+            type="button"
+            className="text-sm text-primary underline"
+            onClick={() => setEvidenceRetry((attempt) => attempt + 1)}
+          >
+            증거 묶음 다시 모으기
+          </button>
         )}
-      </section>
-      <section className="space-y-2" aria-label="AI 진단">
-        <h2 className="text-sm font-medium">AI 진단 (선택)</h2>
-        <ReportDiagnosisReview state={diagnosis} onRequest={runDiagnosis} onChange={setDiagnosis} />
+        {bundle && <ReportBundlePreview bundle={bundle} />}
       </section>
       <section className="space-y-2" aria-label="복사·저장">
         <p className="text-sm">
-          문안을 확인한 후 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수
+          문안과 증거 묶음을 함께 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수
           있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다.
         </p>
         <div className="flex gap-2">
@@ -266,18 +266,8 @@ export default function ReportPage() {
       </section>
       <section className="space-y-2" aria-label="Discord 웹훅 전송">
         <h2 className="text-sm font-medium">개발자 Discord로 보내기 (선택)</h2>
-        <ReportDelivery text={text} />
+        <ReportDelivery text={text} evidence={bundle} />
       </section>
     </main>
   );
 }
-
-// A missing session or unavailable API never prevents a symptom-only draft.
-const emptyEvidence: ReportEvidence = {
-  session: { id: "", projectId: "", title: null },
-  runs: { status: "empty", items: [], truncated: false },
-  approvals: { status: "empty", items: [], truncated: false },
-  transcript: { status: "empty", items: [], truncated: false },
-  calls: { status: "empty", items: [], truncated: false },
-  trace: { status: "empty", items: [], truncated: false },
-};

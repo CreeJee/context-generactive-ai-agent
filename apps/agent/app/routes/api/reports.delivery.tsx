@@ -1,11 +1,21 @@
 import { Effect, Result, Schema } from "effect";
-import { GlobalConfig, ReportDelivery, type ReportDeliveryFailure } from "memory-agent";
+import {
+  GlobalConfig,
+  ReportBundle,
+  ReportDelivery,
+  type ReportDeliveryFailure,
+} from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/reports.delivery";
 
 const DeliveryAction = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("send"), text: Schema.String, resend: Schema.Boolean }),
+  Schema.Struct({
+    action: Schema.Literal("send"),
+    text: Schema.String,
+    evidence: Schema.NullOr(ReportBundle),
+    resend: Schema.Boolean,
+  }),
   Schema.Struct({ action: Schema.Literal("defect_reports"), enabled: Schema.Boolean }),
 ]);
 
@@ -21,6 +31,8 @@ const failureStatus = {
   discord_unavailable: 502,
   uncertain: 504,
 } satisfies Record<ReportDeliveryFailure, number>;
+
+const encodeEvidence = Schema.encodeEffect(Schema.fromJsonString(ReportBundle));
 
 const reply = <A,>(value: A, status = 200) =>
   Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
@@ -49,7 +61,7 @@ export function loader() {
 }
 
 /**
- * POST, same-origin only. `send` posts the reviewed report once; `resend` confirms sending a text
+ * POST, same-origin only. `send` posts the reviewed report once, with its evidence bundle attached; `resend` confirms sending a text
  * that was already sent or may have been. The webhook comes only from server configuration.
  * `defect_reports` turns sending defects to the webhook on or off.
  */
@@ -62,8 +74,14 @@ export function action({ request }: Route.ActionArgs) {
       if (Result.isFailure(decoded)) return reply({ error: "invalid_report_delivery" }, 400);
       const command = decoded.success;
       switch (command.action) {
-        case "send":
-          return reply(yield* (yield* ReportDelivery).send(command.text, command.resend));
+        case "send": {
+          // The bundle the user previewed goes as the report's JSON attachment.
+          const evidence =
+            command.evidence === null ? null : yield* encodeEvidence(command.evidence);
+          return reply(
+            yield* (yield* ReportDelivery).send({ text: command.text, evidence }, command.resend),
+          );
+        }
         case "defect_reports":
           yield* (yield* GlobalConfig).update({ defectReports: command.enabled });
           return reply(yield* deliveryStatus);
@@ -78,6 +96,7 @@ export function action({ request }: Route.ActionArgs) {
             ),
           ),
         UnknownError: () => Effect.succeed(reply({ error: "invalid_report_delivery" }, 400)),
+        SchemaError: () => Effect.succeed(reply({ error: "invalid_report_delivery" }, 400)),
         GlobalConfigFailed: () => Effect.succeed(reply({ error: "settings_unavailable" }, 503)),
       }),
     ),

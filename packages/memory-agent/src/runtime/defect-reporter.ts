@@ -8,12 +8,23 @@ export interface DefectEvent {
   readonly cause: Cause.Cause<unknown>;
 }
 
+/** A defect this process recorded lately, by its fingerprint; never its message or stack. */
+export interface RecentDefect {
+  readonly tag: string;
+  readonly location: string;
+  readonly count: number;
+  /** Epoch milliseconds of the latest one. */
+  readonly lastAt: number;
+}
+
 /**
  * Where `logDefect` hands every defect it logs. Nothing is sent until the app provides the Discord
- * reporter (`report/defect-reports.ts`); tests and the import worker keep the default.
+ * reporter (`report/defect-reports.ts`); tests and the import worker keep the default. `recent`
+ * feeds the evidence bundle of a user's report.
  */
 export const DefectReporter = Context.Reference<{
   readonly report: (event: DefectEvent) => Effect.Effect<void>;
+  readonly recent: Effect.Effect<readonly RecentDefect[]>;
 }>("memory-agent/runtime/defect-reporter/DefectReporter", {
-  defaultValue: () => ({ report: () => Effect.void }),
+  defaultValue: () => ({ report: () => Effect.void, recent: Effect.succeed([]) }),
 });

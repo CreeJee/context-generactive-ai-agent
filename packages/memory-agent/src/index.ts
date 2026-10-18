@@ -56,7 +56,14 @@ export {
 export { OAuthHarnessError } from "./oauth/validation-harness.ts";
 export { logDefect, logFailure } from "./runtime/logged-failures.ts";
 export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
-export { ReportDelivery, ReportDeliveryError, maxReportBytes } from "./report/discord-webhook.ts";
+export {
+  ReportDelivery,
+  ReportDeliveryError,
+  maxEvidenceBytes,
+  maxReportBytes,
+} from "./report/discord-webhook.ts";
+export { bundleLimits, collectReportBundle } from "./report/bundle.ts";
+export { ReportBundle } from "./report/bundle-contract.ts";
 export {
   ReportDeliveryFailure,
   ReportDeliveryResult,

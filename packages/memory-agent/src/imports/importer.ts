@@ -484,6 +484,8 @@ const make = (watching: boolean, home: string) =>
       runOnce,
       start: startPass,
       overview,
+      /** The watch loop's health without counting transcripts; `null` when not watching. */
+      watchHealth: Effect.sync(() => (watching ? watchHealth : null)),
       /** Turns migration on or off and, when turning it on, starts reading what is there now. */
       setEnabled: (enabled: boolean) =>
         Effect.andThen(

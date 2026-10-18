@@ -111,10 +111,11 @@ export function ReportDiagnosisReview({
       return (
         <div className="space-y-1">
           <button type="button" onClick={onRequest} className="rounded-md border px-3 py-2 text-sm">
-            내 모델로 진단 받기 (선택)
+            내 모델로 오류 진단·초안 만들기
           </button>
           <p className="text-xs text-muted-foreground">
-            작성한 설명과 포함한 증거만 선택한 모델에 보냅니다. 진단 없이도 제보할 수 있습니다.
+            작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다.
+            진단 없이도 제보할 수 있습니다.
           </p>
         </div>
       );
@@ -128,7 +129,7 @@ export function ReportDiagnosisReview({
       return (
         <div className="space-y-1 text-sm">
           <p role="status">
-            진단 실패: {diagnosisFailureText[state.reason]}. 제보문에는 사용자 설명과 선택한 증거만
+            진단 실패: {diagnosisFailureText[state.reason]}. 제보문에는 사용자 설명과 증거 묶음만
             들어갑니다.
           </p>
           <button type="button" onClick={onRequest} className="text-primary underline">
@@ -149,8 +150,16 @@ export function ReportDiagnosisReview({
             />
             제보문에 AI 진단 포함
           </label>
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">요약 (개발자가 처음 읽는 부분)</span>
+            <textarea
+              className="min-h-20 w-full rounded-md border bg-background p-2 text-sm"
+              value={diagnosis.summary}
+              onChange={(event) => edit({ ...diagnosis, summary: event.target.value })}
+            />
+          </label>
           <EditableList
-            title="관측 (증거에서 확인)"
+            title="관측 (증거 묶음에서 확인)"
             items={diagnosis.observations}
             cite
             onChange={(index, text) =>

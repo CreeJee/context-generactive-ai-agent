@@ -24,6 +24,13 @@ export {
   ReportDiagnosisInput,
 } from "../report/diagnosis-contract.ts";
 export {
+  ReportBundle,
+  type BundleEvent,
+  type BundleRun,
+  type BundleText,
+} from "../report/bundle-contract.ts";
+export { runHasFailure, runPlace } from "../report/bundle-digest.ts";
+export {
   ReportDeliveryFailure,
   ReportDeliveryResult,
   ReportDeliveryStatus,

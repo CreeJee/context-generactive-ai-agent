@@ -83,6 +83,7 @@ describe("superviseLoopStep", () => {
       ).pipe(
         Effect.provideService(DefectReporter, {
           report: (event) => Ref.update(reported, (all) => [...all, event.message]),
+          recent: Effect.succeed([]),
         }),
       );
       expect(outcome).toEqual({ _tag: "Stopped", health: { _tag: "Defected" } });
