@@ -337,7 +337,7 @@ export {
   createSubscriptionRuntime,
   subscriptionAgentLoop,
 } from "./providers/subscription-runtime.ts";
-export { Database, DatabaseOpenError } from "./db/database.ts";
+export { Database, DatabaseOpenError, DatabaseSchemaRejected } from "./db/database.ts";
 export {
   Attachment,
   AttachmentMimeType,

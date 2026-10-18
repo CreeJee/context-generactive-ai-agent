@@ -109,7 +109,11 @@ it.live(
         "PRAGMA foreign_keys = OFF; DROP TRIGGER workflow_run_bindings_no_update; UPDATE workflow_run_bindings SET goal_instance_id = 'missing'; PRAGMA foreign_keys = ON",
       );
       const before = snapshot(db);
-      expect(() => migrateDatabase(db)).toThrow("invalid foreign key references");
+      expect(() => migrateDatabase(db)).toThrow(
+        expect.objectContaining({
+          reason: expect.objectContaining({ _tag: "InvalidForeignKeys" }),
+        }),
+      );
       expect(snapshot(db)).toEqual(before);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: goalHistoryMigration.version - 1,
