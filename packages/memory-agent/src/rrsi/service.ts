@@ -211,13 +211,17 @@ const make = Effect.gen(function* () {
     abort: AbortController,
   ) {
     const settings = yield* store.settings;
-    // Native evaluator callbacks report progress synchronously; their saves run in this runtime.
+    // Native evaluator callbacks report progress synchronously; their saves run in this runtime,
+    // owned by the service Scope so none outlives its connection.
     // A later save always writes the latest record, so an earlier one finishing last loses nothing.
     const saveLater = () =>
       void runFork(
-        store
-          .saveExperiment(record)
-          .pipe(Effect.catch((error) => Effect.logWarning("rrsi_progress_not_saved", error))),
+        Effect.forkIn(
+          store
+            .saveExperiment(record)
+            .pipe(Effect.catch((error) => Effect.logWarning("rrsi_progress_not_saved", error))),
+          owner,
+        ),
       );
     const deadline = effectClock.currentTimeMillisUnsafe() + settings.maxMinutes * 60000;
     const progress = (
