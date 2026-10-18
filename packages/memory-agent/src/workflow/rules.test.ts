@@ -59,7 +59,7 @@ describe("WorkflowRules", () => {
       Effect.gen(function* () {
         if (failRuleVectors && texts.length > 1) {
           failRuleVectors = false;
-          return yield* new EmbeddingError({ cause: "temporary" });
+          return yield* EmbeddingError.make({ cause: "temporary" });
         }
         return texts.map(fakeVector);
       }),

@@ -1,20 +1,9 @@
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import {
-  DateTime,
-  Clock,
-  Context,
-  Crypto,
-  Data,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Schema,
-} from "effect";
+import { DateTime, Clock, Context, Crypto, Effect, Layer, Option, Predicate, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { evaluateWorkflowAction, type WorkflowActionReason } from "./actions.ts";
+import { evaluateWorkflowAction, WorkflowActionReason } from "./actions.ts";
 import {
   completionEvidence,
   CompletionRequest,
@@ -243,17 +232,21 @@ export const StartNewGoal = Schema.Struct({
 });
 export type StartNewGoal = typeof StartNewGoal.Type;
 
-export class NewGoalTransitionRefused extends Data.TaggedError("NewGoalTransitionRefused")<{
-  readonly reason:
-    | "disabled"
-    | "phase_not_authorized"
-    | "goal_missing"
-    | "workflow_changed"
-    | "run_outcome_uncertain"
-    | "transition_pending"
-    | "owner_effect_uncertain"
-    | "execution_outstanding";
-}> {}
+export class NewGoalTransitionRefused extends Schema.TaggedError<NewGoalTransitionRefused>()(
+  "NewGoalTransitionRefused",
+  {
+    reason: Schema.Literals([
+      "disabled",
+      "phase_not_authorized",
+      "goal_missing",
+      "workflow_changed",
+      "run_outcome_uncertain",
+      "transition_pending",
+      "owner_effect_uncertain",
+      "execution_outstanding",
+    ]),
+  },
+) {}
 
 export const UpdatePlan = Schema.Struct({
   summary: Schema.String,
@@ -365,23 +358,30 @@ const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(StartNewGoal));
 const decodeRequest = Schema.decodeEffect(Schema.fromJsonString(StartNewGoal));
 const sameSnapshot = Schema.toEquivalence(CompletionSnapshot);
 
-export class WorkflowTransitionRefused extends Data.TaggedError("WorkflowTransitionRefused")<{
-  readonly reason: WorkflowActionReason;
-}> {}
+export class WorkflowTransitionRefused extends Schema.TaggedError<WorkflowTransitionRefused>()(
+  "WorkflowTransitionRefused",
+  { reason: WorkflowActionReason },
+) {}
 
-export class WorkflowProgressRefused extends Data.TaggedError("WorkflowProgressRefused")<{
-  readonly reason:
-    | WorkflowActionReason
-    | "plan_missing"
-    | "unknown_step"
-    | "step_evidence_required"
-    | "verification_required"
-    | "steps_incomplete"
-    | "phase_not_executable"
-    | "completion_evidence_required"
-    | "completion_evidence_invalid"
-    | "completion_snapshot_conflict";
-}> {}
+export class WorkflowProgressRefused extends Schema.TaggedError<WorkflowProgressRefused>()(
+  "WorkflowProgressRefused",
+  {
+    reason: Schema.Union([
+      WorkflowActionReason,
+      Schema.Literals([
+        "plan_missing",
+        "unknown_step",
+        "step_evidence_required",
+        "verification_required",
+        "steps_incomplete",
+        "phase_not_executable",
+        "completion_evidence_required",
+        "completion_evidence_invalid",
+        "completion_snapshot_conflict",
+      ]),
+    ]),
+  },
+) {}
 
 const implementationComplete = (plan: PlanArtifact) =>
   plan.steps.every((step) => step.status === "done" && step.evidence.length > 0);
@@ -578,7 +578,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     });
 
     const refuseNewGoal = (reason: NewGoalTransitionRefused["reason"]) =>
-      Effect.fail(new NewGoalTransitionRefused({ reason }));
+      Effect.fail(NewGoalTransitionRefused.make({ reason }));
     // Used both at tool admission and again at the completed-run owner boundary.
     // Only admission may exclude its own (still running) run; application excludes none.
     const checkNewGoal = Effect.fnUntraced(function* (
@@ -696,7 +696,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const decision = evaluateWorkflowAction(current, { kind: "phase", phase });
             if (!decision.allowed)
-              return yield* new WorkflowTransitionRefused({ reason: decision.reason });
+              return yield* WorkflowTransitionRefused.make({ reason: decision.reason });
             const now = nowIso();
             const goal =
               phase === "execute" && current.goal?.status === "draft"
@@ -724,10 +724,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const decision = evaluateWorkflowAction(current, { kind: "control", action });
             if (!decision.allowed)
-              return yield* new WorkflowProgressRefused({ reason: decision.reason });
+              return yield* WorkflowProgressRefused.make({ reason: decision.reason });
             // An allowed control always has a goal; keep narrowing local to the mutation.
             if (current.goal === null)
-              return yield* new WorkflowProgressRefused({ reason: "goal_missing" });
+              return yield* WorkflowProgressRefused.make({ reason: "goal_missing" });
             const currentGoal = current.goal;
             const now = nowIso();
             const goalStatus =
@@ -1083,15 +1083,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             if (input.goalStatus !== undefined && current.goal === null)
-              return yield* new WorkflowProgressRefused({ reason: "goal_missing" });
+              return yield* WorkflowProgressRefused.make({ reason: "goal_missing" });
             if ((input.planStatus !== undefined || input.steps.length > 0) && current.plan === null)
-              return yield* new WorkflowProgressRefused({ reason: "plan_missing" });
+              return yield* WorkflowProgressRefused.make({ reason: "plan_missing" });
             if (
               input.steps.some(
                 (update) => !isTruthy(current.plan?.steps.some((step) => step.id === update.id)),
               )
             )
-              return yield* new WorkflowProgressRefused({ reason: "unknown_step" });
+              return yield* WorkflowProgressRefused.make({ reason: "unknown_step" });
             if (
               current.phase === "plan" &&
               (input.planStatus !== undefined ||
@@ -1099,7 +1099,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 input.planEvidence.length > 0 ||
                 input.verification !== undefined)
             )
-              return yield* new WorkflowProgressRefused({ reason: "phase_not_executable" });
+              return yield* WorkflowProgressRefused.make({ reason: "phase_not_executable" });
 
             // Progress names a step in the model's vocabulary; an untouched card keeps its column.
             const steps = cardStatuses(
@@ -1114,7 +1114,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               }) ?? [],
             );
             if (steps.some((step) => step.status === "done" && step.evidence.length === 0))
-              return yield* new WorkflowProgressRefused({ reason: "step_evidence_required" });
+              return yield* WorkflowProgressRefused.make({ reason: "step_evidence_required" });
 
             const verification = isTruthy(input.verification)
               ? {
@@ -1128,15 +1128,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               input.goalStatus === "completed" &&
               (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
             )
-              return yield* new WorkflowProgressRefused({ reason: "verification_required" });
+              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
             const planVerification = verification ?? current.plan?.verification;
             if (
               input.planStatus === "completed" &&
               (planVerification?.status !== "passed" || planVerification.evidence.length === 0)
             )
-              return yield* new WorkflowProgressRefused({ reason: "verification_required" });
+              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
             if (input.planStatus === "completed" && steps.some((step) => step.status !== "done"))
-              return yield* new WorkflowProgressRefused({ reason: "steps_incomplete" });
+              return yield* WorkflowProgressRefused.make({ reason: "steps_incomplete" });
 
             let snapshot = current.goal?.completion;
             let completionRequest = current.goal?.completionRequest;
@@ -1154,15 +1154,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 stageCompletion,
               );
               if (derived.status === "refused")
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_invalid",
                 });
               if (isTruthy(snapshot) && !sameSnapshot(snapshot, derived.snapshot))
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_snapshot_conflict",
                 });
               if (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
-                return yield* new WorkflowProgressRefused({ reason: "verification_required" });
+                return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
               if (stageCompletion) {
                 completionRequest = {
                   recorderRunId,
@@ -1178,7 +1178,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               !stageCompletion
             ) {
               if (!isTruthy(snapshot))
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_required",
                 });
               const checked = yield* completion.derive(
@@ -1191,7 +1191,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 recorderRunId,
               );
               if (checked.status === "refused" || !sameSnapshot(checked.snapshot, snapshot))
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_invalid",
                 });
             }
