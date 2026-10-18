@@ -8,11 +8,11 @@ import { RpcClient, RpcServer } from "effect/rpc";
 import { isTruthy } from "../truthy.ts";
 import { Worker } from "node:worker_threads";
 import { acquireFullLoopChannel, WorkerLifecycleError } from "./full-loop-resources.ts";
-import { isDeepStrictEqual } from "node:util";
 import { parallelReads, readOnlyToolNames } from "../tools/parallel-reads.ts";
 // Run-local observation ledger, not an Effect contextual service constructor.
 import * as OwnerToolGrants from "./owner-tool-grants.ts";
 import {
+  Equal,
   HashMap,
   HashSet,
   MutableHashMap,
@@ -415,13 +415,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               return approval === true || approval?.approved === true;
             };
             const phaseCall = (call: any) => {
-              const observed = grants.toolCalls().find((entry) => isDeepStrictEqual(entry, call));
+              const observed = grants.toolCalls().find((entry) => Equal.equals(entry, call));
               if (isTruthy(observed)) return observed;
               if (!isTruthy(ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id)))
                 return undefined;
               return ownerContext.messages
                 .flatMap((message: any) => message.toolCalls ?? [])
-                .find((entry: any) => isDeepStrictEqual(entry, call));
+                .find((entry: any) => Equal.equals(entry, call));
             };
             const configuredMiddleware = MutableHashSet.empty<number>();
             const firstConfigMiddleware = middleware.findIndex((mw) =>
@@ -534,7 +534,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   if (
                     !isTruthy(completed) ||
                     input.info.toolName !== completed.toolName ||
-                    !isDeepStrictEqual(input.info.toolCall, completed.toolCall)
+                    !Equal.equals(input.info.toolCall, completed.toolCall)
                   )
                     return false;
                 }
@@ -550,7 +550,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   !isTruthy(snapshot) ||
                   snapshot.runId !== ownerContext.runId ||
                   snapshot.threadId !== ownerContext.threadId ||
-                  !isDeepStrictEqual(snapshot.context, turn.context ?? {}) ||
+                  !Equal.equals(snapshot.context, turn.context ?? {}) ||
                   snapshot.provider !== adapterName ||
                   snapshot.model !== adapterModel ||
                   snapshot.source !== "server"
