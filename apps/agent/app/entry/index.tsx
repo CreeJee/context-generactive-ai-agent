@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { runUiEffect, uiPromise, uiFailure } from "./shared/ui-effect";
+import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
 import {
@@ -44,6 +44,7 @@ import {
 import {
   archiveErrorMessage,
   projectErrorMessage,
+  refusalOf,
   type ModelSelection,
   type ProviderId,
 } from "./api";
@@ -204,13 +205,8 @@ export function App() {
           const remaining = sessions.filter((item) => item.id !== id);
           if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const error = uiFailure(cause);
-              setArchiveError(
-                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -230,13 +226,8 @@ export function App() {
           const remaining = sessions.filter((item) => item.id !== id);
           if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const error = uiFailure(cause);
-              setArchiveError(
-                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -254,13 +245,8 @@ export function App() {
           if (result.status !== "completed") return refreshPendingLifecycle(result.status);
           setArchiveError(null);
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const error = uiFailure(cause);
-              setArchiveError(
-                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -274,11 +260,8 @@ export function App() {
         void setLocation({ project: project.id, session: null }, { history: "push" });
         return null;
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            const error = uiFailure(cause);
-            return projectErrorMessage(error instanceof Error ? error : new Error(String(error)));
-          }),
+        Effect.catchTag("UnknownError", (failure) =>
+          Effect.sync(() => projectErrorMessage(refusalOf(failure.cause))),
         ),
       ),
     );
@@ -309,7 +292,7 @@ export function App() {
         setProvider(target.provider);
         if (selected !== null) setSelection(selected);
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() =>
             setSwitchError("계정을 바꾸지 못했어요. 연결 상태를 확인한 뒤 다시 시도하세요."),
           ),

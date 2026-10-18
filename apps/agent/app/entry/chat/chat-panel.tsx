@@ -1,5 +1,5 @@
 import { Effect, Fiber } from "effect";
-import { runUiEffect, uiPromise, uiFailure } from "../shared/ui-effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -28,6 +28,7 @@ import {
   isApiError,
   chatFetch,
   compactErrorMessage,
+  refusalOf,
   eventDecoders,
   type CompactResult,
   type ContextView,
@@ -368,9 +369,9 @@ function ChatPanel({
         setNotice(done(`${phaseLabels[state.phase]} 모드로 바꿨어요.`));
         return state;
       }).pipe(
-        Effect.catchCause((cause) =>
+        Effect.catchTag("UnknownError", (rejected) =>
           Effect.sync(() => {
-            const failure = uiFailure(cause);
+            const failure = rejected.cause;
             const message =
               isApiError(failure) &&
               (failure.code === "plan_not_ready" || failure.code === "plan_outdated")
@@ -433,7 +434,7 @@ function ChatPanel({
         setNotice(null);
         void sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("Goal 상태를 바꾸지 못했어요."));
           }),
@@ -503,7 +504,7 @@ function ChatPanel({
             );
           return result;
         }).pipe(
-          Effect.catchCause(() =>
+          Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
               setNotice(problem("재개 요청을 저장하지 못했어요."));
               return { status: "failed" as const };
@@ -527,7 +528,7 @@ function ChatPanel({
           ? { status: "blocked" as const, reason: result.blocker }
           : { status: "failed" as const };
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("작업을 보관하지 못했어요."));
             return { status: "failed" as const };
@@ -550,7 +551,7 @@ function ChatPanel({
           ? { status: "blocked" as const, reason: result.blocker }
           : { status: "failed" as const };
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("작업 원본을 삭제하지 못했어요."));
             return { status: "failed" as const };
@@ -796,16 +797,9 @@ function ChatPanel({
                 setNotice(null);
                 return yield* uiPromise(() => compactMutation.mutateAsync()).pipe(
                   Effect.map((result) => setNotice(compacted(result))),
-                  Effect.catch((failure) =>
+                  Effect.catchTag("UnknownError", (failure) =>
                     Effect.sync(() => {
-                      const error = failure.cause;
-                      setNotice(
-                        problem(
-                          compactErrorMessage(
-                            error instanceof Error ? error : new Error(String(error)),
-                          ),
-                        ),
-                      );
+                      setNotice(problem(compactErrorMessage(refusalOf(failure.cause))));
                     }),
                   ),
                 );

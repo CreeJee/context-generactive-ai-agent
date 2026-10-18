@@ -343,6 +343,8 @@ export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
   }
 }
 export const isApiError = Schema.is(ApiError);
+/** The server's refusal behind a failed call, or null when the call failed some other way. */
+export const refusalOf = <F>(failure: F): ApiError | null => (isApiError(failure) ? failure : null);
 const ErrorBody = Schema.Struct({
   error: Schema.optional(ApiErrorCode),
   reason: Schema.optional(Schema.String),
@@ -1005,8 +1007,8 @@ const attachmentRejections = {
   empty: "빈 파일이에요.",
 } satisfies Record<typeof AttachmentRejection.Type, string>;
 
-export function attachmentErrorMessage(error: Error) {
-  if (!isApiError(error) || !isTruthy(error.reason)) return "이미지를 올리지 못했어요.";
+export function attachmentErrorMessage(error: ApiError | null) {
+  if (error === null || !isTruthy(error.reason)) return "이미지를 올리지 못했어요.";
   return Schema.is(AttachmentRejection)(error.reason)
     ? attachmentRejections[error.reason]
     : error.reason;
@@ -1025,8 +1027,8 @@ const projectRejections = {
   already_registered: "이미 등록된 프로젝트예요.",
 } satisfies Record<typeof ProjectRejection.Type, string>;
 
-export function projectErrorMessage(error: Error) {
-  if (!isApiError(error) || !isTruthy(error.reason)) return "프로젝트를 추가하지 못했어요.";
+export function projectErrorMessage(error: ApiError | null) {
+  if (error === null || !isTruthy(error.reason)) return "프로젝트를 추가하지 못했어요.";
   return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
 }
 
@@ -1041,8 +1043,8 @@ const archiveRejections = {
   session_not_found: "대화를 찾을 수 없어요.",
 } satisfies Record<typeof ArchiveRejection.Type, string>;
 
-export function archiveErrorMessage(error: Error) {
-  return isApiError(error) && Schema.is(ArchiveRejection)(error.code)
+export function archiveErrorMessage(error: ApiError | null) {
+  return error !== null && Schema.is(ArchiveRejection)(error.code)
     ? archiveRejections[error.code]
     : "대화를 바꾸지 못했어요.";
 }
@@ -1080,8 +1082,8 @@ const compactRejections = {
   session_not_found: "대화를 찾을 수 없어요.",
 } satisfies Record<typeof CompactRejection.Type, string>;
 
-export function compactErrorMessage(error: Error) {
-  return isApiError(error) && Schema.is(CompactRejection)(error.code)
+export function compactErrorMessage(error: ApiError | null) {
+  return error !== null && Schema.is(CompactRejection)(error.code)
     ? compactRejections[error.code]
     : "도구 출력을 비우지 못했어요.";
 }

@@ -25,7 +25,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { timeOfDay } from "~/lib/dates";
-import { type ImportActivity } from "../../api";
+import { type ImportActivity, refusalOf } from "../../api";
 import { useImportsQuery } from "../../queries/global";
 import { useImportMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError, shortPath } from "../shared";
@@ -52,6 +52,46 @@ const isUnplacedReason = Schema.is(UnplacedReason);
 /** A reason this build does not know yet is shown as it came, rather than hidden. */
 const unplacedReason = (reason: string) =>
   isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
+
+/** The failure tags a transcript's import records, as `Tag` or `Tag:Reason` joined by commas. */
+const ImportFailureTag = Schema.Literals([
+  "PlatformError",
+  "SchemaError",
+  "TranscriptDecompressFailed",
+  "ImportStoreFailed",
+  "BulkWriteFailed",
+  "SqlError",
+  "Defect",
+  "Interrupted",
+]);
+const importFailureTexts = {
+  PlatformError: "파일을 읽지 못했어요",
+  SchemaError: "기록 형식을 읽지 못했어요",
+  TranscriptDecompressFailed: "압축된 기록을 풀지 못했어요",
+  ImportStoreFailed: "기억 저장소에 쓰지 못했어요",
+  BulkWriteFailed: "기억 저장소에 쓰지 못했어요",
+  SqlError: "기억 저장소에 쓰지 못했어요",
+  Defect: "예상하지 못한 오류가 났어요",
+  Interrupted: "가져오기가 중단됐어요",
+} satisfies Record<typeof ImportFailureTag.Type, string>;
+const PlatformFailureReason = Schema.Literals(["NotFound", "PermissionDenied"]);
+const platformFailureTexts = {
+  NotFound: "파일을 찾지 못했어요",
+  PermissionDenied: "파일을 읽을 권한이 없어요",
+} satisfies Record<typeof PlatformFailureReason.Type, string>;
+
+const importFailurePart = (part: string) => {
+  const [tag, reason] = part.split(":");
+  if (tag === "PlatformError" && Schema.is(PlatformFailureReason)(reason))
+    return platformFailureTexts[reason];
+  return Schema.is(ImportFailureTag)(tag) ? importFailureTexts[tag] : "가져오지 못했어요";
+};
+/**
+ * A recorded import failure in words. Anything else, such as text an older build stored, reads
+ * generically: it can hold paths or transcript content.
+ */
+const importFailureText = (failure: string) =>
+  [...new Set(failure.split(",").map(importFailurePart))].join(", ");
 
 /** Why a pass stopped partway. */
 const crashReasons = {
@@ -119,14 +159,8 @@ export function ImportSettings() {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
-          Effect.catch((failure) =>
-            Effect.sync(() => {
-              setError(
-                errorMessage(
-                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
-                ),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -244,7 +278,7 @@ export function ImportSettings() {
             <ul className="font-mono text-xs">
               {overview.failures.map((failure) => (
                 <li key={`${failure.source}:${failure.path}`}>
-                  {failure.path}: {failure.reason}
+                  {failure.path}: {importFailureText(failure.reason)}
                 </li>
               ))}
             </ul>

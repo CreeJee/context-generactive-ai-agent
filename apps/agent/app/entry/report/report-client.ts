@@ -1,4 +1,4 @@
-import { Data, Effect, Function as EffectFunction, Schema } from "effect";
+import { Effect, Function as EffectFunction, Schema } from "effect";
 import {
   ReportDeliveryResult,
   ReportDeliveryStatus,
@@ -8,12 +8,15 @@ import {
 import { appFetch } from "../shared/backend-restart";
 import { ReportEvidence } from "./report-contracts";
 
-export class ReportRequestFailed extends Data.TaggedError("ReportRequestFailed")<{
-  readonly operation: "session" | "evidence" | "detail" | "diagnosis" | "delivery";
-  readonly phase: "transport" | "status" | "response";
-  /** Only the status code is kept from a rejected response; its body is never read. */
-  readonly httpStatus?: number;
-}> {}
+export class ReportRequestFailed extends Schema.TaggedError<ReportRequestFailed>()(
+  "ReportRequestFailed",
+  {
+    operation: Schema.Literals(["session", "evidence", "detail", "diagnosis", "delivery"]),
+    phase: Schema.Literals(["transport", "status", "response"]),
+    /** Only the status code is kept from a rejected response; its body is never read. */
+    httpStatus: Schema.optional(Schema.Int),
+  },
+) {}
 
 export function makeReportClient(fetcher: typeof fetch) {
   const request = <S extends Schema.Constraint>(input: {
@@ -26,17 +29,17 @@ export function makeReportClient(fetcher: typeof fetch) {
       const signal = yield* Effect.abortSignal;
       const response = yield* Effect.tryPromise({
         try: () => fetcher(input.url, { ...input.init, signal }),
-        catch: () => new ReportRequestFailed({ operation: input.operation, phase: "transport" }),
+        catch: () => ReportRequestFailed.make({ operation: input.operation, phase: "transport" }),
       });
       if (!response.ok)
-        return yield* new ReportRequestFailed({
+        return yield* ReportRequestFailed.make({
           operation: input.operation,
           phase: "status",
           httpStatus: response.status,
         });
       const body: unknown = yield* Effect.tryPromise({
         try: () => response.json(),
-        catch: () => new ReportRequestFailed({ operation: input.operation, phase: "response" }),
+        catch: () => ReportRequestFailed.make({ operation: input.operation, phase: "response" }),
       });
       return yield* Schema.decodeUnknownEffect(input.schema)(body);
     }).pipe(Effect.scoped);

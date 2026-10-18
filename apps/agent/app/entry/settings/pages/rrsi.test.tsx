@@ -98,7 +98,8 @@ it.live("a failed query can recover and display experiment controls", () =>
         client.getQueryCache().find({ queryKey: ["settings", "rrsi"] }),
       );
       yield* sdkCall(() => expect(query.fetch()).rejects.toThrow("connection unavailable"));
-      expect(render()).toContain("connection unavailable");
+      // The browser's transport text stays out of the page.
+      expect(render()).toContain("요청을 처리하지 못했어요");
       vi.stubGlobal("fetch", () =>
         Promise.resolve(
           Response.json({
