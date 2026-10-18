@@ -1,14 +1,11 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
-import { Cause, Effect, MutableHashMap, Option } from "effect";
+import { Cause, Context, Effect, Layer, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Crypto } from "effect";
-import type { DatabaseSync } from "node:sqlite";
 import {
   createProfileCredentialStore,
-  listOAuthProfiles,
-  publishOAuthProfileEffect,
-  selectOAuthProfileEffect,
+  OAuthProfiles,
   type ProfileCredentialStore,
 } from "./accounts.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
@@ -34,14 +31,14 @@ export type AccountLoginState =
 /** Each login gets a fresh keychain slot; the legacy provider client is never used to add accounts. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function createOAuthAccountLoginManager(options: {
-  readonly sqlite: DatabaseSync;
+  readonly profiles: OAuthProfiles["Service"];
   readonly accounts?: ProfileCredentialStore | undefined;
   readonly startLogin?: LoginStarter | undefined;
 }) {
-  return createOAuthAccountLoginManagerBody(options.sqlite, options.accounts, options.startLogin);
+  return createOAuthAccountLoginManagerBody(options.profiles, options.accounts, options.startLogin);
 }
 function createOAuthAccountLoginManagerBody(
-  sqlite: DatabaseSync,
+  store: OAuthProfiles["Service"],
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
   startLogin: LoginStarter = (provider, id) =>
     createSubscriptionOAuthClient({
@@ -86,10 +83,8 @@ function createOAuthAccountLoginManagerBody(
         return { status: "idle" };
     }
   };
-  const profiles = (provider: OAuthProvider) => ({
-    profiles: listOAuthProfiles({ sqlite: sqlite, provider: provider }),
-    login: state(provider),
-  });
+  const profiles = (provider: OAuthProvider) =>
+    Effect.map(store.list(provider), (listed) => ({ profiles: listed, login: state(provider) }));
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const start = (provider: OAuthProvider, label: string) =>
     runOAuthNodeEffect(
@@ -119,29 +114,15 @@ function createOAuthAccountLoginManagerBody(
                 Effect.gen(function* () {
                   if (!connection.connected || attempt.cancelled)
                     return yield* new Cause.UnknownError(new Error("login_failed"));
-                  yield* publishOAuthProfileEffect(
-                    sqlite,
-                    provider,
-                    attempt.id,
-                    attempt.label,
-                    accounts,
-                  );
-                  if (
-                    !listOAuthProfiles({ sqlite: sqlite, provider: provider }).some(
-                      (profile) => profile.selected,
-                    )
-                  )
-                    yield* selectOAuthProfileEffect(sqlite, provider, attempt.id, accounts);
+                  yield* store.publish(provider, attempt.id, attempt.label, accounts);
+                  if (!(yield* store.list(provider)).some((profile) => profile.selected))
+                    yield* store.select(provider, attempt.id, accounts);
                   recordResult(provider, { status: "completed" });
                 }),
               ),
               Effect.catchCause(() =>
                 Effect.gen(function* () {
-                  if (
-                    !listOAuthProfiles({ sqlite: sqlite, provider: provider }).some(
-                      (profile) => profile.id === attempt.id,
-                    )
-                  ) {
+                  if (!(yield* store.list(provider)).some((profile) => profile.id === attempt.id)) {
                     yield* nativePromise(() => accounts.remove(provider, attempt.id)).pipe(
                       Effect.ignore,
                     );
@@ -161,16 +142,15 @@ function createOAuthAccountLoginManagerBody(
               ),
             ),
           );
-          return profiles(provider);
+          return yield* profiles(provider);
         }).pipe(
           Effect.catchCause(() =>
-            Effect.sync(() => {
+            Effect.sync(() =>
               MutableHashMap.set(entries, provider, {
                 status: "settled",
                 result: { status: "error", error: "credential_unavailable" },
-              });
-              return profiles(provider);
-            }),
+              }),
+            ).pipe(Effect.andThen(profiles(provider))),
           ),
         );
       }),
@@ -185,7 +165,7 @@ function createOAuthAccountLoginManagerBody(
           const completed = attempt.completed;
           if (completed !== undefined) yield* nativePromise(() => completed);
         }
-        return profiles(provider);
+        return yield* profiles(provider);
       }),
     );
   /** Resolves once the provider's running login, if any, has finished either way. */
@@ -193,4 +173,17 @@ function createOAuthAccountLoginManagerBody(
   const settled = (provider: OAuthProvider): Promise<void> =>
     activeAttempt(provider)?.completed ?? Promise.resolve();
   return { profiles, start, cancel, settled };
+}
+
+/** One pending OAuth callback per provider for the app's profile store. */
+export class OAuthAccountLogins extends Context.Service<
+  OAuthAccountLogins,
+  ReturnType<typeof createOAuthAccountLoginManager>
+>()("memory-agent/oauth/account-login/OAuthAccountLogins") {
+  static readonly layer = Layer.effect(
+    OAuthAccountLogins,
+    Effect.gen(function* () {
+      return createOAuthAccountLoginManager({ profiles: yield* OAuthProfiles });
+    }),
+  );
 }

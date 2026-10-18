@@ -1,14 +1,11 @@
-import { DatabaseSync } from "node:sqlite";
 import { Console, Data, Effect } from "effect";
-import { defaultStorageRoot } from "../src/config/storage-root.ts";
-import { listOAuthProfiles } from "../src/oauth/accounts.ts";
+import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 import { anthropicSubscriptionUsageProbe } from "../src/oauth/subscription-usage-probe.ts";
 import {
   createKeychainProfileCredentialStore,
   OAuthHarnessError,
 } from "../src/oauth/validation-harness.ts";
-import { path } from "../src/runtime/synchronous-path.ts";
 
 // V1 evidence probe (docs/subscription-quota-research.md). Opens the user's app DB read-only, picks
 // the single stored Anthropic profile and sends exactly one usage request through app code. Prints
@@ -22,17 +19,8 @@ const emailLike = /[^\s@]+@[^\s@]+/;
 const safeLabel = (label: string) => (emailLike.test(label) ? "[email-like label]" : label);
 
 const program = Effect.gen(function* () {
-  const profiles = yield* Effect.acquireUseRelease(
-    Effect.try({
-      try: () => new DatabaseSync(path.join(defaultStorageRoot, "agent.db"), { readOnly: true }),
-      catch: (cause) => new ProbeDatabaseError({ cause }),
-    }),
-    (sqlite) =>
-      Effect.try({
-        try: () => listOAuthProfiles({ sqlite, provider: "anthropic" }),
-        catch: (cause) => new ProbeDatabaseError({ cause }),
-      }),
-    (sqlite) => Effect.sync(() => sqlite.close()),
+  const profiles = yield* storedOAuthProfiles("anthropic").pipe(
+    Effect.mapError((cause) => new ProbeDatabaseError({ cause })),
   );
   const candidates = profiles.map((profile) => ({
     id: profile.id,

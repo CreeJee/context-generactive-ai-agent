@@ -41,17 +41,18 @@ export {
 export { ChatState } from "./chat-state/chat-state.ts";
 export { chatPersistence } from "./chat-state/persistence.ts";
 export {
-  importLegacyOAuthProfile,
-  listOAuthProfiles,
+  OAuthProfileRejected,
+  OAuthProfileStoreFailed,
+  OAuthProfiles,
   createProfileCredentialStore,
-  publishOAuthProfile,
-  selectOAuthProfile,
-  removeOAuthProfile,
-  renameOAuthProfile,
   type OAuthProfile,
   type ProfileCredentialStore,
 } from "./oauth/accounts.ts";
-export { createOAuthAccountLoginManager, type AccountLoginState } from "./oauth/account-login.ts";
+export {
+  OAuthAccountLogins,
+  createOAuthAccountLoginManager,
+  type AccountLoginState,
+} from "./oauth/account-login.ts";
 export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
 export { ReportDelivery, ReportDeliveryError, maxReportBytes } from "./report/discord-webhook.ts";
 export {

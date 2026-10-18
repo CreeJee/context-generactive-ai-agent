@@ -25,7 +25,7 @@ import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { createOAuthAccountLoginManager } from "../../src/oauth/account-login.ts";
-import { createProfileCredentialStore } from "../../src/oauth/accounts.ts";
+import { createProfileCredentialStore, OAuthProfiles } from "../../src/oauth/accounts.ts";
 import { providerProtocols, type NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import {
   OAuthValidationHarness,
@@ -261,7 +261,7 @@ testAgent({
         expect(workers).toHaveLength(1);
         expect(workers[0]!.threadId).not.toBe(threadId);
         const manager = createOAuthAccountLoginManager({
-          sqlite,
+          profiles: yield* OAuthProfiles,
           accounts: createProfileCredentialStore(store),
           startLogin: (_provider, slot) => {
             loginStarts++;
@@ -292,15 +292,15 @@ testAgent({
           "terminated worker run fails",
           1000,
         );
-        expect(manager.profiles("openai").login.status).toBe("pending");
+        expect((yield* manager.profiles("openai")).login.status).toBe("pending");
         const client = yield* testHttpClient();
         expect((yield* client.get(callback.toString())).status).toBe(200);
         yield* waitUntil(
-          () => manager.profiles("openai").login.status === "completed",
+          Effect.map(manager.profiles("openai"), (state) => state.login.status === "completed"),
           "owner login completes",
           1000,
         );
-        expect(manager.profiles("openai").profiles).toMatchObject([
+        expect((yield* manager.profiles("openai")).profiles).toMatchObject([
           { label: "owner account", selected: true },
         ]);
         expect(writes).toEqual([threadId]);
@@ -326,18 +326,19 @@ testAgent({
         wrongCallback.searchParams.set("state", "wrong-state");
         expect((yield* client.get(wrongCallback.toString())).status).toBe(400);
         yield* waitUntil(
-          () =>
+          Effect.map(manager.profiles("openai"), (state) =>
             Schema.is(
               Schema.Struct({
                 status: Schema.Literal("error"),
                 error: Schema.Literal("login_failed"),
               }),
-            )(manager.profiles("openai").login),
+            )(state.login),
+          ),
           "wrong OAuth state rejected",
           1000,
         );
         expect(grants).toHaveLength(1);
-        expect(manager.profiles("openai").profiles).toHaveLength(1);
+        expect((yield* manager.profiles("openai")).profiles).toHaveLength(1);
       }),
     20_000,
   );

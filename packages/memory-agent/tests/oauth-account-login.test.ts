@@ -2,12 +2,21 @@ import { testHttpClient } from "./support/http.ts";
 import type { HttpClientResponse } from "effect/http";
 import { it } from "@effect/vitest";
 import { waitUntil } from "./support/wait-until.ts";
-import { Cause, Clock, Deferred, Effect, Fiber, MutableHashMap, Option } from "effect";
-import { DatabaseSync } from "node:sqlite";
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  MutableHashMap,
+  Option,
+} from "effect";
 import { describe, expect, vi } from "vite-plus/test";
-import { migrations } from "../src/db/migrations.ts";
+import { Database } from "../src/db/database.ts";
 import { createOAuthAccountLoginManager } from "../src/oauth/account-login.ts";
-import { createProfileCredentialStore, importLegacyOAuthProfile } from "../src/oauth/accounts.ts";
+import { createProfileCredentialStore, OAuthProfiles } from "../src/oauth/accounts.ts";
 import { providerProtocols, type OAuthProvider } from "../src/oauth/protocol.ts";
 import { createSubscriptionOAuthClient } from "../src/oauth/validation-harness.ts";
 import type {
@@ -24,30 +33,19 @@ const sdkCall = Effect.fn("oauthLoginTest.sdkCall")(function* <A>(
     catch: (cause) => new Cause.UnknownError(cause),
   });
 });
-const oauthSchema = migrations
-  .filter(
-    (sql) =>
-      sql.includes("CREATE TABLE oauth_profiles (") ||
-      sql.includes("CREATE TABLE oauth_legacy_removed ("),
-  )
-  .join("\n");
 const credential = (suffix: string): StoredCredential => ({
   accessToken: `access-${suffix}`,
   refreshToken: `refresh-${suffix}`,
   expiresAt: 1000,
 });
 const fixture = Effect.fn("oauthLoginTest.fixture")(function* () {
-  const db = yield* Effect.acquireRelease(
-    Effect.sync(() => new DatabaseSync(":memory:")),
-    (db) =>
-      Effect.sync(() => {
-        if (db.isOpen) db.close();
-      }),
+  const profiles = Context.get(
+    yield* Layer.build(OAuthProfiles.layer.pipe(Layer.provide(Database.layer(":memory:")))),
+    OAuthProfiles,
   );
   const scope = yield* Effect.scope;
   const runNative = Effect.runPromiseWith(yield* Effect.context());
   const clock = yield* Clock.Clock;
-  db.exec(oauthSchema);
   const slots = MutableHashMap.empty<string, StoredCredential>();
   const accounts = createProfileCredentialStore((id) => ({
     read: (provider) =>
@@ -111,13 +109,13 @@ const fixture = Effect.fn("oauthLoginTest.fixture")(function* () {
       };
     });
   return {
-    db,
+    profiles,
     accounts,
     slots,
     legacy,
     legacyStore,
     attempts,
-    manager: createOAuthAccountLoginManager({ sqlite: db, accounts: accounts, startLogin: start }),
+    manager: createOAuthAccountLoginManager({ profiles, accounts, startLogin: start }),
   };
 });
 
@@ -126,7 +124,7 @@ describe("multi-account OAuth login manager", () => {
     "%s production callback admits one exchange and publishes one selected profile",
     (provider) =>
       Effect.gen(function* () {
-        const { db, accounts, slots } = yield* fixture();
+        const { profiles, accounts, slots } = yield* fixture();
         const gate = yield* Deferred.make<void>();
         const exchanging = yield* Deferred.make<void>();
         const runNative = Effect.runPromiseWith(yield* Effect.context());
@@ -147,7 +145,7 @@ describe("multi-account OAuth login manager", () => {
         );
         let login!: LoginAttempt;
         const manager = createOAuthAccountLoginManager({
-          sqlite: db,
+          profiles,
           accounts: accounts,
           startLogin: (p, id) =>
             createSubscriptionOAuthClient({
@@ -204,20 +202,20 @@ describe("multi-account OAuth login manager", () => {
           }
           expect(tokenFetch).toHaveBeenCalledTimes(1);
           expect(writes).toBe(0);
-          expect(manager.profiles(provider).profiles).toEqual([]);
+          expect((yield* manager.profiles(provider)).profiles).toEqual([]);
           release();
           const response = yield* Fiber.join(initiated);
           expect(response.status).toBe(200);
           yield* response.text;
           yield* sdkCall(() => login.completed);
           yield* waitUntil(
-            () => manager.profiles(provider).login.status === "completed",
+            Effect.map(manager.profiles(provider), (state) => state.login.status === "completed"),
             "login completion",
             1000,
           );
           expect(writes).toBe(1);
           expect(MutableHashMap.size(slots)).toBe(1);
-          expect(manager.profiles(provider).profiles).toEqual([
+          expect((yield* manager.profiles(provider)).profiles).toEqual([
             expect.objectContaining({ label: "concurrent profile", selected: true }),
           ]);
           expect(tokenFetch).toHaveBeenCalledTimes(1);
@@ -229,7 +227,6 @@ describe("multi-account OAuth login manager", () => {
               Effect.ignore,
             );
           yield* sdkCall(() => manager.cancel(provider));
-          db.close();
         }
       }),
   );
@@ -237,85 +234,60 @@ describe("multi-account OAuth login manager", () => {
     "%s adds two accounts without changing the legacy active slot",
     (provider) =>
       Effect.gen(function* () {
-        const { db, accounts, slots, legacy, legacyStore, attempts, manager } = yield* fixture();
-        try {
-          yield* sdkCall(() => legacyStore.write(provider, credential("original")));
+        const { profiles, accounts, slots, legacy, legacyStore, attempts, manager } =
+          yield* fixture();
+        yield* sdkCall(() => legacyStore.write(provider, credential("original")));
+        yield* profiles.importLegacy(provider, accounts, legacyStore);
+        for (const suffix of [1, 2]) {
+          const pending = yield* sdkCall(() => manager.start(provider, `계정 ${suffix}`));
+          expect(pending.login).toMatchObject({ status: "pending" });
+          const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, provider))!;
           yield* sdkCall(() =>
-            importLegacyOAuthProfile({
-              sqlite: db,
-              provider: provider,
-              accounts: accounts,
-              legacy: legacyStore,
-            }),
+            accounts.write(provider, attempt.id, credential(`${provider}-${suffix}`)),
           );
-          for (const suffix of [1, 2]) {
-            const pending = yield* sdkCall(() => manager.start(provider, `계정 ${suffix}`));
-            expect(pending.login).toMatchObject({ status: "pending" });
-            const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, provider))!;
-            yield* sdkCall(() =>
-              accounts.write(provider, attempt.id, credential(`${provider}-${suffix}`)),
-            );
-            attempt.succeed();
-            yield* waitUntil(
-              () => manager.profiles(provider).login.status === "completed",
-              "login completion",
-              1000,
-            );
-          }
-          expect(
-            manager
-              .profiles(provider)
-              .profiles.map((profile) => profile.label)
-              .sort(),
-          ).toEqual(
-            [
-              `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
-              "계정 1",
-              "계정 2",
-            ].sort(),
+          attempt.succeed();
+          yield* waitUntil(
+            Effect.map(manager.profiles(provider), (state) => state.login.status === "completed"),
+            "login completion",
+            1000,
           );
-          expect(
-            manager
-              .profiles(provider)
-              .profiles.filter((p) => p.selected)
-              .map((p) => p.id),
-          ).toEqual([`legacy-${provider}`]);
-          expect(Option.getOrUndefined(MutableHashMap.get(legacy, provider))).toEqual(
-            credential("original"),
-          );
-          expect(MutableHashMap.size(slots)).toBe(3);
-        } finally {
-          db.close();
         }
+        expect(
+          (yield* manager.profiles(provider)).profiles.map((profile) => profile.label).sort(),
+        ).toEqual(
+          [
+            `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
+            "계정 1",
+            "계정 2",
+          ].sort(),
+        );
+        expect(
+          (yield* manager.profiles(provider)).profiles.filter((p) => p.selected).map((p) => p.id),
+        ).toEqual([`legacy-${provider}`]);
+        expect(Option.getOrUndefined(MutableHashMap.get(legacy, provider))).toEqual(
+          credential("original"),
+        );
+        expect(MutableHashMap.size(slots)).toBe(3);
       }),
   );
 
   it.live("cancel discards only the pending slot and retains other accounts", () =>
     Effect.gen(function* () {
-      const { db, accounts, legacyStore, attempts, manager } = yield* fixture();
-      try {
-        yield* sdkCall(() => legacyStore.write("openai", credential("original")));
-        yield* sdkCall(() =>
-          importLegacyOAuthProfile({
-            sqlite: db,
-            provider: "openai",
-            accounts: accounts,
-            legacy: legacyStore,
-          }),
-        );
-        yield* sdkCall(() => manager.start("openai", "new account"));
-        const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, "openai"))!;
-        yield* sdkCall(() => accounts.write("openai", attempt.id, credential("new")));
-        yield* sdkCall(() =>
-          expect(manager.start("openai", "overlap")).rejects.toThrow("oauth_login_in_progress"),
-        );
-        yield* sdkCall(() => manager.cancel("openai"));
-        expect(yield* sdkCall(() => accounts.read("openai", attempt.id))).toBeNull();
-        expect(manager.profiles("openai").profiles.map((p) => p.id)).toEqual(["legacy-openai"]);
-        expect(yield* sdkCall(() => legacyStore.read("openai"))).toEqual(credential("original"));
-      } finally {
-        db.close();
-      }
+      const { profiles, accounts, legacyStore, attempts, manager } = yield* fixture();
+      yield* sdkCall(() => legacyStore.write("openai", credential("original")));
+      yield* profiles.importLegacy("openai", accounts, legacyStore);
+      yield* sdkCall(() => manager.start("openai", "new account"));
+      const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, "openai"))!;
+      yield* sdkCall(() => accounts.write("openai", attempt.id, credential("new")));
+      yield* sdkCall(() =>
+        expect(manager.start("openai", "overlap")).rejects.toThrow("oauth_login_in_progress"),
+      );
+      yield* sdkCall(() => manager.cancel("openai"));
+      expect(yield* sdkCall(() => accounts.read("openai", attempt.id))).toBeNull();
+      expect((yield* manager.profiles("openai")).profiles.map((p) => p.id)).toEqual([
+        "legacy-openai",
+      ]);
+      expect(yield* sdkCall(() => legacyStore.read("openai"))).toEqual(credential("original"));
     }),
   );
 });
