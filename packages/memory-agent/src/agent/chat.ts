@@ -1870,7 +1870,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               { projectId, sessionId, runId, userNodeId },
               memoryScope,
             )
-          : memoryTools.forRun(
+          : yield* memoryTools.forRun(
               {
                 projectId,
                 sessionId,

@@ -1,6 +1,6 @@
 import { chat } from "@tanstack/ai";
 import { layer } from "@effect/vitest";
-import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
@@ -634,7 +634,7 @@ testAgent()("memory tools per run", (it) => {
       const env = yield* environment;
       let reads = 0;
       const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = (yield* MemoryTools).forRun({
+      const prepared = yield* (yield* MemoryTools).forRun({
         ...at,
         runId: `${at.sessionId}:deferred-run`,
         get userNodeId() {
@@ -649,6 +649,33 @@ testAgent()("memory tools per run", (it) => {
         reason: "claim_not_adopted",
       });
       expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect("runs a run's tool calls on its context, so their spans join the run's trace", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const recorded: Tracer.Span[] = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          recorded.push(span);
+          return span;
+        },
+      });
+      const { tools, run } = yield* Effect.gen(function* () {
+        const prepared = yield* (yield* MemoryTools).forRun({
+          ...at,
+          runId: `${at.sessionId}:traced-run`,
+          userNodeId: "user",
+        });
+        return { tools: prepared.tools, run: yield* Effect.currentSpan };
+      }).pipe(Effect.withSpan("chat.run"), Effect.withTracer(tracer));
+      const before = recorded.length;
+      yield* call(() => tools[0].execute!({ query: "anything" }));
+      const toolSpans = recorded.slice(before);
+      expect(toolSpans.length).toBeGreaterThan(0);
+      expect(toolSpans.every((span) => span.traceId === run.traceId)).toBe(true);
     }),
   );
 

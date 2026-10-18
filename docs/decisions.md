@@ -2124,5 +2124,6 @@
 - `@effect/opentelemetry`는 쓰지 않는다. 설치본 `effect/observability`의 `OtlpTracer`·`OtlpMetrics`를 `layerFromConfig`로 쓰고, 기존 OpenTelemetry SDK가 없으므로 Effect 문서가 권하는 내장 경로를 택한다.
 - 에이전트 런타임(`apps/agent/app/.server/agent.ts`) 최하단에 관측 Layer를 둔다. 표준 `OTEL_*` 변수가 없으면 아무것도 내보내지 않는다. 로그는 프롬프트와 공급자 응답을 담을 수 있어 OTLP로 내보내지 않는다. `CONTEXT_AGENT_DEVTOOLS_URL`이 있으면 devtools tracer가 OTLP tracer를 감싼다.
 - `tools/profile/main.ts`가 OTLP·devtools 수집기와 요약기를 맡는다. 두 수집기는 같은 span NDJSON을 쓰고, span 속성은 숫자·불리언만 남긴다. CPU는 Node의 `--cpu-prof` 결과(`.cpuprofile`)를 같은 요약기로 읽는다.
-- worker 내부 span과 `Effect.runPromiseWith`로 고정한 context의 SDK 도구 콜백 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
+- worker 내부 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
+- 사용자 결정: 메모리 도구는 고친다. `MemoryTools.forRun`은 Effect가 되어 호출한 실행의 context를 잡고, 도구 Effect는 그 위에 서비스를 덮어 돈다(`MemoryToolEnvironment.caller`). 그래서 도구 span이 run span과 같은 trace에 붙는다. `forProject`는 Layer를 만들 때의 context를 쓴다. BTW·native owner 경로는 `caller` 없이 그대로 둔다.
 - 절차는 `.agents/skills/effect-profile` 스킬에 둔다.
