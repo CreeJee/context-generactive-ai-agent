@@ -1,4 +1,4 @@
-import { Cause, Console, Effect, Function as EffectFunction } from "effect";
+import { Cause, Console, Effect, Function as EffectFunction, Schema } from "effect";
 import {
   ServerRouter,
   type EntryContext,
@@ -10,6 +10,12 @@ import { isbot } from "isbot";
 
 export { configureAgentBackend, disposeAgent } from "./.server/agent.ts";
 export const streamTimeout = 5_000;
+
+/** React could not render the document; the renderer's error goes to `handleError`'s log only. */
+class DocumentRenderFailed extends Schema.TaggedError<DocumentRenderFailed>()(
+  "DocumentRenderFailed",
+  { stage: Schema.Literals(["shell", "all_ready"]), cause: Schema.Defect() },
+) {}
 
 /**
  * A loader or action that throws. Node prints an Effect error as its fields without a stack, so
@@ -50,12 +56,15 @@ const renderDocument = Effect.fn("server.renderDocument")(function* (
           if (shellRendered) logError(Console.error(error));
         },
       }),
-    catch: (cause) => new Cause.UnknownError(cause),
+    catch: (cause) => DocumentRenderFailed.make({ stage: "shell", cause }),
   });
   shellRendered = true;
   const userAgent = request.headers.get("user-agent");
   if ((userAgent !== null && isbot(userAgent)) || context.isSpaMode)
-    yield* Effect.promise(() => body.allReady);
+    yield* Effect.tryPromise({
+      try: () => body.allReady,
+      catch: (cause) => DocumentRenderFailed.make({ stage: "all_ready", cause }),
+    });
   headers.set("Content-Type", "text/html");
   return new Response(body, { status, headers });
 });

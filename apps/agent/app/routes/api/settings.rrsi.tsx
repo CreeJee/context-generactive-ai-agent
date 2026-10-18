@@ -1,4 +1,4 @@
-import { Effect, Result } from "effect";
+import { Effect, Option, Result } from "effect";
 import { Rrsi, RrsiCommand } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -16,12 +16,14 @@ export function action({ request }: { request: Request }) {
   return agent.runPromise(
     Effect.gen(function* () {
       const decoded = yield* Effect.tryPromise(() => readJson(request, RrsiCommand)).pipe(
-        Effect.option,
+        Effect.map(Result.getSuccess),
+        // A body that cannot be read answers the same as one that does not decode.
+        Effect.catchTag("UnknownError", () => Effect.succeedNone),
       );
-      if (decoded._tag === "None" || Result.isFailure(decoded.value))
+      if (Option.isNone(decoded))
         return Response.json({ error: "invalid_command" }, { status: 400 });
       const rrsi = yield* Rrsi;
-      const command = decoded.value.success;
+      const command = decoded.value;
       return yield* Effect.gen(function* () {
         switch (command.action) {
           case "settings":
