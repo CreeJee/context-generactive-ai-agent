@@ -17,20 +17,22 @@ import {
   SandboxUnavailable,
 } from "./sandbox-protocol.ts";
 
-const setupFailed = <E>(cause: E) =>
-  SandboxUnavailable.make({
-    reason: "setup_failed",
-    detail: cause instanceof Error ? cause.message : String(cause),
-  });
+/**
+ * The setup step that failed, as a fixed detail: the runtime's own message can hold paths, and it
+ * reaches the shell tool's result.
+ */
+const setupFailed =
+  (step: "invalid_setup" | "runtime_unavailable" | "initialize_failed" | "wrap_failed") => () =>
+    SandboxUnavailable.make({ reason: "setup_failed", detail: step });
 
 /** Sets the sandbox up for this worker's one command; the worker's Scope resets it. */
 const prepare = Effect.gen(function* () {
   const { sandbox } = yield* Schema.decodeUnknownEffect(Schema.Struct({ sandbox: SandboxSetup }))(
     workerData,
-  ).pipe(Effect.mapError(setupFailed));
+  ).pipe(Effect.mapError(setupFailed("invalid_setup")));
   const { SandboxManager } = yield* Effect.try({
     try: () => requireRuntime("@anthropic-ai/sandbox-runtime"),
-    catch: setupFailed,
+    catch: setupFailed("runtime_unavailable"),
   });
   yield* Effect.sync(() => SandboxManager.isSupportedPlatform()).pipe(
     Effect.filterOrFail(
@@ -64,7 +66,7 @@ const prepare = Effect.gen(function* () {
             denyWrite: [...denyWrite],
           },
         }),
-      catch: setupFailed,
+      catch: setupFailed("initialize_failed"),
     }),
     () =>
       Effect.tryPromise(() => SandboxManager.reset()).pipe(ignoreLogged("sandbox_reset_failed")),
@@ -72,7 +74,7 @@ const prepare = Effect.gen(function* () {
   const wrapped = yield* Effect.tryPromise({
     try: (signal) =>
       SandboxManager.wrapWithSandbox(command, "/bin/sh", undefined, signal, { commandId }),
-    catch: setupFailed,
+    catch: setupFailed("wrap_failed"),
   });
   return {
     wrapped,
