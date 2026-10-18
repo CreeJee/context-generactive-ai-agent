@@ -1,11 +1,10 @@
 import { uiPromise } from "../shared/ui-effect";
 import { Effect, Fiber, Function as EffectFunction } from "effect";
-import { isTruthy } from "../../truthy.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TraceTaskView } from "memory-agent";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { sessionQueries, useSessionTraceQuery } from "../queries/session";
 
 export type TraceConnection = "connecting" | "live" | "reconnecting";
@@ -19,8 +18,7 @@ export const taskForToolCall: {
 
 /** One session-level subscription shared by every in-conversation task card. */
 export function useWorkTrace(sessionId: string) {
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Work trace requires an active project");
+  const projectId = useProjectScope("work_trace");
   const queryClient = useQueryClient();
   const options = sessionQueries.trace(projectId, sessionId);
   const query = useSessionTraceQuery(projectId, sessionId);

@@ -54,7 +54,7 @@ import { useWorkTrace } from "../session/work-trace";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
 import { useImageGeneration } from "../media/use-image-generation";
 import { useRunState } from "../session/use-run-state";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { sessionQueries } from "../queries/session";
 import {
   useArchiveTraceTaskMutation,
@@ -233,8 +233,7 @@ function ChatPanel({
   sendingEnabled: boolean;
 }) {
   const queryClient = useQueryClient();
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Chat requires an active project");
+  const projectId = useProjectScope("chat");
   // The inbox leads here with the card to open the board on. Closing only the card peek
   // keeps the board, so the summary holding it stays mounted.
   const [boardLocation] = useQueryStates({ board: parseAsBoolean, card: parseAsString });

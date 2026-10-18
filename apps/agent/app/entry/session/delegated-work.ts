@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { type ApprovalRequester, type RelayedApprovalView, type SubagentView } from "../api";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { useApprovalsQuery, useSubagentsQuery } from "../queries/session";
 
 interface DelegatedState {
@@ -14,8 +14,7 @@ export const useDelegatedWork: {
   (_generating: boolean): (sessionId: string) => ReturnType<typeof useDelegatedWorkBody>;
 } & typeof useDelegatedWorkBody = EffectFunction.dual(2, useDelegatedWorkBody);
 function useDelegatedWorkBody(sessionId: string, _generating: boolean) {
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Delegated work requires an active project");
+  const projectId = useProjectScope("delegated_work");
   const subagents = useSubagentsQuery(projectId, sessionId);
   const approvals = useApprovalsQuery(projectId, sessionId);
   const state: DelegatedState = {

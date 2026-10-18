@@ -6,7 +6,6 @@ import {
   HttpBody,
 } from "effect/http";
 import {
-  Data,
   Effect,
   MutableHashSet,
   Function as EffectFunction,
@@ -37,7 +36,11 @@ const requiresRestart = (response: Response) =>
     : Effect.tryPromise(() => response.clone().json()).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(BackendRestartBody)),
         Effect.as(true),
-        Effect.orElseSucceed(() => false),
+        // Any other failed response, JSON or not, is the caller's to handle.
+        Effect.catchTags({
+          UnknownError: () => Effect.succeed(false),
+          SchemaError: () => Effect.succeed(false),
+        }),
       );
 export const responseRequiresBackendRestart = (response: Response) =>
   Effect.runPromise(requiresRestart(response));
@@ -51,9 +54,10 @@ const observeBackendRestart = (response: Response) =>
     ),
     Effect.as(response),
   );
-class BackendTransportFailed extends Data.TaggedError("BackendTransportFailed")<{
-  readonly cause: unknown;
-}> {}
+class BackendTransportFailed extends Schema.TaggedError<BackendTransportFailed>()(
+  "BackendTransportFailed",
+  { cause: Schema.Defect() },
+) {}
 
 /** Pin requests to the backend used to build this client; never retry a rejected mutation. */
 export const backendFetch: {
@@ -77,7 +81,7 @@ function backendFetchBody(buildId: string, origin: string, transport: typeof fet
           }
           return transport(input, init);
         },
-        catch: (cause) => new BackendTransportFailed({ cause }),
+        catch: (cause) => BackendTransportFailed.make({ cause }),
       }).pipe(Effect.flatMap(observeBackendRestart)),
     );
 }
@@ -103,7 +107,7 @@ const sdkHttpTransport: typeof fetch = (input, init) => {
     void close();
   };
   request.signal.addEventListener("abort", abort, { once: true });
-  const release = Effect.promise(close).pipe(
+  const release = Scope.close(scope, Exit.void).pipe(
     Effect.ensuring(Effect.sync(() => request.signal.removeEventListener("abort", abort))),
   );
   return transportRuntime

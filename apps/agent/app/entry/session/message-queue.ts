@@ -1,8 +1,7 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect, Function as EffectFunction } from "effect";
-import { isTruthy } from "../../truthy.ts";
 import { isApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { useQueueQuery } from "../queries/session";
 import { useEditQueueMutation, useEnqueueMutation } from "../queries/mutations/session";
 
@@ -28,8 +27,7 @@ export const useMessageQueue: {
   ): (sessionId: string) => ReturnType<typeof useMessageQueueBody>;
 } & typeof useMessageQueueBody = EffectFunction.dual(3, useMessageQueueBody);
 function useMessageQueueBody(sessionId: string, holder: string, _generating: boolean) {
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Message queue requires an active project");
+  const projectId = useProjectScope("message_queue");
   const enqueue = useEnqueueMutation(projectId, sessionId, holder);
   const editQueue = useEditQueueMutation(projectId, sessionId, holder);
   const query = useQueueQuery(projectId, sessionId);
@@ -58,7 +56,8 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
   const change = (id: string, edit: QueueEdit) =>
     runUiEffect(
       uiPromise(() => editQueue.mutateAsync({ id, edit })).pipe(
-        Effect.orElseSucceed(() => null),
+        // A refused or failed edit shows as the queue the server still has.
+        Effect.catchTag("UnknownError", () => Effect.succeed(null)),
         Effect.andThen(uiPromise(() => refresh())),
       ),
     );
