@@ -10,7 +10,7 @@ import {
   Option,
   Schema,
 } from "effect";
-import { Database } from "../db/database.ts";
+import { SqlClient } from "effect/sql";
 import { resolveProjectPath } from "../files/paths.ts";
 import { createTextFileEffect, readTextFileEffect, replaceTextFileEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
@@ -146,14 +146,14 @@ const skillDocument = (input: {
   ].join("\n");
 
 const make = Effect.gen(function* () {
-  const { sqlite } = yield* Database;
-  const effectClock = yield* Clock.Clock;
-  const approve = sqlite.prepare(
-    "INSERT OR IGNORE INTO shell_skill_approvals (project_id, name, script_sha256, approved_at) VALUES (?, ?, ?, ?)",
-  );
-  const approved = sqlite.prepare(
-    "SELECT 1 FROM shell_skill_approvals WHERE project_id = ? AND name = ? AND script_sha256 = ?",
-  );
+  const sql = yield* SqlClient.SqlClient;
+  const approved = (projectId: string, name: string, sha256: string) =>
+    Effect.map(
+      sql`
+        SELECT 1 FROM shell_skill_approvals
+        WHERE project_id = ${projectId} AND name = ${name} AND script_sha256 = ${sha256}`,
+      (rows) => rows.length > 0,
+    );
 
   /** Writes one project file, replacing whatever text is there now. */
   const put = Effect.fn("ShellSkills.put")(function* (root: string, path: string, text: string) {
@@ -235,12 +235,10 @@ const make = Effect.gen(function* () {
           break;
         case "ask":
         case "auto":
-          approve.run(
-            project.id,
-            input.name,
-            written.sha256,
-            DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-          );
+          yield* sql`
+            INSERT OR IGNORE INTO shell_skill_approvals (project_id, name, script_sha256, approved_at)
+            VALUES (${project.id}, ${input.name}, ${written.sha256},
+              ${DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis))})`;
           break;
       }
       return {
@@ -256,8 +254,7 @@ const make = Effect.gen(function* () {
     runnable: Effect.fn("ShellSkills.runnable")(function* (project: Project, name: string) {
       const current = yield* script(project, name);
       const allowed =
-        project.permissionMode === "full" ||
-        isTruthy(approved.get(project.id, name, current.sha256));
+        project.permissionMode === "full" || (yield* approved(project.id, name, current.sha256));
       if (!allowed)
         return yield* ShellSkillRejected.make({
           reason: "not_approved",

@@ -1,5 +1,5 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { Result, Function as EffectFunction } from "effect";
+import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -27,10 +27,10 @@ import {
   Exit,
   Layer,
   Option,
+  Result,
   Schema,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { Database } from "../db/database.ts";
 import { expandVariables } from "../mcp/config.ts";
 import type { Project } from "../projects/projects.ts";
 import {
@@ -146,11 +146,6 @@ const TrustRow = Schema.Struct({
   name: Schema.String,
   fingerprint: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeTrustRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(TrustRow)),
-  Result.getOrThrow,
-);
 
 const DataMessage = Schema.Struct({ message: Schema.String });
 const decodeDataMessage = Schema.decodeUnknownOption(DataMessage);
@@ -251,29 +246,25 @@ export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation
 );
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serviceScope = yield* Scope.Scope;
 
   const storage = yield* StorageRoot;
-  const { sqlite } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const links = MutableHashMap.empty<string, Link>();
   const retries = yield* FiberMap.make<string, void, never>();
   const context = yield* Effect.context<never>();
   const runCallback = Effect.runForkWith(context);
 
-  const selectTrust = sqlite.prepare(
-    "SELECT scope, name, fingerprint FROM agent_trust WHERE project_id = '' OR project_id = ?",
-  );
-  const upsertTrust = sqlite.prepare(
-    `INSERT INTO agent_trust (scope, project_id, name, fingerprint, trusted_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (scope, project_id, name) DO UPDATE SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`,
-  );
-  const deleteTrust = sqlite.prepare(
-    "DELETE FROM agent_trust WHERE scope = ? AND project_id = ? AND name = ?",
-  );
+  const selectTrust = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: TrustRow,
+    execute: (projectId) => sql`
+      SELECT scope, name, fingerprint FROM agent_trust
+      WHERE project_id = '' OR project_id = ${projectId}`,
+  });
 
   const linkKey = (project: Project, agent: ConfiguredAgent) =>
     `${project.id}/${agent.scope}/${agent.name}`;
@@ -285,7 +276,7 @@ const make = Effect.gen(function* () {
     const local = yield* readAgentsFile(projectAgentsFile(project.root), "project").pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
     );
-    const trust = decodeTrustRows(selectTrust.all(project.id));
+    const trust = yield* selectTrust(project.id);
     const localNames = HashSet.fromIterable(local.agents.map((agent) => agent.name));
     const agents = [...global.agents, ...local.agents].map((agent) => ({
       agent,
@@ -523,7 +514,7 @@ const make = Effect.gen(function* () {
 
   const overview = Effect.fn("ExternalAgents.overview")(function* (
     project: Project,
-  ): Effect.fn.Return<ExternalAgentsOverview> {
+  ): Effect.fn.Return<ExternalAgentsOverview, SqlError.SqlError | Schema.SchemaError> {
     const { files, agents } = yield* configured(project);
     return {
       files,
@@ -572,16 +563,18 @@ const make = Effect.gen(function* () {
         const entry = (yield* configured(project)).agents.find(
           (candidate) => candidate.agent.scope === scope && candidate.agent.name === name,
         );
-        if (trusted && isTruthy(entry))
-          upsertTrust.run(
-            scope,
-            projectId,
-            name,
-            entry.agent.fingerprint,
-            DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-          );
+        if (trusted && isTruthy(entry)) {
+          const trustedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+          yield* sql`
+            INSERT INTO agent_trust (scope, project_id, name, fingerprint, trusted_at)
+            VALUES (${scope}, ${projectId}, ${name}, ${entry.agent.fingerprint}, ${trustedAt})
+            ON CONFLICT (scope, project_id, name) DO UPDATE
+            SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`;
+        }
         if (!trusted) {
-          deleteTrust.run(scope, projectId, name);
+          yield* sql`
+            DELETE FROM agent_trust
+            WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`;
           for (const [key, link] of links)
             if (key.endsWith(`/${scope}/${name}`)) {
               retire(link);

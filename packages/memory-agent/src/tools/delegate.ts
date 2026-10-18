@@ -2,6 +2,7 @@ import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
+import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
 import type { Project } from "../projects/projects.ts";
@@ -72,7 +73,7 @@ const make = Effect.gen(function* () {
       sessionId: string,
       signal: AbortSignal,
       runId: string = randomUUID(),
-    ): Effect.fn.Return<DelegateToolset> {
+    ): Effect.fn.Return<DelegateToolset, SqlError.SqlError | Schema.SchemaError> {
       const available = yield* agents.available(project);
       if (available.length === 0) return { tools: [], instructions: null };
       const delegate = toolDefinition({

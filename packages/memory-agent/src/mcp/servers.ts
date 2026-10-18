@@ -1,5 +1,6 @@
 import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
-import { Cause, Result, Function as EffectFunction } from "effect";
+import { Cause, Function as EffectFunction } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -20,7 +21,6 @@ import {
   Schema,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { Database } from "../db/database.ts";
 import type { Project } from "../projects/projects.ts";
 import {
   McpScope,
@@ -112,11 +112,6 @@ const TrustRow = Schema.Struct({
   name: Schema.String,
   fingerprint: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeTrustRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(TrustRow)),
-  Result.getOrThrow,
-);
 
 interface Connection {
   readonly fingerprint: string;
@@ -148,20 +143,17 @@ const truncated = (text: string) =>
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
-  const { sqlite } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const connections = MutableHashMap.empty<string, Connection>();
 
-  const selectTrust = sqlite.prepare(
-    "SELECT scope, name, fingerprint FROM mcp_trust WHERE project_id = '' OR project_id = ?",
-  );
-  const upsertTrust = sqlite.prepare(
-    `INSERT INTO mcp_trust (scope, project_id, name, fingerprint, trusted_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (scope, project_id, name) DO UPDATE SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`,
-  );
-  const deleteTrust = sqlite.prepare(
-    "DELETE FROM mcp_trust WHERE scope = ? AND project_id = ? AND name = ?",
-  );
+  const selectTrust = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: TrustRow,
+    execute: (projectId) => sql`
+      SELECT scope, name, fingerprint FROM mcp_trust
+      WHERE project_id = '' OR project_id = ${projectId}`,
+  });
 
   const connectionKey = (project: Project, server: ConfiguredServer) =>
     `${project.id}/${server.scope}/${server.name}`;
@@ -173,7 +165,7 @@ const make = Effect.gen(function* () {
     const local = yield* readMcpFile(projectMcpFile(project.root), "project").pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
     );
-    const trust = decodeTrustRows(selectTrust.all(project.id));
+    const trust = yield* selectTrust(project.id);
     const trustedFingerprint = (server: ConfiguredServer) =>
       trust.find((row) => row.scope === server.scope && row.name === server.name)?.fingerprint ??
       null;
@@ -402,20 +394,21 @@ const make = Effect.gen(function* () {
         );
         const projectId = scope === "global" ? "" : project.id;
         if (!trusted) {
-          deleteTrust.run(scope, projectId, name);
+          yield* sql`
+            DELETE FROM mcp_trust
+            WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`;
           // A global server may be running for any project.
           for (const key of MutableHashMap.keys(connections))
             if (key.endsWith(`/${scope}/${name}`)) close(key);
           return yield* overview(project);
         }
         if (!isTruthy(entry)) return yield* overview(project);
-        upsertTrust.run(
-          scope,
-          projectId,
-          name,
-          entry.server.fingerprint,
-          DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-        );
+        const trustedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+        yield* sql`
+          INSERT INTO mcp_trust (scope, project_id, name, fingerprint, trusted_at)
+          VALUES (${scope}, ${projectId}, ${name}, ${entry.server.fingerprint}, ${trustedAt})
+          ON CONFLICT (scope, project_id, name) DO UPDATE
+          SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`;
         if (!entry.shadowed)
           yield* Effect.tryPromise({
             try: () => discover(project, entry.server),
