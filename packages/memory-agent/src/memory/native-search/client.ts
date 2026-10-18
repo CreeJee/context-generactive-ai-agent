@@ -1,22 +1,32 @@
-import { NodeCrypto } from "@effect/platform-node";
+import { NodeCrypto, NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
 import { requireRuntime, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import {
-  Cause,
   Context,
   Crypto,
   Deferred,
   Effect,
   Exit,
   Fiber,
+  FiberMap,
+  HashMap,
   Layer,
   Option,
   Predicate,
-  Queue,
   Ref,
   Schema,
+  Scope,
+  Semaphore,
 } from "effect";
-import { NativeOwnerFailed, OwnerCommand, OwnerReply, OwnerSetup } from "./worker-protocol.ts";
+import { RpcClient } from "effect/rpc";
+import {
+  NativeOwnerFailed,
+  NativeOwnerRpcs,
+  OwnerCommand,
+  type OwnerReady,
+  type OwnerReply,
+  OwnerSetup,
+} from "./worker-protocol.ts";
 import { nativeReadInputLogicalBytes } from "./read-protocol.ts";
 
 export type ReadAdmission =
@@ -32,21 +42,98 @@ type Job = {
   readonly command: OwnerCommand;
   readonly control: Option.Option<RequestControl>;
   readonly result: Deferred.Deferred<OwnerReply, NativeOwnerFailed>;
+  /** `queued` until the job holds the owner's one slot; `active` until the worker answers. */
+  readonly phase: "queued" | "active";
 };
 type State =
-  | { readonly kind: "open"; readonly queued: readonly Job[]; readonly active: Option.Option<Job> }
-  | { readonly kind: "failed"; readonly error: NativeOwnerFailed };
-type Event =
-  | { readonly kind: "reply"; readonly reply: OwnerReply }
+  | { readonly kind: "open"; readonly jobs: HashMap.HashMap<string, Job> }
   | { readonly kind: "failed"; readonly error: NativeOwnerFailed };
 
-/** Scoped native transport. Ref owns the removable pending list; the capacity-one Queue
- * only wakes the dispatcher. Cancelled queued jobs therefore free capacity immediately.
- * Deferred owns waits and Scope owns both fibers and the Worker, not Promise resolver maps.
+/** At most this many requests wait for or hold the owner. */
+const capacity = 32;
+
+/** A started native owner worker, as the host drives it. Tests wrap it to gate transport. */
+export interface OwnerTransport {
+  readonly ready: OwnerReady;
+  readonly send: (command: OwnerCommand) => Effect.Effect<OwnerReply, NativeOwnerFailed>;
+  /** Completes once the worker has exited. */
+  readonly exited: Effect.Effect<void>;
+  /** Ends the worker now, without waiting for its current native call. */
+  readonly terminate: Effect.Effect<void>;
+}
+
+export type OwnerWorker = { readonly setup: OwnerSetup; readonly workerFile: string | URL };
+export type OwnerConnect = (
+  worker: OwnerWorker,
+) => Effect.Effect<OwnerTransport, NativeOwnerFailed, Scope.Scope>;
+
+/** The worker behind an owner, over Effect RPC. Its Scope stops the worker and awaits exit. */
+export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
+  function* ({ setup, workerFile }: OwnerWorker) {
+    const spawned = yield* Deferred.make<Worker>();
+    const exited = yield* Deferred.make<void>();
+    const workers = NodeWorker.layer(() => {
+      const worker = new Worker(workerFile, runtimeWorkerOptions(setup));
+      worker.once("exit", () => Deferred.doneUnsafe(exited, Exit.void));
+      Deferred.doneUnsafe(spawned, Exit.succeed(worker));
+      return worker;
+    });
+    const protocol = yield* Layer.build(
+      RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
+    );
+    const client = yield* RpcClient.make(NativeOwnerRpcs).pipe(Effect.provide(protocol));
+    /** A transport failure is the worker's: it exited, or its channel broke. */
+    const lost = Effect.flatMap(Deferred.isDone(exited), (gone) =>
+      Effect.fail(NativeOwnerFailed.make({ reason: gone ? "worker-exit" : "worker-error" })),
+    );
+    const ready = yield* client.Open().pipe(
+      Effect.catchTag("RpcClientError", () => lost),
+      Effect.timeoutOrElse({
+        duration: "2 seconds",
+        orElse: () => Effect.fail(NativeOwnerFailed.make({ reason: "startup-timeout" })),
+      }),
+    );
+    const worker = yield* Deferred.await(spawned);
+    return {
+      ready,
+      send: (command) =>
+        client.Execute(command).pipe(Effect.catchTag("RpcClientError", () => lost)),
+      exited: Deferred.await(exited),
+      terminate: Effect.promise(() => worker.terminate()).pipe(
+        Effect.andThen(Deferred.await(exited)),
+      ),
+    } satisfies OwnerTransport;
+  },
+  Effect.catchTag("WorkerError", () =>
+    Effect.fail(NativeOwnerFailed.make({ reason: "worker-error" })),
+  ),
+);
+
+/** A worker reporting these has a broken index or reader; nothing after it can be trusted. */
+const fatal = (error: NativeOwnerFailed) => {
+  switch (error.reason) {
+    case "index-failed":
+    case "read-failed":
+    case "native-incompatible":
+    case "worker-exit":
+    case "worker-error":
+      return true;
+    default:
+      return false;
+  }
+};
+
+/**
+ * Scoped native owner. Each request is a job fibre in a `FiberMap` keyed by request id: queued
+ * jobs wait for the owner's one slot (`Semaphore`), and the `Ref` ledger records each job's
+ * phase for capacity, duplicates, cancellation and inspection. A caller that leaves stops a
+ * queued job before dispatch, but an active job keeps the slot until the worker answers: the
+ * native call it started is not over because its caller left.
  */
 export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   setup: OwnerSetup,
   workerFile: string | URL,
+  connect: OwnerConnect = rpcTransport,
 ) {
   const validated = yield* Schema.decodeEffect(OwnerSetup)(setup).pipe(
     Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
@@ -55,223 +142,129 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   const ownerKey = yield* crypto
     .randomUUIDv4()
     .pipe(Effect.mapError(() => NativeOwnerFailed.make({ reason: "worker-error" })));
-  const state = yield* Ref.make<State>({ kind: "open", queued: [], active: Option.none() });
-  const wake = yield* Queue.make<void>({ capacity: 1, strategy: "dropping" });
-  const events = yield* Queue.make<Event, NativeOwnerFailed>({ capacity: 64 });
-  const ready = yield* Deferred.make<OwnerReply, NativeOwnerFailed>();
+  const transport = yield* connect({ setup: { ...validated, ownerKey }, workerFile });
+  const state = yield* Ref.make<State>({ kind: "open", jobs: HashMap.empty() });
+  const slot = yield* Semaphore.make(1);
+  const jobs = yield* FiberMap.make<string>();
   // Sole reply-ingress writer, updated before releasing command waiters.
-  const cachedSize = yield* Ref.make(0);
-  const worker = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => new Worker(workerFile, runtimeWorkerOptions({ ...validated, ownerKey })),
-      catch: () => NativeOwnerFailed.make({ reason: "worker-error" }),
-    }),
-    (handle) =>
-      Effect.callback<void>((resume) => {
-        // Final transport ingress: the dispatch fibers/listeners may already have stopped.
-        // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Native IPC ingress is schema-decoded before inspection.
-        const reply = (input: unknown) => {
-          const decoded = Schema.decodeUnknownOption(OwnerReply)(input);
-          if (
-            Option.isSome(decoded) &&
-            decoded.value.kind === "closed" &&
-            decoded.value.epoch === validated.epoch
-          )
-            resume(Effect.void);
-        };
-        const exited = () => resume(Effect.void);
-        handle.on("message", reply);
-        handle.once("exit", exited);
-        try {
-          handle.postMessage({
-            kind: "close",
-            requestId: "owner-shutdown",
-            epoch: validated.epoch,
-          });
-        } catch {
-          resume(Effect.void);
-        }
-        return Effect.sync(() => {
-          handle.off("message", reply);
-          handle.off("exit", exited);
-        });
-      }).pipe(
-        Effect.timeoutOption("2 seconds"),
-        Effect.ensuring(
-          Effect.tryPromise({
-            try: () => handle.terminate(),
-            catch: () => NativeOwnerFailed.make({ reason: "worker-error" }),
-          }).pipe(Effect.asVoid, Effect.orDie),
-        ),
-      ),
-  );
+  const cachedSize = yield* Ref.make(transport.ready.size);
 
   const failAll = Effect.fnUntraced(function* (error: NativeOwnerFailed) {
-    const previous = yield* Ref.modify(state, (current): readonly [State, State] => [
-      current,
+    const previous = yield* Ref.getAndUpdate(state, (current): State =>
       current.kind === "failed" ? current : { kind: "failed", error },
-    ]);
-    yield* Deferred.fail(ready, error);
+    );
     switch (previous.kind) {
       case "failed":
-        break;
+        return;
       case "open":
-        for (const job of [...previous.queued, ...Option.toArray(previous.active)]) {
+        for (const job of HashMap.values(previous.jobs)) {
           yield* Effect.sync(() => {
             if (Option.isSome(job.control)) job.control.value.close();
           });
           yield* Deferred.fail(job.result, error);
         }
-        break;
+        yield* FiberMap.clear(jobs);
     }
   });
-
-  // Node event ingress is the sole unsafe synchronous bridge. It never runs domain effects.
-  const emit = (event: Event) => {
-    if (!Queue.offerUnsafe(events, event)) {
-      Queue.failCauseUnsafe(events, Cause.fail(NativeOwnerFailed.make({ reason: "worker-error" })));
-    }
-  };
-  const onMessage: Parameters<Worker["on"]>[1] = (input) => {
-    const decoded = Schema.decodeUnknownResult(OwnerReply)(input);
-    switch (decoded._tag) {
-      case "Success":
-        emit({ kind: "reply", reply: decoded.success });
-        break;
-      case "Failure":
-        emit({ kind: "failed", error: NativeOwnerFailed.make({ reason: "invalid-input" }) });
-        break;
-    }
-  };
-  const onError = () =>
-    emit({ kind: "failed", error: NativeOwnerFailed.make({ reason: "worker-error" }) });
-  const onExit = () =>
-    emit({ kind: "failed", error: NativeOwnerFailed.make({ reason: "worker-exit" }) });
-  yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      worker.on("message", onMessage);
-      worker.on("error", onError);
-      worker.on("exit", onExit);
-    }),
-    () =>
-      Effect.sync(() => {
-        worker.off("message", onMessage);
-        worker.off("error", onError);
-        worker.off("exit", onExit);
-      }),
-  );
   yield* Effect.addFinalizer(() => failAll(NativeOwnerFailed.make({ reason: "closed" })));
-
-  const receive = Effect.forever(
-    Effect.gen(function* () {
-      const event = yield* Queue.take(events);
-      switch (event.kind) {
-        case "failed":
-          return yield* event.error;
-        case "reply": {
-          const reply = event.reply;
-          if (reply.epoch !== validated.epoch) return;
-          if (reply.kind === "ready") {
-            yield* Ref.set(cachedSize, reply.size);
-            yield* Deferred.succeed(ready, reply);
-            return;
-          }
-          const current = yield* Ref.get(state);
-          if (current.kind === "failed") return;
-          if (Option.isNone(current.active)) {
-            if (reply.kind === "failed")
-              yield* failAll(NativeOwnerFailed.make({ reason: reply.code }));
-            return;
-          }
-          const job = current.active.value;
-          if (job.command.requestId !== reply.requestId) return;
-          switch (reply.kind) {
-            case "failed": {
-              const error = NativeOwnerFailed.make({ reason: reply.code });
-              yield* Deferred.fail(job.result, error);
-              if (
-                reply.code === "index-failed" ||
-                reply.code === "read-failed" ||
-                reply.code === "native-incompatible"
-              )
-                yield* failAll(error);
-              break;
-            }
-            case "ack":
-            case "removed":
-            case "vector-hits":
-            case "controlled-result":
-              yield* Ref.set(cachedSize, reply.size);
-              yield* Deferred.succeed(job.result, reply);
-              break;
-            case "memory-result":
-              yield* Deferred.succeed(job.result, reply);
-              break;
-            case "closed":
-              yield* Deferred.succeed(job.result, reply);
-              yield* failAll(NativeOwnerFailed.make({ reason: "closed" }));
-              break;
-          }
-          break;
-        }
-      }
-    }),
-  ).pipe(Effect.catch((error) => failAll(error)));
-  yield* Effect.forkScoped(receive);
-
-  const dispatch = Effect.forever(
-    Effect.gen(function* () {
-      yield* Queue.take(wake);
-      while (true) {
-        const job = yield* Ref.modify(state, (current): readonly [Option.Option<Job>, State] => {
-          if (current.kind === "failed" || current.queued.length === 0)
-            return [Option.none(), current];
-          const next = current.queued[0]!;
-          return [
-            Option.some(next),
-            { ...current, queued: current.queued.slice(1), active: Option.some(next) },
-          ];
-        });
-        if (Option.isNone(job)) break;
-        yield* Effect.try({
-          try: () => {
-            const command = job.value.command;
-            switch (command.kind) {
-              case "vector-search-controlled":
-              case "memory-search":
-                if (Option.isNone(job.value.control))
-                  throw NativeOwnerFailed.make({ reason: "invalid-input" });
-                worker.postMessage({ ...command, controlToken: job.value.control.value.token });
-                break;
-              case "add":
-              case "remove":
-              case "reset":
-              case "save":
-              case "validate":
-              case "vector-search":
-              case "close":
-                worker.postMessage(command);
-                break;
-            }
-          },
-          catch: () => NativeOwnerFailed.make({ reason: "worker-error" }),
-        });
-        // Caller interruption does not release this active native resource slot.
-        yield* Deferred.await(job.value.result).pipe(Effect.catch(() => Effect.void));
-        yield* Ref.update(state, (current) =>
-          current.kind === "open" ? { ...current, active: Option.none() } : current,
-        );
-      }
-    }),
-  ).pipe(Effect.catch((error) => failAll(error)));
-  yield* Effect.forkScoped(dispatch);
-  const bootstrap = yield* Deferred.await(ready).pipe(
-    Effect.timeoutOrElse({
-      duration: "2 seconds",
-      orElse: () => Effect.fail(NativeOwnerFailed.make({ reason: "startup-timeout" })),
-    }),
+  // Queued waiters must settle when the worker goes, not only the request it was running.
+  yield* Effect.forkScoped(
+    transport.exited.pipe(
+      Effect.andThen(failAll(NativeOwnerFailed.make({ reason: "worker-exit" }))),
+    ),
   );
-  if (bootstrap.kind !== "ready") return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+
+  const setPhase = (requestId: string, phase: Job["phase"]) =>
+    Ref.update(state, (current) =>
+      current.kind === "open"
+        ? {
+            ...current,
+            jobs: HashMap.modify(current.jobs, requestId, (job) => ({ ...job, phase })),
+          }
+        : current,
+    );
+  /** Removes exactly this job: a later job may reuse its request id. */
+  const forget = (job: Job) =>
+    Ref.update(state, (current) =>
+      current.kind === "open" &&
+      Option.exists(
+        HashMap.get(current.jobs, job.command.requestId),
+        (entry) => entry.result === job.result,
+      )
+        ? { ...current, jobs: HashMap.remove(current.jobs, job.command.requestId) }
+        : current,
+    );
+  const phaseOf = (job: Job) =>
+    Effect.map(Ref.get(state), (current) =>
+      current.kind === "open"
+        ? Option.map(HashMap.get(current.jobs, job.command.requestId), (entry) => entry.phase)
+        : Option.none(),
+    );
+  const sizeOf = (reply: OwnerReply) => {
+    switch (reply.kind) {
+      case "ack":
+      case "removed":
+      case "vector-hits":
+      case "controlled-result":
+        return Option.some(reply.size);
+      case "memory-result":
+        return Option.none();
+    }
+  };
+
+  /** Holds the slot from dispatch until the worker answers, then settles the caller's wait. */
+  const run = (job: Job) =>
+    slot
+      .withPermits(1)(
+        setPhase(job.command.requestId, "active").pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              const command = job.command;
+              switch (command.kind) {
+                case "vector-search-controlled":
+                case "memory-search":
+                  return Option.match(job.control, {
+                    onNone: () => Effect.fail(NativeOwnerFailed.make({ reason: "invalid-input" })),
+                    onSome: (control) =>
+                      transport.send({ ...command, controlToken: control.token }),
+                  });
+                case "add":
+                case "remove":
+                case "reset":
+                case "save":
+                case "validate":
+                case "vector-search":
+                  return transport.send(command);
+              }
+            }),
+          ),
+          Effect.tap((reply) =>
+            Option.match(sizeOf(reply), {
+              onNone: () => Effect.void,
+              onSome: (size) => Ref.set(cachedSize, size),
+            }),
+          ),
+          Effect.exit,
+          Effect.flatMap((exit) =>
+            Deferred.done(job.result, exit).pipe(
+              Effect.andThen(
+                Exit.match(exit, {
+                  onSuccess: () => Effect.void,
+                  onFailure: (cause) =>
+                    Effect.forEach(
+                      cause.reasons.flatMap((reason) =>
+                        reason._tag === "Fail" && fatal(reason.error) ? [reason.error] : [],
+                      ),
+                      failAll,
+                      { discard: true },
+                    ),
+                }),
+              ),
+            ),
+          ),
+        ),
+      )
+      .pipe(Effect.ensuring(forget(job)));
 
   const executeRegistered = Effect.fnUntraced(function* (
     command: OwnerCommand,
@@ -295,6 +288,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     )
       return yield* NativeOwnerFailed.make({ reason: "input-budget" });
     const result = yield* Deferred.make<OwnerReply, NativeOwnerFailed>();
+    // Owned copies: the transport transfers their buffers to the worker.
     const owned: OwnerCommand = (() => {
       switch (input.kind) {
         case "add":
@@ -329,11 +323,10 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           return { ...input, ids: [...input.ids] };
         case "reset":
         case "save":
-        case "close":
           return { ...input };
       }
     })();
-    const job: Job = { command: owned, result, control };
+    const job: Job = { command: owned, result, control, phase: "queued" };
     return yield* Effect.scoped(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
@@ -344,24 +337,21 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                 case "failed":
                   return [Effect.fail(current.error), current];
                 case "open":
-                  if (
-                    current.queued.some(
-                      (pending) => pending.command.requestId === input.requestId,
-                    ) ||
-                    (Option.isSome(current.active) &&
-                      current.active.value.command.requestId === input.requestId)
-                  )
+                  if (HashMap.has(current.jobs, input.requestId))
                     return [
                       Effect.fail(NativeOwnerFailed.make({ reason: "invalid-input" })),
                       current,
                     ];
-                  if (current.queued.length + (Option.isSome(current.active) ? 1 : 0) >= 32)
+                  if (HashMap.size(current.jobs) >= capacity)
                     return [Effect.fail(NativeOwnerFailed.make({ reason: "queue-full" })), current];
-                  return [Effect.void, { ...current, queued: [...current.queued, job] }];
+                  return [
+                    Effect.void,
+                    { ...current, jobs: HashMap.set(current.jobs, input.requestId, job) },
+                  ];
               }
             },
           ).pipe(Effect.flatten);
-          yield* Queue.offer(wake, undefined);
+          yield* FiberMap.run(jobs, input.requestId, run(job));
           if (admission !== undefined && Option.isSome(control)) {
             const observed = control.value;
             yield* Effect.forkScoped(
@@ -405,15 +395,12 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                 duration: "2 seconds",
                 orElse: () => Effect.fail(NativeOwnerFailed.make({ reason: "request-timeout" })),
               }),
+              // A queued job its caller left is never dispatched; an active one keeps its slot.
               Effect.ensuring(
-                Ref.update(state, (current) =>
-                  current.kind === "open"
-                    ? {
-                        ...current,
-                        // This finalizer owns this exact job, not a future reuse of its request ID.
-                        queued: current.queued.filter((pending) => pending !== job),
-                      }
-                    : current,
+                Effect.flatMap(phaseOf(job), (phase) =>
+                  Option.contains(phase, "queued")
+                    ? FiberMap.remove(jobs, input.requestId)
+                    : Effect.void,
                 ),
               ),
             ),
@@ -467,7 +454,6 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
             case "save":
             case "validate":
             case "vector-search":
-            case "close":
               return Option.none();
           }
         },
@@ -486,14 +472,10 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   const cancel = Effect.fn("NativeOwner.cancel")(function* (requestId: string) {
     const current = yield* Ref.get(state);
     if (current.kind === "failed") return yield* current.error;
-    const job = [...current.queued, ...Option.toArray(current.active)].find(
-      (pending) => pending.command.requestId === requestId,
-    );
-    if (job === undefined || Option.isNone(job.control))
-      return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+    const control = Option.flatMap(HashMap.get(current.jobs, requestId), (job) => job.control);
+    if (Option.isNone(control)) return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
     // Direct main-thread native atomic store, never a message to the blocked worker.
-    const control = job.control.value;
-    yield* Effect.sync(() => control.cancel());
+    yield* Effect.sync(() => control.value.cancel());
   });
   const startRead = Effect.fn("NativeOwner.startRead")(function* (
     command: Extract<OwnerCommand, { kind: "memory-search" }>,
@@ -519,20 +501,22 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     startRead,
     cancel,
     epoch: validated.epoch,
-    threadId: bootstrap.threadId,
-    initialSize: bootstrap.size,
+    threadId: transport.ready.threadId,
+    initialSize: transport.ready.size,
     // Synchronous legacy API metadata bridge; never invokes native code or mutates state.
     size: () => Ref.getUnsafe(cachedSize),
-    initialNeedsReset: bootstrap.needsReset ?? false,
+    initialNeedsReset: transport.ready.needsReset,
     inspect: Ref.get(state).pipe(
       Effect.map((current) => {
         switch (current.kind) {
-          case "open":
+          case "open": {
+            const phases = [...HashMap.values(current.jobs)].map((job) => job.phase);
             return {
               kind: "open" as const,
-              queued: current.queued.length,
-              active: Option.isSome(current.active) ? 1 : 0,
+              queued: phases.filter((phase) => phase === "queued").length,
+              active: phases.filter((phase) => phase === "active").length,
             };
+          }
           case "failed":
             return { kind: "failed" as const, reason: current.error.reason };
         }

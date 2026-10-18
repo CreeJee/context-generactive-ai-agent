@@ -205,7 +205,7 @@ const make = Effect.fn("Database.make")(function* (
           sqlite,
           atomic(work) {
             const outermost = depth === 0;
-            if (outermost && sqlite.isTransaction) throw new TransactionInterleaving();
+            if (outermost && sqlite.isTransaction) throw TransactionInterleaving.make({});
             const savepoint = `atomic_${depth}`;
             sqlite.exec(outermost ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
             depth += 1;
