@@ -63,6 +63,8 @@ export declare class VectorIndex {
   bits(): number;
   size(): number;
   validateIds(ids: string[]): void;
+  /** Releases the index now rather than at GC; later calls throw. Idempotent. */
+  close(): void;
 }
 
 export interface NativeReadInput {

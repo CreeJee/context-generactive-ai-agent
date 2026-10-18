@@ -74,9 +74,10 @@ it.effect(
       const active = yield* Queue.take(sent);
       const terminating = yield* Deferred.make<void>();
       const exited = yield* Deferred.make<void>();
+      const run = Effect.runPromiseWith(yield* Effect.context());
       workers[0]!.terminate.mockImplementation(() => {
         Deferred.doneUnsafe(terminating, Effect.void);
-        return Effect.runPromise(Deferred.await(exited).pipe(Effect.as(0)));
+        return run(Deferred.await(exited).pipe(Effect.as(0)));
       });
       const second = yield* Effect.forkChild(embedder.chunks!(["keep me"]), {
         startImmediately: true,

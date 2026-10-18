@@ -325,8 +325,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
             },
           };
         case "validate":
-          return { ...input, ids: [...input.ids] };
         case "remove":
+          return { ...input, ids: [...input.ids] };
         case "reset":
         case "save":
         case "close":

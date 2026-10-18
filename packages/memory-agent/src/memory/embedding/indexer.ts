@@ -6,6 +6,7 @@ import { AppEvents } from "../../events/app-events.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
 import { meaningfulNodeFilter } from "../quality.ts";
 import type { NodeKind } from "../nodes.ts";
+import type { ChunkSpan } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
 import { VectorIndex } from "./vector-index.ts";
 
@@ -24,6 +25,18 @@ export class IndexingError extends Schema.TaggedError<IndexingError>()("Indexing
 }) {}
 
 const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
+type Pending = typeof Pending.Type;
+
+/** How one batch is cut before embedding: whole nodes, or the embedder's chunk windows. */
+type Segmentation =
+  | { readonly kind: "whole" }
+  | { readonly kind: "chunked"; readonly spans: readonly (readonly ChunkSpan[])[] };
+
+/** What the publication commit does with one node, decided in the commit's own transaction. */
+type NodeOutcome =
+  | { readonly kind: "indexed"; readonly seq: number }
+  | { readonly kind: "stale-chunks"; readonly vectorIds: readonly number[] }
+  | { readonly kind: "stale-whole"; readonly seq: number };
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodePending = EffectFunction.flow(Schema.decodeUnknownResult(Pending), Result.getOrThrow);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -62,22 +75,77 @@ const make = Effect.gen(function* () {
   const markAnalyzed = sqlite.prepare(
     "INSERT INTO node_morphs (node_seq, analyzer) VALUES (?, ?) ON CONFLICT (node_seq) DO UPDATE SET analyzer = excluded.analyzer",
   );
+  const selectUnindexed = sqlite.prepare(`
+    SELECT n.seq, n.text FROM nodes n
+    LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
+    WHERE n.seq = ? AND v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`);
+  const reserveChunk = sqlite.prepare(
+    "INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset) VALUES (?,?,?,?,?)",
+  );
+  const deleteChunk = sqlite.prepare("DELETE FROM node_vector_chunks WHERE vector_id=?");
+  const journalRemoval = sqlite.prepare(
+    "INSERT OR IGNORE INTO memory_graph_vector_removals VALUES (?,?)",
+  );
   const oneMorphBatchAtATime = yield* Semaphore.make(1);
   // Runs end concurrently; two batches picking the same pending nodes would index them twice.
   const oneBatchAtATime = yield* Semaphore.make(1);
+
+  /**
+   * Re-reads one node inside the commit transaction. Only a node still unindexed with the text
+   * that was embedded is published; anything else drops the native ids it was given.
+   */
+  const outcomeOf = (
+    node: Pending,
+    segmentation: Segmentation,
+    vectorIds: readonly number[],
+  ): NodeOutcome => {
+    const current = selectUnindexed.get(embedder.identity, node.seq);
+    if (current !== undefined && decodePending(current).text === node.text)
+      return { kind: "indexed", seq: node.seq };
+    switch (segmentation.kind) {
+      case "whole":
+        return { kind: "stale-whole", seq: node.seq };
+      case "chunked":
+        return { kind: "stale-chunks", vectorIds };
+    }
+  };
+
+  /** Writes one outcome. Synchronous: it runs inside the caller's `atomic`. */
+  const settle = (outcome: NodeOutcome) => {
+    switch (outcome.kind) {
+      case "indexed":
+        markIndexed.run(outcome.seq, embedder.identity);
+        return;
+      case "stale-chunks":
+        // The deletion trigger preserves removal IDs even if a purge already cascaded these rows.
+        // Uncommitted chunks never enter the search allowlist.
+        for (const vectorId of outcome.vectorIds) deleteChunk.run(vectorId);
+        return;
+      case "stale-whole":
+        journalRemoval.run(outcome.seq, embedder.identity);
+        return;
+    }
+  };
 
   /** Embeds one batch of not-yet-indexed nodes. Returns how many were indexed. */
   const indexBatch = (limit: number) =>
     Effect.gen(function* () {
       const pending = selectPending.all(embedder.identity, limit).map((row) => decodePending(row));
       if (pending.length === 0) return 0;
-      const texts = pending.map((node) => node.text);
-      const spans = embedder.chunks === undefined ? undefined : yield* embedder.chunks(texts);
-      const inputs = pending.flatMap((node, row) =>
-        spans === undefined
-          ? [{ node, ordinal: 0, start: 0, end: node.text.length }]
-          : spans[row]!.map((span, ordinal) => ({ node, ordinal, ...span })),
-      );
+      // Chunking and embedding are both requests to the one model worker, which serves a single
+      // request at a time, and embedding needs the spans: the steps are sequential by data.
+      const segmentation: Segmentation =
+        embedder.chunks === undefined
+          ? { kind: "whole" }
+          : { kind: "chunked", spans: yield* embedder.chunks(pending.map((node) => node.text)) };
+      const inputs = pending.flatMap((node, row) => {
+        switch (segmentation.kind) {
+          case "whole":
+            return [{ node, ordinal: 0, start: 0, end: node.text.length }];
+          case "chunked":
+            return segmentation.spans[row]!.map((span, ordinal) => ({ node, ordinal, ...span }));
+        }
+      });
       const embedded = yield* embedder.embed(
         inputs.map(({ node, start, end }) => node.text.slice(start, end)),
       );
@@ -99,72 +167,55 @@ const make = Effect.gen(function* () {
           });
           const accepted = inputs.flatMap(({ node, ordinal, start, end }, row) =>
             fresh.some((current) => current.seq === node.seq && current.text === node.text)
-              ? [{ seq: node.seq, vector: embedded[row]!, ordinal, start, end }]
+              ? [{ node, vector: embedded[row]!, ordinal, start, end }]
               : [],
           );
-          const nodeSeqs = [...new Set(accepted.map((node) => node.seq))];
+          const acceptedNodes = pending.filter((node) =>
+            accepted.some((chunk) => chunk.node.seq === node.seq),
+          );
           // Reserve mappings inside the publication gate, before saving vectors. Only node_vectors
           // marks a fully committed node. Startup removes reserved chunks without that marker.
-          const seqs =
-            spans === undefined
-              ? nodeSeqs
-              : yield* Effect.try({
-                  try: () =>
-                    atomic(() =>
-                      accepted.map((chunk) =>
-                        Number(
-                          sqlite
-                            .prepare(
-                              "INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset) VALUES (?,?,?,?,?)",
-                            )
-                            .run(
-                              chunk.seq,
-                              embedder.identity,
-                              chunk.ordinal,
-                              chunk.start,
-                              chunk.end,
-                            ).lastInsertRowid,
-                        ),
+          const ids = yield* Effect.try({
+            try: () => {
+              switch (segmentation.kind) {
+                case "whole":
+                  return accepted.map((chunk) => chunk.node.seq);
+                case "chunked":
+                  return atomic(() =>
+                    accepted.map((chunk) =>
+                      Number(
+                        reserveChunk.run(
+                          chunk.node.seq,
+                          embedder.identity,
+                          chunk.ordinal,
+                          chunk.start,
+                          chunk.end,
+                        ).lastInsertRowid,
                       ),
                     ),
-                  catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
-                });
+                  );
+              }
+            },
+            catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
+          });
+          const idsOf = (node: Pending) =>
+            accepted.flatMap((chunk, row) => (chunk.node.seq === node.seq ? [ids[row]!] : []));
           return {
-            seqs,
-            vectors: accepted.map((node) => node.vector),
+            seqs: ids,
+            vectors: accepted.map((chunk) => chunk.vector),
+            // Native add/save yielded to other agents. A purge or redaction can have
+            // removed/changed the source since prepare, without taking this publication gate.
+            // Each node's re-read and its write share one transaction, and nothing inside it
+            // yields: `atomic` nests by a depth every fibre shares.
             commit: Effect.try({
               try: () =>
-                atomic(() => {
-                  // Native add/save yielded to other agents. A purge or redaction can have
-                  // removed/changed the source since prepare, without taking this publication gate.
-                  let committed = 0;
-                  for (const seq of nodeSeqs) {
-                    const original = pending.find((node) => node.seq === seq)!;
-                    const current = sqlite
-                      .prepare(`SELECT n.seq, n.text FROM nodes n
-                      LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=?
-                      WHERE n.seq=? AND v.node_seq IS NULL AND ${meaningfulNodeFilter}
-                        AND ${embeddedKindFilter}`)
-                      .get(embedder.identity, seq);
-                    if (current !== undefined && decodePending(current).text === original.text) {
-                      markIndexed.run(seq, embedder.identity);
-                      committed++;
-                    } else if (spans !== undefined) {
-                      // The deletion trigger preserves removal IDs even if a purge already
-                      // cascaded these rows. Uncommitted chunks never enter the search allowlist.
-                      for (const [row, chunk] of accepted.entries())
-                        if (chunk.seq === seq)
-                          sqlite
-                            .prepare("DELETE FROM node_vector_chunks WHERE vector_id=?")
-                            .run(seqs[row]!);
-                    } else {
-                      sqlite
-                        .prepare("INSERT OR IGNORE INTO memory_graph_vector_removals VALUES (?,?)")
-                        .run(seq, embedder.identity);
-                    }
-                  }
-                  return committed;
-                }),
+                atomic(() =>
+                  acceptedNodes.reduce((committed, node) => {
+                    const outcome = outcomeOf(node, segmentation, idsOf(node));
+                    settle(outcome);
+                    return outcome.kind === "indexed" ? committed + 1 : committed;
+                  }, 0),
+                ),
               catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
             }),
           };

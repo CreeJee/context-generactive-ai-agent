@@ -41,7 +41,7 @@ impl Outcome {
         }
     }
 }
-fn outcome(kind: Outcome, start: Instant) -> ControlledSearchResult {
+pub(crate) fn outcome(kind: Outcome, start: Instant) -> ControlledSearchResult {
     ControlledSearchResult {
         kind: kind.tag().into(),
         ids: vec![],
