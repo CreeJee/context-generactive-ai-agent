@@ -1,5 +1,4 @@
 import { isTruthy } from "../../truthy.ts";
-import { totalmem } from "node:os";
 import { Context, Effect, Layer } from "effect";
 import {
   GlobalConfig,
@@ -8,6 +7,7 @@ import {
   type Settings,
 } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
+import { totalMemory } from "../../runtime/host-system.ts";
 import { AppEvents } from "../../events/app-events.ts";
 import {
   checkGpu,
@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
   const indexer = yield* Indexer;
   const maintenance = yield* MemoryGraphMaintenance;
-  const memoryBytes = totalmem();
+  const memoryBytes = yield* totalMemory;
   const layerScope = yield* Effect.scope;
   let checking = false;
 

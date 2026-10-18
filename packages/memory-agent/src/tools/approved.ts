@@ -2,12 +2,12 @@ import { Function as EffectFunction } from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
-import { tmpdir } from "node:os";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
 import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
+import { temporaryDirectory } from "../runtime/host-system.ts";
 import {
   canonicalPathEffect,
   PathRejected,
@@ -86,7 +86,7 @@ function resolveShellWorkingDirectoryBody(
   return Effect.gen(function* () {
     const directory = yield* resolved;
     const tempRoots = yield* Effect.all(
-      [canonicalPathEffect("/tmp"), canonicalPathEffect(tmpdir())],
+      [canonicalPathEffect("/tmp"), Effect.flatMap(temporaryDirectory, canonicalPathEffect)],
       { concurrency: 2 },
     );
     return yield* tempRoots.some((root) => isSameOrBelow(root, directory.absolute))

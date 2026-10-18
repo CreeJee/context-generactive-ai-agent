@@ -1,6 +1,5 @@
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
-import { homedir } from "node:os";
 import { Worker } from "node:worker_threads";
 import {
   Context,
@@ -16,6 +15,7 @@ import {
 } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
+import { homeDirectory } from "../runtime/host-system.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
@@ -441,6 +441,11 @@ const make = (watching: boolean, home: string) =>
 export class Importer extends Context.Service<Importer, Effect.Success<ReturnType<typeof make>>>()(
   "memory-agent/imports/importer",
 ) {
-  static readonly layer = (watching: boolean = true, home: string = homedir()) =>
-    Layer.effect(Importer, make(watching, home));
+  static readonly layer = (watching: boolean = true, home?: string) =>
+    Layer.effect(
+      Importer,
+      Effect.flatMap(home === undefined ? homeDirectory : Effect.succeed(home), (home) =>
+        make(watching, home),
+      ),
+    );
 }

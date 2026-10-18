@@ -9,10 +9,10 @@ import {
   Path,
 } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { homedir } from "node:os";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { MutableHashMap, Option, Context, Effect, FileSystem, Crypto, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
+import { homeDirectory } from "../runtime/host-system.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
 
 // Path operations remain synchronous at these public host boundaries.
@@ -140,7 +140,7 @@ const make = (options: SkillsOptions) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const crypto = yield* Crypto.Crypto;
-    const home = options.home ?? homedir();
+    const home = options.home ?? (yield* homeDirectory);
     const builtinRoot = options.builtin ?? builtinSkillsDirectory();
 
     const readSkill = Effect.fn("Skills.readSkill")(function* (
