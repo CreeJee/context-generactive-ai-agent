@@ -111,10 +111,15 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
     fs
       .makeTempDirectory({ directory: parent, prefix: ".verified-native-" })
       .pipe(Effect.mapError(stagingError)),
+    // Best effort: a staging directory left behind holds only verified bytes.
     (directory) =>
       fs
         .remove(directory, { recursive: true, force: true })
-        .pipe(Effect.mapError(stagingError), Effect.orDie),
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Native artifact staging cleanup failed", { error: error._tag }),
+          ),
+        ),
   );
   const file = join(directory, "artifact.mjs");
   yield* fs.writeFile(file, bytes, { flag: "wx", mode: 0o400 }).pipe(Effect.mapError(stagingError));

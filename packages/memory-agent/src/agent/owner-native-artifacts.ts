@@ -36,8 +36,11 @@ const Registration = Schema.Struct({
 });
 type Registration = typeof Registration.Type;
 
-const boundary = <A>(work: () => A) =>
-  Effect.try({ try: work, catch: (cause) => NativeRegistrationError.make({ cause }) });
+/** Fails with `reason` unless `holds`. */
+const ensure = (holds: boolean, reason: NativeRegistrationError["reason"]) =>
+  Effect.asVoid(
+    Effect.when(Effect.fail(NativeRegistrationError.make({ reason })), Effect.succeed(!holds)),
+  );
 const fileUrl = (path: string) =>
   platformPath.toFileUrl(path).pipe(
     Effect.map((url) => url.href),
@@ -58,20 +61,19 @@ const loadManifest = Effect.fn("OwnerNativeArtifacts.loadManifest")(function* (
   );
   const nativePath = yield* files.realpath(join(directory, decoded.native.file));
   const workerPath = yield* files.realpath(join(directory, decoded.worker.file));
-  yield* boundary(() => {
-    if (dirname(nativePath) !== directory || dirname(workerPath) !== directory)
-      throw new Error("Artifact escaped its build directory");
-  });
+  yield* ensure(
+    dirname(nativePath) === directory && dirname(workerPath) === directory,
+    "escaped_build_directory",
+  );
   const [nativeBytes, workerBytes] = yield* Effect.all(
     [files.read(nativePath), files.read(workerPath)],
     { concurrency: 2 },
   );
-  yield* boundary(() => {
-    if (nativeDigest(nativeBytes) !== decoded.native.sha256)
-      throw new Error("Native artifact SHA256 mismatch");
-    if (nativeDigest(workerBytes) !== decoded.worker.sha256)
-      throw new Error("Worker artifact SHA256 mismatch");
-  });
+  yield* ensure(
+    nativeDigest(nativeBytes) === decoded.native.sha256 &&
+      nativeDigest(workerBytes) === decoded.worker.sha256,
+    "artifact_hash_mismatch",
+  );
   return {
     manifest: decoded,
     nativePath,

@@ -2,6 +2,7 @@ import { Function as EffectFunction, HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { convertSchemaToJsonSchema, type AnyTextAdapter } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
+import { FullLoopAdmissionRejected, reject } from "./full-loop-admission-preflight.ts";
 
 export const fullLoopHooks = HashSet.fromIterable([
   "setup",
@@ -24,6 +25,7 @@ export const fullLoopHooks = HashSet.fromIterable([
 /** Pure preparation check: call BEFORE binding/admission/user writes. This does
  * not dispatch SDK hooks or model/tool calls and grants no owner authority.
  * Prepare the complete owner capability set first; admission is a separate commit.
+ * Throws `FullLoopAdmissionRejected`: callers run it inside a synchronous SDK boundary.
  */
 export const preflightFullLoopExecution: {
   <TAdapter extends AnyTextAdapter>(
@@ -40,14 +42,13 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
     isTruthy(turn.resume?.length) &&
     !capabilities.middleware.some((middleware) => middleware.name === "chat-persistence")
   )
-    throw new Error("Worker continuation requires owner persistence");
+    reject("turn", "ContinuationWithoutPersistence");
   const declared = HashSet.fromIterable(
     capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]),
   );
   for (const mw of capabilities.middleware) {
     for (const required of mw.requires ?? []) {
-      if (!HashSet.has(declared, required))
-        throw new Error(`Unprovided owner middleware capability: ${required.capabilityName}`);
+      if (!HashSet.has(declared, required)) reject(required.capabilityName, "UnprovidedCapability");
     }
     for (const [key, value] of Object.entries(mw)) {
       if (
@@ -57,7 +58,7 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
       )
         continue;
       if (!HashSet.has(fullLoopHooks, key) || !(value instanceof Function))
-        throw new Error(`Unsupported worker middleware member: ${key}`);
+        reject(key, "UnsupportedMiddlewareMember");
     }
   }
   const definitions = (turn.interrupts ?? []).map((definition) => ({
@@ -67,8 +68,8 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
       target: "draft-07",
     }),
   }));
-  structuredClone({ ...turn, interrupts: definitions });
-  structuredClone(
+  cloneable({ ...turn, interrupts: definitions });
+  cloneable(
     capabilities.tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -82,3 +83,12 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
     })),
   );
 }
+
+/** structuredClone is the worker's transport check; its DataCloneError becomes a typed rejection. */
+const cloneable = <T>(value: T) => {
+  try {
+    structuredClone(value);
+  } catch {
+    throw FullLoopAdmissionRejected.make({ member: "turn", reason: { _tag: "NotCloneable" } });
+  }
+};

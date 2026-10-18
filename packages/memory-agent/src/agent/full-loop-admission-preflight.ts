@@ -23,6 +23,14 @@ export class FullLoopAdmissionRejected extends Schema.TaggedError<FullLoopAdmiss
       Schema.TaggedStruct("MissingMember", {}),
       Schema.TaggedStruct("NotCallable", {}),
       Schema.TaggedStruct("UnsupportedTool", {}),
+      /** A resumed turn without owner persistence to validate the resumed responses. */
+      Schema.TaggedStruct("ContinuationWithoutPersistence", {}),
+      /** A middleware requires a capability no other middleware provides. */
+      Schema.TaggedStruct("UnprovidedCapability", {}),
+      /** A middleware member is not a hook the worker can relay. */
+      Schema.TaggedStruct("UnsupportedMiddlewareMember", {}),
+      /** The turn, an interrupt definition or a tool description did not clone for the worker. */
+      Schema.TaggedStruct("NotCloneable", {}),
     ]),
   },
 ) {
@@ -36,13 +44,19 @@ export class FullLoopAdmissionRejected extends Schema.TaggedError<FullLoopAdmiss
         return `Unsupported owner callable: ${this.member}`;
       case "UnsupportedTool":
         return `Unsupported owner tool grant capability: ${this.member}`;
+      case "ContinuationWithoutPersistence":
+        return "Worker continuation requires owner persistence";
+      case "UnprovidedCapability":
+        return `Unprovided owner middleware capability: ${this.member}`;
+      case "UnsupportedMiddlewareMember":
+        return `Unsupported worker middleware member: ${this.member}`;
       default:
         return `Unsupported worker member: ${this.member} (${this.reason._tag})`;
     }
   }
 }
 
-function reject(member: string, reason: FullLoopAdmissionRejected["reason"]["_tag"]): never {
+export function reject(member: string, reason: FullLoopAdmissionRejected["reason"]["_tag"]): never {
   throw FullLoopAdmissionRejected.make({ member, reason: { _tag: reason } });
 }
 

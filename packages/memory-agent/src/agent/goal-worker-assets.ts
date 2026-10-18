@@ -54,14 +54,48 @@ export interface GoalExecutionAssets extends SavedGoalExecutionAssets {
  */
 export class GoalWorkerAssetsFailed extends Schema.TaggedError<GoalWorkerAssetsFailed>()(
   "GoalWorkerAssetsFailed",
-  { cause: Schema.Defect() },
+  {
+    reason: Schema.Union([
+      /** The registry was disposed or the Goal ID is empty. */
+      Schema.TaggedStruct("Inactive", {}),
+      /** Reading, copying or writing worker files failed; `cause` has the platform error. */
+      Schema.TaggedStruct("FileSystem", {}),
+      /** A build or snapshot manifest did not decode or encode. */
+      Schema.TaggedStruct("Manifest", {}),
+      /** Worker bytes, paths or a saved pin do not match what the manifest names. */
+      Schema.TaggedStruct("Integrity", {
+        check: Schema.Literals([
+          "escaped_build_root",
+          "worker_hash",
+          "copy_hash",
+          "manifest_hash",
+          "noncanonical_url",
+          "snapshot_identity",
+        ]),
+      }),
+      /** A saved pin differs from the one already registered for the Goal. */
+      Schema.TaggedStruct("PinConflict", {}),
+      Schema.TaggedStruct("Unregistered", {}),
+      /** Disposal was asked while Workers still hold leases. */
+      Schema.TaggedStruct("LeasesActive", {}),
+    ]),
+    cause: Schema.optional(Schema.Defect()),
+  },
 ) {}
-const attempt = <A>(run: () => A) =>
-  Effect.try({ try: run, catch: (cause) => GoalWorkerAssetsFailed.make({ cause }) });
+type GoalWorkerAssetsFailure = GoalWorkerAssetsFailed["reason"];
+type IntegrityCheck = Extract<GoalWorkerAssetsFailure, { readonly _tag: "Integrity" }>["check"];
+const refused = (reason: GoalWorkerAssetsFailure) => GoalWorkerAssetsFailed.make({ reason });
+const integrity = (check: IntegrityCheck) => refused({ _tag: "Integrity", check });
+const inactive = refused({ _tag: "Inactive" });
 const failure = (cause: import("effect/PlatformError").PlatformError) =>
-  GoalWorkerAssetsFailed.make({ cause });
+  GoalWorkerAssetsFailed.make({ reason: { _tag: "FileSystem" }, cause });
 const invalidPath = (cause: import("effect/PlatformError").BadArgument) =>
-  GoalWorkerAssetsFailed.make({ cause });
+  GoalWorkerAssetsFailed.make({ reason: { _tag: "FileSystem" }, cause });
+const manifestFailure = (cause: Schema.SchemaError) =>
+  GoalWorkerAssetsFailed.make({ reason: { _tag: "Manifest" }, cause });
+/** Fails with `error` unless `holds`; the registry's checks read as the conditions they keep. */
+const ensure = (holds: boolean, error: GoalWorkerAssetsFailed) =>
+  Effect.asVoid(Effect.when(Effect.fail(error), Effect.succeed(!holds)));
 
 export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegistry")(function* (
   options: {
@@ -83,11 +117,15 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
   const read =
     customRead === undefined
       ? (path: string) => fs.readFile(path).pipe(Effect.mapError(failure))
-      : (path: string) => attempt(() => customRead(path));
+      : (path: string) =>
+          Effect.try({
+            try: () => customRead(path),
+            catch: (cause) =>
+              GoalWorkerAssetsFailed.make({ reason: { _tag: "FileSystem" }, cause }),
+          });
   const decodeText = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
-  const active = (goalInstanceId: string) => {
-    if (disposed || !(goalInstanceId.length > 0)) throw new Error("Inactive Goal asset registry");
-  };
+  const active = (goalInstanceId: string) =>
+    Effect.suspend(() => ensure(!disposed && goalInstanceId.length > 0, inactive));
 
   const buildWorker = Effect.fn("GoalWorkerAssets.buildWorker")(function* () {
     const manifestPath = yield* fs
@@ -95,75 +133,68 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
       .pipe(Effect.mapError(failure));
     const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(buildManifest))(
       decodeText(yield* read(manifestPath)),
-    ).pipe(Effect.mapError((cause) => GoalWorkerAssetsFailed.make({ cause })));
+    ).pipe(Effect.mapError(manifestFailure));
     const path = yield* fs
       .realPath(join(dirname(manifestPath), manifest.worker.file))
       .pipe(Effect.mapError(failure));
-    yield* attempt(() => {
-      if (dirname(path) !== dirname(manifestPath))
-        throw new Error("Goal worker escaped build root");
-    });
+    yield* ensure(dirname(path) === dirname(manifestPath), integrity("escaped_build_root"));
     const bytes = yield* read(path);
-    yield* attempt(() => {
-      if (digest(bytes) !== manifest.worker.sha256) throw new Error("Goal worker SHA256 mismatch");
-    });
+    yield* ensure(digest(bytes) === manifest.worker.sha256, integrity("worker_hash"));
     return { path, bytes, hash: manifest.worker.sha256 };
   });
 
   const snapshotLocation = Effect.fnUntraced(function* (saved: SavedGoalExecutionAssets) {
-    const url = yield* attempt(() => {
-      active(saved.goalInstanceId);
-      if (!/^[a-f0-9]{64}$/.test(saved.sourceGeneration))
-        throw new Error("Inactive Goal asset registry");
-      const url = new URL(saved.canonicalWorkerUrl);
-      if (url.protocol !== "file:" || url.href !== saved.canonicalWorkerUrl)
-        throw new Error("Noncanonical Goal worker URL");
-      return url;
-    });
+    yield* active(saved.goalInstanceId);
+    yield* ensure(/^[a-f0-9]{64}$/.test(saved.sourceGeneration), inactive);
+    const url = yield* Effect.try({
+      try: () => new URL(saved.canonicalWorkerUrl),
+      catch: () => integrity("noncanonical_url"),
+    }).pipe(
+      Effect.filterOrFail(
+        (url) => url.protocol === "file:" && url.href === saved.canonicalWorkerUrl,
+        () => integrity("noncanonical_url"),
+      ),
+    );
     const workerPath = yield* platformPath.fromFileUrl(url).pipe(Effect.mapError(invalidPath));
     const canonicalUrl = yield* platformPath
       .toFileUrl(workerPath)
       .pipe(Effect.mapError(invalidPath));
     const destination = dirname(workerPath);
-    yield* attempt(() => {
-      if (
-        workerPath !== join(destination, "full-loop-worker.mjs") ||
-        basename(dirname(destination)) !== saved.sourceGeneration ||
-        canonicalUrl.href !== saved.canonicalWorkerUrl
-      )
-        throw new Error("Goal snapshot identity mismatch");
-    });
+    yield* ensure(
+      workerPath === join(destination, "full-loop-worker.mjs") &&
+        basename(dirname(destination)) === saved.sourceGeneration &&
+        canonicalUrl.href === saved.canonicalWorkerUrl,
+      integrity("snapshot_identity"),
+    );
     return { workerPath, destination };
   });
-  const snapshotIdentity = (
+  const snapshotIdentity = Effect.fnUntraced(function* (
     saved: SavedGoalExecutionAssets,
     workerPath: string,
     canonical: string,
     workerBytes: Uint8Array,
     bytes: Uint8Array,
-  ): GoalExecutionAssets => {
-    if (canonical !== workerPath) throw new Error("Goal snapshot identity mismatch");
+  ) {
+    yield* ensure(canonical === workerPath, integrity("snapshot_identity"));
     const workerHash = digest(workerBytes);
-    if (
-      workerHash !== saved.sourceGeneration &&
-      generationForGoal(saved.goalInstanceId, workerHash) !== saved.sourceGeneration
-    )
-      throw new Error("Goal worker hash mismatch");
-    if (digest(bytes) !== saved.manifestHash)
-      throw new Error("Goal snapshot manifest hash mismatch");
-    const manifest = EffectFunction.flow(
-      Schema.decodeUnknownResult(Schema.fromJsonString(snapshotManifest)),
-      Result.getOrThrow,
-    )(decodeText(bytes));
-    if (
-      manifest.goalInstanceId !== saved.goalInstanceId ||
-      manifest.sourceGeneration !== saved.sourceGeneration ||
-      manifest.canonicalWorkerUrl !== saved.canonicalWorkerUrl ||
-      manifest.workerHash !== workerHash
-    )
-      throw new Error("Goal snapshot identity mismatch");
+    yield* ensure(
+      workerHash === saved.sourceGeneration ||
+        generationForGoal(saved.goalInstanceId, workerHash) === saved.sourceGeneration,
+      integrity("worker_hash"),
+    );
+    yield* ensure(digest(bytes) === saved.manifestHash, integrity("manifest_hash"));
+    const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(snapshotManifest))(
+      decodeText(bytes),
+    ).pipe(Effect.mapError(manifestFailure));
+    yield* ensure(
+      manifest.goalInstanceId === saved.goalInstanceId &&
+        manifest.sourceGeneration === saved.sourceGeneration &&
+        manifest.canonicalWorkerUrl === saved.canonicalWorkerUrl &&
+        manifest.workerHash === workerHash,
+      integrity("snapshot_identity"),
+    );
     const canonicalWorkerUrl = saved.canonicalWorkerUrl;
-    return Object.freeze({
+    return Object.freeze<GoalExecutionAssets>({
       goalInstanceId: saved.goalInstanceId,
       sourceGeneration: saved.sourceGeneration,
       manifestHash: saved.manifestHash,
@@ -172,7 +203,7 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
         return new URL(canonicalWorkerUrl);
       },
     });
-  };
+  });
   const verify = Effect.fn("GoalWorkerAssets.verify")(function* (saved: SavedGoalExecutionAssets) {
     const { workerPath, destination } = yield* snapshotLocation(saved);
     const canonical = yield* fs.realPath(workerPath).pipe(Effect.mapError(failure));
@@ -180,13 +211,13 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
     const bytes = yield* fs
       .readFile(join(destination, manifestName))
       .pipe(Effect.mapError(failure));
-    return yield* attempt(() => snapshotIdentity(saved, workerPath, canonical, workerBytes, bytes));
+    return yield* snapshotIdentity(saved, workerPath, canonical, workerBytes, bytes);
   });
 
   return {
     resolve: Effect.fn("GoalWorkerAssets.resolve")(
       function* (goalInstanceId: string) {
-        yield* attempt(() => active(goalInstanceId));
+        yield* active(goalInstanceId);
         const existing = Option.getOrUndefined(MutableHashMap.get(goals, goalInstanceId));
         if (isTruthy(existing)) {
           yield* verify(existing);
@@ -202,17 +233,14 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
           const workerPath = join(destination, "full-loop-worker.mjs");
           yield* fs.copyFile(source.path, workerPath).pipe(Effect.mapError(failure));
           const copied = yield* fs.readFile(workerPath).pipe(Effect.mapError(failure));
-          yield* attempt(() => {
-            if (digest(copied) !== source.hash)
-              throw new Error("Goal worker copy differs from build manifest");
-          });
+          yield* ensure(digest(copied) === source.hash, integrity("copy_hash"));
           const canonicalWorkerUrl = (yield* platformPath
             .toFileUrl(workerPath)
             .pipe(Effect.mapError(invalidPath))).href;
           const encodedManifest = yield* Schema.encodeEffect(
             Schema.fromJsonString(snapshotManifest),
           )({ goalInstanceId, sourceGeneration, canonicalWorkerUrl, workerHash: source.hash }).pipe(
-            Effect.mapError((cause) => GoalWorkerAssetsFailed.make({ cause })),
+            Effect.mapError(manifestFailure),
           );
           const manifest = `${encodedManifest}\n`;
           yield* fs
@@ -227,10 +255,13 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
           MutableHashMap.set(goals, goalInstanceId, assets);
           return assets;
         }).pipe(
+          // Best-effort cleanup: the snapshot's own failure is what the caller sees.
           Effect.onError(() =>
             Effect.sync(() => MutableHashMap.remove(goals, goalInstanceId)).pipe(
               Effect.andThen(fs.remove(destination, { recursive: true, force: true })),
-              Effect.orDie,
+              Effect.catch((error) =>
+                Effect.logWarning("Goal worker snapshot cleanup failed", { error: error._tag }),
+              ),
             ),
           ),
         );
@@ -244,14 +275,12 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
         const verified = yield* verify(saved);
         const existing = Option.getOrUndefined(MutableHashMap.get(goals, saved.goalInstanceId));
         if (isTruthy(existing)) {
-          yield* attempt(() => {
-            if (
-              existing.manifestHash !== verified.manifestHash ||
-              existing.canonicalWorkerUrl !== verified.canonicalWorkerUrl ||
-              existing.sourceGeneration !== verified.sourceGeneration
-            )
-              throw new Error("Goal asset pin conflict");
-          });
+          yield* ensure(
+            existing.manifestHash === verified.manifestHash &&
+              existing.canonicalWorkerUrl === verified.canonicalWorkerUrl &&
+              existing.sourceGeneration === verified.sourceGeneration,
+            refused({ _tag: "PinConflict" }),
+          );
           return existing;
         }
         MutableHashMap.set(goals, verified.goalInstanceId, verified);
@@ -265,13 +294,13 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
      */
     use: Effect.fn("GoalWorkerAssets.use")(
       function* (assets: GoalExecutionAssets) {
-        yield* attempt(() => {
-          if (
-            disposed ||
-            Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) !== assets
-          )
-            throw new Error("Unregistered Goal execution assets");
-        });
+        yield* Effect.suspend(() =>
+          ensure(
+            !disposed &&
+              Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) === assets,
+            refused({ _tag: "Unregistered" }),
+          ),
+        );
         yield* verify(assets);
         activeLeases++;
         let released = false;
@@ -289,11 +318,9 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
     /** Refuses disposal until every owner-tracked Worker lease has been released. */
     dispose: Effect.fn("GoalWorkerAssets.dispose")(
       function* (options: { readonly remove?: boolean } = {}) {
-        yield* attempt(() => {
-          if (activeLeases !== 0) throw new Error("Goal asset workers are still active");
-          disposed = true;
-          MutableHashMap.clear(goals);
-        });
+        yield* Effect.suspend(() => ensure(activeLeases === 0, refused({ _tag: "LeasesActive" })));
+        disposed = true;
+        MutableHashMap.clear(goals);
         if (options.remove === true)
           yield* fs.remove(root, { recursive: true, force: true }).pipe(Effect.mapError(failure));
       },

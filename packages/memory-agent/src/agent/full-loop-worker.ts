@@ -25,6 +25,14 @@ import { layerMessagePortRpcClient } from "./effect-rpc-message-port.ts";
 // TanStack's native SDK requires an AbortController, not an AbortSignal.
 const sdkAbortController = () => new AbortController();
 
+/**
+ * An owner read tool failed. The SDK turns a rejected tool into the result the model reads from
+ * `message`, so the owner's tool error text is carried here and nowhere else.
+ */
+class OwnerToolFailed extends Schema.TaggedError<OwnerToolFailed>()("OwnerToolFailed", {
+  message: Schema.String,
+}) {}
+
 function portableSchema(schema: any) {
   if (schema === undefined) return undefined;
   return {
@@ -72,7 +80,8 @@ function runFullLoop(
           const definition = definitions.find(
             (entry: ReturnType<typeof defineInterrupt>) => entry.id === value.definition.id,
           );
-          if (definition === undefined) throw new Error("Unregistered owner interrupt definition");
+          // The owner answered with an interrupt this worker never registered.
+          if (definition === undefined) throw FullLoopRpcError.make({ reason: "owner_rejected" });
           const { definition: _definition, ...input } = value;
           return definition.interrupt(input);
         }
@@ -126,9 +135,9 @@ function runFullLoop(
                   case "succeeded":
                     return result.outcome.value;
                   case "failed":
-                    throw new Error(result.outcome.message);
+                    return yield* OwnerToolFailed.make({ message: result.outcome.message });
                   default:
-                    throw new Error("Invalid owner tool outcome");
+                    return yield* FullLoopRpcError.make({ reason: "owner_rejected" });
                 }
               }),
             );

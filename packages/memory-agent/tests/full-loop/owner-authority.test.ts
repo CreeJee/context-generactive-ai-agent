@@ -407,7 +407,10 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
             ),
           ),
         );
-        expect(String(inactive.cause)).toContain("Inactive owner tool implementation capability");
+        expect(inactive.cause).toMatchObject({
+          _tag: "FullLoopOwnerRefused",
+          reason: { _tag: "Inactive", stage: "tool" },
+        });
         expect(Reflect.set(run.stream, "abortController", callerController())).toBe(true);
         yield* collect<GatedAdapter>(second.owner, run);
         expect(calls.slice(5)).toEqual([
@@ -626,9 +629,10 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
                             ),
                           ),
                         ).pipe(Effect.orDie);
-                        expect(String(ungranted.cause)).toContain(
-                          "owner tool implementation grant",
-                        );
+                        expect(ungranted.cause).toMatchObject({
+                          _tag: "OwnerToolGrantRefused",
+                          reason: "repeated_implementation_grant",
+                        });
                         expect(started).toEqual([]);
                         guardedBeforeModel = true;
                       }),

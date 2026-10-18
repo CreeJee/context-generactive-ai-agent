@@ -1,6 +1,20 @@
 // Primitive representation checks below are the JSON codec boundary parser,
 // not domain decisions. The owner endpoint separately validates authority.
 /* oxlint-disable anti-slop/no-runtime-typeof */
+import { Schema } from "effect";
+
+/** A value that cannot cross the worker boundary, or a frame that is not one the codec wrote. */
+export class FullLoopCodecFailed extends Schema.TaggedError<FullLoopCodecFailed>()(
+  "FullLoopCodecFailed",
+  {
+    reason: Schema.Literals(["non_finite", "non_portable", "invalid_frame", "invalid_tag"]),
+  },
+) {}
+// Synchronous codec boundary: callers run it inside SDK callbacks and owner handlers.
+const fail = (reason: FullLoopCodecFailed["reason"]): never => {
+  throw FullLoopCodecFailed.make({ reason });
+};
+
 // Every node is tagged, so application objects cannot spoof a Map/Error marker.
 // Functions are never transported. Live hooks/tools/definition factories remain
 // owner capabilities and are rebuilt explicitly by the worker protocol.
@@ -42,7 +56,7 @@ export function encodeFullLoopValue(value: unknown): FullLoopFrame {
     case "boolean":
       return ["boolean", value];
     case "number":
-      if (!Number.isFinite(value)) throw new Error("Non-finite worker value");
+      if (!Number.isFinite(value)) return fail("non_finite");
       return ["number", value];
     case "string":
       return ["string", value];
@@ -54,14 +68,14 @@ export function encodeFullLoopValue(value: unknown): FullLoopFrame {
           .map(([key, entry]) => [key, encodeFullLoopValue(entry)]),
       ];
     default:
-      throw new Error("Non-portable worker value");
+      return fail("non_portable");
   }
 }
 // The decoded SDK value's domain contract is established by each owner handler.
 export function decodeFullLoopValue(
   frame: import("./owner-rpc.ts").OwnerRpcJson,
 ): DecodedFullLoopValue {
-  if (!Array.isArray(frame)) throw new Error("Invalid worker value frame");
+  if (!Array.isArray(frame)) return fail("invalid_frame");
   // SAFETY: this is the tagged JSON parser; the switch checks primitives and
   // recursively parses collection entries. Malformed collections throw at this boundary.
   const parsed = frame as FullLoopFrame;
@@ -72,13 +86,13 @@ export function decodeFullLoopValue(
     case "null":
       return null;
     case "boolean":
-      if (typeof value !== "boolean") throw new Error("Invalid boolean frame");
+      if (typeof value !== "boolean") return fail("invalid_frame");
       return value;
     case "number":
-      if (!Number.isFinite(value)) throw new Error("Invalid number frame");
+      if (!Number.isFinite(value)) return fail("invalid_frame");
       return value;
     case "string":
-      if (typeof value !== "string") throw new Error("Invalid string frame");
+      if (typeof value !== "string") return fail("invalid_frame");
       return value;
     case "error": {
       const error = new Error(parsed[2]);
@@ -96,6 +110,6 @@ export function decodeFullLoopValue(
     case "object":
       return Object.fromEntries(value.map(([key, entry]) => [key, decodeFullLoopValue(entry)]));
     default:
-      throw new Error("Invalid worker value tag");
+      return fail("invalid_tag");
   }
 }
