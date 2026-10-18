@@ -1,4 +1,4 @@
-import { nativePromise } from "../src/runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
 import { isTruthy } from "../src/truthy.ts";
 // Memory use of the in-process models, one scenario per process so peaks do not mix:
 //   node --expose-gc --no-warnings eval/memory.ts            all scenarios
@@ -9,20 +9,18 @@ import { isTruthy } from "../src/truthy.ts";
 import { runProcess } from "../src/rrsi/command.ts";
 import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { FileSystem } from "effect";
-import { homedir } from "node:os";
+import { Duration, FileSystem } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { dirname, join } = path;
-import { fileURLToPath } from "node:url";
 import { Console, Effect, Layer } from "effect";
 import { KiwiBuilder } from "kiwi-nlp";
-import { StorageRoot } from "../src/config/storage-root.ts";
+import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
 import { kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { runtimeRequire } from "../src/runtime/resources.ts";
 
-const home = join(homedir(), ".context-generactive-agent");
+const home = defaultStorageRoot;
 /**
  * macOS physical footprint in MB, what the system counts against the process under memory
  * pressure. Unlike RSS it drops when freed memory is given back, even if pages stay mapped.
@@ -117,28 +115,35 @@ const only = process.argv[2];
 if (isTruthy(only)) {
   const scenario = Object.entries(scenarios).find(([name]) => name === only)?.[1];
   if (!isTruthy(scenario)) throw new Error(`unknown scenario: ${only}`);
-  const started = performance.now();
-  const details = await runOAuthNodeEffect<
-    object,
+  const [elapsed, { details, peakMB }] = await runOAuthNodeEffect<
+    [Duration.Duration, { details: object; peakMB: number | null }],
     Effect.Error<ReturnType<(typeof scenarios)[keyof typeof scenarios]>>
-  >(scenario());
+  >(
+    Effect.timed(
+      Effect.gen(function* () {
+        const details: object = yield* scenario();
+        return { details, peakMB: yield* footprint("phys_footprint_peak") };
+      }),
+    ),
+  );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(
     Console.log(
       JSON.stringify({
         scenario: only,
-        peakMB: await runOAuthNodeEffect(footprint("phys_footprint_peak")),
+        peakMB,
         ...details,
-        ms: Math.round(performance.now() - started),
+        ms: Math.round(Duration.toMillis(elapsed)),
       }),
     ),
   );
 } else {
+  const script = await runNativeEffect(path.fromFileUrl(new URL(import.meta.url)));
   for (const name of Object.keys(scenarios)) {
     try {
       const result = await runProcess({
         command: process.execPath,
-        args: [...process.execArgv, fileURLToPath(import.meta.url), name],
+        args: [...process.execArgv, script, name],
       });
       const line = result.stdout.trim().split("\n").at(-1) ?? "";
       Effect.runSync(Console.log(line));
