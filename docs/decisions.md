@@ -2113,6 +2113,7 @@
 - Goal 워커의 역방향 owner RPC는 Effect worker 프로토콜에 MessagePort 플랫폼 어댑터(`effect-rpc-message-port.ts`)를 끼워 쓴다. 원장·권한 검사(`makeOwnerRpcEffect`)는 그대로다. 포트가 닫힌 뒤 들어온 요청은 바로 실패하지 않고 프로토콜 재연결 주기(1초) 안에 실패한다. 서버 layer는 포트 Scope가 소유한 fiber에서 빌드한다.
 - worker 파일은 `@effect/platform-node` 진입점 대신 쓰는 하위 모듈만 불러온다. 진입점은 `NodeRedis`까지 평가해 시작이 느려지고, `redis`가 없는 실행 파일의 runtime 폴더에서는 Kiwi·임베딩 worker가 시작하지 못했다.
 - 실행 파일은 모든 worker를 한 파일(`.mjs`)로 묶는다. Kiwi·임베딩 worker는 자기 모듈만 묶고 모델 패키지는 runtime 폴더의 `node_modules`에서 쓴다. 원본 `.ts`를 복사하던 때는 옆 모듈의 상대 import가 실행 파일 안에서 풀리지 않았다.
+- `ScopedRef.set`은 새 값을 interruption 없이 얻으므로, worker 세션(임베딩·Kiwi·가져오기)은 획득만 `Effect.interruptible`로 연다. 그러지 않으면 모델 로드 중에 받은 SIGTERM이 로드가 끝날 때까지 서버 종료를 막는다. 앞 PR부터 있던 문제로, 실행 파일에서는 임베딩 worker가 시작하지 못해 가려져 있었다.
 - CLI 인자는 `effect/cli`로 파싱한다. 내장 전역 플래그는 끄고(`CliConfig.builtIns: []`) 기존 옵션 이름·사용법 문구를 유지한다. `isDeepStrictEqual`은 `Equal.equals`로, 포트 점유 확인은 `NodeSocketServer`의 scoped bind로, 측정 시간은 `Clock`·`Effect.timed`로, 테스트 단언은 vitest `expect`로 바꾼다.
 - 홈 폴더·임시 폴더·전체 메모리는 Effect에 대응 서비스가 없어 `runtime/host-system.ts`만 `node:os`를 쓰고 나머지는 그 Effect 값을 읽는다.
 - 남기는 `node:*`와 이유: `sqlite`(Effect의 SQLite 드라이버는 별도 네이티브 패키지라 SEA 제약과 맞지 않아 자체 `SqlClient`가 `node:sqlite`를 감싼다), `sea`(실행 파일 자산), `module`(`createRequire`: SEA 본문은 네이티브 패키지를 require로만 부른다), `zlib`(설치본에는 HTTP 응답 압축만 있고 zstd 해제가 없다), 테스트의 `async_hooks`·모듈 로더 hook의 `url`(Effect 런타임 밖에서 동기로 돈다).
