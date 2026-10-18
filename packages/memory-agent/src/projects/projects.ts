@@ -1,6 +1,3 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import type { SQLOutputValue } from "node:sqlite";
 import {
   DateTime,
   Clock,
@@ -10,14 +7,15 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Option,
   Path,
   Schema,
 } from "effect";
+import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { StorageRoot } from "../config/storage-root.ts";
-import { Database } from "../db/database.ts";
 
 /**
  * How approval-gated tools (shell, writes outside the project) are allowed.
@@ -49,14 +47,7 @@ const ProjectRow = Schema.Struct({
   created_at: Schema.String,
   hidden_at: Schema.NullOr(Schema.String),
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeProjectRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(ProjectRow),
-  Result.getOrThrow,
-);
-
-function toProject(row: Record<string, SQLOutputValue>): Project {
-  const decoded = decodeProjectRow(row);
+function toProject(decoded: typeof ProjectRow.Type): Project {
   return {
     id: decoded.id,
     root: decoded.root,
@@ -90,7 +81,6 @@ export class ProjectHostFailed extends Schema.TaggedError<ProjectHostFailed>()(
 ) {}
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
@@ -120,46 +110,100 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const db = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const storage = yield* StorageRoot;
   const storageRoot = yield* canonical(storage.path);
 
-  const find = (id: string) =>
-    Effect.sync(() => db.sqlite.prepare("SELECT * FROM projects WHERE id = ?").get(id)).pipe(
-      Effect.flatMap((row) =>
-        isTruthy(row) ? Effect.succeed(toProject(row)) : Effect.fail(new ProjectNotFound({ id })),
-      ),
-    );
+  /** One project, or ProjectNotFound: what every lookup and change by id answers. */
+  const one =
+    <I>(
+      query: (
+        request: I,
+      ) => Effect.Effect<
+        Option.Option<typeof ProjectRow.Type>,
+        SqlError.SqlError | Schema.SchemaError
+      >,
+    ) =>
+    (id: string, request: I) =>
+      query(request).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(new ProjectNotFound({ id })),
+            onSome: (row) => Effect.succeed(toProject(row)),
+          }),
+        ),
+      );
+  const byId = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: ProjectRow,
+    execute: (id) => sql`SELECT * FROM projects WHERE id = ${id}`,
+  });
+  const find = (id: string) => one(byId)(id, id);
+  const all = SqlSchema.findAll({
+    Request: Schema.Boolean,
+    Result: ProjectRow,
+    execute: (includeHidden) => sql`
+      SELECT * FROM projects
+      WHERE ${includeHidden ? sql.literal("1") : sql.literal("hidden_at IS NULL")}
+      ORDER BY created_at, id`,
+  });
+  const hide = one(
+    SqlSchema.findOneOption({
+      Request: Schema.Struct({ id: Schema.String, hiddenAt: Schema.NullOr(Schema.String) }),
+      Result: ProjectRow,
+      execute: ({ id, hiddenAt }) =>
+        sql`UPDATE projects SET hidden_at = ${hiddenAt} WHERE id = ${id} RETURNING *`,
+    }),
+  );
+  const exclude = one(
+    SqlSchema.findOneOption({
+      Request: Schema.Struct({ id: Schema.String, excluded: Schema.Literals([0, 1]) }),
+      Result: ProjectRow,
+      execute: ({ id, excluded }) =>
+        sql`UPDATE projects SET cross_recall_excluded = ${excluded} WHERE id = ${id} RETURNING *`,
+    }),
+  );
+  const permit = one(
+    SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: Schema.String,
+        mode: Schema.Literals(["ask", "auto"]),
+        full: Schema.Literals([0, 1]),
+      }),
+      Result: ProjectRow,
+      execute: ({ id, mode, full }) => sql`
+        UPDATE projects SET permission_mode = ${mode}, permission_full = ${full}
+        WHERE id = ${id} RETURNING *`,
+    }),
+  );
+  // Adding a folder that is registered but hidden puts it back in the list: asking for it
+  // again is the same intent as un-hiding it, and there is no other way back.
+  const insert = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      id: Schema.String,
+      root: Schema.String,
+      name: Schema.String,
+      createdAt: Schema.String,
+    }),
+    Result: ProjectRow,
+    execute: (project) => sql`
+      INSERT INTO projects (id, root, name, created_at)
+      VALUES (${project.id}, ${project.root}, ${project.name}, ${project.createdAt})
+      ON CONFLICT(root) DO UPDATE SET hidden_at = NULL WHERE projects.hidden_at IS NOT NULL
+      RETURNING *`,
+  });
 
   return {
     /** The projects offered for choosing. Hidden ones still own their memory and are still searched. */
-    list: Effect.sync(() =>
-      db.sqlite
-        .prepare("SELECT * FROM projects WHERE hidden_at IS NULL ORDER BY created_at, id")
-        .all()
-        .map(toProject),
-    ),
+    list: Effect.map(all(false), (rows) => rows.map(toProject)),
 
     /** Every project, hidden ones included: what the importer matches a recorded folder against. */
-    listAll: Effect.sync(() =>
-      db.sqlite.prepare("SELECT * FROM projects ORDER BY created_at, id").all().map(toProject),
-    ),
+    listAll: Effect.map(all(true), (rows) => rows.map(toProject)),
 
     /** Taken out of the sidebar, or put back. Nothing about its memory changes either way. */
     setHidden: (id: string, hidden: boolean) =>
-      Effect.sync(() =>
-        db.sqlite
-          .prepare("UPDATE projects SET hidden_at = ? WHERE id = ?")
-          .run(
-            hidden
-              ? DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()))
-              : null,
-            id,
-          ),
-      ).pipe(
-        Effect.flatMap((result) =>
-          result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),
-        ),
+      Effect.flatMap(Clock.currentTimeMillis, (millis) =>
+        hide(id, { id, hiddenAt: hidden ? DateTime.formatIso(DateTime.makeUnsafe(millis)) : null }),
       ),
 
     get: find,
@@ -224,42 +268,19 @@ const make = Effect.gen(function* () {
           createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
           hiddenAt: null,
         };
-        // Adding a folder that is registered but hidden puts it back in the list: asking for it
-        // again is the same intent as un-hiding it, and there is no other way back.
-        const row = db.sqlite
-          .prepare(`
-            INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?)
-            ON CONFLICT(root) DO UPDATE SET hidden_at = NULL WHERE projects.hidden_at IS NOT NULL
-            RETURNING *`)
-          .get(project.id, project.root, project.name, project.createdAt);
-        if (!isTruthy(row))
+        const row = yield* insert(project);
+        if (Option.isNone(row))
           return yield* new ProjectRootRejected({ root, reason: "already_registered" });
-        return toProject(row);
+        return toProject(row.value);
       }),
 
     /** R08: excluded projects keep their memory but are not searched from other projects. */
     setCrossRecallExcluded: (id: string, excluded: boolean) =>
-      Effect.sync(() =>
-        db.sqlite
-          .prepare("UPDATE projects SET cross_recall_excluded = ? WHERE id = ?")
-          .run(excluded ? 1 : 0, id),
-      ).pipe(
-        Effect.flatMap((result) =>
-          result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),
-        ),
-      ),
+      exclude(id, { id, excluded: excluded ? 1 : 0 }),
 
     /** Choosing `auto` or `full` records the user's standing permission policy. */
     setPermissionMode: (id: string, mode: PermissionMode) =>
-      Effect.sync(() =>
-        db.sqlite
-          .prepare("UPDATE projects SET permission_mode = ?, permission_full = ? WHERE id = ?")
-          .run(mode === "full" ? "auto" : mode, mode === "full" ? 1 : 0, id),
-      ).pipe(
-        Effect.flatMap((result) =>
-          result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),
-        ),
-      ),
+      permit(id, { id, mode: mode === "full" ? "auto" : mode, full: mode === "full" ? 1 : 0 }),
   };
 });
 
