@@ -1,9 +1,8 @@
+import { gatedTransport } from "../../../tests/support/native-owner.ts";
 import { withTestPlatform } from "../../../tests/support/platform.ts";
-import { Crypto, Deferred, Effect, Exit, Fiber, FileSystem } from "effect";
-import { Worker } from "node:worker_threads";
-import { expect, it, vi } from "vite-plus/test";
-import { makeNativeOwner } from "./client.ts";
-import { NativeOwnerFailed, type OwnerCommand } from "./worker-protocol.ts";
+import { Crypto, Deferred, Effect, Fiber, FileSystem } from "effect";
+import { expect, it } from "vite-plus/test";
+import { makeNativeOwner, type OwnerTransport } from "./client.ts";
 import { loadTurbovec } from "../../../../turbovec/index.js";
 
 it("binds one-shot native control, rejects snapshot duplicates, and never recycles issued tokens", () =>
@@ -80,6 +79,7 @@ it("closes native controls on rejected input, queued/active interruption, worker
           for (const mode of ["failure", "shutdown"] as const) {
             yield* Effect.scoped(
               Effect.gen(function* () {
+                const posted = yield* Deferred.make<OwnerTransport>();
                 const owner = yield* makeNativeOwner(
                   {
                     kind: "setup",
@@ -89,6 +89,17 @@ it("closes native controls on rejected input, queued/active interruption, worker
                     cacheDirectory: directory,
                   },
                   new URL("./worker.ts", import.meta.url),
+                  // Gate transport, not native CPU. Lifetime/cleanup assertion only.
+                  gatedTransport((command, transport) => {
+                    switch (command.kind) {
+                      case "vector-search-controlled":
+                        return command.requestId === "bad"
+                          ? transport.send(command)
+                          : Deferred.succeed(posted, transport).pipe(Effect.andThen(Effect.never));
+                      default:
+                        return transport.send(command);
+                    }
+                  }),
                 );
                 const query = new Float32Array(384);
                 query[0] = 1;
@@ -106,23 +117,8 @@ it("closes native controls on rejected input, queued/active interruption, worker
                   reason: "invalid-input",
                 });
                 expect(SearchControl.count()).toBe(baseline);
-                const posted = yield* Deferred.make<Worker>();
-                yield* Effect.acquireRelease(
-                  Effect.sync(() =>
-                    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-                      this: Worker,
-                      command: OwnerCommand,
-                    ) {
-                      if (command.kind !== "vector-search-controlled")
-                        throw NativeOwnerFailed.make({ reason: "invalid-input" });
-                      // Gate transport, not native CPU. Lifetime/cleanup assertion only.
-                      Deferred.doneUnsafe(posted, Exit.succeed(this));
-                    }),
-                  ),
-                  (spy) => Effect.sync(() => spy.mockRestore()),
-                );
                 const active = yield* Effect.forkScoped(request("active"));
-                const worker = yield* Deferred.await(posted);
+                const transport = yield* Deferred.await(posted);
                 const queued = yield* Effect.forkScoped(request("queued"));
                 yield* owner.inspect.pipe(
                   Effect.repeat({ until: (state) => state.kind === "open" && state.queued === 1 }),
@@ -140,10 +136,7 @@ it("closes native controls on rejected input, queued/active interruption, worker
                 expect(SearchControl.count()).toBe(baseline + 1);
                 switch (mode) {
                   case "failure":
-                    yield* Effect.tryPromise({
-                      try: () => worker.terminate(),
-                      catch: () => NativeOwnerFailed.make({ reason: "worker-exit" }),
-                    });
+                    yield* transport.terminate;
                     expect(yield* Effect.flip(Fiber.join(pending))).toMatchObject({
                       reason: "worker-exit",
                     });

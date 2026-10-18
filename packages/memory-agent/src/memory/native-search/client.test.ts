@@ -1,9 +1,9 @@
 import { withTestPlatform } from "../../../tests/support/platform.ts";
+import { gatedTransport } from "../../../tests/support/native-owner.ts";
 import { Deferred, Effect, Exit, Fiber, FileSystem } from "effect";
-import { Worker } from "node:worker_threads";
-import { NativeOwnerFailed, type OwnerCommand } from "./worker-protocol.ts";
-import { expect, it, vi } from "vite-plus/test";
-import { makeNativeOwner } from "./client.ts";
+import { NativeOwnerFailed } from "./worker-protocol.ts";
+import { expect, it } from "vite-plus/test";
+import { makeNativeOwner, type OwnerTransport } from "./client.ts";
 
 it("uses the actual additive native primitive for exact results, shared cancellation and admission budget", () =>
   Effect.runPromise(
@@ -12,6 +12,8 @@ it("uses the actual additive native primitive for exact results, shared cancella
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-controlled-" });
+          const dispatched = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
           const owner = yield* makeNativeOwner(
             {
               kind: "setup",
@@ -21,6 +23,15 @@ it("uses the actual additive native primitive for exact results, shared cancella
               cacheDirectory: directory,
             },
             new URL("./worker.ts", import.meta.url),
+            // Holds the "cancelled" request in transport until the test has cancelled it.
+            gatedTransport((command, transport) =>
+              command.requestId === "cancelled"
+                ? Deferred.succeed(dispatched, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(transport.send(command)),
+                  )
+                : transport.send(command),
+            ),
           );
           const query = new Float32Array(384);
           query[0] = 1;
@@ -55,25 +66,10 @@ it("uses the actual additive native primitive for exact results, shared cancella
             return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
           expect(result.ids).toEqual(legacy.ids);
           expect(result.scores).toEqual(legacy.scores);
-          const dispatched = yield* Deferred.make<{ worker: Worker; command: OwnerCommand }>();
-          // eslint-disable-next-line typescript/unbound-method -- Measurement gate restores the receiver explicitly with .call below.
-          const originalPost = Worker.prototype.postMessage;
-          const spy = yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-                this: Worker,
-                command: OwnerCommand,
-              ) {
-                Deferred.doneUnsafe(dispatched, Exit.succeed({ worker: this, command }));
-              }),
-            ),
-            (handle) => Effect.sync(() => handle.mockRestore()),
-          );
           const pending = yield* Effect.forkScoped(request("cancelled", 2_000));
-          const queued = yield* Deferred.await(dispatched);
+          yield* Deferred.await(dispatched);
           yield* owner.cancel("cancelled");
-          spy.mockRestore();
-          originalPost.call(queued.worker, queued.command);
+          yield* Deferred.succeed(release, undefined);
           expect(yield* Fiber.join(pending)).toMatchObject({
             kind: "controlled-result",
             outcome: "cancelled",
@@ -99,19 +95,14 @@ it("times out the caller without pretending an active transport job has terminat
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-timeout-" });
+          const blocked = yield* Deferred.make<void>();
           const owner = yield* makeNativeOwner(
             { kind: "setup", epoch: "timeout", dimensions: 8, bits: 4, cacheDirectory: directory },
             new URL("./worker.ts", import.meta.url),
-          );
-          const blocked = yield* Deferred.make<void>();
-          yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              vi.spyOn(Worker.prototype, "postMessage").mockImplementation(() => {
-                // Transport-only gate. No actual native CPU or cancellation guarantee is claimed.
-                Deferred.doneUnsafe(blocked, Exit.void);
-              }),
+            // Transport-only gate. No actual native CPU or cancellation guarantee is claimed.
+            gatedTransport(() =>
+              Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Effect.never)),
             ),
-            (spy) => Effect.sync(() => spy.mockRestore()),
           );
           const job = yield* Effect.forkScoped(
             owner.execute({ kind: "validate", epoch: "timeout", requestId: "timed", ids: [] }),
@@ -132,31 +123,19 @@ it("bounds admission, removes interrupted queued waits, and settles every waiter
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-queue-" });
+          const blocked = yield* Deferred.make<OwnerTransport>();
           const owner = yield* makeNativeOwner(
             { kind: "setup", epoch: "queue", dimensions: 8, bits: 4, cacheDirectory: directory },
             new URL("./worker.ts", import.meta.url),
-          );
-          const blocked = yield* Deferred.make<Worker>();
-          yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-                this: Worker,
-                command: OwnerCommand,
-              ) {
-                if (command.kind === "validate") {
-                  // Narrow SDK interception gate: do not post, retain the active slot until exit.
-                  Deferred.doneUnsafe(blocked, Exit.succeed(this));
-                  return;
-                }
-                throw NativeOwnerFailed.make({ reason: "invalid-input" });
-              }),
+            // Never sends: the first job keeps the active slot until the worker exits.
+            gatedTransport((_, transport) =>
+              Deferred.succeed(blocked, transport).pipe(Effect.andThen(Effect.never)),
             ),
-            (spy) => Effect.sync(() => spy.mockRestore()),
           );
           const request = (id: string) =>
             owner.execute({ kind: "validate", epoch: "queue", requestId: id, ids: [] });
           const active = yield* Effect.forkScoped(request("active"));
-          const worker = yield* Deferred.await(blocked);
+          const transport = yield* Deferred.await(blocked);
           const waiting = yield* Effect.forEach(
             Array.from({ length: 31 }, (_, i) => String(i)),
             (id) => Effect.forkScoped(request(id)),
@@ -175,10 +154,7 @@ it("bounds admission, removes interrupted queued waits, and settles every waiter
           yield* Fiber.interrupt(active);
           expect(yield* owner.inspect).toMatchObject({ kind: "open", queued: 31, active: 1 });
           expect(yield* Effect.flip(request("still-full"))).toMatchObject({ reason: "queue-full" });
-          yield* Effect.tryPromise({
-            try: () => worker.terminate(),
-            catch: () => NativeOwnerFailed.make({ reason: "worker-exit" }),
-          }).pipe(Effect.orDie);
+          yield* transport.terminate;
           const failures = yield* Effect.forEach(
             [...waiting.slice(1), replacement],
             (fiber) => Effect.flip(Fiber.join(fiber)),

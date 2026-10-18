@@ -1,29 +1,27 @@
-import {
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Predicate,
-  Queue,
-  Schema,
-  ScopedRef,
-} from "effect";
-// Node IPC and synchronous native/filesystem calls are confined to this owning worker.
+import { Effect, FileSystem, Layer, Option, Path, Predicate, Schema, ScopedRef } from "effect";
+import { RpcServer } from "effect/rpc";
+// Synchronous native/filesystem calls are confined to this owning worker.
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { parentPort, threadId, workerData } from "node:worker_threads";
+import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
+import { threadId, workerData } from "node:worker_threads";
+import { runNativeEffect } from "../../runtime/native-effect.ts";
 import { requireRuntime } from "../../runtime/resources.ts";
 import { initializeNodeSqlite } from "../../runtime/node-sqlite-bridge.ts";
 import { DatabaseSync } from "node:sqlite";
 import { assertDatabaseSchema } from "../../db/database.ts";
-import { NativeOwnerFailed, OwnerCommand, OwnerReply, OwnerSetup } from "./worker-protocol.ts";
+import {
+  NativeOwnerFailed,
+  NativeOwnerRpcs,
+  type OwnerCommand,
+  type OwnerReply,
+  OwnerSetup,
+} from "./worker-protocol.ts";
 
 const fail = (reason: NativeOwnerFailed["reason"]) => NativeOwnerFailed.make({ reason });
 /** Synchronous addon call. Its exception stays as the cause; only the reason crosses IPC. */
 const native = <A>(operation: () => A, reason: NativeOwnerFailed["reason"] = "index-failed") =>
   Effect.try({ try: operation, catch: (cause) => NativeOwnerFailed.make({ reason, cause }) });
-const correlation = Schema.Struct({ requestId: Schema.String, epoch: Schema.String });
 const canonicalId = Schema.String.check(
   Schema.makeFilter(
     (id) => id.length <= 20 && /^(0|[1-9][0-9]*)$/.test(id) && BigInt(id) <= 18446744073709551615n,
@@ -31,7 +29,8 @@ const canonicalId = Schema.String.check(
 );
 const decodeIds = Schema.decodeUnknownEffect(Schema.Array(canonicalId));
 
-const main = Effect.gen(function* () {
+/** The owner's scoped resources and its command executor; Scope closure releases them. */
+const owner = Effect.gen(function* () {
   const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
   const paths = yield* Effect.provideContext(Path.Path, services);
   const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
@@ -39,12 +38,6 @@ const main = Effect.gen(function* () {
     operation.pipe(
       Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "index-failed", cause })),
     );
-  const port = parentPort;
-  if (port === null || threadId <= 0) return;
-  yield* Effect.acquireRelease(Effect.succeed(port), (current) =>
-    Effect.sync(() => current.close()),
-  );
-  const post = (reply: OwnerReply) => native(() => port.postMessage(reply));
   const setup = yield* Schema.decodeUnknownEffect(OwnerSetup)(workerData).pipe(
     Effect.mapError(() => fail("invalid-input")),
   );
@@ -103,15 +96,17 @@ const main = Effect.gen(function* () {
   if (exists && !compatible && setup.recover !== true) return yield* fail("index-failed");
   const needsReset = !compatible;
   if (exists && !compatible) yield* ScopedRef.set(indexRef, empty);
-  // The worker owns this read-only connection; env teardown drops it with the index.
+  // The worker owns this read-only connection; Scope closure closes it before the index.
   const reader =
     setup.databasePath === undefined
       ? Option.none<InstanceType<typeof binding.MemoryReadSession>>()
       : Option.some(
-          yield* native(() => new binding.MemoryReadSession(setup.databasePath!), "read-failed"),
+          yield* Effect.acquireRelease(
+            native(() => new binding.MemoryReadSession(setup.databasePath!), "read-failed"),
+            (session) => Effect.sync(() => session.close()),
+          ),
         );
   const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
-  yield* post({ kind: "ready", epoch: setup.epoch, threadId, size, needsReset });
 
   const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
     if (command.epoch !== setup.epoch) return yield* fail("epoch-mismatch");
@@ -249,102 +244,53 @@ const main = Effect.gen(function* () {
           result,
         };
       }
-      case "close":
-        yield* native(() => {
-          if (Option.isSome(reader)) reader.value.close();
-        });
-        return {
-          kind: "closed",
-          requestId: command.requestId,
-          epoch: setup.epoch,
-        } satisfies OwnerReply;
     }
   });
 
-  // A single scoped consumer serializes native access and asynchronous file publication.
-  // Native IPC callbacks only enqueue input; they never execute or fork owner operations.
-  type Ingress =
-    | { readonly kind: "message"; readonly input: unknown }
-    | { readonly kind: "closed" };
-  const ingress = yield* Queue.make<Ingress>();
-  yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      // eslint-disable-next-line anti-slop/no-unknown-parameters -- Node IPC input is decoded in the owner loop.
-      const receive = (input: unknown) => Queue.offerUnsafe(ingress, { kind: "message", input });
-      const closed = () => Queue.offerUnsafe(ingress, { kind: "closed" });
-      port.on("message", receive);
-      port.on("close", closed);
-      port.on("messageerror", closed);
-      return { receive, closed };
-    }),
-    ({ receive, closed }) =>
-      Effect.sync(() => {
-        port.off("message", receive);
-        port.off("close", closed);
-        port.off("messageerror", closed);
-      }),
-  );
-  while (true) {
-    const event = yield* Queue.take(ingress);
-    switch (event.kind) {
-      case "closed":
-        return;
-      case "message": {
-        const input = event.input;
-        const terminal = yield* Schema.decodeUnknownEffect(OwnerCommand)(input).pipe(
-          Effect.mapError(() => fail("invalid-input")),
-          Effect.flatMap(execute),
-          Effect.flatMap((reply) => post(reply).pipe(Effect.as(reply.kind === "closed"))),
-          Effect.catchTag("NativeOwnerFailed", (error) => {
-            const identity = Schema.decodeUnknownOption(correlation)(input);
-            return Effect.gen(function* () {
-              const matching = Option.getOrElse(identity, () => ({
-                requestId: "",
-                epoch: setup.epoch,
-              }));
-              const code =
-                error.reason === "epoch-mismatch" ||
-                error.reason === "invalid-input" ||
-                error.reason === "read-failed" ||
-                error.reason === "native-incompatible"
-                  ? error.reason
-                  : "index-failed";
-              yield* post({ kind: "failed", ...matching, code });
-              return code !== "invalid-input" && code !== "epoch-mismatch";
-            });
-          }),
-        );
-        if (terminal) return;
-        break;
-      }
-    }
-  }
+  return { ready: { threadId, size, needsReset }, execute };
 });
 
-// Startup errors contain only protocol codes; no native messages or cache paths cross IPC.
-void Effect.runPromiseExit(
-  main.pipe(
-    Effect.catchTag("NativeOwnerFailed", (error) =>
-      Effect.sync(() => {
-        parentPort?.postMessage({
-          kind: "failed",
-          requestId: "",
-          epoch: Schema.decodeUnknownOption(OwnerSetup)(workerData).pipe(
-            Option.map((setup) => setup.epoch),
-            Option.getOrElse(() => ""),
-          ),
-          code:
-            error.reason === "native-incompatible"
-              ? "native-incompatible"
-              : error.reason === "lease-unavailable"
-                ? "lease-unavailable"
-                : error.reason === "invalid-input"
-                  ? "invalid-input"
-                  : "index-failed",
-        } satisfies OwnerReply);
-        parentPort?.close();
-      }),
-    ),
-    Effect.scoped,
-  ),
+/**
+ * Only the reason crosses IPC: native messages and cache paths stay in this worker. Requests
+ * report their own rejection codes; anything else means the index itself failed.
+ */
+const reported = (error: NativeOwnerFailed) => {
+  switch (error.reason) {
+    case "epoch-mismatch":
+    case "invalid-input":
+    case "read-failed":
+    case "native-incompatible":
+    case "lease-unavailable":
+      return NativeOwnerFailed.make({ reason: error.reason });
+    default:
+      return NativeOwnerFailed.make({ reason: "index-failed" });
+  }
+};
+
+const handlers = NativeOwnerRpcs.toLayer(
+  Effect.gen(function* () {
+    // A failed setup is kept and reported by Open, so the host learns why instead of an exit.
+    const opened = yield* Effect.exit(owner);
+    return NativeOwnerRpcs.of({
+      Open: () =>
+        opened.pipe(
+          Effect.map((current) => current.ready),
+          Effect.mapError(reported),
+        ),
+      Execute: (command) =>
+        opened.pipe(
+          Effect.flatMap((current) => current.execute(command)),
+          Effect.mapError(reported),
+        ),
+    });
+  }),
 );
+
+const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
+// One command at a time: native calls are synchronous and share the index and reader.
+const server = RpcServer.layer(NativeOwnerRpcs, { concurrency: 1 }).pipe(
+  Layer.provide(handlers),
+  Layer.provide(protocol),
+);
+
+await runNativeEffect(Layer.launch(server));

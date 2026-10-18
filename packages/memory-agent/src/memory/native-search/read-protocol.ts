@@ -1,4 +1,10 @@
 import { Schema } from "effect";
+import { Transferable } from "effect/workers";
+
+/** A vector the worker transport moves by transferring its buffer, not by copying. */
+export const TransferredVector = Transferable.schema(Schema.instanceOf(Float32Array), (values) => [
+  values.buffer,
+]);
 
 // Flat SDK DTOs are not the public MemorySearch policy. Host-prepared term groups preserve
 // UTF-16 classification; no all-candidate seq list exists in this boundary.
@@ -11,7 +17,7 @@ const elapsed = Schema.Finite.check(Schema.makeFilter((value) => value >= 0));
 export const NativeReadInput = Schema.Struct({
   allowedProjects: ids,
   embedder: Schema.String,
-  query: Schema.optional(Schema.instanceOf(Float32Array)),
+  query: Schema.optional(TransferredVector),
   trigramTerms: ids,
   shortTerms: ids,
   morphTerms: ids,

@@ -1,9 +1,8 @@
-import { NodePath } from "@effect/platform-node";
+import { NodePath, NodeWorker } from "@effect/platform-node";
 import { Array as EffectArray, Function as EffectFunction } from "effect";
 import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Worker } from "node:worker_threads";
-import type { EventEmitter } from "node:events";
 import {
   Path,
   DateTime,
@@ -11,26 +10,32 @@ import {
   Context,
   Data,
   Deferred,
-  HashMap,
-  Ref,
   Effect,
+  Exit,
   Layer,
   Option,
   Schema,
+  Scope,
+  ScopedRef,
   Semaphore,
 } from "effect";
+import { RpcClient, type RpcClientError } from "effect/rpc";
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
-import { ChunkSpan, chunkPolicy } from "./chunks.ts";
+import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
+import {
+  type EmbeddingDevice,
+  EmbeddingRpcs,
+  type EmbeddingWorkerData,
+  EmbeddingWorkerFailed,
+} from "./embedding-rpc.ts";
 
 export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
   readonly cause: unknown;
 }> {}
 
-/** Where the model runs. */
-export const EmbeddingDevice = Schema.Literals(["cpu", "webgpu"]);
-export type EmbeddingDevice = typeof EmbeddingDevice.Type;
+export { EmbeddingDevice } from "./embedding-rpc.ts";
 
 /**
  * How the local model runs; chosen when the app starts.
@@ -145,36 +150,6 @@ function planBatchesBody(
   return batches;
 }
 
-/** Replies from `embed-worker.ts`. */
-const Reply = Schema.Union([
-  Schema.Struct({
-    id: Schema.Finite,
-    kind: Schema.Literal("chunks"),
-    spans: Schema.Array(Schema.Array(ChunkSpan)),
-  }),
-  Schema.Struct({
-    id: Schema.Finite,
-    kind: Schema.Literal("counts"),
-    counts: Schema.Array(Schema.Finite),
-  }),
-  Schema.Struct({
-    id: Schema.Finite,
-    kind: Schema.Literal("rows"),
-    rows: Schema.instanceOf(Float32Array),
-  }),
-  Schema.Struct({
-    id: Schema.Finite,
-    kind: Schema.Literal("failed"),
-    /** `load`: the model never loaded, so the next request starts a new worker to try again. */
-    stage: Schema.Literals(["load", "run"]),
-    reason: Schema.String,
-  }),
-  /** Sent unasked once the model runs, with the device it runs on. */
-  Schema.Struct({ id: Schema.Finite, kind: Schema.Literal("loaded"), device: EmbeddingDevice }),
-]);
-type Reply = typeof Reply.Type;
-const decodeReply = Schema.decodeUnknownOption(Reply);
-
 /** Which file to load, and the devices to try it on in order. */
 interface ModelSetup {
   readonly variant: ModelVariant;
@@ -213,200 +188,152 @@ function embeddingModeForBody(settings: Settings, memoryBytes: number = totalmem
 }
 
 /**
+ * One running model worker as the host uses it. Production sessions speak Effect RPC to
+ * `embed-worker.ts`; lifecycle tests supply a controlled one.
+ */
+export interface ModelSession {
+  readonly device: EmbeddingDevice;
+  readonly countTokens: (
+    texts: readonly string[],
+  ) => Effect.Effect<readonly number[], EmbeddingWorkerFailed>;
+  readonly embed: (texts: readonly string[]) => Effect.Effect<Float32Array, EmbeddingWorkerFailed>;
+  readonly chunk: (
+    texts: readonly string[],
+  ) => Effect.Effect<readonly (readonly ChunkSpan[])[], EmbeddingWorkerFailed>;
+  /** Stops in-flight native work now: ONNX inference cannot be interrupted in place. */
+  readonly terminate: Effect.Effect<void>;
+  /** Keeps the process alive while `work` runs; an idle worker must not. */
+  readonly busy: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+}
+
+/** The worker thread behind a session. Transport failures mean the worker is gone. */
+const rpcSession = (data: EmbeddingWorkerData) =>
+  Effect.gen(function* () {
+    const spawned = yield* Deferred.make<Worker>();
+    const workers = NodeWorker.layer(() => {
+      const worker = new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(data));
+      worker.unref();
+      Deferred.doneUnsafe(spawned, Exit.succeed(worker));
+      return worker;
+    });
+    const protocol = yield* Layer.build(
+      RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
+    );
+    const client = yield* RpcClient.make(EmbeddingRpcs).pipe(Effect.provide(protocol));
+    const lost = (cause: unknown) =>
+      EmbeddingWorkerFailed.make({ stage: "lost", reason: String(cause) });
+    const call = <A>(
+      effect: Effect.Effect<A, EmbeddingWorkerFailed | RpcClientError.RpcClientError>,
+    ) => effect.pipe(Effect.catchTag("RpcClientError", (error) => Effect.fail(lost(error))));
+    const device = yield* call(client.Load());
+    const worker = yield* Deferred.await(spawned);
+    return {
+      device,
+      countTokens: (texts) => call(client.CountTokens({ texts })),
+      embed: (texts) => call(client.Embed({ texts })),
+      chunk: (texts) => call(client.Chunk({ texts })),
+      terminate: Effect.promise(() => worker.terminate()).pipe(Effect.asVoid),
+      busy: (work) =>
+        Effect.acquireUseRelease(
+          Effect.sync(() => worker.ref()),
+          () => work,
+          () => Effect.sync(() => worker.unref()),
+        ),
+    } satisfies ModelSession;
+  }).pipe(
+    Effect.catchTag("WorkerError", (error) =>
+      Effect.fail(EmbeddingWorkerFailed.make({ stage: "lost", reason: String(error) })),
+    ),
+  );
+
+/**
  * The model in a worker thread, started on the first request and kept. onnxruntime-node runs a
  * session synchronously, so on the main thread a backlog of batches held up every request the
  * server answered meanwhile: a start with ~1,100 nodes to embed kept settings waiting for over a
  * minute. Releasing the model when idle was measured and dropped: the freed memory mostly stays with
  * the allocator (quint8: ~40 MB back) and each reload grows the footprint a little.
+ *
+ * The session lives in a `ScopedRef` owned by the caller's Scope: replacing it (after a lost
+ * worker or an interrupted request) and closing the Scope both stop the worker and await its exit.
  */
-/** Minimal native transport contract; lifecycle tests supply a controlled worker. */
-interface EmbeddingWorker {
-  on: EventEmitter["on"];
-  ref(): void;
-  unref(): void;
-  postMessage(message: {
-    readonly id: number;
-    readonly kind: "count" | "embed" | "chunks";
-    readonly texts: readonly string[];
-  }): void;
-  terminate(): Promise<number>;
-}
-
-export function modelWorker(
+export const modelWorker = Effect.fnUntraced(function* (
   cacheDir: string,
   setup: ModelSetup,
-  createWorker: (data: {
-    readonly cacheDir: string;
-    readonly modelId: string;
-    readonly modelFileName: string;
-    readonly maxTokens: number;
-    readonly devices: readonly EmbeddingDevice[];
-  }) => EmbeddingWorker = (data) =>
-    new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(data)),
+  connect: (
+    data: EmbeddingWorkerData,
+  ) => Effect.Effect<ModelSession, EmbeddingWorkerFailed, Scope.Scope> = rpcSession,
 ) {
-  const workerData = {
+  const data: EmbeddingWorkerData = {
     cacheDir,
     modelId: localModel.id,
     modelFileName: variantFile[setup.variant],
     maxTokens: localModel.maxTokens,
     devices: setup.devices,
   };
-  let worker: EmbeddingWorker | null = null;
-  let device: EmbeddingDevice | null = null;
-  let nextId = 1;
+  const session = yield* ScopedRef.make(() => Option.none<ModelSession>());
   // Bound physical worker work, not an entire document embedding. Queries can acquire a
   // permit between backfill batches; a cancelled waiter never starts a worker request.
-  const oneRequest = Semaphore.makeUnsafe(1);
-  const pending = Ref.makeUnsafe(HashMap.empty<number, Deferred.Deferred<Reply>>());
-
-  const stop = (reason: string) => {
-    const current = worker;
-    worker = null;
-    device = null;
-    const waiting = Effect.runSync(Ref.getAndSet(pending, HashMap.empty()));
-    for (const [id, done] of waiting)
-      Deferred.doneUnsafe(done, Effect.succeed({ id, kind: "failed", stage: "run", reason }));
-    return current?.terminate();
-  };
-
-  const start = () => {
-    const created = createWorker(workerData);
-    const lost = () => {
-      if (worker === created) void stop("embedding worker stopped");
-    };
-    created.on("message", (message) => {
-      const decoded = decodeReply(message);
-      if (Option.isNone(decoded)) return lost();
-      const reply = decoded.value;
-      switch (reply.kind) {
-        case "loaded":
-          if (worker === created) device = reply.device;
-          return;
-        case "counts":
-        case "chunks":
-        case "rows":
-        case "failed":
-          const done = Option.getOrUndefined(
-            HashMap.get(Effect.runSync(Ref.get(pending)), reply.id),
-          );
-          Effect.runSync(Ref.update(pending, HashMap.remove(reply.id)));
-          // A model that failed to load is tried again by the next request, in a new worker.
-          if (reply.kind === "failed" && reply.stage === "load") lost();
-          // An idle worker must not keep the process alive; one with requests in flight must.
-          else if (HashMap.isEmpty(Effect.runSync(Ref.get(pending)))) created.unref();
-          if (done !== undefined) Deferred.doneUnsafe(done, Effect.succeed(reply));
-      }
-    });
-    created.on("error", lost);
-    created.on("exit", lost);
-    created.unref();
-    return created;
-  };
-
-  const request = Effect.fnUntraced(function* (
-    kind: "count" | "embed" | "chunks",
-    texts: readonly string[],
-  ) {
-    const current = yield* Effect.try({
-      try: () => (worker ??= start()),
-      catch: (cause) => new EmbeddingError({ cause }),
-    });
-    const id = nextId++;
-    const done = yield* Deferred.make<Reply>();
-    return yield* Ref.update(pending, HashMap.set(id, done)).pipe(
-      Effect.andThen(
-        Effect.try({
-          try: () => {
-            current.ref();
-            current.postMessage({ id, kind, texts });
-          },
-          catch: (cause) => new EmbeddingError({ cause }),
-        }),
-      ),
-      Effect.andThen(Deferred.await(done)),
-      // ONNX inference cannot be interrupted in-place. Only one request owns this worker,
-      // so terminate it and await exit before handing the permit to another agent.
-      Effect.onInterrupt(() =>
-        Effect.tryPromise({
-          try: () =>
-            Promise.resolve(worker === current ? stop("embedding request interrupted") : undefined),
-          catch: (cause) => new EmbeddingError({ cause }),
-        }).pipe(Effect.asVoid),
-      ),
-      Effect.ensuring(
-        Ref.updateAndGet(pending, HashMap.remove(id)).pipe(
-          Effect.map((remaining) => {
-            if (HashMap.isEmpty(remaining)) current.unref();
-          }),
+  const oneRequest = yield* Semaphore.make(1);
+  const discard = ScopedRef.set(session, Effect.succeed(Option.none<ModelSession>()));
+  const live = Effect.flatMap(
+    ScopedRef.get(session),
+    Option.match({
+      onSome: Effect.succeed,
+      onNone: () =>
+        ScopedRef.set(session, connect(data).pipe(Effect.map(Option.some))).pipe(
+          Effect.andThen(ScopedRef.get(session)),
+          // `set` just stored the session it acquired.
+          Effect.map(Option.getOrThrow),
         ),
+    }),
+  );
+  /** A worker that failed to load or was lost is replaced by the next request's new one. */
+  const keepsSession = (error: EmbeddingWorkerFailed) => {
+    switch (error.stage) {
+      case "run":
+        return true;
+      case "load":
+      case "lost":
+        return false;
+    }
+  };
+  const request = <A>(call: (current: ModelSession) => Effect.Effect<A, EmbeddingWorkerFailed>) =>
+    Effect.flatMap(live, (current) =>
+      current.busy(call(current)).pipe(
+        // Only one request owns this worker: terminate it and await its exit before handing
+        // the permit to another agent.
+        Effect.onInterrupt(() => current.terminate.pipe(Effect.andThen(discard))),
+        Effect.tapError((error) => (keepsSession(error) ? Effect.void : discard)),
       ),
+    ).pipe(
+      Effect.mapError((cause) => new EmbeddingError({ cause })),
+      oneRequest.withPermits(1),
     );
-  }, oneRequest.withPermits(1));
-
-  const tokenCounts = Effect.fnUntraced(function* (texts: readonly string[]) {
-    const reply = yield* request("count", texts);
-    switch (reply.kind) {
-      case "counts":
-        return reply.counts;
-      case "failed":
-        return yield* new EmbeddingError({ cause: reply.reason });
-      case "rows":
-      case "chunks":
-      case "loaded":
-        return yield* new EmbeddingError({
-          cause: "the embedding worker answered a count with something else",
-        });
-    }
-  });
-
-  const embedBatch = Effect.fnUntraced(function* (texts: readonly string[]) {
-    const reply = yield* request("embed", texts);
-    switch (reply.kind) {
-      case "rows":
-        return reply.rows;
-      case "failed":
-        return yield* new EmbeddingError({ cause: reply.reason });
-      case "counts":
-      case "chunks":
-      case "loaded":
-        return yield* new EmbeddingError({
-          cause: "the embedding worker answered an embedding with something else",
-        });
-    }
-  });
 
   return {
-    device: () => device,
-    stop,
-    chunks: Effect.fnUntraced(function* (texts: readonly string[]) {
-      const reply = yield* request("chunks", texts);
-      switch (reply.kind) {
-        case "chunks":
-          return reply.spans;
-        case "failed":
-          return yield* new EmbeddingError({ cause: reply.reason });
-        case "counts":
-        case "rows":
-        case "loaded":
-          return yield* new EmbeddingError({
-            cause: "the embedding worker answered a chunking with something else",
-          });
-      }
-    }),
+    device: (): EmbeddingDevice | null =>
+      Option.getOrNull(Option.map(ScopedRef.getUnsafe(session), (current) => current.device)),
+    chunks: (texts: readonly string[]) => request((current) => current.chunk(texts)),
     embed: Effect.fnUntraced(function* (texts: readonly string[]) {
+      if (texts.length === 0) return [];
+      const counts = yield* request((current) => current.countTokens(texts));
+      // One worker serves one request at a time: batches run one after another.
+      const embedded = yield* Effect.forEach(planBatches(counts), (batch) =>
+        request((current) => current.embed(batch.map((index) => texts[index]!))).pipe(
+          Effect.map((rows) =>
+            batch.map((index, position) => {
+              const start = position * localModel.dimensions;
+              return [index, normalize(rows.slice(start, start + localModel.dimensions))] as const;
+            }),
+          ),
+        ),
+      );
       const vectors: Float32Array[] = [];
-      if (texts.length === 0) return vectors;
-      for (const batch of planBatches(yield* tokenCounts(texts))) {
-        const rows = yield* embedBatch(batch.map((index) => texts[index]!));
-        batch.forEach((index, position) => {
-          const start = position * localModel.dimensions;
-          vectors[index] = normalize(rows.slice(start, start + localModel.dimensions));
-        });
-      }
+      for (const [index, vector] of embedded.flat()) vectors[index] = vector;
       return vectors;
     }),
   };
-}
+});
 
 /** What a local embedder is for: the app (run as settings say) or evaluating a model file. */
 type LocalPurpose =
@@ -417,11 +344,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
   Effect.gen(function* () {
     const storage = yield* StorageRoot;
     const paths = yield* Path.Path;
-    const model = modelWorker(paths.join(storage.path, "models"), setup);
-    yield* Effect.addFinalizer(() =>
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Effect.promise(() => Promise.resolve(model.stop("embedder stopped"))).pipe(Effect.asVoid),
-    );
+    const model = yield* modelWorker(paths.join(storage.path, "models"), setup);
     return {
       identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}/chunks-v${chunkPolicy.version}-${chunkPolicy.tokens}-${chunkPolicy.overlap}`,
       dimensions: localModel.dimensions,
@@ -448,17 +371,10 @@ export const checkGpu = (storageRoot: string) =>
       const effectClock = yield* Clock.Clock;
       const paths = yield* Path.Path;
 
-      const model = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          modelWorker(paths.join(storageRoot, "models"), {
-            variant: "fp32",
-            devices: ["webgpu"],
-          }),
-        ),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        (model) =>
-          Effect.promise(() => Promise.resolve(model.stop("GPU check done"))).pipe(Effect.asVoid),
-      );
+      const model = yield* modelWorker(paths.join(storageRoot, "models"), {
+        variant: "fp32",
+        devices: ["webgpu"],
+      });
       return yield* model.embed(["준비"]).pipe(
         Effect.map((): GpuCheck =>
           model.device() === "webgpu"

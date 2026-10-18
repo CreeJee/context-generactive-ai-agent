@@ -2,10 +2,11 @@ import { Result, Function as EffectFunction } from "effect";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { DatabaseSync } from "node:sqlite";
-import { Context, Data, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Data, Effect, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
 import { Migrator, SqlClient } from "effect/sql";
 import { goalHistoryMigration, migrations } from "./migrations.ts";
 import { migrationClient } from "./migration-client.ts";
+import { sqlClientOver } from "./sql-client.ts";
 
 export class DatabaseOpenError extends Data.TaggedError("DatabaseOpenError")<{
   readonly file: string;
@@ -14,9 +15,23 @@ export class DatabaseOpenError extends Data.TaggedError("DatabaseOpenError")<{
 
 export interface DatabaseApi {
   readonly sqlite: DatabaseSync;
-  /** Runs synchronous SQL work in one transaction; nested calls join the outer one. */
+  /**
+   * Runs synchronous SQL work in one transaction; nested calls join the outer one. Legacy: new
+   * code uses `SqlClient.withTransaction`, which tracks nesting per fibre instead of by a depth
+   * every fibre shares.
+   */
   readonly atomic: <T>(work: () => T) => T;
 }
+
+/**
+ * A synchronous `atomic` found the connection inside another fibre's `SqlClient` transaction.
+ * Joining it would commit or roll back this work with that fibre's, so it is a defect: a
+ * `withTransaction` body must not yield to other fibres before it ends.
+ */
+export class TransactionInterleaving extends Schema.TaggedError<
+  TransactionInterleaving,
+  { readonly brand: unique symbol }
+>()("TransactionInterleaving", {}) {}
 
 const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 
@@ -180,28 +195,37 @@ const make = Effect.fn("Database.make")(function* (
     }),
     (sqlite) => Effect.sync(() => sqlite.close()),
   ).pipe(
-    Effect.map((sqlite): DatabaseApi => {
-      let depth = 0;
-      return {
-        sqlite,
-        atomic(work) {
-          const outermost = depth === 0;
-          const savepoint = `atomic_${depth}`;
-          sqlite.exec(outermost ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
-          depth += 1;
-          try {
-            const result = work();
-            sqlite.exec(outermost ? "COMMIT" : `RELEASE ${savepoint}`);
-            return result;
-          } catch (error) {
-            sqlite.exec(outermost ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
-            throw error;
-          } finally {
-            depth -= 1;
-          }
-        },
-      };
-    }),
+    Effect.flatMap((sqlite) =>
+      Effect.gen(function* () {
+        // One lease for the connection: SqlClient statements and transactions take it, and
+        // legacy `atomic` refuses to run inside a transaction that holds it.
+        const sql = yield* sqlClientOver(sqlite, yield* Semaphore.make(1));
+        let depth = 0;
+        const database: DatabaseApi = {
+          sqlite,
+          atomic(work) {
+            const outermost = depth === 0;
+            if (outermost && sqlite.isTransaction) throw TransactionInterleaving.make({});
+            const savepoint = `atomic_${depth}`;
+            sqlite.exec(outermost ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
+            depth += 1;
+            try {
+              const result = work();
+              sqlite.exec(outermost ? "COMMIT" : `RELEASE ${savepoint}`);
+              return result;
+            } catch (error) {
+              sqlite.exec(
+                outermost ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`,
+              );
+              throw error;
+            } finally {
+              depth -= 1;
+            }
+          },
+        };
+        return Context.make(Database, database).pipe(Context.add(SqlClient.SqlClient, sql));
+      }),
+    ),
   );
 });
 
@@ -211,7 +235,7 @@ export class Database extends Context.Service<Database, DatabaseApi>()("memory-a
     file: string,
     open: (file: string) => DatabaseSync = (file) => new DatabaseSync(file),
   ) =>
-    Layer.effect(Database, make(file, open)).pipe(
+    Layer.effectContext(make(file, open)).pipe(
       Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
     );
 }

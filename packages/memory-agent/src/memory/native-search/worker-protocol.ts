@@ -1,10 +1,12 @@
 import { Schema } from "effect";
-import { NativeReadInput, NativeReadOutput } from "./read-protocol.ts";
+import { Rpc, RpcGroup } from "effect/rpc";
+import { NativeReadInput, NativeReadOutput, TransferredVector } from "./read-protocol.ts";
 
 // Only the owner transport uses these low-level commands. Public high-level search never
 // sends a candidate allowlist; its separate request contract is in contracts.ts.
 const correlation = { requestId: Schema.String, epoch: Schema.String };
-const vector = Schema.instanceOf(Float32Array);
+// Host commands carry owned copies, so the worker receives their buffers instead of a clone.
+const vector = TransferredVector;
 const ids = Schema.Array(Schema.String);
 
 export const OwnerSetup = Schema.Struct({
@@ -52,18 +54,10 @@ export const OwnerCommand = Schema.Union([
     /** Set only by host dispatch; user values are never adopted. */
     controlToken: Schema.optional(Schema.String),
   }),
-  Schema.Struct({ kind: Schema.Literal("close"), ...correlation }),
 ]);
 export type OwnerCommand = typeof OwnerCommand.Type;
 
 export const OwnerReply = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("ready"),
-    epoch: Schema.String,
-    threadId: Schema.Int,
-    needsReset: Schema.optional(Schema.Boolean),
-    size: Schema.Int,
-  }),
   Schema.Struct({ kind: Schema.Literal("ack"), ...correlation, size: Schema.Int }),
   Schema.Struct({
     kind: Schema.Literal("removed"),
@@ -103,20 +97,6 @@ export const OwnerReply = Schema.Union([
     result: NativeReadOutput,
     workerCpuUs: Schema.optional(Schema.Finite),
   }),
-  Schema.Struct({ kind: Schema.Literal("closed"), ...correlation }),
-  Schema.Struct({
-    kind: Schema.Literal("failed"),
-    ...correlation,
-    code: Schema.Literals([
-      "invalid-input",
-      "lease-unavailable",
-      "read-failed",
-      "native-incompatible",
-      "index-failed",
-      "epoch-mismatch",
-      "closed",
-    ]),
-  }),
 ]);
 export type OwnerReply = typeof OwnerReply.Type;
 
@@ -151,3 +131,20 @@ export class NativeOwnerFailed extends Schema.TaggedError<NativeOwnerFailed>()(
     }
   }
 }
+
+/** What a started owner reports before it takes commands. */
+export const OwnerReady = Schema.Struct({
+  threadId: Schema.Int,
+  size: Schema.Int,
+  needsReset: Schema.Boolean,
+});
+export type OwnerReady = typeof OwnerReady.Type;
+
+/** Waits for the owner's setup; its failure is the reason the owner could not start. */
+export const Open = Rpc.make("Open", { success: OwnerReady, error: NativeOwnerFailed });
+export const Execute = Rpc.make("Execute", {
+  payload: OwnerCommand,
+  success: OwnerReply,
+  error: NativeOwnerFailed,
+});
+export const NativeOwnerRpcs = RpcGroup.make(Open, Execute);
