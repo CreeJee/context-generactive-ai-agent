@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
 import { strict as assert } from "node:assert";
-import { pathToFileURL } from "node:url";
 import { chat } from "@tanstack/ai";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
@@ -88,14 +87,13 @@ await Effect.runPromise(
           ),
         );
         sql = services.sql;
-        for (const [runId, path, prefix] of [
+        for (const [runId, file, prefix] of [
           ["a-first", a, ""],
           ["b", b, "copied-B:"],
           ["a-next", a, ""],
         ] as const) {
-          const artifact: typeof NativeArtifact = yield* sdkCall(
-            () => import(pathToFileURL(path).href),
-          );
+          const url = yield* path.toFileUrl(file);
+          const artifact: typeof NativeArtifact = yield* sdkCall(() => import(url.href));
           assert.deepEqual(
             Object.keys(artifact).sort(),
             [

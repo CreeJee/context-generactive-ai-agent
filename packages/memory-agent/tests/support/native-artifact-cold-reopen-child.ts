@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
 import { strict as assert } from "node:assert";
-import { pathToFileURL } from "node:url";
 import { chat } from "@tanstack/ai";
 import { Config, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
@@ -143,9 +142,8 @@ await Effect.runPromise(
           verifiedOld = true;
         }
         // Explicit NEW SDK turn, never replay/resume the first run or claim Goal admission.
-        const artifact: typeof NativeArtifact = yield* sdkCall(
-          () => import(pathToFileURL(artifactPath).href),
-        );
+        const artifactUrl = yield* path.toFileUrl(artifactPath);
+        const artifact: typeof NativeArtifact = yield* sdkCall(() => import(artifactUrl.href));
         const user = yield* services.nodes.append({ ...binding, kind: "user", text: phase });
         const recording = yield* sdkCall(() =>
           runtime.runPromise(

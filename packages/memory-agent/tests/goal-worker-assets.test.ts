@@ -1,5 +1,4 @@
 // Native workers exercise immutable pins; Effect services own filesystem corruption fixtures.
-import { fileURLToPath } from "node:url";
 import { NodeWorker, NodeServices } from "@effect/platform-node";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { Cause, Effect, Layer, Schema, Stream, FileSystem, Path } from "effect";
@@ -128,6 +127,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goal-assets-hash-" });
         const registry = yield* makeGoalWorkerAssetsRegistry({ temporaryDirectory: directory });
         try {
@@ -139,8 +139,8 @@ layer(NodeServices.layer)((it) => {
           const secondGoal = yield* registry.resolve("goal-b");
           expect(first.sourceGeneration).toMatch(/^[a-f0-9]{64}$/);
           expect(secondGoal.sourceGeneration).not.toBe(first.sourceGeneration);
-          expect(yield* fs.readFile(fileURLToPath(secondGoal.workerUrl))).toEqual(
-            yield* fs.readFile(fileURLToPath(first.workerUrl)),
+          expect(yield* fs.readFile(yield* path.fromFileUrl(secondGoal.workerUrl))).toEqual(
+            yield* fs.readFile(yield* path.fromFileUrl(first.workerUrl)),
           );
           const lease = yield* registry.use(first);
           expect(String((yield* Effect.flip(registry.dispose())).cause)).toContain("still active");
@@ -195,7 +195,7 @@ layer(NodeServices.layer)((it) => {
         });
         try {
           const asset = yield* original.resolve("g");
-          const worker = fileURLToPath(asset.workerUrl);
+          const worker = yield* path.fromFileUrl(asset.workerUrl);
           const destination = path.dirname(worker);
           yield* original.dispose();
           if (corruption === "bytes") yield* fs.writeFileString(worker, "tampered");
