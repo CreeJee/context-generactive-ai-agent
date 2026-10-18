@@ -1865,6 +1865,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ? nativeGoal.createMemoryTools(
               {
                 ...nativeMemoryOwner,
+                // The artifact shares the host `effect` (never bundled), so the run's tracer applies.
+                caller: yield* Effect.context<never>(),
               },
               projectId,
               { projectId, sessionId, runId, userNodeId },

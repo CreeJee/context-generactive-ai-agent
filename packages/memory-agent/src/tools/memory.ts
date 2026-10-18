@@ -101,7 +101,7 @@ export interface MemoryToolEnvironment {
   readonly knowledge: KnowledgePromotions["Service"];
   /**
    * Fiber context the tool effects run on, so their spans reach the app tracer and nest under the
-   * caller's span. Callers without an app runtime (BTW, the native owner) leave it out.
+   * caller's span. Callers without a fiber of their own (tests) leave it out.
    */
   readonly caller?: Context.Context<never>;
 }
