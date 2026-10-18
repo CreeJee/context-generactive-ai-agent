@@ -4,6 +4,7 @@ import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceReadFailed, WorkTraceStore } from "../src/work-trace/store.ts";
+import { sqlRun, sqlExec } from "./support/sql.ts";
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
@@ -15,32 +16,29 @@ const run = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>
   return yield* Effect.provideContext(effect, services);
 });
 
-const seed = (db: Database["Service"]) => {
+const seed = Effect.fnUntraced(function* () {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
-  db.sqlite
-    .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
-    .run(iso);
-  db.sqlite
-    .prepare(
-      "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
-    )
-    .run(iso);
-  db.sqlite
-    .prepare(
-      `INSERT INTO subagents
+  yield* sqlRun(
+    "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)",
+    iso,
+  );
+  yield* sqlRun(
+    "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
+    iso,
+  );
+  yield* sqlRun(
+    `INSERT INTO subagents
        (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
        VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`,
-    )
-    .run();
-};
+  );
+});
 
 describe("Work Trace durable stream source", () => {
   it.effect("replays visible events by durable cursor and redacts payloads", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
@@ -119,9 +117,8 @@ describe("Work Trace durable stream source", () => {
   it.effect("wakes a live tail on an appended event and emits an idle heartbeat", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
@@ -166,7 +163,7 @@ describe("Work Trace durable stream source", () => {
   it.effect("interrupts a waiting tail without converting cancellation to a heartbeat", () =>
     run(
       Effect.gen(function* () {
-        seed(yield* Database);
+        yield* seed();
         const trace = yield* WorkTraceStore;
         const waiting = yield* trace
           .waitForChangeEffect({
@@ -186,7 +183,7 @@ describe("Work Trace durable stream source", () => {
   it.live("preserves the native aborted-wait contract", () =>
     run(
       Effect.gen(function* () {
-        seed(yield* Database);
+        yield* seed();
         const trace = yield* WorkTraceStore;
         const signalScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
         const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, signalScope);
@@ -200,9 +197,8 @@ describe("Work Trace durable stream source", () => {
   it.effect("reports a durable cursor read failure in the typed error channel", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
-        seed(db);
-        db.sqlite.exec("DROP TABLE run_events");
+        yield* seed();
+        yield* sqlExec("DROP TABLE run_events");
         const trace = yield* WorkTraceStore;
         const failure = yield* trace
           .waitForChangeEffect({

@@ -1,6 +1,7 @@
 // Finite production-service fixture; never opens the application storage root.
 import { NodeFileSystem, NodePath, NodeRuntime } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { createServer } from "node:http";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { threadId, Worker } from "node:worker_threads";
@@ -140,7 +141,7 @@ const morph = Layer.succeed(MorphAnalyzer, {
 });
 
 const measurements = Effect.gen(function* () {
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const vectors = yield* VectorIndex;
   console.log(
     JSON.stringify({
@@ -153,51 +154,38 @@ const measurements = Effect.gen(function* () {
       productionBackendStartup: backend === "native",
     }),
   );
-  yield* Effect.try({
-    try: () =>
-      atomic(() => {
-        const project = sqlite.prepare(
-          "INSERT INTO projects(id, root, name, created_at) VALUES (?, ?, ?, ?)",
-        );
-        const session = sqlite.prepare(
-          "INSERT INTO sessions(id, project_id, created_at) VALUES (?, ?, ?)",
-        );
-        const stamp = "2026-01-01T00:00:00.000Z";
-        for (const id of ["one", "two"]) {
-          project.run(id, `/fixture/${id}`, id, stamp);
-          session.run(id, id, stamp);
-        }
-        const node = sqlite.prepare(
-          "INSERT INTO nodes(seq,id,project_id,session_id,kind,text,created_at) VALUES (?,?,?,?, 'user',?,?)",
-        );
-        const terms = sqlite.prepare("INSERT INTO nodes_morph(rowid,terms) VALUES (?,?)");
-        const edge = sqlite.prepare(
-          "INSERT INTO edges(from_id,to_id,kind,origin,weight,created_at) VALUES (?,?,'related','structure',0.8,?)",
-        );
-        for (let seq = 1; seq <= rows; seq++) {
-          const owner = seq % 2 === 0 ? "one" : "two";
-          node.run(seq, `fixture-${seq}`, owner, owner, `${text} ${seq % 100}`, stamp);
-          terms.run(seq, "sqlite storage");
-          if (seq > 2) edge.run(`fixture-${seq}`, `fixture-${seq - 2}`, stamp);
-        }
-      }),
-    catch: (cause) => new BaselineFailed({ stage: "seed", cause }),
-  });
+  const stamp = "2026-01-01T00:00:00.000Z";
+  yield* Effect.gen(function* () {
+    for (const id of ["one", "two"]) {
+      yield* sql`INSERT INTO projects(id, root, name, created_at) VALUES (${id}, ${`/fixture/${id}`}, ${id}, ${stamp})`;
+      yield* sql`INSERT INTO sessions(id, project_id, created_at) VALUES (${id}, ${id}, ${stamp})`;
+    }
+    for (let seq = 1; seq <= rows; seq++) {
+      const owner = seq % 2 === 0 ? "one" : "two";
+      yield* sql`INSERT INTO nodes(seq,id,project_id,session_id,kind,text,created_at)
+        VALUES (${seq}, ${`fixture-${seq}`}, ${owner}, ${owner}, 'user', ${`${text} ${seq % 100}`}, ${stamp})`;
+      yield* sql`INSERT INTO nodes_morph(rowid,terms) VALUES (${seq}, 'sqlite storage')`;
+      if (seq > 2)
+        yield* sql`INSERT INTO edges(from_id,to_id,kind,origin,weight,created_at)
+          VALUES (${`fixture-${seq}`}, ${`fixture-${seq - 2}`}, 'related', 'structure', 0.8, ${stamp})`;
+    }
+  }).pipe(
+    sql.withTransaction,
+    Effect.mapError((cause) => new BaselineFailed({ stage: "seed", cause })),
+  );
   const seqs = Array.from({ length: rows }, (_, index) => index + 1);
   yield* vectors.add(
     seqs,
     seqs.map((seq) => benchmarkVector(`${text} ${seq % 100}`)),
   );
-  yield* Effect.try({
-    try: () =>
-      atomic(() => {
-        const record = sqlite.prepare(
-          "INSERT INTO node_vectors(node_seq,embedder) VALUES (?, 'fake-trigram-384')",
-        );
-        for (const seq of seqs) record.run(seq);
-      }),
-    catch: (cause) => new BaselineFailed({ stage: "vector-records", cause }),
-  });
+  yield* Effect.forEach(
+    seqs,
+    (seq) => sql`INSERT INTO node_vectors(node_seq,embedder) VALUES (${seq}, 'fake-trigram-384')`,
+    { discard: true },
+  ).pipe(
+    sql.withTransaction,
+    Effect.mapError((cause) => new BaselineFailed({ stage: "vector-records", cause })),
+  );
   const search = yield* MemorySearch;
   const histogram = yield* Effect.acquireRelease(
     Effect.sync(() => {

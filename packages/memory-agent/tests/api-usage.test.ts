@@ -3,6 +3,7 @@ import { deepStrictEqual, strictEqual, assertTrue } from "@effect/vitest/utils";
 import { Context, Effect, Layer } from "effect";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { Database } from "../src/db/database.ts";
+import { sqlAll } from "./support/sql.ts";
 
 effectTest.effect(
   "OpenAI-compatible usage includes cache reads and preserves missing counters",
@@ -112,7 +113,6 @@ effectTest.effect(
     Effect.gen(function* () {
       const services = yield* Layer.build(layer);
       const usage = Context.get(services, ApiUsage);
-      const { sqlite } = Context.get(services, Database);
       yield* usage.record({
         rootSessionId: "root",
         purpose: "tool",
@@ -138,7 +138,9 @@ effectTest.effect(
         uncachedInputTokens: null,
         totalInputTokens: null,
       });
-      const columns = sqlite.prepare("SELECT * FROM api_usage_responses ORDER BY id").all();
+      const columns = yield* sqlAll("SELECT * FROM api_usage_responses ORDER BY id").pipe(
+        Effect.provideContext(services),
+      );
       strictEqual(columns.length, 2);
       deepStrictEqual(
         Object.keys(columns[0]).sort(),

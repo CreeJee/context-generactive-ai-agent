@@ -1,5 +1,5 @@
 import { Cause, Effect } from "effect";
-import { Database, Nodes } from "memory-agent";
+import { Nodes } from "memory-agent";
 import { expect } from "vite-plus/test";
 import { randomUUID } from "../../../../packages/memory-agent/src/runtime/synchronous-crypto.ts";
 import { selectTestModel } from "../../../../packages/memory-agent/tests/support/provider.ts";
@@ -9,6 +9,7 @@ import {
   type AgentServices,
 } from "../../../../packages/memory-agent/tests/support/test-env.ts";
 import { makeBtwHandlers } from "../../app/.server/btw-handlers";
+import { sqlGet } from "../../../../packages/memory-agent/tests/support/sql.ts";
 
 const sdk = <A>(operation: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -49,7 +50,6 @@ testAgent({
       const routes = makeBtwHandlers({ runPromise });
       const call = (route: () => Promise<Response>) => sdk(route);
       const nodes = yield* Nodes;
-      const { sqlite } = yield* Database;
       const session = env.session.id;
       const mainNode = (text: string) =>
         nodes.append({ projectId: env.project.id, sessionId: session, kind: "user", text });
@@ -120,9 +120,9 @@ testAgent({
         );
       const deleted = yield* remove();
       expect(yield* sdk(() => deleted.json())).toEqual({ deleted: true, filesPending: false });
-      expect(
-        sqlite.prepare("SELECT count(*) AS n FROM btw_threads WHERE id = ?").get(thread),
-      ).toEqual({ n: 0 });
+      expect(yield* sqlGet("SELECT count(*) AS n FROM btw_threads WHERE id = ?", thread)).toEqual({
+        n: 0,
+      });
       expect((yield* remove()).status).toBe(404);
       expect((yield* ask("after delete")).status).toBe(404);
     }),

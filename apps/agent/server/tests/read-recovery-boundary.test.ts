@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { Database, SessionLeases } from "memory-agent";
+import { SessionLeases } from "memory-agent";
 import { expect } from "vite-plus/test";
 import {
   TestEnv,
@@ -7,6 +7,7 @@ import {
   type AgentServices,
 } from "../../../../packages/memory-agent/tests/support/test-env.ts";
 import { makeReadRecoveryHandlers } from "../../app/.server/read-recovery-handlers.ts";
+import { sqlGet } from "../../../../packages/memory-agent/tests/support/sql.ts";
 
 testAgent({ testProvider: {} })("read recovery HTTP boundary", (it) => {
   it.effect(
@@ -15,11 +16,10 @@ testAgent({ testProvider: {} })("read recovery HTTP boundary", (it) => {
       Effect.gen(function* () {
         const context = yield* TestEnv;
         const services = yield* Effect.context<AgentServices>();
-        const db = yield* Database;
         const leases = yield* SessionLeases;
         const handlers = makeReadRecoveryHandlers({ runPromise: Effect.runPromiseWith(services) });
         expect(leases.claim(context.session.id, "owning-page")).toEqual({ claimed: true });
-        const before = db.sqlite.prepare("SELECT total_changes() AS n").get();
+        const before = yield* sqlGet("SELECT total_changes() AS n");
         const params = { session: context.session.id, run: "missing-run" };
         const body = {
           assessmentId: "a".repeat(64),
@@ -68,7 +68,7 @@ testAgent({ testProvider: {} })("read recovery HTTP boundary", (it) => {
           type: "blocked",
           reason: "run_not_found",
         });
-        expect(db.sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(before);
+        expect(yield* sqlGet("SELECT total_changes() AS n")).toEqual(before);
         expect(context.provider!.adapter.invocations).toHaveLength(0);
       }),
   );

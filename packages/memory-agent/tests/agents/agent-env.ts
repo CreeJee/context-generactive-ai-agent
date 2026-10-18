@@ -16,7 +16,7 @@ export const sdk = <A>(operation: () => A | PromiseLike<A>) =>
     catch: (cause) => new Cause.UnknownError(cause),
   });
 
-export const until = <E = never>(condition: WaitCondition<E>, what: string) =>
+export const until = <E = never, R = never>(condition: WaitCondition<E, R>, what: string) =>
   waitUntil(condition, what, 6_000);
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);

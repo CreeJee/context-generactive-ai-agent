@@ -1,4 +1,5 @@
 import { layer } from "@effect/vitest";
+import { SqlClient } from "effect/sql";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { homedir } from "node:os";
 import {
@@ -18,7 +19,6 @@ import { Hex } from "effect/encoding";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../../src/config/storage-root.ts";
 import { GlobalConfig, type Settings } from "../../src/config/global-config.ts";
-import { Database } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import {
   Embedder,
@@ -37,6 +37,7 @@ import { memoryAgentLayer } from "../../src/layers.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { fakeEmbedderLayer, fakeVector } from "../../src/testing/fake-embedder.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlRun, sqlExec, sqlTransaction } from "../support/sql.ts";
 
 const texts = [
   "저장소는 SQLite로 결정했다",
@@ -102,9 +103,7 @@ testAgent()("Indexer + VectorIndex", (it) => {
       const indexer = yield* Indexer;
       expect(yield* indexer.pending).toBe(3);
       // A vector from another model (the other mode) does not make a node indexed for this one.
-      (yield* Database).sqlite
-        .prepare("INSERT INTO node_vectors VALUES (?, 'another-model')")
-        .run(stored[0]!.seq);
+      yield* sqlRun("INSERT INTO node_vectors VALUES (?, 'another-model')", stored[0]!.seq);
       expect(yield* indexer.pending).toBe(3);
       yield* indexer.indexAll();
       expect(yield* indexer.pending).toBe(0);
@@ -184,14 +183,13 @@ testAgent()("an index an older build filled with tool nodes", (it) => {
       const [first, second] = yield* embedder.embed([statement!.text, call!.text]);
       yield* vectors.add([statement!.seq, call!.seq], [first!, second!]);
       yield* vectors.save;
-      const { sqlite } = yield* Database;
-      const mark = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
-      mark.run(statement!.seq, embedder.identity);
-      mark.run(call!.seq, embedder.identity);
+      const mark = "INSERT INTO node_vectors VALUES (?, ?)";
+      yield* sqlRun(mark, statement!.seq, embedder.identity);
+      yield* sqlRun(mark, call!.seq, embedder.identity);
       // The migration that stopped embedding tool nodes, as an upgrade runs it.
       const cleanup = migrations.find((step) => step.includes("DELETE FROM node_vectors"));
       expect(cleanup).toBeDefined();
-      sqlite.exec(cleanup!);
+      yield* sqlExec(cleanup!);
 
       yield* env.reopen;
       // The tool call's vector is dropped on open; the statement keeps its own.
@@ -284,40 +282,31 @@ testAgent({ embedder: lateEmbedder })("late embedding", (it) => {
             "recorded elsewhere during embedding",
           ].map(said("user")),
         );
-        const { sqlite, atomic } = yield* Database;
         const index = yield* VectorIndex;
         /** Use the permitted text-redaction path; the immutable evidence triggers stay on. */
-        const redact = (seq: number, text: string) => {
-          sqlite.prepare("INSERT INTO secret_sweep_permits VALUES (?)").run(seq);
-          sqlite.prepare("UPDATE nodes SET text=? WHERE seq=?").run(text, seq);
-          sqlite.prepare("DELETE FROM secret_sweep_permits WHERE node_seq=?").run(seq);
-        };
+        const redact = Effect.fnUntraced(function* (seq: number, text: string) {
+          yield* sqlRun("INSERT INTO secret_sweep_permits VALUES (?)", seq);
+          yield* sqlRun("UPDATE nodes SET text=? WHERE seq=?", text, seq);
+          yield* sqlRun("DELETE FROM secret_sweep_permits WHERE node_seq=?", seq);
+        });
+        const sql = yield* SqlClient.SqlClient;
         yield* Ref.set(
           lateEdits,
           Effect.gen(function* () {
             // Same index owner, saved before recording: no fake mapping without a vector.
-            yield* index
-              .add([recorded!.seq], [fakeVector(recorded!.text)])
-              .pipe(Effect.mapError((cause) => new EmbeddingError({ cause })));
-            yield* index.save.pipe(Effect.mapError((cause) => new EmbeddingError({ cause })));
-            yield* Effect.try({
-              try: () =>
-                atomic(() => {
-                  redact(changed!.seq, "new current text");
-                  // Referenced evidence keeps its FKs; redaction makes it no longer meaningful.
-                  redact(emptied!.seq, " \t\n");
-                  sqlite
-                    .prepare(
-                      "INSERT INTO memory_graph_suppressed_nodes(node_seq,version,reason) VALUES(?,1,'fixture')",
-                    )
-                    .run(suppressed!.seq);
-                  sqlite
-                    .prepare("INSERT INTO node_vectors VALUES(?,?)")
-                    .run(recorded!.seq, lateIdentity);
-                }),
-              catch: (cause) => new EmbeddingError({ cause }),
-            });
-          }),
+            yield* index.add([recorded!.seq], [fakeVector(recorded!.text)]);
+            yield* index.save;
+            yield* Effect.gen(function* () {
+              yield* redact(changed!.seq, "new current text");
+              // Referenced evidence keeps its FKs; redaction makes it no longer meaningful.
+              yield* redact(emptied!.seq, " \t\n");
+              yield* sqlRun(
+                "INSERT INTO memory_graph_suppressed_nodes(node_seq,version,reason) VALUES(?,1,'fixture')",
+                suppressed!.seq,
+              );
+              yield* sqlRun("INSERT INTO node_vectors VALUES(?,?)", recorded!.seq, lateIdentity);
+            }).pipe(sqlTransaction, Effect.provideService(SqlClient.SqlClient, sql));
+          }).pipe(Effect.mapError((cause) => new EmbeddingError({ cause }))),
         );
         const indexer = yield* Indexer;
         expect(yield* indexer.indexBatch(16)).toBe(1);
@@ -326,11 +315,12 @@ testAgent({ embedder: lateEmbedder })("late embedding", (it) => {
           { seq: stable!.seq },
         ]);
         expect(
-          sqlite
-            .prepare("SELECT node_seq FROM node_vectors WHERE embedder=? ORDER BY node_seq")
-            .all(lateIdentity),
+          yield* sqlAll(
+            "SELECT node_seq FROM node_vectors WHERE embedder=? ORDER BY node_seq",
+            lateIdentity,
+          ),
         ).toEqual([{ node_seq: stable!.seq }, { node_seq: recorded!.seq }]);
-        expect(sqlite.prepare("SELECT node_seq FROM secret_sweep_permits").all()).toEqual([]);
+        expect(yield* sqlAll("SELECT node_seq FROM secret_sweep_permits")).toEqual([]);
         yield* Ref.set(lateEdits, Effect.void);
         expect(yield* indexer.indexBatch(16)).toBe(1);
         expect(index.size()).toBe(3);
@@ -351,7 +341,7 @@ testAgent()("vector publication", (it) => {
       const vectors = yield* VectorIndex;
       const storage = yield* StorageRoot;
       const embedder = yield* Embedder;
-      const { sqlite, atomic } = yield* Database;
+      const sql = yield* SqlClient.SqlClient;
       expect(vectors.backend.kind).toBe("native");
       const {
         stored: [first, second],
@@ -370,17 +360,14 @@ testAgent()("vector publication", (it) => {
           vectors: [fakeVector(first!.text)],
           commit: fs.exists(file).pipe(
             Effect.flatMap((exists) =>
-              Effect.try({
-                try: () => {
-                  expect(exists).toBe(true);
-                  atomic(() =>
-                    sqlite
-                      .prepare("INSERT INTO node_vectors VALUES (?,?)")
-                      .run(first!.seq, embedder.identity),
-                  );
-                },
-                catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
-              }),
+              Effect.sync(() => expect(exists).toBe(true)).pipe(
+                Effect.andThen(
+                  sqlRun("INSERT INTO node_vectors VALUES (?,?)", first!.seq, embedder.identity),
+                ),
+                Effect.provideService(SqlClient.SqlClient, sql),
+                Effect.mapError(() => IndexingError.make({ reason: "mapping-commit-failed" })),
+                Effect.asVoid,
+              ),
             ),
           ),
         }),
@@ -398,7 +385,7 @@ testAgent()("vector publication", (it) => {
       // Saved ahead-of-DB; existing reopen recovery repairs this, not a fake rollback.
       expect(vectors.size()).toBe(2);
       expect(
-        sqlite.prepare("SELECT node_seq FROM node_vectors WHERE embedder=?").all(embedder.identity),
+        yield* sqlAll("SELECT node_seq FROM node_vectors WHERE embedder=?", embedder.identity),
       ).toEqual([{ node_seq: first!.seq }]);
     }),
   );

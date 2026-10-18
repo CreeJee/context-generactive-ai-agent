@@ -1,12 +1,23 @@
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { DatabaseSync } from "node:sqlite";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit, FileSystem, Layer, Path, Schedule, Schema, Scope } from "effect";
+import { SqlClient } from "effect/sql";
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Path,
+  Schedule,
+  Schema,
+  Scope,
+} from "effect";
 import { describe, expect } from "vite-plus/test";
 import { RelayedApprovals, type RelayedRequest } from "../src/approvals/relayed.ts";
 import { Database } from "../src/db/database.ts";
 import { sdkCancellation } from "./support/sdk-cancellation.ts";
+import { sqlGet, sqlRun } from "./support/sql.ts";
 
 const request: RelayedRequest = {
   requester: { kind: "subagent", subagentId: "child", name: null },
@@ -23,23 +34,24 @@ const result = <A>(promise: Promise<A>) =>
   });
 
 const withRelay = <A, E, R>(
-  use: (
-    relay: RelayedApprovals["Service"],
-    database: Database["Service"],
-  ) => Effect.Effect<A, E, R>,
+  use: (relay: RelayedApprovals["Service"]) => Effect.Effect<A, E, R | SqlClient.SqlClient>,
   timeoutMs = 60_000,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const databaseContext = yield* Layer.build(Database.layer(":memory:"));
-      const database = yield* Effect.provideContext(Database, databaseContext);
       const relayContext = yield* Layer.build(
         RelayedApprovals.layerWith({ timeoutMs }).pipe(
           Layer.provide(Layer.succeedContext(databaseContext)),
         ),
       );
       const relay = yield* Effect.provideContext(RelayedApprovals, relayContext);
-      return yield* use(relay, database);
+      return yield* use(relay).pipe(
+        Effect.provideService(
+          SqlClient.SqlClient,
+          Context.get(databaseContext, SqlClient.SqlClient),
+        ),
+      );
     }),
   );
 
@@ -48,14 +60,14 @@ const openRelay = Effect.fnUntraced(function* (file: string) {
   const databaseContext = yield* Layer.build(Database.layer(file)).pipe(
     Effect.provideService(Scope.Scope, scope),
   );
-  const database = yield* Effect.provideContext(Database, databaseContext);
+  const sql = Context.get(databaseContext, SqlClient.SqlClient);
   const relayContext = yield* Layer.build(
     RelayedApprovals.layerWith({ timeoutMs: 60_000 }).pipe(
       Layer.provide(Layer.succeedContext(databaseContext)),
     ),
   ).pipe(Effect.provideService(Scope.Scope, scope));
   const relay = yield* Effect.provideContext(RelayedApprovals, relayContext);
-  return { database, relay, scope };
+  return { sql, relay, scope };
 });
 
 const pending = (relay: RelayedApprovals["Service"], sessionId: string, count: number) =>
@@ -67,14 +79,12 @@ const pending = (relay: RelayedApprovals["Service"], sessionId: string, count: n
     Effect.retry(Schedule.recurs(100)),
   );
 
-const completed = (database: Database["Service"]) =>
+const completed = () =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const row = database.sqlite
-        .prepare(
-          "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
-        )
-        .get();
+      const row = yield* sqlGet(
+        "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
+      );
       if (Schema.is(Schema.Struct({ status: Schema.String }))(row) && row.status === "completed")
         return;
       yield* Effect.yieldNow;
@@ -107,7 +117,7 @@ describe("durable relayed approvals", () => {
   );
 
   it.live("interrupts a cancelled owner's durable wait and rejects a late answer", () =>
-    withRelay((relay, database) =>
+    withRelay((relay) =>
       Effect.gen(function* () {
         const { controller } = yield* sdkCancellation;
         const waiting = relay.ask("s", "run-1", request, controller.signal);
@@ -117,18 +127,14 @@ describe("durable relayed approvals", () => {
         expect(yield* pending(relay, "s", 0)).toEqual([]);
         expect(yield* relay.answer("s", approval!.id, true)).toBe(false);
         expect(
-          database.sqlite
-            .prepare(
-              "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
-            )
-            .get(),
+          yield* sqlGet(
+            "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
+          ),
         ).toEqual({ status: "interrupted" });
         expect(
-          database.sqlite
-            .prepare(
-              "SELECT COUNT(*) AS count FROM owner_workflow_clocks WHERE status = 'scheduled'",
-            )
-            .get(),
+          yield* sqlGet(
+            "SELECT COUNT(*) AS count FROM owner_workflow_clocks WHERE status = 'scheduled'",
+          ),
         ).toEqual({ count: 0 });
       }),
     ),
@@ -152,22 +158,13 @@ describe("durable relayed approvals", () => {
         expect((yield* reopened.relay.pending("s")).map((entry) => entry.id)).toEqual([
           approval!.id,
         ]);
-        expect(
-          reopened.database.sqlite
-            .prepare(
-              "SELECT COUNT(*) AS count FROM owner_workflow_clocks WHERE status = 'scheduled'",
-            )
-            .get(),
-        ).toEqual({ count: 1 });
+        const scheduled = sqlGet(
+          "SELECT COUNT(*) AS count FROM owner_workflow_clocks WHERE status = 'scheduled'",
+        ).pipe(Effect.provideService(SqlClient.SqlClient, reopened.sql));
+        expect(yield* scheduled).toEqual({ count: 1 });
         expect(yield* reopened.relay.answer("s", approval!.id, true)).toBe(true);
         expect(yield* reopened.relay.pending("s")).toEqual([]);
-        expect(
-          reopened.database.sqlite
-            .prepare(
-              "SELECT COUNT(*) AS count FROM owner_workflow_clocks WHERE status = 'scheduled'",
-            )
-            .get(),
-        ).toEqual({ count: 0 });
+        expect(yield* scheduled).toEqual({ count: 0 });
         yield* Scope.close(reopened.scope, Exit.void);
       }),
     ).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer])),
@@ -187,14 +184,19 @@ describe("durable relayed approvals", () => {
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 
-        const sqlite = new DatabaseSync(file);
-        sqlite
-          .prepare("UPDATE owner_workflow_clocks SET due_at = 0 WHERE status = 'scheduled'")
-          .run();
-        sqlite.close();
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const closed = yield* Layer.build(Database.layer(file));
+            yield* sqlRun(
+              "UPDATE owner_workflow_clocks SET due_at = 0 WHERE status = 'scheduled'",
+            ).pipe(
+              Effect.provideService(SqlClient.SqlClient, Context.get(closed, SqlClient.SqlClient)),
+            );
+          }),
+        );
 
         const reopened = yield* openRelay(file);
-        yield* completed(reopened.database);
+        yield* completed().pipe(Effect.provideService(SqlClient.SqlClient, reopened.sql));
         expect(yield* reopened.relay.pending("s")).toEqual([]);
         expect(yield* reopened.relay.answer("s", approval!.id, true)).toBe(false);
         yield* Scope.close(reopened.scope, Exit.void);

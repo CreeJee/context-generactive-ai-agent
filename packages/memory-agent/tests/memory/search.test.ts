@@ -16,7 +16,6 @@ import {
 } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../../src/config/storage-root.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { kiwiModel, MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -30,6 +29,7 @@ import { fakeTerms } from "../../src/testing/fake-morph.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlGet } from "../support/sql.ts";
 
 /**
  * A new project with one session. Search ranks within a project, so each test gets its own and
@@ -205,9 +205,7 @@ testAgent()("MemorySearch.find", (it) => {
       expect(yield* indexer.analyzeAll()).toBe(3);
       expect(yield* indexer.analyzeAll()).toBe(0);
       const stored = yield* Schema.decodeUnknownEffect(Schema.Struct({ terms: Schema.String }))(
-        (yield* Database).sqlite
-          .prepare("SELECT terms FROM nodes_morph WHERE rowid = ?")
-          .get(target.seq),
+        yield* sqlGet("SELECT terms FROM nodes_morph WHERE rowid = ?", target.seq),
       );
       expect(stored.terms).toBe(fakeTerms("결제모듈은 토스페이먼츠로 연동하기로 했다").join(" "));
       // "결제모듈을" never occurs as text, so only the morpheme terms tie the question to it.
@@ -313,13 +311,6 @@ testAgent()("MemorySearch.find", (it) => {
         earlier.decision.id,
       ]);
       expect(refused).toEqual({ error: "not_found", id: hidden.node.id });
-    }),
-  );
-
-  it.effect("Database is shared by every service in one agent", () =>
-    Effect.gen(function* () {
-      const [a, b] = yield* Effect.all([Database, Database]);
-      expect(a.sqlite).toBe(b.sqlite);
     }),
   );
 });

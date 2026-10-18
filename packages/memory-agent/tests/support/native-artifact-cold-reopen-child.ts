@@ -6,7 +6,7 @@ import { Config, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { SecretStore } from "../../src/config/secrets.ts";
-import { Database } from "../../src/db/database.ts";
+import { SqlClient } from "effect/sql";
 import { memoryAgentLayer } from "../../src/layers.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -16,7 +16,7 @@ import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { NodeServices } from "@effect/platform-node";
-import { Cause, Context, FileSystem, Path } from "effect";
+import { Cause, Context, Exit, FileSystem, Path } from "effect";
 const sdkCall = <A>(operation: () => PromiseLike<A>) =>
   Effect.tryPromise({ try: operation, catch: (cause) => new Cause.UnknownError(cause) });
 const encodeJson = EffectFunction.flow(
@@ -89,17 +89,21 @@ await Effect.runPromise(
         thread: Schema.String,
         pid: Schema.Finite,
       });
-      let sqlite: Database["Service"]["sqlite"] | undefined;
+      let sql: SqlClient.SqlClient | undefined;
       let verifiedOld = false;
       try {
         const services = yield* sdkCall(() =>
           runtime.runPromise(
             Effect.gen(function* () {
-              return { nodes: yield* Nodes, db: yield* Database, state: yield* ChatState };
+              return {
+                nodes: yield* Nodes,
+                sql: yield* SqlClient.SqlClient,
+                state: yield* ChatState,
+              };
             }),
           ),
         );
-        sqlite = services.db.sqlite;
+        sql = services.sql;
         const previous =
           phase === "second"
             ? EffectFunction.flow(
@@ -194,8 +198,8 @@ await Effect.runPromise(
         yield* Effect.uninterruptible(sdkCall(() => runtime.dispose()));
       }
       assert.deepEqual(counts, { acquired: 1, released: 1 });
-      assert.ok(sqlite);
-      assert.throws(() => sqlite.prepare("SELECT 1"));
+      assert.ok(sql);
+      assert.ok(Exit.isFailure(yield* Effect.exit(sql`SELECT 1`)));
       yield* fs.writeFileString(
         path.join(base, `${phase}.json`),
         encodeJson({ ...counts, sqliteClosed: true, pid: process.pid, verifiedOld }),

@@ -24,7 +24,6 @@ import {
 } from "../../src/agent/owner-native-artifacts.ts";
 import { OwnerNativeBuild } from "../../src/agent/owner-native-build.ts";
 import { StorageRoot } from "../../src/config/storage-root.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Graph } from "../../src/memory/graph.ts";
@@ -42,6 +41,7 @@ import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { freshSession, goalSession, responder, responseText, rows, send } from "./goal-session.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -406,17 +406,16 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       const bundles = yield* NativeBundles;
       const env = yield* memoryServices;
       const trace = yield* WorkTraceStore;
-      const { sqlite } = yield* Database;
       const owners = embedderOwners.count;
       const sessionId = yield* freshSession();
       const agentId = `${sessionId}-factory-agent`;
-      sqlite
-        .prepare(
-          `INSERT INTO subagents
+      yield* sqlRun(
+        `INSERT INTO subagents
           (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
           VALUES (?, ?, 'factory', 'research', 'interrupted', 'parent', 'task', 1, 1)`,
-        )
-        .run(agentId, sessionId);
+        agentId,
+        sessionId,
+      );
       const user = yield* env.nodes.append({
         projectId: project.id,
         sessionId,
@@ -561,11 +560,8 @@ const Registered = Schema.Struct({
 /** The Goal instance of a fresh session with an active Goal. */
 const goalInstance = Effect.fnUntraced(function* (statement: string) {
   const id = yield* goalSession(statement);
-  const { sqlite } = yield* Database;
   return (yield* Schema.decodeUnknownEffect(GoalInstance)(
-    sqlite
-      .prepare("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?")
-      .get(id),
+    yield* sqlGet("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?", id),
   )).goal_instance_id;
 });
 
@@ -618,14 +614,14 @@ testAgent()("owner native artifacts", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const storage = yield* StorageRoot;
-        const { sqlite } = yield* Database;
         const id = yield* goalInstance("Prebuilt native artifact");
         const { directory, manifest } = yield* prebuiltCopy("prebuilt-runtime");
         yield* acquire(manifest, id);
         const registered = yield* Schema.decodeUnknownEffect(Registered)(
-          sqlite
-            .prepare("SELECT * FROM workflow_goal_native_artifacts WHERE goal_instance_id = ?")
-            .get(id),
+          yield* sqlGet(
+            "SELECT * FROM workflow_goal_native_artifacts WHERE goal_instance_id = ?",
+            id,
+          ),
         );
         const goalDigest = yield* (yield* Crypto.Crypto).digest(
           "SHA-256",
@@ -670,7 +666,6 @@ testAgent()("owner native artifacts", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { sqlite } = yield* Database;
       const { directory, manifest } = yield* prebuiltCopy("prebuilt-failures");
       const id = yield* goalInstance("Reject corrupt build");
       const rejected = Effect.flip(acquire(manifest, id));
@@ -686,9 +681,14 @@ testAgent()("owner native artifacts", (it) => {
       expect(yield* rejected).toMatchObject({ _tag: "NativeRegistrationError" });
       yield* fs.copy(runtimeArtifact("artifact-manifest.json"), manifest);
 
-      sqlite
-        .prepare("INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)")
-        .run(id, "historical-sdk-only", "0".repeat(64), "file:///tmp/old-worker.mjs", "test");
+      yield* sqlRun(
+        "INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)",
+        id,
+        "historical-sdk-only",
+        "0".repeat(64),
+        "file:///tmp/old-worker.mjs",
+        "test",
+      );
       expect(yield* rejected).toMatchObject({
         _tag: "NativeRegistrationError",
         reason: "historical_goal",

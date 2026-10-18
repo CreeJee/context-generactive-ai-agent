@@ -4,13 +4,13 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import { decodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import * as workerPreflight from "../../src/agent/full-loop-preflight.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
-import { Database } from "../../src/db/database.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
   statement: "Run safely in worker",
@@ -78,17 +78,20 @@ const hydrate = Effect.fnUntraced(function* (
   );
 });
 
-const count = (db: Database["Service"], sql: string, ...params: string[]) =>
-  db.sqlite.prepare(`SELECT count(*) AS n FROM ${sql}`).get(...params);
+const count = (sql: string, ...params: string[]) =>
+  sqlGet(`SELECT count(*) AS n FROM ${sql}`, ...params);
 
-const latestRevision = (db: Database["Service"], session: string) =>
-  Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.String }))(
-    db.sqlite
-      .prepare(
+const latestRevision = (session: string) =>
+  Effect.gen(function* () {
+    return yield* Schema.decodeUnknownEffect(
+      Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.String }),
+    )(
+      yield* sqlGet(
         "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(session),
-  );
+        session,
+      ),
+    );
+  });
 
 const Receipt = Schema.Struct({ fingerprint: Schema.String, status: Schema.String });
 const Frame = Schema.fromJsonString(
@@ -98,14 +101,11 @@ const MiddlewareInput = Schema.Struct({ index: Schema.Finite, hook: Schema.Strin
 
 /** Owner ledger receipts of middleware hooks, named by the worker's middleware order. */
 const middlewareHooks = Effect.fnUntraced(function* (
-  db: Database["Service"],
   runId: string,
   middlewareNames: readonly string[],
 ) {
   const receipts = yield* Schema.decodeUnknownEffect(Schema.Array(Receipt))(
-    db.sqlite
-      .prepare("SELECT fingerprint, status FROM owner_rpc_operations WHERE run_id = ?")
-      .all(runId),
+    yield* sqlAll("SELECT fingerprint, status FROM owner_rpc_operations WHERE run_id = ?", runId),
   );
   // The ledger persists canonical {operation,input} in fingerprint, not input_json.
   const hooks = yield* Effect.forEach(
@@ -139,9 +139,8 @@ type Refusal = "unresolved-bound-run" | "foreign-session" | "changed-goal";
  * refuse before persisting anything.
  */
 const refusedRequest = Effect.fnUntraced(function* (refusal: Refusal, session: string) {
-  const db = yield* Database;
   const reserved = `${session}:reserved`;
-  const { id } = yield* latestRevision(db, session);
+  const { id } = yield* latestRevision(session);
   expect((yield* (yield* workflowRunBindings).bind(session, reserved, id)).status).toBe("bound");
   switch (refusal) {
     case "unresolved-bound-run":
@@ -162,7 +161,6 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
   (it) => {
     it.effect.each([false, true])("opt-in AgentChat full worker finalizer failure=%s", (fail) =>
       Effect.gen(function* () {
-        const db = yield* Database;
         const session = yield* withGoal;
         const runId = `${session}:worker`;
         const failingCleanup = vi.fn(() => {
@@ -192,41 +190,42 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
           expect(body).not.toContain("injected owner finalizer failure");
         } else {
           expect(body).not.toContain("RUN_ERROR");
-          const hooks = yield* middlewareHooks(db, runId, middlewareNames);
+          const hooks = yield* middlewareHooks(runId, middlewareNames);
           for (const name of ["memory-agent/subagents", "memory-agent/promoted-memory-use"]) {
             expect(
               hooks.filter((entry) => entry.name === name && entry.hook === "onFinish"),
             ).toEqual([{ name, hook: "onFinish", status: "succeeded" }]);
           }
         }
-        expect(count(db, "nodes WHERE session_id = ? AND kind = 'assistant'", session)).toEqual({
+        expect(yield* count("nodes WHERE session_id = ? AND kind = 'assistant'", session)).toEqual({
           n: fail ? 0 : 1,
         });
         expect(
-          count(db, "owner_rpc_operations WHERE run_id = ? AND status = 'pending'", runId),
+          yield* count("owner_rpc_operations WHERE run_id = ? AND status = 'pending'", runId),
         ).toEqual({ n: 0 });
         expect(
-          Number(count(db, "owner_rpc_operations WHERE run_id = ?", runId)?.n),
+          Number((yield* count("owner_rpc_operations WHERE run_id = ?", runId))?.n),
         ).toBeGreaterThan(0);
-        expect(
-          db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
-        ).toEqual({ status: fail ? "failed" : "completed" });
+        expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
+          status: fail ? "failed" : "completed",
+        });
         const execution = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ status: Schema.String, result_json: Schema.String }),
         )(
-          db.sqlite
-            .prepare(
-              "SELECT status, result_json FROM owner_workflow_executions WHERE json_extract(payload_json, '$.identity.runId') = ?",
-            )
-            .get(runId),
+          yield* sqlGet(
+            "SELECT status, result_json FROM owner_workflow_executions WHERE json_extract(payload_json, '$.identity.runId') = ?",
+            runId,
+          ),
         );
         expect(execution.status).toBe("completed");
         expect(execution.result_json).toContain(fail ? "Failure" : "Success");
         if (fail) expect(execution.result_json).toContain("SideEffectUncertain");
-        expect(count(db, "workflow_run_bindings WHERE run_id = ?", runId)).toEqual({ n: 1 });
-        expect(count(db, "workflow_worker_dispatches WHERE run_id = ?", runId)).toEqual({ n: 1 });
+        expect(yield* count("workflow_run_bindings WHERE run_id = ?", runId)).toEqual({ n: 1 });
+        expect(yield* count("workflow_worker_dispatches WHERE run_id = ?", runId)).toEqual({
+          n: 1,
+        });
         expect((yield* post(session, runId)).status).toBe(409);
-        expect(count(db, "nodes WHERE session_id = ? AND kind = 'user'", session)).toEqual({
+        expect(yield* count("nodes WHERE session_id = ? AND kind = 'user'", session)).toEqual({
           n: 1,
         });
       }),
@@ -234,7 +233,6 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
 
     it.effect("unsupported opt-in worker preflight creates neither binding nor user node", () =>
       Effect.gen(function* () {
-        const db = yield* Database;
         const session = yield* withGoal;
         // A member the worker cannot carry, beyond what ChatState's own middleware declares.
         const unsupported = { name: "unsupported-preflight", unsupportedMember: true };
@@ -245,28 +243,31 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
           error: "unsupported_worker_capabilities",
           detail: "Unsupported worker middleware member: unsupportedMember",
         });
-        expect(count(db, "workflow_run_bindings WHERE session_id = ?", session)).toEqual({ n: 0 });
-        expect(count(db, "nodes WHERE session_id = ?", session)).toEqual({ n: 0 });
+        expect(yield* count("workflow_run_bindings WHERE session_id = ?", session)).toEqual({
+          n: 0,
+        });
+        expect(yield* count("nodes WHERE session_id = ?", session)).toEqual({ n: 0 });
       }),
     );
 
     it.effect("new Goal turns automatically acquire a durable worker binding", () =>
       Effect.gen(function* () {
-        const db = yield* Database;
         const session = yield* withGoal;
         for (const runId of [`${session}:automatic`, `${session}:another-automatic`]) {
           const response = yield* post(session, runId);
           expect(response.status).toBe(200);
           expect(yield* sdkCall(() => response.text())).toContain("Hello from fast-1");
-          expect(
-            db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
-          ).toEqual({ status: "completed" });
+          expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
+            status: "completed",
+          });
         }
-        expect(count(db, "nodes WHERE session_id = ? AND kind = 'user'", session)).toEqual({
+        expect(yield* count("nodes WHERE session_id = ? AND kind = 'user'", session)).toEqual({
           n: 2,
         });
-        expect(count(db, "workflow_run_bindings WHERE session_id = ?", session)).toEqual({ n: 2 });
-        expect(count(db, "chat_runs WHERE thread_id = ?", session)).toEqual({ n: 2 });
+        expect(yield* count("workflow_run_bindings WHERE session_id = ?", session)).toEqual({
+          n: 2,
+        });
+        expect(yield* count("chat_runs WHERE thread_id = ?", session)).toEqual({ n: 2 });
       }),
     );
 
@@ -276,13 +277,12 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
       { refusal: "changed-goal", error: "workflow_changed" },
     ] as const)("admission refuses $refusal before persisting a user turn", ({ refusal, error }) =>
       Effect.gen(function* () {
-        const db = yield* Database;
         const target = yield* refusedRequest(refusal, yield* withGoal);
         const response = yield* post(target.session, target.runId);
         expect(response.status).toBe(409);
         expect(yield* sdkCall(() => response.json())).toEqual({ error });
-        expect(count(db, "nodes WHERE session_id = ?", target.session)).toEqual({ n: 0 });
-        expect(count(db, "chat_runs WHERE run_id = ?", target.runId)).toEqual({ n: 0 });
+        expect(yield* count("nodes WHERE session_id = ?", target.session)).toEqual({ n: 0 });
+        expect(yield* count("chat_runs WHERE run_id = ?", target.runId)).toEqual({ n: 0 });
       }),
     );
 
@@ -303,8 +303,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
           runIds: [reserved],
         });
         expect(continued.status).toBe(200);
-        const db = yield* Database;
-        const { id } = yield* latestRevision(db, target.session);
+        const { id } = yield* latestRevision(target.session);
         expect(
           yield* (yield* workflowRunBindings).preview(target.session, target.runId, id),
         ).toMatchObject({
@@ -338,7 +337,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
           Effect.map(nodes.session(id), (session) => session.map((node) => node.kind));
         expect((yield* kinds(session)).filter((kind) => kind === "user")).toHaveLength(1);
         expect((yield* kinds(session)).filter((kind) => kind === "assistant")).toHaveLength(1);
-        expect(count(yield* Database, "chat_runs WHERE run_id = ?", runId)).toEqual({ n: 1 });
+        expect(yield* count("chat_runs WHERE run_id = ?", runId)).toEqual({ n: 1 });
         const replay = yield* hydrate(session, `runId=${runId}&offset=-1`);
         expect(replay.status).toBe(200);
         expect(yield* sdkCall(() => replay.text())).toContain("done");
@@ -383,7 +382,7 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
       Effect.gen(function* () {
         const env = yield* TestEnv;
         const session = yield* env.use(withGoal);
-        const revision = yield* latestRevision(yield* env.use(Database), session);
+        const revision = yield* latestRevision(session);
         const runId = `${session}:bound`;
         const response = yield* env.use(post(session, runId));
         expect(response.status).toBe(200);
@@ -416,12 +415,9 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
         const other = yield* env.use(freshSession);
         expect((yield* env.use(hydrate(other, `runId=${runId}`, fromFirst))).status).toBe(404);
 
-        const persisted = yield* env.use(Database);
         const nodes = yield* env.use(Nodes);
         expect(
-          persisted.sqlite
-            .prepare("SELECT thread_id, status FROM chat_runs WHERE run_id = ?")
-            .get(runId),
+          yield* sqlGet("SELECT thread_id, status FROM chat_runs WHERE run_id = ?", runId),
         ).toEqual({ thread_id: session, status: "completed" });
         const kinds = (yield* nodes.session(session)).map((node) => node.kind);
         expect(kinds.filter((kind) => kind === "user")).toHaveLength(1);
@@ -438,11 +434,10 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
           receipts.slice(1),
         );
         expect(
-          persisted.sqlite
-            .prepare(
-              "SELECT session_id, goal_instance_id, goal_version, workflow_revision_id FROM workflow_run_bindings WHERE run_id = ?",
-            )
-            .get(runId),
+          yield* sqlGet(
+            "SELECT session_id, goal_instance_id, goal_version, workflow_revision_id FROM workflow_run_bindings WHERE run_id = ?",
+            runId,
+          ),
         ).toEqual({
           session_id: session,
           goal_instance_id: revision.goal_instance_id,
@@ -450,23 +445,21 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
           workflow_revision_id: revision.id,
         });
 
-        const before = count(persisted, "nodes WHERE session_id = ?", session);
+        const before = yield* count("nodes WHERE session_id = ?", session);
         const duplicate = yield* env.use(post(session, runId, "do it again", "again"));
         expect(duplicate.status).toBe(409);
         expect(yield* sdkCall(() => duplicate.json())).toEqual({ error: "run_already_completed" });
-        expect(count(persisted, "nodes WHERE session_id = ?", session)).toEqual(before);
+        expect(yield* count("nodes WHERE session_id = ?", session)).toEqual(before);
         expect(yield* events.replay(session, runId)).toEqual(receipts);
         // Simulate restart recovery classifying an in-flight run as failed. The same ID must
         // not re-enter the model after an uncertain tool-side effect.
-        persisted.sqlite
-          .prepare("UPDATE chat_runs SET status = 'failed' WHERE run_id = ?")
-          .run(runId);
+        yield* sqlRun("UPDATE chat_runs SET status = 'failed' WHERE run_id = ?", runId);
         const failedRetry = yield* env.use(post(session, runId, "repeat uncertain work", "retry"));
         expect(failedRetry.status).toBe(409);
         expect(yield* sdkCall(() => failedRetry.json())).toEqual({
           error: "run_outcome_uncertain",
         });
-        expect(count(persisted, "nodes WHERE session_id = ?", session)).toEqual(before);
+        expect(yield* count("nodes WHERE session_id = ?", session)).toEqual(before);
       }),
   );
 });

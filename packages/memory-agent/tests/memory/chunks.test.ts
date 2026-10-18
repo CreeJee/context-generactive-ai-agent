@@ -1,6 +1,5 @@
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { expect } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
 import { chunkText } from "../../src/memory/embedding/chunks.ts";
 import { Embedder, EmbeddingError, normalize } from "../../src/memory/embedding/embedder.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
@@ -12,6 +11,7 @@ import { readStructuredEvidence } from "../../src/memory/evidence.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 // Deliberately semantic fixture: the question and answer share no lexical search terms.
 const vector = (text: string) => {
@@ -59,17 +59,15 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunk r
           kind: "user",
           text: "금요일",
         });
-        const { sqlite } = yield* Database;
         const index = yield* VectorIndex;
         const failed = yield* Effect.flip(
           index.publish(
-            Effect.sync(() => {
+            Effect.gen(function* () {
               const id = Number(
-                sqlite
-                  .prepare(
-                    "INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset) VALUES (?, 'chunk-contract-v1', 0, 0, 3)",
-                  )
-                  .run(pending.seq).lastInsertRowid,
+                (yield* sqlRun(
+                  "INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset) VALUES (?, 'chunk-contract-v1', 0, 0, 3)",
+                  pending.seq,
+                )).lastInsertRowid,
               );
               return {
                 seqs: [id],
@@ -146,15 +144,14 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunked
         yield* env.use(
           Effect.gen(function* () {
             expect(yield* (yield* Indexer).indexAll()).toBe(0);
-            const { sqlite } = yield* Database;
-            sqlite.prepare("DELETE FROM node_vectors WHERE node_seq=?").run(node.seq);
+            yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", node.seq);
             expect(
-              sqlite.prepare("SELECT count(*) AS n FROM memory_chunk_vector_removals").get()!.n,
+              (yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n,
             ).toBeGreaterThan(1);
             const index = yield* VectorIndex;
             yield* index.flushRemovals;
             expect(index.size()).toBe(0);
-            expect(sqlite.prepare("SELECT count(*) AS n FROM node_vector_chunks").get()!.n).toBe(0);
+            expect((yield* sqlGet("SELECT count(*) AS n FROM node_vector_chunks"))!.n).toBe(0);
             expect(
               (yield* (yield* MemorySearch).find({
                 projectId: env.project.id,
@@ -163,10 +160,10 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunked
             ).toEqual([]);
             yield* (yield* Indexer).indexAll();
             // A mapping removed independently must retain its native removal ID, too.
-            sqlite.prepare("DELETE FROM node_vector_chunks WHERE node_seq=?").run(node.seq);
-            sqlite.prepare("DELETE FROM node_vectors WHERE node_seq=?").run(node.seq);
+            yield* sqlRun("DELETE FROM node_vector_chunks WHERE node_seq=?", node.seq);
+            yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", node.seq);
             expect(
-              sqlite.prepare("SELECT count(*) AS n FROM memory_chunk_vector_removals").get()!.n,
+              (yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n,
             ).toBeGreaterThan(1);
             yield* index.flushRemovals;
             expect(index.size()).toBe(0);

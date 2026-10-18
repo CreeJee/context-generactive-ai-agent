@@ -1,8 +1,7 @@
-import { Cause, Effect, Fiber, Result, Schema } from "effect";
+import { Cause, Effect, Fiber, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
-import { Database } from "../../src/db/database.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { messageText } from "../../src/messages/text.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
@@ -20,6 +19,7 @@ import {
   send,
   until,
 } from "./agent-env.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const Ids = Schema.Struct({ taskId: Schema.String, attemptId: Schema.String });
 const Receipt = Schema.Struct({
@@ -147,32 +147,27 @@ const callTool = Effect.fnUntraced(function* (sessionId: string, name: string, a
   return yield* send(sessionId, `call ${name} ${yield* encodeJson(args)}`);
 });
 
-// Polled from synchronous `until` conditions; a malformed row fails the polling test at once.
-const count = (db: Database["Service"], query: string, ...params: string[]) =>
-  Result.getOrThrow(Schema.decodeUnknownResult(Count)(db.sqlite.prepare(query).get(...params)))
-    .count;
+const count = (query: string, ...params: string[]) =>
+  Effect.map(
+    Effect.flatMap(sqlGet(query, ...params), Schema.decodeUnknownEffect(Count)),
+    (row) => row.count,
+  );
 
-const runningRuns = (db: Database["Service"], sessionId: string) =>
+const runningRuns = (sessionId: string) =>
   count(
-    db,
     "SELECT count(*) AS count FROM chat_runs WHERE thread_id = ? AND status = 'running'",
     sessionId,
   );
 
-const deliveredCompletions = (db: Database["Service"], sessionId: string) =>
+const deliveredCompletions = (sessionId: string) =>
   count(
-    db,
     `SELECT count(*) AS count FROM parent_notifications
      WHERE origin_session_id = ? AND kind = 'completed' AND delivered_at IS NOT NULL`,
     sessionId,
   );
 
-const userNodes = (db: Database["Service"], sessionId: string) =>
-  count(
-    db,
-    "SELECT count(*) AS count FROM nodes WHERE session_id = ? AND kind = 'user'",
-    sessionId,
-  );
+const userNodes = (sessionId: string) =>
+  count("SELECT count(*) AS count FROM nodes WHERE session_id = ? AND kind = 'user'", sessionId);
 
 /** Whether the model was asked for the session's automatic follow-up. */
 const followedUp = Effect.fnUntraced(function* (sessionId: string) {
@@ -218,7 +213,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         const { provider } = yield* TestEnv;
         const { sessionId, turns } = yield* parentSession;
         const children = yield* Subagents;
-        const db = yield* Database;
         expect(yield* send(sessionId, "delegate and keep working")).toBe(
           "Independent parent work finished.",
         );
@@ -235,9 +229,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ).toBe(true);
         yield* turns.release("nap");
         yield* until(
-          Effect.map(
+          Effect.zipWith(
             children.list(sessionId),
-            (listed) => listed[0]?.status === "completed" && runningRuns(db, sessionId) === 0,
+            runningRuns(sessionId),
+            (listed, running) => listed[0]?.status === "completed" && running === 0,
           ),
           "child finishes after parent work",
         );
@@ -251,7 +246,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         const { sessionId, turns } = yield* parentSession;
         const children = yield* Subagents;
         const trace = yield* WorkTraceStore;
-        const db = yield* Database;
         const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
         expect((yield* children.list(sessionId))[0]?.status).toBe("running");
         expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.adoptions).toEqual([]);
@@ -262,9 +256,12 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
           "child survives parent end",
         );
         const followUp = yield* followedUp(sessionId);
-        yield* until(() => followUp() && runningRuns(db, sessionId) === 0, "idle follow-up");
-        expect(deliveredCompletions(db, sessionId)).toBe(1);
-        expect(userNodes(db, sessionId)).toBe(2);
+        yield* until(
+          Effect.map(runningRuns(sessionId), (running) => followUp() && running === 0),
+          "idle follow-up",
+        );
+        expect(yield* deliveredCompletions(sessionId)).toBe(1);
+        expect(yield* userNodes(sessionId)).toBe(2);
         expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.adoptions).toEqual([]);
         const { persistence } = yield* ChatState;
         const messages = yield* sdk(() => persistence.stores.messages.loadThread(sessionId));
@@ -283,7 +280,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
       const children = yield* Subagents;
-      const db = yield* Database;
       const answer = yield* send(sessionId, "delegate twice dispatch only");
       expect(answer.match(/"status":"running"/g)).toHaveLength(2);
       expect((yield* children.list(sessionId)).map((child) => child.status)).toEqual([
@@ -302,24 +298,27 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ),
         "both children finish",
       );
-      expect(runningRuns(db, sessionId)).toBe(1);
+      expect(yield* runningRuns(sessionId)).toBe(1);
       expect((yield* followedUp(sessionId))()).toBe(false);
       yield* turns.release("slow parent work");
       yield* Fiber.join(parent);
       yield* until(
-        () => deliveredCompletions(db, sessionId) === 2 && runningRuns(db, sessionId) === 0,
+        Effect.zipWith(
+          deliveredCompletions(sessionId),
+          runningRuns(sessionId),
+          (delivered, running) => delivered === 2 && running === 0,
+        ),
         "post-parent notification",
       );
       const runs = yield* Schema.decodeUnknownEffect(RunSpans)(
-        db.sqlite
-          .prepare(
-            "SELECT started_at, finished_at FROM chat_runs WHERE thread_id = ? ORDER BY started_at",
-          )
-          .all(sessionId),
+        yield* sqlAll(
+          "SELECT started_at, finished_at FROM chat_runs WHERE thread_id = ? ORDER BY started_at",
+          sessionId,
+        ),
       );
       for (let index = 1; index < runs.length; index++)
         expect(runs[index]!.started_at).toBeGreaterThanOrEqual(runs[index - 1]!.finished_at);
-      expect(userNodes(db, sessionId)).toBe(2);
+      expect(yield* userNodes(sessionId)).toBe(2);
     }),
   );
 
@@ -392,7 +391,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const { sessionId } = yield* parentSession;
       const children = yield* Subagents;
       const trace = yield* WorkTraceStore;
-      const db = yield* Database;
       const receipt = yield* receiptFrom(
         yield* send(sessionId, 'call run_subagent {"task":"shell: printf dispatch only"}'),
       );
@@ -406,8 +404,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
       expect((yield* children.list(sessionId))[0]?.status).toBe("cancelled");
       expect(
-        count(
-          db,
+        yield* count(
           `SELECT count(*) AS count FROM run_events
            WHERE task_id = ? AND kind = 'tool_completed'`,
           receipt.taskId,
@@ -416,7 +413,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       // Nothing signals that a follow-up was not started, so give one a moment to appear.
       yield* Effect.sleep("100 millis");
       expect(
-        count(db, "SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?", sessionId),
+        yield* count("SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?", sessionId),
       ).toBe(1);
     }),
   );
@@ -465,18 +462,17 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
       const children = yield* Subagents;
-      const db = yield* Database;
       const first = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* turns.release("nap");
       yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(first)], timeoutMs: 5000 });
-      db.sqlite
-        .prepare("UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?")
-        .run(first.attemptId);
-      db.sqlite
-        .prepare(
-          "UPDATE work_tasks SET status = 'resumable', active_attempt_id = NULL WHERE id = ?",
-        )
-        .run(first.taskId);
+      yield* sqlRun(
+        "UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?",
+        first.attemptId,
+      );
+      yield* sqlRun(
+        "UPDATE work_tasks SET status = 'resumable', active_attempt_id = NULL WHERE id = ?",
+        first.taskId,
+      );
       const resumed = yield* receiptFrom(
         yield* send(
           sessionId,

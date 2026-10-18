@@ -5,7 +5,6 @@ import { sessionMessages } from "../../src/agent/history.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
 import { attachmentUrl } from "../../src/attachments/urls.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
-import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
@@ -14,6 +13,7 @@ import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { freshSession, invocationsOf, json, openTab, sdk, until } from "./tab.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 type Content = string | readonly object[];
 
@@ -73,14 +73,15 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       const response = yield* post(sessionId, "");
       expect(response.status).toBe(400);
       expect(yield* json(response)).toEqual({ error: "empty_message" });
-      const { sqlite } = yield* Database;
       expect({
-        runs: sqlite
-          .prepare("SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?")
-          .get(sessionId)?.count,
-        users: sqlite
-          .prepare("SELECT count(*) AS count FROM nodes WHERE session_id = ? AND kind = 'user'")
-          .get(sessionId)?.count,
+        runs: (yield* sqlGet(
+          "SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?",
+          sessionId,
+        ))?.count,
+        users: (yield* sqlGet(
+          "SELECT count(*) AS count FROM nodes WHERE session_id = ? AND kind = 'user'",
+          sessionId,
+        ))?.count,
       }).toEqual({ runs: 0, users: 0 });
     }),
   );
@@ -174,15 +175,17 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
   it.effect("hides Work Trace behind a reversible exposure flag without deleting shadow data", () =>
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
-      const { sqlite } = yield* Database;
       const agent = yield* AgentChat;
       const config = yield* GlobalConfig;
       const agentId = `${sessionId}-flag-agent`;
-      sqlite
-        .prepare(`INSERT INTO subagents
+      yield* sqlRun(
+        `INSERT INTO subagents
           (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
-          VALUES (?, ?, ?, 'test', 'running', 'parent-flag', 'test', 1, 1)`)
-        .run(agentId, sessionId, agentId);
+          VALUES (?, ?, ?, 'test', 'running', 'parent-flag', 'test', 1, 1)`,
+        agentId,
+        sessionId,
+        agentId,
+      );
       const handle = yield* (yield* WorkTraceStore).startAttempt({
         sessionId,
         parentRunId: "parent-flag",
@@ -194,9 +197,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
         threadId: `subagent-${agentId}`,
       });
       const traces = () =>
-        sqlite
-          .prepare("SELECT count(*) AS count FROM work_tasks WHERE origin_session_id = ?")
-          .get(sessionId);
+        sqlGet("SELECT count(*) AS count FROM work_tasks WHERE origin_session_id = ?", sessionId);
 
       yield* Effect.acquireRelease(config.update({ workTraceEnabled: false }), () =>
         Effect.orDie(config.update({ workTraceEnabled: true })),
@@ -204,7 +205,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       const hidden = yield* agent.traceTree(sessionId);
       expect(hidden.status).toBe(404);
       expect(yield* json(hidden)).toEqual({ error: "work_trace_disabled" });
-      expect(traces()).toEqual({ count: 1 });
+      expect(yield* traces()).toEqual({ count: 1 });
 
       yield* config.update({ workTraceEnabled: true });
       const visible = yield* agent.traceTree(sessionId);

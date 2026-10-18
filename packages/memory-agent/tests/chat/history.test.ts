@@ -1,10 +1,10 @@
 import { DateTime, Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { sessionMessages } from "../../src/agent/history.ts";
-import { Database } from "../../src/db/database.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlRun } from "../support/sql.ts";
 
 /** A new session of the given origin with one user message appended. */
 const sessionWithMessage = Effect.fnUntraced(function* (
@@ -126,9 +126,7 @@ testAgent()("session history", (it) => {
           text: "두 번째 질문",
         });
         // Simulate a conversation written before automatic titles existed.
-        (yield* Database).sqlite
-          .prepare("UPDATE sessions SET title = NULL WHERE id = ?")
-          .run(sessionId);
+        yield* sqlRun("UPDATE sessions SET title = NULL WHERE id = ?", sessionId);
         const titleIn = (list: readonly { readonly id: string; readonly title: string | null }[]) =>
           list.find((session) => session.id === sessionId)?.title;
         expect(titleIn(yield* sessions.list(project.id))).toBe("첫 번째 질문");

@@ -1,8 +1,10 @@
 import { DateTime, Schema, Effect, Layer } from "effect";
+import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -11,27 +13,25 @@ const testLayer = () => {
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 const run = Effect.fnUntraced(function* <A, E>(
-  program: Effect.Effect<A, E, Database | WorkTraceStore>,
+  program: Effect.Effect<A, E, SqlClient.SqlClient | WorkTraceStore>,
 ) {
   const services = yield* Layer.build(testLayer());
   return yield* Effect.provideContext(program, services);
 }, Effect.scoped);
-const seed = (db: Database["Service"]) => {
+const seed = Effect.fnUntraced(function* () {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
-  db.sqlite
-    .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
-    .run(iso);
-  db.sqlite
-    .prepare(
-      "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
-    )
-    .run(iso);
-  db.sqlite
-    .prepare(`INSERT INTO subagents
+  yield* sqlRun(
+    "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)",
+    iso,
+  );
+  yield* sqlRun(
+    "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
+    iso,
+  );
+  yield* sqlRun(`INSERT INTO subagents
     (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
-    VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`)
-    .run();
-};
+    VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`);
+});
 const start = (trace: WorkTraceStore["Service"]) =>
   trace.startAttempt({
     sessionId: "s1",
@@ -48,9 +48,8 @@ describe("Work Trace evidence and artifact provenance", () => {
   it.effect("stores typed locators without source payloads and projects them by task", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* start(trace);
         const message = yield* trace.recordEvidence({
           handle,
@@ -97,8 +96,8 @@ describe("Work Trace evidence and artifact provenance", () => {
           }),
         );
         const persisted = yield* stringifyJson({
-          evidence: db.sqlite.prepare("SELECT * FROM evidence_refs").all(),
-          artifacts: db.sqlite.prepare("SELECT * FROM work_artifacts").all(),
+          evidence: yield* sqlAll("SELECT * FROM evidence_refs"),
+          artifacts: yield* sqlAll("SELECT * FROM work_artifacts"),
         });
         expect(persisted).not.toContain("secret transcript body");
         expect(persisted).not.toContain("tool result contents");
@@ -109,9 +108,8 @@ describe("Work Trace evidence and artifact provenance", () => {
   it.effect("uses explicit states and clears locator metadata in source-deleted tombstones", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* start(trace);
         const evidence = yield* trace.recordEvidence({
           handle,
@@ -140,8 +138,8 @@ describe("Work Trace evidence and artifact provenance", () => {
           }),
         );
         const raw = yield* stringifyJson({
-          evidence: db.sqlite.prepare("SELECT * FROM evidence_refs WHERE id = ?").get(evidence.id),
-          artifact: db.sqlite.prepare("SELECT * FROM work_artifacts WHERE id = ?").get(artifact.id),
+          evidence: yield* sqlGet("SELECT * FROM evidence_refs WHERE id = ?", evidence.id),
+          artifact: yield* sqlGet("SELECT * FROM work_artifacts WHERE id = ?", artifact.id),
         });
         expect(raw).not.toContain("private/report.md");
         expect(raw).not.toContain("private-object-17");
@@ -153,9 +151,8 @@ describe("Work Trace evidence and artifact provenance", () => {
   it.effect("keeps project provenance after origin deletion and rejects unsafe file locators", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* start(trace);
         yield* trace.recordEvidence({
           handle,
@@ -216,8 +213,8 @@ describe("Work Trace evidence and artifact provenance", () => {
             }),
           ),
         ).toMatchObject({ reason: "foreign_checkpoint" });
-        db.sqlite.prepare("DELETE FROM subagents WHERE id = 'agent-1'").run();
-        db.sqlite.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+        yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
+        yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
         expect(yield* trace.taskDetail("s1", handle.taskId)).toBeNull();
         expect(yield* trace.projectTaskDetail("p1", handle.taskId)).toEqual(
           expect.objectContaining({
@@ -237,9 +234,8 @@ describe("Work Trace report adoption", () => {
     () =>
       run(
         Effect.gen(function* () {
-          const db = yield* Database;
           const trace = yield* WorkTraceStore;
-          seed(db);
+          yield* seed();
           const handle = yield* start(trace);
           const evidence = yield* trace.recordEvidence({
             handle,
@@ -320,9 +316,8 @@ describe("Work Trace report adoption", () => {
   it.effect("records an omitted reviewed report as not used and rejects unreviewed use", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* start(trace);
         const unreviewed = yield* Effect.flip(
           trace.finalizeAnswerClaim({

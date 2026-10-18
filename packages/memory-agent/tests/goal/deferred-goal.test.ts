@@ -1,7 +1,7 @@
 import { Cause, Effect, MutableHashMap, Option, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { Database } from "../../src/db/database.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
 import { isTruthy } from "../../src/truthy.ts";
@@ -9,6 +9,7 @@ import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
+import { sqlAll, sqlGet } from "../support/sql.ts";
 
 const goal = {
   statement: "original",
@@ -24,7 +25,7 @@ type Scenario = "goal" | "completed" | "stale-id" | "failed-run";
 
 interface Script {
   readonly scenario: Scenario;
-  readonly db: Database["Service"];
+  readonly sql: SqlClient.SqlClient;
   /** The Goal instance ID the model read from its prompt. */
   readonly seenId?: string;
   /** Owner state the model observed while the run was still in progress. */
@@ -36,8 +37,8 @@ const scripts = MutableHashMap.empty<string, Script>();
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-const requestStatus = (db: Database["Service"], runId: string) =>
-  db.sqlite.prepare("SELECT status FROM workflow_new_goal_requests WHERE run_id = ?").get(runId);
+const requestStatus = (runId: string) =>
+  sqlGet("SELECT status FROM workflow_new_goal_requests WHERE run_id = ?", runId);
 
 /** The continuation after `start_new_goal`, by scenario. */
 const continuation = Effect.fnUntraced(function* (threadId: string, runId: string, script: Script) {
@@ -46,12 +47,13 @@ const continuation = Effect.fnUntraced(function* (threadId: string, runId: strin
     case "completed":
       MutableHashMap.set(scripts, threadId, {
         ...script,
-        observed: {
-          request: requestStatus(script.db, runId),
-          identity: script.db.sqlite
-            .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
-            .get(threadId),
-        },
+        observed: yield* Effect.all({
+          request: requestStatus(runId),
+          identity: sqlGet(
+            "SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?",
+            threadId,
+          ),
+        }).pipe(Effect.provideService(SqlClient.SqlClient, script.sql), Effect.orDie),
       });
       return { text: "The request was accepted, not saved yet." };
     case "stale-id":
@@ -99,7 +101,7 @@ const sessionIn = Effect.fnUntraced(function* (scenario: Scenario) {
   const workflows = yield* Workflows;
   yield* selectTestModel();
   const session = (yield* (yield* Sessions).create(project.id)).id;
-  MutableHashMap.set(scripts, session, { scenario, db: yield* Database });
+  MutableHashMap.set(scripts, session, { scenario, sql: yield* SqlClient.SqlClient });
   yield* Effect.addFinalizer(() => Effect.sync(() => MutableHashMap.remove(scripts, session)));
   yield* workflows.setPhase(session, "goal");
   yield* workflows.updateGoal(session, goal);
@@ -128,7 +130,6 @@ const sessionIn = Effect.fnUntraced(function* (scenario: Scenario) {
 
 /** Ask for a new independent Goal through a real chat turn and wait until the run settles. */
 const requestNewGoal = Effect.fnUntraced(function* (session: string) {
-  const db = yield* Database;
   const runId = `${session}:new-goal`;
   const response = yield* (yield* AgentChat).handle(
     new Request("http://localhost/api/chat", {
@@ -150,9 +151,11 @@ const requestNewGoal = Effect.fnUntraced(function* (session: string) {
     catch: (cause) => new Cause.UnknownError(cause),
   });
   yield* waitUntil(
-    () =>
-      db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId)?.status !==
-        "running" && requestStatus(db, runId)?.status !== "accepted",
+    Effect.zipWith(
+      sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId),
+      requestStatus(runId),
+      (run, request) => run?.status !== "running" && request?.status !== "accepted",
+    ),
     "new Goal request settles",
     3000,
   );
@@ -164,7 +167,6 @@ testAgent({ testProvider: { responder } })("deferred new Goal through chat", (it
     "chat in %s accepts intent, then applies it after run completion",
     (phase) =>
       Effect.gen(function* () {
-        const db = yield* Database;
         const workflows = yield* Workflows;
         const session = yield* sessionIn(phase);
         const previousId = yield* workflows.goalInstanceId(session);
@@ -177,10 +179,10 @@ testAgent({ testProvider: { responder } })("deferred new Goal through chat", (it
           identity: { goal_instance_id: previousId },
         });
         expect(body).toContain("The request was accepted, not saved yet.");
-        expect(
-          db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
-        ).toEqual({ status: "completed" });
-        expect(requestStatus(db, runId)).toEqual({ status: "applied" });
+        expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
+          status: "completed",
+        });
+        expect(yield* requestStatus(runId)).toEqual({ status: "applied" });
         expect(yield* workflows.goalInstanceId(session)).not.toBe(previousId);
         expect((yield* workflows.get(session)).goal?.statement).toBe("new task");
       }),
@@ -190,23 +192,23 @@ testAgent({ testProvider: { responder } })("deferred new Goal through chat", (it
     "chat with %s never applies a new Goal",
     (scenario) =>
       Effect.gen(function* () {
-        const db = yield* Database;
         const workflows = yield* Workflows;
         const session = yield* sessionIn(scenario);
         const previousId = yield* workflows.goalInstanceId(session);
         const { runId } = yield* requestNewGoal(session);
-        const requests = db.sqlite
-          .prepare("SELECT status, reason FROM workflow_new_goal_requests WHERE session_id = ?")
-          .all(session);
+        const requests = yield* sqlAll(
+          "SELECT status, reason FROM workflow_new_goal_requests WHERE session_id = ?",
+          session,
+        );
         switch (scenario) {
           case "stale-id":
             expect(requests).toEqual([]);
             break;
           case "failed-run":
             expect(requests).toEqual([{ status: "rejected", reason: "run_outcome_uncertain" }]);
-            expect(
-              db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
-            ).toEqual({ status: "failed" });
+            expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
+              status: "failed",
+            });
             break;
         }
         expect(yield* workflows.goalInstanceId(session)).toBe(previousId);

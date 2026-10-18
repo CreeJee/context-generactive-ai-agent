@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { DateTime, Effect, FileSystem, Path } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { Database } from "../src/db/database.ts";
+import { migrateDatabase } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 
 const databaseFile = Effect.fn("workTrace.databaseFile")(function* () {
@@ -20,13 +20,21 @@ const databaseFile = Effect.fn("workTrace.databaseFile")(function* () {
   }).pipe(Effect.provideContext(context));
 });
 
+/** The schema boundary itself: a raw connection the startup migration has brought up to date. */
 const withDatabase = Effect.fnUntraced(function* <A>(
   file: string,
-  use: (db: Database["Service"]) => A,
+  use: (db: { readonly sqlite: DatabaseSync }) => A,
 ) {
-  const services = yield* Layer.build(Database.layer(file));
-  const database = yield* Effect.provideContext(Database, services);
-  return use(database);
+  const sqlite = yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const sqlite = new DatabaseSync(file);
+      sqlite.exec("PRAGMA foreign_keys = ON");
+      migrateDatabase(sqlite);
+      return sqlite;
+    }),
+    (sqlite) => Effect.sync(() => sqlite.close()),
+  );
+  return use({ sqlite });
 }, Effect.scoped);
 
 function seedProjectSessionAndAgent(sqlite: DatabaseSync) {

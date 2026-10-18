@@ -20,7 +20,6 @@ import { expect } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../../src/agent/chat.ts";
 import { chatPersistence } from "../../src/chat-state/persistence.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -56,6 +55,7 @@ import {
   rows,
   send,
 } from "./goal-session.ts";
+import { sqlGet } from "../support/sql.ts";
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -208,7 +208,6 @@ testAgent({
     "account callback and PKCE survive actual SDK worker termination without restarting login",
     () =>
       Effect.gen(function* () {
-        const { sqlite } = yield* Database;
         const entered = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
@@ -285,10 +284,10 @@ testAgent({
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(streaming);
         yield* waitUntil(
-          () =>
-            Schema.is(Schema.Struct({ status: Schema.Literal("failed") }))(
-              sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
-            ),
+          Effect.map(
+            sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId),
+            Schema.is(Schema.Struct({ status: Schema.Literal("failed") })),
+          ),
           "terminated worker run fails",
           1000,
         );

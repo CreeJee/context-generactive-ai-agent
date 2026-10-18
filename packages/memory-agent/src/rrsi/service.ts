@@ -136,11 +136,14 @@ const make = Effect.gen(function* () {
   const originalFile = isTruthy(originalStorage)
     ? oauthProtocolPath.join(originalStorage, "agent.db")
     : null;
-  const original =
+  // The original store is read-only evidence; its connection closes after the poller stops.
+  const originalContext =
     originalFile !== null && (yield* fs.exists(originalFile).pipe(Effect.orDie))
-      ? new DatabaseSync(originalFile, { readOnly: true })
+      ? yield* Effect.acquireRelease(
+          Effect.sync(() => new DatabaseSync(originalFile, { readOnly: true })),
+          (original) => Effect.sync(() => original.close()),
+        ).pipe(Effect.flatMap(connectionContext))
       : null;
-  const originalContext = original !== null ? yield* connectionContext(original) : null;
   const repo = Option.getOrNull(
     yield* Config.String("CONTEXT_AGENT_RRSI_REPOSITORY")
       .pipe(Config.option)
@@ -726,7 +729,6 @@ const make = Effect.gen(function* () {
       disposed = true;
       controller?.abort("app_shutdown");
       if (task !== null) yield* Fiber.interrupt(task);
-      original?.close();
     }),
   );
   const wrap = <A, E>(operation: Effect.Effect<A, E>) =>

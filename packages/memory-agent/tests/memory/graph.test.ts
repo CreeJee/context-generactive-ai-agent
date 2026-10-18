@@ -1,11 +1,11 @@
 import { DateTime, Effect, FileSystem, MutableHashMap, Option, Path } from "effect";
 import { expect } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
 import { Graph } from "../../src/memory/graph.ts";
 import { evidencePageLength, Nodes } from "../../src/memory/nodes.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlRun } from "../support/sql.ts";
 
 /** In a fresh session: user -> assistant -> tool_call -> tool_result, then a later user correction. */
 const conversation = Effect.gen(function* () {
@@ -48,9 +48,14 @@ const addLlmEdge = Effect.fnUntraced(function* (
   kind: string,
   weight: number,
 ) {
-  (yield* Database).sqlite
-    .prepare("INSERT INTO edges VALUES (?, ?, ?, 'llm', ?, ?)")
-    .run(fromId, toId, kind, weight, DateTime.formatIso(DateTime.nowUnsafe()));
+  yield* sqlRun(
+    "INSERT INTO edges VALUES (?, ?, ?, 'llm', ?, ?)",
+    fromId,
+    toId,
+    kind,
+    weight,
+    DateTime.formatIso(DateTime.nowUnsafe()),
+  );
 });
 
 /** A node in another project, which links to nothing yet. */
@@ -81,13 +86,17 @@ testAgent()("memory graph", (it) => {
           text: "\n ",
           links: [{ kind: "reply", nodeId: user.id }],
         });
-        const { sqlite } = yield* Database;
-        sqlite
-          .prepare("DELETE FROM edges WHERE from_id = ? AND to_id = ? AND kind = 'calls'")
-          .run(assistant.id, call.id);
-        sqlite
-          .prepare("INSERT INTO edges VALUES (?, ?, 'calls', 'structure', 0.95, ?)")
-          .run(empty.id, call.id, empty.createdAt);
+        yield* sqlRun(
+          "DELETE FROM edges WHERE from_id = ? AND to_id = ? AND kind = 'calls'",
+          assistant.id,
+          call.id,
+        );
+        yield* sqlRun(
+          "INSERT INTO edges VALUES (?, ?, 'calls', 'structure', 0.95, ?)",
+          empty.id,
+          call.id,
+          empty.createdAt,
+        );
         const graph = yield* Graph;
         const walk = yield* graph.traverse(MutableHashMap.fromIterable([[result.id, 1]]), {
           budget: 20,

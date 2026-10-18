@@ -1,7 +1,6 @@
 import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { Database } from "../../src/db/database.ts";
 import { Importer } from "../../src/imports/importer.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { embeddedKindFilter, Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -10,6 +9,7 @@ import { SecretSweep } from "../../src/secrets/sweep.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const parseJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -23,8 +23,7 @@ const decodeRefs = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ ref: 
 
 /** One string column of the single row a query returns. */
 const value = Effect.fnUntraced(function* (sql: string, ...values: Array<string | number>) {
-  const { sqlite } = yield* Database;
-  return (yield* decodeValue(sqlite.prepare(sql).get(...values))).value;
+  return (yield* decodeValue(yield* sqlGet(sql, ...values))).value;
 });
 
 /** Post one user message to AgentChat and read the run's whole event stream. */
@@ -152,13 +151,11 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       expect(text).not.toContain(githubToken);
       expect(text).toContain("GITHUB_TOKEN=[redacted:github]");
       // The URL the call named is remembered as a reference, without its token.
-      const { sqlite } = yield* Database;
       const refs = yield* decodeRefs(
-        sqlite
-          .prepare(
-            "SELECT ref FROM node_refs WHERE node_id IN (SELECT id FROM nodes WHERE session_id = ?)",
-          )
-          .all(migratedId),
+        yield* sqlAll(
+          "SELECT ref FROM node_refs WHERE node_id IN (SELECT id FROM nodes WHERE session_id = ?)",
+          migratedId,
+        ),
       );
       expect(refs.map((row) => row.ref)).toEqual([
         "https://api.example.com/?token=[redacted:github]",
@@ -171,7 +168,6 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
     () =>
       Effect.gen(function* () {
         const { project } = yield* TestEnv;
-        const { sqlite } = yield* Database;
         const session = yield* freshSession;
         const queued = `${session}:queued`;
         const call = yield* (yield* Nodes).append({
@@ -181,27 +177,24 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
           text: "fetch",
           refs: [`https://api.example.com/?token=${githubToken}`],
         });
-        sqlite
-          .prepare("INSERT INTO chat_threads VALUES (?, ?, 0)")
-          .run(
-            session,
-            yield* stringifyJson([
-              { role: "tool", content: `token: ${githubToken}`, toolCallId: "c-1" },
-            ]),
-          );
-        sqlite
-          .prepare(
-            "INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (?, 'c-2', 'run_shell', ?, 'ask', 'user', 'x', '2026')",
-          )
-          .run(
-            session,
-            yield* stringifyJson({ command: `GITHUB_TOKEN=${githubToken} gh pr list` }),
-          );
-        sqlite
-          .prepare(
-            "INSERT INTO queued_messages (id, session_id, seq, text, state, created_at, updated_at) VALUES (?, ?, 1, ?, 'held', 0, 0)",
-          )
-          .run(queued, session, `이걸로 해줘 ${githubToken}`);
+        yield* sqlRun(
+          "INSERT INTO chat_threads VALUES (?, ?, 0)",
+          session,
+          yield* stringifyJson([
+            { role: "tool", content: `token: ${githubToken}`, toolCallId: "c-1" },
+          ]),
+        );
+        yield* sqlRun(
+          "INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (?, 'c-2', 'run_shell', ?, 'ask', 'user', 'x', '2026')",
+          session,
+          yield* stringifyJson({ command: `GITHUB_TOKEN=${githubToken} gh pr list` }),
+        );
+        yield* sqlRun(
+          "INSERT INTO queued_messages (id, session_id, seq, text, state, created_at, updated_at) VALUES (?, ?, 1, ?, 'held', 0, 0)",
+          queued,
+          session,
+          `이걸로 해줘 ${githubToken}`,
+        );
 
         const sweep = yield* SecretSweep;
         yield* sweep.run;
@@ -233,11 +226,10 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
   it.effect("the sweep catches what arrives after a finished pass, on the next one", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
-      const { sqlite } = yield* Database;
       const session = yield* freshSession;
       const sweep = yield* SecretSweep;
       // Nothing of this session to sweep yet: both passes reach the end and remember it.
-      sqlite.prepare("INSERT INTO chat_threads VALUES (?, '[]', 0)").run(session);
+      yield* sqlRun("INSERT INTO chat_threads VALUES (?, '[]', 0)", session);
       yield* sweep.run;
 
       // Text that skipped the way in: an older build wrote this node, and the conversation grew
@@ -248,9 +240,11 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
         kind: "tool_result",
         text: `GITHUB_TOKEN=${githubToken}`,
       });
-      sqlite
-        .prepare("UPDATE chat_threads SET messages = ? WHERE thread_id = ?")
-        .run(yield* stringifyJson([{ role: "user", content: githubToken }]), session);
+      yield* sqlRun(
+        "UPDATE chat_threads SET messages = ? WHERE thread_id = ?",
+        yield* stringifyJson([{ role: "user", content: githubToken }]),
+        session,
+      );
 
       expect(yield* sweep.run).toBe(1);
       expect(
@@ -276,7 +270,6 @@ testAgent()("SecretSweep of stored nodes", (it) => {
       Effect.gen(function* () {
         const { project, session } = yield* TestEnv;
         const nodes = yield* Nodes;
-        const { sqlite } = yield* Database;
         const indexer = yield* Indexer;
         // Written the way it was before redaction existed: straight in. A statement, so it has a
         // vector to drop and make again.
@@ -296,7 +289,7 @@ testAgent()("SecretSweep of stored nodes", (it) => {
         yield* indexer.analyzeAll();
 
         const count = Effect.fnUntraced(function* (sql: string, ...values: Array<string | number>) {
-          return (yield* decodeCount(sqlite.prepare(sql).get(...values))).count;
+          return (yield* decodeCount(yield* sqlGet(sql, ...values))).count;
         });
         const trigram = (query: string) =>
           count("SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH ?", `"${query}"`);
@@ -337,16 +330,22 @@ testAgent()("SecretSweep of stored nodes", (it) => {
         kind: "user",
         text: "원문",
       });
-      const { sqlite } = yield* Database;
-      expect(() =>
-        sqlite.prepare("UPDATE nodes SET text = 'changed' WHERE seq = ?").run(node.seq),
-      ).toThrow("nodes are immutable evidence");
+      expect(
+        String(
+          (yield* Effect.flip(sqlRun("UPDATE nodes SET text = 'changed' WHERE seq = ?", node.seq)))
+            .reason.cause,
+        ),
+      ).toContain("nodes are immutable evidence");
       // Even with a permit, only the text may change.
-      sqlite.prepare("INSERT INTO secret_sweep_permits VALUES (?)").run(node.seq);
-      expect(() =>
-        sqlite.prepare("UPDATE nodes SET kind = 'assistant' WHERE seq = ?").run(node.seq),
-      ).toThrow("nodes are immutable evidence");
-      sqlite.prepare("DELETE FROM secret_sweep_permits WHERE node_seq = ?").run(node.seq);
+      yield* sqlRun("INSERT INTO secret_sweep_permits VALUES (?)", node.seq);
+      expect(
+        String(
+          (yield* Effect.flip(
+            sqlRun("UPDATE nodes SET kind = 'assistant' WHERE seq = ?", node.seq),
+          )).reason.cause,
+        ),
+      ).toContain("nodes are immutable evidence");
+      yield* sqlRun("DELETE FROM secret_sweep_permits WHERE node_seq = ?", node.seq);
     }),
   );
 });

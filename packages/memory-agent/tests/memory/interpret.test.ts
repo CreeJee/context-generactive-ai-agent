@@ -1,6 +1,5 @@
 import { Cause, Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { Interpreter } from "../../src/memory/interpret.ts";
@@ -11,6 +10,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlGet } from "../support/sql.ts";
 
 const EdgeRow = Schema.Struct({
   from_id: Schema.String,
@@ -50,22 +50,25 @@ const freshProject = Effect.gen(function* () {
   );
   const session = yield* (yield* Sessions).create(project.id);
   const nodes = yield* Nodes;
-  const { sqlite } = yield* Database;
   const say = (kind: "user" | "assistant", text: string) =>
     nodes.append({ projectId: project.id, sessionId: session.id, kind, text });
   const edges = (kind: string) =>
-    Schema.decodeUnknownEffect(Schema.Array(EdgeRow))(
-      sqlite
-        .prepare(
+    Effect.gen(function* () {
+      return yield* Schema.decodeUnknownEffect(Schema.Array(EdgeRow))(
+        yield* sqlAll(
           `SELECT e.from_id, e.to_id, e.kind FROM edges e JOIN nodes n ON n.id = e.from_id
            WHERE e.kind = ? AND e.origin = 'llm' AND n.project_id = ?`,
-        )
-        .all(kind, project.id),
-    );
+          kind,
+          project.id,
+        ),
+      );
+    });
   const job = (nodeId: string) =>
-    Schema.decodeUnknownEffect(JobRow)(
-      sqlite.prepare("SELECT status, attempts FROM interpret_jobs WHERE node_id = ?").get(nodeId),
-    );
+    Effect.gen(function* () {
+      return yield* Schema.decodeUnknownEffect(JobRow)(
+        yield* sqlGet("SELECT status, attempts FROM interpret_jobs WHERE node_id = ?", nodeId),
+      );
+    });
   const find = (query: string) =>
     Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId: project.id }));
   const trace = Effect.fnUntraced(function* (id: string) {
@@ -74,7 +77,7 @@ const freshProject = Effect.gen(function* () {
       yield* call(() => tools.find((tool) => tool.name === "trace_evidence")!.execute!({ id })),
     );
   });
-  return { project, sqlite, say, edges, job, find, trace };
+  return { project, say, edges, job, find, trace };
 });
 
 const interpret = Effect.flatMap(Indexer, (indexer) => indexer.indexAll()).pipe(
@@ -100,11 +103,10 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
         expect(yield* context.job(decision.id)).toEqual({ status: "done", attempts: 1 });
 
         // One topic per label in the project, from the statement the model labelled.
-        const topics = context.sqlite
-          .prepare(
-            "SELECT id FROM nodes WHERE kind = 'topic' AND text = 'database' AND project_id = ?",
-          )
-          .all(context.project.id);
+        const topics = yield* sqlAll(
+          "SELECT id FROM nodes WHERE kind = 'topic' AND text = 'database' AND project_id = ?",
+          context.project.id,
+        );
         expect(topics).toHaveLength(1);
         expect(yield* context.edges("about")).toHaveLength(1);
         expect(yield* context.edges("corrects")).toEqual([
@@ -164,7 +166,7 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
         expect(yield* context.edges("corrects")).toEqual([]);
         // An assistant answer is a candidate, never a job of its own.
         expect(
-          context.sqlite.prepare("SELECT 1 FROM interpret_jobs WHERE node_id = ?").get(claim.id),
+          yield* sqlGet("SELECT 1 FROM interpret_jobs WHERE node_id = ?", claim.id),
         ).toBeUndefined();
         expect((yield* context.job(stray.id)).status).toBe("done");
       }),
@@ -208,7 +210,6 @@ testAgent({ testProvider: {} })("interpretation without a model", (it) => {
       const session = yield* (yield* Sessions).create(project.id);
       const nodes = yield* Nodes;
       const indexer = yield* Indexer;
-      const { sqlite } = yield* Database;
       // Earlier tests' nodes are indexed first, so the count below is only this test's.
       yield* indexer.indexAll();
       const meaningful = yield* nodes.append({
@@ -232,11 +233,11 @@ testAgent({ testProvider: {} })("interpretation without a model", (it) => {
         model: "test",
       });
       expect(
-        sqlite.prepare("SELECT * FROM interpret_jobs WHERE node_id = ?").get(empty.id),
+        yield* sqlGet("SELECT * FROM interpret_jobs WHERE node_id = ?", empty.id),
       ).toBeUndefined();
-      expect(
-        sqlite.prepare("SELECT * FROM interpretations WHERE node_id = ?").all(empty.id),
-      ).toEqual([]);
+      expect(yield* sqlAll("SELECT * FROM interpretations WHERE node_id = ?", empty.id)).toEqual(
+        [],
+      );
       expect(yield* indexer.indexAll()).toBe(1);
     }),
   );

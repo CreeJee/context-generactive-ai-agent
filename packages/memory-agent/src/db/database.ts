@@ -13,26 +13,6 @@ export class DatabaseOpenError extends Data.TaggedError("DatabaseOpenError")<{
   readonly cause: unknown;
 }> {}
 
-export interface DatabaseApi {
-  readonly sqlite: DatabaseSync;
-  /**
-   * Runs synchronous SQL work in one transaction; nested calls join the outer one. Legacy: new
-   * code uses `SqlClient.withTransaction`, which tracks nesting per fibre instead of by a depth
-   * every fibre shares.
-   */
-  readonly atomic: <T>(work: () => T) => T;
-}
-
-/**
- * A synchronous `atomic` found the connection inside another fibre's `SqlClient` transaction.
- * Joining it would commit or roll back this work with that fibre's, so it is a defect: a
- * `withTransaction` body must not yield to other fibres before it ends.
- */
-export class TransactionInterleaving extends Schema.TaggedError<
-  TransactionInterleaving,
-  { readonly brand: unique symbol }
->()("TransactionInterleaving", {}) {}
-
 const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 
 /** Startup-only: call before handing this connection to any service or writer. */
@@ -198,50 +178,24 @@ const make = Effect.fn("Database.make")(function* (
 });
 
 /**
- * `Database` and `SqlClient` over one open, migrated connection. The caller owns the connection;
- * the app's layer opens it, and tests pass the connection a fixture made.
+ * `SqlClient` over one open, migrated connection. The caller owns the connection; the app's layer
+ * opens it, and tests pass the connection a fixture made. Every statement and transaction leases
+ * the connection, so no code reaches it except through the client.
  */
 export const connectionContext = Effect.fn("Database.connectionContext")(function* (
   sqlite: DatabaseSync,
 ) {
-  // One lease for the connection: SqlClient statements and transactions take it, and
-  // legacy `atomic` refuses to run inside a transaction that holds it.
-  const sql = yield* sqlClientOver(sqlite, yield* Semaphore.make(1));
-  let depth = 0;
-  const database: DatabaseApi = {
-    sqlite,
-    atomic(work) {
-      const outermost = depth === 0;
-      if (outermost && sqlite.isTransaction) throw TransactionInterleaving.make({});
-      const savepoint = `atomic_${depth}`;
-      sqlite.exec(outermost ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
-      depth += 1;
-      try {
-        const result = work();
-        sqlite.exec(outermost ? "COMMIT" : `RELEASE ${savepoint}`);
-        return result;
-      } catch (error) {
-        sqlite.exec(outermost ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
-        throw error;
-      } finally {
-        depth -= 1;
-      }
-    },
-  };
-  return Context.make(Database, database).pipe(Context.add(SqlClient.SqlClient, sql));
+  return Context.make(SqlClient.SqlClient, yield* sqlClientOver(sqlite, yield* Semaphore.make(1)));
 });
 
-/** The single local SQLite database shared by every memory-agent module. */
-export class Database extends Context.Service<Database, DatabaseApi>()("memory-agent/db/database") {
-  static readonly layer = (
-    file: string,
-    open: (file: string) => DatabaseSync = (file) => new DatabaseSync(file),
-  ) =>
+/** The single local SQLite database shared by every memory-agent module, as its `SqlClient`. */
+export const Database = {
+  layer: (file: string, open: (file: string) => DatabaseSync = (file) => new DatabaseSync(file)) =>
     Layer.effectContext(make(file, open)).pipe(
       Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
-    );
+    ),
 
   /** Over a connection the caller opened and migrated, as fixtures do. */
-  static readonly over = <E, R>(sqlite: Effect.Effect<DatabaseSync, E, R>) =>
-    Layer.effectContext(Effect.flatMap(sqlite, connectionContext));
-}
+  over: <E, R>(sqlite: Effect.Effect<DatabaseSync, E, R>) =>
+    Layer.effectContext(Effect.flatMap(sqlite, connectionContext)),
+};

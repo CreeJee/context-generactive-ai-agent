@@ -1,8 +1,10 @@
 import { DateTime, Effect, Layer, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const AttemptLineage = Schema.Struct({
   id: Schema.String,
@@ -19,30 +21,28 @@ const testLayer = () => {
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 const run = Effect.fnUntraced(function* <A, E>(
-  program: Effect.Effect<A, E, Database | WorkTraceStore>,
+  program: Effect.Effect<A, E, SqlClient.SqlClient | WorkTraceStore>,
 ) {
   const services = yield* Layer.build(testLayer());
   return yield* Effect.provideContext(program, services);
 }, Effect.scoped);
 
-const seed = (db: Database["Service"]) => {
+const seed = Effect.fnUntraced(function* () {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
-  db.sqlite
-    .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
-    .run(iso);
-  db.sqlite
-    .prepare(
-      "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
-    )
-    .run(iso);
-  db.sqlite
-    .prepare(
-      `INSERT INTO subagents
+  yield* sqlRun(
+    "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)",
+    iso,
+  );
+  yield* sqlRun(
+    "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
+    iso,
+  );
+  yield* sqlRun(
+    `INSERT INTO subagents
        (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
        VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`,
-    )
-    .run();
-};
+  );
+});
 
 const interruptedAttempt = Effect.fnUntraced(function* (
   trace: WorkTraceStore["Service"],
@@ -82,9 +82,8 @@ describe("Work Trace logical resume", () => {
     () =>
       run(
         Effect.gen(function* () {
-          const db = yield* Database;
           const trace = yield* WorkTraceStore;
-          seed(db);
+          yield* seed();
           const previous = yield* interruptedAttempt(trace);
           const resumed = yield* trace.claimResume({
             sessionId: "s1",
@@ -121,13 +120,12 @@ describe("Work Trace logical resume", () => {
 
           expect(
             yield* decodeLineage(
-              db.sqlite
-                .prepare(
-                  `SELECT id, attempt_number, chat_run_id, status, resumed_from_attempt_id,
+              yield* sqlAll(
+                `SELECT id, attempt_number, chat_run_id, status, resumed_from_attempt_id,
                         superseded_by_attempt_id
                  FROM agent_run_attempts WHERE task_id = ? ORDER BY attempt_number`,
-                )
-                .all(previous.taskId),
+                previous.taskId,
+              ),
             ),
           ).toEqual([
             {
@@ -154,9 +152,8 @@ describe("Work Trace logical resume", () => {
   it.effect("only one parent run can claim a queued automatic recovery", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
@@ -182,14 +179,14 @@ describe("Work Trace logical resume", () => {
           "attempt_interrupted",
           "Interrupted",
         );
-        db.sqlite
-          .prepare(
-            `INSERT INTO work_recovery_jobs
+        yield* sqlRun(
+          `INSERT INTO work_recovery_jobs
              (id, project_id, task_id, interrupted_attempt_id, status, blocker,
               created_at, updated_at)
              VALUES ('job-1', 'p1', ?, ?, 'queued', NULL, 1, 1)`,
-          )
-          .run(handle.taskId, handle.id);
+          handle.taskId,
+          handle.id,
+        );
 
         const first = yield* trace.claimRecoveryJobs("s1", "parent-recovery-1");
         const second = yield* trace.claimRecoveryJobs("s1", "parent-recovery-2");
@@ -197,14 +194,13 @@ describe("Work Trace logical resume", () => {
         expect(first[0]?.claim.handle.attemptNumber).toBe(2);
         expect(second).toEqual([]);
         expect(
-          db.sqlite
-            .prepare("SELECT status, claimed_by FROM work_recovery_jobs WHERE id = 'job-1'")
-            .get(),
+          yield* sqlGet("SELECT status, claimed_by FROM work_recovery_jobs WHERE id = 'job-1'"),
         ).toEqual({ status: "claimed", claimed_by: "parent-recovery-1" });
         expect(
-          db.sqlite
-            .prepare("SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?")
-            .get(handle.taskId),
+          yield* sqlGet(
+            "SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?",
+            handle.taskId,
+          ),
         ).toEqual({ attempts: 2 });
       }),
     ),
@@ -213,9 +209,8 @@ describe("Work Trace logical resume", () => {
   it.effect("requires explicit confirmation when a checkpoint has uncertain side effects", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const previous = yield* interruptedAttempt(trace, ["tool-uncertain"]);
         const input = {
           sessionId: "s1",
@@ -239,9 +234,8 @@ describe("Work Trace logical resume", () => {
   it.effect("a confirmed server resume request is durably queued and claimed by one parent", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const previous = yield* interruptedAttempt(trace, ["tool-uncertain"]);
         const request = {
           sessionId: "s1",
@@ -259,9 +253,10 @@ describe("Work Trace logical resume", () => {
           expectedAttemptId: previous.id,
         });
         expect(
-          db.sqlite
-            .prepare("SELECT status, confirm_uncertain FROM work_recovery_jobs WHERE task_id = ?")
-            .get(previous.taskId),
+          yield* sqlGet(
+            "SELECT status, confirm_uncertain FROM work_recovery_jobs WHERE task_id = ?",
+            previous.taskId,
+          ),
         ).toEqual({ status: "queued", confirm_uncertain: 1 });
 
         const [claimed] = yield* trace.claimRecoveryJobs("s1", "parent-http-resume");
@@ -276,12 +271,11 @@ describe("Work Trace logical resume", () => {
   it.effect("project review keeps task detail after the origin session and agent are deleted", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* interruptedAttempt(trace);
-        db.sqlite.prepare("DELETE FROM subagents WHERE id = 'agent-1'").run();
-        db.sqlite.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+        yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
+        yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
 
         expect(yield* trace.taskTree("s1")).toEqual([]);
         expect(yield* trace.projectLatestCursor("p1")).toBeGreaterThan(0);
@@ -307,9 +301,8 @@ describe("Work Trace logical resume", () => {
   it.effect("archives only a settled task and keeps its trace while blocking resume", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* interruptedAttempt(trace);
 
         expect(yield* trace.archiveTask("s1", handle.taskId)).toEqual({
@@ -335,9 +328,8 @@ describe("Work Trace logical resume", () => {
   it.effect("rejects stale attempt ids and tasks without a durable checkpoint", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const trace = yield* WorkTraceStore;
-        seed(db);
+        yield* seed();
         const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",

@@ -2,7 +2,6 @@ import { chat } from "@tanstack/ai";
 import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
@@ -15,6 +14,7 @@ import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlRun } from "../support/sql.ts";
 
 const environment = Effect.gen(function* () {
   return {
@@ -657,17 +657,17 @@ testAgent()("memory tools per run", (it) => {
       const at = yield* freshSession;
       const { sessionId } = at;
       const env = yield* environment;
-      const db = yield* Database;
       const trace = yield* WorkTraceStore;
       const agentId = `${sessionId}:factory-agent`;
       const parentRunId = `${sessionId}:parent`;
-      db.sqlite
-        .prepare(
-          `INSERT INTO subagents
+      yield* sqlRun(
+        `INSERT INTO subagents
           (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
           VALUES (?, ?, 'factory', 'research', 'interrupted', ?, 'task', 1, 1)`,
-        )
-        .run(agentId, sessionId, parentRunId);
+        agentId,
+        sessionId,
+        parentRunId,
+      );
       const user = yield* env.nodes.append({
         ...at,
         kind: "user",

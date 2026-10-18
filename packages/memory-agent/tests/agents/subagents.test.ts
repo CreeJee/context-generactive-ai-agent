@@ -2,7 +2,6 @@ import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
-import { Database } from "../../src/db/database.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { Subagents, subagentThreadId } from "../../src/subagents/subagents.ts";
@@ -19,6 +18,7 @@ import {
   send,
   until,
 } from "./agent-env.ts";
+import { sqlAll, sqlGet, sqlRun, sqlTransaction } from "../support/sql.ts";
 
 const TraceSummary = Schema.Struct({
   task_id: Schema.String,
@@ -52,16 +52,17 @@ const parentSession = Effect.fnUntraced(function* (mode: PermissionMode = "ask")
 });
 
 /** The latest child attempt started from the session. */
-const latestAttempt = (db: Database["Service"], sessionId: string) =>
-  Schema.decodeUnknownEffect(ResumeIds)(
-    db.sqlite
-      .prepare(
+const latestAttempt = (sessionId: string) =>
+  Effect.gen(function* () {
+    return yield* Schema.decodeUnknownEffect(ResumeIds)(
+      yield* sqlGet(
         `SELECT t.id AS task_id, a.id AS attempt_id
          FROM work_tasks t JOIN agent_run_attempts a ON a.task_id = t.id
          WHERE t.origin_session_id = ? ORDER BY a.created_at DESC LIMIT 1`,
-      )
-      .get(sessionId),
-  );
+        sessionId,
+      ),
+    );
+  });
 
 testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) => {
   it.effect(
@@ -71,7 +72,6 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         const { provider } = yield* TestEnv;
         const { project, sessionId } = yield* parentSession();
         const subagents = yield* Subagents;
-        const db = yield* Database;
         const chat = yield* AgentChat;
         yield* (yield* FileSystem.FileSystem).writeFileString(
           (yield* Path.Path).join(project.root, "AGENTS.md"),
@@ -133,9 +133,8 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         const transcript = yield* sdk(() => subagents.transcript(sessionId, child!.id));
         expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
         const trace = yield* Schema.decodeUnknownEffect(TraceSummary)(
-          db.sqlite
-            .prepare(
-              `SELECT t.id AS task_id, a.id AS attempt_id,
+          yield* sqlGet(
+            `SELECT t.id AS task_id, a.id AS attempt_id,
                   t.status AS task_status, a.status AS attempt_status,
                   t.parent_run_id, t.parent_tool_call_id, a.chat_run_id,
                   (SELECT group_concat(kind, ',') FROM run_events e
@@ -147,8 +146,8 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
                FROM work_tasks t
                JOIN agent_run_attempts a ON a.task_id = t.id
                WHERE t.agent_id = ?`,
-            )
-            .get(child!.id),
+            child!.id,
+          ),
         );
         expect(trace).toMatchObject({ task_status: "completed", attempt_status: "completed" });
         expect(trace.parent_run_id).not.toBe("");
@@ -168,9 +167,10 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(trace.evidence_kinds.split(",").sort()).toEqual(["checkpoint", "message"]);
         expect(
           yield* encodeJson(
-            db.sqlite
-              .prepare("SELECT locator FROM evidence_refs WHERE attempt_id = ?")
-              .all(trace.attempt_id),
+            yield* sqlAll(
+              "SELECT locator FROM evidence_refs WHERE attempt_id = ?",
+              trace.attempt_id,
+            ),
           ),
         ).not.toContain("child done: list what matters");
 
@@ -195,16 +195,18 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           status: "blocked",
           reason: "task_terminal",
         });
-        db.atomic(() => {
-          db.sqlite
-            .prepare("UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?")
-            .run(trace.attempt_id);
-          db.sqlite
-            .prepare(
+        yield* sqlTransaction(
+          Effect.gen(function* () {
+            yield* sqlRun(
+              "UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?",
+              trace.attempt_id,
+            );
+            yield* sqlRun(
               "UPDATE work_tasks SET status = 'resumable', active_attempt_id = NULL WHERE id = ?",
-            )
-            .run(trace.task_id);
-        });
+              trace.task_id,
+            );
+          }),
+        );
         const queuedResume = yield* chat.requestTraceResume(
           sessionId,
           null,
@@ -278,7 +280,6 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const { sessionId } = yield* parentSession("ask");
       const subagents = yield* Subagents;
       const relayed = yield* RelayedApprovals;
-      const db = yield* Database;
       const approved = yield* Effect.forkChild(
         send(sessionId, 'call run_subagent {"task":"shell: printf child-approved"}'),
       );
@@ -316,36 +317,33 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         (yield* reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`))?.decision,
       ).toBe("denied");
       const toolEvidenceCount = (agentId: string) =>
-        db.sqlite
-          .prepare(
-            `SELECT count(*) AS count FROM evidence_refs e
+        sqlGet(
+          `SELECT count(*) AS count FROM evidence_refs e
              JOIN work_tasks t ON t.id = e.task_id
              WHERE t.agent_id = ? AND e.source_kind IN ('tool_call', 'tool_result')`,
-          )
-          .get(agentId);
-      expect(toolEvidenceCount(children[0]!.id)).toEqual({ count: 2 });
-      expect(toolEvidenceCount(children[1]!.id)).toEqual({ count: 2 });
+          agentId,
+        );
+      expect(yield* toolEvidenceCount(children[0]!.id)).toEqual({ count: 2 });
+      expect(yield* toolEvidenceCount(children[1]!.id)).toEqual({ count: 2 });
       expect(
-        db.sqlite
-          .prepare(
-            `SELECT verification FROM evidence_refs e
+        yield* sqlGet(
+          `SELECT verification FROM evidence_refs e
              JOIN work_tasks t ON t.id = e.task_id
              WHERE t.agent_id = ? AND e.source_kind = 'tool_result'`,
-          )
-          .get(children[1]!.id),
+          children[1]!.id,
+        ),
       ).toEqual({ verification: "verified" });
       // Tool evidence points at calls that the child's transcript really holds.
       for (const child of children) {
         const transcript = yield* sdk(() => subagents.transcript(sessionId, child.id));
         const persisted = yield* encodeJson(transcript?.messages ?? []);
         const locators = yield* Schema.decodeUnknownEffect(LocatorRows)(
-          db.sqlite
-            .prepare(
-              `SELECT e.locator FROM evidence_refs e
+          yield* sqlAll(
+            `SELECT e.locator FROM evidence_refs e
                JOIN work_tasks t ON t.id = e.task_id
                WHERE t.agent_id = ? AND e.source_kind IN ('tool_call', 'tool_result')`,
-            )
-            .all(child.id),
+            child.id,
+          ),
         );
         for (const { locator } of locators) {
           const { toolCallId } = yield* Schema.decodeEffect(
@@ -360,27 +358,25 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
   it.effect("a child file write records the actual artifact without copying its contents", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession("full");
-      const db = yield* Database;
       const answer = yield* send(
         sessionId,
         'call run_subagent {"task":"call write_file {\\"path\\":\\"wt-artifact.txt\\",\\"content\\":\\"artifact sentinel body\\"}"}',
       );
       expect(answer).toContain("write_file said");
       const artifact = yield* Schema.decodeUnknownEffect(ArtifactSummary)(
-        db.sqlite
-          .prepare(
-            `SELECT w.kind, w.locator FROM work_artifacts w
+        yield* sqlGet(
+          `SELECT w.kind, w.locator FROM work_artifacts w
              JOIN work_tasks t ON t.id = w.task_id
              WHERE t.agent_id = ?`,
-          )
-          .get((yield* (yield* Subagents).list(sessionId))[0]!.id),
+          (yield* (yield* Subagents).list(sessionId))[0]!.id,
+        ),
       );
       expect(artifact.kind).toBe("file");
       expect(artifact.locator).toContain('"path":"wt-artifact.txt"');
       expect(
         yield* encodeJson({
-          evidence: db.sqlite.prepare("SELECT * FROM evidence_refs").all(),
-          artifacts: db.sqlite.prepare("SELECT * FROM work_artifacts").all(),
+          evidence: yield* sqlAll("SELECT * FROM evidence_refs"),
+          artifacts: yield* sqlAll("SELECT * FROM work_artifacts"),
         }),
       ).not.toContain("artifact sentinel body");
     }),
@@ -389,19 +385,20 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
   it.effect("resume_subagent runs a new child attempt from the durable checkpoint", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession();
-      const db = yield* Database;
       yield* send(sessionId, 'call run_subagent {"task":"collect facts"}');
-      const ids = yield* latestAttempt(db, sessionId);
-      db.atomic(() => {
-        db.sqlite
-          .prepare("UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?")
-          .run(ids.attempt_id);
-        db.sqlite
-          .prepare(
+      const ids = yield* latestAttempt(sessionId);
+      yield* sqlTransaction(
+        Effect.gen(function* () {
+          yield* sqlRun(
+            "UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?",
+            ids.attempt_id,
+          );
+          yield* sqlRun(
             "UPDATE work_tasks SET status = 'resumable', active_attempt_id = NULL WHERE id = ?",
-          )
-          .run(ids.task_id);
-      });
+            ids.task_id,
+          );
+        }),
+      );
       const resumed = yield* send(
         sessionId,
         `call resume_subagent ${yield* encodeJson({ taskId: ids.task_id, expectedAttemptId: ids.attempt_id })}`,
@@ -409,14 +406,14 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       expect(resumed).toContain('"status":"completed"');
       expect(resumed).toContain("Resume the interrupted task as a new execution attempt");
       const result = yield* Schema.decodeUnknownEffect(ResumeResult)(
-        db.sqlite
-          .prepare(
-            `SELECT count(*) AS attempts,
+        yield* sqlGet(
+          `SELECT count(*) AS attempts,
                   (SELECT status FROM agent_run_attempts WHERE task_id = ?
                    ORDER BY attempt_number DESC LIMIT 1) AS latest_status
              FROM agent_run_attempts WHERE task_id = ?`,
-          )
-          .get(ids.task_id, ids.task_id),
+          ids.task_id,
+          ids.task_id,
+        ),
       );
       expect(result).toEqual({ attempts: 2, latest_status: "completed" });
     }),
@@ -431,43 +428,40 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagent blocked re
       const env = yield* TestEnv;
       const { sessionId } = yield* parentSession();
       yield* send(sessionId, 'call run_subagent {"task":"write externally"}');
-      const db = yield* Database;
-      const ids = yield* latestAttempt(db, sessionId);
-      db.atomic(() => {
-        db.sqlite
-          .prepare(
+      const ids = yield* latestAttempt(sessionId);
+      yield* sqlTransaction(
+        Effect.gen(function* () {
+          yield* sqlRun(
             `UPDATE work_checkpoints SET uncertain_tool_call_ids = '["non-idempotent-write"]'
              WHERE attempt_id = ?`,
-          )
-          .run(ids.attempt_id);
-        db.sqlite
-          .prepare(
+            ids.attempt_id,
+          );
+          yield* sqlRun(
             "UPDATE agent_run_attempts SET status = 'running', finished_at = NULL WHERE id = ?",
-          )
-          .run(ids.attempt_id);
-        db.sqlite
-          .prepare("UPDATE work_tasks SET status = 'running', active_attempt_id = ? WHERE id = ?")
-          .run(ids.attempt_id, ids.task_id);
-      });
+            ids.attempt_id,
+          );
+          yield* sqlRun(
+            "UPDATE work_tasks SET status = 'running', active_attempt_id = ? WHERE id = ?",
+            ids.attempt_id,
+            ids.task_id,
+          );
+        }),
+      );
       yield* env.reopen;
-      const reopened = yield* env.use(Database);
       const recoveryJob = () =>
-        reopened.sqlite
-          .prepare("SELECT status, blocker FROM work_recovery_jobs WHERE task_id = ?")
-          .get(ids.task_id);
-      expect(recoveryJob()).toEqual({ status: "blocked", blocker: "uncertain_side_effect" });
+        sqlGet("SELECT status, blocker FROM work_recovery_jobs WHERE task_id = ?", ids.task_id);
+      expect(yield* recoveryJob()).toEqual({ status: "blocked", blocker: "uncertain_side_effect" });
       expect(
-        reopened.sqlite
-          .prepare("SELECT status, active_attempt_id FROM work_tasks WHERE id = ?")
-          .get(ids.task_id),
+        yield* sqlGet("SELECT status, active_attempt_id FROM work_tasks WHERE id = ?", ids.task_id),
       ).toEqual({ status: "blocked", active_attempt_id: null });
       yield* send(sessionId, "continue");
       expect(
-        reopened.sqlite
-          .prepare("SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?")
-          .get(ids.task_id),
+        yield* sqlGet(
+          "SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?",
+          ids.task_id,
+        ),
       ).toEqual({ attempts: 1 });
-      expect(recoveryJob()).toEqual({ status: "blocked", blocker: "uncertain_side_effect" });
+      expect(yield* recoveryJob()).toEqual({ status: "blocked", blocker: "uncertain_side_effect" });
     }),
   );
 });
@@ -498,34 +492,35 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
         // Create a safe checkpoint with no uncertain tool side effects, then simulate a crash while
         // that newest child attempt is still running.
         yield* send(sessionId, 'call run_subagent {"task":"recover facts"}');
-        const db = yield* Database;
-        const ids = yield* latestAttempt(db, sessionId);
-        db.atomic(() => {
-          db.sqlite
-            .prepare("UPDATE subagents SET status = 'running' WHERE session_id = ?")
-            .run(sessionId);
-          db.sqlite
-            .prepare(
+        const ids = yield* latestAttempt(sessionId);
+        yield* sqlTransaction(
+          Effect.gen(function* () {
+            yield* sqlRun(
+              "UPDATE subagents SET status = 'running' WHERE session_id = ?",
+              sessionId,
+            );
+            yield* sqlRun(
               "UPDATE agent_run_attempts SET status = 'running', finished_at = NULL WHERE id = ?",
-            )
-            .run(ids.attempt_id);
-          db.sqlite
-            .prepare("UPDATE work_tasks SET status = 'running', active_attempt_id = ? WHERE id = ?")
-            .run(ids.attempt_id, ids.task_id);
-        });
+              ids.attempt_id,
+            );
+            yield* sqlRun(
+              "UPDATE work_tasks SET status = 'running', active_attempt_id = ? WHERE id = ?",
+              ids.attempt_id,
+              ids.task_id,
+            );
+          }),
+        );
         yield* env.reopen;
         expect((yield* (yield* env.use(Subagents)).list(sessionId))[0]?.status).toBe("interrupted");
-        const reopened = yield* env.use(Database);
         expect(
           yield* Schema.decodeUnknownEffect(RestartedTrace)(
-            reopened.sqlite
-              .prepare(
-                `SELECT a.status AS attempt_status, a.resume_reason, t.status AS task_status,
+            yield* sqlGet(
+              `SELECT a.status AS attempt_status, a.resume_reason, t.status AS task_status,
                   t.active_attempt_id
                FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
                WHERE a.id = ?`,
-              )
-              .get(ids.attempt_id),
+              ids.attempt_id,
+            ),
           ),
         ).toEqual({
           attempt_status: "interrupted",
@@ -534,22 +529,23 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
           resume_reason: "server_restarted",
         });
         const recoveryJob = () =>
-          reopened.sqlite
-            .prepare("SELECT status, blocker FROM work_recovery_jobs WHERE task_id = ?")
-            .get(ids.task_id);
-        expect(recoveryJob()).toEqual({ status: "queued", blocker: null });
+          sqlGet("SELECT status, blocker FROM work_recovery_jobs WHERE task_id = ?", ids.task_id);
+        expect(yield* recoveryJob()).toEqual({ status: "queued", blocker: null });
         yield* send(sessionId, "continue");
-        yield* until(() => {
-          const job = recoveryJob();
-          return (
-            Schema.is(JobStatus)(job) && ["completed", "failed", "blocked"].includes(job.status)
-          );
-        }, "the recovery job to finish");
-        expect(recoveryJob()).toMatchObject({ status: "completed" });
+        yield* until(
+          Effect.map(
+            recoveryJob(),
+            (job) =>
+              Schema.is(JobStatus)(job) && ["completed", "failed", "blocked"].includes(job.status),
+          ),
+          "the recovery job to finish",
+        );
+        expect(yield* recoveryJob()).toMatchObject({ status: "completed" });
         expect(
-          reopened.sqlite
-            .prepare("SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?")
-            .get(ids.task_id),
+          yield* sqlGet(
+            "SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?",
+            ids.task_id,
+          ),
         ).toEqual({ attempts: 2 });
         const trace = yield* env.use(WorkTraceStore);
         const notifications = yield* trace.consumeParentNotifications(
@@ -564,13 +560,12 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
           ),
         ).toBe(true);
         expect(
-          reopened.sqlite
-            .prepare(
-              `SELECT count(*) AS count FROM parent_notifications
+          yield* sqlGet(
+            `SELECT count(*) AS count FROM parent_notifications
              WHERE origin_session_id = ? AND kind IN ('resumed', 'completed')
                AND delivered_at IS NOT NULL`,
-            )
-            .get(sessionId),
+            sessionId,
+          ),
         ).toEqual({ count: 3 });
         expect(yield* trace.consumeParentNotifications(sessionId, `${sessionId}:another`)).toEqual(
           [],

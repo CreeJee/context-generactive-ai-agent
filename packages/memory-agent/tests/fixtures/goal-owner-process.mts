@@ -16,12 +16,13 @@ import {
 } from "effect";
 import { memoryAgentLayer, Projects, Sessions } from "../../src/index.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { Database } from "../../src/db/database.ts";
+import { SqlClient } from "effect/sql";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { testProvider, turnGate } from "../support/provider.ts";
+import { sqlAll } from "../support/sql.ts";
 
 const [base, mode] = process.argv.slice(2);
 if (base === undefined || base === "") throw new Error("Missing owned temporary root");
@@ -89,8 +90,8 @@ await Effect.runPromise(
       yield* sdkCall(() => provider.select(runtime));
       const services = yield* runtime.contextEffect;
       const runNative = Effect.runPromiseWith(services);
-      const { chat, db, workflows } = yield* Effect.provideContext(
-        Effect.all({ chat: AgentChat, db: Database, workflows: Workflows }),
+      const { chat, sql, workflows } = yield* Effect.provideContext(
+        Effect.all({ chat: AgentChat, sql: SqlClient.SqlClient, workflows: Workflows }),
         services,
       );
       let sessionId: string;
@@ -123,18 +124,19 @@ await Effect.runPromise(
           const incoming = yield* HttpServerRequest.HttpServerRequest;
           const url = new URL(incoming.url, "http://127.0.0.1");
           if (url.pathname === "/inspect")
-            return yield* HttpServerResponse.json({
-              runs: db.sqlite.prepare("SELECT * FROM chat_runs ORDER BY started_at").all(),
-              bindings: db.sqlite.prepare("SELECT * FROM workflow_run_bindings").all(),
-              operations: db.sqlite.prepare("SELECT * FROM owner_rpc_operations").all(),
-              revisions: db.sqlite.prepare("SELECT * FROM workflow_state_revisions").all(),
-              dispatches: db.sqlite.prepare("SELECT * FROM workflow_worker_dispatches").all(),
-              executions: db.sqlite
-                .prepare(
-                  "SELECT json_extract(payload_json, '$.identity.runId') AS runId, status FROM owner_workflow_executions WHERE workflow_name = 'GoalExecution'",
-                )
-                .all(),
-            });
+            return yield* Effect.all({
+              runs: sqlAll("SELECT * FROM chat_runs ORDER BY started_at"),
+              bindings: sqlAll("SELECT * FROM workflow_run_bindings"),
+              operations: sqlAll("SELECT * FROM owner_rpc_operations"),
+              revisions: sqlAll("SELECT * FROM workflow_state_revisions"),
+              dispatches: sqlAll("SELECT * FROM workflow_worker_dispatches"),
+              executions: sqlAll(
+                "SELECT json_extract(payload_json, '$.identity.runId') AS runId, status FROM owner_workflow_executions WHERE workflow_name = 'GoalExecution'",
+              ),
+            }).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+              Effect.flatMap(HttpServerResponse.json),
+            );
           const request = yield* HttpServerRequest.toWeb(incoming);
           const response = yield* Effect.provideContext(
             chatRoute(chat, request, sessionId),

@@ -1,7 +1,6 @@
 import { Cause, Deferred, Effect, FileSystem, Path, Ref, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
-import { Database } from "../../src/db/database.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
 import {
   BackgroundOperationFailed,
@@ -11,6 +10,7 @@ import {
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { freshSession, sdk } from "./agent-env.ts";
+import { sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
 
 const Receipt = Schema.Struct({
   status: Schema.Literal("running"),
@@ -261,7 +261,6 @@ testAgent()("read-only background results", (it) => {
     Effect.gen(function* () {
       const { session } = yield* TestEnv;
       const tasks = yield* BackgroundTasks;
-      const db = yield* Database;
       const trace = yield* WorkTraceStore;
       const receipt = yield* tasks.start(
         yield* runOf(session.id),
@@ -272,13 +271,12 @@ testAgent()("read-only background results", (it) => {
       );
       yield* tasks.waitResult(session.id, receipt.taskId, 2000);
       expect((yield* trace.taskDetail(session.id, receipt.taskId))?.task.status).toBe("completed");
-      const changes = db.sqlite.prepare("SELECT total_changes() AS n").get();
+      const changes = yield* sqlGet("SELECT total_changes() AS n");
       const get = tasks
         .forSession(session.id)
         .find((tool) => tool.name === "get_background_result")!;
-      yield* Effect.acquireRelease(
-        Effect.sync(() => db.sqlite.exec("PRAGMA query_only = ON")),
-        () => Effect.sync(() => db.sqlite.exec("PRAGMA query_only = OFF")),
+      yield* Effect.acquireRelease(sqlExec("PRAGMA query_only = ON"), () =>
+        Effect.orDie(sqlExec("PRAGMA query_only = OFF")),
       );
       const first = yield* sdk(() => get.execute!({ taskId: receipt.taskId }));
       expect(first).toMatchObject({ status: "completed", result: "saved result" });
@@ -286,7 +284,7 @@ testAgent()("read-only background results", (it) => {
       expect(yield* rejection(sdk(() => get.execute!({ taskId: "missing-task" })))).toMatchObject({
         message: expect.stringContaining("not found"),
       });
-      expect(db.sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(changes);
+      expect(yield* sqlGet("SELECT total_changes() AS n")).toEqual(changes);
     }),
   );
 });
@@ -375,13 +373,12 @@ testAgent()("background cancellation across restart", (it) => {
       yield* sdk(() =>
         persistence.stores.metadata.delete("background-task-result", receipt.taskId),
       );
-      const db = yield* Database;
-      db.sqlite
-        .prepare("UPDATE agent_run_attempts SET status='running' WHERE id=?")
-        .run(receipt.attemptId);
-      db.sqlite
-        .prepare("UPDATE work_tasks SET active_attempt_id=?,status='running' WHERE id=?")
-        .run(receipt.attemptId, receipt.taskId);
+      yield* sqlRun("UPDATE agent_run_attempts SET status='running' WHERE id=?", receipt.attemptId);
+      yield* sqlRun(
+        "UPDATE work_tasks SET active_attempt_id=?,status='running' WHERE id=?",
+        receipt.attemptId,
+        receipt.taskId,
+      );
       yield* env.reopen;
       expect((yield* env.use(BackgroundTasks)).hasSession(session.id)).toBe(false);
       expect(yield* env.use(readResult(session.id, { taskId: receipt.taskId }))).toMatchObject({
