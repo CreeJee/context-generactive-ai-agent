@@ -1,20 +1,23 @@
-import { Effect } from "effect";
-import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { NodeServices, NodeWorker, NodeWorkerRunner } from "@effect/platform-node";
+import { Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/rpc";
+import { Worker, isMainThread } from "node:worker_threads";
 import { createReadFixture } from "../../src/memory/native-search/read-fixture.ts";
+import { runNativeEffect } from "../../src/runtime/native-effect.ts";
 import { initializeNodeSqlite } from "../../src/runtime/node-sqlite-bridge.ts";
 import { requireRuntime } from "../../src/runtime/resources.ts";
-import { NodeServices } from "@effect/platform-node";
-import { Context, FileSystem, Layer, Schema } from "effect";
-await Effect.runPromise(
-  Effect.scoped(
-    Effect.gen(function* () {
-      const platform = yield* Layer.build(NodeServices.layer);
-      const fs = Context.get(platform, FileSystem.FileSystem);
 
-      // Isolated crash regression: no provider, account, user storage, or network.
+// Isolated crash regression: no provider, account, user storage, or network.
 
-      if (!isMainThread) {
-        const path = String(workerData);
+const reads = 300;
+const Reader = RpcGroup.make(
+  Rpc.make("ReadRepeatedly", { payload: { path: Schema.String }, success: Schema.Int }),
+);
+
+if (!isMainThread) {
+  const handlers = Reader.toLayer({
+    ReadRepeatedly: ({ path }) =>
+      Effect.gen(function* () {
         const addon = requireRuntime("turbovec");
         const binding = addon.loadTurbovec();
         // Initialization is required before any native SQLite call and may be repeated safely.
@@ -25,7 +28,7 @@ await Effect.runPromise(
         initializeNodeSqlite(addon.addonPath);
         initializeNodeSqlite(addon.addonPath);
         const index = new binding.VectorIndex(384, 4);
-        for (let i = 0; i < 300; i++) {
+        for (let i = 0; i < reads; i++) {
           const reader = new binding.MemoryReadSession(path);
           const control = new binding.SearchControl(`lock-${i}`, "lock", "lock", String(i), 5_000);
           try {
@@ -57,52 +60,62 @@ await Effect.runPromise(
             control.close();
           }
         }
-        parentPort!.postMessage("completed");
-      } else {
+        return reads;
+      }),
+  });
+  const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
+  await runNativeEffect(
+    Layer.launch(RpcServer.layer(Reader).pipe(Layer.provide(handlers), Layer.provide(protocol))),
+  );
+} else {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const platform = yield* Layer.build(NodeServices.layer);
+        const fs = Context.get(platform, FileSystem.FileSystem);
         const directory = yield* fs.makeTempDirectoryScoped({
           prefix: "context-sqlite-regression-",
         });
         const path = `${directory}/owner.db`;
         const writer = createReadFixture(path);
+        yield* Effect.addFinalizer(() => Effect.sync(() => writer.close()));
         // Establish the owner's WAL SHM mapping before the other thread opens its first reader.
         writer.prepare("SELECT count(*) FROM nodes").get();
-        const worker = new Worker(new URL(import.meta.url), { workerData: path });
-        let completed = false;
-        let failure: { readonly cause: unknown } | undefined;
-        worker.on("message", () => {
-          completed = true;
-        });
-        worker.on("error", (error) => {
-          failure = { cause: error };
-        });
+        const protocol = yield* Layer.build(
+          RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(
+            Layer.provide(NodeWorker.layer(() => new Worker(new URL(import.meta.url)))),
+          ),
+        );
+        const client = yield* RpcClient.make(Reader).pipe(Effect.provide(protocol));
         let writes = 0;
-        try {
-          while (!completed && failure === undefined) {
-            writer.exec(`BEGIN; UPDATE nodes SET text = 'write-${writes}' WHERE seq = 1; COMMIT;`);
-            writes++;
-            yield* Effect.callback<void>((resume) => {
+        const write = Effect.sync(() => {
+          writer.exec(`BEGIN; UPDATE nodes SET text = 'write-${writes}' WHERE seq = 1; COMMIT;`);
+          writes++;
+        }).pipe(
+          Effect.andThen(
+            Effect.callback<void>((resume) => {
               const immediate = setImmediate(() => resume(Effect.void));
               return Effect.sync(() => clearImmediate(immediate));
-            });
-          }
-          if (failure !== undefined) throw new Error("Native reader worker failed", failure);
-          const integrity = writer.prepare("PRAGMA integrity_check").get();
-          if (integrity?.integrity_check !== "ok") throw new Error("SQLite integrity failed");
-          const report = yield* Schema.encodeEffect(
-            Schema.fromJsonString(
-              Schema.Struct({
-                status: Schema.Literal("passed"),
-                reads: Schema.Int,
-                writes: Schema.Int,
-              }),
-            ),
-          )({ status: "passed", reads: 300, writes });
-          process.stdout.write(report + "\n");
-        } finally {
-          yield* Effect.uninterruptible(Effect.tryPromise(() => worker.terminate()));
-          writer.close();
-        }
-      }
-    }),
-  ),
-);
+            }),
+          ),
+        );
+        // Keep writing until the reader thread finishes; its failure fails the race.
+        const completed = yield* client
+          .ReadRepeatedly({ path })
+          .pipe(Effect.raceFirst(Effect.forever(write)));
+        const integrity = writer.prepare("PRAGMA integrity_check").get();
+        if (integrity?.integrity_check !== "ok") throw new Error("SQLite integrity failed");
+        const report = yield* Schema.encodeEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              status: Schema.Literal("passed"),
+              reads: Schema.Int,
+              writes: Schema.Int,
+            }),
+          ),
+        )({ status: "passed", reads: completed, writes });
+        process.stdout.write(report + "\n");
+      }),
+    ),
+  );
+}

@@ -13,7 +13,7 @@ import { makeGoalWorkerAssetsRegistry } from "../src/agent/goal-worker-assets.ts
 import { runtimeArtifact } from "../src/runtime/resources.ts";
 
 const boot = Effect.fn("bootGoalWorker")(
-  function* (url: URL) {
+  function* (url: URL, presentedToken = "asset-token") {
     const capability = {
       sessionId: "asset-session",
       runId: "asset-run",
@@ -72,7 +72,7 @@ const boot = Effect.fn("bootGoalWorker")(
     yield* Stream.runDrain(
       client.RunFullLoop(
         {
-          capability,
+          capability: { ...capability, token: presentedToken },
           lastOperationId: 0,
           turn: { messages: [] },
           tools: [],
@@ -109,6 +109,7 @@ layer(NodeServices.layer)((it) => {
           try {
             const assets = yield* registry.resolve("runtime-default-goal");
             expect(yield* boot(assets.workerUrl)).toBe("rpc");
+            expect(yield* boot(assets.workerUrl, "forged-token")).toContain("unauthorized");
             yield* registry.dispose();
             const adopted = yield* reopened.adopt(assets);
             expect(yield* reopened.resolve(assets.goalInstanceId)).toBe(adopted);

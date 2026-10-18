@@ -176,16 +176,9 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop worker lifecycle", (
       Effect.gen(function* () {
         const f = yield* ownerFixture();
         const { lifecycle, worker, hooks } = yield* watched();
+        // Never answers the RPC handshake, so the pull waits until the owner aborts.
         const waitingWorker = new URL(
-          `data:text/javascript;base64,${Buffer.from(`
-      import { workerData, parentPort } from 'node:worker_threads';
-      parentPort.on('message', frame => {
-        if (frame.type !== 'abort') return;
-        parentPort.postMessage({ type: 'done' });
-        workerData.port.close();
-        parentPort.close();
-      });
-    `).toString("base64")}`,
+          `data:text/javascript;base64,${Buffer.from("setInterval(() => {}, 1 << 30);").toString("base64")}`,
         );
         const { stream, controller, modelCall } = started({
           ...f.owner,
