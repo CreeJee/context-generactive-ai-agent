@@ -1,16 +1,23 @@
 import { nativePromise } from "../runtime/native-effect.ts";
-import { Effect, Stream, Cause, Function as EffectFunction } from "effect";
+import { Effect, Stream, Function as EffectFunction, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 
 const tokenEndpoint = "https://auth.openai.com/oauth/token";
 
-export type ProxyRoute = "direct" | "unavailable" | "attempted";
+export const ProxyRoute = Schema.Literals(["direct", "unavailable", "attempted"]);
+export type ProxyRoute = typeof ProxyRoute.Type;
 export interface TokenProxyResult {
   readonly route: ProxyRoute;
   readonly response: Response | null;
 }
+
+/** PowerShell printed more than a proxy URL can be; its output is not read further. */
+class ProxyOutputTooLarge extends Schema.TaggedError<ProxyOutputTooLarge>()(
+  "ProxyOutputTooLarge",
+  {},
+) {}
 
 type ProxyResolution =
   | { readonly route: "direct" | "unavailable" }
@@ -75,7 +82,7 @@ const windowsTokenProxyEffect = Effect.fn("OAuth.windowsTokenProxy")(function* (
         Stream.runForEach((chunk) =>
           Effect.gen(function* () {
             size += chunk.byteLength;
-            if (size > 2048) return yield* new Cause.UnknownError(new Error("proxy_output_limit"));
+            if (size > 2048) return yield* new ProxyOutputTooLarge();
             output += decoder.decode(chunk, { stream: true });
           }),
         ),
@@ -86,7 +93,10 @@ const windowsTokenProxyEffect = Effect.fn("OAuth.windowsTokenProxy")(function* (
     }),
   ).pipe(
     Effect.timeout(5_000),
-    Effect.orElseSucceed((): ProxyResolution => ({ route: "unavailable" })),
+    // Without an answer from the OS policy the token request is not routed through a proxy.
+    Effect.catchTag(["PlatformError", "ProxyOutputTooLarge", "TimeoutError"], () =>
+      Effect.succeed<ProxyResolution>({ route: "unavailable" }),
+    ),
   );
 });
 export function windowsTokenProxy(): Promise<ProxyResolution> {
@@ -115,7 +125,9 @@ function fetchOpenAiTokenViaSystemProxyBody(
       const resolution = yield* windowsTokenProxyEffect();
       if (resolution.route !== "proxy") return { route: resolution.route, response: null };
       return yield* Effect.acquireUseRelease(
-        Effect.try(() => new ProxyAgent(resolution.url)).pipe(Effect.orElseSucceed(() => null)),
+        Effect.try(() => new ProxyAgent(resolution.url)).pipe(
+          Effect.catchTag("UnknownError", () => Effect.succeed(null)),
+        ),
         (dispatcher) =>
           Effect.gen(function* () {
             if (dispatcher === null) return { route: "unavailable" as const, response: null };
@@ -135,8 +147,15 @@ function fetchOpenAiTokenViaSystemProxyBody(
               response: new Response(text, { status: response.status }),
             };
           }),
+        // Closing the one-shot agent is best-effort; the token response already stands.
         (dispatcher) =>
-          dispatcher === null ? Effect.void : Effect.promise(() => dispatcher.close()),
+          dispatcher === null
+            ? Effect.void
+            : nativePromise(() => dispatcher.close()).pipe(
+                Effect.catchTag("UnknownError", () =>
+                  Effect.logWarning("OAuth proxy agent close failed", { error: "UnknownError" }),
+                ),
+              ),
       );
     }),
   );

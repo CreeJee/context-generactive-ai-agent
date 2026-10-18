@@ -1,4 +1,4 @@
-import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { Result } from "effect";
 import { isTruthy } from "../truthy.ts";
@@ -15,7 +15,6 @@ import {
   HashSet,
   MutableHashSet,
   DateTime,
-  Data,
   Option,
   Schema,
   Layer,
@@ -23,12 +22,13 @@ import {
   Exit,
 } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
+import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { oauthProtocolCrypto } from "./node-runtime.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
 import {
   fetchOpenAiTokenViaSystemProxy,
-  type ProxyRoute,
+  ProxyRoute,
   type TokenProxyResult,
 } from "./windows-token-proxy.ts";
 import {
@@ -72,16 +72,18 @@ export interface CredentialStore {
 export const providerKeychainService = (provider: OAuthProvider) =>
   `com.context-agent.oauth.${provider}`;
 
-export type CredentialStoreStage =
-  | "module_load"
-  | "entry_open"
-  | "read"
-  | "decode"
-  | "write"
-  | "delete";
+export const CredentialStoreStage = Schema.Literals([
+  "module_load",
+  "entry_open",
+  "read",
+  "decode",
+  "write",
+  "delete",
+]);
+export type CredentialStoreStage = typeof CredentialStoreStage.Type;
 
 const credentialStoreFailure = (provider: OAuthProvider, stage: CredentialStoreStage) =>
-  new OAuthHarnessError("credential_store_unavailable", null, {
+  OAuthHarnessError.fromCode("credential_store_unavailable", null, {
     provider,
     operation: "credential_store",
     credentialStage: stage,
@@ -153,30 +155,43 @@ export const createKeychainCredentialStore = (
     ).then(() => undefined),
 });
 
+/** A keychain slot was asked for with an id no profile can have. */
+export class OAuthProfileIdRejected extends Schema.TaggedError<OAuthProfileIdRejected>()(
+  "OAuthProfileIdRejected",
+  {},
+) {
+  override get message() {
+    return "invalid_oauth_profile_id";
+  }
+}
+
 export const createKeychainProfileCredentialStore = (profileId: string): CredentialStore => {
   if (
     !/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|legacy-(?:openai|anthropic))$/.test(
       profileId,
     )
   )
-    throw new Error("invalid_oauth_profile_id");
+    // Synchronous store factory: callers hold no error channel here.
+    throw new OAuthProfileIdRejected();
   // Preserve the original 'subscription-oauth' entry for rollback until migration is verified.
   return createKeychainCredentialStore((provider) =>
     keychainEntry(provider, `subscription-oauth-${profileId}`),
   );
 };
 
-export type OAuthHarnessFailure =
-  | "cancelled"
-  | "callback_invalid"
-  | "callback_state_mismatch"
-  | "callback_timeout"
-  | "credential_store_unavailable"
-  | "invalid_token_response"
-  | "login_in_progress"
-  | "not_connected"
-  | "provider_rejected"
-  | "transport_unavailable";
+export const OAuthHarnessFailure = Schema.Literals([
+  "cancelled",
+  "callback_invalid",
+  "callback_state_mismatch",
+  "callback_timeout",
+  "credential_store_unavailable",
+  "invalid_token_response",
+  "login_in_progress",
+  "not_connected",
+  "provider_rejected",
+  "transport_unavailable",
+]);
+export type OAuthHarnessFailure = typeof OAuthHarnessFailure.Type;
 
 const failureMessages: Record<OAuthHarnessFailure, string> = {
   cancelled: "OAuth login was cancelled.",
@@ -191,20 +206,27 @@ const failureMessages: Record<OAuthHarnessFailure, string> = {
   transport_unavailable: "The provider could not be reached.",
 };
 
-export type OAuthHarnessOperation =
-  | "credential_store"
-  | "login_callback"
-  | "model_catalog"
-  | "model_stream"
-  | "subscription_usage"
-  | "token_exchange"
-  | "token_refresh";
+export const OAuthHarnessOperation = Schema.Literals([
+  "credential_store",
+  "login_callback",
+  "model_catalog",
+  "model_stream",
+  "subscription_usage",
+  "token_exchange",
+  "token_refresh",
+]);
+export type OAuthHarnessOperation = typeof OAuthHarnessOperation.Type;
+
+/** A fixed explanation appended to the message; never provider text. */
+const OAuthHarnessDetail = Schema.Literals(["catalog_pagination_unbounded"]);
+const detailMessages: Record<typeof OAuthHarnessDetail.Type, string> = {
+  catalog_pagination_unbounded: "Model catalog pagination did not terminate.",
+};
 
 export interface OAuthHarnessErrorContext {
   readonly provider?: OAuthProvider;
   readonly operation?: OAuthHarnessOperation;
-  /** A bounded provider error message. Never include response headers or request bodies here. */
-  readonly reason?: string;
+  readonly detail?: typeof OAuthHarnessDetail.Type;
   /** A short machine-readable provider code, never a raw response body. */
   readonly providerCode?: string;
   /** Fixed stage only; never a native exception message or credential. */
@@ -302,28 +324,27 @@ const providerCode = (body: string): string | undefined => {
   return HashSet.has(safeOAuthCodes, code) ? code : undefined;
 };
 
-export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
-  readonly code: OAuthHarnessFailure;
-  readonly status: number | null;
-  readonly provider: OAuthProvider | null;
-  readonly operation: OAuthHarnessOperation | null;
-  readonly providerCode: string | null;
-  readonly credentialStage: CredentialStoreStage | null;
-  readonly transportCode: string | null;
-  readonly proxyRoute: ProxyRoute | null;
-  readonly message: string;
-}> {
-  constructor(
+export class OAuthHarnessError extends Schema.TaggedError<OAuthHarnessError>()(
+  "OAuthHarnessError",
+  {
+    code: OAuthHarnessFailure,
+    status: Schema.NullOr(Schema.Int),
+    provider: Schema.NullOr(SubscriptionAccountProvider),
+    operation: Schema.NullOr(OAuthHarnessOperation),
+    /** An allowlisted OAuth error code, never a raw response body. */
+    providerCode: Schema.NullOr(Schema.String),
+    credentialStage: Schema.NullOr(CredentialStoreStage),
+    transportCode: Schema.NullOr(Schema.String),
+    proxyRoute: Schema.NullOr(ProxyRoute),
+    detail: Schema.NullOr(OAuthHarnessDetail),
+  },
+) {
+  static fromCode(
     code: OAuthHarnessFailure,
     status: number | null = null,
     context: OAuthHarnessErrorContext = {},
   ) {
-    const details = [
-      context.provider === undefined ? null : `provider=${providerName(context.provider)}`,
-      context.operation === undefined ? null : `operation=${context.operation}`,
-      status === null ? null : `status=${status}`,
-    ].filter((detail) => detail !== null);
-    super({
+    return OAuthHarnessError.make({
       code,
       status,
       provider: context.provider ?? null,
@@ -332,8 +353,17 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
       credentialStage: context.credentialStage ?? null,
       transportCode: context.transportCode ?? null,
       proxyRoute: context.proxyRoute ?? null,
-      message: `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
+      detail: context.detail ?? null,
     });
+  }
+
+  override get message() {
+    const details = [
+      this.provider === null ? null : `provider=${providerName(this.provider)}`,
+      this.operation === null ? null : `operation=${this.operation}`,
+      this.status === null ? null : `status=${this.status}`,
+    ].filter((detail) => detail !== null);
+    return `oauth_${this.code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[this.code]}${this.detail === null ? "" : ` ${detailMessages[this.detail]}`}`;
   }
 }
 
@@ -404,21 +434,18 @@ const decodeOpenAiIdClaims = Schema.decodeUnknownOption(Schema.fromJsonString(Op
 const openAiAccountId = (idToken: string) => {
   const payload = idToken.split(".")[1];
   if (payload === undefined) return undefined;
-  try {
-    return Option.getOrUndefined(
-      decodeOpenAiIdClaims(Buffer.from(payload, "base64url").toString()),
-    )?.["https://api.openai.com/auth"].chatgpt_account_id;
-  } catch {
-    return undefined;
-  }
+  return Option.getOrUndefined(
+    decodeOpenAiIdClaims(Buffer.from(payload, "base64url").toString()),
+  )?.["https://api.openai.com/auth"].chatgpt_account_id;
 };
 
 const parseTokens = (
   token: typeof TokenResponse.Type,
   previous?: StoredCredential,
-): StoredCredential => {
+): Result.Result<StoredCredential, OAuthHarnessError> => {
   const refreshToken = token.refresh_token ?? previous?.refreshToken;
-  if (refreshToken === undefined) throw new OAuthHarnessError("invalid_token_response");
+  if (refreshToken === undefined)
+    return Result.fail(OAuthHarnessError.fromCode("invalid_token_response"));
   const idToken = token.id_token ?? previous?.idToken;
   const accountId = (idToken && openAiAccountId(idToken)) ?? previous?.accountId;
   const credential: StoredCredential = {
@@ -427,7 +454,7 @@ const parseTokens = (
     expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + token.expires_in * 1_000,
   };
   const withIdentity = idToken === undefined ? credential : { ...credential, idToken };
-  return accountId === undefined ? withIdentity : { ...withIdentity, accountId };
+  return Result.succeed(accountId === undefined ? withIdentity : { ...withIdentity, accountId });
 };
 
 interface AuthorizationCodeGrant {
@@ -511,7 +538,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
   const store = options.store ?? createKeychainCredentialStore();
   const fetcher = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
-  const anthropicSessionId = Effect.runSync(oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie));
+  // Synchronous client factory: a failed random source throws its PlatformError here.
+  const anthropicSessionId = Effect.runSync(oauthProtocolCrypto.randomUUIDv4());
   let loginActive = false;
   const refreshLock = Semaphore.makeUnsafe(1);
   type Refresh = {
@@ -527,9 +555,9 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       credential = yield* refreshEffect(credential).pipe(
         Effect.catchIf(
           (failure) => {
-            const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
+            const error = failure._tag === "UnknownError" ? failure.cause : failure;
             return (
-              error instanceof OAuthHarnessError &&
+              Schema.is(OAuthHarnessError)(error) &&
               (invalidatesStoredCredential(error) || error.code === "not_connected")
             );
           },
@@ -559,7 +587,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       readonly signal?: AbortSignal;
     } = {},
   ): Effect.fn.Return<LoginAttempt, OAuthHarnessError> {
-    if (loginActive) return yield* new OAuthHarnessError("login_in_progress");
+    if (loginActive) return yield* OAuthHarnessError.fromCode("login_in_progress");
     loginActive = true;
     const pkce = createPkce();
     let verifier: string | null = pkce.verifier;
@@ -574,16 +602,16 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       }),
       listenerScope,
     ).pipe(
-      Effect.catchCause(() =>
+      Effect.onError(() =>
         closeListener.pipe(
-          Effect.andThen(() => Effect.fail(new OAuthHarnessError("transport_unavailable"))),
+          Effect.andThen(
+            Effect.sync(() => {
+              loginActive = false;
+            }),
+          ),
         ),
       ),
-      Effect.tapError(() =>
-        Effect.sync(() => {
-          loginActive = false;
-        }),
-      ),
+      Effect.mapError(() => OAuthHarnessError.fromCode("transport_unavailable")),
     );
     const server = yield* Effect.provideContext(HttpServer.HttpServer, serverServices);
     let port: number;
@@ -595,7 +623,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       case "UnixPathAddress":
         yield* closeListener;
         loginActive = false;
-        return yield* new OAuthHarnessError("transport_unavailable");
+        return yield* OAuthHarnessError.fromCode("transport_unavailable");
     }
     const redirectAuthority = `${protocol.callbackRedirectHost}:${port}`;
     const redirectUri = `http://${redirectAuthority}${protocol.callbackPath}`;
@@ -635,7 +663,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       });
     });
     const abort = () => {
-      void runNativeEffect(Result.fail(new OAuthHarnessError("cancelled")).pipe(finish));
+      void runNativeEffect(Result.fail(OAuthHarnessError.fromCode("cancelled")).pipe(finish));
     };
     // HttpEffect closes each request Scope only after writing its response. Finish from a
     // detached finalizer Fiber so closing the listener never interrupts its own callback.
@@ -666,7 +694,9 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       const returnedState = callback.searchParams.get("state");
       const code = callback.searchParams.get("code");
       if (returnedState === null || !safeEqual(returnedState, state)) {
-        yield* settleAfterResponse(Result.fail(new OAuthHarnessError("callback_state_mismatch")));
+        yield* settleAfterResponse(
+          Result.fail(OAuthHarnessError.fromCode("callback_state_mismatch")),
+        );
         return callbackResponse("OAuth state mismatch.", 400);
       }
       if (code === null || code.length === 0 || verifier === null) {
@@ -674,12 +704,12 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         yield* settleAfterResponse(
           Result.fail(
             callbackCode !== null && HashSet.has(safeOAuthCodes, callbackCode)
-              ? new OAuthHarnessError("provider_rejected", null, {
+              ? OAuthHarnessError.fromCode("provider_rejected", null, {
                   provider: protocol.provider,
                   operation: "login_callback",
                   providerCode: callbackCode,
                 })
-              : new OAuthHarnessError("callback_invalid"),
+              : OAuthHarnessError.fromCode("callback_invalid"),
           ),
         );
         return callbackResponse("Invalid OAuth callback.", 400);
@@ -689,7 +719,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       let previous: StoredCredential | null = null;
       let written = false;
       return yield* Effect.gen(function* () {
-        if (finished) return yield* new OAuthHarnessError("cancelled");
+        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
         const commonGrant = {
           grant_type: "authorization_code",
           code,
@@ -700,43 +730,46 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         const grant: AuthorizationCodeGrant =
           protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
         const credential = yield* exchangeEffect(grant);
-        if (finished) return yield* new OAuthHarnessError("cancelled");
+        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
         previous = yield* nativePromise(() => store.read(protocol.provider));
-        if (finished) return yield* new OAuthHarnessError("cancelled");
+        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
         written = true;
         yield* nativePromise(() => store.write(protocol.provider, credential));
-        if (finished) return yield* new OAuthHarnessError("cancelled");
+        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
         const connection = yield* statusEffect();
-        if (finished) return yield* new OAuthHarnessError("cancelled");
+        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
         yield* settleAfterResponse(Result.succeed(connection));
         return callbackResponse("Connected. You may close this window.", 200);
       }).pipe(
-        Effect.catchCause((cause) =>
+        Effect.catch((failure) =>
           Effect.gen(function* () {
-            const error = nativeFailure(cause).cause;
+            // Store callbacks reject through Promises; their typed errors arrive wrapped.
+            const cause = failure._tag === "UnknownError" ? failure.cause : failure;
+            const error = Schema.is(OAuthHarnessError)(cause)
+              ? cause
+              : OAuthHarnessError.fromCode("provider_rejected", null, {
+                  provider: protocol.provider,
+                  operation: "login_callback",
+                });
             if (written) {
               const credential = previous;
+              // Best-effort rollback; the login already failed with `error`.
               yield* nativePromise(() =>
                 credential === null
                   ? store.remove(protocol.provider)
                   : store.write(protocol.provider, credential),
-              ).pipe(Effect.ignore);
+              ).pipe(
+                Effect.catchTag("UnknownError", () =>
+                  Effect.logWarning("OAuth credential rollback failed", { error: "UnknownError" }),
+                ),
+              );
             }
-            yield* settleAfterResponse(
-              Result.fail(
-                error instanceof OAuthHarnessError
-                  ? error
-                  : new OAuthHarnessError("provider_rejected", null, {
-                      provider: protocol.provider,
-                      operation: "login_callback",
-                    }),
-              ),
-            );
+            yield* settleAfterResponse(Result.fail(error));
             return callbackResponse(
-              error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
+              error.code === "credential_store_unavailable"
                 ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."
                 : "Login could not be completed. Return to the app for diagnostic details.",
-              error instanceof OAuthHarnessError && error.code === "cancelled" ? 410 : 502,
+              error.code === "cancelled" ? 410 : 502,
             );
           }),
         ),
@@ -747,7 +780,9 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       serverServices,
     );
     timer = yield* Effect.sleep(timeoutMs).pipe(
-      Effect.andThen(() => finish(Result.fail(new OAuthHarnessError("callback_timeout")), true)),
+      Effect.andThen(() =>
+        finish(Result.fail(OAuthHarnessError.fromCode("callback_timeout")), true),
+      ),
       Effect.forkDetach,
     );
     options.signal?.addEventListener("abort", abort, { once: true });
@@ -803,20 +838,19 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
             const retry = yield* nativePromise(() =>
               proxyFetch(protocol.tokenUrl, encoded.body, encoded.contentType),
             ).pipe(
-              Effect.mapError(
-                (failure) =>
-                  new OAuthHarnessError("transport_unavailable", null, {
-                    ...context,
-                    transportCode:
-                      failure.cause instanceof Error ? safeTransportCode(failure.cause) : "other",
-                    proxyRoute: "attempted",
-                  }),
+              Effect.mapError((failure) =>
+                OAuthHarnessError.fromCode("transport_unavailable", null, {
+                  ...context,
+                  transportCode:
+                    failure.cause instanceof Error ? safeTransportCode(failure.cause) : "other",
+                  proxyRoute: "attempted",
+                }),
               ),
             );
             proxyRoute = retry.route;
             if (retry.response !== null) return retry.response;
           }
-          return yield* new OAuthHarnessError(
+          return yield* OAuthHarnessError.fromCode(
             "transport_unavailable",
             null,
             withProxyRoute({ ...context, transportCode }),
@@ -825,33 +859,25 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       ),
     );
     if (!response.ok) {
-      const body = yield* nativePromise(() => response.text()).pipe(Effect.orElseSucceed(() => ""));
-      return yield* new OAuthHarnessError(
+      // The body is read only for an allowlisted OAuth code; an unreadable body has none.
+      const body = yield* nativePromise(() => response.text()).pipe(
+        Effect.catchTag("UnknownError", () => Effect.succeed("")),
+      );
+      return yield* OAuthHarnessError.fromCode(
         "provider_rejected",
         response.status,
         withProxyRoute({ ...context, ...optionalProperty("providerCode", providerCode(body)) }),
       );
     }
-    return yield* nativePromise(() => response.json()).pipe(
-      Effect.flatMap((body) =>
-        Effect.try(() => {
-          const token = Option.getOrThrowWith(
-            decodeTokenResponse(body),
-            () => new OAuthHarnessError("invalid_token_response", response.status, context),
-          );
-          const parsed = parseTokens(token, previous);
-          return {
-            ...parsed,
-            expiresAt: now() + (parsed.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe())),
-          };
-        }),
-      ),
-      Effect.mapError((failure) =>
-        failure.cause instanceof OAuthHarnessError
-          ? failure.cause
-          : new OAuthHarnessError("invalid_token_response", response.status, context),
-      ),
-    );
+    const invalidResponse = () =>
+      OAuthHarnessError.fromCode("invalid_token_response", response.status, context);
+    const body = yield* nativePromise(() => response.json()).pipe(Effect.mapError(invalidResponse));
+    const token = yield* Effect.fromOption(decodeTokenResponse(body), invalidResponse);
+    const parsed = yield* Effect.fromResult(parseTokens(token, previous));
+    return {
+      ...parsed,
+      expiresAt: now() + (parsed.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe())),
+    };
   });
   const refreshEffect = Effect.fn("OAuth.refresh")(function* (credential: StoredCredential) {
     const entry = yield* refreshLock.withPermits(1)(
@@ -861,7 +887,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         // tokens rotate, so spending the old one would be rejected and sign out the new login.
         const stored = yield* nativePromise(() => store.read(protocol.provider));
         if (stored === null)
-          return yield* new OAuthHarnessError("not_connected", null, {
+          return yield* OAuthHarnessError.fromCode("not_connected", null, {
             provider: protocol.provider,
             operation: "token_refresh",
           });
@@ -885,8 +911,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           }).pipe(
             Effect.catch((failure) =>
               Effect.gen(function* () {
-                const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
-                if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
+                const error = failure._tag === "UnknownError" ? failure.cause : failure;
+                if (Schema.is(OAuthHarnessError)(error) && invalidatesStoredCredential(error))
                   yield* nativePromise(() => store.remove(protocol.provider));
                 return yield* failure;
               }),
@@ -912,7 +938,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     return runNativeEffect(
       Effect.gen(function* () {
         const credential = yield* nativePromise(() => store.read(protocol.provider));
-        if (credential === null) return yield* new OAuthHarnessError("not_connected");
+        if (credential === null) return yield* OAuthHarnessError.fromCode("not_connected");
         yield* refreshEffect(credential);
         return yield* statusEffect();
       }),
@@ -932,10 +958,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     if (protocol.provider === "openai" && credential.accountId !== undefined)
       headers.set("chatgpt-account-id", credential.accountId);
     if (protocol.provider === "anthropic") {
-      headers.set(
-        "x-client-request-id",
-        yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
-      );
+      headers.set("x-client-request-id", yield* oauthProtocolCrypto.randomUUIDv4());
       headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
     }
     return yield* Effect.tryPromise({
@@ -947,7 +970,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           signal,
         }),
       catch: () =>
-        new OAuthHarnessError("transport_unavailable", null, {
+        OAuthHarnessError.fromCode("transport_unavailable", null, {
           provider: protocol.provider,
           operation: "model_catalog",
         }),
@@ -962,7 +985,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       operation: "model_catalog",
     };
     let credential = yield* nativePromise(() => store.read(protocol.provider));
-    if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
+    if (!isTruthy(credential))
+      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
     if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
 
     const pages: unknown[] = [];
@@ -984,18 +1008,20 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         response = yield* authorizedCatalogRequest(url, credential, signal);
       }
       if (!response.ok)
-        return yield* new OAuthHarnessError("provider_rejected", response.status, context);
+        return yield* OAuthHarnessError.fromCode("provider_rejected", response.status, context);
       const page = yield* nativePromise(() => response.json()).pipe(
-        Effect.mapError(() => new OAuthHarnessError("provider_rejected", response.status, context)),
+        Effect.mapError(() =>
+          OAuthHarnessError.fromCode("provider_rejected", response.status, context),
+        ),
       );
       pages.push(page);
       if (protocol.provider !== "anthropic") break;
       const pagination = Option.getOrUndefined(decodeCatalogPage(page));
       if (pagination?.has_more !== true || pagination.last_id === undefined) break;
       if (pages.length >= 10 || MutableHashSet.has(seenCursors, pagination.last_id))
-        return yield* new OAuthHarnessError("provider_rejected", null, {
+        return yield* OAuthHarnessError.fromCode("provider_rejected", null, {
           ...context,
-          reason: "Model catalog pagination did not terminate.",
+          detail: "catalog_pagination_unbounded",
         });
       MutableHashSet.add(seenCursors, pagination.last_id);
       afterId = pagination.last_id;
@@ -1016,7 +1042,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       operation: "model_stream",
     };
     let credential = yield* nativePromise(() => store.read(protocol.provider));
-    if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
+    if (!isTruthy(credential))
+      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
     if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
 
     const prepared =
@@ -1031,10 +1058,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       if (protocol.provider === "openai" && current.accountId !== undefined)
         headers.set("chatgpt-account-id", current.accountId);
       if (protocol.provider === "anthropic") {
-        headers.set(
-          "x-client-request-id",
-          yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
-        );
+        headers.set("x-client-request-id", yield* oauthProtocolCrypto.randomUUIDv4());
         headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
         if (prepared.betas.length > 0)
           headers.set(
@@ -1081,15 +1105,16 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         protocol.provider === "anthropic" &&
         (response.status === 400 || response.status === 422)
       ) {
+        // Read only to recognise a prompt-cache rejection; an unreadable body is not one.
         const responseText = yield* nativePromise(() => response.clone().text()).pipe(
-          Effect.orElseSucceed(() => ""),
+          Effect.catchTag("UnknownError", () => Effect.succeed("")),
         );
         if (/cache[_ -]?control|prompt[_ -]?cach/i.test(responseText))
-          return yield* new ProviderFeatureRejectedError(
-            "anthropic",
-            "prompt-cache",
-            response.status,
-          );
+          return yield* new ProviderFeatureRejectedError({
+            provider: "anthropic",
+            feature: "prompt-cache",
+            status: response.status,
+          });
       }
       // Only the status class leaves this boundary; the body may echo the prompt or account data.
       return yield* ProviderStreamFailed.make({

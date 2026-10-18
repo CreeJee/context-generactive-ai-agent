@@ -1,27 +1,24 @@
 import { Effect, Function as EffectFunction } from "effect";
 import { oauthProtocolCrypto } from "./node-runtime.ts";
 import { optionalProperty } from "../optional-property.ts";
-import { Data, Option, Schema } from "effect";
+import { Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
-import type { SubscriptionAccountProvider } from "../providers/contracts.ts";
+import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 
 export { JsonValue } from "../json.ts";
 
 export type OAuthProvider = SubscriptionAccountProvider;
 
-export class ProviderFeatureRejectedError extends Data.TaggedError("ProviderFeatureRejectedError")<{
-  readonly provider: OAuthProvider;
-  readonly feature: "prompt-cache";
-  readonly status: number | null;
-  readonly message: string;
-}> {
-  constructor(provider: OAuthProvider, feature: "prompt-cache", status: number | null = null) {
-    super({
-      provider,
-      feature,
-      status,
-      message: `${provider} rejected the ${feature} request feature.`,
-    });
+export class ProviderFeatureRejectedError extends Schema.TaggedError<ProviderFeatureRejectedError>()(
+  "ProviderFeatureRejectedError",
+  {
+    provider: SubscriptionAccountProvider,
+    feature: Schema.Literal("prompt-cache"),
+    status: Schema.NullOr(Schema.Int),
+  },
+) {
+  override get message() {
+    return `${this.provider} rejected the ${this.feature} request feature.`;
   }
 }
 

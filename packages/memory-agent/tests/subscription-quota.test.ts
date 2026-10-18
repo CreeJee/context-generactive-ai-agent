@@ -33,7 +33,7 @@ const quotaService = Effect.fn(function* (failing: Ref.Ref<boolean>, calls: Ref.
         if (accountId === expiredId) return yield* SubscriptionUsageCredentialExpired.make({});
         yield* Ref.update(calls, (count) => count + 1);
         if (yield* Ref.get(failing))
-          return yield* new OAuthHarnessError("transport_unavailable", null);
+          return yield* OAuthHarnessError.fromCode("transport_unavailable", null);
         return [fiveHour];
       }),
   });

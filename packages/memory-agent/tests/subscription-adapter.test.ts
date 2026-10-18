@@ -599,7 +599,11 @@ describe("subscription model adapters", () => {
               (function* () {
                 bodies.push(body);
                 if (bodies.length === 1)
-                  throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", 400);
+                  throw new ProviderFeatureRejectedError({
+                    provider: "anthropic",
+                    feature: "prompt-cache",
+                    status: 400,
+                  });
                 yield { type: "text" as const, text: "fallback worked" };
               })(),
               { chunkSize: 1 },

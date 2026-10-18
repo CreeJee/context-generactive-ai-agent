@@ -15,7 +15,7 @@ import {
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import { Cause, Effect, Stream, MutableHashMap, DateTime, Option, Schema } from "effect";
+import { Effect, Stream, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
@@ -376,7 +376,7 @@ const streamFailure = (
   received: boolean,
 ): SubscriptionStreamFailed | ProviderFeatureRejectedError | ReasoningSummaryProtocolFailed => {
   if (
-    cause instanceof ProviderFeatureRejectedError ||
+    Schema.is(ProviderFeatureRejectedError)(cause) ||
     Schema.is(SubscriptionStreamFailed)(cause) ||
     Schema.is(ReasoningSummaryProtocolFailed)(cause)
   )
@@ -419,18 +419,17 @@ function providerEventsWithPromptCacheFallback(
       Stream.mapEffect((event) =>
         Effect.gen(function* () {
           if (provider === "anthropic" && isPromptCacheRejection(event))
-            return yield* new ProviderFeatureRejectedError("anthropic", "prompt-cache");
+            return yield* new ProviderFeatureRejectedError({
+              provider: "anthropic",
+              feature: "prompt-cache",
+              status: null,
+            });
           emitted = true;
           return event;
         }),
       ),
-      Stream.catch((failure) => {
-        if (
-          provider !== "anthropic" ||
-          emitted ||
-          !(failure instanceof ProviderFeatureRejectedError) ||
-          failure.feature !== "prompt-cache"
-        )
+      Stream.catchTag("ProviderFeatureRejectedError", (failure) => {
+        if (provider !== "anthropic" || emitted || failure.feature !== "prompt-cache")
           return Stream.fail(failure);
         return Stream.suspend(() => {
           onFallback();
@@ -826,21 +825,26 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
               ),
           ).pipe(
             Stream.takeWhile(() => signal?.aborted !== true),
-            Stream.flatMap((event) => Stream.fromIterable(translate(event))),
-            Stream.catchCause((cause) => {
+            Stream.flatMap((event) =>
+              Stream.fromEffect(
+                Effect.try({
+                  try: () => Array.from(translate(event)),
+                  // The translator throws only its typed protocol failures; anything else it
+                  // throws is classified without its text.
+                  catch: (thrown) =>
+                    Schema.is(ReasoningSummaryProtocolFailed)(thrown) ||
+                    Schema.is(SubscriptionStreamFailed)(thrown)
+                      ? thrown
+                      : SubscriptionStreamFailed.make({
+                          provider: providerName,
+                          reason: { _tag: "RequestOutcomeUnknown" },
+                        }),
+                }),
+              ).pipe(Stream.flatMap(Stream.fromIterable)),
+            ),
+            Stream.catch((failure) => {
               if (signal?.aborted === true) return Stream.empty;
-              const squashed = Cause.squash(cause);
-              const error = squashed instanceof Cause.UnknownError ? squashed.cause : squashed;
               // Native transport/SDK edge: never publish provider-controlled error text.
-              const failure =
-                Schema.is(ReasoningSummaryProtocolFailed)(error) ||
-                Schema.is(SubscriptionStreamFailed)(error) ||
-                error instanceof ProviderFeatureRejectedError
-                  ? error
-                  : SubscriptionStreamFailed.make({
-                      provider: this.name,
-                      reason: { _tag: "RequestOutcomeUnknown" },
-                    });
               options.logger.errors("subscription model request failed", {
                 provider: this.name,
                 code: failure._tag,
