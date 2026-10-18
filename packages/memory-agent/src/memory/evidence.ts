@@ -52,31 +52,25 @@ const changeLimit = 8;
 const provenanceLimit = 4;
 
 /**
- * The owner services read native SQLite synchronously. Only those reads are converted here; the
- * exception itself is dropped because it can carry private paths or row contents, so the typed
- * failure keeps just the stage. A failed read is never returned as an absence of corrections.
+ * Owner storage reads become a typed failure carrying only the stage: the cause can hold private
+ * paths or row contents. A failed read is never returned as an absence of corrections.
  */
-const storageRead = <A>(stage: ReadStage, read: () => A) =>
-  Effect.try({
-    try: read,
-    catch: () => EvidenceReadFailed.make({ reason: { _tag: "StorageRead", stage } }),
-  });
-/** The same conversion for owner services that already read through Effect. */
-const storedRead = <A, E>(stage: ReadStage, read: Effect.Effect<A, E>) =>
+const storageRead = <A, E>(stage: ReadStage, read: Effect.Effect<A, E>) =>
   Effect.mapError(read, () => EvidenceReadFailed.make({ reason: { _tag: "StorageRead", stage } }));
 
 /** Projects whose memory this read may show. */
 const visibleProjects = Effect.fnUntraced(function* (projectId: string, crossProject: boolean) {
   const search = yield* MemorySearch;
-  return yield* storageRead("scope", () =>
-    HashSet.fromIterable(search.allowedProjects(projectId, crossProject)),
+  return yield* storageRead(
+    "scope",
+    Effect.map(search.allowedProjects(projectId, crossProject), HashSet.fromIterable),
   );
 });
 
 /** The visible chain of a node; an unknown or out-of-scope node fails with NoSuchElementError. */
 const visibleTrace = Effect.fnUntraced(function* (id: string, allowed: HashSet.HashSet<string>) {
   const graph = yield* Graph;
-  const trace = yield* storedRead("trace", graph.trace(id));
+  const trace = yield* storageRead("trace", graph.trace(id));
   const chain = yield* Effect.succeed(scopedChain(trace, allowed)).pipe(
     Effect.filterOrFail(EffectArray.isReadonlyArrayNonEmpty),
   );
@@ -86,14 +80,14 @@ const visibleTrace = Effect.fnUntraced(function* (id: string, allowed: HashSet.H
 /** Pending corrections/retractions of the chain, with their sources loaded. */
 const pendingChanges = Effect.fnUntraced(function* (chain: readonly Node[]) {
   const [nodes, interpretations] = yield* Effect.all([Nodes, Interpretations]);
-  const targeting = yield* storedRead(
+  const targeting = yield* storageRead(
     "pending_changes",
     interpretations.targeting(
       chain.map((entry) => entry.id),
       "unconfirmed",
     ),
   );
-  const changes = yield* storedRead(
+  const changes = yield* storageRead(
     "pending_changes",
     Effect.forEach(targeting, (entry): Effect.Effect<PendingChange[], NodeStoreFailed> => {
       switch (entry.kind) {
@@ -276,11 +270,11 @@ export const readStructuredEvidence = Effect.fn("Memory.readStructuredEvidence")
   function* (id: string, offset: number, projectId: string, crossProject: boolean) {
     const nodes = yield* Nodes;
     const allowed = yield* visibleProjects(projectId, crossProject);
-    const node = yield* storedRead("source", nodes.get(id)).pipe(
+    const node = yield* storageRead("source", nodes.get(id)).pipe(
       Effect.flatMap(Effect.fromNullishOr),
       Effect.filterOrFail((source) => HashSet.has(allowed, source.projectId)),
     );
-    const page = yield* storageRead("source", () => nodes.page(node, offset));
+    const page = nodes.page(node, offset);
     // A visible source whose provenance cannot be traced is still evidence, reported as untraced.
     const { trace, chain } = yield* visibleTrace(id, allowed).pipe(
       Effect.catchTag("NoSuchElementError", () =>
@@ -304,7 +298,7 @@ export const traceStructuredEvidence = Effect.fn("Memory.traceStructuredEvidence
     const { trace, chain } = yield* visibleTrace(id, allowed);
     const [pending, reasons] = yield* Effect.all([
       pendingChanges(chain),
-      storedRead(
+      storageRead(
         "change_reasons",
         interpretations.targeting(
           chain.map((entry) => entry.id),
