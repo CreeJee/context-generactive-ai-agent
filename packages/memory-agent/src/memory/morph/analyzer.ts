@@ -164,7 +164,8 @@ const makeKiwi = Effect.gen(function* () {
     Option.match({
       onSome: Effect.succeed,
       onNone: () =>
-        ScopedRef.set(session, connect).pipe(
+        // `set` acquires uninterruptibly; a model build must still stop when the Scope closes.
+        ScopedRef.set(session, Effect.interruptible(connect)).pipe(
           Effect.andThen(ScopedRef.get(session)),
           // `set` just stored the session it acquired.
           Effect.map(Option.getOrThrow),

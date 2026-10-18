@@ -279,7 +279,11 @@ export const modelWorker = Effect.fnUntraced(function* (
     Option.match({
       onSome: Effect.succeed,
       onNone: () =>
-        ScopedRef.set(session, connect(data).pipe(Effect.map(Option.some))).pipe(
+        // `set` acquires uninterruptibly; a model load must still stop when the Scope closes.
+        ScopedRef.set(
+          session,
+          Effect.interruptible(connect(data)).pipe(Effect.map(Option.some)),
+        ).pipe(
           Effect.andThen(ScopedRef.get(session)),
           // `set` just stored the session it acquired.
           Effect.map(Option.getOrThrow),

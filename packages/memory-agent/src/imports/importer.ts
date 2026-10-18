@@ -213,7 +213,11 @@ const make = (watching: boolean, home: string) =>
       Option.match({
         onSome: Effect.succeed,
         onNone: () =>
-          ScopedRef.set(session, rpcSession(setup).pipe(Effect.map(Option.some))).pipe(
+          // `set` acquires uninterruptibly; starting a worker must still stop when the Scope closes.
+          ScopedRef.set(
+            session,
+            Effect.interruptible(rpcSession(setup)).pipe(Effect.map(Option.some)),
+          ).pipe(
             Effect.andThen(ScopedRef.get(session)),
             // `set` just stored the session it acquired.
             Effect.map(Option.getOrThrow),
