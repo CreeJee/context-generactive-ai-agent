@@ -1,15 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import {
-  Clock,
-  Context,
-  Crypto,
-  Data,
-  Effect,
-  Layer,
-  MutableHashMap,
-  Option,
-  Schema,
-} from "effect";
+import { Clock, Context, Crypto, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "./queue-state.ts";
 
@@ -58,10 +48,13 @@ function toMessage(row: typeof Row.Type): QueuedMessage {
 }
 
 /** The message is gone, already delivered, or not in a state that allows the change. */
-export class QueueChangeRefused extends Data.TaggedError("QueueChangeRefused")<{
-  readonly id: string;
-  readonly reason: "not_found" | "delivered" | "not_held" | "reserved";
-}> {}
+export class QueueChangeRefused extends Schema.TaggedError<QueueChangeRefused>()(
+  "QueueChangeRefused",
+  {
+    id: Schema.String,
+    reason: Schema.Literals(["not_found", "delivered", "not_held", "reserved"]),
+  },
+) {}
 
 const SessionMessage = Schema.Struct({ sessionId: Schema.String, id: Schema.String });
 
@@ -87,11 +80,11 @@ const make = Effect.gen(function* () {
   /** The message, if it may still change (not delivered). */
   const pending = Effect.fnUntraced(function* (sessionId: string, id: string) {
     const message = yield* get(sessionId, id);
-    if (message === null) return yield* new QueueChangeRefused({ id, reason: "not_found" });
+    if (message === null) return yield* QueueChangeRefused.make({ id, reason: "not_found" });
     if (Option.getOrUndefined(MutableHashMap.get(reservations, sessionId))?.id === id)
-      return yield* new QueueChangeRefused({ id, reason: "reserved" });
+      return yield* QueueChangeRefused.make({ id, reason: "reserved" });
     if (message.state.kind === "delivered")
-      return yield* new QueueChangeRefused({ id, reason: "delivered" });
+      return yield* QueueChangeRefused.make({ id, reason: "delivered" });
     return message;
   });
   // Every change of state, editing included, takes a message off the steered path.
@@ -259,7 +252,7 @@ const make = Effect.gen(function* () {
             case "waiting":
             case "editing":
             case "delivered":
-              return Effect.fail(new QueueChangeRefused({ id, reason: "not_held" }));
+              return Effect.fail(QueueChangeRefused.make({ id, reason: "not_held" }));
           }
         },
       ),

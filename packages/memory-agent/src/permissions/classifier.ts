@@ -1,4 +1,5 @@
 import { Function as EffectFunction } from "effect";
+import { failureTags } from "../runtime/failure-tags.ts";
 import { isTruthy } from "../truthy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { chat } from "@tanstack/ai";
@@ -166,9 +167,15 @@ const make = Effect.gen(function* () {
       return verdict === undefined ? fallback : { ...verdict, decidedBy: "classifier" as const };
     },
     Effect.timeoutOrElse({ duration: reviewTimeoutMs, orElse: () => Effect.succeed(fallback) }),
+    // Fails closed: any failure, a defect included, asks the user instead of allowing the call.
+    // Only the failures' tags are logged; causes can hold provider text.
     Effect.catchCauseIf(
       (cause) => !Cause.hasInterrupts(cause),
-      () => Effect.succeed(fallback),
+      (cause) =>
+        Effect.as(
+          Effect.logWarning("permission_classification_failed", { error: failureTags(cause) }),
+          fallback,
+        ),
     ),
   );
 
