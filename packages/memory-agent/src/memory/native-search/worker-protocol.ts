@@ -23,7 +23,8 @@ export type OwnerSetup = typeof OwnerSetup.Type;
 
 export const OwnerCommand = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("add"), ...correlation, vectors: vector, ids }),
-  Schema.Struct({ kind: Schema.Literal("remove"), ...correlation, id: Schema.String }),
+  /** One owner step for the whole batch, like add: no other command interleaves inside it. */
+  Schema.Struct({ kind: Schema.Literal("remove"), ...correlation, ids }),
   Schema.Struct({ kind: Schema.Literal("save"), ...correlation }),
   Schema.Struct({ kind: Schema.Literal("reset"), ...correlation }),
   Schema.Struct({ kind: Schema.Literal("validate"), ...correlation, ids }),
@@ -67,7 +68,8 @@ export const OwnerReply = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("removed"),
     ...correlation,
-    removed: Schema.Boolean,
+    /** How many of the requested ids were present. */
+    removed: Schema.Int,
     size: Schema.Int,
   }),
   Schema.Struct({
@@ -136,6 +138,8 @@ export class NativeOwnerFailed extends Schema.TaggedError<NativeOwnerFailed>()(
       "read-failed",
       "native-incompatible",
     ]),
+    /** The native exception, kept inside the process that caught it; IPC carries only `reason`. */
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {

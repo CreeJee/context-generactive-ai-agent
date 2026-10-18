@@ -3,6 +3,7 @@ import { Array as EffectArray, Function as EffectFunction } from "effect";
 import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Worker } from "node:worker_threads";
+import type { EventEmitter } from "node:events";
 import {
   Path,
   DateTime,
@@ -16,10 +17,12 @@ import {
   Layer,
   Option,
   Schema,
+  Semaphore,
 } from "effect";
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { ChunkSpan, chunkPolicy } from "./chunks.ts";
 
 export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
   readonly cause: unknown;
@@ -54,6 +57,10 @@ export interface EmbedderApi {
   readonly dimensions: number;
   /** L2-normalized vectors, one per text, in order. */
   readonly embed: (texts: readonly string[]) => Effect.Effect<Float32Array[], EmbeddingError>;
+  /** Local document windows; custom evaluation embedders may keep one vector per node. */
+  readonly chunks?: (
+    texts: readonly string[],
+  ) => Effect.Effect<readonly (readonly ChunkSpan[])[], EmbeddingError>;
   readonly runtime: () => EmbedderRuntime;
 }
 
@@ -62,9 +69,8 @@ export const localModel = {
   id: "ibm-granite/granite-embedding-97m-multilingual-r2",
   dimensions: 384,
   /**
-   * Longest input embedded. Attention memory grows with the square of the length (4096 tokens
-   * already takes ~650 MB more than a short text), so long tool output is embedded from its start;
-   * the full text stays in the node and in text and morpheme search.
+   * Query/direct-call limit. Indexed documents are first split into chunkPolicy windows, so
+   * their tail is never discarded. Keep this separate from the document chunk size.
    */
   maxTokens: 2048,
   /** Texts per batch at most. */
@@ -143,6 +149,11 @@ function planBatchesBody(
 const Reply = Schema.Union([
   Schema.Struct({
     id: Schema.Finite,
+    kind: Schema.Literal("chunks"),
+    spans: Schema.Array(Schema.Array(ChunkSpan)),
+  }),
+  Schema.Struct({
+    id: Schema.Finite,
     kind: Schema.Literal("counts"),
     counts: Schema.Array(Schema.Finite),
   }),
@@ -208,7 +219,31 @@ function embeddingModeForBody(settings: Settings, memoryBytes: number = totalmem
  * minute. Releasing the model when idle was measured and dropped: the freed memory mostly stays with
  * the allocator (quint8: ~40 MB back) and each reload grows the footprint a little.
  */
-function modelWorker(cacheDir: string, setup: ModelSetup) {
+/** Minimal native transport contract; lifecycle tests supply a controlled worker. */
+interface EmbeddingWorker {
+  on: EventEmitter["on"];
+  ref(): void;
+  unref(): void;
+  postMessage(message: {
+    readonly id: number;
+    readonly kind: "count" | "embed" | "chunks";
+    readonly texts: readonly string[];
+  }): void;
+  terminate(): Promise<number>;
+}
+
+export function modelWorker(
+  cacheDir: string,
+  setup: ModelSetup,
+  createWorker: (data: {
+    readonly cacheDir: string;
+    readonly modelId: string;
+    readonly modelFileName: string;
+    readonly maxTokens: number;
+    readonly devices: readonly EmbeddingDevice[];
+  }) => EmbeddingWorker = (data) =>
+    new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(data)),
+) {
   const workerData = {
     cacheDir,
     modelId: localModel.id,
@@ -216,9 +251,12 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
     maxTokens: localModel.maxTokens,
     devices: setup.devices,
   };
-  let worker: Worker | null = null;
+  let worker: EmbeddingWorker | null = null;
   let device: EmbeddingDevice | null = null;
   let nextId = 1;
+  // Bound physical worker work, not an entire document embedding. Queries can acquire a
+  // permit between backfill batches; a cancelled waiter never starts a worker request.
+  const oneRequest = Semaphore.makeUnsafe(1);
   const pending = Ref.makeUnsafe(HashMap.empty<number, Deferred.Deferred<Reply>>());
 
   const stop = (reason: string) => {
@@ -232,7 +270,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
   };
 
   const start = () => {
-    const created = new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(workerData));
+    const created = createWorker(workerData);
     const lost = () => {
       if (worker === created) void stop("embedding worker stopped");
     };
@@ -245,6 +283,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
           if (worker === created) device = reply.device;
           return;
         case "counts":
+        case "chunks":
         case "rows":
         case "failed":
           const done = Option.getOrUndefined(
@@ -264,7 +303,10 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
     return created;
   };
 
-  const request = Effect.fnUntraced(function* (kind: "count" | "embed", texts: readonly string[]) {
+  const request = Effect.fnUntraced(function* (
+    kind: "count" | "embed" | "chunks",
+    texts: readonly string[],
+  ) {
     const current = yield* Effect.try({
       try: () => (worker ??= start()),
       catch: (cause) => new EmbeddingError({ cause }),
@@ -282,6 +324,15 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
         }),
       ),
       Effect.andThen(Deferred.await(done)),
+      // ONNX inference cannot be interrupted in-place. Only one request owns this worker,
+      // so terminate it and await exit before handing the permit to another agent.
+      Effect.onInterrupt(() =>
+        Effect.tryPromise({
+          try: () =>
+            Promise.resolve(worker === current ? stop("embedding request interrupted") : undefined),
+          catch: (cause) => new EmbeddingError({ cause }),
+        }).pipe(Effect.asVoid),
+      ),
       Effect.ensuring(
         Ref.updateAndGet(pending, HashMap.remove(id)).pipe(
           Effect.map((remaining) => {
@@ -290,7 +341,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
         ),
       ),
     );
-  });
+  }, oneRequest.withPermits(1));
 
   const tokenCounts = Effect.fnUntraced(function* (texts: readonly string[]) {
     const reply = yield* request("count", texts);
@@ -300,6 +351,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
       case "failed":
         return yield* new EmbeddingError({ cause: reply.reason });
       case "rows":
+      case "chunks":
       case "loaded":
         return yield* new EmbeddingError({
           cause: "the embedding worker answered a count with something else",
@@ -315,6 +367,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
       case "failed":
         return yield* new EmbeddingError({ cause: reply.reason });
       case "counts":
+      case "chunks":
       case "loaded":
         return yield* new EmbeddingError({
           cause: "the embedding worker answered an embedding with something else",
@@ -325,6 +378,21 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
   return {
     device: () => device,
     stop,
+    chunks: Effect.fnUntraced(function* (texts: readonly string[]) {
+      const reply = yield* request("chunks", texts);
+      switch (reply.kind) {
+        case "chunks":
+          return reply.spans;
+        case "failed":
+          return yield* new EmbeddingError({ cause: reply.reason });
+        case "counts":
+        case "rows":
+        case "loaded":
+          return yield* new EmbeddingError({
+            cause: "the embedding worker answered a chunking with something else",
+          });
+      }
+    }),
     embed: Effect.fnUntraced(function* (texts: readonly string[]) {
       const vectors: Float32Array[] = [];
       if (texts.length === 0) return vectors;
@@ -355,7 +423,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
       Effect.promise(() => Promise.resolve(model.stop("embedder stopped"))).pipe(Effect.asVoid),
     );
     return {
-      identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}`,
+      identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}/chunks-v${chunkPolicy.version}-${chunkPolicy.tokens}-${chunkPolicy.overlap}`,
       dimensions: localModel.dimensions,
       runtime: (): EmbedderRuntime => {
         switch (purpose.kind) {
@@ -366,6 +434,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
         }
       },
       embed: model.embed,
+      chunks: model.chunks,
     } satisfies EmbedderApi;
   });
 

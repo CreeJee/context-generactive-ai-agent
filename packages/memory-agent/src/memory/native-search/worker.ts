@@ -1,4 +1,14 @@
-import { Effect, FileSystem, Layer, Option, Path, Predicate, Queue, Schema } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Queue,
+  Schema,
+  ScopedRef,
+} from "effect";
 // Node IPC and synchronous native/filesystem calls are confined to this owning worker.
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -10,8 +20,9 @@ import { assertDatabaseSchema } from "../../db/database.ts";
 import { NativeOwnerFailed, OwnerCommand, OwnerReply, OwnerSetup } from "./worker-protocol.ts";
 
 const fail = (reason: NativeOwnerFailed["reason"]) => NativeOwnerFailed.make({ reason });
-const native = <A>(operation: () => A) =>
-  Effect.try({ try: operation, catch: () => fail("index-failed") });
+/** Synchronous addon call. Its exception stays as the cause; only the reason crosses IPC. */
+const native = <A>(operation: () => A, reason: NativeOwnerFailed["reason"] = "index-failed") =>
+  Effect.try({ try: operation, catch: (cause) => NativeOwnerFailed.make({ reason, cause }) });
 const correlation = Schema.Struct({ requestId: Schema.String, epoch: Schema.String });
 const canonicalId = Schema.String.check(
   Schema.makeFilter(
@@ -25,7 +36,9 @@ const main = Effect.gen(function* () {
   const paths = yield* Effect.provideContext(Path.Path, services);
   const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
   const files = <A>(operation: Effect.Effect<A, import("effect/PlatformError").PlatformError>) =>
-    operation.pipe(Effect.mapError(() => fail("index-failed")));
+    operation.pipe(
+      Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "index-failed", cause })),
+    );
   const port = parentPort;
   if (port === null || threadId <= 0) return;
   yield* Effect.acquireRelease(Effect.succeed(port), (current) =>
@@ -43,74 +56,73 @@ const main = Effect.gen(function* () {
   )
     return yield* fail("invalid-input");
   if (setup.databasePath !== undefined)
-    yield* Effect.try({
-      try: () => {
-        const sqlite = new DatabaseSync(setup.databasePath!, { readOnly: true });
-        try {
-          assertDatabaseSchema(sqlite);
-        } finally {
-          sqlite.close();
-        }
-      },
-      catch: () => fail("native-incompatible"),
-    });
+    yield* native(() => {
+      const sqlite = new DatabaseSync(setup.databasePath!, { readOnly: true });
+      try {
+        assertDatabaseSchema(sqlite);
+      } finally {
+        sqlite.close();
+      }
+    }, "native-incompatible");
   yield* files(fs.makeDirectory(setup.cacheDirectory, { recursive: true, mode: 0o700 }));
-  const binding = yield* Effect.try({
-    try: () => {
-      const addon = requireRuntime("turbovec");
-      const binding = addon.loadTurbovec();
-      initializeNodeSqlite(addon.addonPath);
-      return binding;
-    },
-    catch: () => fail("native-incompatible"),
-  });
+  const binding = yield* native(() => {
+    const addon = requireRuntime("turbovec");
+    const binding = addon.loadTurbovec();
+    initializeNodeSqlite(addon.addonPath);
+    return binding;
+  }, "native-incompatible");
   if (
     !Predicate.isFunction(binding.MemoryReadSession) ||
     !Predicate.isFunction(binding.SearchControl)
   )
     return yield* fail("native-incompatible");
   yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => new binding.CacheLease(paths.join(setup.cacheDirectory, "writer.lock")),
-      catch: () => fail("lease-unavailable"),
-    }),
+    native(
+      () => new binding.CacheLease(paths.join(setup.cacheDirectory, "writer.lock")),
+      "lease-unavailable",
+    ),
     (lease) => Effect.sync(() => lease.close()),
   );
   const file = paths.join(setup.cacheDirectory, "index.tvim");
   const exists = yield* files(fs.exists(file));
-  let needsReset = !exists;
-  let index = yield* native(() => {
-    if (exists) {
-      const saved = binding.VectorIndex.load(file);
-      // Metadata belongs to the snapshot; never silently reuse a different vector layout.
-      if (saved.dimensions() === setup.dimensions && saved.bits() === setup.bits) return saved;
-      // Rebuild must be an explicit host recovery/publication, never a clean empty owner.
-      if (setup.recover !== true) throw fail("index-failed");
-      needsReset = true;
-      return new binding.VectorIndex(setup.dimensions, setup.bits);
-    }
-    return new binding.VectorIndex(setup.dimensions, setup.bits);
-  });
+  // The index is released when replaced or when the worker's Scope closes, not at GC.
+  const owned = (create: () => InstanceType<typeof binding.VectorIndex>) =>
+    Effect.acquireRelease(native(create), (index) => Effect.sync(() => index.close()));
+  const empty = owned(() => new binding.VectorIndex(setup.dimensions, setup.bits));
+  const indexRef = yield* ScopedRef.fromAcquire(
+    exists ? owned(() => binding.VectorIndex.load(file)) : empty,
+  );
+  // Metadata belongs to the snapshot; never silently reuse a different vector layout.
+  const compatible =
+    exists &&
+    (yield* native(() => {
+      const saved = ScopedRef.getUnsafe(indexRef);
+      return saved.dimensions() === setup.dimensions && saved.bits() === setup.bits;
+    }));
+  // Rebuild must be an explicit host recovery/publication, never a clean empty owner.
+  if (exists && !compatible && setup.recover !== true) return yield* fail("index-failed");
+  const needsReset = !compatible;
+  if (exists && !compatible) yield* ScopedRef.set(indexRef, empty);
   // The worker owns this read-only connection; env teardown drops it with the index.
   const reader =
     setup.databasePath === undefined
       ? Option.none<InstanceType<typeof binding.MemoryReadSession>>()
       : Option.some(
-          yield* Effect.try({
-            try: () => new binding.MemoryReadSession(setup.databasePath!),
-            catch: () => fail("read-failed"),
-          }),
+          yield* native(() => new binding.MemoryReadSession(setup.databasePath!), "read-failed"),
         );
-  const size = yield* native(() => index.size());
+  const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
   yield* post({ kind: "ready", epoch: setup.epoch, threadId, size, needsReset });
 
   const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
     if (command.epoch !== setup.epoch) return yield* fail("epoch-mismatch");
+    // The single owner loop is the only reader and writer of indexRef, so `index` stays current
+    // for this command; only reset replaces it, and ack then reads the replacement.
+    const index = yield* ScopedRef.get(indexRef);
     const ack = (): OwnerReply => ({
       kind: "ack",
       requestId: command.requestId,
       epoch: setup.epoch,
-      size: index.size(),
+      size: ScopedRef.getUnsafe(indexRef).size(),
     });
     const ids = (values: readonly string[]) =>
       decodeIds(values).pipe(Effect.mapError(() => fail("invalid-input")));
@@ -125,8 +137,10 @@ const main = Effect.gen(function* () {
         yield* native(() => index.add(command.vectors, [...command.ids]));
         return yield* native(ack);
       case "remove": {
-        yield* ids([command.id]);
-        const removed = yield* native(() => index.remove(command.id));
+        yield* ids(command.ids);
+        const removed = yield* native(() =>
+          command.ids.reduce((count, id) => (index.remove(id) ? count + 1 : count), 0),
+        );
         return yield* native((): OwnerReply => ({
           kind: "removed",
           requestId: command.requestId,
@@ -136,7 +150,7 @@ const main = Effect.gen(function* () {
         }));
       }
       case "reset":
-        index = yield* native(() => new binding.VectorIndex(setup.dimensions, setup.bits));
+        yield* ScopedRef.set(indexRef, empty);
         return yield* native(ack);
       case "save":
         yield* native(() => index.save(`${file}.tmp`));
@@ -213,8 +227,8 @@ const main = Effect.gen(function* () {
         if (command.controlToken === undefined || setup.ownerKey === undefined)
           return yield* fail("invalid-input");
         const beforeCpu = process.threadCpuUsage();
-        const result = yield* Effect.try({
-          try: () =>
+        const result = yield* native(
+          () =>
             reader.value.search(
               index,
               command.input,
@@ -223,8 +237,8 @@ const main = Effect.gen(function* () {
               setup.epoch,
               command.requestId,
             ),
-          catch: () => fail("read-failed"),
-        });
+          "read-failed",
+        );
         if (result.kind === "read-failed") return yield* fail("read-failed");
         const cpu = process.threadCpuUsage(beforeCpu);
         return {

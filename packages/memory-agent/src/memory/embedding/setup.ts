@@ -96,6 +96,20 @@ const make = Effect.gen(function* () {
 
   if (wantsCheck(yield* config.read, memoryBytes)) yield* startCheck;
 
+  // A changed chunk identity must rebuild existing conversations even when no new import or
+  // chat arrives. The service Scope owns the drain; failed nodes remain pending for the next run.
+  if (embedder.runtime().kind === "local")
+    yield* Effect.forkIn(
+      indexer.indexAll().pipe(
+        Effect.catchTags({
+          EmbeddingError: () => Effect.logWarning("memory_backfill_embedding_failed"),
+          VectorIndexError: () => Effect.logWarning("memory_backfill_vector_failed"),
+          IndexingError: () => Effect.logWarning("memory_backfill_mapping_failed"),
+        }),
+      ),
+      layerScope,
+    );
+
   const overview = Effect.gen(function* () {
     const settings = yield* config.read;
     const gpu: GpuState = checking

@@ -1,6 +1,6 @@
 // Native transport/filesystem/SQLite boundaries; the worker is the sole index and lease owner.
 import { randomUUID, sha256 } from "../../runtime/synchronous-crypto.ts";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Path, Result, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { Database } from "../../db/database.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
@@ -10,8 +10,9 @@ import { makeNativeOwner } from "../native-search/client.ts";
 import { makePublication } from "../native-search/publication.ts";
 import type { NativeReadInput } from "../native-search/read-protocol.ts";
 import { NativeOwnerFailed, type OwnerCommand } from "../native-search/worker-protocol.ts";
+import { chunkVectorIdFloor } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
-import { VectorIndexError, type VectorIndexApi } from "./vector-index.ts";
+import { VectorIndexError, type VectorHit, type VectorIndexApi } from "./vector-index.ts";
 
 /** The sole application vector backend, acquired inside the application's Scope. */
 export const makeNativeVectorIndex = Effect.gen(function* () {
@@ -56,43 +57,115 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const save = Effect.suspend(() => command({ kind: "save", ...identity() }, "save")).pipe(
     Effect.asVoid,
   );
+  const decodeSeqs = Schema.decodeUnknownResult(
+    Schema.Array(Schema.Struct({ seq: Schema.Finite })),
+  );
+  type Statement = ReturnType<typeof sqlite.prepare>;
+  /** Runs a `SELECT … AS seq` statement and decodes its rows at this SQLite boundary. */
+  const seqsOf = (statement: Statement, ...values: readonly (string | number)[]) =>
+    Result.getOrThrow(decodeSeqs(statement.all(...values))).map(({ seq }) => seq);
+  const chunkIdsOfNode = sqlite.prepare(
+    "SELECT vector_id AS seq FROM node_vector_chunks WHERE node_seq=? AND embedder=?",
+  );
+  const nodeOfChunk = sqlite.prepare(
+    "SELECT node_seq AS seq FROM node_vector_chunks WHERE vector_id=? AND embedder=?",
+  );
+  const journaledNodes = sqlite.prepare(
+    "SELECT node_seq AS seq FROM memory_graph_vector_removals WHERE embedder=? ORDER BY node_seq",
+  );
+  const journaledChunks = sqlite.prepare(`
+    SELECT vector_id AS seq FROM memory_chunk_vector_removals WHERE embedder=?
+    UNION SELECT c.vector_id AS seq FROM node_vector_chunks c
+    JOIN memory_graph_vector_removals r ON r.node_seq=c.node_seq AND r.embedder=c.embedder
+    WHERE c.embedder=?`);
+  const reservedChunks = sqlite.prepare(`
+    SELECT c.vector_id AS seq FROM node_vector_chunks c
+    LEFT JOIN node_vectors v ON v.node_seq=c.node_seq AND v.embedder=c.embedder
+    WHERE c.embedder=? AND v.node_seq IS NULL`);
+  const unmarkNode = sqlite.prepare("DELETE FROM node_vectors WHERE node_seq=? AND embedder=?");
+  const ackNodeRemoval = sqlite.prepare(
+    "DELETE FROM memory_graph_vector_removals WHERE node_seq=? AND embedder=?",
+  );
+  const ackChunkRemoval = sqlite.prepare(
+    "DELETE FROM memory_chunk_vector_removals WHERE vector_id=? AND embedder=?",
+  );
+  const deleteChunk = sqlite.prepare("DELETE FROM node_vector_chunks WHERE vector_id=?");
+
+  /**
+   * Native ids to distinct nodes, best rank first. A chunk id whose mapping a purge or redaction
+   * deleted after the native search is dropped: it is not a node seq.
+   */
+  const nodeHits = (ids: readonly string[], scores: readonly number[]): VectorHit[] => {
+    const seen = new Set<number>();
+    return ids.flatMap((id, rank) => {
+      const [seq] =
+        Number(id) < chunkVectorIdFloor ? [Number(id)] : seqsOf(nodeOfChunk, id, embedder.identity);
+      if (seq === undefined || seen.has(seq)) return [];
+      seen.add(seq);
+      return [{ seq, score: scores[rank]! }];
+    });
+  };
+
+  // The owner runs one command at a time, so per-id commands only add round trips and let other
+  // commands interleave between them. Like add, a batch is a single owner step.
+  const removeIds = (ids: readonly number[]) =>
+    ids.length === 0
+      ? Effect.void
+      : Effect.suspend(() =>
+          command({ kind: "remove", ...identity(), ids: ids.map(String) }, "remove"),
+        ).pipe(Effect.asVoid);
   const remove = Effect.fnUntraced(function* (seqs: readonly number[]) {
-    for (const seq of seqs)
-      yield* command({ kind: "remove", ...identity(), id: String(seq) }, "remove");
+    // Read every node's chunk ids in one transaction before the native await, not one node
+    // per await: a purge between reads would otherwise leave a partial snapshot.
+    const chunkIds = yield* io("remove", () =>
+      atomic(() => seqs.flatMap((seq) => seqsOf(chunkIdsOfNode, seq, embedder.identity))),
+    );
+    yield* removeIds([...seqs, ...chunkIds]);
   });
   const flush = Effect.gen(function* () {
-    const pending = yield* io("remove", () =>
-      sqlite
-        .prepare(
-          "SELECT node_seq AS seq FROM memory_graph_vector_removals WHERE embedder = ? ORDER BY node_seq",
-        )
-        .all(embedder.identity),
-    ).pipe(
-      Effect.flatMap(
-        Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ seq: Schema.Finite }))),
-      ),
-      Effect.mapError((cause) => new VectorIndexError({ operation: "remove", cause })),
+    // Snapshot both journals and live mappings in one transaction. Other agents can invalidate
+    // nodes while native remove/save awaits; acknowledge only these exact IDs.
+    const { pending, removedChunks } = yield* io("remove", () =>
+      atomic(() => ({
+        pending: seqsOf(journaledNodes, embedder.identity),
+        removedChunks: seqsOf(journaledChunks, embedder.identity, embedder.identity),
+      })),
     );
-    if (pending.length === 0) return;
-    yield* remove(pending.map(({ seq }) => seq));
+    if (pending.length === 0 && removedChunks.length === 0) return;
+    yield* removeIds([...removedChunks, ...pending]);
     yield* save;
     yield* io("remove", () =>
       atomic(() => {
-        for (const { seq } of pending) {
-          sqlite
-            .prepare("DELETE FROM node_vectors WHERE node_seq = ? AND embedder = ?")
-            .run(seq, embedder.identity);
-          sqlite
-            .prepare("DELETE FROM memory_graph_vector_removals WHERE node_seq = ? AND embedder = ?")
-            .run(seq, embedder.identity);
+        for (const seq of pending) {
+          unmarkNode.run(seq, embedder.identity);
+          ackNodeRemoval.run(seq, embedder.identity);
         }
+        for (const seq of removedChunks) ackChunkRemoval.run(seq, embedder.identity);
       }),
     );
   });
   if (!owner.initialNeedsReset) yield* flush;
+  const reserved = yield* io("open", () => seqsOf(reservedChunks, embedder.identity));
+  if (reserved.length > 0) {
+    if (!owner.initialNeedsReset) {
+      yield* removeIds(reserved);
+      yield* save;
+    }
+    // Deleting a mapping journals its id for removal. These ids are already gone natively (or
+    // the reset below drops everything), so the journal entry is acknowledged in the same step.
+    yield* io("open", () =>
+      atomic(() => {
+        for (const seq of reserved) {
+          deleteChunk.run(seq);
+          ackChunkRemoval.run(seq, embedder.identity);
+        }
+      }),
+    );
+  }
   const indexed = yield* io("open", () =>
     sqlite
-      .prepare("SELECT count(*) AS count FROM node_vectors WHERE embedder = ?")
+      .prepare(`SELECT count(*) AS count FROM node_vectors v LEFT JOIN node_vector_chunks c
+        ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder = ?`)
       .get(embedder.identity),
   ).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ count: Schema.Finite }))),
@@ -122,6 +195,9 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
         sqlite.prepare("DELETE FROM node_vectors WHERE embedder = ?").run(embedder.identity);
         sqlite
           .prepare("DELETE FROM memory_graph_vector_removals WHERE embedder = ?")
+          .run(embedder.identity);
+        sqlite
+          .prepare("DELETE FROM memory_chunk_vector_removals WHERE embedder=?")
           .run(embedder.identity);
       }),
     );
@@ -163,18 +239,40 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       allowedSeqs?: readonly number[],
     ) {
       if (owner.size() === 0) return [];
-      const reply = yield* command(
-        {
-          kind: "vector-search",
-          ...identity(),
-          query: new Float32Array(query),
-          k,
-          allowedIds: allowedSeqs?.map(String),
-        },
-        "search",
-      );
-      if (reply.kind !== "vector-hits") return yield* publicationError(reply);
-      return reply.ids.map((id, rank) => ({ seq: Number(id), score: reply.scores[rank]! }));
+      const allowedIds =
+        allowedSeqs === undefined
+          ? undefined
+          : yield* io("search", () =>
+              atomic(() =>
+                allowedSeqs.flatMap((seq) => {
+                  const chunks = seqsOf(chunkIdsOfNode, seq, embedder.identity);
+                  return chunks.length === 0 ? [String(seq)] : chunks.map(String);
+                }),
+              ),
+            );
+      const maximum = allowedIds?.length ?? owner.size();
+      // Chunks of one node collapse into one hit, so `take` native hits can be fewer than `k`
+      // nodes. Each round's size depends on the previous round's result: rounds are sequential.
+      const widen = (take: number): Effect.Effect<VectorHit[], VectorIndexError> =>
+        Effect.gen(function* () {
+          const reply = yield* command(
+            {
+              kind: "vector-search",
+              ...identity(),
+              query: new Float32Array(query),
+              k: take,
+              allowedIds,
+            },
+            "search",
+          );
+          if (reply.kind !== "vector-hits") return yield* publicationError(reply);
+          const hits = yield* io("search", () => nodeHits(reply.ids, reply.scores));
+          return hits.length >= k || take === maximum || reply.ids.length < take
+            ? hits.slice(0, k)
+            : yield* widen(Math.min(take * 2, maximum));
+        });
+      const first = Math.min(k, maximum);
+      return first > 0 ? yield* widen(first) : [];
     }),
     backend: {
       kind: "native",

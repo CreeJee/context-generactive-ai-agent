@@ -195,6 +195,10 @@ impl MemoryReadSession {
                 return out;
             }
         };
+        let Ok(inner) = index.index() else {
+            out.kind = Outcome::IndexFailed.tag().into();
+            return out;
+        };
         let bytes = 40usize
             .saturating_add(input.embedder.len())
             .saturating_add(
@@ -219,7 +223,7 @@ impl MemoryReadSession {
             || input.input_budget_bytes as usize > MAX_BYTES
             || input.output_budget_bytes as usize > MAX_BYTES
             || input.query.as_ref().is_some_and(|q| {
-                Some(q.len()) != index.inner.dim_opt()
+                Some(q.len()) != inner.dim_opt()
                     || q.iter().any(|x| !x.is_finite() || x.abs() >= 1e16)
                     || input.vector_k == 0
             })
@@ -293,11 +297,12 @@ impl MemoryReadSession {
             };
             let stage = Instant::now();
             let mut allowed = Vec::new();
+            let mut parents = HashMap::new();
             if input.query.is_some() && !input.allowed_projects.is_empty() {
                 let mut values = vec![Value::Text(input.embedder.clone())];
                 values.extend(project_values());
                 // The kind terms let SQLite answer from the `nodes_embeddable` index without reading text.
-                let sql = format!("SELECT n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq WHERE {MEANINGFUL} AND {EMBEDDED_KINDS} AND v.embedder=? AND n.project_id IN ({projects})");
+                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE {MEANINGFUL} AND {EMBEDDED_KINDS} AND v.embedder=? AND n.project_id IN ({projects})");
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
                     .query(params_from_iter(values))
@@ -310,6 +315,10 @@ impl MemoryReadSession {
                         return Err(Outcome::ReadFailed);
                     }
                     allowed.push(seq as u64);
+                    parents.insert(
+                        seq as u64,
+                        row.get::<_, i64>(1).map_err(|_| Outcome::ReadFailed)?,
+                    );
                     if allowed.len() > 50_000 {
                         return Err(Outcome::BudgetExceeded);
                     }
@@ -320,46 +329,69 @@ impl MemoryReadSession {
             let stage = Instant::now();
             if let Some(query) = &input.query {
                 check()?;
-                if !allowed.is_empty()
-                    && index.inner.len() > 0
-                    && !admitted(
-                        index.inner.len(),
+                let mut remaining = allowed.clone();
+                let mut seen = HashSet::new();
+                while !remaining.is_empty() && !inner.is_empty() {
+                    let take =
+                        (input.vector_k as usize - out.vector_seqs.len()).min(remaining.len());
+                    let previous = seen.len();
+                    if !admitted(
+                        inner.len(),
                         query.len(),
-                        index.inner.bit_width(),
+                        inner.bit_width(),
                         input.vector_k,
                         cell.remaining(),
-                    )
-                {
-                    return Err(Outcome::BudgetExceeded);
-                }
-                if !allowed.is_empty() && index.inner.len() > 0 {
-                    let result = index.inner.try_search_with_allowlist(
-                        query,
-                        input.vector_k as usize,
-                        Some(&allowed),
-                    );
+                    ) {
+                        return Err(Outcome::BudgetExceeded);
+                    }
+                    let result = inner.try_search_with_allowlist(query, take, Some(&remaining));
                     // Never convert cancellation/deadline into a degraded success.
                     check()?;
                     record_vector_channel(&mut out, result, |hits, out| {
-                        out.vector_seqs = hits.ids.iter().map(u64::to_string).collect();
-                        out.vector_scores = hits.scores.iter().map(|s| *s as f64).collect();
+                        // Hits are score ordered: the first chunk is the parent's maximum score.
+                        for (id, score) in hits.ids.iter().zip(&hits.scores) {
+                            if let Some(parent) = parents.get(id) {
+                                if seen.insert(*parent) {
+                                    out.vector_seqs.push(id.to_string());
+                                    out.vector_scores.push(*score as f64);
+                                    if out.vector_seqs.len() >= input.vector_k as usize {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     });
+                    if out.vector_unavailable
+                        || out.vector_seqs.len() >= input.vector_k as usize
+                        || seen.len() == previous
+                    {
+                        break;
+                    }
+                    // Exclude all chunks of selected parents before the next bounded search.
+                    // Keep each call inside the measured k <= 48 admission envelope.
+                    remaining.retain(|id| parents.get(id).is_some_and(|p| !seen.contains(p)));
+                }
+                if out.vector_unavailable {
+                    out.vector_seqs.clear();
+                    out.vector_scores.clear();
                 }
             }
             out.vector_ms = ms(stage);
             let stage = Instant::now();
             if !out.vector_seqs.is_empty() {
                 let placeholders = vec!["?"; out.vector_seqs.len()].join(",");
-                let sql = format!("SELECT n.seq,n.id FROM nodes n WHERE {MEANINGFUL} AND n.seq IN ({placeholders}) AND n.project_id IN ({projects})");
-                let mut values = out
-                    .vector_seqs
-                    .iter()
-                    .map(|s| {
-                        s.parse::<i64>()
-                            .map(Value::Integer)
-                            .map_err(|_| Outcome::IndexFailed)
-                    })
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.id FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND {MEANINGFUL} AND COALESCE(c.vector_id,n.seq) IN ({placeholders}) AND n.project_id IN ({projects})");
+                let mut values = vec![Value::Text(input.embedder.clone())];
+                values.extend(
+                    out.vector_seqs
+                        .iter()
+                        .map(|s| {
+                            s.parse::<i64>()
+                                .map(Value::Integer)
+                                .map_err(|_| Outcome::IndexFailed)
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
+                );
                 values.extend(project_values());
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
