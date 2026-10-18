@@ -5,10 +5,7 @@ import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ownerWorkflowEngineLayer } from "../src/workflow/owner-workflow-engine.ts";
-import {
-  OwnerWorkflowAdmission,
-  OwnerWorkflowStorageError,
-} from "../src/workflow/owner-workflow-storage.ts";
+import { OwnerWorkflowAdmission } from "../src/workflow/owner-workflow-storage.ts";
 
 const ContractWorkflow = Workflow.make("OwnerWorkflowEngineContract", {
   payload: { value: Schema.String },
@@ -35,22 +32,20 @@ const withDatabase = <A, E, R>(use: (database: Database["Service"]) => Effect.Ef
     }),
   ).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer]));
 
+/** A fresh engine scope over the database `withDatabase` provides. */
 const withEngine = <A, E, R>(
-  database: Database["Service"],
   use: Effect.Effect<A, E, R | WorkflowEngine.WorkflowEngine | OwnerWorkflowAdmission>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const context = yield* Layer.build(
-        ownerWorkflowEngineLayer.pipe(Layer.provide(Layer.succeed(Database, database))),
-      );
+      const context = yield* Layer.build(ownerWorkflowEngineLayer);
       return yield* Effect.provideContext(use, context);
     }),
   );
 
 describe("owner workflow engine", () => {
   it.live("preserves activity services and typed failures across durable replay", () =>
-    withDatabase((database) => {
+    withDatabase(() => {
       let executions = 0;
       const workflow = Workflow.make("OwnerActivityFailure", {
         payload: { value: Schema.String },
@@ -58,7 +53,6 @@ describe("owner workflow engine", () => {
         idempotencyKey: ({ value }) => value,
       });
       const run = withEngine(
-        database,
         Effect.gen(function* () {
           const engine = yield* WorkflowEngine.WorkflowEngine;
           yield* engine.register(workflow, () =>
@@ -95,14 +89,13 @@ describe("owner workflow engine", () => {
   );
 
   it.live("persists a transformed Activity result once and decodes the typed workflow result", () =>
-    withDatabase((database) => {
+    withDatabase(() => {
       const workflow = Workflow.make("OwnerWorkflowTransformedActivity", {
         payload: { value: Schema.String },
         success: Schema.Finite,
         idempotencyKey: ({ value }) => value,
       });
       const run = withEngine(
-        database,
         Effect.gen(function* () {
           const engine = yield* WorkflowEngine.WorkflowEngine;
           yield* engine.register(workflow, () =>
@@ -126,10 +119,9 @@ describe("owner workflow engine", () => {
   );
 
   it.live("replays a completed Activity after the scoped engine restarts", () =>
-    withDatabase((database) => {
+    withDatabase(() => {
       let executions = 0;
       const run = withEngine(
-        database,
         Effect.gen(function* () {
           const engine = yield* WorkflowEngine.WorkflowEngine;
           yield* engine.register(ContractWorkflow, ({ value }) =>
@@ -160,10 +152,9 @@ describe("owner workflow engine", () => {
     }),
   );
 
-  it.live("commits owner binding and the first request in one Database.atomic transaction", () =>
+  it.live("commits owner binding and the first request in one transaction", () =>
     withDatabase((database) =>
       withEngine(
-        database,
         Effect.gen(function* () {
           database.sqlite.exec("CREATE TABLE owner_workflow_binding_probe (id TEXT PRIMARY KEY)");
           const admission = yield* OwnerWorkflowAdmission;
@@ -174,14 +165,16 @@ describe("owner workflow engine", () => {
           };
 
           const failed = yield* admission
-            .admit(request, () => {
-              database.sqlite
-                .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
-                .run("rolled-back");
-              throw new Error("reject binding");
-            })
+            .admit(
+              request,
+              Effect.sync(() =>
+                database.sqlite
+                  .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
+                  .run("rolled-back"),
+              ).pipe(Effect.andThen(Effect.fail("reject binding" as const))),
+            )
             .pipe(Effect.flip);
-          expect(failed).toBeInstanceOf(OwnerWorkflowStorageError);
+          expect(failed).toBe("reject binding");
           expect(
             database.sqlite.prepare("SELECT id FROM owner_workflow_binding_probe").all(),
           ).toEqual([]);
@@ -189,10 +182,13 @@ describe("owner workflow engine", () => {
             database.sqlite.prepare("SELECT execution_id FROM owner_workflow_executions").all(),
           ).toEqual([]);
 
-          yield* admission.admit(request, () =>
-            database.sqlite
-              .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
-              .run("committed"),
+          yield* admission.admit(
+            request,
+            Effect.sync(() =>
+              database.sqlite
+                .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
+                .run("committed"),
+            ),
           );
           expect(
             database.sqlite.prepare("SELECT id FROM owner_workflow_binding_probe").all(),
@@ -209,9 +205,12 @@ describe("owner workflow engine", () => {
           ]);
 
           let rebound = false;
-          const duplicate = yield* admission.admit(request, () => {
-            rebound = true;
-          });
+          const duplicate = yield* admission.admit(
+            request,
+            Effect.sync(() => {
+              rebound = true;
+            }),
+          );
           expect(duplicate.type).toBe("existing");
           expect(rebound).toBe(false);
         }),
@@ -220,11 +219,10 @@ describe("owner workflow engine", () => {
   );
 
   it.live("interrupts live workflow fibers when the engine scope closes", () =>
-    withDatabase((database) =>
+    withDatabase(() =>
       Effect.gen(function* () {
         let finalized = 0;
         yield* withEngine(
-          database,
           Effect.gen(function* () {
             const engine = yield* WorkflowEngine.WorkflowEngine;
             yield* engine.register(ContractWorkflow, () =>

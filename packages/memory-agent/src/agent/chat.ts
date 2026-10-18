@@ -1,3 +1,4 @@
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { ExecutionAdmission, ExecutionSaturated } from "../runtime/execution-admission.ts";
@@ -573,12 +574,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const providerToolRuntime = yield* ProviderToolRuntime;
   const sessions = yield* Sessions;
   const { sqlite, atomic } = yield* Database;
-  const runBindings = workflowRunBindings({ sqlite, atomic });
-  const uncertain = uncertainRuns({ sqlite, atomic });
+  const runBindings = yield* workflowRunBindings;
+  const uncertain = yield* uncertainRuns;
   const readRecovery = yield* OwnerReadRecovery;
   const workerAuthority = goalWorkerAuthority({ sqlite, atomic });
   const workerLedger = makeSqliteOwnerRpcLedger({ sqlite, atomic });
-  const runEvents = workflowRunEvents({ sqlite, atomic });
+  const runEvents = yield* workflowRunEvents;
+  const sql = yield* SqlClient.SqlClient;
+  const latestRevisionId = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.Finite }),
+    execute: (sessionId) => sql`
+      SELECT id FROM workflow_state_revisions WHERE session_id = ${sessionId}
+      ORDER BY id DESC LIMIT 1`,
+  });
   const nodes = yield* Nodes;
   const recorder = yield* Recorder;
   const memoryTools = yield* MemoryTools;
@@ -1802,7 +1811,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             state.phase !== workflow.phase ||
             state.plan?.version !== workflow.plan?.version ||
             (yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
-            relayed.pending(sessionId).length > 0
+            (yield* relayed.pending(sessionId)).length > 0
           )
             return json(409, { error: "workflow_followup_deferred" });
         }
@@ -2241,7 +2250,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           };
           goalExecutionPayload = durablePayload;
           const durableAdmission = yield* goalExecutions
-            .admitAndStart(durablePayload, () =>
+            .admitAndStart(
+              durablePayload,
               runBindings.bind(sessionId, runId, workerRevision, resumeRunId),
             )
             .pipe(
@@ -2423,10 +2433,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   stream,
                   (cause) => new Cause.UnknownError(cause),
                 ).pipe(
-                  Stream.map((chunk) => {
-                    runEvents.append(sessionId, runId, `chunk:${sequence++}`, "chunk", chunk);
-                    return chunk;
-                  }),
+                  Stream.tap((chunk) =>
+                    runEvents.append(sessionId, runId, `chunk:${sequence++}`, "chunk", chunk),
+                  ),
                 );
               }),
             )
@@ -2601,24 +2610,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "eligible":
             return json(200, result);
           case "recovered": {
-            const latest = yield* Schema.decodeUnknownEffect(
-              Schema.UndefinedOr(Schema.Struct({ id: Schema.Finite })),
-            )(
-              sqlite
-                .prepare(
-                  "SELECT id FROM workflow_state_revisions WHERE session_id=? ORDER BY id DESC LIMIT 1",
-                )
-                .get(sessionId),
-            );
-            if (latest === undefined)
+            const latest = yield* latestRevisionId(sessionId);
+            if (Option.isNone(latest))
               return json(200, {
                 ...result,
                 admission: { status: "blocked", reason: "workflow_changed" },
               });
-            const admission = runBindings.preview(
+            const admission = yield* runBindings.preview(
               sessionId,
               `operator-preview:${randomUUID()}`,
-              latest.id,
+              latest.value.id,
             );
             switch (admission.status) {
               case "bound":
@@ -2999,7 +3000,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * agent's own permission requests.
      */
     approvals: (sessionId: string) =>
-      Effect.map(sessions.get(sessionId), () => json(200, relayed.pending(sessionId))).pipe(
+      sessions.get(sessionId).pipe(
+        Effect.andThen(relayed.pending(sessionId)),
+        Effect.map((pending) => json(200, pending)),
         Effect.catchTag("SessionNotFound", sessionNotFound),
       ),
 
@@ -3013,7 +3016,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         return (yield* relayed.answer(sessionId, approvalId, approved))
-          ? json(200, relayed.pending(sessionId))
+          ? json(200, yield* relayed.pending(sessionId))
           : json(404, { error: "approval_not_pending" });
       }),
 
@@ -3102,7 +3105,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (
           continuing &&
           ((yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
-            relayed.pending(sessionId).length > 0)
+            (yield* relayed.pending(sessionId)).length > 0)
         )
           return;
         const pendingApprovals = yield* agentPromise("list-approvals", () =>

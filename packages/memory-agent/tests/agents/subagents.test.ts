@@ -282,8 +282,11 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const approved = yield* Effect.forkChild(
         send(sessionId, 'call run_subagent {"task":"shell: printf child-approved"}'),
       );
-      yield* until(() => relayed.pending(sessionId).length === 1, "the child's approval");
-      const [request] = relayed.pending(sessionId);
+      yield* until(
+        Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
+        "the child's approval",
+      );
+      const [request] = yield* relayed.pending(sessionId);
       expect(request).toMatchObject({
         toolName: "save_shell_skill",
         askedBy: "every_call",
@@ -296,8 +299,11 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const denied = yield* Effect.forkChild(
         send(sessionId, 'call run_subagent {"task":"shell: printf child-denied"}'),
       );
-      yield* until(() => relayed.pending(sessionId).length === 1, "the second approval");
-      yield* relayed.answer(sessionId, relayed.pending(sessionId)[0]!.id, false);
+      yield* until(
+        Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
+        "the second approval",
+      );
+      yield* relayed.answer(sessionId, (yield* relayed.pending(sessionId))[0]!.id, false);
       const deniedAnswer = yield* Fiber.join(denied);
       expect(deniedAnswer).toContain("User denied this action");
       expect(deniedAnswer).not.toContain("scriptSha256");
@@ -478,14 +484,17 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
         const run = yield* Effect.forkChild(
           send(sessionId, 'call run_subagent {"task":"shell: printf never-runs"}'),
         );
-        yield* until(() => relayed.pending(sessionId).length === 1, "the child's approval");
+        yield* until(
+          Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
+          "the child's approval",
+        );
         expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
         yield* Fiber.join(run);
         yield* until(
           () => subagents.list(sessionId)[0]?.status === "cancelled",
           "the child to stop",
         );
-        expect(relayed.pending(sessionId)).toEqual([]);
+        expect(yield* relayed.pending(sessionId)).toEqual([]);
         // Create a safe checkpoint with no uncertain tool side effects, then simulate a crash while
         // that newest child attempt is still running.
         yield* send(sessionId, 'call run_subagent {"task":"recover facts"}');

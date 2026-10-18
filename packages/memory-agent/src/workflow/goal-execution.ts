@@ -67,34 +67,26 @@ const make = Effect.gen(function* () {
 
   return {
     /** Admitted executions still waiting for their run to settle them, as their stored payloads. */
-    unsettled: Effect.try({
-      try: () => storage.pendingExecutions(GoalExecution._tag),
-      catch: (cause) =>
-        Schema.is(OwnerWorkflowStorageError)(cause)
-          ? cause
-          : OwnerWorkflowStorageError.make({
-              operation: "execution.pending",
-              reason: "database",
-              cause,
-            }),
-    }).pipe(
-      Effect.flatMap((executions) =>
-        Effect.forEach(executions, (execution) =>
-          Schema.decodeUnknownEffect(GoalExecutionPayload)(execution.payload),
+    unsettled: storage
+      .pendingExecutions(GoalExecution._tag)
+      .pipe(
+        Effect.flatMap((executions) =>
+          Effect.forEach(executions, (execution) =>
+            Schema.decodeUnknownEffect(GoalExecutionPayload)(execution.payload),
+          ),
         ),
       ),
-    ),
 
     /**
      * Commits the existing owner run binding callback and first durable request together, then
      * dispatches the replay-safe workflow body. A committed request is always re-identifiable.
      */
-    admitAndStart: (
+    admitAndStart: <E>(
       payload: GoalExecutionPayloadType,
-      bind: () => Admission,
+      bind: Effect.Effect<Admission, E>,
     ): Effect.Effect<
       OwnerWorkflowAdmissionResult<RunBinding>,
-      GoalExecutionAdmissionRefused | OwnerWorkflowStorageError | ExecutionSaturated
+      GoalExecutionAdmissionRefused | OwnerWorkflowStorageError | ExecutionSaturated | E
     > =>
       executionAdmission.run(
         "workflow",
@@ -107,33 +99,23 @@ const make = Effect.gen(function* () {
                 executionId,
                 payload,
               },
-              () => {
-                const result = bind();
+              Effect.flatMap(bind, (result) => {
                 switch (result.status) {
                   case "bound":
-                    return result.binding;
+                    return Effect.succeed(result.binding);
                   case "refused":
-                    throw GoalExecutionAdmissionRefused.make({ reason: result.reason });
+                    return Effect.fail(
+                      GoalExecutionAdmissionRefused.make({ reason: result.reason }),
+                    );
                 }
-              },
+              }),
             )
             .pipe(
-              Effect.catchTag(
-                "OwnerWorkflowStorageError",
-                (
-                  error,
-                ): Effect.Effect<
-                  never,
-                  GoalExecutionAdmissionRefused | OwnerWorkflowStorageError
-                > => {
-                  if (Schema.is(GoalExecutionAdmissionRefused)(error.cause))
-                    return Effect.fail(error.cause);
-                  if (error.reason === "execution_conflict")
-                    return Effect.fail(
-                      GoalExecutionAdmissionRefused.make({ reason: "owner_mismatch" }),
-                    );
-                  return Effect.fail(error);
-                },
+              Effect.catchIf(
+                (error) =>
+                  Schema.is(OwnerWorkflowStorageError)(error) &&
+                  error.reason === "execution_conflict",
+                () => Effect.fail(GoalExecutionAdmissionRefused.make({ reason: "owner_mismatch" })),
               ),
             );
           yield* provideEngine(GoalExecution.execute(payload, { discard: true }));

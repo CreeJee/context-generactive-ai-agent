@@ -154,7 +154,7 @@ const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed")
       directory: `${env.storage}/native-artifacts`,
     }).acquire(revision.goal_instance_id),
   );
-  const admission = workflowRunBindings(db).bind(id, `${id}-old`, revision.id);
+  const admission = yield* (yield* workflowRunBindings).bind(id, `${id}-old`, revision.id);
   expect(admission.status).toBe("bound");
   if (admission.status !== "bound") return yield* Effect.die("the earlier run was not bound");
   db.sqlite

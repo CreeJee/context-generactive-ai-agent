@@ -6,7 +6,7 @@ import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/to
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import { defaultTestResponder } from "./provider.ts";
 import type { AgentServices } from "./test-env.ts";
-import { waitUntil } from "./wait-until.ts";
+import { type WaitCondition, waitUntil } from "./wait-until.ts";
 
 /**
  * Interrupt IDs come from tool-call IDs and are unique across the database, as provider call IDs
@@ -91,7 +91,8 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
           : [],
       )
       .join("");
-  const until = (condition: () => boolean, what: string) => waitUntil(condition, what, 6_000);
+  const until = <E = never>(condition: WaitCondition<E>, what: string) =>
+    waitUntil(condition, what, 6_000);
   return {
     client,
     text,

@@ -1,8 +1,7 @@
-/* Native SQLite and Effect's encoded workflow boundary necessarily accept parsed unknown values. */
-/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/require-safety-comment-for-type-assertion */
-import { Context, Effect, Layer, Option, Result, Schema } from "effect";
-import { Function as EffectFunction } from "effect";
-import { Database } from "../db/database.ts";
+/* Effect's encoded workflow boundary necessarily accepts parsed unknown values. */
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns */
+import { type Cause, Context, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
 export class OwnerWorkflowStorageError extends Schema.TaggedError<OwnerWorkflowStorageError>()(
   "OwnerWorkflowStorageError",
@@ -37,6 +36,14 @@ export type OwnerWorkflowAdmissionResult<A> =
   | { readonly type: "admitted"; readonly value: A }
   | { readonly type: "existing"; readonly execution: StoredExecution };
 
+export type ScheduledClock = {
+  readonly workflowName: string;
+  readonly executionId: string;
+  readonly clockName: string;
+  readonly deferredName: string;
+  readonly dueAt: number;
+};
+
 const ExecutionRow = Schema.Struct({
   execution_id: Schema.String,
   workflow_name: Schema.String,
@@ -46,6 +53,17 @@ const ExecutionRow = Schema.Struct({
   result_json: Schema.NullOr(Schema.String),
 });
 type ExecutionRow = typeof ExecutionRow.Type;
+const ClockRow = Schema.Struct({
+  workflow_name: Schema.String,
+  execution_id: Schema.String,
+  clock_name: Schema.String,
+  deferred_name: Schema.String,
+  due_at: Schema.Finite,
+});
+const StoredResult = Schema.Union([
+  Schema.TaggedStruct("Suspended", {}),
+  Schema.TaggedStruct("Complete", { exit: Schema.Unknown }),
+]);
 
 const JsonObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
 const JsonUnknown = Schema.fromJsonString(Schema.Unknown);
@@ -53,420 +71,368 @@ const JsonUnknown = Schema.fromJsonString(Schema.Unknown);
 const failure = (operation: string, reason: OwnerWorkflowStorageError["reason"], cause: unknown) =>
   OwnerWorkflowStorageError.make({ operation, reason, cause });
 
-const encodeJson = (operation: string, value: unknown): string => {
-  try {
-    const encoded = JSON.stringify(value);
-    if (encoded === undefined) throw failure(operation, "codec", value);
-    return encoded;
-  } catch (cause) {
-    if (Schema.is(OwnerWorkflowStorageError)(cause)) throw cause;
-    throw failure(operation, "codec", cause);
-  }
-};
+const encodeJson = (operation: string, value: unknown) =>
+  Schema.encodeUnknownEffect(JsonUnknown)(value).pipe(
+    Effect.mapError((cause) => failure(operation, "codec", cause)),
+  );
 
-const decodeUnknown = (operation: string, value: string): unknown => {
-  const result = Schema.decodeResult(JsonUnknown)(value);
-  if (Result.isFailure(result)) throw failure(operation, "codec", result.failure);
-  return result.success;
-};
+const decodeUnknown = (operation: string, value: string) =>
+  Schema.decodeEffect(JsonUnknown)(value).pipe(
+    Effect.mapError((cause) => failure(operation, "codec", cause)),
+  );
 
-const decodeObject = (operation: string, value: string): object => {
-  const result = Schema.decodeResult(JsonObject)(value);
-  if (Result.isFailure(result)) throw failure(operation, "codec", result.failure);
-  return result.success;
-};
-
-const optionalRow = (operation: string, value: unknown): ExecutionRow | undefined => {
-  const result = Schema.decodeUnknownResult(Schema.UndefinedOr(ExecutionRow))(value);
-  if (Result.isFailure(result)) throw failure(operation, "invalid_state", result.failure);
-  return result.success;
-};
-
-const executionRows = (operation: string, value: unknown): ReadonlyArray<ExecutionRow> => {
-  const result = Schema.decodeUnknownResult(Schema.Array(ExecutionRow))(value);
-  if (Result.isFailure(result)) throw failure(operation, "invalid_state", result.failure);
-  return result.success;
-};
-
-const storedResult = (
-  operation: string,
-  value: string | null,
-): StoredWorkflowResult | undefined => {
+const storedResult = Effect.fnUntraced(function* (operation: string, value: string | null) {
   if (value === null) return undefined;
-  const result = decodeUnknown(operation, value);
-  const decoded = Schema.decodeUnknownResult(
-    Schema.Union([
-      Schema.TaggedStruct("Suspended", {}),
-      Schema.TaggedStruct("Complete", { exit: Schema.Unknown }),
-    ]),
-  )(result);
-  if (Result.isFailure(decoded)) throw failure(operation, "invalid_state", decoded.failure);
-  return decoded.success;
-};
+  const result = yield* decodeUnknown(operation, value);
+  return yield* Schema.decodeUnknownEffect(StoredResult)(result).pipe(
+    Effect.mapError((cause) => failure(operation, "invalid_state", cause)),
+  );
+});
+
+type Stored<A> = Effect.Effect<A, OwnerWorkflowStorageError>;
 
 export interface OwnerWorkflowStorageApi {
-  readonly admit: (request: OwnerWorkflowAdmissionRequest) => StoredExecution;
-  readonly admitWith: <A>(
+  readonly admit: (request: OwnerWorkflowAdmissionRequest) => Stored<StoredExecution>;
+  /** Runs `bind` and the first durable request in one transaction; `bind` may refuse with `E`. */
+  readonly admitWith: <A, E>(
     request: OwnerWorkflowAdmissionRequest,
-    bind: () => A,
-  ) => OwnerWorkflowAdmissionResult<A>;
-  readonly execution: (executionId: string) => Option.Option<StoredExecution>;
-  readonly workflowExecutions: (workflowName: string) => ReadonlyArray<StoredExecution>;
-  readonly pendingExecutions: (workflowName: string) => ReadonlyArray<StoredExecution>;
-  readonly setRunning: (executionId: string) => void;
-  readonly setInterrupted: (executionId: string) => void;
-  readonly setResult: (executionId: string, result: StoredWorkflowResult) => void;
+    bind: Effect.Effect<A, E>,
+  ) => Effect.Effect<OwnerWorkflowAdmissionResult<A>, OwnerWorkflowStorageError | E>;
+  readonly execution: (executionId: string) => Stored<Option.Option<StoredExecution>>;
+  readonly workflowExecutions: (workflowName: string) => Stored<ReadonlyArray<StoredExecution>>;
+  readonly pendingExecutions: (workflowName: string) => Stored<ReadonlyArray<StoredExecution>>;
+  readonly setRunning: (executionId: string) => Stored<void>;
+  readonly setInterrupted: (executionId: string) => Stored<void>;
+  readonly setResult: (executionId: string, result: StoredWorkflowResult) => Stored<void>;
   readonly activityResult: (
     executionId: string,
     activityName: string,
     attempt: number,
-  ) => Option.Option<StoredWorkflowResult>;
+  ) => Stored<Option.Option<StoredWorkflowResult>>;
   readonly setActivityResult: (
     executionId: string,
     activityName: string,
     attempt: number,
     result: StoredWorkflowResult,
-  ) => void;
-  readonly deferredResult: (executionId: string, deferredName: string) => Option.Option<unknown>;
+  ) => Stored<void>;
+  readonly deferredResult: (
+    executionId: string,
+    deferredName: string,
+  ) => Stored<Option.Option<unknown>>;
   readonly setDeferredResult: (
     workflowName: string,
     executionId: string,
     deferredName: string,
     exit: unknown,
-  ) => boolean;
-  readonly scheduleClock: (clock: {
-    readonly workflowName: string;
-    readonly executionId: string;
-    readonly clockName: string;
-    readonly deferredName: string;
-    readonly dueAt: number;
-  }) => number;
-  readonly pendingClocks: () => ReadonlyArray<{
-    readonly workflowName: string;
-    readonly executionId: string;
-    readonly clockName: string;
-    readonly deferredName: string;
-    readonly dueAt: number;
-  }>;
-  readonly fireClock: (executionId: string, clockName: string) => boolean;
-  readonly cancelClocks: (executionId: string) => ReadonlyArray<string>;
+  ) => Stored<boolean>;
+  readonly scheduleClock: (clock: ScheduledClock) => Stored<number>;
+  readonly pendingClocks: Stored<ReadonlyArray<ScheduledClock>>;
+  readonly fireClock: (executionId: string, clockName: string) => Stored<boolean>;
+  readonly cancelClocks: (executionId: string) => Stored<ReadonlyArray<string>>;
 }
 
-function makeOwnerWorkflowStorage(database: Database["Service"]): OwnerWorkflowStorageApi {
-  const { atomic, sqlite } = database;
-  const byExecution = sqlite.prepare(`
-    SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
-    FROM owner_workflow_executions WHERE execution_id = ?
-  `);
-  const allByWorkflow = sqlite.prepare(`
-    SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
-    FROM owner_workflow_executions WHERE workflow_name = ? ORDER BY execution_id
-  `);
-  const pendingByWorkflow = sqlite.prepare(`
-    SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
-    FROM owner_workflow_executions
-    WHERE workflow_name = ? AND status IN ('running', 'suspended')
-    ORDER BY execution_id
-  `);
-  const insertExecution = sqlite.prepare(`
-    INSERT INTO owner_workflow_executions
-      (execution_id, workflow_name, payload_json, parent_execution_id, status, result_json)
-    VALUES (?, ?, ?, ?, 'running', NULL)
-  `);
-  const updateRunning = sqlite.prepare(`
-    UPDATE owner_workflow_executions SET status = 'running', result_json = NULL
-    WHERE execution_id = ? AND status <> 'completed'
-  `);
-  const updateInterrupted = sqlite.prepare(`
-    UPDATE owner_workflow_executions SET status = 'interrupted'
-    WHERE execution_id = ? AND status <> 'completed'
-  `);
-  const updateResult = sqlite.prepare(`
-    UPDATE owner_workflow_executions SET status = ?, result_json = ? WHERE execution_id = ?
-  `);
-  const getActivity = sqlite.prepare(`
-    SELECT result_json FROM owner_workflow_activities
-    WHERE execution_id = ? AND activity_name = ? AND attempt = ?
-  `);
-  const putActivity = sqlite.prepare(`
-    INSERT INTO owner_workflow_activities (execution_id, activity_name, attempt, result_json)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(execution_id, activity_name, attempt) DO NOTHING
-  `);
-  const getDeferred = sqlite.prepare(`
-    SELECT exit_json FROM owner_workflow_deferreds
-    WHERE execution_id = ? AND deferred_name = ?
-  `);
-  const putDeferred = sqlite.prepare(`
-    INSERT INTO owner_workflow_deferreds
-      (execution_id, deferred_name, workflow_name, exit_json)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(execution_id, deferred_name) DO NOTHING
-  `);
-  const putClock = sqlite.prepare(`
-    INSERT INTO owner_workflow_clocks
-      (execution_id, clock_name, workflow_name, deferred_name, due_at, status)
-    VALUES (?, ?, ?, ?, ?, 'scheduled')
-    ON CONFLICT(execution_id, clock_name) DO NOTHING
-  `);
-  const getClock = sqlite.prepare(`
-    SELECT due_at FROM owner_workflow_clocks WHERE execution_id = ? AND clock_name = ?
-  `);
-  const listClocks = sqlite.prepare(`
-    SELECT workflow_name, execution_id, clock_name, deferred_name, due_at
-    FROM owner_workflow_clocks WHERE status = 'scheduled' ORDER BY due_at
-  `);
-  const clockForFire = sqlite.prepare(`
-    SELECT workflow_name, deferred_name, status FROM owner_workflow_clocks
-    WHERE execution_id = ? AND clock_name = ?
-  `);
-  const markClockFired = sqlite.prepare(`
-    UPDATE owner_workflow_clocks SET status = 'fired'
-    WHERE execution_id = ? AND clock_name = ? AND status = 'scheduled'
-  `);
-  const scheduledClocks = sqlite.prepare(`
-    SELECT clock_name FROM owner_workflow_clocks
-    WHERE execution_id = ? AND status = 'scheduled' ORDER BY clock_name
-  `);
-  const deleteScheduledClocks = sqlite.prepare(`
-    DELETE FROM owner_workflow_clocks WHERE execution_id = ? AND status = 'scheduled'
-  `);
+const makeOwnerWorkflowStorage = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
 
-  const run = <A>(operation: string, work: () => A): A => {
-    try {
-      return work();
-    } catch (cause) {
-      if (Schema.is(OwnerWorkflowStorageError)(cause)) throw cause;
-      throw failure(operation, "database", cause);
-    }
-  };
+  /** A storage step: database failures and malformed rows keep the operation that met them. */
+  const step =
+    (operation: string) =>
+    <A>(
+      effect: Effect.Effect<A, SqlError.SqlError | Schema.SchemaError | Cause.NoSuchElementError>,
+    ): Stored<A> =>
+      Effect.mapError(effect, (cause) => {
+        switch (cause._tag) {
+          case "SqlError":
+            return failure(operation, "database", cause);
+          case "SchemaError":
+          case "NoSuchElementError":
+            return failure(operation, "invalid_state", cause);
+        }
+      });
 
-  const decodeExecution = (row: ExecutionRow): StoredExecution => ({
-    executionId: row.execution_id,
-    workflowName: row.workflow_name,
-    payload: decodeObject("execution.payload", row.payload_json),
-    parentExecutionId: row.parent_execution_id ?? undefined,
-    status: row.status,
-    result: storedResult("execution.result", row.result_json),
+  const byExecution = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: ExecutionRow,
+    execute: (executionId) => sql`
+      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
+      FROM owner_workflow_executions WHERE execution_id = ${executionId}`,
+  });
+  const allByWorkflow = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: ExecutionRow,
+    execute: (workflowName) => sql`
+      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
+      FROM owner_workflow_executions WHERE workflow_name = ${workflowName} ORDER BY execution_id`,
+  });
+  const pendingByWorkflow = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: ExecutionRow,
+    execute: (workflowName) => sql`
+      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
+      FROM owner_workflow_executions
+      WHERE workflow_name = ${workflowName} AND status IN ('running', 'suspended')
+      ORDER BY execution_id`,
+  });
+  const activityRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      executionId: Schema.String,
+      activityName: Schema.String,
+      attempt: Schema.Finite,
+    }),
+    Result: Schema.Struct({ result_json: Schema.String }),
+    execute: ({ executionId, activityName, attempt }) => sql`
+      SELECT result_json FROM owner_workflow_activities
+      WHERE execution_id = ${executionId} AND activity_name = ${activityName} AND attempt = ${attempt}`,
+  });
+  const deferredRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({ executionId: Schema.String, deferredName: Schema.String }),
+    Result: Schema.Struct({ exit_json: Schema.String }),
+    execute: ({ executionId, deferredName }) => sql`
+      SELECT exit_json FROM owner_workflow_deferreds
+      WHERE execution_id = ${executionId} AND deferred_name = ${deferredName}`,
+  });
+  const clockDue = SqlSchema.findOne({
+    Request: Schema.Struct({ executionId: Schema.String, clockName: Schema.String }),
+    Result: Schema.Struct({ due_at: Schema.Finite }),
+    execute: ({ executionId, clockName }) => sql`
+      SELECT due_at FROM owner_workflow_clocks
+      WHERE execution_id = ${executionId} AND clock_name = ${clockName}`,
+  });
+  const scheduledClocks = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ClockRow,
+    execute: () => sql`
+      SELECT workflow_name, execution_id, clock_name, deferred_name, due_at
+      FROM owner_workflow_clocks WHERE status = 'scheduled' ORDER BY due_at`,
+  });
+  const clockForFire = SqlSchema.findOneOption({
+    Request: Schema.Struct({ executionId: Schema.String, clockName: Schema.String }),
+    Result: Schema.Struct({
+      workflow_name: Schema.String,
+      deferred_name: Schema.String,
+      status: Schema.Literals(["scheduled", "fired"]),
+    }),
+    execute: ({ executionId, clockName }) => sql`
+      SELECT workflow_name, deferred_name, status FROM owner_workflow_clocks
+      WHERE execution_id = ${executionId} AND clock_name = ${clockName}`,
+  });
+  const cancelScheduled = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ clock_name: Schema.String }),
+    execute: (executionId) => sql`
+      DELETE FROM owner_workflow_clocks
+      WHERE execution_id = ${executionId} AND status = 'scheduled' RETURNING clock_name`,
   });
 
-  const readExecution = (executionId: string): StoredExecution | undefined => {
-    const row = optionalRow("execution.read", byExecution.get(executionId));
-    return row === undefined ? undefined : decodeExecution(row);
-  };
+  const decodeExecution = Effect.fnUntraced(function* (row: ExecutionRow) {
+    const payload: object = yield* Schema.decodeEffect(JsonObject)(row.payload_json).pipe(
+      Effect.mapError((cause) => failure("execution.payload", "codec", cause)),
+    );
+    return {
+      executionId: row.execution_id,
+      workflowName: row.workflow_name,
+      payload,
+      parentExecutionId: row.parent_execution_id ?? undefined,
+      status: row.status,
+      result: yield* storedResult("execution.result", row.result_json),
+    } satisfies StoredExecution;
+  });
 
-  const admitRaw = (request: OwnerWorkflowAdmissionRequest): StoredExecution => {
-    const payloadJson = encodeJson("execution.payload", request.payload);
-    const existing = readExecution(request.executionId);
-    if (existing !== undefined) {
+  const readExecution = (executionId: string) =>
+    Effect.flatMap(
+      step("execution.read")(byExecution(executionId)),
+      Option.match({
+        onNone: () => Effect.succeedNone,
+        onSome: (row) => Effect.asSome(decodeExecution(row)),
+      }),
+    );
+
+  const admitRaw = Effect.fnUntraced(function* (request: OwnerWorkflowAdmissionRequest) {
+    const payloadJson = yield* encodeJson("execution.payload", request.payload);
+    const existing = yield* readExecution(request.executionId);
+    if (Option.isSome(existing)) {
       if (
-        existing.workflowName !== request.workflowName ||
-        encodeJson("execution.payload", existing.payload) !== payloadJson ||
-        existing.parentExecutionId !== request.parentExecutionId
+        existing.value.workflowName !== request.workflowName ||
+        (yield* encodeJson("execution.payload", existing.value.payload)) !== payloadJson ||
+        existing.value.parentExecutionId !== request.parentExecutionId
       )
-        throw failure("execution.admit", "execution_conflict", request.executionId);
-      return existing;
+        return yield* failure("execution.admit", "execution_conflict", request.executionId);
+      return existing.value;
     }
-    insertExecution.run(
-      request.executionId,
-      request.workflowName,
-      payloadJson,
-      request.parentExecutionId ?? null,
-    );
-    return (
-      readExecution(request.executionId) ??
-      (() => {
-        throw failure("execution.admit", "invalid_state", request.executionId);
-      })()
-    );
-  };
+    yield* step("execution.admit")(sql`
+      INSERT INTO owner_workflow_executions
+        (execution_id, workflow_name, payload_json, parent_execution_id, status, result_json)
+      VALUES (${request.executionId}, ${request.workflowName}, ${payloadJson},
+        ${request.parentExecutionId ?? null}, 'running', NULL)`);
+    const admitted = yield* readExecution(request.executionId);
+    if (Option.isNone(admitted))
+      return yield* failure("execution.admit", "invalid_state", request.executionId);
+    return admitted.value;
+  });
 
-  const setDeferredRaw = (
+  const setDeferredRaw = Effect.fnUntraced(function* (
     workflowName: string,
     executionId: string,
     deferredName: string,
     exit: unknown,
-  ) => {
-    const json = encodeJson("deferred.encode", exit);
-    const result = putDeferred.run(executionId, deferredName, workflowName, json);
-    if (result.changes === 0) {
-      const row = getDeferred.get(executionId, deferredName) as { exit_json?: unknown } | undefined;
-      if (row?.exit_json !== json)
-        throw failure("deferred.complete", "execution_conflict", deferredName);
-      return false;
-    }
-    return true;
-  };
+  ) {
+    const json = yield* encodeJson("deferred.encode", exit);
+    const inserted = yield* step("deferred.complete")(sql`
+      INSERT INTO owner_workflow_deferreds (execution_id, deferred_name, workflow_name, exit_json)
+      VALUES (${executionId}, ${deferredName}, ${workflowName}, ${json})
+      ON CONFLICT(execution_id, deferred_name) DO NOTHING RETURNING execution_id`);
+    if (inserted.length > 0) return true;
+    const row = yield* step("deferred.complete")(deferredRow({ executionId, deferredName }));
+    if (Option.getOrUndefined(row)?.exit_json !== json)
+      return yield* failure("deferred.complete", "execution_conflict", deferredName);
+    return false;
+  });
 
-  return {
-    admit: (request) => run("execution.admit", () => atomic(() => admitRaw(request))),
+  const transaction =
+    (operation: string) =>
+    <A, E>(effect: Effect.Effect<A, E>) =>
+      sql
+        .withTransaction(effect)
+        .pipe(
+          Effect.catchTag("SqlError", (cause) =>
+            Effect.fail(failure(operation, "database", cause)),
+          ),
+        );
+
+  const storage: OwnerWorkflowStorageApi = {
+    admit: (request) => transaction("execution.admit")(admitRaw(request)),
     admitWith: (request, bind) =>
-      run("execution.admitWith", () =>
-        atomic(() => {
-          const existing = readExecution(request.executionId);
-          if (existing !== undefined)
-            return { type: "existing" as const, execution: admitRaw(request) };
-          const value = bind();
-          admitRaw(request);
+      transaction("execution.admitWith")(
+        Effect.gen(function* () {
+          const existing = yield* readExecution(request.executionId);
+          if (Option.isSome(existing))
+            return { type: "existing" as const, execution: yield* admitRaw(request) };
+          const value = yield* bind;
+          yield* admitRaw(request);
           return { type: "admitted" as const, value };
         }),
       ),
-    execution: (executionId) =>
-      run("execution.read", () => Option.fromNullishOr(readExecution(executionId))),
+    execution: readExecution,
     workflowExecutions: (workflowName) =>
-      run("execution.list", () =>
-        executionRows("execution.list", allByWorkflow.all(workflowName)).map(decodeExecution),
+      Effect.flatMap(step("execution.list")(allByWorkflow(workflowName)), (rows) =>
+        Effect.forEach(rows, decodeExecution),
       ),
     pendingExecutions: (workflowName) =>
-      run("execution.pending", () =>
-        executionRows("execution.pending", pendingByWorkflow.all(workflowName)).map(
-          decodeExecution,
-        ),
+      Effect.flatMap(step("execution.pending")(pendingByWorkflow(workflowName)), (rows) =>
+        Effect.forEach(rows, decodeExecution),
       ),
     setRunning: (executionId) =>
-      run("execution.running", () => void updateRunning.run(executionId)),
+      step("execution.running")(
+        Effect.asVoid(sql`
+          UPDATE owner_workflow_executions SET status = 'running', result_json = NULL
+          WHERE execution_id = ${executionId} AND status <> 'completed'`),
+      ),
     setInterrupted: (executionId) =>
-      run("execution.interrupt", () => void updateInterrupted.run(executionId)),
-    setResult: (executionId, result) =>
-      run("execution.result", () => {
-        const status = result._tag === "Complete" ? "completed" : "suspended";
-        const changed = updateResult.run(
-          status,
-          encodeJson("execution.result", result),
-          executionId,
-        );
-        if (changed.changes !== 1) throw failure("execution.result", "invalid_state", executionId);
-      }),
-    activityResult: (executionId, activityName, attempt) =>
-      run("activity.read", () => {
-        const row = getActivity.get(executionId, activityName, attempt) as
-          | { result_json?: unknown }
-          | undefined;
-        if (row === undefined) return Option.none();
-        if (!Schema.is(Schema.String)(row.result_json))
-          throw failure("activity.read", "invalid_state", row);
-        return Option.fromNullishOr(storedResult("activity.result", row.result_json));
-      }),
-    setActivityResult: (executionId, activityName, attempt, result) =>
-      run("activity.result", () => {
-        const json = encodeJson("activity.result", result);
-        const inserted = putActivity.run(executionId, activityName, attempt, json);
-        if (inserted.changes === 0) {
-          const row = getActivity.get(executionId, activityName, attempt) as
-            | { result_json?: unknown }
-            | undefined;
-          if (row?.result_json !== json)
-            throw failure("activity.result", "execution_conflict", activityName);
-        }
-      }),
-    deferredResult: (executionId, deferredName) =>
-      run("deferred.read", () => {
-        const row = getDeferred.get(executionId, deferredName) as
-          | { exit_json?: unknown }
-          | undefined;
-        if (row === undefined) return Option.none();
-        if (!Schema.is(Schema.String)(row.exit_json))
-          throw failure("deferred.read", "invalid_state", row);
-        return Option.some(decodeUnknown("deferred.exit", row.exit_json));
-      }),
+      step("execution.interrupt")(
+        Effect.asVoid(sql`
+          UPDATE owner_workflow_executions SET status = 'interrupted'
+          WHERE execution_id = ${executionId} AND status <> 'completed'`),
+      ),
+    setResult: Effect.fnUntraced(function* (executionId, result) {
+      const status = result._tag === "Complete" ? "completed" : "suspended";
+      const json = yield* encodeJson("execution.result", result);
+      const changed = yield* step("execution.result")(sql`
+        UPDATE owner_workflow_executions SET status = ${status}, result_json = ${json}
+        WHERE execution_id = ${executionId} RETURNING execution_id`);
+      if (changed.length !== 1)
+        return yield* failure("execution.result", "invalid_state", executionId);
+    }),
+    activityResult: Effect.fnUntraced(function* (executionId, activityName, attempt) {
+      const row = yield* step("activity.read")(activityRow({ executionId, activityName, attempt }));
+      if (Option.isNone(row)) return Option.none();
+      return Option.fromNullishOr(yield* storedResult("activity.result", row.value.result_json));
+    }),
+    setActivityResult: Effect.fnUntraced(function* (executionId, activityName, attempt, result) {
+      const json = yield* encodeJson("activity.result", result);
+      const inserted = yield* step("activity.result")(sql`
+        INSERT INTO owner_workflow_activities (execution_id, activity_name, attempt, result_json)
+        VALUES (${executionId}, ${activityName}, ${attempt}, ${json})
+        ON CONFLICT(execution_id, activity_name, attempt) DO NOTHING RETURNING execution_id`);
+      if (inserted.length > 0) return;
+      const row = yield* step("activity.result")(
+        activityRow({ executionId, activityName, attempt }),
+      );
+      if (Option.getOrUndefined(row)?.result_json !== json)
+        return yield* failure("activity.result", "execution_conflict", activityName);
+    }),
+    deferredResult: Effect.fnUntraced(function* (executionId, deferredName) {
+      const row = yield* step("deferred.read")(deferredRow({ executionId, deferredName }));
+      if (Option.isNone(row)) return Option.none();
+      return Option.some(yield* decodeUnknown("deferred.exit", row.value.exit_json));
+    }),
     setDeferredResult: (workflowName, executionId, deferredName, exit) =>
-      run("deferred.complete", () =>
-        atomic(() => setDeferredRaw(workflowName, executionId, deferredName, exit)),
+      transaction("deferred.complete")(
+        setDeferredRaw(workflowName, executionId, deferredName, exit),
       ),
     scheduleClock: (clock) =>
-      run("clock.schedule", () =>
-        atomic(() => {
-          putClock.run(
-            clock.executionId,
-            clock.clockName,
-            clock.workflowName,
-            clock.deferredName,
-            clock.dueAt,
-          );
-          const row = getClock.get(clock.executionId, clock.clockName) as
-            | { due_at?: unknown }
-            | undefined;
-          if (!Schema.is(Schema.Finite)(row?.due_at))
-            throw failure("clock.schedule", "invalid_state", row);
-          return row.due_at;
-        }),
+      transaction("clock.schedule")(
+        step("clock.schedule")(
+          Effect.andThen(
+            sql`
+              INSERT INTO owner_workflow_clocks
+                (execution_id, clock_name, workflow_name, deferred_name, due_at, status)
+              VALUES (${clock.executionId}, ${clock.clockName}, ${clock.workflowName},
+                ${clock.deferredName}, ${clock.dueAt}, 'scheduled')
+              ON CONFLICT(execution_id, clock_name) DO NOTHING`,
+            clockDue({ executionId: clock.executionId, clockName: clock.clockName }),
+          ),
+        ).pipe(Effect.map((row) => row.due_at)),
       ),
-    pendingClocks: () =>
-      run("clock.pending", () => {
-        const Row = Schema.Struct({
-          workflow_name: Schema.String,
-          execution_id: Schema.String,
-          clock_name: Schema.String,
-          deferred_name: Schema.String,
-          due_at: Schema.Finite,
-        });
-        return EffectFunction.flow(
-          Schema.decodeUnknownResult(Schema.Array(Row)),
-          Result.getOrThrow,
-        )(listClocks.all()).map((row) => ({
-          workflowName: row.workflow_name,
-          executionId: row.execution_id,
-          clockName: row.clock_name,
-          deferredName: row.deferred_name,
-          dueAt: row.due_at,
-        }));
-      }),
+    pendingClocks: Effect.map(step("clock.pending")(scheduledClocks()), (rows) =>
+      rows.map((row) => ({
+        workflowName: row.workflow_name,
+        executionId: row.execution_id,
+        clockName: row.clock_name,
+        deferredName: row.deferred_name,
+        dueAt: row.due_at,
+      })),
+    ),
     fireClock: (executionId, clockName) =>
-      run("clock.fire", () =>
-        atomic(() => {
-          const row = clockForFire.get(executionId, clockName) as
-            | { workflow_name?: unknown; deferred_name?: unknown; status?: unknown }
-            | undefined;
-          if (row === undefined || row.status === "fired") return false;
-          if (
-            !Schema.is(Schema.String)(row.workflow_name) ||
-            !Schema.is(Schema.String)(row.deferred_name) ||
-            row.status !== "scheduled"
-          )
-            throw failure("clock.fire", "invalid_state", row);
-          setDeferredRaw(row.workflow_name, executionId, row.deferred_name, {
+      transaction("clock.fire")(
+        Effect.gen(function* () {
+          const row = yield* step("clock.fire")(clockForFire({ executionId, clockName }));
+          if (Option.isNone(row) || row.value.status === "fired") return false;
+          yield* setDeferredRaw(row.value.workflow_name, executionId, row.value.deferred_name, {
             _tag: "Success",
             value: null,
           });
-          markClockFired.run(executionId, clockName);
+          yield* step("clock.fire")(sql`
+            UPDATE owner_workflow_clocks SET status = 'fired'
+            WHERE execution_id = ${executionId} AND clock_name = ${clockName}
+              AND status = 'scheduled'`);
           return true;
         }),
       ),
     cancelClocks: (executionId) =>
-      run("clock.cancel", () =>
-        atomic(() => {
-          const decoded = Schema.decodeUnknownResult(
-            Schema.Array(Schema.Struct({ clock_name: Schema.String })),
-          )(scheduledClocks.all(executionId));
-          if (decoded._tag === "Failure")
-            throw failure("clock.cancel", "invalid_state", decoded.failure);
-          const rows = decoded.success;
-          deleteScheduledClocks.run(executionId);
-          return rows.map((row) => row.clock_name);
-        }),
+      Effect.map(step("clock.cancel")(cancelScheduled(executionId)), (rows) =>
+        rows.map((row) => row.clock_name).toSorted(),
       ),
   };
-}
+  return storage;
+});
 
 export class OwnerWorkflowStorage extends Context.Service<
   OwnerWorkflowStorage,
   OwnerWorkflowStorageApi
 >()("memory-agent/workflow/owner-workflow-storage/OwnerWorkflowStorage") {}
 
-export const ownerWorkflowStorageLayer: Layer.Layer<OwnerWorkflowStorage, never, Database> =
-  Layer.effect(
-    OwnerWorkflowStorage,
-    Effect.gen(function* () {
-      return makeOwnerWorkflowStorage(yield* Database);
-    }),
-  );
+export const ownerWorkflowStorageLayer: Layer.Layer<
+  OwnerWorkflowStorage,
+  never,
+  SqlClient.SqlClient
+> = Layer.effect(OwnerWorkflowStorage, makeOwnerWorkflowStorage);
 
 export class OwnerWorkflowAdmission extends Context.Service<
   OwnerWorkflowAdmission,
   {
-    readonly admit: <A>(
+    readonly admit: <A, E>(
       request: OwnerWorkflowAdmissionRequest,
-      bind: () => A,
-    ) => Effect.Effect<OwnerWorkflowAdmissionResult<A>, OwnerWorkflowStorageError>;
+      bind: Effect.Effect<A, E>,
+    ) => Effect.Effect<OwnerWorkflowAdmissionResult<A>, OwnerWorkflowStorageError | E>;
   }
 >()("memory-agent/workflow/owner-workflow-storage/OwnerWorkflowAdmission") {}

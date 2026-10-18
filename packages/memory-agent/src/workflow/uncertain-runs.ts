@@ -1,12 +1,7 @@
-import { DateTime, Effect, HashSet, Result, Schema } from "effect";
-import type { DatabaseSync } from "node:sqlite";
+import { DateTime, Effect, HashSet, Schema } from "effect";
+import { SqlClient, type SqlError } from "effect/sql";
 import { readOnlyToolNames } from "../tools/effects.ts";
 import { invocationFieldSql, resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
-
-type OwnerDatabase = {
-  readonly sqlite: DatabaseSync;
-  readonly atomic: <T>(work: () => T) => T;
-};
 
 /**
  * How a tool of an ended run left its outcome unknown: its owner operation never settled
@@ -78,45 +73,44 @@ const stateOf = (operation: typeof Operation.Type): UncertainToolState | null =>
  * Bound runs that admission refuses to start past, and the user's choice to continue anyway. Runs
  * still producing or waiting on an approval are not listed: those settle by themselves.
  */
-export function uncertainRuns({ sqlite, atomic }: OwnerDatabase) {
-  const blocking = sqlite.prepare(`
+export const uncertainRuns = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const blocking = (sessionId: string) => sql`
     SELECT b.run_id AS runId FROM workflow_run_bindings b
     LEFT JOIN chat_runs r ON r.run_id = b.run_id
-    WHERE b.session_id = ? AND coalesce(r.status, '') <> 'running'
+    WHERE b.session_id = ${sessionId} AND coalesce(r.status, '') <> 'running'
       AND NOT (r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id))
-      AND NOT ${resolvedRunSql("b", "r")}
+      AND NOT ${sql.literal(resolvedRunSql("b", "r"))}
       AND (coalesce(r.status, '') <> 'completed' OR EXISTS (SELECT 1 FROM owner_rpc_operations o
         WHERE o.run_id = b.run_id AND (o.status = 'pending' OR (o.side_effect = 1 AND o.status <> 'succeeded'))))
-    ORDER BY b.created_at, b.run_id`);
+    ORDER BY b.created_at, b.run_id`;
   // A fingerprint that is not JSON names no tool; it still counts, with no name to show.
   const field = (name: "name" | "toolCallId") =>
     `CASE WHEN json_valid(o.fingerprint) THEN ${invocationFieldSql("o", name)} END`;
-  const operations = sqlite.prepare(`
+  const operations = (runId: string) => sql`
     SELECT o.status,
       CASE WHEN json_valid(o.fingerprint) THEN json_extract(o.fingerprint, '$.operation') END AS operation,
-      ${field("name")} AS name, ${field("toolCallId")} AS toolCallId,
+      ${sql.literal(field("name"))} AS name, ${sql.literal(field("toolCallId"))} AS toolCallId,
       (SELECT n.text FROM nodes n WHERE n.session_id = b.session_id AND n.kind = 'tool_call'
-        AND json_extract(n.detail, '$.toolCallId') = ${field("toolCallId")} ORDER BY n.seq LIMIT 1) AS call,
+        AND json_extract(n.detail, '$.toolCallId') = ${sql.literal(field("toolCallId"))} ORDER BY n.seq LIMIT 1) AS call,
       EXISTS (SELECT 1 FROM nodes n WHERE n.session_id = b.session_id AND n.kind = 'tool_result'
-        AND json_extract(n.detail, '$.toolCallId') = ${field("toolCallId")}) AS recorded
+        AND json_extract(n.detail, '$.toolCallId') = ${sql.literal(field("toolCallId"))}) AS recorded
     FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
-    WHERE o.run_id = ? AND ${toolOperationSql("o")}
-    ORDER BY o.operation_id`);
-  const producing = sqlite.prepare(`
-    SELECT 1 FROM chat_runs WHERE thread_id = ? AND status = 'running'
+    WHERE o.run_id = ${runId} AND ${sql.literal(toolOperationSql("o"))}
+    ORDER BY o.operation_id`;
+  const producing = (sessionId: string) => sql`
+    SELECT 1 FROM chat_runs WHERE thread_id = ${sessionId} AND status = 'running'
     UNION ALL SELECT 1 FROM owner_workflow_executions
     WHERE workflow_name = 'GoalExecution' AND status IN ('running', 'suspended')
-      AND json_extract(payload_json, '$.identity.sessionId') = ?
-    LIMIT 1`);
-  const insert = sqlite.prepare(`
-    INSERT INTO workflow_uncertain_acknowledgements (run_id, session_id, acknowledged_at)
-    VALUES (?, ?, ?) ON CONFLICT DO NOTHING`);
+      AND json_extract(payload_json, '$.identity.sessionId') = ${sessionId}
+    LIMIT 1`;
+  const read = <A>(effect: Effect.Effect<A, SqlError.SqlError>) =>
+    Effect.mapError(effect, (cause) =>
+      UncertainRunsFailed.make({ reason: { _tag: "Read", cause } }),
+    );
 
   const tools = Effect.fnUntraced(function* (runId: string) {
-    const rows = yield* Effect.try({
-      try: () => operations.all(runId),
-      catch: (cause) => UncertainRunsFailed.make({ reason: { _tag: "Read", cause } }),
-    });
+    const rows = yield* read(operations(runId));
     const decoded = yield* decodeOperations(rows);
     // An authorization and the call it allowed share one tool call id; show the call once.
     const seen = new Set<string>();
@@ -134,10 +128,7 @@ export function uncertainRuns({ sqlite, atomic }: OwnerDatabase) {
   });
 
   const list = Effect.fnUntraced(function* (sessionId: string) {
-    const rows = yield* Effect.try({
-      try: () => blocking.all(sessionId),
-      catch: (cause) => UncertainRunsFailed.make({ reason: { _tag: "Read", cause } }),
-    });
+    const rows = yield* read(blocking(sessionId));
     const runs = yield* Schema.decodeUnknownEffect(Runs)(rows);
     return yield* Effect.forEach(
       runs,
@@ -156,32 +147,37 @@ export function uncertainRuns({ sqlite, atomic }: OwnerDatabase) {
      */
     acknowledge: Effect.fnUntraced(function* (sessionId: string, runIds: readonly string[]) {
       const at = DateTime.formatIso(yield* DateTime.now);
-      // Keep read/compare/write within one synchronous SQLite transaction. The Result decoder
-      // returns validation failures without throwing or introducing an async transaction gap.
-      const outcome = yield* Effect.try({
-        try: () =>
-          atomic((): Result.Result<UncertainContinue, Schema.SchemaError> => {
-            if (producing.get(sessionId, sessionId) !== undefined)
-              return Result.succeed({ status: "refused", reason: "run_in_progress" });
-            return Result.gen(function* () {
-              const runs = yield* Schema.decodeUnknownResult(Runs)(blocking.all(sessionId));
-              for (const { runId } of runs)
-                yield* Schema.decodeUnknownResult(Operations)(operations.all(runId));
-              const current = runs.map((run) => run.runId);
-              const asked = new Set(runIds);
-              if (
-                current.length === 0 ||
-                current.length !== asked.size ||
-                !current.every((id) => asked.has(id))
-              )
-                return { status: "refused", reason: "uncertain_runs_changed" } as const;
-              for (const runId of current) insert.run(runId, sessionId, at);
-              return { status: "acknowledged" } as const;
-            });
+      // Read, compare and write in one transaction, so the runs the user saw are the runs covered.
+      return yield* sql
+        .withTransaction(
+          Effect.gen(function* (): Effect.fn.Return<
+            UncertainContinue,
+            SqlError.SqlError | Schema.SchemaError
+          > {
+            if ((yield* producing(sessionId)).length > 0)
+              return { status: "refused", reason: "run_in_progress" };
+            const runs = yield* Schema.decodeUnknownEffect(Runs)(yield* blocking(sessionId));
+            for (const { runId } of runs) yield* decodeOperations(yield* operations(runId));
+            const current = runs.map((run) => run.runId);
+            const asked = new Set(runIds);
+            if (
+              current.length === 0 ||
+              current.length !== asked.size ||
+              !current.every((id) => asked.has(id))
+            )
+              return { status: "refused", reason: "uncertain_runs_changed" };
+            for (const runId of current)
+              yield* sql`
+                INSERT INTO workflow_uncertain_acknowledgements (run_id, session_id, acknowledged_at)
+                VALUES (${runId}, ${sessionId}, ${at}) ON CONFLICT DO NOTHING`;
+            return { status: "acknowledged" };
           }),
-        catch: (cause) => UncertainRunsFailed.make({ reason: { _tag: "Acknowledge", cause } }),
-      });
-      return yield* Effect.fromResult(outcome);
+        )
+        .pipe(
+          Effect.catchTag("SqlError", (cause) =>
+            Effect.fail(UncertainRunsFailed.make({ reason: { _tag: "Acknowledge", cause } })),
+          ),
+        );
     }),
   };
-}
+});

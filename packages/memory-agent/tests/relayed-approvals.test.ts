@@ -35,7 +35,7 @@ const withRelay = <A, E, R>(
       const database = yield* Effect.provideContext(Database, databaseContext);
       const relayContext = yield* Layer.build(
         RelayedApprovals.layerWith({ timeoutMs }).pipe(
-          Layer.provide(Layer.succeed(Database, database)),
+          Layer.provide(Layer.succeedContext(databaseContext)),
         ),
       );
       const relay = yield* Effect.provideContext(RelayedApprovals, relayContext);
@@ -51,7 +51,7 @@ const openRelay = Effect.fnUntraced(function* (file: string) {
   const database = yield* Effect.provideContext(Database, databaseContext);
   const relayContext = yield* Layer.build(
     RelayedApprovals.layerWith({ timeoutMs: 60_000 }).pipe(
-      Layer.provide(Layer.succeed(Database, database)),
+      Layer.provide(Layer.succeedContext(databaseContext)),
     ),
   ).pipe(Effect.provideService(Scope.Scope, scope));
   const relay = yield* Effect.provideContext(RelayedApprovals, relayContext);
@@ -59,10 +59,13 @@ const openRelay = Effect.fnUntraced(function* (file: string) {
 });
 
 const pending = (relay: RelayedApprovals["Service"], sessionId: string, count: number) =>
-  Effect.suspend(() => {
-    const approvals = relay.pending(sessionId);
-    return approvals.length === count ? Effect.succeed(approvals) : Effect.fail(approvals.length);
-  }).pipe(Effect.retry(Schedule.recurs(100)));
+  relay.pending(sessionId).pipe(
+    Effect.filterOrFail(
+      (approvals) => approvals.length === count,
+      (approvals) => approvals.length,
+    ),
+    Effect.retry(Schedule.recurs(100)),
+  );
 
 const completed = (database: Database["Service"]) =>
   Effect.gen(function* () {
@@ -98,7 +101,7 @@ describe("durable relayed approvals", () => {
             false,
             true,
           ]);
-          expect(relay.pending("s")).toEqual([]);
+          expect(yield* relay.pending("s")).toEqual([]);
         }),
       ),
   );
@@ -146,7 +149,9 @@ describe("durable relayed approvals", () => {
         yield* Scope.close(first.scope, Exit.void);
 
         const reopened = yield* openRelay(file);
-        expect(reopened.relay.pending("s").map((entry) => entry.id)).toEqual([approval!.id]);
+        expect((yield* reopened.relay.pending("s")).map((entry) => entry.id)).toEqual([
+          approval!.id,
+        ]);
         expect(
           reopened.database.sqlite
             .prepare(
@@ -155,7 +160,7 @@ describe("durable relayed approvals", () => {
             .get(),
         ).toEqual({ count: 1 });
         expect(yield* reopened.relay.answer("s", approval!.id, true)).toBe(true);
-        expect(reopened.relay.pending("s")).toEqual([]);
+        expect(yield* reopened.relay.pending("s")).toEqual([]);
         expect(
           reopened.database.sqlite
             .prepare(
@@ -190,7 +195,7 @@ describe("durable relayed approvals", () => {
 
         const reopened = yield* openRelay(file);
         yield* completed(reopened.database);
-        expect(reopened.relay.pending("s")).toEqual([]);
+        expect(yield* reopened.relay.pending("s")).toEqual([]);
         expect(yield* reopened.relay.answer("s", approval!.id, true)).toBe(false);
         yield* Scope.close(reopened.scope, Exit.void);
       }),

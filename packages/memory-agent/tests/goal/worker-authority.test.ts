@@ -48,7 +48,7 @@ const bindLatest = Effect.fnUntraced(function* (session: string, runId: string) 
       .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
       .get(session),
   );
-  return boundRun(workflowRunBindings(db).bind(session, runId, revision.id));
+  return boundRun(yield* (yield* workflowRunBindings).bind(session, runId, revision.id));
 });
 
 const boundRun = (admission: Admission) => {

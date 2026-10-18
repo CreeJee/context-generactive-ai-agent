@@ -16,7 +16,7 @@ import { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { WorkflowExecution } from "./execution.ts";
 import { ownerWorkflowEngineLayer } from "./owner-workflow-engine.ts";
-import { OwnerWorkflowStorage, OwnerWorkflowStorageError } from "./owner-workflow-storage.ts";
+import { OwnerWorkflowStorage } from "./owner-workflow-storage.ts";
 
 /**
  * Backoff and exhaustion of a provider request that was never sent. One place for every limit;
@@ -113,11 +113,6 @@ export interface ProviderRetryView {
   readonly retryAt: number;
 }
 
-const storageFailure = (operation: string) => (cause: unknown) =>
-  Schema.is(OwnerWorkflowStorageError)(cause)
-    ? cause
-    : OwnerWorkflowStorageError.make({ operation, reason: "database", cause });
-
 const make = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const storage = yield* OwnerWorkflowStorage;
@@ -127,13 +122,10 @@ const make = Effect.gen(function* () {
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
 
   const stored = (pendingOnly: boolean) =>
-    Effect.try({
-      try: () =>
-        pendingOnly
-          ? storage.pendingExecutions(ProviderRetryWait._tag)
-          : storage.workflowExecutions(ProviderRetryWait._tag),
-      catch: storageFailure("provider_retry.list"),
-    }).pipe(
+    (pendingOnly
+      ? storage.pendingExecutions(ProviderRetryWait._tag)
+      : storage.workflowExecutions(ProviderRetryWait._tag)
+    ).pipe(
       Effect.map((executions) =>
         executions.flatMap((entry) => {
           const decoded = Schema.decodeUnknownResult(ProviderRetryWaitPayload)(entry.payload);

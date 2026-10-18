@@ -34,14 +34,14 @@ import { OwnerWorkflowStorageError } from "../../src/workflow/owner-workflow-sto
 
 const open = Effect.fnUntraced(function* (file: string) {
   const scope = yield* Scope.make();
-  const database = yield* Effect.provideContext(
-    Database,
-    yield* Layer.build(Database.layer(file)).pipe(Effect.provideService(Scope.Scope, scope)),
+  const databaseContext = yield* Layer.build(Database.layer(file)).pipe(
+    Effect.provideService(Scope.Scope, scope),
   );
+  const database = yield* Effect.provideContext(Database, databaseContext);
   const context = yield* Layer.build(
     Layer.merge(providerRetryLayer, WorkflowExecution.layer).pipe(
       Layer.provide(ExecutionAdmission.layer(defaultExecutionAdmissionLimits)),
-      Layer.provide(Layer.succeed(Database, database)),
+      Layer.provide(Layer.succeedContext(databaseContext)),
     ),
   ).pipe(Effect.provideService(Scope.Scope, scope));
   return {

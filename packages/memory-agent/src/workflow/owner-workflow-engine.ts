@@ -15,7 +15,7 @@ import {
 import { Workflow } from "effect/workflow";
 import type { Activity, DurableDeferred } from "effect/workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Database } from "../db/database.ts";
+import type { SqlClient } from "effect/sql";
 import {
   OwnerWorkflowAdmission,
   OwnerWorkflowStorage,
@@ -128,14 +128,15 @@ const decodeResult = (
   }
 };
 
-const defect = <A>(operation: string, evaluate: () => A): Effect.Effect<A> =>
+/** A storage step the engine cannot recover from; encoding throws stay with their operation. */
+const defect = <A, E>(operation: string, evaluate: () => Effect.Effect<A, E>): Effect.Effect<A> =>
   Effect.try({
     try: evaluate,
     catch: (cause) =>
       Schema.is(OwnerWorkflowStorageError)(cause) || Schema.is(OwnerWorkflowEngineError)(cause)
         ? cause
         : engineFailure(operation, "execution_conflict", cause),
-  }).pipe(Effect.orDie);
+  }).pipe(Effect.flatten, Effect.orDie);
 
 const makeEngine = Effect.gen(function* () {
   const ownerScope = yield* Effect.scope;
@@ -347,14 +348,15 @@ const makeEngine = Effect.gen(function* () {
           : Workflow.Result<unknown, unknown>;
       }),
     poll: (_workflow, executionId) =>
-      defect("execution.poll", () => {
-        const execution = storage.execution(executionId);
-        return Option.flatMap(execution, (value) =>
-          value.result === undefined
-            ? Option.none()
-            : Option.some(decodeResult(_workflow, value.result)),
-        );
-      }),
+      defect("execution.poll", () =>
+        Effect.map(storage.execution(executionId), (execution) =>
+          Option.flatMap(execution, (value) =>
+            value.result === undefined
+              ? Option.none()
+              : Option.some(decodeResult(_workflow, value.result)),
+          ),
+        ),
+      ),
     interrupt: Effect.fnUntraced(function* (_workflow, executionId) {
       const state = executions.get(executionId);
       if (state !== undefined) {
@@ -472,7 +474,7 @@ const makeEngine = Effect.gen(function* () {
       }),
   });
 
-  yield* Effect.forEach(yield* defect("clock.pending", () => storage.pendingClocks()), armClock, {
+  yield* Effect.forEach(yield* defect("clock.pending", () => storage.pendingClocks), armClock, {
     discard: true,
   });
 
@@ -486,35 +488,23 @@ const admissionServiceLayer = Layer.effect(
   Effect.gen(function* () {
     const storage = yield* OwnerWorkflowStorage;
     return OwnerWorkflowAdmission.of({
-      admit: (request, bind) =>
-        Effect.try({
-          try: () => storage.admitWith(request, bind),
-          catch: (cause) =>
-            Schema.is(OwnerWorkflowStorageError)(cause)
-              ? cause
-              : OwnerWorkflowStorageError.make({
-                  operation: "execution.admitWith",
-                  reason: "database",
-                  cause,
-                }),
-        }),
+      admit: (request, bind) => storage.admitWith(request, bind),
     });
   }),
 );
 
 /**
  * One scoped graph for the project-owned engine, owner admission and its shared storage adapter.
- * Database remains the only connection/writer owner and is supplied by the application root.
+ * The app's SqlClient remains the only connection/writer owner and is supplied by the root.
  */
 export const ownerWorkflowEngineLayer = Layer.merge(engineLayer, admissionServiceLayer).pipe(
   Layer.provideMerge(ownerWorkflowStorageLayer),
 );
 
-/** Project-owned durable Effect WorkflowEngine backed by the shared Database connection. */
-export const layer: Layer.Layer<WorkflowEngine.WorkflowEngine, never, Database> = engineLayer.pipe(
-  Layer.provide(ownerWorkflowStorageLayer),
-);
+/** Project-owned durable Effect WorkflowEngine backed by the shared SqlClient connection. */
+export const layer: Layer.Layer<WorkflowEngine.WorkflowEngine, never, SqlClient.SqlClient> =
+  engineLayer.pipe(Layer.provide(ownerWorkflowStorageLayer));
 
-/** Atomic owner admission; bind and the first durable workflow request share Database.atomic. */
-export const admissionLayer: Layer.Layer<OwnerWorkflowAdmission, never, Database> =
+/** Atomic owner admission; bind and the first durable workflow request share one transaction. */
+export const admissionLayer: Layer.Layer<OwnerWorkflowAdmission, never, SqlClient.SqlClient> =
   admissionServiceLayer.pipe(Layer.provide(ownerWorkflowStorageLayer));

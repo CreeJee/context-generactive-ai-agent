@@ -142,7 +142,7 @@ const refusedRequest = Effect.fnUntraced(function* (refusal: Refusal, session: s
   const db = yield* Database;
   const reserved = `${session}:reserved`;
   const { id } = yield* latestRevision(db, session);
-  expect(workflowRunBindings(db).bind(session, reserved, id).status).toBe("bound");
+  expect((yield* (yield* workflowRunBindings).bind(session, reserved, id)).status).toBe("bound");
   switch (refusal) {
     case "unresolved-bound-run":
       return { session, runId: `${session}:bypass` };
@@ -305,7 +305,9 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         expect(continued.status).toBe(200);
         const db = yield* Database;
         const { id } = yield* latestRevision(db, target.session);
-        expect(workflowRunBindings(db).preview(target.session, target.runId, id)).toMatchObject({
+        expect(
+          yield* (yield* workflowRunBindings).preview(target.session, target.runId, id),
+        ).toMatchObject({
           status: "bound",
         });
       }),
@@ -423,15 +425,17 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
         const kinds = nodes.session(session).map((node) => node.kind);
         expect(kinds.filter((kind) => kind === "user")).toHaveLength(1);
         expect(kinds.filter((kind) => kind === "assistant")).toHaveLength(1);
-        const events = workflowRunEvents(persisted);
-        const receipts = events.replay(session, runId);
+        const events = yield* env.use(workflowRunEvents);
+        const receipts = yield* events.replay(session, runId);
         expect(receipts.length).toBeGreaterThan(0);
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
             receipts.map((event) => event.payload),
           ),
         ).toContain("Hello from fast-1");
-        expect(events.replay(session, runId, receipts[0]!.cursor)).toEqual(receipts.slice(1));
+        expect(yield* events.replay(session, runId, receipts[0]!.cursor)).toEqual(
+          receipts.slice(1),
+        );
         expect(
           persisted.sqlite
             .prepare(
@@ -450,7 +454,7 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
         expect(duplicate.status).toBe(409);
         expect(yield* sdkCall(() => duplicate.json())).toEqual({ error: "run_already_completed" });
         expect(count(persisted, "nodes WHERE session_id = ?", session)).toEqual(before);
-        expect(events.replay(session, runId)).toEqual(receipts);
+        expect(yield* events.replay(session, runId)).toEqual(receipts);
         // Simulate restart recovery classifying an in-flight run as failed. The same ID must
         // not re-enter the model after an uncertain tool-side effect.
         persisted.sqlite

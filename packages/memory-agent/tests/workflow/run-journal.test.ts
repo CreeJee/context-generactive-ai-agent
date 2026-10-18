@@ -1,3 +1,4 @@
+import { SqlClient } from "effect/sql";
 import { DateTime, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
@@ -45,7 +46,11 @@ const goalInstance = (db: Database["Service"], session: string) =>
 /** Bind a run to the session's latest revision. */
 const bindLatest = Effect.fnUntraced(function* (session: string, runId: string) {
   const db = yield* Database;
-  return workflowRunBindings(db).bind(session, runId, yield* latestRevision(db, session));
+  return yield* (yield* workflowRunBindings).bind(
+    session,
+    runId,
+    yield* latestRevision(db, session),
+  );
 });
 
 const finishRun = (db: Database["Service"], session: string, runId: string, status: string) =>
@@ -79,7 +84,7 @@ testAgent()("workflow run bindings", (it) => {
             encodeFullLoopValue({ name: "run_shell", toolCallId: "call", args: {} }),
           ),
         );
-      const owner = uncertainRuns(db);
+      const owner = yield* uncertainRuns;
       expect(yield* owner.list(session)).toEqual([
         {
           runId,
@@ -110,8 +115,8 @@ testAgent()("workflow run bindings", (it) => {
       Effect.gen(function* () {
         const session = yield* freshSession;
         const db = yield* Database;
-        const owner = workflowRunBindings(db);
-        expect(owner.bind(session, `${session}:legacy`, 0)).toEqual({
+        const owner = yield* workflowRunBindings;
+        expect(yield* owner.bind(session, `${session}:legacy`, 0)).toEqual({
           status: "refused",
           reason: "legacy_unbound",
         });
@@ -120,21 +125,21 @@ testAgent()("workflow run bindings", (it) => {
         const second = `${session}:second`;
         const revision = yield* latestRevision(db, session);
         const goalInstanceId = yield* goalInstance(db, session);
-        expect(owner.bind(session, first, revision)).toMatchObject({
+        expect(yield* owner.bind(session, first, revision)).toMatchObject({
           status: "bound",
           binding: { goalInstanceId, goalVersion: 1, planVersion: null },
         });
-        expect(owner.bind(session, first, revision)).toEqual({
+        expect(yield* owner.bind(session, first, revision)).toEqual({
           status: "refused",
           reason: "run_id_conflict",
         });
-        expect(owner.bind(session, second, revision)).toEqual({
+        expect(yield* owner.bind(session, second, revision)).toEqual({
           status: "refused",
           reason: "run_outcome_uncertain",
         });
         finishRun(db, session, first, "completed");
         yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["New outcome"] });
-        expect(owner.bind(session, second, revision)).toEqual({
+        expect(yield* owner.bind(session, second, revision)).toEqual({
           status: "refused",
           reason: "workflow_changed",
         });
@@ -180,22 +185,20 @@ testAgent()("workflow run bindings", (it) => {
             ),
             status,
           );
+        const bindings = yield* workflowRunBindings;
         const admits = () =>
-          workflowRunBindings(db).bind(
-            session,
-            `${session}:different`,
-            revision,
-            undefined,
-            "preview",
-          ).status;
+          Effect.map(
+            bindings.bind(session, `${session}:different`, revision, undefined, "preview"),
+            (admission) => admission.status,
+          );
         // Owner bookkeeping, an authorization and a read the next run cannot know of repeat nothing.
         operation.run(shared, 1, '{"operation":"middleware"}', "succeeded");
         step(2, "toolAuthorize", "run_shell", "succeeded");
         step(3, "tool", "read_file", "succeeded");
-        expect(admits()).toBe("bound");
+        expect(yield* admits()).toBe("bound");
         // An effectful tool is known to the next run only through its recorded result.
         step(4, "tool", "run_shell", "succeeded");
-        expect(admits()).toBe("refused");
+        expect(yield* admits()).toBe("refused");
         (yield* Nodes).append({
           projectId: (yield* TestEnv).project.id,
           sessionId: session,
@@ -204,7 +207,7 @@ testAgent()("workflow run bindings", (it) => {
           text: "done",
           detail: { toolName: "run_shell", toolCallId: "run_shell-call", ok: true },
         });
-        expect(admits()).toBe("bound");
+        expect(yield* admits()).toBe("bound");
         // A tool the run left uncertain may have changed something.
         step(5, "tool", "read_file", "uncertain");
         expect(yield* bindLatest(session, `${session}:different`)).toEqual({
@@ -286,30 +289,42 @@ testAgent()("workflow run event journal", (it) => {
         const other = yield* freshSession;
         const run = `${session}:journaled`;
         expect((yield* bindLatest(session, run)).status).toBe("bound");
-        const events = workflowRunEvents(db);
-        expect(() => events.append(other, run, "chunk:0", "chunk", { text: "stolen" })).toThrow(
-          "Run event has no owner binding",
-        );
-        const first = events.append(session, run, "chunk:0", "chunk", { text: "before restart" });
-        expect(events.append(session, run, "chunk:0", "chunk", { text: "before restart" })).toEqual(
-          first,
-        );
-        expect(() =>
-          events.append(session, run, "chunk:0", "chunk", { text: "different" }),
-        ).toThrow("Run event key was reused for different content");
-        const second = events.append(session, run, "chunk:1", "chunk", { text: "after first" });
+        const events = yield* workflowRunEvents;
+        expect(
+          yield* events
+            .append(other, run, "chunk:0", "chunk", { text: "stolen" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "RunEventRejected", reason: "unbound" });
+        const first = yield* events.append(session, run, "chunk:0", "chunk", {
+          text: "before restart",
+        });
+        expect(
+          yield* events.append(session, run, "chunk:0", "chunk", { text: "before restart" }),
+        ).toEqual(first);
+        expect(
+          yield* events
+            .append(session, run, "chunk:0", "chunk", { text: "different" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "RunEventRejected", reason: "key-reused" });
+        const second = yield* events.append(session, run, "chunk:1", "chunk", {
+          text: "after first",
+        });
         expect(second.cursor).toBeGreaterThan(first.cursor);
-        expect(events.replay(other, run)).toEqual([]);
-        expect(events.replay(session, run, first.cursor)).toEqual([second]);
+        expect(yield* events.replay(other, run)).toEqual([]);
+        expect(yield* events.replay(session, run, first.cursor)).toEqual([second]);
         expect(
           db.sqlite
             .prepare("SELECT count(*) AS n FROM workflow_run_events WHERE run_id = ?")
             .get(run),
         ).toEqual({ n: 2 });
         yield* env.reopen;
-        const replay = workflowRunEvents(yield* env.use(Database));
-        expect(replay.replay(session, run)).toEqual([first, second]);
-        expect(() => replay.replay(session, run, -1)).toThrow("Invalid run cursor");
+        const replay = yield* workflowRunEvents.pipe(
+          Effect.provideService(SqlClient.SqlClient, yield* env.use(SqlClient.SqlClient)),
+        );
+        expect(yield* replay.replay(session, run)).toEqual([first, second]);
+        expect(yield* replay.replay(session, run, -1).pipe(Effect.flip)).toMatchObject({
+          reason: "invalid-cursor",
+        });
       }),
   );
 });

@@ -5,6 +5,7 @@ import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ExecutionAdmission } from "../src/runtime/execution-admission.ts";
 import type { GoalExecutionPayload } from "../src/workflow/goal-execution-contracts.ts";
+import type { Admission } from "../src/workflow/run-bindings.ts";
 import {
   GoalExecution,
   GoalExecutionAdmissionRefused,
@@ -46,7 +47,7 @@ const withGoalExecutions = <A, E, R>(
           const database = yield* Database;
           const context = yield* Layer.build(
             goalExecutionLayer.pipe(
-              Layer.provide(Layer.succeed(Database, database)),
+              Layer.provide(Layer.succeedContext(databaseContext)),
               Layer.provide(ExecutionAdmission.layer()),
             ),
           );
@@ -63,10 +64,13 @@ describe("GoalExecution workflow", () => {
       Effect.gen(function* () {
         const goals = yield* GoalExecutions;
         let binds = 0;
-        const admitted = yield* goals.admitAndStart(payload, () => {
-          binds += 1;
-          return { status: "bound", binding };
-        });
+        const admitted = yield* goals.admitAndStart(
+          payload,
+          Effect.sync((): Admission => {
+            binds += 1;
+            return { status: "bound", binding };
+          }),
+        );
         expect(admitted).toEqual({ type: "admitted", value: binding });
 
         const executionId = yield* GoalExecution.executionId(payload);
@@ -100,10 +104,13 @@ describe("GoalExecution workflow", () => {
         Effect.gen(function* () {
           const goals = yield* GoalExecutions;
           let binds = 0;
-          yield* goals.admitAndStart(payload, () => {
-            binds += 1;
-            return { status: "bound", binding };
-          });
+          yield* goals.admitAndStart(
+            payload,
+            Effect.sync((): Admission => {
+              binds += 1;
+              return { status: "bound", binding };
+            }),
+          );
           for (const owner of [
             { ownerId: "project-2", generation: "generation-1" },
             { ownerId: "project-1", generation: "generation-2" },
@@ -113,10 +120,13 @@ describe("GoalExecution workflow", () => {
               identity: { ...payload.identity, owner },
             };
             const failure = yield* goals
-              .admitAndStart(changedOwner, () => {
-                binds += 1;
-                return { status: "bound", binding };
-              })
+              .admitAndStart(
+                changedOwner,
+                Effect.sync((): Admission => {
+                  binds += 1;
+                  return { status: "bound", binding };
+                }),
+              )
               .pipe(Effect.flip);
             expect(failure).toEqual(
               GoalExecutionAdmissionRefused.make({ reason: "owner_mismatch" }),
@@ -134,7 +144,10 @@ describe("GoalExecution workflow", () => {
     withGoalExecutions((database) =>
       Effect.gen(function* () {
         const goals = yield* GoalExecutions;
-        yield* goals.admitAndStart(payload, () => ({ status: "bound", binding }));
+        yield* goals.admitAndStart(
+          payload,
+          Effect.succeed<Admission>({ status: "bound", binding }),
+        );
         yield* goals.fail(payload, {
           _tag: "SideEffectUncertain",
           operationId: "1",
@@ -153,12 +166,15 @@ describe("GoalExecution workflow", () => {
         database.sqlite.exec("CREATE TABLE goal_execution_binding_probe (id TEXT PRIMARY KEY)");
         const goals = yield* GoalExecutions;
         const failure = yield* goals
-          .admitAndStart(payload, () => {
-            database.sqlite
-              .prepare("INSERT INTO goal_execution_binding_probe VALUES (?)")
-              .run("rolled-back");
-            return { status: "refused", reason: "workflow_changed" };
-          })
+          .admitAndStart(
+            payload,
+            Effect.sync((): Admission => {
+              database.sqlite
+                .prepare("INSERT INTO goal_execution_binding_probe VALUES (?)")
+                .run("rolled-back");
+              return { status: "refused", reason: "workflow_changed" };
+            }),
+          )
           .pipe(Effect.flip);
         expect(failure).toBeInstanceOf(GoalExecutionAdmissionRefused);
         expect(

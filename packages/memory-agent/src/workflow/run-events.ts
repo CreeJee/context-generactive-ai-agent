@@ -1,13 +1,6 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
 import type { StreamChunk } from "@tanstack/ai";
-import { DateTime, Schema } from "effect";
-import type { DatabaseSync } from "node:sqlite";
-
-type OwnerDatabase = {
-  readonly sqlite: DatabaseSync;
-  readonly atomic: <T>(work: () => T) => T;
-};
+import { DateTime, Effect, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 
 export type RunEventKind = "chunk" | "run_error" | "run_completed";
 export type RunEvent = {
@@ -18,47 +11,55 @@ export type RunEvent = {
   readonly payload: Schema.Json;
 };
 
+/** A run event the owner refuses to append or replay. */
+export class RunEventRejected extends Schema.TaggedError<RunEventRejected>()("RunEventRejected", {
+  reason: Schema.Literals(["unbound", "key-reused", "invalid-cursor", "invalid-limit"]),
+}) {}
+
+const Row = Schema.Struct({
+  cursor: Schema.Finite,
+  run_id: Schema.String,
+  event_key: Schema.String,
+  kind: Schema.Literals(["chunk", "run_error", "run_completed"]),
+  payload_json: Schema.String,
+});
+type Row = typeof Row.Type;
+const JsonText = Schema.fromJsonString(Schema.Json);
+
 /** Central-owner receipts for bound runs; not an authorization or an SSE adapter. */
-export function workflowRunEvents({ sqlite, atomic }: OwnerDatabase) {
-  const owner = sqlite.prepare("SELECT session_id FROM workflow_run_bindings WHERE run_id = ?");
-  const insert = sqlite.prepare(`
-    INSERT INTO workflow_run_events (run_id, event_key, kind, payload_json, created_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(run_id, event_key) DO NOTHING
-  `);
-  const byKey = sqlite.prepare(`
-    SELECT cursor, run_id, event_key, kind, payload_json
-    FROM workflow_run_events WHERE run_id = ? AND event_key = ?
-  `);
-  const byCursor = sqlite.prepare(`
-    SELECT cursor, run_id, event_key, kind, payload_json
-    FROM workflow_run_events WHERE run_id = ? AND cursor > ? ORDER BY cursor LIMIT ?
-  `);
-  const Row = Schema.Struct({
-    cursor: Schema.Finite,
-    run_id: Schema.String,
-    event_key: Schema.String,
-    kind: Schema.Literals(["chunk", "run_error", "run_completed"]),
-    payload_json: Schema.String,
+export const workflowRunEvents = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const owner = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ session_id: Schema.String }),
+    execute: (runId) => sql`SELECT session_id FROM workflow_run_bindings WHERE run_id = ${runId}`,
   });
-  type Row = typeof Row.Type;
-  const decode = (row: Row): RunEvent => ({
-    cursor: row.cursor,
-    runId: row.run_id,
-    eventKey: row.event_key,
-    kind: row.kind,
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    payload: EffectFunction.flow(
-      Schema.decodeResult(Schema.fromJsonString(Schema.Json)),
-      Result.getOrThrow,
-    )(row.payload_json),
+  const byKey = SqlSchema.findOneOption({
+    Request: Schema.Struct({ runId: Schema.String, eventKey: Schema.String }),
+    Result: Row,
+    execute: ({ runId, eventKey }) => sql`
+      SELECT cursor, run_id, event_key, kind, payload_json
+      FROM workflow_run_events WHERE run_id = ${runId} AND event_key = ${eventKey}`,
+  });
+  const byCursor = SqlSchema.findAll({
+    Request: Schema.Struct({ runId: Schema.String, after: Schema.Finite, limit: Schema.Finite }),
+    Result: Row,
+    execute: ({ runId, after, limit }) => sql`
+      SELECT cursor, run_id, event_key, kind, payload_json
+      FROM workflow_run_events WHERE run_id = ${runId} AND cursor > ${after}
+      ORDER BY cursor LIMIT ${limit}`,
+  });
+  const decode = Effect.fnUntraced(function* (row: Row) {
+    return {
+      cursor: row.cursor,
+      runId: row.run_id,
+      eventKey: row.event_key,
+      kind: row.kind,
+      payload: yield* Schema.decodeEffect(JsonText)(row.payload_json),
+    } satisfies RunEvent;
   });
   const permitted = (sessionId: string, runId: string) =>
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    EffectFunction.flow(
-      Schema.decodeUnknownResult(Schema.UndefinedOr(Schema.Struct({ session_id: Schema.String }))),
-      Result.getOrThrow,
-    )(owner.get(runId))?.session_id === sessionId;
+    Effect.map(owner(runId), (row) => Option.getOrUndefined(row)?.session_id === sessionId);
 
   return {
     append: (
@@ -67,38 +68,36 @@ export function workflowRunEvents({ sqlite, atomic }: OwnerDatabase) {
       eventKey: string,
       kind: RunEventKind,
       payload: StreamChunk | Schema.Json,
-    ) => {
-      const json = JSON.stringify(payload);
-      if (json === undefined) throw new Error("Run event payload is not JSON serializable");
-      return atomic(() => {
-        if (!permitted(sessionId, runId)) throw new Error("Run event has no owner binding");
-        insert.run(runId, eventKey, kind, json, DateTime.formatIso(DateTime.nowUnsafe()));
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const row = EffectFunction.flow(
-          Schema.decodeUnknownResult(Schema.UndefinedOr(Row)),
-          Result.getOrThrow,
-        )(byKey.get(runId, eventKey));
-        if (!isTruthy(row) || row.kind !== kind || row.payload_json !== json)
-          throw new Error("Run event key was reused for different content");
-        return decode(row);
-      });
-    },
-    replay: (
+    ) =>
+      Effect.gen(function* () {
+        const json = yield* Schema.encodeUnknownEffect(JsonText)(payload);
+        return yield* sql.withTransaction(
+          Effect.gen(function* () {
+            if (!(yield* permitted(sessionId, runId)))
+              return yield* RunEventRejected.make({ reason: "unbound" });
+            yield* sql`
+              INSERT INTO workflow_run_events (run_id, event_key, kind, payload_json, created_at)
+              VALUES (${runId}, ${eventKey}, ${kind}, ${json}, ${DateTime.formatIso(yield* DateTime.now)})
+              ON CONFLICT(run_id, event_key) DO NOTHING`;
+            const row = Option.getOrUndefined(yield* byKey({ runId, eventKey }));
+            if (row === undefined || row.kind !== kind || row.payload_json !== json)
+              return yield* RunEventRejected.make({ reason: "key-reused" });
+            return yield* decode(row);
+          }),
+        );
+      }),
+    replay: Effect.fnUntraced(function* (
       sessionId: string,
       runId: string,
       afterCursor = 0,
       limit = 256,
-    ): readonly RunEvent[] => {
+    ) {
       if (!Number.isSafeInteger(afterCursor) || afterCursor < 0)
-        throw new Error("Invalid run cursor");
+        return yield* RunEventRejected.make({ reason: "invalid-cursor" });
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
-        throw new Error("Invalid run limit");
-      if (!permitted(sessionId, runId)) return [];
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      return EffectFunction.flow(
-        Schema.decodeUnknownResult(Schema.Array(Row)),
-        Result.getOrThrow,
-      )(byCursor.all(runId, afterCursor, limit)).map(decode);
-    },
+        return yield* RunEventRejected.make({ reason: "invalid-limit" });
+      if (!(yield* permitted(sessionId, runId))) return [];
+      return yield* Effect.forEach(yield* byCursor({ runId, after: afterCursor, limit }), decode);
+    }),
   };
-}
+});

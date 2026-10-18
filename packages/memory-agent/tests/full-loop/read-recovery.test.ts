@@ -1,9 +1,10 @@
+import { SqlClient } from "effect/sql";
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import { makeOwnerNativeArtifacts } from "../../src/agent/owner-native-artifacts.ts";
-import { makeOwnerReadRecovery } from "../../src/agent/owner-read-recovery.ts";
+import { OwnerReadRecovery } from "../../src/agent/owner-read-recovery.ts";
 import { migrateOwnerRpcFingerprintBatch } from "../../src/agent/owner-rpc-fingerprint-migration.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { Database } from "../../src/db/database.ts";
@@ -54,7 +55,7 @@ const failedRead = Effect.fnUntraced(function* (
       )
       .get(session),
   );
-  const owner = workflowRunBindings(db);
+  const owner = yield* workflowRunBindings;
   yield* Effect.scoped(
     makeOwnerNativeArtifacts({ ...db, directory: `${env.storage}/native-artifacts` }).acquire(
       revision.goal_instance_id,
@@ -70,7 +71,8 @@ const failedRead = Effect.fnUntraced(function* (
       workflowRevisionId: revision.id,
     },
   };
-  const admitted = yield* executions.admitAndStart(payload, () =>
+  const admitted = yield* executions.admitAndStart(
+    payload,
     owner.bind(session, runId, revision.id),
   );
   if (admitted.type !== "admitted") return yield* Effect.die("new admission expected");
@@ -93,7 +95,7 @@ const failedRead = Effect.fnUntraced(function* (
     operationId: "2",
     state: "uncertain",
   });
-  const recovery = makeOwnerReadRecovery(db);
+  const recovery = yield* OwnerReadRecovery;
   const preview = yield* recovery.assess(session, runId);
   expect(preview.type).toBe("eligible");
   if (preview.type !== "eligible") return yield* Effect.die("eligible fixture expected");
@@ -168,9 +170,9 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
           "recovered",
         );
         expect(f.history()).toEqual(before);
-        expect(f.owner.preview(f.session, `${f.session}:next-report`, f.revision.id).status).toBe(
-          "bound",
-        );
+        expect(
+          (yield* f.owner.preview(f.session, `${f.session}:next-report`, f.revision.id)).status,
+        ).toBe("bound");
         f.updateOperation(
           1,
           "fingerprint=?",
@@ -179,9 +181,9 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
             input: encodeFullLoopValue({ name, toolCallId: "read-call", args: changedArgs }),
           }),
         );
-        expect(f.owner.preview(f.session, `${f.session}:changed-report`, f.revision.id)).toEqual(
-          refused,
-        );
+        expect(
+          yield* f.owner.preview(f.session, `${f.session}:changed-report`, f.revision.id),
+        ).toEqual(refused);
       }),
     20000,
   );
@@ -305,7 +307,9 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         expect(result.type).toBe("revoked");
         expect(yield* f.recovery.revoke(f.session, f.runId, input)).toEqual(result);
         expect(f.history()).toEqual(before);
-        expect(f.owner.bind(f.session, `${f.session}:new-run`, f.revision.id)).toEqual(refused);
+        expect(yield* f.owner.bind(f.session, `${f.session}:new-run`, f.revision.id)).toEqual(
+          refused,
+        );
         expect(f.receipts()).toEqual({ n: 1 });
         expect(f.modelCalls()).toHaveLength(0);
       }),
@@ -381,18 +385,19 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
       });
       expect(f.history()).toEqual(before);
       expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("recovered");
-      expect(f.owner.preview(f.session, `${f.session}:fresh`, f.revision.id).status).toBe("bound");
+      expect((yield* f.owner.preview(f.session, `${f.session}:fresh`, f.revision.id)).status).toBe(
+        "bound",
+      );
     }),
   );
 
   it.effect("recovery cannot issue a durable receipt inside an outer transaction", () =>
     Effect.gen(function* () {
       const f = yield* failedRead();
-      yield* Effect.acquireRelease(
-        Effect.sync(() => f.db.sqlite.exec("BEGIN")),
-        () => Effect.sync(() => f.db.sqlite.exec("ROLLBACK")),
+      const sql = yield* SqlClient.SqlClient;
+      const result = yield* Effect.exit(
+        sql.withTransaction(f.recovery.confirm(f.session, f.runId, f.confirmation)),
       );
-      const result = yield* Effect.exit(f.recovery.confirm(f.session, f.runId, f.confirmation));
       expect(result._tag).toBe("Failure");
       expect(f.receipts()).toEqual({ n: 0 });
     }),
@@ -409,14 +414,16 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         const f = yield* failedRead();
         const next = `${f.session}:next`;
         const before = f.history();
-        expect(f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).toEqual(refused);
-        expect(f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
+        expect(yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).toEqual(
+          refused,
+        );
+        expect(yield* f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
         const result = yield* f.recovery.confirm(f.session, f.runId, f.confirmation);
         expect(result.type).toBe("recovered");
         expect(f.history()).toEqual(before);
-        expect(f.owner.preview(f.session, `${f.session}:probe`, f.revision.id).status).toBe(
-          "bound",
-        );
+        expect(
+          (yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).status,
+        ).toBe("bound");
         expect(f.history()).toEqual(before);
         expect(yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).toEqual(result);
         expect(f.receipts()).toEqual({ n: 1 });
@@ -450,15 +457,18 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         );
         f.updateOperation(1, "fingerprint='{}'");
         expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("blocked");
-        expect(f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
+        expect(yield* f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
         f.updateOperation(1, "fingerprint=?", authorization.fingerprint);
         expect(f.history()).toEqual(before);
         yield* env.reopen;
         const db = yield* env.use(Database);
-        expect((yield* makeOwnerReadRecovery(db).assess(f.session, f.runId)).type).toBe(
+        expect((yield* (yield* env.use(OwnerReadRecovery)).assess(f.session, f.runId)).type).toBe(
           "recovered",
         );
-        const binding = workflowRunBindings(db).bind(f.session, next, f.revision.id);
+        const bindings = yield* workflowRunBindings.pipe(
+          Effect.provideService(SqlClient.SqlClient, yield* env.use(SqlClient.SqlClient)),
+        );
+        const binding = yield* bindings.bind(f.session, next, f.revision.id);
         expect(binding.status).toBe("bound");
         if (binding.status !== "bound") return yield* Effect.die("new binding expected");
         expect(
@@ -469,7 +479,7 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
             true,
           ),
         ).toEqual({ type: "reserved" });
-        expect(workflowRunBindings(db).bind(f.session, f.runId, f.revision.id)).toEqual({
+        expect(yield* bindings.bind(f.session, f.runId, f.revision.id)).toEqual({
           status: "refused",
           reason: "run_id_conflict",
         });
