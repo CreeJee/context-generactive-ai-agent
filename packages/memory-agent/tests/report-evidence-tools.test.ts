@@ -1,16 +1,30 @@
 import { it } from "@effect/vitest";
 import { isTruthy } from "../src/truthy.ts";
-import { Cause, Effect, Schema } from "effect";
+import { Cause, Effect, Option, Schema } from "effect";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
+import { connectionContext } from "../src/db/database.ts";
+import { SqlClient } from "effect/sql";
 import {
   initialReportEvidence,
   reportBinding,
   reportToolsForSession,
 } from "../src/tools/report-evidence.ts";
 
-function fixture() {
-  const db = new DatabaseSync(":memory:");
+const redactSecret = (text: string) => Effect.succeed(text.replaceAll("SECRET", "[redacted]"));
+const keep = (text: string) => Effect.succeed(text);
+
+/** Run a report Effect over `db`, as the owner composition root supplies its SqlClient. */
+const over =
+  (db: DatabaseSync) =>
+  <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    Effect.flatMap(connectionContext(db), (context) => Effect.provideContext(effect, context));
+
+const fixture = Effect.gen(function* () {
+  const db = yield* Effect.acquireRelease(
+    Effect.sync(() => new DatabaseSync(":memory:")),
+    (db) => Effect.sync(() => db.close()),
+  );
   db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, project_id TEXT NOT NULL);
     CREATE TABLE report_sessions(report_session_id TEXT PRIMARY KEY, source_session_id TEXT, project_id TEXT);
     CREATE TABLE chat_runs(run_id TEXT PRIMARY KEY, thread_id TEXT, status TEXT, started_at INTEGER, error TEXT);
@@ -26,12 +40,8 @@ function fixture() {
       ('other-node',4,'other','p','tool_result','2026-01-04','private','{}'),
       ('foreign-node',5,'source','q','tool_result','2026-01-05','private','{}');
     ALTER TABLE nodes ADD COLUMN run_id TEXT;`);
-  const tools = reportToolsForSession(
-    db,
-    "report",
-    "p",
-    (text) => Promise.resolve(text.replaceAll("SECRET", "[redacted]")),
-    () => [
+  const tools = yield* over(db)(
+    reportToolsForSession("report", "p", redactSecret, () => [
       {
         id: "task",
         projectId: "p",
@@ -52,7 +62,7 @@ function fixture() {
         parentToolCallId: "x",
         createdAt: 13,
       },
-    ],
+    ]),
   );
   const invoke = (name: string, input: Schema.Json) =>
     Effect.tryPromise({
@@ -65,41 +75,32 @@ function fixture() {
       catch: (cause) => new Cause.UnknownError(cause),
     });
   return { db, tools, invoke };
-}
+});
 
 describe("report evidence tools", () => {
-  test("exposes only two bound read tools, without mutation or arbitrary search", () => {
-    const { db, tools } = fixture();
-    expect(tools.map((tool) => tool.name)).toEqual(["list_report_evidence", "read_report_item"]);
-    db.close();
-  });
+  it.effect("exposes only two bound read tools, without mutation or arbitrary search", () =>
+    Effect.gen(function* () {
+      const { tools } = yield* fixture;
+      expect(tools.map((tool) => tool.name)).toEqual(["list_report_evidence", "read_report_item"]);
+    }),
+  );
 
-  test("binding validates both session projects and refuses forged bindings", () => {
-    const { db } = fixture();
-    expect(reportBinding(db, "report", "p")).toEqual({
-      sourceSessionId: "source",
-      reportSessionId: "report",
-      projectId: "p",
-    });
-    expect(reportBinding(db, "report", "q")).toBeNull();
-    expect(reportBinding(db, "bad-report", "p")).toBeNull();
-    expect(
-      reportToolsForSession(
-        db,
-        "bad-report",
-        "p",
-        (x) => Promise.resolve(x),
-        () => [],
-      ),
-    ).toEqual([]);
-    db.close();
-  });
+  it.effect("binding validates both session projects and refuses forged bindings", () =>
+    Effect.gen(function* () {
+      const { db } = yield* fixture;
+      const read = over(db);
+      expect(yield* read(reportBinding("report", "p"))).toEqual(
+        Option.some({ sourceSessionId: "source", reportSessionId: "report", projectId: "p" }),
+      );
+      expect(yield* read(reportBinding("report", "q"))).toEqual(Option.none());
+      expect(yield* read(reportBinding("bad-report", "p"))).toEqual(Option.none());
+      expect(yield* read(reportToolsForSession("bad-report", "p", keep, () => []))).toEqual([]);
+    }),
+  );
 
   it.effect("cannot read other sessions, projects or arbitrary ids", () =>
     Effect.gen(function* () {
-      const { invoke } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
-        Effect.sync(() => resource.db.close()),
-      );
+      const { invoke } = yield* fixture;
       for (const [section, id] of [
         ["run", "other-run"],
         ["approval", "2"],
@@ -123,9 +124,7 @@ describe("report evidence tools", () => {
     "initial context contains bounded source calls/results, gaps, and redacted provenance",
     () =>
       Effect.gen(function* () {
-        const { db } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
-          Effect.sync(() => resource.db.close()),
-        );
+        const { db } = yield* fixture;
         db.prepare(
           'UPDATE nodes SET detail = \'{"toolCallId":"call-1","ok":false}\' WHERE id = \'result\'',
         ).run();
@@ -137,35 +136,29 @@ describe("report evidence tools", () => {
         db.prepare(
           "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
         ).run();
-        const context = yield* Effect.promise(() =>
-          initialReportEvidence(
-            db,
-            "report",
-            "p",
-            (text) => Promise.resolve(text.replaceAll("SECRET", "[redacted]")),
-            () => [
-              {
-                id: "source-task",
-                projectId: "p",
-                originSessionId: "source",
-                status: "failed",
-                title: "SECRET trace",
-                request: "",
-                parentToolCallId: "call-1",
-                createdAt: 12,
-              },
-              {
-                id: "private-task",
-                projectId: "q",
-                originSessionId: "foreign",
-                status: "failed",
-                title: "private",
-                request: "",
-                parentToolCallId: "x",
-                createdAt: 13,
-              },
-            ],
-          ),
+        const context = yield* over(db)(
+          initialReportEvidence("report", "p", redactSecret, () => [
+            {
+              id: "source-task",
+              projectId: "p",
+              originSessionId: "source",
+              status: "failed",
+              title: "SECRET trace",
+              request: "",
+              parentToolCallId: "call-1",
+              createdAt: 12,
+            },
+            {
+              id: "private-task",
+              projectId: "q",
+              originSessionId: "foreign",
+              status: "failed",
+              title: "private",
+              request: "",
+              parentToolCallId: "x",
+              createdAt: 13,
+            },
+          ]),
         );
         expect(context).toContain("old failed output");
         expect(context).toContain("[redacted] result");
@@ -177,24 +170,14 @@ describe("report evidence tools", () => {
         expect(context).not.toContain("private");
         expect(context.length).toBeLessThanOrEqual(20_100);
         db.exec("DROP TABLE permission_reviews");
-        const missing = yield* Effect.promise(() =>
-          initialReportEvidence(
-            db,
-            "report",
-            "p",
-            (x) => Promise.resolve(x),
-            () => [],
-          ),
-        );
+        const missing = yield* over(db)(initialReportEvidence("report", "p", keep, () => []));
         expect(missing).toContain("approvals: failed");
       }),
   );
 
   it.effect("revoking or rebinding the source invalidates an already issued tool", () =>
     Effect.gen(function* () {
-      const { db, invoke } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
-        Effect.sync(() => resource.db.close()),
-      );
+      const { db, invoke } = yield* fixture;
       db.exec(
         "UPDATE report_sessions SET source_session_id = 'other' WHERE report_session_id = 'report'",
       );
@@ -209,9 +192,7 @@ describe("report evidence tools", () => {
 
   it.effect("read and list cap text, redact it and attribute calls and status/time", () =>
     Effect.gen(function* () {
-      const { invoke } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
-        Effect.sync(() => resource.db.close()),
-      );
+      const { invoke } = yield* fixture;
       const call = yield* invoke("read_report_item", { section: "node", id: "result" });
       expect(call).toMatchObject({
         id: "result",

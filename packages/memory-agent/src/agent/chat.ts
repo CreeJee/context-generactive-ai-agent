@@ -573,7 +573,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const imageRouter = yield* ImageRouter;
   const providerToolRuntime = yield* ProviderToolRuntime;
   const sessions = yield* Sessions;
-  const { sqlite, atomic } = yield* Database;
+  const { sqlite } = yield* Database;
   const runBindings = yield* workflowRunBindings;
   const uncertain = yield* uncertainRuns;
   const readRecovery = yield* OwnerReadRecovery;
@@ -581,6 +581,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const workerLedger = yield* makeSqliteOwnerRpcLedger;
   const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
+  const withSql = Effect.provideService(SqlClient.SqlClient, sql);
+  const streamDurability = (input: Parameters<typeof sqliteStreamDurability>[0]) =>
+    withSql(sqliteStreamDurability(input));
   const latestRevisionId = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: Schema.Struct({ id: Schema.Finite }),
@@ -1304,7 +1307,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
         if (project.hiddenAt === null) rrsi.touch();
-        const reportSource = reportBinding(sqlite, sessionId, projectId);
+        const reportSource = Option.getOrNull(yield* withSql(reportBinding(sessionId, projectId)));
+        const redactReport = (text: string) =>
+          Effect.map(redactor.redactText(text), (kept) => kept.text).pipe(
+            Effect.provideContext(context),
+          );
         // A reporting conversation is always local, using the user's selected model. An external
         // agent or its full project toolset must never be used to inspect the source session.
         if (reportSource !== null && external !== null)
@@ -1918,14 +1925,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         const sharedTools =
           reportSource !== null
-            ? reportToolsForSession(
-                sqlite,
-                sessionId,
-                projectId,
-                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                (text: string) =>
-                  runEffect(Effect.map(redactor.redactText(text), (kept) => kept.text)),
-                () => workTrace.taskTree(reportSource.sourceSessionId),
+            ? yield* withSql(
+                reportToolsForSession(sessionId, projectId, redactReport, () =>
+                  workTrace.taskTree(reportSource.sourceSessionId),
+                ),
               )
             : workflowReadOnly
               ? profiledTools.filter((tool) => HashSet.has(workflowReadToolNames, tool.name))
@@ -1970,15 +1973,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ].join("\n");
         const reportSnapshot =
           reportSource !== null
-            ? yield* agentPromise("report-evidence-snapshot", () =>
-                initialReportEvidence(
-                  sqlite,
-                  sessionId,
-                  projectId,
-                  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                  (text) => runEffect(Effect.map(redactor.redactText(text), (kept) => kept.text)),
-                  () => workTrace.taskTree(reportSource.sourceSessionId),
-                ).catch(
+            ? yield* withSql(
+                initialReportEvidence(sessionId, projectId, redactReport, () =>
+                  workTrace.taskTree(reportSource.sourceSessionId),
+                ),
+              ).pipe(
+                Effect.orElseSucceed(
                   () =>
                     "자동 근거 수집 실패. 원본 근거를 확인한 것으로 주장하지 마세요; 읽기 도구로 재시도할 수 있습니다.",
                 ),
@@ -2459,14 +2459,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Stream.ensuring(Effect.sync(() => releaseSubscriptionRun(runAdapter))),
           Stream.ensuring(stopSteering),
         );
+        // Bound runs publish only after central durable delivery-log acknowledgement.
+        // Unbound legacy runs retain the SDK's process-local memory namespace.
+        const durableAdapter = isTruthy(boundRun)
+          ? yield* streamDurability({ sessionId, runId })
+          : memoryStream({ runId });
         const response = toServerSentEventsResponse(Stream.toAsyncIterable(withAccountLease), {
           abortController: deliveryAbortController,
-          // Bound runs publish only after central durable delivery-log acknowledgement.
-          // Unbound legacy runs retain the SDK's process-local memory namespace.
           durability: {
-            adapter: isTruthy(boundRun)
-              ? sqliteStreamDurability({ sqlite, atomic, sessionId, runId })
-              : memoryStream({ runId }),
+            adapter: durableAdapter,
             batch: 1,
           },
         });
@@ -2524,16 +2525,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             return json(400, { error: "invalid_stream_offset" });
           // The exported adapter validates its SDK namespace, immutable run/session binding,
           // and persisted chunk membership synchronously before returning an HTTP stream.
-          return yield* Effect.try(() => {
-            const adapter = sqliteStreamDurability({
-              sqlite,
-              atomic,
-              sessionId,
-              runId,
-              resumeOffset: offset,
-            });
-            return resumeServerSentEventsResponse({ adapter });
-          }).pipe(Effect.orElseSucceed(() => json(400, { error: "invalid_stream_offset" })));
+          return yield* streamDurability({ sessionId, runId, resumeOffset: offset }).pipe(
+            Effect.map((adapter) => resumeServerSentEventsResponse({ adapter })),
+            Effect.orElseSucceed(() => json(400, { error: "invalid_stream_offset" })),
+          );
         }
         const prefix = `memory:v1:${encodeURIComponent(runId)}:`;
         if (

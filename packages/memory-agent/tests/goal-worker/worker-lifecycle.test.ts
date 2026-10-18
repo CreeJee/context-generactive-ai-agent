@@ -148,12 +148,10 @@ const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed")
       )
       .get(id),
   );
-  yield* Effect.scoped(
-    makeOwnerNativeArtifacts({
-      ...db,
-      directory: `${env.storage}/native-artifacts`,
-    }).acquire(revision.goal_instance_id),
-  );
+  const artifacts = yield* makeOwnerNativeArtifacts({
+    directory: `${env.storage}/native-artifacts`,
+  });
+  yield* Effect.scoped(artifacts.acquire(revision.goal_instance_id));
   const admission = yield* (yield* workflowRunBindings).bind(id, `${id}-old`, revision.id);
   expect(admission.status).toBe("bound");
   if (admission.status !== "bound") return yield* Effect.die("the earlier run was not bound");

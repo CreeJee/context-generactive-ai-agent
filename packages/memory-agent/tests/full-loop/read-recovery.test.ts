@@ -56,11 +56,10 @@ const failedRead = Effect.fnUntraced(function* (
       .get(session),
   );
   const owner = yield* workflowRunBindings;
-  yield* Effect.scoped(
-    makeOwnerNativeArtifacts({ ...db, directory: `${env.storage}/native-artifacts` }).acquire(
-      revision.goal_instance_id,
-    ),
-  );
+  const artifacts = yield* makeOwnerNativeArtifacts({
+    directory: `${env.storage}/native-artifacts`,
+  });
+  yield* Effect.scoped(artifacts.acquire(revision.goal_instance_id));
   const payload = {
     _tag: "GoalExecutionPayload" as const,
     identity: {
