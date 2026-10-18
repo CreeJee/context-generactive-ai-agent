@@ -1,6 +1,5 @@
-import { fileURLToPath } from "node:url";
-import { HashSet, Effect, FileSystem } from "effect";
-import { NodeFileSystem } from "@effect/platform-node";
+import { HashSet, Effect, FileSystem, Layer, Path } from "effect";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { layer } from "@effect/vitest";
 import { test, expect } from "vite-plus/test";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
@@ -10,11 +9,11 @@ import { builtinToolEffects, readOnlyToolNames } from "../src/tools/effects.ts";
 const unclassified = (names: readonly string[]) =>
   names.filter((name) => !Object.hasOwn(builtinToolEffects, name));
 
-layer(NodeFileSystem.layer)((it) => {
+layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
   it.effect("every built-in source registration requires an explicit owner effect decision", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const root = fileURLToPath(new URL("../src/", import.meta.url));
+      const root = yield* (yield* Path.Path).fromFileUrl(new URL("../src/", import.meta.url));
       const registered = new Set<string>([
         ...approvalToolDefinitions.map((tool) => tool.name),
         delegateToolName,

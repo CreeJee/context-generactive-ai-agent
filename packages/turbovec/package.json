@@ -12,6 +12,8 @@
     "./package.json": "./package.json"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
     "vite-plus": "catalog:"
   }
 }

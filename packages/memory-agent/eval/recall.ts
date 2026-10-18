@@ -10,13 +10,12 @@ import { isTruthy } from "../src/truthy.ts";
 import { NodeServices } from "@effect/platform-node";
 import { Context, FileSystem } from "effect";
 import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
-import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { Console, Effect, Layer, MutableHashMap, Option } from "effect";
+import { Clock, Console, Duration, Effect, Layer, MutableHashMap, Option } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
-import { StorageRoot } from "../src/config/storage-root.ts";
+import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import {
   Embedder,
@@ -38,7 +37,7 @@ import {
 } from "./recall-corpus.ts";
 import { technicalQueries, technicalSessions } from "./recall-technical.ts";
 
-const home = join(homedir(), ".context-generactive-agent");
+const home = defaultStorageRoot;
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 for (const file of [embeddingModel, kiwiFile])
@@ -132,10 +131,10 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
         }
       }
       const indexer = yield* Indexer;
-      const started = performance.now();
-      yield* Effect.ignore(indexer.indexAll());
-      yield* Effect.ignore(indexer.analyzeAll());
-      const indexedMs = Math.round(performance.now() - started);
+      const [indexed] = yield* Effect.timed(
+        Effect.ignore(indexer.indexAll()).pipe(Effect.andThen(Effect.ignore(indexer.analyzeAll()))),
+      );
+      const indexedMs = Math.round(Duration.toMillis(indexed));
       const search = yield* configuration.text
         ? MemorySearch
         : // Evaluation entry point owns this Layer and its resource scope.
@@ -150,7 +149,7 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
       let top5 = 0;
       let reciprocal = 0;
       const misses: string[] = [];
-      const searchStarted = performance.now();
+      const searchStarted = yield* Clock.currentTimeNanos;
       for (const item of set.queries) {
         const result = yield* search.find({
           query: item.query,
@@ -178,7 +177,10 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
         top5: `${top5}/${total}`,
         mrr: (reciprocal / total).toFixed(3),
         indexedMs,
-        searchMs: Math.round((performance.now() - searchStarted) / total),
+        searchMs: Math.round(
+          Duration.toMillis(Duration.nanos((yield* Clock.currentTimeNanos) - searchStarted)) /
+            total,
+        ),
         misses,
       };
     }),

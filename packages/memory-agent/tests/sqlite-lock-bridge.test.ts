@@ -1,11 +1,9 @@
 import { NodeServices } from "@effect/platform-node";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // A crashing native child must fail this test without crashing the Vitest pool itself.
-import { fileURLToPath } from "node:url";
-import { Effect, Schema, Layer, Stream, Context } from "effect";
+import { Effect, Schema, Layer, Path, Stream, Context } from "effect";
 import { expect, it } from "vite-plus/test";
 
-const fixture = fileURLToPath(new URL("./fixtures/sqlite-lock-process.ts", import.meta.url));
 const Result = Schema.Struct({
   status: Schema.Literal("passed"),
   reads: Schema.Int,
@@ -20,6 +18,9 @@ it(
         Effect.gen(function* () {
           const services = yield* Layer.build(NodeServices.layer);
           const spawner = Context.get(services, ChildProcessSpawner.ChildProcessSpawner);
+          const fixture = yield* Context.get(services, Path.Path).fromFileUrl(
+            new URL("./fixtures/sqlite-lock-process.ts", import.meta.url),
+          );
           const handle = yield* spawner.spawn(
             ChildProcess.make(process.execPath, ["--experimental-strip-types", fixture]),
           );

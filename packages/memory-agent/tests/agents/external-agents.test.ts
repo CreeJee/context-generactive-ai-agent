@@ -1,5 +1,4 @@
 // Native ACP processes prove actual OS environment isolation, reconnect and cancellation.
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Cause, Effect, Fiber, FiberSet, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
@@ -16,8 +15,6 @@ import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/to
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { current, encodeJson, freshProject, post, sdk, until } from "./agent-env.ts";
-
-const fakeAgent = fileURLToPath(new URL("../support/fake-acp-agent.ts", import.meta.url));
 
 const Start = Schema.fromJsonString(
   Schema.Struct({ pid: Schema.Int, cwd: Schema.String, secret: Schema.NullOr(Schema.String) }),
@@ -48,6 +45,9 @@ const fakeAgentProject = Effect.fnUntraced(function* () {
   const { base } = yield* TestEnv;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const fakeAgent = yield* path.fromFileUrl(
+    new URL("../support/fake-acp-agent.ts", import.meta.url),
+  );
   const { project, sessionId } = yield* freshProject();
   const logs = yield* fs.makeTempDirectory({ directory: base, prefix: "acp-" });
   const log = path.join(logs, "starts.log");

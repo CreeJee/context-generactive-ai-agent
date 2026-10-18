@@ -3,7 +3,6 @@ import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Stream } fro
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native child-process fixture: real SQLite locks coordinate two independent startup owners.
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { migrateDatabase } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
@@ -32,6 +31,7 @@ await Effect.runPromise(
           const fs = Context.get(platform, FileSystem.FileSystem);
           const path = Context.get(platform, Path.Path);
           const spawner = Context.get(platform, ChildProcessSpawner.ChildProcessSpawner);
+          const script = yield* path.fromFileUrl(new URL(import.meta.url));
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "db-migration-race-" });
           const file = path.join(directory, "agent.db");
           const sqlite = new DatabaseSync(file);
@@ -41,14 +41,10 @@ await Effect.runPromise(
             const starts = [];
             for (const _ of [0, 1]) {
               const child = yield* spawner.spawn(
-                ChildProcess.make(
-                  process.execPath,
-                  [fileURLToPath(import.meta.url), "child", file],
-                  {
-                    stdin: "ignore",
-                    killSignal: "SIGKILL",
-                  },
-                ),
+                ChildProcess.make(process.execPath, [script, "child", file], {
+                  stdin: "ignore",
+                  killSignal: "SIGKILL",
+                }),
               );
               const ready = yield* Deferred.make<void>();
               let output = "";

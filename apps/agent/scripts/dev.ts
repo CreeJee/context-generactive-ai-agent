@@ -7,20 +7,18 @@ import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-
-import { fileURLToPath } from "node:url";
 import { Option, Schema } from "effect";
 import { developmentBuildId } from "../server/dev-safety.ts";
 import { devHelp, readDevConfiguration } from "./dev-configuration.ts";
 import { assertPortAvailable } from "./dev-process.ts";
 
-const { dirname } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const { dirname } = nodePath;
 
 const developmentRuntime = ManagedRuntime.make(
   Layer.merge(NodeServices.layer, FetchHttpClient.layer),
 );
-const app = fileURLToPath(new URL("..", import.meta.url));
+const app = await runNativeEffect(nodePath.fromFileUrl(new URL("..", import.meta.url)));
 // Validate CLI/environment settings before any build, process or storage mutation.
 const configuration = await runNativeEffect(
   readDevConfiguration(process.argv.slice(2), process.env, app).pipe(

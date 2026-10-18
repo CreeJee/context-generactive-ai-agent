@@ -1,10 +1,8 @@
 import { NodeServices } from "@effect/platform-node";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { fileURLToPath } from "node:url";
-import { Effect, Layer, Stream, Context } from "effect";
+import { Effect, Layer, Path, Stream, Context } from "effect";
 import { expect, it } from "vite-plus/test";
 
-const fixture = fileURLToPath(new URL("./fixtures/concurrent-migration.ts", import.meta.url));
 it(
   "concurrent owners serialize migration and re-read the actual DB version under its lock",
   () =>
@@ -13,6 +11,9 @@ it(
         Effect.gen(function* () {
           const services = yield* Layer.build(NodeServices.layer);
           const spawner = Context.get(services, ChildProcessSpawner.ChildProcessSpawner);
+          const fixture = yield* Context.get(services, Path.Path).fromFileUrl(
+            new URL("./fixtures/concurrent-migration.ts", import.meta.url),
+          );
           const handle = yield* spawner.spawn(
             ChildProcess.make(process.execPath, [fixture, "parent"]),
           );

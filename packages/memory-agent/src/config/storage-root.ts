@@ -1,13 +1,16 @@
-import { homedir } from "node:os";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { Context, Effect, Layer, Path } from "effect";
+import { homeDirectory } from "../runtime/host-system.ts";
 
 /** `~/.context-generactive-agent`: database, vector indexes, models and config. */
 export const defaultStorageRoot = Effect.runSync(
   Effect.scoped(
     Effect.gen(function* () {
       const services = yield* Layer.build(NodePath.layer);
-      return Context.get(services, Path.Path).join(homedir(), ".context-generactive-agent");
+      return Context.get(services, Path.Path).join(
+        yield* homeDirectory,
+        ".context-generactive-agent",
+      );
     }),
   ),
 );
