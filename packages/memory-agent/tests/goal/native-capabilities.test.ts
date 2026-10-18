@@ -3,7 +3,6 @@ import { Array as EffectArray, Cause, Effect, HashSet, Schema, Stream } from "ef
 import { expect } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../../src/agent/chat.ts";
 import { createGoalNativeImplementations } from "../../src/agent/goal-native-implementation.ts";
-import { Database } from "../../src/db/database.ts";
 import { Graph } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
@@ -23,6 +22,7 @@ import { MemoryTools } from "../../src/tools/memory.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
+import { sqlGet } from "../support/sql.ts";
 
 const goal = {
   statement: "native capabilities",
@@ -103,7 +103,7 @@ const ownerRun = Effect.fnUntraced(function* (
     );
   // Attribution is deferred: nothing reads the user node before the run admits it.
   expect(reads).toBe(0);
-  const user = env.nodes.append({
+  const user = yield* env.nodes.append({
     projectId: project.id,
     sessionId: session,
     kind: "user",
@@ -154,21 +154,25 @@ const ownerRun = Effect.fnUntraced(function* (
     decision: index === 0 ? "allow" : "block",
     reason: runId,
   });
-  expect(env.nodes.toolNode(session, "tool_result", "shared-call")).toMatchObject({
+  expect(yield* env.nodes.toolNode(session, "tool_result", "shared-call")).toMatchObject({
     runId,
     detail: { ok: index === 0, permission: { reason: runId } },
   });
-  for (const assistant of env.nodes.session(session).filter((node) => node.kind === "assistant")) {
-    expect(env.nodes.edgesOf(assistant.id)).toEqual(
+  for (const assistant of (yield* env.nodes.session(session)).filter(
+    (node) => node.kind === "assistant",
+  )) {
+    expect(yield* env.nodes.edgesOf(assistant.id)).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "reply", toId: user.id })]),
     );
   }
   expect(reads).toBeGreaterThan(1);
   // The run records only into its own session.
   expect(
-    (yield* Database).sqlite
-      .prepare("SELECT count(*) AS n FROM nodes WHERE run_id = ? AND session_id != ?")
-      .get(runId, session),
+    yield* sqlGet(
+      "SELECT count(*) AS n FROM nodes WHERE run_id = ? AND session_id != ?",
+      runId,
+      session,
+    ),
   ).toEqual({ n: 0 });
 });
 
@@ -216,12 +220,15 @@ const accountClients = (registry: ProviderRegistry["Service"]) => {
   return { acquired, released, service };
 };
 
-const goalInstance = (db: Database["Service"], session: string) =>
-  Schema.decodeUnknownEffect(Schema.Struct({ goal_instance_id: Schema.String }))(
-    db.sqlite
-      .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
-      .get(session),
-  ).pipe(Effect.map((row) => row.goal_instance_id));
+const goalInstance = (session: string) =>
+  Effect.gen(function* () {
+    return yield* Schema.decodeUnknownEffect(Schema.Struct({ goal_instance_id: Schema.String }))(
+      yield* sqlGet(
+        "SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?",
+        session,
+      ),
+    ).pipe(Effect.map((row) => row.goal_instance_id));
+  });
 
 // The project switches to auto permission mode, so these turns get their own agent.
 testAgent({ testProvider: {} })("native AgentChat Goal turns", (it) => {
@@ -230,7 +237,6 @@ testAgent({ testProvider: {} })("native AgentChat Goal turns", (it) => {
     () =>
       Effect.gen(function* () {
         const { project, provider } = yield* TestEnv;
-        const db = yield* Database;
         const workflows = yield* Workflows;
         const nodes = yield* Nodes;
         yield* selectTestModel();
@@ -241,8 +247,8 @@ testAgent({ testProvider: {} })("native AgentChat Goal turns", (it) => {
           yield* workflows.setPhase(session, "goal");
           yield* workflows.updateGoal(session, goal);
         }
-        const firstGoal = yield* goalInstance(db, first);
-        expect(yield* goalInstance(db, second)).not.toBe(firstGoal);
+        const firstGoal = yield* goalInstance(first);
+        expect(yield* goalInstance(second)).not.toBe(firstGoal);
         const clients = accountClients(yield* ProviderRegistry);
         const unsupported = () => {
           throw new Error("Goal must not use service-bound forRun");
@@ -281,7 +287,7 @@ testAgent({ testProvider: {} })("native AgentChat Goal turns", (it) => {
             yield* turn(second, 2);
             // Amending the Goal keeps its identity, and so the same native implementation.
             yield* workflows.updateGoal(first, { ...goal, statement: "amended goal" });
-            expect(yield* goalInstance(db, first)).toBe(firstGoal);
+            expect(yield* goalInstance(first)).toBe(firstGoal);
             yield* turn(first, 3);
           }).pipe(
             Effect.provideService(PermissionGate, { ...gate, forRun: unsupported }),
@@ -293,16 +299,21 @@ testAgent({ testProvider: {} })("native AgentChat Goal turns", (it) => {
         expect(clients.acquired).toEqual([1, 2, 3]);
         expect(clients.released).toEqual([1, 2, 3]);
         const assistants = (session: string) =>
-          nodes.session(session).filter((node) => node.kind === "assistant");
-        expect(assistants(first).map((node) => node.text)).toEqual([
+          Effect.map(nodes.session(session), (nodes) =>
+            nodes.filter((node) => node.kind === "assistant"),
+          );
+        expect((yield* assistants(first)).map((node) => node.text)).toEqual([
           "native-answer-1",
           "native-answer-3",
         ]);
-        expect(assistants(second).map((node) => node.text)).toEqual(["native-answer-2"]);
-        const all = [...assistants(first), ...assistants(second)];
+        expect((yield* assistants(second)).map((node) => node.text)).toEqual(["native-answer-2"]);
+        const all = [...(yield* assistants(first)), ...(yield* assistants(second))];
         expect(EffectArray.dedupe(all.map((node) => node.runId))).toHaveLength(3);
-        const replies = all.map(
-          (node) => nodes.edgesOf(node.id).find((edge) => edge.kind === "reply")?.toId,
+        const replies = yield* Effect.forEach(all, (node) =>
+          Effect.map(
+            nodes.edgesOf(node.id),
+            (edges) => edges.find((edge) => edge.kind === "reply")?.toId,
+          ),
         );
         expect(EffectArray.dedupe(replies)).toHaveLength(3);
         expect(provider!.adapter.invocations).toHaveLength(0);

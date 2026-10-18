@@ -1,5 +1,5 @@
-// Native host/SDK boundary uses synchronous SQLite contracts.
-import type { DatabaseSync } from "node:sqlite";
+import { Effect } from "effect";
+import { SqlClient } from "effect/sql";
 import { memoryGraphRepairVersion } from "./quality.ts";
 
 /** The app's own reads; their results are JSON carrying the file's sha256. */
@@ -14,11 +14,10 @@ const shaOf = (column: string) =>
  * content: it shows a file that is no longer there. The node itself stays, as evidence of what was
  * read then, and `read_evidence` and the transcript still show it.
  */
-export function createSupersededReads(sqlite: DatabaseSync) {
-  // The file is the one the calls named: `returns` runs from a call to its result.
-  // Keep the indexed path from this result to its file before visiting older calls. SQLite can
-  // otherwise start at nodes_project and scan the entire project for every read during repairs.
-  const suppress = sqlite.prepare(`
+// The file is the one the calls named: `returns` runs from a call to its result.
+// Keep the indexed path from this result to its file before visiting older calls. SQLite can
+// otherwise start at nodes_project and scan the entire project for every read during repairs.
+export const supersededReadSql = `
     INSERT INTO memory_graph_suppressed_nodes (node_seq, version, reason)
     SELECT DISTINCT old.seq, ?, 'superseded_read' FROM nodes cur
     CROSS JOIN edges ce ON ce.to_id = cur.id AND ce.kind = 'returns'
@@ -32,9 +31,11 @@ export function createSupersededReads(sqlite: DatabaseSync) {
       AND json_extract(old.detail, '$.toolName') = json_extract(cur.detail, '$.toolName')
       AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = old.seq)
       AND ${shaOf("old.text")} <> ${shaOf("cur.text")}
-    ON CONFLICT DO NOTHING`);
+    ON CONFLICT DO NOTHING`;
+
+export const createSupersededReads = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
   /** Applies the rule for one newly recorded result. Call inside the transaction that wrote it. */
-  return (resultId: string) => {
-    suppress.run(memoryGraphRepairVersion, resultId);
-  };
-}
+  return (resultId: string) =>
+    Effect.asVoid(sql.unsafe(supersededReadSql, [memoryGraphRepairVersion, resultId]));
+});

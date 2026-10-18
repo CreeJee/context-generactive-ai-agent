@@ -3,17 +3,12 @@ import { runOAuthNodeEffect } from "./node-runtime.ts";
 import { Effect, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Crypto } from "effect";
-import type { DatabaseSync } from "node:sqlite";
 import {
   createProfileCredentialStore,
-  listOAuthProfiles,
-  publishOAuthProfileEffect,
-  removeOAuthProfileEffect,
-  selectOAuthProfileEffect,
+  type OAuthProfiles,
   type ProfileCredentialStore,
 } from "./accounts.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
-import { acquireOAuthProfileRun, beginOAuthProfileRemoval } from "./run-leases.ts";
 import {
   createKeychainProfileCredentialStore,
   createSubscriptionOAuthClient,
@@ -25,14 +20,14 @@ import {
 /** Synchronous selection at request/run creation; each profile owns its client and refresh lock. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function createAccountBoundSubscriptionClients(options: {
-  readonly sqlite: DatabaseSync;
+  readonly profiles: OAuthProfiles["Service"];
   readonly provider: OAuthProvider;
   readonly createClient?: ((id: string | null) => SubscriptionOAuthClient) | undefined;
   readonly accounts?: ProfileCredentialStore | undefined;
   readonly legacy?: CredentialStore | undefined;
 }) {
   return createAccountBoundSubscriptionClientsBody(
-    options.sqlite,
+    options.profiles,
     options.provider,
     options.createClient,
     options.accounts,
@@ -40,7 +35,7 @@ export function createAccountBoundSubscriptionClients(options: {
   );
 }
 function createAccountBoundSubscriptionClientsBody(
-  sqlite: DatabaseSync,
+  profiles: OAuthProfiles["Service"],
   provider: OAuthProvider,
   createClient: (id: string | null) => SubscriptionOAuthClient = (id) => {
     const protocol = providerProtocols[provider];
@@ -55,11 +50,10 @@ function createAccountBoundSubscriptionClientsBody(
 ) {
   const cache = MutableHashMap.empty<string, SubscriptionOAuthClient>();
   const selectedId = () =>
-    listOAuthProfiles({ sqlite: sqlite, provider: provider }).find((profile) => profile.selected)
-      ?.id ?? null;
+    profiles.committed(provider).profiles.find((profile) => profile.selected)?.id ?? null;
   const clientFor = (id: string | null) => {
     const key = id ?? "__legacy__";
-    const configured = listOAuthProfiles({ sqlite: sqlite, provider: provider });
+    const configured = profiles.committed(provider).profiles;
     for (const cachedId of MutableHashMap.keys(cache)) {
       if (
         cachedId !== key &&
@@ -76,11 +70,10 @@ function createAccountBoundSubscriptionClientsBody(
     }
     return client;
   };
-  const legacyAllowed = () =>
-    listOAuthProfiles({ sqlite: sqlite, provider: provider }).length === 0 &&
-    !isTruthy(
-      sqlite.prepare("SELECT provider FROM oauth_legacy_removed WHERE provider = ?").get(provider),
-    );
+  const legacyAllowed = () => {
+    const committed = profiles.committed(provider);
+    return committed.profiles.length === 0 && !committed.legacyRemoved;
+  };
   const current = () => {
     const id = selectedId();
     if (id !== null) return clientFor(id);
@@ -93,7 +86,7 @@ function createAccountBoundSubscriptionClientsBody(
     forRun: () => {
       const id = selectedId();
       if (id === null && !legacyAllowed()) throw new OAuthHarnessError("not_connected");
-      const releaseRun = acquireOAuthProfileRun(sqlite, provider, id ?? "__legacy__");
+      const releaseRun = profiles.acquireRun(provider, id ?? "__legacy__");
       try {
         return { ...clientFor(id), releaseRun };
       } catch (error) {
@@ -128,26 +121,20 @@ function createAccountBoundSubscriptionClientsBody(
                   Effect.gen(function* () {
                     if (cancelled) return yield* new OAuthHarnessError("cancelled");
                     if (!connection.connected) return yield* new OAuthHarnessError("not_connected");
-                    yield* publishOAuthProfileEffect(
-                      sqlite,
+                    yield* profiles.publish(
                       provider,
                       id,
                       provider === "openai" ? "ChatGPT" : "Claude",
                       accounts,
                     );
-                    if (selectedId() === null)
-                      yield* selectOAuthProfileEffect(sqlite, provider, id, accounts);
+                    if (selectedId() === null) yield* profiles.select(provider, id, accounts);
                     return connection;
                   }),
                 ),
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     // A published account survives a selection failure or late cancellation.
-                    if (
-                      !listOAuthProfiles({ sqlite: sqlite, provider: provider }).some(
-                        (profile) => profile.id === id,
-                      )
-                    ) {
+                    if (!(yield* profiles.list(provider)).some((profile) => profile.id === id)) {
                       yield* nativePromise(() => accounts.remove(provider, id));
                       MutableHashMap.remove(cache, id);
                     }
@@ -171,13 +158,15 @@ function createAccountBoundSubscriptionClientsBody(
           Effect.gen(function* () {
             const id = selectedId();
             if (id !== null) {
-              yield* removeOAuthProfileEffect(sqlite, provider, id, accounts, legacy);
+              yield* profiles.remove(provider, id, accounts, legacy);
               MutableHashMap.remove(cache, id);
             } else if (legacyAllowed()) {
-              const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, "__legacy__");
-              yield* nativePromise(() => clientFor(null).disconnect()).pipe(
-                Effect.tap(() => Effect.sync(() => MutableHashMap.remove(cache, "__legacy__"))),
-                Effect.ensuring(Effect.sync(finishRemoval)),
+              yield* profiles.whileRemoving(
+                provider,
+                "__legacy__",
+                nativePromise(() => clientFor(null).disconnect()).pipe(
+                  Effect.tap(() => Effect.sync(() => MutableHashMap.remove(cache, "__legacy__"))),
+                ),
               );
             } else return yield* new OAuthHarnessError("not_connected");
             const next = selectedId();

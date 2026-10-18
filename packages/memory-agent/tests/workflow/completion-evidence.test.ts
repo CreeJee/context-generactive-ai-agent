@@ -1,6 +1,5 @@
 import { Cause, Effect, FileSystem, Path, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { isTruthy } from "../../src/truthy.ts";
@@ -14,6 +13,7 @@ import {
   WorkflowState,
 } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
   statement: "Verified Goal",
@@ -62,8 +62,6 @@ type Registration = "native" | "legacy";
 const fixture = Effect.fnUntraced(function* (registration: Registration) {
   const { project } = yield* TestEnv;
   const workflows = yield* Workflows;
-  const db = yield* Database;
-  const { sqlite } = db;
   const sessionId = (yield* (yield* Sessions).create(project.id)).id;
   const run = `run-${sessionId}`;
   const proof = `proof-${sessionId}`;
@@ -74,32 +72,31 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
   const goalId = yield* workflows.goalInstanceId(sessionId);
   if (goalId === null) return yield* Effect.die("Expected Goal identity");
   const revision = Number(
-    sqlite
-      .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
-      .get(sessionId)!.id,
+    (yield* sqlGet(
+      "SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?",
+      sessionId,
+    ))!.id,
   );
   const bind = (yield* workflowRunBindings).bind(sessionId, run, revision);
   switch (registration) {
     case "native": {
-      sqlite
-        .prepare("INSERT INTO workflow_goal_native_artifacts VALUES (?, ?, ?, ?, ?, ?)")
-        .run(
-          goalId,
-          "file:///owner/native.mjs",
-          "a".repeat(64),
-          "native-v1",
-          "b".repeat(64),
-          "2026-10-07T00:00:00.000Z",
-        );
-      sqlite
-        .prepare("INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)")
-        .run(
-          goalId,
-          source,
-          "c".repeat(64),
-          "file:///owner/worker.mjs",
-          "2026-10-07T00:00:00.000Z",
-        );
+      yield* sqlRun(
+        "INSERT INTO workflow_goal_native_artifacts VALUES (?, ?, ?, ?, ?, ?)",
+        goalId,
+        "file:///owner/native.mjs",
+        "a".repeat(64),
+        "native-v1",
+        "b".repeat(64),
+        "2026-10-07T00:00:00.000Z",
+      );
+      yield* sqlRun(
+        "INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)",
+        goalId,
+        source,
+        "c".repeat(64),
+        "file:///owner/worker.mjs",
+        "2026-10-07T00:00:00.000Z",
+      );
       const goals = yield* GoalExecutions;
       const payload: GoalExecutionPayload = {
         _tag: "GoalExecutionPayload",
@@ -120,15 +117,18 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
       expect((yield* bind).status).toBe("bound");
       break;
   }
-  sqlite
-    .prepare(
-      "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', 1)",
-    )
-    .run(run, sessionId);
-  sqlite
-    .prepare("INSERT INTO workflow_worker_dispatches VALUES (?, ?, ?)")
-    .run(run, "dispatch", "2026-10-07T00:00:00.000Z");
-  insertNode(sqlite, { id: proof, projectId: project.id, sessionId, run, ok: true });
+  yield* sqlRun(
+    "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', 1)",
+    run,
+    sessionId,
+  );
+  yield* sqlRun(
+    "INSERT INTO workflow_worker_dispatches VALUES (?, ?, ?)",
+    run,
+    "dispatch",
+    "2026-10-07T00:00:00.000Z",
+  );
+  yield* insertNode({ id: proof, projectId: project.id, sessionId, run, ok: true });
   const mapping = (outcomeIndex: number) => ({
     outcomeIndex,
     outcomeText: goal.outcomes[outcomeIndex]!,
@@ -149,7 +149,6 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
     run,
     proof,
     source,
-    sqlite,
     mapping,
     complete,
   };
@@ -157,14 +156,22 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
 
 type Fixture = Effect.Success<ReturnType<typeof fixture>>;
 
-const insertNode = (
-  sqlite: Fixture["sqlite"],
-  node: { id: string; projectId: string; sessionId: string; run: string; ok: boolean },
-) =>
-  sqlite
-    .prepare(`INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
-      VALUES (?, ?, ?, ?, 'tool_result', 'Check result', ?, '2026-10-07T00:00:00.000Z')`)
-    .run(node.id, node.projectId, node.sessionId, node.run, JSON.stringify({ ok: node.ok }));
+const insertNode = (node: {
+  id: string;
+  projectId: string;
+  sessionId: string;
+  run: string;
+  ok: boolean;
+}) =>
+  sqlRun(
+    `INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
+      VALUES (?, ?, ?, ?, 'tool_result', 'Check result', ?, '2026-10-07T00:00:00.000Z')`,
+    node.id,
+    node.projectId,
+    node.sessionId,
+    node.run,
+    JSON.stringify({ ok: node.ok }),
+  );
 
 /** The progress update fails and leaves the persisted workflow untouched. */
 const refused = Effect.fnUntraced(function* (
@@ -219,18 +226,20 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
   const unchanged = { input: fx.complete, recorder: fx.run };
   const badNode = `${fx.run}-bad`;
   const operation = (sideEffect: 0 | 1, reply: string, status: string) =>
-    fx.sqlite
-      .prepare(
-        `INSERT INTO owner_rpc_operations
+    sqlRun(
+      `INSERT INTO owner_rpc_operations
          (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
          VALUES (?, '{}', 1, '{}', ?, ?, ?)`,
-      )
-      .run(fx.run, sideEffect, reply, status);
+      fx.run,
+      sideEffect,
+      reply,
+      status,
+    );
   switch (failure) {
     case "other session": {
       const { project } = yield* TestEnv;
       const other = yield* (yield* Sessions).create(project.id);
-      insertNode(fx.sqlite, { ...nodeOf(fx, badNode), sessionId: other.id });
+      yield* insertNode({ ...nodeOf(fx, badNode), sessionId: other.id });
       return withSecondMapping({ evidenceNodeIds: [badNode] });
     }
     case "other project": {
@@ -239,16 +248,16 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
       const root = (yield* Path.Path).join(base, `other-${fx.sessionId}`);
       yield* fs.makeDirectory(root);
       const other = yield* (yield* Projects).add(root);
-      insertNode(fx.sqlite, { ...nodeOf(fx, badNode), projectId: other.id });
+      yield* insertNode({ ...nodeOf(fx, badNode), projectId: other.id });
       return withSecondMapping({ evidenceNodeIds: [badNode] });
     }
     case "missing node":
       return withSecondMapping({ evidenceNodeIds: [badNode] });
     case "failed result":
-      insertNode(fx.sqlite, { ...nodeOf(fx, badNode), ok: false });
+      yield* insertNode({ ...nodeOf(fx, badNode), ok: false });
       return withSecondMapping({ evidenceNodeIds: [badNode] });
     case "interrupted run":
-      fx.sqlite.prepare("UPDATE chat_runs SET status = 'interrupted' WHERE run_id = ?").run(fx.run);
+      yield* sqlRun("UPDATE chat_runs SET status = 'interrupted' WHERE run_id = ?", fx.run);
       return unchanged;
     case "missing mappings":
       return { input: noMappings, recorder: fx.run };
@@ -259,7 +268,7 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
       };
     case "foreign run node": {
       const foreign = `${fx.run}-foreign`;
-      insertNode(fx.sqlite, { ...nodeOf(fx, foreign), run: "other" });
+      yield* insertNode({ ...nodeOf(fx, foreign), run: "other" });
       return withSecondMapping({ evidenceNodeIds: [foreign] });
     }
     case "stale outcome text":
@@ -273,32 +282,28 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
     case "wrong run":
       return withSecondMapping({ runId: "other" });
     case "missing execution":
-      fx.sqlite
-        .prepare(`DELETE FROM owner_workflow_executions WHERE ${ownExecution}`)
-        .run(fx.sessionId);
+      yield* sqlRun(`DELETE FROM owner_workflow_executions WHERE ${ownExecution}`, fx.sessionId);
       return unchanged;
     case "suspended execution":
-      fx.sqlite
-        .prepare(
-          `UPDATE owner_workflow_executions SET status = 'suspended', result_json = '{"_tag":"Suspended"}' WHERE ${ownExecution}`,
-        )
-        .run(fx.sessionId);
+      yield* sqlRun(
+        `UPDATE owner_workflow_executions SET status = 'suspended', result_json = '{"_tag":"Suspended"}' WHERE ${ownExecution}`,
+        fx.sessionId,
+      );
       return unchanged;
     case "failed execution":
-      fx.sqlite
-        .prepare(
-          `UPDATE owner_workflow_executions SET status = 'completed', result_json = '{"_tag":"Complete","exit":{"_tag":"Failure"}}' WHERE ${ownExecution}`,
-        )
-        .run(fx.sessionId);
+      yield* sqlRun(
+        `UPDATE owner_workflow_executions SET status = 'completed', result_json = '{"_tag":"Complete","exit":{"_tag":"Failure"}}' WHERE ${ownExecution}`,
+        fx.sessionId,
+      );
       return unchanged;
     case "missing dispatch":
-      fx.sqlite.prepare("DELETE FROM workflow_worker_dispatches WHERE run_id = ?").run(fx.run);
+      yield* sqlRun("DELETE FROM workflow_worker_dispatches WHERE run_id = ?", fx.run);
       return unchanged;
     case "pending operation":
-      operation(0, '{"type":"pending","operationId":1}', "pending");
+      yield* operation(0, '{"type":"pending","operationId":1}', "pending");
       return unchanged;
     case "uncertain effect":
-      operation(1, '{"type":"uncertain","operationId":1}', "uncertain");
+      yield* operation(1, '{"type":"uncertain","operationId":1}', "uncertain");
       return unchanged;
   }
 });
@@ -316,12 +321,13 @@ testAgent()("criterion-linked Goal completion", (it) => {
     Effect.gen(function* () {
       const fx = yield* fixture("native");
       const workflows = yield* Workflows;
-      fx.sqlite.prepare("UPDATE chat_runs SET status = 'running' WHERE run_id = ?").run(fx.run);
-      fx.sqlite
-        .prepare(`INSERT INTO owner_rpc_operations
+      yield* sqlRun("UPDATE chat_runs SET status = 'running' WHERE run_id = ?", fx.run);
+      yield* sqlRun(
+        `INSERT INTO owner_rpc_operations
         (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
-        VALUES (?, '{}', 1, '{}', 1, '{"type":"pending","operationId":1}', 'pending')`)
-        .run(fx.run);
+        VALUES (?, '{}', 1, '{}', 1, '{"type":"pending","operationId":1}', 'pending')`,
+        fx.run,
+      );
       const staged = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.run);
       expect(staged.goal?.status).toBe("active");
       expect(staged.goal?.completion).toBeUndefined();
@@ -329,10 +335,11 @@ testAgent()("criterion-linked Goal completion", (it) => {
       yield* workflows.finishRun(fx.sessionId, "execute");
       const pending = yield* workflows.finishRun(fx.sessionId, "verify");
       expect(pending.goal?.completion).toBeUndefined();
-      fx.sqlite.prepare("UPDATE chat_runs SET status = 'completed' WHERE run_id = ?").run(fx.run);
-      fx.sqlite
-        .prepare("UPDATE owner_rpc_operations SET status = 'succeeded' WHERE run_id = ?")
-        .run(fx.run);
+      yield* sqlRun("UPDATE chat_runs SET status = 'completed' WHERE run_id = ?", fx.run);
+      yield* sqlRun(
+        "UPDATE owner_rpc_operations SET status = 'succeeded' WHERE run_id = ?",
+        fx.run,
+      );
       const settled = yield* workflows.finishRun(fx.sessionId, "verify");
       expect(settled.goal?.status).toBe("completed");
       expect(settled.goal?.completion?.runs[0]?.durableExecutionId).toEqual(expect.any(String));
@@ -449,11 +456,11 @@ testAgent()("criterion-linked Goal completion across reopen", (it) => {
             const restored = (yield* workflows.get(fx.sessionId)).goal?.completion;
             yield* workflows.updateGoal(fx.sessionId, { ...goal, statement: "Revised" });
             const revised = (yield* workflows.get(fx.sessionId)).goal?.completion;
-            const { sqlite } = yield* Database;
-            const history = sqlite
-              .prepare(`SELECT state_json FROM workflow_state_revisions WHERE session_id = ?
-                AND json_extract(state_json, '$.goal.status') = 'completed' ORDER BY id LIMIT 1`)
-              .get(fx.sessionId);
+            const history = yield* sqlGet(
+              `SELECT state_json FROM workflow_state_revisions WHERE session_id = ?
+                AND json_extract(state_json, '$.goal.status') = 'completed' ORDER BY id LIMIT 1`,
+              fx.sessionId,
+            );
             const completed = yield* Schema.decodeEffect(Schema.fromJsonString(WorkflowState))(
               String(history?.state_json),
             );

@@ -1,7 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { HashSet, Array as EffectArray } from "effect";
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
   Cause,
@@ -12,12 +11,13 @@ import {
   DateTime,
   Clock,
   Context,
+  Crypto,
   Effect,
   Layer,
   Option,
   Schema,
 } from "effect";
-import { Database } from "../db/database.ts";
+import { SqlClient, type Statement } from "effect/sql";
 import { JsonValue } from "../json.ts";
 import type { MemoryCandidateView, MemoryUsageView } from "../memory/knowledge.ts";
 import {
@@ -46,6 +46,35 @@ export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>
     cause: Schema.Defect(),
   },
 ) {}
+
+/** A Work Trace write the store refused; `message` is safe to show the model. */
+export class WorkTraceRejected extends Schema.TaggedError<WorkTraceRejected>()(
+  "WorkTraceRejected",
+  {
+    reason: Schema.Literals([
+      "handle_mismatch",
+      "unsafe_file_path",
+      "missing_file_digest",
+      "locator_kind_changed",
+      "foreign_thread",
+      "foreign_checkpoint",
+      "foreign_artifact",
+      "artifact_kind_mismatch",
+      "origin_missing",
+      "invalid_transition",
+      "superseding_attempt_required",
+      "foreign_superseding_attempt",
+      "foreign_session",
+      "unreviewed_report",
+      "unrelated_evidence",
+      "undelivered_notification",
+      "attempt_not_found",
+    ]),
+    message: Schema.String,
+  },
+) {}
+const rejected = (reason: WorkTraceRejected["reason"], message: string) =>
+  WorkTraceRejected.make({ reason, message });
 
 const AttemptRow = Schema.Struct({
   id: Schema.String,
@@ -272,157 +301,76 @@ const StoredEventRow = Schema.Struct({
   payload: Schema.String,
   occurred_at: Schema.Finite,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeAttempt = EffectFunction.flow(
-  Schema.decodeUnknownResult(AttemptRow),
-  Result.getOrThrow,
+const SessionLifecycleRow = Schema.Struct({
+  project_id: Schema.String,
+  archived_at: Schema.NullOr(Schema.String),
+});
+const NodePurgeRow = Schema.Struct({ seq: Schema.Finite, id: Schema.String, text: Schema.String });
+const PendingLifecycleRow = Schema.Struct({
+  id: Schema.String,
+  target_kind: Schema.Literals(["task", "session"]),
+  target_id: Schema.String,
+  intent: Schema.Literals(["archive", "restore", "delete"]),
+});
+const decodeAttempt = Schema.decodeUnknownEffect(AttemptRow);
+const decodeRecoveryRows = Schema.decodeUnknownEffect(Schema.Array(RecoveryRow));
+const decodeRecoveryAssessment = Schema.decodeUnknownEffect(RecoveryAssessment);
+const decodeRecoveryJobRows = Schema.decodeUnknownEffect(Schema.Array(RecoveryJobRow));
+const decodeNotificationTask = Schema.decodeUnknownEffect(NotificationTaskRow);
+const decodeParentNotificationRows = Schema.decodeUnknownEffect(
+  Schema.Array(ParentNotificationRow),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRecoveryRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(RecoveryRow)),
-  Result.getOrThrow,
+const decodeSequence = Schema.decodeUnknownEffect(SequenceRow);
+const decodeCursor = Schema.decodeUnknownEffect(CursorRow);
+const decodeId = Schema.decodeUnknownEffect(IdRow);
+const decodeIds = Schema.decodeUnknownEffect(Schema.Array(IdRow));
+const decodeTaskId = Schema.decodeUnknownEffect(TaskIdRow);
+const decodeAttemptId = Schema.decodeUnknownEffect(AttemptIdRow);
+const decodeAttemptNumber = Schema.decodeUnknownEffect(AttemptNumberRow);
+const decodeLifecycleOperation = Schema.decodeUnknownEffect(LifecycleOperationRow);
+const decodeLifecycleTask = Schema.decodeUnknownEffect(LifecycleTaskRow);
+const decodeTaskViewRows = Schema.decodeUnknownEffect(Schema.Array(TaskViewRow));
+const decodeAttemptViewRows = Schema.decodeUnknownEffect(Schema.Array(AttemptViewRow));
+const decodeCheckpointViewRows = Schema.decodeUnknownEffect(Schema.Array(CheckpointViewRow));
+const decodeStoredEventRows = Schema.decodeUnknownEffect(Schema.Array(StoredEventRow));
+const decodeResumeTask = Schema.decodeUnknownEffect(ResumeTaskRow);
+const decodeCheckpoint = Schema.decodeUnknownEffect(CheckpointRow);
+const decodeEvidenceRows = Schema.decodeUnknownEffect(Schema.Array(EvidenceRow));
+const decodeEvidenceRow = Schema.decodeUnknownEffect(EvidenceRow);
+const decodeArtifactRows = Schema.decodeUnknownEffect(Schema.Array(ArtifactRow));
+const decodeArtifactRow = Schema.decodeUnknownEffect(ArtifactRow);
+const decodeReportAdoptionRows = Schema.decodeUnknownEffect(Schema.Array(ReportAdoptionRow));
+const decodeFinalAnswerClaimRows = Schema.decodeUnknownEffect(Schema.Array(FinalAnswerClaimRow));
+const decodeFinalAnswerSourceRows = Schema.decodeUnknownEffect(Schema.Array(FinalAnswerSourceRow));
+const decodeFinalAnswerNotificationRows = Schema.decodeUnknownEffect(
+  Schema.Array(FinalAnswerNotificationRow),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRecoveryAssessment = EffectFunction.flow(
-  Schema.decodeUnknownResult(RecoveryAssessment),
-  Result.getOrThrow,
+const decodeSessionLifecycle = Schema.decodeUnknownEffect(Schema.UndefinedOr(SessionLifecycleRow));
+const decodeNodePurgeRows = Schema.decodeUnknownEffect(Schema.Array(NodePurgeRow));
+const decodeRunIds = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ run_id: Schema.String })),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRecoveryJobRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(RecoveryJobRow)),
-  Result.getOrThrow,
+const decodePendingLifecycleRows = Schema.decodeUnknownEffect(Schema.Array(PendingLifecycleRow));
+const decodeAttemptStatus = Schema.decodeUnknownEffect(Schema.Struct({ status: AttemptStatus }));
+const decodeOriginSessions = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ origin_session_id: Schema.String })),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeNotificationTask = EffectFunction.flow(
-  Schema.decodeUnknownResult(NotificationTaskRow),
-  Result.getOrThrow,
+const decodeEvidenceLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(EvidenceLocator));
+const decodeArtifactLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(ArtifactLocator));
+const decodeStringArray = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeParentNotificationRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(ParentNotificationRow)),
-  Result.getOrThrow,
+const decodeRunResult = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    changes: Schema.Finite,
+    lastInsertRowid: Schema.Union([Schema.Finite, Schema.BigInt]),
+  }),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSequence = EffectFunction.flow(
-  Schema.decodeUnknownResult(SequenceRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCursor = EffectFunction.flow(Schema.decodeUnknownResult(CursorRow), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(IdRow), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeTaskId = EffectFunction.flow(Schema.decodeUnknownResult(TaskIdRow), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeAttemptId = EffectFunction.flow(
-  Schema.decodeUnknownResult(AttemptIdRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeAttemptNumber = EffectFunction.flow(
-  Schema.decodeUnknownResult(AttemptNumberRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeLifecycleOperation = EffectFunction.flow(
-  Schema.decodeUnknownResult(LifecycleOperationRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeLifecycleTask = EffectFunction.flow(
-  Schema.decodeUnknownResult(LifecycleTaskRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeTaskViewRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(TaskViewRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeAttemptViewRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(AttemptViewRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCheckpointViewRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(CheckpointViewRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeStoredEventRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(StoredEventRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeResumeTask = EffectFunction.flow(
-  Schema.decodeUnknownResult(ResumeTaskRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCheckpoint = EffectFunction.flow(
-  Schema.decodeUnknownResult(CheckpointRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeEvidenceRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(EvidenceRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeEvidenceRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(EvidenceRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeArtifactRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(ArtifactRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeArtifactRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(ArtifactRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeReportAdoptionRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(ReportAdoptionRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeFinalAnswerClaimRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(FinalAnswerClaimRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeFinalAnswerSourceRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(FinalAnswerSourceRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeFinalAnswerNotificationRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(FinalAnswerNotificationRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeEvidenceLocator = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(EvidenceLocator)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeArtifactLocator = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactLocator)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeStringArray = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Schema.String))),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodePayload = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(JsonValue)),
-  Result.getOrThrow,
-);
+const decodePayload = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonValue));
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const encodeEvidenceLocator = Schema.encodeEffect(Schema.fromJsonString(EvidenceLocator));
+const encodeArtifactLocator = Schema.encodeEffect(Schema.fromJsonString(ArtifactLocator));
+const encodeStringArray = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export interface TraceTaskView {
   readonly id: string;
@@ -695,279 +643,248 @@ const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
   const runPromiseExit = Effect.runPromiseExitWith(yield* Effect.context());
 
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
+  /** The first row a query returns, if any. */
+  const first = <A, E>(rows: Effect.Effect<ReadonlyArray<A>, E>) =>
+    Effect.map(rows, (found) => found.at(0));
+  /** What a write changed, as the connection reports it. */
+  const run = <A>(statement: Statement.Statement<A>) =>
+    Effect.flatMap(statement.raw, decodeRunResult);
   // A crash after prompt delivery but before parent completion must not lose operational
   // notifications. No current-process runs exist while this singleton is being constructed.
-  sqlite
-    .prepare(`UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
+  yield* run(sql`UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
     WHERE delivered_to_run_id IS NOT NULL AND NOT EXISTS
-      (SELECT 1 FROM chat_runs WHERE run_id = delivered_to_run_id AND status = 'completed')`)
-    .run();
+      (SELECT 1 FROM chat_runs WHERE run_id = delivered_to_run_id AND status = 'completed')`);
 
-  const assertHandle = (handle: AttemptHandle) => {
-    const found = sqlite
-      .prepare(
-        `SELECT 1 FROM agent_run_attempts
-         WHERE id = ? AND task_id = ? AND invocation_id = ? AND chat_run_id = ? AND thread_id = ?`,
-      )
-      .get(handle.id, handle.taskId, handle.invocationId, handle.chatRunId, handle.threadId);
+  const assertHandle = Effect.fnUntraced(function* (handle: AttemptHandle) {
+    const found = yield* first(sql`SELECT 1 FROM agent_run_attempts
+      WHERE id = ${handle.id} AND task_id = ${handle.taskId} AND invocation_id = ${handle.invocationId}
+        AND chat_run_id = ${handle.chatRunId} AND thread_id = ${handle.threadId}`);
     if (!isTruthy(found))
-      throw new Error("Evidence AttemptHandle does not match a durable attempt");
-  };
-  const assertSafeFile = (locator: { readonly path: string; readonly sha256: string }) => {
+      return yield* rejected(
+        "handle_mismatch",
+        "Evidence AttemptHandle does not match a durable attempt",
+      );
+  });
+  const assertSafeFile = Effect.fnUntraced(function* (locator: {
+    readonly path: string;
+    readonly sha256: string;
+  }) {
     if (
       locator.path.length === 0 ||
       locator.path.startsWith("/") ||
       /^[A-Za-z]:[\\/]/.test(locator.path) ||
       locator.path.split(/[\\/]/).includes("..")
     )
-      throw new Error("Evidence file paths must be project-relative and normalized");
+      return yield* rejected(
+        "unsafe_file_path",
+        "Evidence file paths must be project-relative and normalized",
+      );
     if (!/^[a-f\d]{64}$/i.test(locator.sha256))
-      throw new Error("Evidence file locators require a sha256 digest");
-  };
-  const evidenceView = (row: typeof EvidenceRow.Type): TraceEvidenceView => ({
-    id: row.id,
-    taskId: row.task_id,
-    attemptId: row.attempt_id,
-    sourceKind: row.source_kind,
-    locator:
-      row.locator === null || row.redaction === "redacted"
-        ? null
-        : decodeEvidenceLocator(row.locator),
-    verification: row.verification,
-    visibility: row.visibility,
-    redaction: row.redaction,
-    sourceDeletedAt: row.source_deleted_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+      return yield* rejected(
+        "missing_file_digest",
+        "Evidence file locators require a sha256 digest",
+      );
   });
-  const artifactView = (row: typeof ArtifactRow.Type): TraceArtifactView => ({
-    id: row.id,
-    taskId: row.task_id,
-    attemptId: row.attempt_id,
-    kind: row.kind,
-    locator: row.locator === null ? null : decodeArtifactLocator(row.locator),
-    mediaType: row.media_type,
-    verification: row.verification,
-    sourceDeletedAt: row.source_deleted_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+  const handleOf = (attempt: typeof AttemptRow.Type): AttemptHandle => ({
+    id: attempt.id,
+    taskId: attempt.task_id,
+    invocationId: attempt.invocation_id,
+    chatRunId: attempt.chat_run_id,
+    threadId: attempt.thread_id,
+    attemptNumber: attempt.attempt_number,
   });
+  const evidenceView = Effect.fnUntraced(function* (row: typeof EvidenceRow.Type) {
+    const view: TraceEvidenceView = {
+      id: row.id,
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      sourceKind: row.source_kind,
+      locator:
+        row.locator === null || row.redaction === "redacted"
+          ? null
+          : yield* decodeEvidenceLocator(row.locator),
+      verification: row.verification,
+      visibility: row.visibility,
+      redaction: row.redaction,
+      sourceDeletedAt: row.source_deleted_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    return view;
+  });
+  const artifactView = Effect.fnUntraced(function* (row: typeof ArtifactRow.Type) {
+    const view: TraceArtifactView = {
+      id: row.id,
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      kind: row.kind,
+      locator: row.locator === null ? null : yield* decodeArtifactLocator(row.locator),
+      mediaType: row.media_type,
+      verification: row.verification,
+      sourceDeletedAt: row.source_deleted_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    return view;
+  });
+  const eventView = Effect.fnUntraced(function* (row: typeof StoredEventRow.Type) {
+    const view: TraceEventView = {
+      cursor: row.cursor,
+      id: row.id,
+      sessionId: row.origin_session_id,
+      taskId: row.task_id,
+      invocationId: row.invocation_id,
+      attemptId: row.attempt_id,
+      attemptSequence: row.attempt_sequence,
+      kind: row.kind,
+      visibility: row.visibility === "public" ? "public" : "summary",
+      redaction: row.redaction === "redacted" ? "redacted" : "clear",
+      summary: row.summary,
+      payload: row.redaction === "redacted" ? {} : yield* decodePayload(row.payload),
+      occurredAt: row.occurred_at,
+    };
+    return view;
+  });
+  const eventViews = (rows: ReadonlyArray<typeof StoredEventRow.Type>) =>
+    Effect.forEach(rows, eventView);
 
-  const recordEvidence = (input: RecordEvidenceInput): TraceEvidenceView =>
-    atomic(() => {
-      assertHandle(input.handle);
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const locator = EffectFunction.flow(
-        Schema.decodeResult(EvidenceLocator),
-        Result.getOrThrow,
-      )(input.locator);
+  const recordEvidence = (input: RecordEvidenceInput) =>
+    Effect.gen(function* () {
+      yield* assertHandle(input.handle);
+      const locator = yield* Schema.decodeEffect(EvidenceLocator)(input.locator);
       if (locator.kind !== input.locator.kind)
-        throw new Error("Evidence locator kind changed during decoding");
-      if (locator.kind === "file") assertSafeFile(locator);
+        return yield* rejected(
+          "locator_kind_changed",
+          "Evidence locator kind changed during decoding",
+        );
+      if (locator.kind === "file") yield* assertSafeFile(locator);
       if (
         (locator.kind === "message" ||
           locator.kind === "tool_call" ||
           locator.kind === "tool_result") &&
         locator.threadId !== input.handle.threadId
       )
-        throw new Error("Evidence locator belongs to another thread");
+        return yield* rejected("foreign_thread", "Evidence locator belongs to another thread");
       if (
         locator.kind === "checkpoint" &&
         !isTruthy(
-          sqlite
-            .prepare(
-              "SELECT 1 FROM work_checkpoints WHERE id = ? AND attempt_id = ? AND task_id = ?",
-            )
-            .get(locator.checkpointId, input.handle.id, input.handle.taskId),
+          yield* first(sql`SELECT 1 FROM work_checkpoints WHERE id = ${locator.checkpointId}
+            AND attempt_id = ${input.handle.id} AND task_id = ${input.handle.taskId}`),
         )
       )
-        throw new Error("Evidence checkpoint does not belong to this attempt");
+        return yield* rejected(
+          "foreign_checkpoint",
+          "Evidence checkpoint does not belong to this attempt",
+        );
       if (
         locator.kind === "artifact" &&
         !isTruthy(
-          sqlite
-            .prepare("SELECT 1 FROM work_artifacts WHERE id = ? AND task_id = ?")
-            .get(locator.artifactId, input.handle.taskId),
+          yield* first(sql`SELECT 1 FROM work_artifacts
+            WHERE id = ${locator.artifactId} AND task_id = ${input.handle.taskId}`),
         )
       )
-        throw new Error("Evidence artifact does not belong to this task");
+        return yield* rejected(
+          "foreign_artifact",
+          "Evidence artifact does not belong to this task",
+        );
       const sourceKind = locator.kind;
-      const encoded = JSON.stringify(locator);
-      const existing = sqlite
-        .prepare(
-          `SELECT * FROM evidence_refs
-           WHERE attempt_id = ? AND source_kind = ? AND locator = ?`,
-        )
-        .get(input.handle.id, sourceKind, encoded);
-      if (isTruthy(existing)) return evidenceView(decodeEvidenceRow(existing));
+      const encoded = yield* encodeEvidenceLocator(locator);
+      const existing = yield* first(sql`SELECT * FROM evidence_refs
+        WHERE attempt_id = ${input.handle.id} AND source_kind = ${sourceKind} AND locator = ${encoded}`);
+      if (isTruthy(existing)) return yield* evidenceView(yield* decodeEvidenceRow(existing));
       const now = effectClock.currentTimeMillisUnsafe();
-      return evidenceView(
-        decodeEvidenceRow(
-          sqlite
-            .prepare(
-              `INSERT INTO evidence_refs
-               (id, task_id, attempt_id, source_kind, locator, verification, visibility,
-                redaction, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-            )
-            .get(
-              randomUUID(),
-              input.handle.taskId,
-              input.handle.id,
-              sourceKind,
-              encoded,
-              input.verification ?? "unverified",
-              input.visibility ?? "summary",
-              input.redaction ?? "clear",
-              now,
-              now,
-            ),
-        ),
-      );
-    });
+      const inserted = yield* first(sql`INSERT INTO evidence_refs
+        (id, task_id, attempt_id, source_kind, locator, verification, visibility,
+         redaction, created_at, updated_at)
+        VALUES (${yield* crypto.randomUUIDv4()}, ${input.handle.taskId}, ${input.handle.id},
+          ${sourceKind}, ${encoded}, ${input.verification ?? "unverified"},
+          ${input.visibility ?? "summary"}, ${input.redaction ?? "clear"}, ${now}, ${now})
+        RETURNING *`);
+      return yield* evidenceView(yield* decodeEvidenceRow(inserted));
+    }).pipe(sql.withTransaction);
 
   const setEvidenceVerification = (
     evidenceId: string,
     verification: Exclude<EvidenceVerification, "source_deleted">,
-  ): TraceEvidenceView | null =>
-    atomic(() => {
-      const row = sqlite
-        .prepare(
-          `UPDATE evidence_refs SET verification = ?, source_deleted_at = NULL, updated_at = ?
-           WHERE id = ? AND locator IS NOT NULL RETURNING *`,
-        )
-        .get(verification, effectClock.currentTimeMillisUnsafe(), evidenceId);
-      return isTruthy(row) ? evidenceView(decodeEvidenceRow(row)) : null;
-    });
+  ) =>
+    Effect.gen(function* () {
+      const row = yield* first(sql`UPDATE evidence_refs SET verification = ${verification},
+          source_deleted_at = NULL, updated_at = ${effectClock.currentTimeMillisUnsafe()}
+        WHERE id = ${evidenceId} AND locator IS NOT NULL RETURNING *`);
+      return isTruthy(row) ? yield* evidenceView(yield* decodeEvidenceRow(row)) : null;
+    }).pipe(sql.withTransaction);
 
-  const markEvidenceSourceDeleted = (evidenceId: string): TraceEvidenceView | null =>
-    atomic(() => {
+  const markEvidenceSourceDeleted = (evidenceId: string) =>
+    Effect.gen(function* () {
       const now = effectClock.currentTimeMillisUnsafe();
-      const row = sqlite
-        .prepare(
-          `UPDATE evidence_refs
-           SET locator = NULL, verification = 'source_deleted', redaction = 'redacted',
-               source_deleted_at = ?, updated_at = ?
-           WHERE id = ? RETURNING *`,
-        )
-        .get(now, now, evidenceId);
-      return isTruthy(row) ? evidenceView(decodeEvidenceRow(row)) : null;
-    });
+      const row = yield* first(sql`UPDATE evidence_refs
+        SET locator = NULL, verification = 'source_deleted', redaction = 'redacted',
+            source_deleted_at = ${now}, updated_at = ${now}
+        WHERE id = ${evidenceId} RETURNING *`);
+      return isTruthy(row) ? yield* evidenceView(yield* decodeEvidenceRow(row)) : null;
+    }).pipe(sql.withTransaction);
 
-  const recordArtifact = (input: RecordArtifactInput): TraceArtifactView =>
-    atomic(() => {
-      assertHandle(input.handle);
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const locator = EffectFunction.flow(
-        Schema.decodeResult(ArtifactLocator),
-        Result.getOrThrow,
-      )(input.locator);
-      if (locator.kind !== input.kind) throw new Error("Artifact kind must match its locator");
-      if (locator.kind === "file") assertSafeFile(locator);
-      const encoded = JSON.stringify(locator);
-      const existing = sqlite
-        .prepare("SELECT * FROM work_artifacts WHERE attempt_id = ? AND kind = ? AND locator = ?")
-        .get(input.handle.id, input.kind, encoded);
-      if (isTruthy(existing)) return artifactView(decodeArtifactRow(existing));
+  const recordArtifact = (input: RecordArtifactInput) =>
+    Effect.gen(function* () {
+      yield* assertHandle(input.handle);
+      const locator = yield* Schema.decodeEffect(ArtifactLocator)(input.locator);
+      if (locator.kind !== input.kind)
+        return yield* rejected("artifact_kind_mismatch", "Artifact kind must match its locator");
+      if (locator.kind === "file") yield* assertSafeFile(locator);
+      const encoded = yield* encodeArtifactLocator(locator);
+      const existing = yield* first(sql`SELECT * FROM work_artifacts
+        WHERE attempt_id = ${input.handle.id} AND kind = ${input.kind} AND locator = ${encoded}`);
+      if (isTruthy(existing)) return yield* artifactView(yield* decodeArtifactRow(existing));
       const now = effectClock.currentTimeMillisUnsafe();
-      return artifactView(
-        decodeArtifactRow(
-          sqlite
-            .prepare(
-              `INSERT INTO work_artifacts
-               (id, task_id, attempt_id, kind, locator, media_type, verification,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-            )
-            .get(
-              randomUUID(),
-              input.handle.taskId,
-              input.handle.id,
-              input.kind,
-              encoded,
-              input.mediaType ?? null,
-              input.verification ?? "unverified",
-              now,
-              now,
-            ),
-        ),
-      );
-    });
+      const inserted = yield* first(sql`INSERT INTO work_artifacts
+        (id, task_id, attempt_id, kind, locator, media_type, verification, created_at, updated_at)
+        VALUES (${yield* crypto.randomUUIDv4()}, ${input.handle.taskId}, ${input.handle.id},
+          ${input.kind}, ${encoded}, ${input.mediaType ?? null},
+          ${input.verification ?? "unverified"}, ${now}, ${now})
+        RETURNING *`);
+      return yield* artifactView(yield* decodeArtifactRow(inserted));
+    }).pipe(sql.withTransaction);
 
   const setArtifactVerification = (
     artifactId: string,
     verification: Exclude<EvidenceVerification, "source_deleted">,
-  ): TraceArtifactView | null =>
-    atomic(() => {
-      const row = sqlite
-        .prepare(
-          `UPDATE work_artifacts SET verification = ?, source_deleted_at = NULL, updated_at = ?
-           WHERE id = ? AND locator IS NOT NULL RETURNING *`,
-        )
-        .get(verification, effectClock.currentTimeMillisUnsafe(), artifactId);
-      return isTruthy(row) ? artifactView(decodeArtifactRow(row)) : null;
-    });
+  ) =>
+    Effect.gen(function* () {
+      const row = yield* first(sql`UPDATE work_artifacts SET verification = ${verification},
+          source_deleted_at = NULL, updated_at = ${effectClock.currentTimeMillisUnsafe()}
+        WHERE id = ${artifactId} AND locator IS NOT NULL RETURNING *`);
+      return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
+    }).pipe(sql.withTransaction);
 
-  const markArtifactSourceDeleted = (artifactId: string): TraceArtifactView | null =>
-    atomic(() => {
+  const markArtifactSourceDeleted = (artifactId: string) =>
+    Effect.gen(function* () {
       const now = effectClock.currentTimeMillisUnsafe();
-      const row = sqlite
-        .prepare(
-          `UPDATE work_artifacts
-           SET locator = NULL, media_type = NULL, verification = 'source_deleted',
-               source_deleted_at = ?, updated_at = ?
-           WHERE id = ? RETURNING *`,
-        )
-        .get(now, now, artifactId);
-      return isTruthy(row) ? artifactView(decodeArtifactRow(row)) : null;
-    });
+      const row = yield* first(sql`UPDATE work_artifacts
+        SET locator = NULL, media_type = NULL, verification = 'source_deleted',
+            source_deleted_at = ${now}, updated_at = ${now}
+        WHERE id = ${artifactId} RETURNING *`);
+      return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
+    }).pipe(sql.withTransaction);
 
-  const recover = atomic(() => {
+  // Attempts the previous process left running are interrupted before any new work starts.
+  const recoveredAttempts = yield* Effect.gen(function* () {
     const now = effectClock.currentTimeMillisUnsafe();
-    const attempts = decodeRecoveryRows(
-      sqlite
-        .prepare(
-          `SELECT a.id, a.task_id, t.project_id, t.origin_session_id, t.agent_id,
-                  t.parent_run_id
-           FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
-           WHERE a.status IN ('queued', 'running', 'waiting', 'blocked')`,
-        )
-        .all(),
-    );
-    const assess = sqlite.prepare(
-      `SELECT c.id AS checkpoint_id,
-              coalesce(json_array_length(c.uncertain_tool_call_ids), 0) AS uncertain_count,
-              coalesce(json_array_length(c.pending_approval_ids), 0) AS approval_count
-       FROM work_checkpoints c WHERE c.attempt_id = ?
-       ORDER BY c.event_sequence DESC LIMIT 1`,
-    );
-    const markAttempt = sqlite.prepare(
-      `UPDATE agent_run_attempts
-       SET status = 'interrupted', resume_reason = 'server_restarted',
-           resumability = ?, finished_at = ?, updated_at = ?
-       WHERE id = ?`,
-    );
-    const markTask = sqlite.prepare(
-      `UPDATE work_tasks SET status = ?, active_attempt_id = NULL, updated_at = ? WHERE id = ?`,
-    );
-    const insertRecovery = sqlite.prepare(
-      `INSERT INTO work_recovery_jobs
-       (id, project_id, task_id, interrupted_attempt_id, status, blocker, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(task_id) DO NOTHING`,
-    );
-    const insertNotification = sqlite.prepare(
-      `INSERT INTO parent_notifications
-       (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
-        idempotency_key, created_at)
-       VALUES (?, ?, ?, ?, ?, 'interrupted', ?, '{}', ?, ?)
-       ON CONFLICT(idempotency_key) DO NOTHING`,
+    const attempts = yield* decodeRecoveryRows(
+      yield* sql`SELECT a.id, a.task_id, t.project_id, t.origin_session_id, t.agent_id,
+          t.parent_run_id
+        FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+        WHERE a.status IN ('queued', 'running', 'waiting', 'blocked')`,
     );
     for (const row of attempts) {
-      const assessmentRow = assess.get(row.id);
+      const assessmentRow = yield* first(sql`SELECT c.id AS checkpoint_id,
+          coalesce(json_array_length(c.uncertain_tool_call_ids), 0) AS uncertain_count,
+          coalesce(json_array_length(c.pending_approval_ids), 0) AS approval_count
+        FROM work_checkpoints c WHERE c.attempt_id = ${row.id}
+        ORDER BY c.event_sequence DESC LIMIT 1`);
       const assessment = isTruthy(assessmentRow)
-        ? decodeRecoveryAssessment(assessmentRow)
+        ? yield* decodeRecoveryAssessment(assessmentRow)
         : { checkpoint_id: null, uncertain_count: 0, approval_count: 0 };
       const blocker =
         row.origin_session_id === null
@@ -982,85 +899,61 @@ const make = Effect.gen(function* () {
                   ? "approval_expired"
                   : null;
       const safe = blocker === null;
-      markAttempt.run(
-        JSON.stringify(
-          safe
-            ? { state: "logical_resume", reason: "server_restarted", blockers: [] }
-            : { state: "blocked", reason: "server_restarted", blockers: [blocker] },
-        ),
-        now,
-        now,
-        row.id,
-      );
-      markTask.run(safe ? "resumable" : "blocked", now, row.task_id);
-      insertRecovery.run(
-        randomUUID(),
-        row.project_id,
-        row.task_id,
-        row.id,
-        safe ? "queued" : "blocked",
-        blocker,
-        now,
-        now,
-      );
-      insertNotification.run(
-        randomUUID(),
-        row.project_id,
-        row.task_id,
-        row.origin_session_id,
-        row.parent_run_id,
+      const resumability = yield* encodeJson(
         safe
-          ? "Subagent execution was interrupted and queued for safe recovery."
-          : `Subagent execution was interrupted; recovery is blocked by ${blocker}.`,
-        `recovery:${row.id}:interrupted`,
-        now,
+          ? { state: "logical_resume", reason: "server_restarted", blockers: [] }
+          : { state: "blocked", reason: "server_restarted", blockers: [blocker] },
       );
+      yield* run(sql`UPDATE agent_run_attempts
+        SET status = 'interrupted', resume_reason = 'server_restarted',
+            resumability = ${resumability}, finished_at = ${now}, updated_at = ${now}
+        WHERE id = ${row.id}`);
+      yield* run(sql`UPDATE work_tasks SET status = ${safe ? "resumable" : "blocked"},
+          active_attempt_id = NULL, updated_at = ${now}
+        WHERE id = ${row.task_id}`);
+      yield* run(sql`INSERT INTO work_recovery_jobs
+        (id, project_id, task_id, interrupted_attempt_id, status, blocker, created_at, updated_at)
+        VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id}, ${row.id},
+          ${safe ? "queued" : "blocked"}, ${blocker}, ${now}, ${now})
+        ON CONFLICT(task_id) DO NOTHING`);
+      const summary = safe
+        ? "Subagent execution was interrupted and queued for safe recovery."
+        : `Subagent execution was interrupted; recovery is blocked by ${blocker}.`;
+      yield* run(sql`INSERT INTO parent_notifications
+        (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
+         idempotency_key, created_at)
+        VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id},
+          ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary}, '{}',
+          ${`recovery:${row.id}:interrupted`}, ${now})
+        ON CONFLICT(idempotency_key) DO NOTHING`);
     }
     return attempts.length;
-  });
+  }).pipe(sql.withTransaction);
 
   const listeners = MutableHashSet.empty<(sessionId: string, cursor: number) => void>();
-  const appendEvent = (input: AppendEventInput) => {
-    const event = atomic(() => {
-      const next = decodeSequence(
-        sqlite
-          .prepare(
-            `SELECT coalesce(max(attempt_sequence), 0) + 1 AS sequence
-             FROM run_events WHERE attempt_id = ?`,
-          )
-          .get(input.handle.id),
+  const appendEvent = Effect.fnUntraced(function* (input: AppendEventInput) {
+    const event = yield* Effect.gen(function* () {
+      const next = yield* decodeSequence(
+        yield* first(sql`SELECT coalesce(max(attempt_sequence), 0) + 1 AS sequence
+          FROM run_events WHERE attempt_id = ${input.handle.id}`),
       );
       const occurredAt = input.occurredAt ?? effectClock.currentTimeMillisUnsafe();
-      const id = randomUUID();
-      const row = decodeCursor(
-        sqlite
-          .prepare(
-            `INSERT INTO run_events
-             (id, origin_session_id, task_id, invocation_id, attempt_id, attempt_sequence, kind,
-              visibility, redaction, summary, payload, occurred_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             RETURNING seq`,
-          )
-          .get(
-            id,
-            input.sessionId,
-            input.handle.taskId,
-            input.handle.invocationId,
-            input.handle.id,
-            next.sequence,
-            input.kind,
-            input.visibility ?? "summary",
-            input.redaction ?? "clear",
-            input.summary,
-            JSON.stringify(input.payload ?? {}),
-            occurredAt,
-          ),
+      const id = yield* crypto.randomUUIDv4();
+      const payload = yield* encodeJson(input.payload ?? {});
+      const row = yield* decodeCursor(
+        yield* first(sql`INSERT INTO run_events
+          (id, origin_session_id, task_id, invocation_id, attempt_id, attempt_sequence, kind,
+           visibility, redaction, summary, payload, occurred_at)
+          VALUES (${id}, ${input.sessionId}, ${input.handle.taskId}, ${input.handle.invocationId},
+            ${input.handle.id}, ${next.sequence}, ${input.kind}, ${input.visibility ?? "summary"},
+            ${input.redaction ?? "clear"}, ${input.summary}, ${payload}, ${occurredAt})
+          RETURNING seq`),
       );
       return { id, cursor: row.seq, attemptSequence: next.sequence, occurredAt };
-    });
+    }).pipe(sql.withTransaction);
     for (const listener of listeners) listener(input.sessionId, event.cursor);
     return event;
-  };
+  });
 
   const notifyParent = (input: {
     readonly taskId: string;
@@ -1079,164 +972,103 @@ const make = Effect.gen(function* () {
     readonly deliveredImmediately?: boolean;
     readonly deliveredToRunId?: string;
   }) =>
-    atomic(() => {
-      const task = decodeNotificationTask(
-        sqlite
-          .prepare(
-            `SELECT project_id, origin_session_id, parent_run_id FROM work_tasks WHERE id = ?`,
-          )
-          .get(input.taskId),
+    Effect.gen(function* () {
+      const task = yield* decodeNotificationTask(
+        yield* first(sql`SELECT project_id, origin_session_id, parent_run_id FROM work_tasks
+          WHERE id = ${input.taskId}`),
       );
       const now = effectClock.currentTimeMillisUnsafe();
-      const id = randomUUID();
-      const result = sqlite
-        .prepare(
-          `INSERT INTO parent_notifications
-           (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
-            idempotency_key, delivered_to_run_id, delivered_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(idempotency_key) DO NOTHING`,
-        )
-        .run(
-          id,
-          task.project_id,
-          input.taskId,
-          task.origin_session_id,
-          task.parent_run_id,
-          input.kind,
-          input.summary,
-          JSON.stringify(input.payload ?? {}),
-          input.idempotencyKey,
-          input.deliveredImmediately === true
-            ? (input.deliveredToRunId ?? task.parent_run_id)
-            : null,
-          input.deliveredImmediately === true ? now : null,
-          now,
-        );
+      const id = yield* crypto.randomUUIDv4();
+      const payload = yield* encodeJson(input.payload ?? {});
+      const deliveredToRunId =
+        input.deliveredImmediately === true ? (input.deliveredToRunId ?? task.parent_run_id) : null;
+      const result = yield* run(sql`INSERT INTO parent_notifications
+        (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
+         idempotency_key, delivered_to_run_id, delivered_at, created_at)
+        VALUES (${id}, ${task.project_id}, ${input.taskId}, ${task.origin_session_id},
+          ${task.parent_run_id}, ${input.kind}, ${input.summary}, ${payload},
+          ${input.idempotencyKey}, ${deliveredToRunId},
+          ${input.deliveredImmediately === true ? now : null}, ${now})
+        ON CONFLICT(idempotency_key) DO NOTHING`);
       return result.changes === 1 ? id : null;
-    });
+    }).pipe(sql.withTransaction);
 
   const releaseParentNotifications = (sessionId: string, deliveredToRunId: string) =>
-    sqlite
-      .prepare(
-        `UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
-         WHERE origin_session_id = ? AND delivered_to_run_id = ?`,
-      )
-      .run(sessionId, deliveredToRunId).changes;
+    Effect.map(
+      run(sql`UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
+        WHERE origin_session_id = ${sessionId} AND delivered_to_run_id = ${deliveredToRunId}`),
+      (result) => result.changes,
+    );
 
   const consumeParentNotifications = (sessionId: string, deliveredToRunId: string) =>
-    atomic(() => {
-      const rows = decodeParentNotificationRows(
-        sqlite
-          .prepare(
-            `SELECT id, task_id, kind, summary, payload, created_at
-             FROM parent_notifications
-             WHERE origin_session_id = ? AND delivered_at IS NULL ORDER BY seq`,
-          )
-          .all(sessionId),
+    Effect.gen(function* () {
+      const rows = yield* decodeParentNotificationRows(
+        yield* sql`SELECT id, task_id, kind, summary, payload, created_at
+          FROM parent_notifications
+          WHERE origin_session_id = ${sessionId} AND delivered_at IS NULL ORDER BY seq`,
       );
-      if (rows.length === 0) return [];
       const now = effectClock.currentTimeMillisUnsafe();
-      const deliver = sqlite.prepare(
-        `UPDATE parent_notifications SET delivered_to_run_id = ?, delivered_at = ?
-         WHERE id = ? AND delivered_at IS NULL`,
-      );
       const delivered: ParentNotificationView[] = [];
       for (const row of rows) {
-        if (deliver.run(deliveredToRunId, now, row.id).changes !== 1) continue;
+        const claimed = yield* run(sql`UPDATE parent_notifications
+          SET delivered_to_run_id = ${deliveredToRunId}, delivered_at = ${now}
+          WHERE id = ${row.id} AND delivered_at IS NULL`);
+        if (claimed.changes !== 1) continue;
         delivered.push({
           id: row.id,
           taskId: row.task_id,
           kind: row.kind,
           summary: row.summary,
-          payload: decodePayload(row.payload),
+          payload: yield* decodePayload(row.payload),
           createdAt: row.created_at,
         });
       }
       return delivered;
-    });
+    }).pipe(sql.withTransaction);
 
-  const startAttempt = (input: StartAttemptInput): AttemptHandle =>
-    atomic(() => {
+  const startAttempt = (input: StartAttemptInput) =>
+    Effect.gen(function* () {
       const now = effectClock.currentTimeMillisUnsafe();
-      const taskId = randomUUID();
-      const invocationId = randomUUID();
-      const attemptId = randomUUID();
-      const chatRunId = randomUUID();
+      const taskId = yield* crypto.randomUUIDv4();
+      const invocationId = yield* crypto.randomUUIDv4();
+      const attemptId = yield* crypto.randomUUIDv4();
+      const chatRunId = yield* crypto.randomUUIDv4();
       const previousAttempt = isTruthy(input.resumedFromAttemptId)
-        ? sqlite
-            .prepare("SELECT attempt_number FROM agent_run_attempts WHERE id = ?")
-            .get(input.resumedFromAttemptId)
+        ? yield* first(sql`SELECT attempt_number FROM agent_run_attempts
+            WHERE id = ${input.resumedFromAttemptId}`)
         : undefined;
       const attemptNumber = isTruthy(previousAttempt)
-        ? decodeAttemptNumber(previousAttempt).attempt_number + 1
+        ? (yield* decodeAttemptNumber(previousAttempt)).attempt_number + 1
         : 1;
-      const insertedTask = sqlite
-        .prepare(
-          `INSERT INTO work_tasks
-           (id, project_id, origin_session_id, parent_run_id, parent_tool_call_id, agent_id,
-            agent_name, status, title, request, active_attempt_id, created_at, updated_at)
-           SELECT ?, s.project_id, s.id, ?, ?, a.id, coalesce(a.name, ?, 'subagent'),
-                  'queued', ?, ?, NULL, ?, ?
-           FROM sessions s LEFT JOIN subagents a ON a.session_id = s.id AND a.id = ?
-           WHERE s.id = ? AND (? IS NULL OR a.id IS NOT NULL)`,
-        )
-        .run(
-          taskId,
-          input.parentRunId,
-          input.parentToolCallId,
-          input.agentName ?? null,
-          input.title,
-          input.request,
-          now,
-          now,
-          input.agentId,
-          input.sessionId,
-          input.agentId,
-        );
+      const agentId = input.agentId;
+      const insertedTask = yield* run(sql`INSERT INTO work_tasks
+        (id, project_id, origin_session_id, parent_run_id, parent_tool_call_id, agent_id,
+         agent_name, status, title, request, active_attempt_id, created_at, updated_at)
+        SELECT ${taskId}, s.project_id, s.id, ${input.parentRunId}, ${input.parentToolCallId}, a.id,
+          coalesce(a.name, ${input.agentName ?? null}, 'subagent'),
+          'queued', ${input.title}, ${input.request}, NULL, ${now}, ${now}
+        FROM sessions s LEFT JOIN subagents a ON a.session_id = s.id AND a.id = ${agentId}
+        WHERE s.id = ${input.sessionId} AND (${agentId} IS NULL OR a.id IS NOT NULL)`);
       if (insertedTask.changes !== 1)
-        throw new Error("Work Trace origin session or subagent no longer exists");
-      sqlite
-        .prepare(
-          `INSERT INTO agent_invocations
-           (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
-            target_attempt_id, idempotency_key, created_at)
-           VALUES (?, ?, ?, ?, ?, 'accepted', ?, ?, ?, ?)`,
-        )
-        .run(
-          invocationId,
-          taskId,
-          input.parentRunId,
-          input.parentToolCallId,
-          input.kind,
-          input.request,
-          input.resumedFromAttemptId ?? null,
-          `${input.parentRunId}:${input.parentToolCallId}`,
-          now,
+        return yield* rejected(
+          "origin_missing",
+          "Work Trace origin session or subagent no longer exists",
         );
-      sqlite
-        .prepare(
-          `INSERT INTO agent_run_attempts
-           (id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-            resumed_from_attempt_id, resume_reason, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
-        )
-        .run(
-          attemptId,
-          taskId,
-          invocationId,
-          attemptNumber,
-          chatRunId,
-          input.threadId,
-          input.resumedFromAttemptId ?? null,
-          input.resumeReason ?? null,
-          now,
-          now,
-        );
-      sqlite
-        .prepare("UPDATE work_tasks SET active_attempt_id = ? WHERE id = ?")
-        .run(attemptId, taskId);
-      const handle = {
+      const idempotencyKey = `${input.parentRunId}:${input.parentToolCallId}`;
+      yield* run(sql`INSERT INTO agent_invocations
+        (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
+         target_attempt_id, idempotency_key, created_at)
+        VALUES (${invocationId}, ${taskId}, ${input.parentRunId}, ${input.parentToolCallId},
+          ${input.kind}, 'accepted', ${input.request}, ${input.resumedFromAttemptId ?? null},
+          ${idempotencyKey}, ${now})`);
+      yield* run(sql`INSERT INTO agent_run_attempts
+        (id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status,
+         resumed_from_attempt_id, resume_reason, created_at, updated_at)
+        VALUES (${attemptId}, ${taskId}, ${invocationId}, ${attemptNumber}, ${chatRunId},
+          ${input.threadId}, 'queued', ${input.resumedFromAttemptId ?? null},
+          ${input.resumeReason ?? null}, ${now}, ${now})`);
+      yield* run(sql`UPDATE work_tasks SET active_attempt_id = ${attemptId} WHERE id = ${taskId}`);
+      const handle: AttemptHandle = {
         id: attemptId,
         taskId,
         invocationId,
@@ -1244,7 +1076,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         attemptNumber,
       };
-      appendEvent({
+      yield* appendEvent({
         handle,
         sessionId: input.sessionId,
         kind: input.kind === "resume" ? "resume_requested" : "attempt_queued",
@@ -1252,7 +1084,7 @@ const make = Effect.gen(function* () {
         occurredAt: now,
       });
       return handle;
-    });
+    }).pipe(sql.withTransaction);
 
   const recordSteer = (input: {
     readonly handle: AttemptHandle;
@@ -1261,37 +1093,24 @@ const make = Effect.gen(function* () {
     readonly parentToolCallId: string;
     readonly message: string;
   }) =>
-    atomic(() => {
-      const id = randomUUID();
+    Effect.gen(function* () {
+      const id = yield* crypto.randomUUIDv4();
       const now = effectClock.currentTimeMillisUnsafe();
-      sqlite
-        .prepare(
-          `INSERT INTO agent_invocations
-           (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
-            target_attempt_id, idempotency_key, created_at, finished_at)
-           VALUES (?, ?, ?, ?, 'steer', 'steered', ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          input.handle.taskId,
-          input.parentRunId,
-          input.parentToolCallId,
-          input.message,
-          input.handle.id,
-          `${input.parentRunId}:${input.parentToolCallId}`,
-          now,
-          now,
-        );
-      const steerHandle = { ...input.handle, invocationId: id };
-      appendEvent({
-        handle: steerHandle,
+      yield* run(sql`INSERT INTO agent_invocations
+        (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
+         target_attempt_id, idempotency_key, created_at, finished_at)
+        VALUES (${id}, ${input.handle.taskId}, ${input.parentRunId}, ${input.parentToolCallId},
+          'steer', 'steered', ${input.message}, ${input.handle.id},
+          ${`${input.parentRunId}:${input.parentToolCallId}`}, ${now}, ${now})`);
+      yield* appendEvent({
+        handle: { ...input.handle, invocationId: id },
         sessionId: input.sessionId,
         kind: "steered",
         summary: "Additional instructions delivered",
         occurredAt: now,
       });
       return id;
-    });
+    }).pipe(sql.withTransaction);
 
   const transitionAttempt = (
     handle: AttemptHandle,
@@ -1303,41 +1122,37 @@ const make = Effect.gen(function* () {
     deliveredImmediately = true,
     deliveredToRunId?: string,
   ) =>
-    atomic(() => {
-      const current = decodeAttempt(
-        sqlite.prepare("SELECT * FROM agent_run_attempts WHERE id = ?").get(handle.id),
+    Effect.gen(function* () {
+      const current = yield* decodeAttempt(
+        yield* first(sql`SELECT * FROM agent_run_attempts WHERE id = ${handle.id}`),
       );
       const from = current.status;
       if (!canTransitionAttempt(from, status))
-        throw new Error(`Invalid attempt transition ${from} -> ${status}`);
+        return yield* rejected(
+          "invalid_transition",
+          `Invalid attempt transition ${from} -> ${status}`,
+        );
       const now = effectClock.currentTimeMillisUnsafe();
       const terminal = ["interrupted", "completed", "failed", "cancelled"].includes(status);
-      sqlite
-        .prepare(
-          `UPDATE agent_run_attempts
-           SET status = ?, started_at = coalesce(started_at, ?), finished_at = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(status, now, terminal ? now : null, now, handle.id);
-      sqlite
-        .prepare(
-          `UPDATE work_tasks SET status = ?, active_attempt_id = ?, updated_at = ? WHERE id = ?`,
-        )
-        .run(taskStatusForAttempt(status), terminal ? null : handle.id, now, handle.taskId);
-      sqlite
-        .prepare(`UPDATE agent_invocations SET status = ?, finished_at = ? WHERE id = ?`)
-        .run(
-          status === "completed"
-            ? "completed"
-            : status === "cancelled"
-              ? "cancelled"
-              : status === "failed" || status === "interrupted"
-                ? "failed"
-                : "running",
-          terminal ? now : null,
-          handle.invocationId,
-        );
-      const appended = appendEvent({
+      yield* run(sql`UPDATE agent_run_attempts
+        SET status = ${status}, started_at = coalesce(started_at, ${now}),
+            finished_at = ${terminal ? now : null}, updated_at = ${now}
+        WHERE id = ${handle.id}`);
+      yield* run(sql`UPDATE work_tasks SET status = ${taskStatusForAttempt(status)},
+          active_attempt_id = ${terminal ? null : handle.id}, updated_at = ${now}
+        WHERE id = ${handle.taskId}`);
+      const invocationStatus =
+        status === "completed"
+          ? "completed"
+          : status === "cancelled"
+            ? "cancelled"
+            : status === "failed" || status === "interrupted"
+              ? "failed"
+              : "running";
+      yield* run(sql`UPDATE agent_invocations SET status = ${invocationStatus},
+          finished_at = ${terminal ? now : null}
+        WHERE id = ${handle.invocationId}`);
+      const appended = yield* appendEvent({
         handle,
         sessionId,
         kind: event,
@@ -1358,7 +1173,7 @@ const make = Effect.gen(function* () {
                   ? "resumed"
                   : null;
       if (isTruthy(notificationKind))
-        notifyParent({
+        yield* notifyParent({
           taskId: handle.taskId,
           kind: notificationKind,
           summary,
@@ -1368,130 +1183,111 @@ const make = Effect.gen(function* () {
           ...optionalProperty("deliveredToRunId", deliveredToRunId),
         });
       return appended;
-    });
+    }).pipe(sql.withTransaction);
 
   const checkpoint = (sessionId: string, input: CheckpointInput) =>
-    atomic(() => {
-      const event = appendEvent({
+    Effect.gen(function* () {
+      const event = yield* appendEvent({
         handle: input.handle,
         sessionId,
         kind: "checkpoint_created",
         summary: "Checkpoint saved",
       });
-      const id = randomUUID();
-      sqlite
-        .prepare(
-          `INSERT INTO work_checkpoints
-           (id, task_id, attempt_id, event_sequence, transcript_message_id,
-            completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-            remaining_work, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          input.handle.taskId,
-          input.handle.id,
-          event.attemptSequence,
-          input.transcriptMessageId ?? null,
-          JSON.stringify(input.completedToolCallIds),
-          JSON.stringify(input.uncertainToolCallIds),
-          JSON.stringify(input.pendingApprovalIds),
-          input.remainingWork,
-          event.occurredAt,
-        );
+      const id = yield* crypto.randomUUIDv4();
+      yield* run(sql`INSERT INTO work_checkpoints
+        (id, task_id, attempt_id, event_sequence, transcript_message_id,
+         completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
+         remaining_work, created_at)
+        VALUES (${id}, ${input.handle.taskId}, ${input.handle.id}, ${event.attemptSequence},
+          ${input.transcriptMessageId ?? null}, ${yield* encodeStringArray(input.completedToolCallIds)},
+          ${yield* encodeStringArray(input.uncertainToolCallIds)},
+          ${yield* encodeStringArray(input.pendingApprovalIds)}, ${input.remainingWork},
+          ${event.occurredAt})`);
       return { checkpointId: id, ...event };
-    });
+    }).pipe(sql.withTransaction);
 
-  const evidenceForTask = (taskId: string): TraceEvidenceView[] =>
-    decodeEvidenceRows(
-      sqlite
-        .prepare(
-          `SELECT * FROM evidence_refs
-           WHERE task_id = ? AND visibility <> 'internal' AND redaction <> 'omitted'
-           ORDER BY created_at, id`,
-        )
-        .all(taskId),
-    ).map(evidenceView);
+  const evidenceForTask = (taskId: string) =>
+    sql`SELECT * FROM evidence_refs
+      WHERE task_id = ${taskId} AND visibility <> 'internal' AND redaction <> 'omitted'
+      ORDER BY created_at, id`.pipe(
+      Effect.flatMap(decodeEvidenceRows),
+      Effect.flatMap((rows) => Effect.forEach(rows, evidenceView)),
+    );
 
-  const artifactsForTask = (taskId: string): TraceArtifactView[] =>
-    decodeArtifactRows(
-      sqlite
-        .prepare("SELECT * FROM work_artifacts WHERE task_id = ? ORDER BY created_at, id")
-        .all(taskId),
-    ).map(artifactView);
+  const artifactsForTask = (taskId: string) =>
+    sql`SELECT * FROM work_artifacts WHERE task_id = ${taskId} ORDER BY created_at, id`.pipe(
+      Effect.flatMap(decodeArtifactRows),
+      Effect.flatMap((rows) => Effect.forEach(rows, artifactView)),
+    );
 
   const evidenceIdsForAttempt = (attemptId: string) =>
-    decodeEvidenceRows(
-      sqlite
-        .prepare(
-          `SELECT * FROM evidence_refs WHERE attempt_id = ? AND verification = 'verified'
-             AND visibility <> 'internal' AND redaction <> 'omitted'
-           ORDER BY created_at, id`,
-        )
-        .all(attemptId),
-    ).map((row) => row.id);
+    sql`SELECT * FROM evidence_refs WHERE attempt_id = ${attemptId} AND verification = 'verified'
+        AND visibility <> 'internal' AND redaction <> 'omitted'
+      ORDER BY created_at, id`.pipe(
+      Effect.flatMap(decodeEvidenceRows),
+      Effect.map((rows) => rows.map((row) => row.id)),
+    );
 
-  const reportAdoptionsForTask = (taskId: string): TraceReportAdoptionView[] =>
-    decodeReportAdoptionRows(
-      sqlite
-        .prepare(
-          `SELECT seq, task_id, attempt_id, disposition, superseded_by_attempt_id,
-                  parent_run_id, parent_message_id, claim_id, updated_at
-           FROM report_adoptions WHERE task_id = ? ORDER BY seq`,
-        )
-        .all(taskId),
-    ).map((row) => ({
-      sequence: row.seq,
-      taskId: row.task_id,
-      attemptId: row.attempt_id,
-      disposition: row.disposition,
-      supersededByAttemptId: row.superseded_by_attempt_id,
-      parentRunId: row.parent_run_id,
-      parentMessageId: row.parent_message_id,
-      claimId: row.claim_id,
-      updatedAt: row.updated_at,
-    }));
-
-  const answerClaimsForTask = (taskId: string): TraceFinalAnswerClaimView[] => {
-    const claims = decodeFinalAnswerClaimRows(
-      sqlite
-        .prepare(
-          `SELECT DISTINCT c.id, c.project_id, c.origin_session_id, c.parent_run_id,
-                           c.parent_message_id, c.created_at
-           FROM final_answer_claims c
-           WHERE EXISTS (SELECT 1 FROM final_answer_sources s
-                         WHERE s.claim_id = c.id AND s.task_id = ?)
-              OR EXISTS (SELECT 1 FROM final_answer_notifications n
-                         WHERE n.claim_id = c.id AND n.task_id = ?)
-           ORDER BY c.created_at, c.id`,
-        )
-        .all(taskId, taskId),
-    );
-    const sources = sqlite.prepare(
-      `SELECT id, claim_id, task_id, attempt_id, evidence_ref_id
-       FROM final_answer_sources WHERE claim_id = ? ORDER BY task_id, attempt_id, evidence_ref_id`,
-    );
-    const notifications = sqlite.prepare(
-      `SELECT claim_id, notification_id, task_id FROM final_answer_notifications
-       WHERE claim_id = ? ORDER BY notification_id`,
-    );
-    return claims.map((claim) => ({
-      id: claim.id,
-      projectId: claim.project_id,
-      originSessionId: claim.origin_session_id,
-      parentRunId: claim.parent_run_id,
-      parentMessageId: claim.parent_message_id,
-      sources: decodeFinalAnswerSourceRows(sources.all(claim.id)).map((source) => ({
-        taskId: source.task_id,
-        attemptId: source.attempt_id,
-        evidenceRefId: source.evidence_ref_id,
-      })),
-      notificationIds: decodeFinalAnswerNotificationRows(notifications.all(claim.id)).map(
-        (notification) => notification.notification_id,
+  const reportAdoptionsForTask = (taskId: string) =>
+    sql`SELECT seq, task_id, attempt_id, disposition, superseded_by_attempt_id,
+        parent_run_id, parent_message_id, claim_id, updated_at
+      FROM report_adoptions WHERE task_id = ${taskId} ORDER BY seq`.pipe(
+      Effect.flatMap(decodeReportAdoptionRows),
+      Effect.map((rows) =>
+        rows.map((row): TraceReportAdoptionView => ({
+          sequence: row.seq,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          disposition: row.disposition,
+          supersededByAttemptId: row.superseded_by_attempt_id,
+          parentRunId: row.parent_run_id,
+          parentMessageId: row.parent_message_id,
+          claimId: row.claim_id,
+          updatedAt: row.updated_at,
+        })),
       ),
-      createdAt: claim.created_at,
-    }));
-  };
+    );
+
+  const answerClaimsForTask = Effect.fnUntraced(function* (taskId: string) {
+    const claims = yield* decodeFinalAnswerClaimRows(
+      yield* sql`SELECT DISTINCT c.id, c.project_id, c.origin_session_id, c.parent_run_id,
+          c.parent_message_id, c.created_at
+        FROM final_answer_claims c
+        WHERE EXISTS (SELECT 1 FROM final_answer_sources s
+                      WHERE s.claim_id = c.id AND s.task_id = ${taskId})
+           OR EXISTS (SELECT 1 FROM final_answer_notifications n
+                      WHERE n.claim_id = c.id AND n.task_id = ${taskId})
+        ORDER BY c.created_at, c.id`,
+    );
+    return yield* Effect.forEach(claims, (claim) =>
+      Effect.gen(function* () {
+        const sources = yield* decodeFinalAnswerSourceRows(
+          yield* sql`SELECT id, claim_id, task_id, attempt_id, evidence_ref_id
+            FROM final_answer_sources WHERE claim_id = ${claim.id}
+            ORDER BY task_id, attempt_id, evidence_ref_id`,
+        );
+        const notifications = yield* decodeFinalAnswerNotificationRows(
+          yield* sql`SELECT claim_id, notification_id, task_id FROM final_answer_notifications
+            WHERE claim_id = ${claim.id} ORDER BY notification_id`,
+        );
+        const view: TraceFinalAnswerClaimView = {
+          id: claim.id,
+          projectId: claim.project_id,
+          originSessionId: claim.origin_session_id,
+          parentRunId: claim.parent_run_id,
+          parentMessageId: claim.parent_message_id,
+          sources: sources.map((source) => ({
+            taskId: source.task_id,
+            attemptId: source.attempt_id,
+            evidenceRefId: source.evidence_ref_id,
+          })),
+          notificationIds: notifications.map((notification) => notification.notification_id),
+          createdAt: claim.created_at,
+        };
+        return view;
+      }),
+    );
+  });
 
   const recordReportDisposition = (input: {
     readonly handle: AttemptHandle;
@@ -1501,57 +1297,42 @@ const make = Effect.gen(function* () {
     readonly parentMessageId?: string | null;
     readonly claimId?: string | null;
     readonly supersededByAttemptId?: string | null;
-  }) => {
-    assertHandle(input.handle);
-    if ((input.disposition === "superseded") !== Boolean(input.supersededByAttemptId))
-      throw new Error("Only superseded reports require a superseding attempt");
-    if (
-      isTruthy(input.supersededByAttemptId) &&
-      !isTruthy(
-        sqlite
-          .prepare("SELECT 1 FROM agent_run_attempts WHERE id = ? AND task_id = ?")
-          .get(input.supersededByAttemptId, input.handle.taskId),
-      )
-    )
-      throw new Error("Superseding attempt belongs to another task");
-    const existing = sqlite
-      .prepare(
-        `SELECT seq FROM report_adoptions
-         WHERE task_id = ? AND attempt_id = ? AND disposition = ?
-           AND parent_run_id IS ? AND parent_message_id IS ? AND claim_id IS ?
-           AND superseded_by_attempt_id IS ?
-         ORDER BY seq DESC LIMIT 1`,
-      )
-      .get(
-        input.handle.taskId,
-        input.handle.id,
-        input.disposition,
-        input.parentRunId ?? null,
-        input.parentMessageId ?? null,
-        input.claimId ?? null,
-        input.supersededByAttemptId ?? null,
-      );
-    if (isTruthy(existing)) return decodeCursor(existing).seq;
-    return atomic(() => {
-      const now = effectClock.currentTimeMillisUnsafe();
-      const result = sqlite
-        .prepare(
-          `INSERT INTO report_adoptions
-           (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
-            parent_run_id, parent_message_id, claim_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.handle.taskId,
-          input.handle.id,
-          input.disposition,
-          input.supersededByAttemptId ?? null,
-          now,
-          input.parentRunId ?? null,
-          input.parentMessageId ?? null,
-          input.claimId ?? null,
+  }) =>
+    Effect.gen(function* () {
+      yield* assertHandle(input.handle);
+      if ((input.disposition === "superseded") !== Boolean(input.supersededByAttemptId))
+        return yield* rejected(
+          "superseding_attempt_required",
+          "Only superseded reports require a superseding attempt",
         );
-      appendEvent({
+      if (
+        isTruthy(input.supersededByAttemptId) &&
+        !isTruthy(
+          yield* first(sql`SELECT 1 FROM agent_run_attempts
+            WHERE id = ${input.supersededByAttemptId} AND task_id = ${input.handle.taskId}`),
+        )
+      )
+        return yield* rejected(
+          "foreign_superseding_attempt",
+          "Superseding attempt belongs to another task",
+        );
+      const existing = yield* first(sql`SELECT seq FROM report_adoptions
+        WHERE task_id = ${input.handle.taskId} AND attempt_id = ${input.handle.id}
+          AND disposition = ${input.disposition}
+          AND parent_run_id IS ${input.parentRunId ?? null}
+          AND parent_message_id IS ${input.parentMessageId ?? null}
+          AND claim_id IS ${input.claimId ?? null}
+          AND superseded_by_attempt_id IS ${input.supersededByAttemptId ?? null}
+        ORDER BY seq DESC LIMIT 1`);
+      if (isTruthy(existing)) return (yield* decodeCursor(existing)).seq;
+      const now = effectClock.currentTimeMillisUnsafe();
+      const result = yield* run(sql`INSERT INTO report_adoptions
+        (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
+         parent_run_id, parent_message_id, claim_id)
+        VALUES (${input.handle.taskId}, ${input.handle.id}, ${input.disposition},
+          ${input.supersededByAttemptId ?? null}, ${now}, ${input.parentRunId ?? null},
+          ${input.parentMessageId ?? null}, ${input.claimId ?? null})`);
+      yield* appendEvent({
         handle: input.handle,
         sessionId: input.sessionId,
         kind: `report_${input.disposition}`,
@@ -1559,8 +1340,7 @@ const make = Effect.gen(function* () {
         payload: isTruthy(input.claimId) ? { claimId: input.claimId } : {},
       });
       return Number(result.lastInsertRowid);
-    });
-  };
+    }).pipe(sql.withTransaction);
 
   const finalizeAnswerClaim = (input: {
     readonly projectId: string;
@@ -1573,437 +1353,313 @@ const make = Effect.gen(function* () {
       readonly evidenceRefIds: readonly string[];
     }[];
     readonly reflectedNotificationIds: readonly string[];
-  }) => {
-    const existing = sqlite
-      .prepare(
-        "SELECT id FROM final_answer_claims WHERE parent_run_id = ? AND parent_message_id = ?",
-      )
-      .get(input.parentRunId, input.parentMessageId);
-    if (isTruthy(existing)) return decodeId(existing).id;
-    const session = sqlite
-      .prepare("SELECT 1 FROM sessions WHERE id = ? AND project_id = ?")
-      .get(input.sessionId, input.projectId);
-    if (!isTruthy(session)) throw new Error("Final answer session does not belong to the project");
-    const reviewed = decodeReportAdoptionRows(
-      sqlite
-        .prepare(
-          `SELECT a.seq, a.task_id, a.attempt_id, a.disposition, a.superseded_by_attempt_id,
-                  a.parent_run_id, a.parent_message_id, a.claim_id, a.updated_at
-           FROM report_adoptions a JOIN work_tasks t ON t.id = a.task_id
-           WHERE a.parent_run_id = ? AND a.disposition = 'reviewed'
-             AND t.project_id = ? AND t.origin_session_id = ?
-           ORDER BY a.seq`,
-        )
-        .all(input.parentRunId, input.projectId, input.sessionId),
-    );
-    const reviewedKeys = HashSet.fromIterable(
-      reviewed.map((row) => `${row.task_id}:${row.attempt_id}`),
-    );
-    const selected = MutableHashMap.fromIterable(
-      input.usedReports.map((report) => [`${report.taskId}:${report.attemptId}`, report] as const),
-    );
-    for (const [key, report] of selected) {
-      if (!HashSet.has(reviewedKeys, key))
-        throw new Error("Final answer selected an unreviewed report");
-      for (const evidenceId of report.evidenceRefIds)
-        if (
-          !isTruthy(
-            sqlite
-              .prepare(
-                `SELECT 1 FROM evidence_refs
-               WHERE id = ? AND task_id = ? AND attempt_id = ? AND verification = 'verified'`,
-              )
-              .get(evidenceId, report.taskId, report.attemptId),
-          )
-        )
-          throw new Error("Final answer selected unavailable or unrelated evidence");
-    }
-    const notificationTasks = MutableHashMap.empty<string, string>();
-    for (const notificationId of input.reflectedNotificationIds) {
-      const row = sqlite
-        .prepare(
-          `SELECT n.task_id FROM parent_notifications n
-           JOIN work_tasks t ON t.id = n.task_id
-           WHERE n.id = ? AND n.origin_session_id = ? AND n.delivered_to_run_id = ?
-             AND t.project_id = ?`,
-        )
-        .get(notificationId, input.sessionId, input.parentRunId, input.projectId);
-      if (!isTruthy(row))
-        throw new Error("Final answer selected an undelivered parent notification");
-      MutableHashMap.set(notificationTasks, notificationId, decodeTaskId(row).task_id);
-    }
-
-    const claimId = randomUUID();
-    const now = effectClock.currentTimeMillisUnsafe();
-    const eventInputs: {
-      handle: AttemptHandle;
-      disposition: "used" | "not_used" | "superseded";
-    }[] = [];
-    atomic(() => {
-      sqlite
-        .prepare(
-          `INSERT INTO final_answer_claims
-           (id, project_id, origin_session_id, parent_run_id, parent_message_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          claimId,
-          input.projectId,
-          input.sessionId,
-          input.parentRunId,
-          input.parentMessageId,
-          now,
+  }) =>
+    Effect.gen(function* () {
+      const existing = yield* first(sql`SELECT id FROM final_answer_claims
+        WHERE parent_run_id = ${input.parentRunId} AND parent_message_id = ${input.parentMessageId}`);
+      if (isTruthy(existing)) return (yield* decodeId(existing)).id;
+      const session = yield* first(sql`SELECT 1 FROM sessions
+        WHERE id = ${input.sessionId} AND project_id = ${input.projectId}`);
+      if (!isTruthy(session))
+        return yield* rejected(
+          "foreign_session",
+          "Final answer session does not belong to the project",
         );
-      const addSource = sqlite.prepare(
-        `INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id, evidence_ref_id)
-         VALUES (?, ?, ?, ?, ?)`,
+      const reviewed = yield* decodeReportAdoptionRows(
+        yield* sql`SELECT a.seq, a.task_id, a.attempt_id, a.disposition, a.superseded_by_attempt_id,
+            a.parent_run_id, a.parent_message_id, a.claim_id, a.updated_at
+          FROM report_adoptions a JOIN work_tasks t ON t.id = a.task_id
+          WHERE a.parent_run_id = ${input.parentRunId} AND a.disposition = 'reviewed'
+            AND t.project_id = ${input.projectId} AND t.origin_session_id = ${input.sessionId}
+          ORDER BY a.seq`,
       );
+      const reviewedKeys = HashSet.fromIterable(
+        reviewed.map((row) => `${row.task_id}:${row.attempt_id}`),
+      );
+      const selected = MutableHashMap.fromIterable(
+        input.usedReports.map(
+          (report) => [`${report.taskId}:${report.attemptId}`, report] as const,
+        ),
+      );
+      for (const [key, report] of selected) {
+        if (!HashSet.has(reviewedKeys, key))
+          return yield* rejected("unreviewed_report", "Final answer selected an unreviewed report");
+        for (const evidenceId of report.evidenceRefIds)
+          if (
+            !isTruthy(
+              yield* first(sql`SELECT 1 FROM evidence_refs
+                WHERE id = ${evidenceId} AND task_id = ${report.taskId}
+                  AND attempt_id = ${report.attemptId} AND verification = 'verified'`),
+            )
+          )
+            return yield* rejected(
+              "unrelated_evidence",
+              "Final answer selected unavailable or unrelated evidence",
+            );
+      }
+      const notificationTasks = MutableHashMap.empty<string, string>();
+      for (const notificationId of input.reflectedNotificationIds) {
+        const row = yield* first(sql`SELECT n.task_id FROM parent_notifications n
+          JOIN work_tasks t ON t.id = n.task_id
+          WHERE n.id = ${notificationId} AND n.origin_session_id = ${input.sessionId}
+            AND n.delivered_to_run_id = ${input.parentRunId} AND t.project_id = ${input.projectId}`);
+        if (!isTruthy(row))
+          return yield* rejected(
+            "undelivered_notification",
+            "Final answer selected an undelivered parent notification",
+          );
+        MutableHashMap.set(notificationTasks, notificationId, (yield* decodeTaskId(row)).task_id);
+      }
+
+      const claimId = yield* crypto.randomUUIDv4();
+      const now = effectClock.currentTimeMillisUnsafe();
+      const eventInputs: {
+        handle: AttemptHandle;
+        disposition: "used" | "not_used" | "superseded";
+      }[] = [];
+      const attemptOf = (attemptId: string, taskId: string) =>
+        first(sql`SELECT id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status
+          FROM agent_run_attempts WHERE id = ${attemptId} AND task_id = ${taskId}`).pipe(
+          Effect.flatMap(decodeAttempt),
+        );
+      yield* run(sql`INSERT INTO final_answer_claims
+        (id, project_id, origin_session_id, parent_run_id, parent_message_id, created_at)
+        VALUES (${claimId}, ${input.projectId}, ${input.sessionId}, ${input.parentRunId},
+          ${input.parentMessageId}, ${now})`);
       for (const report of MutableHashMap.values(selected)) {
         const ids = EffectArray.dedupe(report.evidenceRefIds);
-        if (ids.length === 0)
-          addSource.run(randomUUID(), claimId, report.taskId, report.attemptId, null);
-        else
-          for (const id of ids)
-            addSource.run(randomUUID(), claimId, report.taskId, report.attemptId, id);
+        for (const evidenceId of ids.length === 0 ? [null] : ids)
+          yield* run(sql`INSERT INTO final_answer_sources
+            (id, claim_id, task_id, attempt_id, evidence_ref_id)
+            VALUES (${yield* crypto.randomUUIDv4()}, ${claimId}, ${report.taskId},
+              ${report.attemptId}, ${evidenceId})`);
       }
-      const addNotification = sqlite.prepare(
-        `INSERT INTO final_answer_notifications (claim_id, notification_id, task_id)
-         VALUES (?, ?, ?)`,
-      );
-      for (const [id, taskId] of notificationTasks) addNotification.run(claimId, id, taskId);
+      for (const [id, taskId] of notificationTasks)
+        yield* run(sql`INSERT INTO final_answer_notifications (claim_id, notification_id, task_id)
+          VALUES (${claimId}, ${id}, ${taskId})`);
 
-      const findHandle = sqlite.prepare(
-        `SELECT id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status
-         FROM agent_run_attempts WHERE id = ? AND task_id = ?`,
-      );
       for (const row of reviewed) {
-        const attempt = decodeAttempt(findHandle.get(row.attempt_id, row.task_id));
+        const attempt = yield* attemptOf(row.attempt_id, row.task_id);
         const disposition = MutableHashMap.has(selected, `${row.task_id}:${row.attempt_id}`)
           ? "used"
           : "not_used";
-        sqlite
-          .prepare(
-            `INSERT INTO report_adoptions
-             (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
-              parent_run_id, parent_message_id, claim_id)
-             VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
-          )
-          .run(
-            row.task_id,
-            row.attempt_id,
-            disposition,
-            now,
-            input.parentRunId,
-            input.parentMessageId,
-            claimId,
-          );
-        eventInputs.push({
-          handle: {
-            id: attempt.id,
-            taskId: attempt.task_id,
-            invocationId: attempt.invocation_id,
-            chatRunId: attempt.chat_run_id,
-            threadId: attempt.thread_id,
-            attemptNumber: attempt.attempt_number,
-          },
-          disposition,
-        });
+        yield* run(sql`INSERT INTO report_adoptions
+          (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
+           parent_run_id, parent_message_id, claim_id)
+          VALUES (${row.task_id}, ${row.attempt_id}, ${disposition}, NULL, ${now},
+            ${input.parentRunId}, ${input.parentMessageId}, ${claimId})`);
+        eventInputs.push({ handle: handleOf(attempt), disposition });
       }
       for (const report of MutableHashMap.values(selected)) {
-        const priorRow = sqlite
-          .prepare(
-            `SELECT attempt_id FROM report_adoptions
-             WHERE task_id = ? AND disposition = 'used' AND attempt_id <> ?
-             ORDER BY seq DESC LIMIT 1`,
-          )
-          .get(report.taskId, report.attemptId);
-        if (isTruthy(priorRow)) {
-          const prior = decodeAttemptId(priorRow);
-          sqlite
-            .prepare(
-              `INSERT INTO report_adoptions
-               (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
-                parent_run_id, parent_message_id, claim_id)
-               VALUES (?, ?, 'superseded', ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              report.taskId,
-              prior.attempt_id,
-              report.attemptId,
-              now,
-              input.parentRunId,
-              input.parentMessageId,
-              claimId,
-            );
-          const priorAttempt = decodeAttempt(findHandle.get(prior.attempt_id, report.taskId));
-          eventInputs.push({
-            handle: {
-              id: priorAttempt.id,
-              taskId: priorAttempt.task_id,
-              invocationId: priorAttempt.invocation_id,
-              chatRunId: priorAttempt.chat_run_id,
-              threadId: priorAttempt.thread_id,
-              attemptNumber: priorAttempt.attempt_number,
-            },
-            disposition: "superseded",
-          });
-        }
+        const priorRow = yield* first(sql`SELECT attempt_id FROM report_adoptions
+          WHERE task_id = ${report.taskId} AND disposition = 'used'
+            AND attempt_id <> ${report.attemptId}
+          ORDER BY seq DESC LIMIT 1`);
+        if (!isTruthy(priorRow)) continue;
+        const prior = yield* decodeAttemptId(priorRow);
+        yield* run(sql`INSERT INTO report_adoptions
+          (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
+           parent_run_id, parent_message_id, claim_id)
+          VALUES (${report.taskId}, ${prior.attempt_id}, 'superseded', ${report.attemptId}, ${now},
+            ${input.parentRunId}, ${input.parentMessageId}, ${claimId})`);
+        const priorAttempt = yield* attemptOf(prior.attempt_id, report.taskId);
+        eventInputs.push({ handle: handleOf(priorAttempt), disposition: "superseded" });
       }
       for (const event of eventInputs)
-        appendEvent({
+        yield* appendEvent({
           handle: event.handle,
           sessionId: input.sessionId,
           kind: `report_${event.disposition}`,
           summary: `Subagent report ${event.disposition.replace("_", " ")}`,
           payload: { claimId, parentMessageId: input.parentMessageId },
         });
-    });
-    return claimId;
-  };
+      return claimId;
+    }).pipe(sql.withTransaction);
 
-  const taskTree = (sessionId: string): TraceTaskView[] =>
-    decodeTaskViewRows(
-      sqlite
-        .prepare(
-          `SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
-                  t.parent_run_id, t.parent_tool_call_id, t.agent_id, t.agent_name,
-                  CASE
-                    WHEN t.deleted_at IS NOT NULL THEN 'deleted'
-                    WHEN t.archived_at IS NOT NULL THEN 'archived'
-                    ELSE t.status
-                  END AS status,
-                  t.title, t.request,
-                  t.active_attempt_id, a.id AS latest_attempt_id,
-                  a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
-                  a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
-                  e.summary AS latest_activity, e.occurred_at AS latest_activity_at,
-                  t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
-                  t.updated_at, t.created_at
-           FROM work_tasks t
-           LEFT JOIN agent_run_attempts a ON a.id =
-             (SELECT latest.id FROM agent_run_attempts latest
-              WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
-           LEFT JOIN run_events e ON e.seq =
-             (SELECT latest_event.seq FROM run_events latest_event
-              WHERE latest_event.task_id = t.id AND latest_event.visibility <> 'internal'
-                AND latest_event.redaction <> 'omitted'
-              ORDER BY latest_event.seq DESC LIMIT 1)
-           WHERE t.origin_session_id = ? ORDER BY t.created_at, t.id`,
-        )
-        .all(sessionId),
-    ).map((row) => ({
-      id: row.id,
-      projectId: row.project_id,
-      originSessionId: row.origin_session_id,
-      parentTaskId: row.parent_task_id,
-      parentRunId: row.parent_run_id,
-      parentToolCallId: row.parent_tool_call_id,
-      agentId: row.agent_id,
-      agentName: row.agent_name,
-      status: row.status,
-      title: row.title,
-      request: row.request,
-      activeAttemptId: row.active_attempt_id,
-      latestAttemptId: row.latest_attempt_id,
-      latestAttemptStatus: row.latest_attempt_status,
-      latestAttemptNumber: row.latest_attempt_number,
-      latestResumedFromAttemptId: row.latest_resumed_from_attempt_id,
-      latestActivity: row.latest_activity,
-      latestActivityAt: row.latest_activity_at,
-      archivedAt: row.archived_at,
-      deleteRequestedAt: row.delete_requested_at,
-      deletedAt: row.deleted_at,
-      purgeReceiptId: row.purge_receipt_id,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+  const taskView = (row: typeof TaskViewRow.Type): TraceTaskView => ({
+    id: row.id,
+    projectId: row.project_id,
+    originSessionId: row.origin_session_id,
+    parentTaskId: row.parent_task_id,
+    parentRunId: row.parent_run_id,
+    parentToolCallId: row.parent_tool_call_id,
+    agentId: row.agent_id,
+    agentName: row.agent_name,
+    status: row.status,
+    title: row.title,
+    request: row.request,
+    activeAttemptId: row.active_attempt_id,
+    latestAttemptId: row.latest_attempt_id,
+    latestAttemptStatus: row.latest_attempt_status,
+    latestAttemptNumber: row.latest_attempt_number,
+    latestResumedFromAttemptId: row.latest_resumed_from_attempt_id,
+    latestActivity: row.latest_activity,
+    latestActivityAt: row.latest_activity_at,
+    archivedAt: row.archived_at,
+    deleteRequestedAt: row.delete_requested_at,
+    deletedAt: row.deleted_at,
+    purgeReceiptId: row.purge_receipt_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+
+  const taskTree = (sessionId: string) =>
+    sql`SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
+        t.parent_run_id, t.parent_tool_call_id, t.agent_id, t.agent_name,
+        CASE
+          WHEN t.deleted_at IS NOT NULL THEN 'deleted'
+          WHEN t.archived_at IS NOT NULL THEN 'archived'
+          ELSE t.status
+        END AS status,
+        t.title, t.request,
+        t.active_attempt_id, a.id AS latest_attempt_id,
+        a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
+        a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
+        e.summary AS latest_activity, e.occurred_at AS latest_activity_at,
+        t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
+        t.updated_at, t.created_at
+      FROM work_tasks t
+      LEFT JOIN agent_run_attempts a ON a.id =
+        (SELECT latest.id FROM agent_run_attempts latest
+         WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
+      LEFT JOIN run_events e ON e.seq =
+        (SELECT latest_event.seq FROM run_events latest_event
+         WHERE latest_event.task_id = t.id AND latest_event.visibility <> 'internal'
+           AND latest_event.redaction <> 'omitted'
+         ORDER BY latest_event.seq DESC LIMIT 1)
+      WHERE t.origin_session_id = ${sessionId} ORDER BY t.created_at, t.id`.pipe(
+      Effect.flatMap(decodeTaskViewRows),
+      Effect.map((rows) => rows.map(taskView)),
+    );
 
   /** Project-owned review projection, including tasks whose origin session was deleted. */
-  const projectTaskTree = (projectId: string): TraceTaskView[] =>
-    decodeTaskViewRows(
-      sqlite
-        .prepare(
-          `SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
-                  t.parent_run_id, t.parent_tool_call_id, t.agent_id, t.agent_name,
-                  CASE
-                    WHEN t.deleted_at IS NOT NULL THEN 'deleted'
-                    WHEN t.archived_at IS NOT NULL THEN 'archived'
-                    ELSE t.status
-                  END AS status,
-                  t.title, t.request,
-                  t.active_attempt_id, a.id AS latest_attempt_id,
-                  a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
-                  a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
-                  e.summary AS latest_activity, e.occurred_at AS latest_activity_at,
-                  t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
-                  t.updated_at, t.created_at
-           FROM work_tasks t
-           LEFT JOIN agent_run_attempts a ON a.id =
-             (SELECT latest.id FROM agent_run_attempts latest
-              WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
-           LEFT JOIN run_events e ON e.seq =
-             (SELECT latest_event.seq FROM run_events latest_event
-              WHERE latest_event.task_id = t.id AND latest_event.visibility <> 'internal'
-                AND latest_event.redaction <> 'omitted'
-              ORDER BY latest_event.seq DESC LIMIT 1)
-           WHERE t.project_id = ? ORDER BY t.created_at, t.id`,
-        )
-        .all(projectId),
-    ).map((row) => ({
-      id: row.id,
-      projectId: row.project_id,
-      originSessionId: row.origin_session_id,
-      parentTaskId: row.parent_task_id,
-      parentRunId: row.parent_run_id,
-      parentToolCallId: row.parent_tool_call_id,
-      agentId: row.agent_id,
-      agentName: row.agent_name,
-      status: row.status,
-      title: row.title,
-      request: row.request,
-      activeAttemptId: row.active_attempt_id,
-      latestAttemptId: row.latest_attempt_id,
-      latestAttemptStatus: row.latest_attempt_status,
-      latestAttemptNumber: row.latest_attempt_number,
-      latestResumedFromAttemptId: row.latest_resumed_from_attempt_id,
-      latestActivity: row.latest_activity,
-      latestActivityAt: row.latest_activity_at,
-      archivedAt: row.archived_at,
-      deleteRequestedAt: row.delete_requested_at,
-      deletedAt: row.deleted_at,
-      purgeReceiptId: row.purge_receipt_id,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+  const projectTaskTree = (projectId: string) =>
+    sql`SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
+        t.parent_run_id, t.parent_tool_call_id, t.agent_id, t.agent_name,
+        CASE
+          WHEN t.deleted_at IS NOT NULL THEN 'deleted'
+          WHEN t.archived_at IS NOT NULL THEN 'archived'
+          ELSE t.status
+        END AS status,
+        t.title, t.request,
+        t.active_attempt_id, a.id AS latest_attempt_id,
+        a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
+        a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
+        e.summary AS latest_activity, e.occurred_at AS latest_activity_at,
+        t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
+        t.updated_at, t.created_at
+      FROM work_tasks t
+      LEFT JOIN agent_run_attempts a ON a.id =
+        (SELECT latest.id FROM agent_run_attempts latest
+         WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
+      LEFT JOIN run_events e ON e.seq =
+        (SELECT latest_event.seq FROM run_events latest_event
+         WHERE latest_event.task_id = t.id AND latest_event.visibility <> 'internal'
+           AND latest_event.redaction <> 'omitted'
+         ORDER BY latest_event.seq DESC LIMIT 1)
+      WHERE t.project_id = ${projectId} ORDER BY t.created_at, t.id`.pipe(
+      Effect.flatMap(decodeTaskViewRows),
+      Effect.map((rows) => rows.map(taskView)),
+    );
 
-  const taskDetail = (sessionId: string, taskId: string) => {
-    const task = taskTree(sessionId).find((candidate) => candidate.id === taskId);
-    if (!isTruthy(task)) return null;
-    const attempts: TraceAttemptView[] = decodeAttemptViewRows(
-      sqlite
-        .prepare(
-          `SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-                  resumed_from_attempt_id, superseded_by_attempt_id, resumability,
-                  started_at, finished_at, created_at, updated_at
-           FROM agent_run_attempts WHERE task_id = ? ORDER BY attempt_number`,
-        )
-        .all(taskId),
-    ).map((row) => ({
-      id: row.id,
-      invocationId: row.invocation_id,
-      attemptNumber: row.attempt_number,
-      chatRunId: row.chat_run_id,
-      threadId: row.thread_id,
-      status: row.status,
-      resumedFromAttemptId: row.resumed_from_attempt_id,
-      supersededByAttemptId: row.superseded_by_attempt_id,
-      resumability: decodePayload(row.resumability),
-      startedAt: row.started_at,
-      finishedAt: row.finished_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
-    const checkpoints: TraceCheckpointView[] = decodeCheckpointViewRows(
-      sqlite
-        .prepare(
-          `SELECT id, attempt_id, event_sequence, transcript_message_id,
-                  completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-                  remaining_work, created_at
-           FROM work_checkpoints WHERE task_id = ? ORDER BY created_at, id`,
-        )
-        .all(taskId),
-    ).map((row) => ({
-      id: row.id,
-      attemptId: row.attempt_id,
-      eventSequence: row.event_sequence,
-      transcriptMessageId: row.transcript_message_id,
-      completedToolCallIds: decodeStringArray(row.completed_tool_call_ids),
-      uncertainToolCallIds: decodeStringArray(row.uncertain_tool_call_ids),
-      pendingApprovalIds: decodeStringArray(row.pending_approval_ids),
-      remainingWork: row.remaining_work,
-      createdAt: row.created_at,
-    }));
+  const attemptsForTask = Effect.fnUntraced(function* (taskId: string) {
+    const rows = yield* decodeAttemptViewRows(
+      yield* sql`SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
+          resumed_from_attempt_id, superseded_by_attempt_id, resumability,
+          started_at, finished_at, created_at, updated_at
+        FROM agent_run_attempts WHERE task_id = ${taskId} ORDER BY attempt_number`,
+    );
+    return yield* Effect.forEach(rows, (row) =>
+      Effect.map(decodePayload(row.resumability), (resumability): TraceAttemptView => ({
+        id: row.id,
+        invocationId: row.invocation_id,
+        attemptNumber: row.attempt_number,
+        chatRunId: row.chat_run_id,
+        threadId: row.thread_id,
+        status: row.status,
+        resumedFromAttemptId: row.resumed_from_attempt_id,
+        supersededByAttemptId: row.superseded_by_attempt_id,
+        resumability,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+    );
+  });
+
+  const checkpointsForTask = Effect.fnUntraced(function* (taskId: string) {
+    const rows = yield* decodeCheckpointViewRows(
+      yield* sql`SELECT id, attempt_id, event_sequence, transcript_message_id,
+          completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
+          remaining_work, created_at
+        FROM work_checkpoints WHERE task_id = ${taskId} ORDER BY created_at, id`,
+    );
+    return yield* Effect.forEach(rows, (row) =>
+      Effect.gen(function* () {
+        const view: TraceCheckpointView = {
+          id: row.id,
+          attemptId: row.attempt_id,
+          eventSequence: row.event_sequence,
+          transcriptMessageId: row.transcript_message_id,
+          completedToolCallIds: yield* decodeStringArray(row.completed_tool_call_ids),
+          uncertainToolCallIds: yield* decodeStringArray(row.uncertain_tool_call_ids),
+          pendingApprovalIds: yield* decodeStringArray(row.pending_approval_ids),
+          remainingWork: row.remaining_work,
+          createdAt: row.created_at,
+        };
+        return view;
+      }),
+    );
+  });
+
+  const detailOf = Effect.fnUntraced(function* <E>(
+    task: TraceTaskView,
+    events: Effect.Effect<ReadonlyArray<TraceEventView>, E>,
+  ) {
     return {
       task,
-      attempts,
-      checkpoints,
-      evidence: evidenceForTask(taskId),
-      artifacts: artifactsForTask(taskId),
-      adoptions: reportAdoptionsForTask(taskId),
-      answerClaims: answerClaimsForTask(taskId),
-      events: events(sessionId, 0, 500).filter((event) => event.taskId === taskId),
+      attempts: yield* attemptsForTask(task.id),
+      checkpoints: yield* checkpointsForTask(task.id),
+      evidence: yield* evidenceForTask(task.id),
+      artifacts: yield* artifactsForTask(task.id),
+      adoptions: yield* reportAdoptionsForTask(task.id),
+      answerClaims: yield* answerClaimsForTask(task.id),
+      events: yield* events,
     };
-  };
+  });
 
-  const projectTaskDetail = (projectId: string, taskId: string) => {
-    const task = projectTaskTree(projectId).find((candidate) => candidate.id === taskId);
+  const taskDetail = Effect.fnUntraced(function* (sessionId: string, taskId: string) {
+    const task = (yield* taskTree(sessionId)).find((candidate) => candidate.id === taskId);
     if (!isTruthy(task)) return null;
-    if (task.originSessionId !== null) return taskDetail(task.originSessionId, taskId);
-    const attempts: TraceAttemptView[] = decodeAttemptViewRows(
-      sqlite
-        .prepare(
-          `SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-                  resumed_from_attempt_id, superseded_by_attempt_id, resumability,
-                  started_at, finished_at, created_at, updated_at
-           FROM agent_run_attempts WHERE task_id = ? ORDER BY attempt_number`,
-        )
-        .all(taskId),
-    ).map((row) => ({
-      id: row.id,
-      invocationId: row.invocation_id,
-      attemptNumber: row.attempt_number,
-      chatRunId: row.chat_run_id,
-      threadId: row.thread_id,
-      status: row.status,
-      resumedFromAttemptId: row.resumed_from_attempt_id,
-      supersededByAttemptId: row.superseded_by_attempt_id,
-      resumability: decodePayload(row.resumability),
-      startedAt: row.started_at,
-      finishedAt: row.finished_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
-    const checkpoints: TraceCheckpointView[] = decodeCheckpointViewRows(
-      sqlite
-        .prepare(
-          `SELECT id, attempt_id, event_sequence, transcript_message_id,
-                  completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-                  remaining_work, created_at
-           FROM work_checkpoints WHERE task_id = ? ORDER BY created_at, id`,
-        )
-        .all(taskId),
-    ).map((row) => ({
-      id: row.id,
-      attemptId: row.attempt_id,
-      eventSequence: row.event_sequence,
-      transcriptMessageId: row.transcript_message_id,
-      completedToolCallIds: decodeStringArray(row.completed_tool_call_ids),
-      uncertainToolCallIds: decodeStringArray(row.uncertain_tool_call_ids),
-      pendingApprovalIds: decodeStringArray(row.pending_approval_ids),
-      remainingWork: row.remaining_work,
-      createdAt: row.created_at,
-    }));
-    const visibleEvents = decodeStoredEventRows(
-      sqlite
-        .prepare(
-          `SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
-                  attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
-           FROM run_events WHERE task_id = ?
-             AND visibility <> 'internal' AND redaction <> 'omitted'
-           ORDER BY seq LIMIT 500`,
-        )
-        .all(taskId),
-    ).map(eventView);
-    return {
+    return yield* detailOf(
       task,
-      attempts,
-      checkpoints,
-      evidence: evidenceForTask(taskId),
-      artifacts: artifactsForTask(taskId),
-      adoptions: reportAdoptionsForTask(taskId),
-      answerClaims: answerClaimsForTask(taskId),
-      events: visibleEvents,
-    };
+      Effect.map(events(sessionId, 0, 500), (found) =>
+        found.filter((event) => event.taskId === taskId),
+      ),
+    );
+  });
+
+  const projectTaskDetail = Effect.fnUntraced(function* (projectId: string, taskId: string) {
+    const task = (yield* projectTaskTree(projectId)).find((candidate) => candidate.id === taskId);
+    if (!isTruthy(task)) return null;
+    if (task.originSessionId !== null) return yield* taskDetail(task.originSessionId, taskId);
+    return yield* detailOf(
+      task,
+      sql`SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
+          attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
+        FROM run_events WHERE task_id = ${taskId}
+          AND visibility <> 'internal' AND redaction <> 'omitted'
+        ORDER BY seq LIMIT 500`.pipe(
+        Effect.flatMap(decodeStoredEventRows),
+        Effect.flatMap(eventViews),
+      ),
+    );
+  });
+
+  const resumeBlocked = (reason: Extract<ResumeClaim, { status: "blocked" }>["reason"]) => {
+    const claim: ResumeClaim = { status: "blocked", reason };
+    return claim;
   };
 
   const claimResume = (input: {
@@ -2013,97 +1669,62 @@ const make = Effect.gen(function* () {
     readonly parentRunId: string;
     readonly parentToolCallId: string;
     readonly confirmUncertain: boolean;
-  }): ResumeClaim =>
-    atomic(() => {
-      const candidate = sqlite
-        .prepare(
-          `SELECT t.id, t.origin_session_id, t.agent_id, t.request, t.status, t.active_attempt_id, t.archived_at, t.delete_requested_at, t.deleted_at,
-                  a.id AS previous_attempt_id, a.attempt_number AS previous_attempt_number,
-                  a.status AS previous_status, a.thread_id
-           FROM work_tasks t
-           JOIN agent_run_attempts a ON a.task_id = t.id
-           WHERE t.id = ? AND t.origin_session_id = ?
-           ORDER BY a.attempt_number DESC LIMIT 1`,
-        )
-        .get(input.taskId, input.sessionId);
-      if (!isTruthy(candidate)) return { status: "blocked", reason: "task_not_found" };
-      const task = decodeResumeTask(candidate);
+  }) =>
+    Effect.gen(function* () {
+      const candidate = yield* first(sql`SELECT t.id, t.origin_session_id, t.agent_id, t.request,
+          t.status, t.active_attempt_id, t.archived_at, t.delete_requested_at, t.deleted_at,
+          a.id AS previous_attempt_id, a.attempt_number AS previous_attempt_number,
+          a.status AS previous_status, a.thread_id
+        FROM work_tasks t
+        JOIN agent_run_attempts a ON a.task_id = t.id
+        WHERE t.id = ${input.taskId} AND t.origin_session_id = ${input.sessionId}
+        ORDER BY a.attempt_number DESC LIMIT 1`);
+      if (!isTruthy(candidate)) return resumeBlocked("task_not_found");
+      const task = yield* decodeResumeTask(candidate);
       if (task.deleted_at !== null || task.delete_requested_at !== null)
-        return { status: "blocked", reason: "task_deleted" };
-      if (task.archived_at !== null) return { status: "blocked", reason: "task_archived" };
-      if (task.origin_session_id === null) return { status: "blocked", reason: "origin_deleted" };
-      if (task.agent_id === null) return { status: "blocked", reason: "agent_deleted" };
-      if (isTruthy(task.active_attempt_id)) return { status: "blocked", reason: "attempt_alive" };
-      if (task.status === "completed") return { status: "blocked", reason: "task_terminal" };
+        return resumeBlocked("task_deleted");
+      if (task.archived_at !== null) return resumeBlocked("task_archived");
+      if (task.origin_session_id === null) return resumeBlocked("origin_deleted");
+      if (task.agent_id === null) return resumeBlocked("agent_deleted");
+      if (isTruthy(task.active_attempt_id)) return resumeBlocked("attempt_alive");
+      if (task.status === "completed") return resumeBlocked("task_terminal");
       if (task.previous_attempt_id !== input.expectedAttemptId)
-        return { status: "blocked", reason: "stale_attempt" };
-      const checkpointRow = sqlite
-        .prepare(
-          `SELECT id, completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-                  remaining_work
-           FROM work_checkpoints WHERE attempt_id = ? ORDER BY event_sequence DESC LIMIT 1`,
-        )
-        .get(task.previous_attempt_id);
-      if (!isTruthy(checkpointRow)) return { status: "blocked", reason: "missing_checkpoint" };
-      const checkpoint = decodeCheckpoint(checkpointRow);
-      const uncertainToolCallIds = decodeStringArray(checkpoint.uncertain_tool_call_ids);
+        return resumeBlocked("stale_attempt");
+      const checkpointRow = yield* first(sql`SELECT id, completed_tool_call_ids,
+          uncertain_tool_call_ids, pending_approval_ids, remaining_work
+        FROM work_checkpoints WHERE attempt_id = ${task.previous_attempt_id}
+        ORDER BY event_sequence DESC LIMIT 1`);
+      if (!isTruthy(checkpointRow)) return resumeBlocked("missing_checkpoint");
+      const checkpoint = yield* decodeCheckpoint(checkpointRow);
+      const uncertainToolCallIds = yield* decodeStringArray(checkpoint.uncertain_tool_call_ids);
       if (uncertainToolCallIds.length > 0 && !input.confirmUncertain)
-        return { status: "blocked", reason: "uncertain_side_effect" };
+        return resumeBlocked("uncertain_side_effect");
 
       const now = effectClock.currentTimeMillisUnsafe();
-      const invocationId = randomUUID();
-      const attemptId = randomUUID();
-      const chatRunId = randomUUID();
+      const invocationId = yield* crypto.randomUUIDv4();
+      const attemptId = yield* crypto.randomUUIDv4();
+      const chatRunId = yield* crypto.randomUUIDv4();
       const attemptNumber = task.previous_attempt_number + 1;
-      sqlite
-        .prepare(
-          `INSERT INTO agent_invocations
-           (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
-            target_attempt_id, idempotency_key, created_at)
-           VALUES (?, ?, ?, ?, 'resume', 'accepted', ?, ?, ?, ?)`,
-        )
-        .run(
-          invocationId,
-          task.id,
-          input.parentRunId,
-          input.parentToolCallId,
-          task.request,
-          task.previous_attempt_id,
-          `${input.parentRunId}:${input.parentToolCallId}`,
-          now,
-        );
-      sqlite
-        .prepare(
-          `INSERT INTO agent_run_attempts
-           (id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-            resumed_from_attempt_id, resume_reason, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
-        )
-        .run(
-          attemptId,
-          task.id,
-          invocationId,
-          attemptNumber,
-          chatRunId,
-          task.thread_id,
-          task.previous_attempt_id,
-          task.previous_status === "interrupted" ? "server_restarted" : "provider_failed",
-          now,
-          now,
-        );
-      sqlite
-        .prepare(
-          `UPDATE agent_run_attempts SET superseded_by_attempt_id = ?,
-             resumability = '{"state":"not_needed"}', updated_at = ? WHERE id = ?`,
-        )
-        .run(attemptId, now, task.previous_attempt_id);
-      sqlite
-        .prepare(
-          `UPDATE work_tasks SET status = 'resuming', active_attempt_id = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(attemptId, now, task.id);
-      const handle = {
+      const resumeReason =
+        task.previous_status === "interrupted" ? "server_restarted" : "provider_failed";
+      yield* run(sql`INSERT INTO agent_invocations
+        (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
+         target_attempt_id, idempotency_key, created_at)
+        VALUES (${invocationId}, ${task.id}, ${input.parentRunId}, ${input.parentToolCallId},
+          'resume', 'accepted', ${task.request}, ${task.previous_attempt_id},
+          ${`${input.parentRunId}:${input.parentToolCallId}`}, ${now})`);
+      yield* run(sql`INSERT INTO agent_run_attempts
+        (id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status,
+         resumed_from_attempt_id, resume_reason, created_at, updated_at)
+        VALUES (${attemptId}, ${task.id}, ${invocationId}, ${attemptNumber}, ${chatRunId},
+          ${task.thread_id}, 'queued', ${task.previous_attempt_id}, ${resumeReason}, ${now}, ${now})`);
+      yield* run(sql`UPDATE agent_run_attempts SET superseded_by_attempt_id = ${attemptId},
+          resumability = '{"state":"not_needed"}', updated_at = ${now}
+        WHERE id = ${task.previous_attempt_id}`);
+      yield* run(sql`UPDATE work_tasks SET status = 'resuming', active_attempt_id = ${attemptId},
+          updated_at = ${now}
+        WHERE id = ${task.id}`);
+      const handle: AttemptHandle = {
         id: attemptId,
         taskId: task.id,
         invocationId,
@@ -2111,250 +1732,28 @@ const make = Effect.gen(function* () {
         threadId: task.thread_id,
         attemptNumber,
       };
-      appendEvent({
+      yield* appendEvent({
         handle,
         sessionId: input.sessionId,
         kind: "resume_requested",
         summary: "Resume requested from the latest checkpoint",
         occurredAt: now,
       });
-      return {
+      const claim: ResumeClaim = {
         status: "started",
         handle,
         agentId: task.agent_id,
         context: {
           originalRequest: task.request,
           remainingWork: checkpoint.remaining_work,
-          completedToolCallIds: decodeStringArray(checkpoint.completed_tool_call_ids),
+          completedToolCallIds: yield* decodeStringArray(checkpoint.completed_tool_call_ids),
           uncertainToolCallIds,
-          expiredApprovalIds: decodeStringArray(checkpoint.pending_approval_ids),
+          expiredApprovalIds: yield* decodeStringArray(checkpoint.pending_approval_ids),
           checkpointId: checkpoint.id,
         },
       };
-    });
-
-  const eventView = (row: typeof StoredEventRow.Type): TraceEventView => ({
-    cursor: row.cursor,
-    id: row.id,
-    sessionId: row.origin_session_id,
-    taskId: row.task_id,
-    invocationId: row.invocation_id,
-    attemptId: row.attempt_id,
-    attemptSequence: row.attempt_sequence,
-    kind: row.kind,
-    visibility: row.visibility === "public" ? "public" : "summary",
-    redaction: row.redaction === "redacted" ? "redacted" : "clear",
-    summary: row.summary,
-    payload: row.redaction === "redacted" ? {} : decodePayload(row.payload),
-    occurredAt: row.occurred_at,
-  });
-
-  const requestSessionLifecycle = (input: {
-    readonly sessionId: string;
-    readonly intent: "archive" | "restore" | "delete";
-    readonly idempotencyKey: string;
-  }) =>
-    atomic(() => {
-      const retried = sqlite
-        .prepare("SELECT * FROM lifecycle_operations WHERE idempotency_key = ?")
-        .get(input.idempotencyKey);
-      if (isTruthy(retried)) return lifecycleOperationView(decodeLifecycleOperation(retried));
-      // SAFETY: this statement selects exactly the typed session columns; absence is allowed.
-      const session = sqlite
-        .prepare("SELECT project_id, archived_at FROM sessions WHERE id = ?")
-        .get(input.sessionId) as { project_id: string; archived_at: string | null } | undefined;
-      if (!(session !== undefined))
-        return { status: "blocked" as const, blocker: "session_not_found" };
-      if (input.intent === "restore" && session.archived_at === null)
-        return { status: "blocked" as const, blocker: "session_not_archived" };
-      if (input.intent === "archive" && session.archived_at !== null)
-        return { status: "completed" as const, targetId: input.sessionId, intent: input.intent };
-      const now = effectClock.currentTimeMillisUnsafe();
-      const operationId = randomUUID();
-      sqlite
-        .prepare(
-          `INSERT INTO lifecycle_operations
-           (id, project_id, origin_session_id, target_kind, target_id, intent, status,
-            idempotency_key, requested_at, updated_at)
-           VALUES (?, ?, ?, 'session', ?, ?, 'cancelling', ?, ?, ?)`,
-        )
-        .run(
-          operationId,
-          session.project_id,
-          input.sessionId,
-          input.sessionId,
-          input.intent,
-          input.idempotencyKey,
-          now,
-          now,
-        );
-      return {
-        operationId,
-        projectId: session.project_id,
-        sessionId: input.sessionId,
-        targetKind: "session" as const,
-        targetId: input.sessionId,
-        intent: input.intent,
-        status: "cancelling" as const,
-        blocker: null,
-        requestedAt: now,
-        updatedAt: now,
-        completedAt: null,
-      };
-    });
-
-  const finalizeSessionLifecycle = (operationId: string) =>
-    atomic(() => {
-      const found = sqlite
-        .prepare("SELECT * FROM lifecycle_operations WHERE id = ?")
-        .get(operationId);
-      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
-      const operation = decodeLifecycleOperation(found);
-      if (operation.status === "completed")
-        return { status: "completed" as const, operationId, targetId: operation.target_id };
-      const now = effectClock.currentTimeMillisUnsafe();
-      const active = decodeId(
-        sqlite
-          .prepare(
-            `SELECT coalesce(max(active_attempt_id), '') AS id FROM work_tasks
-             WHERE origin_session_id = ? AND active_attempt_id IS NOT NULL`,
-          )
-          .get(operation.target_id),
-      ).id;
-      if (active !== "") {
-        sqlite
-          .prepare(
-            "UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ? WHERE id = ?",
-          )
-          .run(now, operationId);
-        return { status: "waiting_for_stop" as const, operationId, targetId: operation.target_id };
-      }
-      if (operation.intent === "restore")
-        sqlite
-          .prepare("UPDATE sessions SET archived_at = NULL WHERE id = ?")
-          .run(operation.target_id);
-      else if (operation.intent === "archive")
-        sqlite
-          .prepare("UPDATE sessions SET archived_at = ? WHERE id = ?")
-          .run(DateTime.formatIso(DateTime.makeUnsafe(now)), operation.target_id);
-      else {
-        const remaining = decodeId(
-          sqlite
-            .prepare(
-              `SELECT coalesce(max(id), '') AS id FROM work_tasks
-               WHERE origin_session_id = ? AND deleted_at IS NULL`,
-            )
-            .get(operation.target_id),
-        ).id;
-        if (remaining !== "") {
-          sqlite
-            .prepare(
-              `UPDATE lifecycle_operations SET status = 'blocked', blocker = 'task_purge_required',
-                      updated_at = ? WHERE id = ?`,
-            )
-            .run(now, operationId);
-          return { status: "blocked" as const, blocker: "task_purge_required", operationId };
-        }
-        sqlite
-          .prepare(
-            "UPDATE lifecycle_operations SET status = 'purging', updated_at = ? WHERE id = ?",
-          )
-          .run(now, operationId);
-        // SAFETY: this statement selects exactly the typed node columns.
-        const nodeRows = sqlite
-          .prepare("SELECT seq, id, text FROM nodes WHERE session_id = ? ORDER BY seq")
-          .all(operation.target_id) as { seq: number; id: string; text: string }[];
-        // SAFETY: this statement selects the string primary key only.
-        const subagentRows = sqlite
-          .prepare("SELECT id FROM subagents WHERE session_id = ?")
-          .all(operation.target_id) as { id: string }[];
-        for (const node of nodeRows) {
-          sqlite
-            .prepare("INSERT INTO nodes_fts(nodes_fts, rowid, text) VALUES ('delete', ?, ?)")
-            .run(node.seq, node.text);
-          sqlite
-            .prepare("DELETE FROM interpretations WHERE node_id = ? OR target_id = ?")
-            .run(node.id, node.id);
-          sqlite.prepare("DELETE FROM edges WHERE from_id = ? OR to_id = ?").run(node.id, node.id);
-          sqlite.prepare("DELETE FROM node_refs WHERE node_id = ?").run(node.id);
-          sqlite.prepare("DELETE FROM node_attachments WHERE node_id = ?").run(node.id);
-          sqlite.prepare("DELETE FROM imported_nodes WHERE node_id = ?").run(node.id);
-          sqlite.prepare("DELETE FROM interpret_jobs WHERE node_id = ?").run(node.id);
-          sqlite.prepare("DELETE FROM node_vectors WHERE node_seq = ?").run(node.seq);
-          sqlite.prepare("DELETE FROM node_morphs WHERE node_seq = ?").run(node.seq);
-          sqlite.prepare("DELETE FROM nodes_morph WHERE rowid = ?").run(node.seq);
-          sqlite
-            .prepare("DELETE FROM memory_graph_suppressed_nodes WHERE node_seq = ?")
-            .run(node.seq);
-        }
-        sqlite.prepare("DELETE FROM nodes WHERE session_id = ?").run(operation.target_id);
-        sqlite
-          .prepare(
-            "DELETE FROM chat_metadata WHERE namespace = 'background-task-result' AND key IN (SELECT id FROM work_tasks WHERE origin_session_id = ?)",
-          )
-          .run(operation.target_id);
-        const threadIds = [operation.target_id, ...subagentRows.map((row) => `subagent-${row.id}`)];
-        for (const threadId of threadIds) {
-          // SAFETY: this statement selects the string run identifier only.
-          const runIds = sqlite
-            .prepare("SELECT run_id FROM chat_runs WHERE thread_id = ?")
-            .all(threadId) as {
-            run_id: string;
-          }[];
-          for (const run of runIds)
-            sqlite.prepare("DELETE FROM chat_interrupts WHERE run_id = ?").run(run.run_id);
-          sqlite.prepare("DELETE FROM chat_interrupts WHERE thread_id = ?").run(threadId);
-          sqlite.prepare("DELETE FROM chat_runs WHERE thread_id = ?").run(threadId);
-          sqlite.prepare("DELETE FROM chat_threads WHERE thread_id = ?").run(threadId);
-        }
-        sqlite
-          .prepare("DELETE FROM permission_reviews WHERE session_id = ?")
-          .run(operation.target_id);
-        sqlite.prepare("DELETE FROM queued_messages WHERE session_id = ?").run(operation.target_id);
-        sqlite
-          .prepare("DELETE FROM imported_sessions WHERE session_id = ?")
-          .run(operation.target_id);
-        sqlite
-          .prepare("DELETE FROM session_workflows WHERE session_id = ?")
-          .run(operation.target_id);
-        sqlite.prepare("DELETE FROM subagents WHERE session_id = ?").run(operation.target_id);
-        sqlite.prepare("DELETE FROM sessions WHERE id = ?").run(operation.target_id);
-        const receiptId = randomUUID();
-        sqlite
-          .prepare(
-            `INSERT INTO purge_receipts
-             (id, operation_id, project_id, target_kind, target_id, policy_version,
-              purged_counts, retained_kinds, completed_at)
-             VALUES (?, ?, ?, 'session', ?, 1, ?, ?, ?)`,
-          )
-          .run(
-            receiptId,
-            operationId,
-            operation.project_id,
-            operation.target_id,
-            JSON.stringify({ nodes: nodeRows.length, subagents: subagentRows.length }),
-            JSON.stringify([
-              "task_tombstones",
-              "answer_claims",
-              "adopted_memory",
-              "purge_receipts",
-            ]),
-            now,
-          );
-      }
-      sqlite
-        .prepare(
-          `UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
-                  updated_at = ?, completed_at = ? WHERE id = ?`,
-        )
-        .run(now, now, operationId);
-      return {
-        status: "completed" as const,
-        operationId,
-        targetId: operation.target_id,
-        intent: operation.intent,
-      };
-    });
+      return claim;
+    }).pipe(sql.withTransaction);
 
   const lifecycleOperationView = (row: typeof LifecycleOperationRow.Type) => ({
     operationId: row.id,
@@ -2370,6 +1769,167 @@ const make = Effect.gen(function* () {
     completedAt: row.completed_at,
   });
 
+  const requestSessionLifecycle = (input: {
+    readonly sessionId: string;
+    readonly intent: "archive" | "restore" | "delete";
+    readonly idempotencyKey: string;
+  }) =>
+    Effect.gen(function* () {
+      const retried = yield* first(sql`SELECT * FROM lifecycle_operations
+        WHERE idempotency_key = ${input.idempotencyKey}`);
+      if (isTruthy(retried))
+        return lifecycleOperationView(yield* decodeLifecycleOperation(retried));
+      const session = yield* decodeSessionLifecycle(
+        yield* first(
+          sql`SELECT project_id, archived_at FROM sessions WHERE id = ${input.sessionId}`,
+        ),
+      );
+      if (session === undefined)
+        return { status: "blocked" as const, blocker: "session_not_found" };
+      if (input.intent === "restore" && session.archived_at === null)
+        return { status: "blocked" as const, blocker: "session_not_archived" };
+      if (input.intent === "archive" && session.archived_at !== null)
+        return { status: "completed" as const, targetId: input.sessionId, intent: input.intent };
+      const now = effectClock.currentTimeMillisUnsafe();
+      const operationId = yield* crypto.randomUUIDv4();
+      yield* run(sql`INSERT INTO lifecycle_operations
+        (id, project_id, origin_session_id, target_kind, target_id, intent, status,
+         idempotency_key, requested_at, updated_at)
+        VALUES (${operationId}, ${session.project_id}, ${input.sessionId}, 'session',
+          ${input.sessionId}, ${input.intent}, 'cancelling', ${input.idempotencyKey}, ${now}, ${now})`);
+      return {
+        operationId,
+        projectId: session.project_id,
+        sessionId: input.sessionId,
+        targetKind: "session" as const,
+        targetId: input.sessionId,
+        intent: input.intent,
+        status: "cancelling" as const,
+        blocker: null,
+        requestedAt: now,
+        updatedAt: now,
+        completedAt: null,
+      };
+    }).pipe(sql.withTransaction);
+
+  const purgeSession = Effect.fnUntraced(function* (
+    operation: typeof LifecycleOperationRow.Type,
+    now: number,
+  ) {
+    const sessionId = operation.target_id;
+    const nodeRows = yield* decodeNodePurgeRows(
+      yield* sql`SELECT seq, id, text FROM nodes WHERE session_id = ${sessionId} ORDER BY seq`,
+    );
+    const subagentRows = yield* decodeIds(
+      yield* sql`SELECT id FROM subagents WHERE session_id = ${sessionId}`,
+    );
+    for (const node of nodeRows) {
+      yield* run(sql`INSERT INTO nodes_fts(nodes_fts, rowid, text)
+        VALUES ('delete', ${node.seq}, ${node.text})`);
+      yield* run(
+        sql`DELETE FROM interpretations WHERE node_id = ${node.id} OR target_id = ${node.id}`,
+      );
+      yield* run(sql`DELETE FROM edges WHERE from_id = ${node.id} OR to_id = ${node.id}`);
+      yield* run(sql`DELETE FROM node_refs WHERE node_id = ${node.id}`);
+      yield* run(sql`DELETE FROM node_attachments WHERE node_id = ${node.id}`);
+      yield* run(sql`DELETE FROM imported_nodes WHERE node_id = ${node.id}`);
+      yield* run(sql`DELETE FROM interpret_jobs WHERE node_id = ${node.id}`);
+      yield* run(sql`DELETE FROM node_vectors WHERE node_seq = ${node.seq}`);
+      yield* run(sql`DELETE FROM node_morphs WHERE node_seq = ${node.seq}`);
+      yield* run(sql`DELETE FROM nodes_morph WHERE rowid = ${node.seq}`);
+      yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq = ${node.seq}`);
+    }
+    yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM chat_metadata WHERE namespace = 'background-task-result'
+      AND key IN (SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId})`);
+    const threadIds = [sessionId, ...subagentRows.map((row) => `subagent-${row.id}`)];
+    for (const threadId of threadIds) {
+      const chatRuns = yield* decodeRunIds(
+        yield* sql`SELECT run_id FROM chat_runs WHERE thread_id = ${threadId}`,
+      );
+      for (const chatRun of chatRuns)
+        yield* run(sql`DELETE FROM chat_interrupts WHERE run_id = ${chatRun.run_id}`);
+      yield* run(sql`DELETE FROM chat_interrupts WHERE thread_id = ${threadId}`);
+      yield* run(sql`DELETE FROM chat_runs WHERE thread_id = ${threadId}`);
+      yield* run(sql`DELETE FROM chat_threads WHERE thread_id = ${threadId}`);
+    }
+    yield* run(sql`DELETE FROM permission_reviews WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM queued_messages WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM imported_sessions WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM session_workflows WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
+    const purgedCounts = yield* encodeJson({
+      nodes: nodeRows.length,
+      subagents: subagentRows.length,
+    });
+    const retainedKinds = yield* encodeJson([
+      "task_tombstones",
+      "answer_claims",
+      "adopted_memory",
+      "purge_receipts",
+    ]);
+    yield* run(sql`INSERT INTO purge_receipts
+      (id, operation_id, project_id, target_kind, target_id, policy_version,
+       purged_counts, retained_kinds, completed_at)
+      VALUES (${yield* crypto.randomUUIDv4()}, ${operation.id}, ${operation.project_id}, 'session',
+        ${sessionId}, 1, ${purgedCounts}, ${retainedKinds}, ${now})`);
+  });
+
+  const finalizeSessionLifecycle = (operationId: string) =>
+    Effect.gen(function* () {
+      const found = yield* first(sql`SELECT * FROM lifecycle_operations WHERE id = ${operationId}`);
+      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
+      const operation = yield* decodeLifecycleOperation(found);
+      if (operation.status === "completed")
+        return { status: "completed" as const, operationId, targetId: operation.target_id };
+      const now = effectClock.currentTimeMillisUnsafe();
+      const active = (yield* decodeId(
+        yield* first(sql`SELECT coalesce(max(active_attempt_id), '') AS id FROM work_tasks
+          WHERE origin_session_id = ${operation.target_id} AND active_attempt_id IS NOT NULL`),
+      )).id;
+      if (active !== "") {
+        yield* run(sql`UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ${now}
+          WHERE id = ${operationId}`);
+        return { status: "waiting_for_stop" as const, operationId, targetId: operation.target_id };
+      }
+      switch (operation.intent) {
+        case "restore":
+          yield* run(sql`UPDATE sessions SET archived_at = NULL WHERE id = ${operation.target_id}`);
+          break;
+        case "archive":
+          yield* run(sql`UPDATE sessions
+            SET archived_at = ${DateTime.formatIso(DateTime.makeUnsafe(now))}
+            WHERE id = ${operation.target_id}`);
+          break;
+        case "delete": {
+          const remaining = (yield* decodeId(
+            yield* first(sql`SELECT coalesce(max(id), '') AS id FROM work_tasks
+              WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL`),
+          )).id;
+          if (remaining !== "") {
+            yield* run(sql`UPDATE lifecycle_operations SET status = 'blocked',
+                blocker = 'task_purge_required', updated_at = ${now}
+              WHERE id = ${operationId}`);
+            return { status: "blocked" as const, blocker: "task_purge_required", operationId };
+          }
+          yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
+            WHERE id = ${operationId}`);
+          yield* purgeSession(operation, now);
+          break;
+        }
+      }
+      yield* run(sql`UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
+          updated_at = ${now}, completed_at = ${now}
+        WHERE id = ${operationId}`);
+      return {
+        status: "completed" as const,
+        operationId,
+        targetId: operation.target_id,
+        intent: operation.intent,
+      };
+    }).pipe(sql.withTransaction);
+
   /**
    * Persist a task archive/delete request before touching the live child. The unique active-target
    * index serializes archive/delete/resume races; retries with the same key return the same row.
@@ -2380,57 +1940,45 @@ const make = Effect.gen(function* () {
     readonly intent: "archive" | "restore" | "delete";
     readonly idempotencyKey: string;
   }) =>
-    atomic(() => {
-      const retried = sqlite
-        .prepare("SELECT * FROM lifecycle_operations WHERE idempotency_key = ?")
-        .get(input.idempotencyKey);
+    Effect.gen(function* () {
+      const retried = yield* first(sql`SELECT * FROM lifecycle_operations
+        WHERE idempotency_key = ${input.idempotencyKey}`);
       if (isTruthy(retried))
-        return { ...lifecycleOperationView(decodeLifecycleOperation(retried)) };
-      const found = sqlite
-        .prepare(
-          `SELECT project_id, origin_session_id, agent_id, parent_run_id, active_attempt_id,
-                  archived_at, delete_requested_at, deleted_at, purge_receipt_id
-           FROM work_tasks WHERE id = ? AND origin_session_id = ?`,
-        )
-        .get(input.taskId, input.sessionId);
-      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "task_not_found" };
-      const task = decodeLifecycleTask(found);
+        return { ...lifecycleOperationView(yield* decodeLifecycleOperation(retried)) };
+      const found = yield* first(sql`SELECT project_id, origin_session_id, agent_id, parent_run_id,
+          active_attempt_id, archived_at, delete_requested_at, deleted_at, purge_receipt_id
+        FROM work_tasks WHERE id = ${input.taskId} AND origin_session_id = ${input.sessionId}`);
+      if (!isTruthy(found))
+        return { status: "blocked" as const, blocker: "task_not_found", operationId: null };
+      const task = yield* decodeLifecycleTask(found);
       if (task.deleted_at !== null)
         return {
           status: "completed" as const,
           targetId: input.taskId,
           intent: "delete" as const,
           receiptId: task.purge_receipt_id,
+          operationId: null,
         };
       if (input.intent === "restore" && task.archived_at === null)
-        return { status: "blocked" as const, blocker: "task_not_archived" };
+        return { status: "blocked" as const, blocker: "task_not_archived", operationId: null };
       if (input.intent === "archive" && task.archived_at !== null)
-        return { status: "completed" as const, targetId: input.taskId, intent: input.intent };
+        return {
+          status: "completed" as const,
+          targetId: input.taskId,
+          intent: input.intent,
+          operationId: null,
+        };
       const now = effectClock.currentTimeMillisUnsafe();
-      const id = randomUUID();
+      const id = yield* crypto.randomUUIDv4();
       const status = task.active_attempt_id === null ? "requested" : "cancelling";
-      sqlite
-        .prepare(
-          `INSERT INTO lifecycle_operations
-           (id, project_id, origin_session_id, target_kind, target_id, intent, status,
-            idempotency_key, requested_at, updated_at)
-           VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          task.project_id,
-          task.origin_session_id,
-          input.taskId,
-          input.intent,
-          status,
-          input.idempotencyKey,
-          now,
-          now,
-        );
+      yield* run(sql`INSERT INTO lifecycle_operations
+        (id, project_id, origin_session_id, target_kind, target_id, intent, status,
+         idempotency_key, requested_at, updated_at)
+        VALUES (${id}, ${task.project_id}, ${task.origin_session_id}, 'task', ${input.taskId},
+          ${input.intent}, ${status}, ${input.idempotencyKey}, ${now}, ${now})`);
       if (input.intent === "delete")
-        sqlite
-          .prepare("UPDATE work_tasks SET delete_requested_at = ?, updated_at = ? WHERE id = ?")
-          .run(now, now, input.taskId);
+        yield* run(sql`UPDATE work_tasks SET delete_requested_at = ${now}, updated_at = ${now}
+          WHERE id = ${input.taskId}`);
       return {
         operationId: id,
         projectId: task.project_id,
@@ -2446,219 +1994,158 @@ const make = Effect.gen(function* () {
         agentId: task.agent_id,
         activeAttemptId: task.active_attempt_id,
       };
-    });
+    }).pipe(sql.withTransaction);
 
-  const finalizeTaskLifecycle = (operationId: string) => {
-    const completed = atomic(() => {
-      const found = sqlite
-        .prepare("SELECT * FROM lifecycle_operations WHERE id = ?")
-        .get(operationId);
+  const lifecycleTaskOf = (taskId: string) =>
+    first(sql`SELECT project_id, origin_session_id, agent_id, parent_run_id, active_attempt_id,
+        archived_at, delete_requested_at, deleted_at, purge_receipt_id
+      FROM work_tasks WHERE id = ${taskId}`).pipe(Effect.flatMap(decodeLifecycleTask));
+
+  const notifyLifecycle = (
+    operation: typeof LifecycleOperationRow.Type,
+    receiptId: string | null,
+  ) =>
+    operation.intent === "restore"
+      ? Effect.void
+      : Effect.asVoid(
+          notifyParent({
+            taskId: operation.target_id,
+            kind: operation.intent === "delete" ? "deleted" : "archived",
+            summary:
+              operation.intent === "delete"
+                ? "Subagent task deleted; adopted project knowledge was retained"
+                : "Subagent task archived",
+            idempotencyKey: `lifecycle:${operation.id}:${operation.intent}`,
+            payload: { operationId: operation.id, receiptId },
+          }),
+        );
+
+  const purgeTask = Effect.fnUntraced(function* (
+    operation: typeof LifecycleOperationRow.Type,
+    now: number,
+  ) {
+    const taskId = operation.target_id;
+    yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
+      WHERE id = ${operation.id}`);
+    const evidence = (yield* run(sql`UPDATE evidence_refs SET locator = NULL,
+        verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
+      WHERE task_id = ${taskId}`)).changes;
+    yield* run(sql`UPDATE memory_candidate_evidence SET evidence_ref_id = NULL,
+        source_deleted_at = ${now}
+      WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE task_id = ${taskId})`);
+    const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL,
+        verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
+      WHERE task_id = ${taskId}`)).changes;
+    const checkpoints = (yield* run(sql`DELETE FROM work_checkpoints WHERE task_id = ${taskId}`))
+      .changes;
+    yield* run(sql`DELETE FROM chat_metadata
+      WHERE namespace = 'background-task-result' AND key = ${taskId}`);
+    const events = (yield* run(sql`DELETE FROM run_events WHERE task_id = ${taskId}`)).changes;
+    yield* run(sql`UPDATE agent_invocations SET message = '' WHERE task_id = ${taskId}`);
+    yield* run(sql`UPDATE parent_notifications
+      SET summary = 'Deleted task lifecycle notification', payload = '{}'
+      WHERE task_id = ${taskId}`);
+    const receiptId = yield* crypto.randomUUIDv4();
+    const purgedCounts = yield* encodeJson({ evidence, artifacts, checkpoints, events });
+    const retainedKinds = yield* encodeJson([
+      "task_tombstone",
+      "attempt_lineage",
+      "answer_claims",
+      "adopted_memory",
+    ]);
+    yield* run(sql`INSERT INTO purge_receipts
+      (id, operation_id, project_id, target_kind, target_id, policy_version,
+       purged_counts, retained_kinds, completed_at)
+      VALUES (${receiptId}, ${operation.id}, ${operation.project_id}, 'task', ${taskId}, 1,
+        ${purgedCounts}, ${retainedKinds}, ${now})`);
+    yield* run(sql`UPDATE work_tasks SET title = 'Deleted task', request = '',
+        agent_name = 'deleted subagent', archived_at = NULL, deleted_at = ${now},
+        purge_receipt_id = ${receiptId}, updated_at = ${now}
+      WHERE id = ${taskId}`);
+    return receiptId;
+  });
+
+  const finalizeTaskLifecycle = (operationId: string) =>
+    Effect.gen(function* () {
+      const found = yield* first(sql`SELECT * FROM lifecycle_operations WHERE id = ${operationId}`);
       if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
-      const operation = decodeLifecycleOperation(found);
-      if (operation.status === "completed")
+      const operation = yield* decodeLifecycleOperation(found);
+      if (operation.status === "completed") {
+        yield* notifyLifecycle(operation, null);
         return { status: "completed" as const, operationId, targetId: operation.target_id };
-      const task = decodeLifecycleTask(
-        sqlite
-          .prepare(
-            `SELECT project_id, origin_session_id, agent_id, parent_run_id, active_attempt_id,
-                    archived_at, delete_requested_at, deleted_at, purge_receipt_id
-             FROM work_tasks WHERE id = ?`,
-          )
-          .get(operation.target_id),
-      );
+      }
+      const task = yield* lifecycleTaskOf(operation.target_id);
       const now = effectClock.currentTimeMillisUnsafe();
       if (task.active_attempt_id !== null) {
-        sqlite
-          .prepare(
-            "UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ? WHERE id = ?",
-          )
-          .run(now, operationId);
+        yield* run(sql`UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ${now}
+          WHERE id = ${operationId}`);
         return { status: "waiting_for_stop" as const, operationId, targetId: operation.target_id };
       }
-      if (operation.intent === "restore") {
-        sqlite
-          .prepare("UPDATE work_tasks SET archived_at = NULL, updated_at = ? WHERE id = ?")
-          .run(now, operation.target_id);
-      } else if (operation.intent === "archive") {
-        sqlite
-          .prepare("UPDATE work_tasks SET archived_at = ?, updated_at = ? WHERE id = ?")
-          .run(now, now, operation.target_id);
-      } else {
-        sqlite
-          .prepare(
-            "UPDATE lifecycle_operations SET status = 'purging', updated_at = ? WHERE id = ?",
-          )
-          .run(now, operationId);
-        const evidence = sqlite
-          .prepare(
-            `UPDATE evidence_refs SET locator = NULL, verification = 'source_deleted',
-                    source_deleted_at = ?, updated_at = ? WHERE task_id = ?`,
-          )
-          .run(now, now, operation.target_id).changes;
-        sqlite
-          .prepare(
-            `UPDATE memory_candidate_evidence SET evidence_ref_id = NULL, source_deleted_at = ?
-             WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE task_id = ?)`,
-          )
-          .run(now, operation.target_id);
-        const artifacts = sqlite
-          .prepare(
-            `UPDATE work_artifacts SET locator = NULL, verification = 'source_deleted',
-                    source_deleted_at = ?, updated_at = ? WHERE task_id = ?`,
-          )
-          .run(now, now, operation.target_id).changes;
-        const checkpoints = sqlite
-          .prepare("DELETE FROM work_checkpoints WHERE task_id = ?")
-          .run(operation.target_id).changes;
-        sqlite
-          .prepare(
-            "DELETE FROM chat_metadata WHERE namespace = 'background-task-result' AND key = ?",
-          )
-          .run(operation.target_id);
-        const events = sqlite
-          .prepare("DELETE FROM run_events WHERE task_id = ?")
-          .run(operation.target_id).changes;
-        sqlite
-          .prepare("UPDATE agent_invocations SET message = '' WHERE task_id = ?")
-          .run(operation.target_id);
-        sqlite
-          .prepare(
-            `UPDATE parent_notifications SET summary = 'Deleted task lifecycle notification', payload = '{}'
-             WHERE task_id = ?`,
-          )
-          .run(operation.target_id);
-        const receiptId = randomUUID();
-        sqlite
-          .prepare(
-            `INSERT INTO purge_receipts
-             (id, operation_id, project_id, target_kind, target_id, policy_version,
-              purged_counts, retained_kinds, completed_at)
-             VALUES (?, ?, ?, 'task', ?, 1, ?, ?, ?)`,
-          )
-          .run(
-            receiptId,
-            operationId,
-            operation.project_id,
-            operation.target_id,
-            JSON.stringify({ evidence, artifacts, checkpoints, events }),
-            JSON.stringify([
-              "task_tombstone",
-              "attempt_lineage",
-              "answer_claims",
-              "adopted_memory",
-            ]),
-            now,
-          );
-        sqlite
-          .prepare(
-            `UPDATE work_tasks SET title = 'Deleted task', request = '', agent_name = 'deleted subagent',
-                    archived_at = NULL, deleted_at = ?, purge_receipt_id = ?, updated_at = ?
-             WHERE id = ?`,
-          )
-          .run(now, receiptId, now, operation.target_id);
+      let receiptId: string | null = null;
+      switch (operation.intent) {
+        case "restore":
+          yield* run(sql`UPDATE work_tasks SET archived_at = NULL, updated_at = ${now}
+            WHERE id = ${operation.target_id}`);
+          break;
+        case "archive":
+          yield* run(sql`UPDATE work_tasks SET archived_at = ${now}, updated_at = ${now}
+            WHERE id = ${operation.target_id}`);
+          break;
+        case "delete":
+          receiptId = yield* purgeTask(operation, now);
+          break;
       }
-      sqlite
-        .prepare(
-          `UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
-                  updated_at = ?, completed_at = ? WHERE id = ?`,
-        )
-        .run(now, now, operationId);
+      yield* run(sql`UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
+          updated_at = ${now}, completed_at = ${now}
+        WHERE id = ${operationId}`);
+      yield* notifyLifecycle(operation, receiptId);
       return {
         status: "completed" as const,
         operationId,
         targetId: operation.target_id,
         intent: operation.intent,
-        receiptId:
-          operation.intent === "delete"
-            ? decodeLifecycleTask(
-                sqlite
-                  .prepare(
-                    `SELECT project_id, origin_session_id, agent_id, parent_run_id, active_attempt_id,
-                            archived_at, delete_requested_at, deleted_at, purge_receipt_id
-                     FROM work_tasks WHERE id = ?`,
-                  )
-                  .get(operation.target_id),
-              ).purge_receipt_id
-            : null,
+        receiptId,
       };
-    });
-    if (completed.status === "completed") {
-      const operation = decodeLifecycleOperation(
-        sqlite.prepare("SELECT * FROM lifecycle_operations WHERE id = ?").get(operationId),
-      );
-      if (operation.intent !== "restore")
-        notifyParent({
-          taskId: operation.target_id,
-          kind: operation.intent === "delete" ? "deleted" : "archived",
-          summary:
-            operation.intent === "delete"
-              ? "Subagent task deleted; adopted project knowledge was retained"
-              : "Subagent task archived",
-          idempotencyKey: `lifecycle:${operationId}:${operation.intent}`,
-          payload: {
-            operationId,
-            receiptId: "receiptId" in completed ? (completed.receiptId ?? null) : null,
-          },
-        });
-    }
-    return completed;
-  };
+    }).pipe(sql.withTransaction);
 
-  /** Archives a non-active task without discarding its execution status or project provenance. */
-  const recoverLifecycleOperations = () => {
-    // SAFETY: the lifecycle schema constrains target_kind and intent to these literal unions.
-    const pending = sqlite
-      .prepare(
-        `SELECT id, target_kind, target_id, intent FROM lifecycle_operations
-         WHERE status IN ('requested', 'cancelling', 'waiting_for_stop', 'purging', 'blocked')
-         ORDER BY CASE target_kind WHEN 'task' THEN 0 ELSE 1 END, requested_at, id`,
-      )
-      .all() as {
-      id: string;
-      target_kind: "task" | "session";
-      target_id: string;
-      intent: "archive" | "restore" | "delete";
-    }[];
+  /** Finishes lifecycle operations a crash left between request and completion. */
+  const recoverLifecycleOperations = Effect.fnUntraced(function* () {
+    const pending = yield* decodePendingLifecycleRows(
+      yield* sql`SELECT id, target_kind, target_id, intent FROM lifecycle_operations
+        WHERE status IN ('requested', 'cancelling', 'waiting_for_stop', 'purging', 'blocked')
+        ORDER BY CASE target_kind WHEN 'task' THEN 0 ELSE 1 END, requested_at, id`,
+    );
     for (const operation of pending) {
       if (operation.target_kind === "task") {
-        finalizeTaskLifecycle(operation.id);
+        yield* finalizeTaskLifecycle(operation.id);
         continue;
       }
       if (operation.intent === "delete") {
-        // SAFETY: this statement selects the string Task primary key only.
-        const tasks = sqlite
-          .prepare(
-            `SELECT id FROM work_tasks
-             WHERE origin_session_id = ? AND deleted_at IS NULL ORDER BY created_at, id`,
-          )
-          .all(operation.target_id) as { id: string }[];
+        const tasks = yield* decodeIds(
+          yield* sql`SELECT id FROM work_tasks
+            WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL
+            ORDER BY created_at, id`,
+        );
         for (const task of tasks) {
-          const requested = requestTaskLifecycle({
+          const requested = yield* requestTaskLifecycle({
             sessionId: operation.target_id,
             taskId: task.id,
             intent: "delete",
             idempotencyKey: `session:${operation.id}:task:${task.id}`,
           });
-          if (
-            requested.status !== "completed" &&
-            "operationId" in requested &&
-            isTruthy(requested.operationId)
-          )
-            finalizeTaskLifecycle(requested.operationId);
+          if (requested.status !== "completed" && isTruthy(requested.operationId))
+            yield* finalizeTaskLifecycle(requested.operationId);
         }
       }
-      finalizeSessionLifecycle(operation.id);
+      yield* finalizeSessionLifecycle(operation.id);
     }
-  };
+  });
 
   const archiveTask = (sessionId: string, taskId: string) =>
-    atomic(() => {
-      const existing = sqlite
-        .prepare(
-          `SELECT active_attempt_id, status, archived_at FROM work_tasks
-           WHERE id = ? AND origin_session_id = ?`,
-        )
-        .get(taskId, sessionId);
+    Effect.gen(function* () {
+      const existing =
+        yield* first(sql`SELECT active_attempt_id, status, archived_at FROM work_tasks
+        WHERE id = ${taskId} AND origin_session_id = ${sessionId}`);
       const decoded = Schema.decodeUnknownOption(
         Schema.Struct({
           active_attempt_id: Schema.NullOr(Schema.String),
@@ -2674,11 +2161,11 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, reason: "attempt_alive" as const };
       if (!["interrupted", "resumable", "completed", "failed", "cancelled"].includes(task.status))
         return { status: "blocked" as const, reason: "task_not_archivable" as const };
-      sqlite
-        .prepare("UPDATE work_tasks SET archived_at = ?, updated_at = ? WHERE id = ?")
-        .run(effectClock.currentTimeMillisUnsafe(), effectClock.currentTimeMillisUnsafe(), taskId);
+      const now = effectClock.currentTimeMillisUnsafe();
+      yield* run(sql`UPDATE work_tasks SET archived_at = ${now}, updated_at = ${now}
+        WHERE id = ${taskId}`);
       return { status: "archived" as const, taskId };
-    });
+    }).pipe(sql.withTransaction);
 
   /**
    * Queue a user-requested logical resume. Execution waits for the next valid parent run so the
@@ -2690,21 +2177,18 @@ const make = Effect.gen(function* () {
     readonly expectedAttemptId: string;
     readonly confirmUncertain: boolean;
   }) =>
-    atomic(() => {
-      const candidate = sqlite
-        .prepare(
-          `SELECT t.id, t.origin_session_id, t.agent_id, t.request, t.status, t.active_attempt_id, t.archived_at, t.delete_requested_at, t.deleted_at,
-                  a.id AS previous_attempt_id, a.attempt_number AS previous_attempt_number,
-                  a.status AS previous_status, a.thread_id
-           FROM work_tasks t
-           JOIN agent_run_attempts a ON a.task_id = t.id
-           WHERE t.id = ? AND t.origin_session_id = ?
-           ORDER BY a.attempt_number DESC LIMIT 1`,
-        )
-        .get(input.taskId, input.sessionId);
+    Effect.gen(function* () {
+      const candidate = yield* first(sql`SELECT t.id, t.origin_session_id, t.agent_id, t.request,
+          t.status, t.active_attempt_id, t.archived_at, t.delete_requested_at, t.deleted_at,
+          a.id AS previous_attempt_id, a.attempt_number AS previous_attempt_number,
+          a.status AS previous_status, a.thread_id
+        FROM work_tasks t
+        JOIN agent_run_attempts a ON a.task_id = t.id
+        WHERE t.id = ${input.taskId} AND t.origin_session_id = ${input.sessionId}
+        ORDER BY a.attempt_number DESC LIMIT 1`);
       if (!isTruthy(candidate))
         return { status: "blocked" as const, reason: "task_not_found" as const };
-      const task = decodeResumeTask(candidate);
+      const task = yield* decodeResumeTask(candidate);
       if (task.deleted_at !== null || task.delete_requested_at !== null)
         return { status: "blocked" as const, reason: "task_deleted" as const };
       if (task.archived_at !== null)
@@ -2719,66 +2203,47 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, reason: "task_terminal" as const };
       if (task.previous_attempt_id !== input.expectedAttemptId)
         return { status: "blocked" as const, reason: "stale_attempt" as const };
-      const checkpointRow = sqlite
-        .prepare(
-          `SELECT id, completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-                  remaining_work
-           FROM work_checkpoints WHERE attempt_id = ? ORDER BY event_sequence DESC LIMIT 1`,
-        )
-        .get(task.previous_attempt_id);
+      const checkpointRow = yield* first(sql`SELECT id, completed_tool_call_ids,
+          uncertain_tool_call_ids, pending_approval_ids, remaining_work
+        FROM work_checkpoints WHERE attempt_id = ${task.previous_attempt_id}
+        ORDER BY event_sequence DESC LIMIT 1`);
       if (!isTruthy(checkpointRow))
         return { status: "blocked" as const, reason: "missing_checkpoint" as const };
-      const checkpoint = decodeCheckpoint(checkpointRow);
-      const uncertain = decodeStringArray(checkpoint.uncertain_tool_call_ids);
+      const checkpoint = yield* decodeCheckpoint(checkpointRow);
+      const uncertain = yield* decodeStringArray(checkpoint.uncertain_tool_call_ids);
       if (uncertain.length > 0 && !input.confirmUncertain)
         return { status: "blocked" as const, reason: "uncertain_side_effect" as const };
 
       const now = effectClock.currentTimeMillisUnsafe();
-      sqlite
-        .prepare(
-          `INSERT INTO work_recovery_jobs
-           (id, project_id, task_id, interrupted_attempt_id, status, blocker,
-            claimed_by, claimed_at, created_at, updated_at, confirm_uncertain)
-           SELECT ?, project_id, id, ?, 'queued', NULL, NULL, NULL, ?, ?, ?
-           FROM work_tasks WHERE id = ?
-           ON CONFLICT(task_id) DO UPDATE SET
-             interrupted_attempt_id = excluded.interrupted_attempt_id,
-             status = 'queued', blocker = NULL, claimed_by = NULL, claimed_at = NULL,
-             updated_at = excluded.updated_at,
-             confirm_uncertain = excluded.confirm_uncertain`,
-        )
-        .run(
-          randomUUID(),
-          task.previous_attempt_id,
-          now,
-          now,
-          input.confirmUncertain ? 1 : 0,
-          task.id,
-        );
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const queued = EffectFunction.flow(
-        Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String })),
-        Result.getOrThrow,
-      )(sqlite.prepare("SELECT id FROM work_recovery_jobs WHERE task_id = ?").get(task.id));
+      yield* run(sql`INSERT INTO work_recovery_jobs
+        (id, project_id, task_id, interrupted_attempt_id, status, blocker,
+         claimed_by, claimed_at, created_at, updated_at, confirm_uncertain)
+        SELECT ${yield* crypto.randomUUIDv4()}, project_id, id, ${task.previous_attempt_id},
+          'queued', NULL, NULL, NULL, ${now}, ${now}, ${input.confirmUncertain ? 1 : 0}
+        FROM work_tasks WHERE id = ${task.id}
+        ON CONFLICT(task_id) DO UPDATE SET
+          interrupted_attempt_id = excluded.interrupted_attempt_id,
+          status = 'queued', blocker = NULL, claimed_by = NULL, claimed_at = NULL,
+          updated_at = excluded.updated_at,
+          confirm_uncertain = excluded.confirm_uncertain`);
+      const queued = yield* decodeId(
+        yield* first(sql`SELECT id FROM work_recovery_jobs WHERE task_id = ${task.id}`),
+      );
       return {
         status: "queued" as const,
         jobId: queued.id,
         taskId: task.id,
         expectedAttemptId: task.previous_attempt_id,
       };
-    });
+    }).pipe(sql.withTransaction);
 
   const claimRecoveryJobs = (sessionId: string, parentRunId: string) =>
-    atomic(() => {
-      const jobs = decodeRecoveryJobRows(
-        sqlite
-          .prepare(
-            `SELECT j.id, j.task_id, j.interrupted_attempt_id, j.confirm_uncertain
-             FROM work_recovery_jobs j JOIN work_tasks t ON t.id = j.task_id
-             WHERE j.status = 'queued' AND t.origin_session_id = ?
-             ORDER BY j.created_at, j.id`,
-          )
-          .all(sessionId),
+    Effect.gen(function* () {
+      const jobs = yield* decodeRecoveryJobRows(
+        yield* sql`SELECT j.id, j.task_id, j.interrupted_attempt_id, j.confirm_uncertain
+          FROM work_recovery_jobs j JOIN work_tasks t ON t.id = j.task_id
+          WHERE j.status = 'queued' AND t.origin_session_id = ${sessionId}
+          ORDER BY j.created_at, j.id`,
       );
       const claimed: Array<{
         readonly jobId: string;
@@ -2786,15 +2251,11 @@ const make = Effect.gen(function* () {
       }> = [];
       for (const job of jobs) {
         const now = effectClock.currentTimeMillisUnsafe();
-        const acquired = sqlite
-          .prepare(
-            `UPDATE work_recovery_jobs
-             SET status = 'claimed', claimed_by = ?, claimed_at = ?, updated_at = ?
-             WHERE id = ? AND status = 'queued'`,
-          )
-          .run(parentRunId, now, now, job.id);
+        const acquired = yield* run(sql`UPDATE work_recovery_jobs
+          SET status = 'claimed', claimed_by = ${parentRunId}, claimed_at = ${now}, updated_at = ${now}
+          WHERE id = ${job.id} AND status = 'queued'`);
         if (acquired.changes !== 1) continue;
-        const claim = claimResume({
+        const claim = yield* claimResume({
           sessionId,
           taskId: job.task_id,
           expectedAttemptId: job.interrupted_attempt_id,
@@ -2802,106 +2263,93 @@ const make = Effect.gen(function* () {
           parentToolCallId: `recovery:${job.id}`,
           confirmUncertain: job.confirm_uncertain === 1,
         });
-        if (claim.status === "started") claimed.push({ jobId: job.id, claim });
-        else
-          sqlite
-            .prepare(
-              `UPDATE work_recovery_jobs SET status = 'blocked', blocker = ?, updated_at = ?
-               WHERE id = ?`,
-            )
-            .run(
+        switch (claim.status) {
+          case "started":
+            claimed.push({ jobId: job.id, claim });
+            break;
+          case "blocked": {
+            const blocker =
               claim.reason === "origin_deleted" || claim.reason === "agent_deleted"
                 ? claim.reason
-                : "missing_checkpoint",
-              now,
-              job.id,
-            );
+                : "missing_checkpoint";
+            yield* run(sql`UPDATE work_recovery_jobs SET status = 'blocked', blocker = ${blocker},
+                updated_at = ${now}
+              WHERE id = ${job.id}`);
+            break;
+          }
+        }
       }
       return claimed;
-    });
+    }).pipe(sql.withTransaction);
 
   const finishRecoveryJob = (jobId: string, completed: boolean) =>
-    sqlite
-      .prepare(
-        `UPDATE work_recovery_jobs SET status = ?, updated_at = ?
-         WHERE id = ? AND status = 'claimed'`,
-      )
-      .run(completed ? "completed" : "failed", effectClock.currentTimeMillisUnsafe(), jobId)
-      .changes === 1;
-
-  const events = (sessionId: string, afterCursor = 0, limit = 200): TraceEventView[] =>
-    decodeStoredEventRows(
-      sqlite
-        .prepare(
-          `SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
-                  attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
-           FROM run_events
-           WHERE origin_session_id = ? AND seq > ?
-             AND visibility <> 'internal' AND redaction <> 'omitted'
-           ORDER BY seq LIMIT ?`,
-        )
-        .all(sessionId, Math.max(0, afterCursor), Math.min(Math.max(1, limit), 500)),
-    ).map(eventView);
-
-  const latestCursor = (sessionId: string) => {
-    const row = decodeCursor(
-      sqlite
-        .prepare("SELECT coalesce(max(seq), 0) AS seq FROM run_events WHERE origin_session_id = ?")
-        .get(sessionId),
+    Effect.map(
+      run(sql`UPDATE work_recovery_jobs SET status = ${completed ? "completed" : "failed"},
+          updated_at = ${effectClock.currentTimeMillisUnsafe()}
+        WHERE id = ${jobId} AND status = 'claimed'`),
+      (result) => result.changes === 1,
     );
-    return row.seq;
-  };
 
-  const projectLatestCursor = (projectId: string) => {
-    const row = decodeCursor(
-      sqlite
-        .prepare(
-          `SELECT coalesce(max(e.seq), 0) AS seq
-           FROM run_events e JOIN work_tasks t ON t.id = e.task_id WHERE t.project_id = ?`,
-        )
-        .get(projectId),
+  const events = (sessionId: string, afterCursor = 0, limit = 200) =>
+    sql`SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
+        attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
+      FROM run_events
+      WHERE origin_session_id = ${sessionId} AND seq > ${Math.max(0, afterCursor)}
+        AND visibility <> 'internal' AND redaction <> 'omitted'
+      ORDER BY seq LIMIT ${Math.min(Math.max(1, limit), 500)}`.pipe(
+      Effect.flatMap(decodeStoredEventRows),
+      Effect.flatMap(eventViews),
     );
-    return row.seq;
-  };
+
+  const latestCursor = (sessionId: string) =>
+    first(sql`SELECT coalesce(max(seq), 0) AS seq FROM run_events
+      WHERE origin_session_id = ${sessionId}`).pipe(
+      Effect.flatMap(decodeCursor),
+      Effect.map((row) => row.seq),
+    );
+
+  const projectLatestCursor = (projectId: string) =>
+    first(sql`SELECT coalesce(max(e.seq), 0) AS seq
+      FROM run_events e JOIN work_tasks t ON t.id = e.task_id WHERE t.project_id = ${projectId}`).pipe(
+      Effect.flatMap(decodeCursor),
+      Effect.map((row) => row.seq),
+    );
 
   const snapshot = (sessionId: string, afterCursor = 0, limit = 500) =>
-    atomic(() => {
-      const upperCursor = latestCursor(sessionId);
+    Effect.gen(function* () {
+      const upperCursor = yield* latestCursor(sessionId);
       const boundedLimit = Math.min(Math.max(1, limit), 500);
-      const rows = decodeStoredEventRows(
-        sqlite
-          .prepare(
-            `SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
-                    attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
-             FROM run_events
-             WHERE origin_session_id = ? AND seq > ? AND seq <= ?
-               AND visibility <> 'internal' AND redaction <> 'omitted'
-             ORDER BY seq LIMIT ?`,
-          )
-          .all(sessionId, Math.max(0, afterCursor), upperCursor, boundedLimit),
+      const rows = yield* decodeStoredEventRows(
+        yield* sql`SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
+            attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
+          FROM run_events
+          WHERE origin_session_id = ${sessionId} AND seq > ${Math.max(0, afterCursor)}
+            AND seq <= ${upperCursor}
+            AND visibility <> 'internal' AND redaction <> 'omitted'
+          ORDER BY seq LIMIT ${boundedLimit}`,
       );
       const cursor =
         rows.length === boundedLimit ? (rows.at(-1)?.cursor ?? afterCursor) : upperCursor;
-      return { cursor, events: rows.map(eventView) };
-    });
+      return { cursor, events: yield* eventViews(rows) };
+    }).pipe(sql.withTransaction);
 
   const latestCursorEffect = (sessionId: string) =>
-    Effect.try({
-      try: () => latestCursor(sessionId),
-      catch: (cause) =>
+    latestCursor(sessionId).pipe(
+      Effect.mapError((cause) =>
         WorkTraceReadFailed.make({
           operation: "latest_cursor",
           reason: { _tag: "ReadFailed" },
           cause,
         }),
-    });
+      ),
+    );
 
   const snapshotEffect = (options: { readonly sessionId: string; readonly afterCursor: number }) =>
-    Effect.try({
-      try: () => snapshot(options.sessionId, options.afterCursor),
-      catch: (cause) =>
+    snapshot(options.sessionId, options.afterCursor).pipe(
+      Effect.mapError((cause) =>
         WorkTraceReadFailed.make({ operation: "snapshot", reason: { _tag: "ReadFailed" }, cause }),
-    });
+      ),
+    );
 
   const waitForChangeEffect = Effect.fnUntraced(function* (options: {
     readonly sessionId: string;
@@ -2945,83 +2393,54 @@ const make = Effect.gen(function* () {
       },
     );
 
-  const attemptHandle = (taskId: string, attemptId: string): AttemptHandle | null => {
-    const row = sqlite
-      .prepare("SELECT * FROM agent_run_attempts WHERE id = ? AND task_id = ?")
-      .get(attemptId, taskId);
-    if (!isTruthy(row)) return null;
-    const attempt = decodeAttempt(row);
-    return {
-      id: attempt.id,
-      taskId: attempt.task_id,
-      invocationId: attempt.invocation_id,
-      chatRunId: attempt.chat_run_id,
-      threadId: attempt.thread_id,
-      attemptNumber: attempt.attempt_number,
-    };
-  };
+  const attemptHandle = (taskId: string, attemptId: string) =>
+    Effect.gen(function* () {
+      const row = yield* first(sql`SELECT * FROM agent_run_attempts
+        WHERE id = ${attemptId} AND task_id = ${taskId}`);
+      return isTruthy(row) ? handleOf(yield* decodeAttempt(row)) : null;
+    });
 
-  const activeAttemptForAgent = (agentId: string): AttemptHandle | null => {
-    const row = sqlite
-      .prepare(
-        `SELECT a.* FROM agent_run_attempts a
-         JOIN work_tasks t ON t.id = a.task_id
-         WHERE t.agent_id = ? AND a.status IN ('queued', 'running', 'waiting', 'blocked')
-         ORDER BY a.created_at DESC LIMIT 1`,
-      )
-      .get(agentId);
-    if (!isTruthy(row)) return null;
-    const decoded = decodeAttempt(row);
-    return {
-      id: decoded.id,
-      taskId: decoded.task_id,
-      invocationId: decoded.invocation_id,
-      attemptNumber: decoded.attempt_number,
-      chatRunId: decoded.chat_run_id,
-      threadId: decoded.thread_id,
-    };
-  };
+  const activeAttemptForAgent = (agentId: string) =>
+    Effect.gen(function* () {
+      const row = yield* first(sql`SELECT a.* FROM agent_run_attempts a
+        JOIN work_tasks t ON t.id = a.task_id
+        WHERE t.agent_id = ${agentId} AND a.status IN ('queued', 'running', 'waiting', 'blocked')
+        ORDER BY a.created_at DESC LIMIT 1`);
+      return isTruthy(row) ? handleOf(yield* decodeAttempt(row)) : null;
+    });
 
   return {
-    recoveredAttempts: recover,
+    recoveredAttempts,
     startAttempt,
     recordSteer,
     appendEvent,
     notifyParent,
     consumeParentNotifications,
     holdParentNotifications: (sessionId: string) =>
-      sqlite
-        .prepare(
-          `INSERT INTO parent_notification_holds (session_id, held_at)
-           SELECT id, ? FROM sessions WHERE id = ?
-           ON CONFLICT(session_id) DO UPDATE SET held_at = excluded.held_at`,
-        )
-        .run(effectClock.currentTimeMillisUnsafe(), sessionId),
+      Effect.asVoid(
+        run(sql`INSERT INTO parent_notification_holds (session_id, held_at)
+          SELECT id, ${effectClock.currentTimeMillisUnsafe()} FROM sessions WHERE id = ${sessionId}
+          ON CONFLICT(session_id) DO UPDATE SET held_at = excluded.held_at`),
+      ),
     resumeParentNotifications: (sessionId: string) =>
-      sqlite.prepare("DELETE FROM parent_notification_holds WHERE session_id = ?").run(sessionId),
+      Effect.asVoid(
+        run(sql`DELETE FROM parent_notification_holds WHERE session_id = ${sessionId}`),
+      ),
     parentNotificationsHeld: (sessionId: string) =>
-      sqlite
-        .prepare("SELECT 1 FROM parent_notification_holds WHERE session_id = ?")
-        .get(sessionId) !== undefined,
+      Effect.map(
+        first(sql`SELECT 1 FROM parent_notification_holds WHERE session_id = ${sessionId}`),
+        (row) => row !== undefined,
+      ),
     /** Durable wake-up source. Reading does not mark a notification delivered. */
-    pendingParentNotificationSessions: () =>
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(
-          Schema.Array(Schema.Struct({ origin_session_id: Schema.String })),
-        ),
-        Result.getOrThrow,
-      )(
-        sqlite
-          .prepare(
-            `SELECT DISTINCT origin_session_id FROM parent_notifications n
-             WHERE delivered_at IS NULL AND origin_session_id IS NOT NULL
-               AND NOT EXISTS (
-                 SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.origin_session_id
-               )`,
-          )
-          .all(),
-      ).map((row) => row.origin_session_id),
+    pendingParentNotificationSessions:
+      sql`SELECT DISTINCT origin_session_id FROM parent_notifications n
+        WHERE delivered_at IS NULL AND origin_session_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.origin_session_id
+          )`.pipe(
+        Effect.flatMap(decodeOriginSessions),
+        Effect.map((rows) => rows.map((row) => row.origin_session_id)),
+      ),
     releaseParentNotifications,
     transitionAttempt,
     checkpoint,
@@ -3040,20 +2459,16 @@ const make = Effect.gen(function* () {
     projectTaskTree,
     taskDetail,
     /** A small session-authorized projection for event-driven waits, not a report retrieval. */
-    subagentAttemptStatus: (sessionId: string, taskId: string, attemptId: string) => {
-      const row = sqlite
-        .prepare(`SELECT a.status FROM agent_run_attempts a
-        JOIN work_tasks t ON t.id = a.task_id
-        WHERE a.id = ? AND a.task_id = ? AND t.origin_session_id = ?
-          AND t.agent_id IS NOT NULL AND t.deleted_at IS NULL AND t.delete_requested_at IS NULL`)
-        .get(attemptId, taskId, sessionId);
-      if (!isTruthy(row)) throw new Error("Subagent attempt not found in this session");
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      return EffectFunction.flow(
-        Schema.decodeUnknownResult(Schema.Struct({ status: AttemptStatus })),
-        Result.getOrThrow,
-      )(row).status;
-    },
+    subagentAttemptStatus: (sessionId: string, taskId: string, attemptId: string) =>
+      Effect.gen(function* () {
+        const row = yield* first(sql`SELECT a.status FROM agent_run_attempts a
+          JOIN work_tasks t ON t.id = a.task_id
+          WHERE a.id = ${attemptId} AND a.task_id = ${taskId} AND t.origin_session_id = ${sessionId}
+            AND t.agent_id IS NOT NULL AND t.deleted_at IS NULL AND t.delete_requested_at IS NULL`);
+        if (!isTruthy(row))
+          return yield* rejected("attempt_not_found", "Subagent attempt not found in this session");
+        return (yield* decodeAttemptStatus(row)).status;
+      }),
     projectTaskDetail,
     claimResume,
     requestResume,
@@ -3080,5 +2495,5 @@ const make = Effect.gen(function* () {
 export class WorkTraceStore extends Context.Service<WorkTraceStore, Effect.Success<typeof make>>()(
   "memory-agent/work-trace/store/WorkTraceStore",
 ) {
-  static readonly layer = Layer.effect(WorkTraceStore, make);
+  static readonly layer = Layer.effect(WorkTraceStore, make).pipe(Layer.provide(NodeCrypto.layer));
 }

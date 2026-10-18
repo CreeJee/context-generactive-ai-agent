@@ -1,8 +1,7 @@
 import { Effect, Result, Option, Schema } from "effect";
 import {
   AppEvents,
-  Database,
-  importLegacyOAuthProfile,
+  OAuthProfiles,
   ProviderId,
   providerConnection,
   ProviderRegistry,
@@ -44,18 +43,14 @@ export function loader({ request }: Route.LoaderArgs) {
 
       const response = Effect.gen(function* () {
         const configured = yield* (yield* ProviderRegistry).get(provider);
-        const { sqlite } = yield* Database;
         // Migrate when the sidebar first checks this provider. If the vault is unavailable,
         // keep the legacy connection usable; the next status request can retry the copy.
         const connection = providerConnection(provider);
         switch (connection.type) {
           case "subscription":
-            yield* Effect.promise(() =>
-              importLegacyOAuthProfile({
-                sqlite: sqlite,
-                provider: connection.accountProvider,
-              }).catch(() => null),
-            );
+            yield* (yield* OAuthProfiles)
+              .importLegacy(connection.accountProvider)
+              .pipe(Effect.ignore);
             break;
           case "compatible-endpoint":
             break;

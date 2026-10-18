@@ -6,7 +6,6 @@ import { attachmentUrl } from "../../src/attachments/urls.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
 import { btwToolNames } from "../../src/btw/contracts.ts";
 import { btwToolGuard } from "../../src/btw/tools.ts";
-import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { randomUUID } from "../../src/runtime/synchronous-crypto.ts";
@@ -14,6 +13,7 @@ import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlGet } from "../support/sql.ts";
 
 const sdk = <A>(operation: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -49,9 +49,10 @@ const btwRequest = (text: string, imageIds: readonly string[] = []) =>
 
 const Count = Schema.Struct({ count: Schema.Finite });
 const count = (sql: string, ...values: string[]) =>
-  Effect.flatMap(Database, ({ sqlite }) =>
-    Schema.decodeUnknownEffect(Count)(sqlite.prepare(sql).get(...values)),
-  ).pipe(Effect.map((row) => row.count));
+  sqlGet(sql, ...values).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Count)),
+    Effect.map((row) => row.count),
+  );
 
 /** Calls the tool its question names (`promote` asks for a write), then answers. */
 const responder: ScriptedResponder = (invocation) => {
@@ -176,7 +177,7 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
       Effect.gen(function* () {
         yield* selectTestModel();
         const env = yield* TestEnv;
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",

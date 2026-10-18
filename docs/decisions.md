@@ -2082,6 +2082,17 @@
 - 임베딩 세션은 `ScopedRef<Option<ModelSession>>`와 Semaphore(1)로 소유한다. 실행 중 취소·load 실패·transport 유실은 세션을 버리고, 다음 요청이 새 worker를 연다.
 - native owner host는 요청마다 job fiber를 `FiberMap`에 두고 Semaphore(1) 슬롯과 `Ref` 원장(queued/active)으로 용량 32·중복·취소·조회를 관리한다. 대기 중 떠난 호출자는 전송 전에 제거하고, 실행 중 job은 worker 응답까지 슬롯을 유지한다. worker 종료와 치명적 reason은 남은 대기자를 모두 실패시킨다.
 
+## 남은 DB 접근의 SqlClient 전환과 node:* 정리 (2026-10-18)
+
+- 사용자 결정: 앞 PR을 머지한 뒤 남은 원시 SQLite·`Database.atomic` 사용처를 모두 `SqlClient`로 옮기고, Effect에 대응 API가 있는 `node:*` 모듈을 걷어 낸다.
+- `Database`는 열고 마이그레이션한 연결의 `SqlClient`만 제공한다. `Database.sqlite`·`atomic`·`TransactionInterleaving`을 지우고, 동기 SQL이 lease 밖에서 끼어들 일이 없어졌으므로 `withTransaction`의 `PreventSchedulerYield` 우회도 지운다.
+- 노드·그래프·해석·검색·secret sweep·가져오기·작업 추적·구독 계정 프로필을 도메인별 커밋으로 옮긴다. 거부 사유는 리터럴 reason을 가진 typed error로 오류 채널에 남긴다.
+- SDK가 동기로 묻는 경계(계정 바인딩된 실행의 계정 선택, 카탈로그 키)는 `OAuthProfiles`가 소유한 커밋 스냅샷을 읽는다. 스냅샷은 쓰기와 같은 트랜잭션 안에서 다시 읽어 `Ref`에 둔다. 실행 lease는 `DatabaseSync`를 키로 한 WeakMap 대신 서비스 인스턴스가 소유한다.
+- 원시 `DatabaseSync`는 다음 경계에만 남긴다: 시작 시 열기·마이그레이션, 별도 읽기 연결을 쓰는 native 검색 worker, RRSI의 읽기 전용 원본 DB(acquireRelease로 수명 관리), 마이그레이션 경계 테스트, 패키지 smoke 검사와 순수 SQLite 벤치마크 도구.
+- 테스트 fixture SQL은 `tests/support/sql.ts`(`sqlAll`·`sqlGet`·`sqlRun`·`sqlExec`·`sqlTransaction`)로 SqlClient를 거친다. `TestEnv`는 `OpenSqlClient` reference로 현재 열린 agent의 연결을 가리켜 `reopen` 뒤에도 닫힌 연결에 쓰지 않는다. `env.use` 안에서는 그 agent 자신의 SqlClient를 쓴다.
+- 앱이 쓰지 않는 Effect cluster 엔진이 lease 없는 어댑터로 owner 연결을 공유하던 계약 테스트와 atomic 전용 테스트는 지운다. 재시작 뒤 재생은 owner 엔진 테스트가, 0.0.13 cluster 테이블 제거는 남은 릴리즈 스키마 테스트가 맡는다.
+- `node:*`는 Effect 대응 API가 있으면 쓰지 않는다(fs·path·crypto·child_process·http·url). 파일 URL 변환은 `Path.fromFileUrl`·`toFileUrl`로 옮긴다. 대응 API가 없는 `worker_threads`·`os`·`sqlite`·`sea`·`module`·`zlib`·`perf_hooks`·`util`(`parseArgs`·`isDeepStrictEqual`)은 경계에 남긴다.
+
 ## OpenAI 호환 엔드포인트의 계정화 (2026-10-18)
 
 - OpenAI 호환 연결을 설정 하나가 아니라 계정 목록으로 관리한다. `ProviderId`의 `openai-compatible`은 연결 종류로 유지하고, 그 아래에 엔드포인트 계정을 여러 개 두며 선택 계정 하나가 새 실행에 쓰인다. 구독 공급자의 계정 목록·선택 계정과 같은 구조다. 엔드포인트마다 `ProviderId`를 만들지 않는 이유는 `ModelSelection`·DB·feature flag·공급자 간 동의가 고정된 `ProviderId`를 키로 쓰기 때문이다.

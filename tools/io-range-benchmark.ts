@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { NodeServices } from "@effect/platform-node";
 import { Cause, Console, Effect, FileSystem, Path } from "effect";
+import { connectionContext } from "../packages/memory-agent/src/db/database.ts";
 import { createResultPageReader } from "../packages/memory-agent/src/memory/result-pages.ts";
 import {
   createTextPageReader,
@@ -55,7 +56,8 @@ const program = Effect.gen(function* () {
   const resultText = "match 한글 😀\r\n".repeat(400000);
   sqlite.prepare("INSERT INTO nodes VALUES ('r', 'tool_result', 'p', 's', ?)").run(resultText);
   const oldResult = sqlite.prepare("SELECT * FROM nodes WHERE id = 'r'");
-  const resultReader = createResultPageReader(sqlite);
+  const context = yield* connectionContext(sqlite);
+  const resultReader = yield* Effect.provideContext(createResultPageReader, context);
   const rows = [];
   rows.push(
     yield* measure(
@@ -100,7 +102,7 @@ const program = Effect.gen(function* () {
       }),
     ),
   );
-  const savedReader = createResultPageReader(sqlite);
+  const savedReader = yield* Effect.provideContext(createResultPageReader, context);
   rows.push(
     yield* measure(
       "result new: index at save",

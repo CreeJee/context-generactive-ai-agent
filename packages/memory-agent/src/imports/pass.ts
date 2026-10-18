@@ -1,14 +1,13 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = platformPath;
-import { Option, Clock, DateTime, Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { Option, DateTime, Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
-import { Database } from "../db/database.ts";
 import { canonicalPathEffect } from "../files/paths.ts";
 import { Projects } from "../projects/projects.ts";
 import { SecretRedactor, type SecretRedactionFailed } from "../secrets/redactor.ts";
@@ -44,35 +43,22 @@ export type TranscriptCounts = ReadonlyArray<{
   readonly transcripts: number;
 }>;
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCursor = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({
-      byte_offset: Schema.Finite,
-      size: Schema.Finite,
-      mtime_ms: Schema.Finite,
-      skipped: Schema.NullOr(Schema.String),
-      cwd: Schema.NullOr(Schema.String),
-    }),
-  ),
-  Result.getOrThrow,
-);
-type Cursor = ReturnType<typeof decodeCursor>;
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeParent = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ parent: Schema.String })),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCount = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSessionId = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ session_id: Schema.String })),
-  Result.getOrThrow,
-);
+const Cursor = Schema.Struct({
+  byte_offset: Schema.Finite,
+  size: Schema.Finite,
+  mtime_ms: Schema.Finite,
+  skipped: Schema.NullOr(Schema.String),
+  cwd: Schema.NullOr(Schema.String),
+});
+type Cursor = typeof Cursor.Type;
+
+/** The import records could not be read or written; the cause stays with the error. */
+export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
+  "ImportStoreFailed",
+  { cause: Schema.Defect() },
+) {}
+const stored = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.mapError(effect, (cause) => ImportStoreFailed.make({ cause }));
 
 /** What settings says went wrong: the error's message, never the transcript's content. */
 const failureOf = (cause: Cause.Cause<unknown>) => {
@@ -96,10 +82,10 @@ const firstLine = (text: string) => text.replace(/\s+/gu, " ").trim().slice(0, t
 
 const make = (home: string) =>
   Effect.gen(function* () {
-    const effectClock = yield* Clock.Clock;
     const fs = yield* FileSystem.FileSystem;
     const filesystemContext = yield* Effect.context<FileSystem.FileSystem>();
-    const { sqlite, atomic } = yield* Database;
+    const sql = yield* SqlClient.SqlClient;
+    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const storage = yield* StorageRoot;
     const projects = yield* Projects;
     const sessions = yield* Sessions;
@@ -131,44 +117,63 @@ const make = (home: string) =>
       }
     };
 
-    const readCursor = sqlite.prepare(
-      "SELECT byte_offset, size, mtime_ms, skipped, cwd FROM import_cursors WHERE source = ? AND path = ?",
-    );
-    const saveCursor = sqlite.prepare(`
-      INSERT INTO import_cursors (source, path, external_id, cwd, byte_offset, size, mtime_ms, imported, skipped, failure, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+    const readCursor = SqlSchema.findOneOption({
+      Request: Schema.Struct({ source: Schema.String, path: Schema.String }),
+      Result: Cursor,
+      execute: ({ source, path }) => sql`SELECT byte_offset, size, mtime_ms, skipped, cwd
+        FROM import_cursors WHERE source = ${source} AND path = ${path}`,
+    });
+    const saveCursor = (
+      transcript: Transcript,
+      cursor: {
+        readonly cwd: string | null;
+        readonly offset: number;
+        readonly size: number;
+        readonly mtimeMs: number;
+        readonly imported: number;
+        readonly skipped: string | null;
+        readonly now: string;
+      },
+    ) => sql`
+      INSERT INTO import_cursors ${sql.insert({
+        source: transcript.source,
+        path: transcript.path,
+        external_id: transcript.externalId,
+        cwd: cursor.cwd,
+        byte_offset: cursor.offset,
+        size: cursor.size,
+        mtime_ms: cursor.mtimeMs,
+        imported: cursor.imported,
+        skipped: cursor.skipped,
+        failure: null,
+        updated_at: cursor.now,
+      })}
       ON CONFLICT (source, path) DO UPDATE SET external_id = excluded.external_id,
         cwd = coalesce(excluded.cwd, import_cursors.cwd), byte_offset = excluded.byte_offset,
         size = excluded.size, mtime_ms = excluded.mtime_ms,
         imported = import_cursors.imported + excluded.imported, skipped = excluded.skipped,
-        failure = NULL, updated_at = excluded.updated_at`);
-    // Keeps how far the transcript was read and what it wrote; size -1 makes the next pass retry it.
-    const saveFailure = sqlite.prepare(`
-      INSERT INTO import_cursors (source, path, external_id, size, mtime_ms, failure, updated_at)
-      VALUES (?, ?, ?, -1, 0, ?, ?)
-      ON CONFLICT (source, path) DO UPDATE SET size = -1, skipped = NULL,
-        failure = excluded.failure, updated_at = excluded.updated_at`);
-    const readMapping = sqlite.prepare(
-      "SELECT session_id FROM imported_sessions WHERE source = ? AND external_id = ?",
-    );
-    const saveMapping = sqlite.prepare(
-      "INSERT INTO imported_sessions (source, external_id, session_id) VALUES (?, ?, ?)",
-    );
-    const nameSession = sqlite.prepare(
-      "UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL",
-    );
+        failure = NULL, updated_at = excluded.updated_at`;
+    const readMapping = SqlSchema.findOneOption({
+      Request: Schema.Struct({ source: Schema.String, externalId: Schema.String }),
+      Result: Schema.Struct({ session_id: Schema.String }),
+      execute: ({ source, externalId }) => sql`SELECT session_id FROM imported_sessions
+        WHERE source = ${source} AND external_id = ${externalId}`,
+    });
 
-    /** Records why a transcript failed, so the pass can go on with the rest. */
+    /**
+     * Records why a transcript failed, so the pass can go on with the rest. Keeps how far the
+     * transcript was read and what it wrote; size -1 makes the next pass retry it.
+     */
     const recordFailure = (transcript: Transcript, cause: Cause.Cause<unknown>) =>
-      Effect.sync(() => {
-        saveFailure.run(
-          transcript.source,
-          transcript.path,
-          transcript.externalId,
-          failureOf(cause),
-          DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-        );
-      });
+      Effect.flatMap(
+        nowIso,
+        (now) => sql`
+          INSERT INTO import_cursors (source, path, external_id, size, mtime_ms, failure, updated_at)
+          VALUES (${transcript.source}, ${transcript.path}, ${transcript.externalId}, -1, 0,
+            ${failureOf(cause)}, ${now})
+          ON CONFLICT (source, path) DO UPDATE SET size = -1, skipped = NULL,
+            failure = excluded.failure, updated_at = excluded.updated_at`,
+      );
 
     /**
      * The project a recorded working directory belongs to, registering the folder when none does.
@@ -209,18 +214,21 @@ const make = (home: string) =>
             Effect.map(({ project }) => project !== null),
           );
 
-    const knownParents = sqlite.prepare("SELECT parent FROM worktree_parents WHERE project_id = ?");
-    const keepParent = sqlite.prepare(
-      "INSERT INTO worktree_parents (project_id, parent) VALUES (?, ?) ON CONFLICT DO NOTHING",
-    );
-
-    const countRows = (sql: string, id: string) => decodeCount(sqlite.prepare(sql).get(id)).count;
-    // The folded project's folder was the worktree its conversations ran in.
-    const markWorktree = sqlite.prepare(
-      "UPDATE sessions SET worktree_path = coalesce(worktree_path, ?) WHERE project_id = ?",
-    );
-    const moveSessions = sqlite.prepare("UPDATE sessions SET project_id = ? WHERE project_id = ?");
-    const moveNodes = sqlite.prepare("UPDATE nodes SET project_id = ? WHERE project_id = ?");
+    const knownParents = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ parent: Schema.String }),
+      execute: (projectId) =>
+        sql`SELECT parent FROM worktree_parents WHERE project_id = ${projectId}`,
+    });
+    /** Conversations held here and memory outside a session: what makes a project someone's own. */
+    const ownedRows = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ count: Schema.Finite }),
+      execute: (projectId) => sql`SELECT
+        (SELECT count(*) FROM sessions WHERE project_id = ${projectId} AND imported_from IS NULL)
+        + (SELECT count(*) FROM nodes WHERE project_id = ${projectId} AND session_id IS NULL)
+        AS count`,
+    });
 
     /**
      * Folds a project that only migration made for a worktree into its repository's project. Its
@@ -234,23 +242,19 @@ const make = (home: string) =>
         yield* Effect.forEach(registered, (project) =>
           Effect.gen(function* () {
             const resolved = (yield* placement.resolve(project.root, null)).path;
-            const owned =
-              countRows(
-                "SELECT count(*) AS count FROM sessions WHERE project_id = ? AND imported_from IS NULL",
-                project.id,
-              ) +
-              countRows(
-                "SELECT count(*) AS count FROM nodes WHERE project_id = ? AND session_id IS NULL",
-                project.id,
-              );
+            const owned = (yield* stored(ownedRows(project.id))).count;
             if (resolved === project.root || owned > 0) return;
             const { project: owner } = yield* projectOf(resolved);
             if (!isTruthy(owner) || owner.id === project.id) return;
-            atomic(() => {
-              markWorktree.run(project.root, project.id);
-              moveSessions.run(owner.id, project.id);
-              moveNodes.run(owner.id, project.id);
-            });
+            yield* stored(
+              Effect.gen(function* () {
+                // The folded project's folder was the worktree its conversations ran in.
+                yield* sql`UPDATE sessions SET worktree_path = coalesce(worktree_path, ${project.root})
+                  WHERE project_id = ${project.id}`;
+                yield* sql`UPDATE sessions SET project_id = ${owner.id} WHERE project_id = ${project.id}`;
+                yield* sql`UPDATE nodes SET project_id = ${owner.id} WHERE project_id = ${project.id}`;
+              }).pipe(sql.withTransaction),
+            );
             yield* Effect.when(
               projects.setHidden(project.id, true),
               Effect.succeed(project.hiddenAt === null),
@@ -270,15 +274,17 @@ const make = (home: string) =>
       placement: Placement,
     ) =>
       Effect.gen(function* () {
-        const existing = readMapping.get(transcript.source, transcript.externalId);
+        const existing = yield* stored(
+          readMapping({ source: transcript.source, externalId: transcript.externalId }),
+        );
         const placed =
           start === undefined ? null : yield* placement.resolve(start.cwd, start.repository);
         const origin = {
           worktreePath: placed?.worktree ?? null,
           branch: start?.branch ?? null,
         };
-        if (isTruthy(existing)) {
-          const sessionId = decodeSessionId(existing).session_id;
+        if (Option.isSome(existing)) {
+          const sessionId = existing.value.session_id;
           yield* Effect.when(
             sessions.recordOrigin(sessionId, origin),
             Effect.succeed(placed !== null),
@@ -296,7 +302,8 @@ const make = (home: string) =>
           transcript.source,
           origin,
         );
-        saveMapping.run(transcript.source, transcript.externalId, session.id);
+        yield* stored(sql`INSERT INTO imported_sessions (source, external_id, session_id)
+          VALUES (${transcript.source}, ${transcript.externalId}, ${session.id})`);
         return { sessionId: session.id, skipped: null };
       });
 
@@ -311,8 +318,9 @@ const make = (home: string) =>
           Effect.orElseSucceed(() => null),
         );
         if (!isTruthy(stats)) return 0;
-        const saved = readCursor.get(transcript.source, transcript.path);
-        const cursor = isTruthy(saved) ? decodeCursor(saved) : null;
+        const cursor = Option.getOrNull(
+          yield* stored(readCursor({ source: transcript.source, path: transcript.path })),
+        );
         const unchanged =
           cursor !== null && cursor.size === stats.size && cursor.mtime_ms === stats.mtimeMs;
         if (unchanged && !(yield* placeableNow(cursor, placement))) return 0;
@@ -332,20 +340,19 @@ const make = (home: string) =>
 
         const start = items.find((item) => item.kind === "session");
         const { sessionId, skipped } = yield* sessionFor(transcript, start, placement);
-        const now = DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()));
+        const now = yield* nowIso;
         if (!isTruthy(sessionId)) {
           // Leave the offset at 0: if the folder comes back, the whole transcript is read.
-          saveCursor.run(
-            transcript.source,
-            transcript.path,
-            transcript.externalId,
-            start?.cwd ?? null,
-            0,
-            stats.size,
-            stats.mtimeMs,
-            0,
-            skipped,
-            now,
+          yield* stored(
+            saveCursor(transcript, {
+              cwd: start?.cwd ?? null,
+              offset: 0,
+              size: stats.size,
+              mtimeMs: stats.mtimeMs,
+              imported: 0,
+              skipped,
+              now,
+            }),
           );
           return 0;
         }
@@ -360,13 +367,13 @@ const make = (home: string) =>
         );
         let written = 0;
         for (let index = 0; index < items.length; index += writeChunk) {
-          written += bulk.write({
+          written += (yield* bulk.write({
             source: transcript.source,
             projectId: session.projectId,
             sessionId,
             items: items.slice(index, index + writeChunk),
             interpret,
-          }).written;
+          })).written;
           // Lets other work in the worker (a count for settings) in between pieces.
           yield* Effect.yieldNow;
         }
@@ -374,19 +381,19 @@ const make = (home: string) =>
         if (session.title === null) {
           const opening = items.find((item) => item.kind === "message" && item.role === "user");
           if (opening?.kind === "message")
-            atomic(() => nameSession.run(firstLine(opening.text), sessionId));
+            yield* stored(sql`UPDATE sessions SET title = ${firstLine(opening.text)}
+              WHERE id = ${sessionId} AND title IS NULL`);
         }
-        saveCursor.run(
-          transcript.source,
-          transcript.path,
-          transcript.externalId,
-          start?.cwd ?? null,
-          offset,
-          stats.size,
-          stats.mtimeMs,
-          written,
-          null,
-          now,
+        yield* stored(
+          saveCursor(transcript, {
+            cwd: start?.cwd ?? null,
+            offset,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+            imported: written,
+            skipped: null,
+            now,
+          }),
         );
         return written;
       });
@@ -428,10 +435,14 @@ const make = (home: string) =>
           onProgress(progress);
           const registered = yield* projects.listAll;
           const placement = yield* checkouts.forRoots(
-            registered.map((project) => ({
-              root: project.root,
-              worktreeParents: knownParents.all(project.id).map((row) => decodeParent(row).parent),
-            })),
+            yield* stored(
+              Effect.forEach(registered, (project) =>
+                Effect.map(knownParents(project.id), (rows) => ({
+                  root: project.root,
+                  worktreeParents: rows.map((row) => row.parent),
+                })),
+              ),
+            ),
           );
           yield* foldWorktreeProjects(placement);
           for (const transcript of found) {
@@ -439,7 +450,8 @@ const make = (home: string) =>
               Effect.map((written) => ({ written, failed: 0 })),
               Effect.catchCauseIf(
                 (cause) => !Cause.hasInterruptsOnly(cause),
-                (cause) => Effect.as(recordFailure(transcript, cause), { written: 0, failed: 1 }),
+                (cause) =>
+                  Effect.as(stored(recordFailure(transcript, cause)), { written: 0, failed: 1 }),
               ),
             );
             progress = {
@@ -452,11 +464,19 @@ const make = (home: string) =>
           }
           // What git showed this pass outlives the worktrees it was seen through.
           const seen = yield* placement.seen;
-          atomic(() => {
-            for (const { root, parents } of seen)
-              for (const owner of registered.filter((project) => project.root === root))
-                for (const parent of parents) keepParent.run(owner.id, parent);
-          });
+          const kept = seen.flatMap(({ root, parents }) =>
+            registered
+              .filter((project) => project.root === root)
+              .flatMap((owner) => parents.map((parent) => ({ projectId: owner.id, parent }))),
+          );
+          yield* stored(
+            Effect.forEach(
+              kept,
+              ({ projectId, parent }) => sql`INSERT INTO worktree_parents (project_id, parent)
+                VALUES (${projectId}, ${parent}) ON CONFLICT DO NOTHING`,
+              { discard: true },
+            ).pipe(sql.withTransaction),
+          );
           return { progress, counts: countsOf(found) };
         }),
     };

@@ -1,4 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
+import { SqlClient } from "effect/sql";
 import { Crypto, DateTime, Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -6,6 +7,7 @@ import { Database } from "../src/db/database.ts";
 import { KnowledgePromotions } from "../src/memory/knowledge.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { sqlGet, sqlRun } from "./support/sql.ts";
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
@@ -18,29 +20,27 @@ const run = Effect.fnUntraced(function* <A, E>(
   program: Effect.Effect<
     A,
     E,
-    Database | Nodes | WorkTraceStore | KnowledgePromotions | Crypto.Crypto
+    SqlClient.SqlClient | Nodes | WorkTraceStore | KnowledgePromotions | Crypto.Crypto
   >,
 ) {
   const services = yield* Layer.build(Layer.merge(testLayer(), NodeCrypto.layer));
   return yield* Effect.provideContext(program, services);
 }, Effect.scoped);
 
-const seed = (db: Database["Service"]) => {
+const seed = Effect.fnUntraced(function* () {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
-  db.sqlite
-    .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
-    .run(iso);
-  db.sqlite
-    .prepare(
-      "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
-    )
-    .run(iso);
-  db.sqlite
-    .prepare(`INSERT INTO subagents
+  yield* sqlRun(
+    "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)",
+    iso,
+  );
+  yield* sqlRun(
+    "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
+    iso,
+  );
+  yield* sqlRun(`INSERT INTO subagents
     (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
-    VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`)
-    .run();
-};
+    VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`);
+});
 
 describe("Work Trace knowledge promotion", () => {
   it.effect(
@@ -48,18 +48,17 @@ describe("Work Trace knowledge promotion", () => {
     () =>
       run(
         Effect.gen(function* () {
-          const db = yield* Database;
           const nodes = yield* Nodes;
           const trace = yield* WorkTraceStore;
           const knowledge = yield* KnowledgePromotions;
-          seed(db);
-          const user = nodes.append({
+          yield* seed();
+          const user = yield* nodes.append({
             projectId: "p1",
             sessionId: "s1",
             kind: "user",
             text: "Save this project decision.",
           });
-          const handle = trace.startAttempt({
+          const handle = yield* trace.startAttempt({
             sessionId: "s1",
             parentRunId: "parent-1",
             parentToolCallId: "call-1",
@@ -69,22 +68,22 @@ describe("Work Trace knowledge promotion", () => {
             kind: "start",
             threadId: "subagent-agent-1",
           });
-          const evidence = trace.recordEvidence({
+          const evidence = yield* trace.recordEvidence({
             handle,
             locator: { kind: "message", threadId: handle.threadId, messageId: "child-answer" },
             verification: "verified",
           });
-          const pending = trace.recordEvidence({
+          const pending = yield* trace.recordEvidence({
             handle,
             locator: { kind: "tool_result", threadId: handle.threadId, toolCallId: "pending-tool" },
           });
-          trace.recordReportDisposition({
+          yield* trace.recordReportDisposition({
             handle,
             sessionId: "s1",
             disposition: "reviewed",
             parentRunId: "parent-1",
           });
-          const claimId = trace.finalizeAnswerClaim({
+          const claimId = yield* trace.finalizeAnswerClaim({
             projectId: "p1",
             sessionId: "s1",
             parentRunId: "parent-1",
@@ -130,7 +129,7 @@ describe("Work Trace knowledge promotion", () => {
             disposition: "edited_saved",
             evidence: [{ evidenceRefId: evidence.id }],
           });
-          const memory = nodes.get(candidate.memoryNodeId!);
+          const memory = yield* nodes.get(candidate.memoryNodeId!);
           expect(memory).toMatchObject({
             projectId: "p1",
             sessionId: null,
@@ -140,38 +139,40 @@ describe("Work Trace knowledge promotion", () => {
           });
 
           expect(
-            knowledge.recordRetrieval({
+            yield* knowledge.recordRetrieval({
               projectId: "p1",
               sessionId: "s1",
               runId: "run-2",
               memoryNodeIds: [memory!.id],
             }),
           ).toEqual([memory!.id]);
-          expect(knowledge.usageForTask(handle.taskId).map((item) => item.kind)).toEqual([
+          expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
             "retrieved",
           ]);
-          knowledge.recordUsed({
+          yield* knowledge.recordUsed({
             projectId: "p1",
             sessionId: "s1",
             runId: "run-2",
             parentMessageId: "answer-2",
             memoryNodeIds: [memory!.id],
           });
-          expect(knowledge.usageForTask(handle.taskId).map((item) => item.kind)).toEqual([
+          expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
             "retrieved",
             "used",
           ]);
 
-          db.sqlite.prepare("DELETE FROM subagents WHERE id = 'agent-1'").run();
-          db.sqlite.prepare("DELETE FROM interpret_jobs WHERE node_id = ?").run(user.id);
-          db.sqlite.prepare("DELETE FROM nodes WHERE session_id = 's1'").run();
-          db.sqlite.prepare("DELETE FROM sessions WHERE id = 's1'").run();
-          expect(knowledge.candidatesForTask(handle.taskId)[0]).toMatchObject({
+          yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
+          yield* sqlRun("DELETE FROM interpret_jobs WHERE node_id = ?", user.id);
+          yield* sqlRun("DELETE FROM nodes WHERE session_id = 's1'");
+          yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
+          expect((yield* knowledge.candidatesForTask(handle.taskId))[0]).toMatchObject({
             id: candidate.id,
             originSessionId: null,
             authorizedByUserNodeId: user.id,
           });
-          expect(nodes.get(memory!.id)?.text).toBe("Use SQLite for durable Work Trace state.");
+          expect((yield* nodes.get(memory!.id))?.text).toBe(
+            "Use SQLite for durable Work Trace state.",
+          );
         }),
       ),
   );
@@ -179,18 +180,17 @@ describe("Work Trace knowledge promotion", () => {
   it.effect("conversation-only and rejected dispositions never create recall nodes", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const nodes = yield* Nodes;
         const trace = yield* WorkTraceStore;
         const knowledge = yield* KnowledgePromotions;
-        seed(db);
-        const user = nodes.append({
+        yield* seed();
+        const user = yield* nodes.append({
           projectId: "p1",
           sessionId: "s1",
           kind: "user",
           text: "Do not save this.",
         });
-        const handle = trace.startAttempt({
+        const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
           parentToolCallId: "call-1",
@@ -200,13 +200,13 @@ describe("Work Trace knowledge promotion", () => {
           kind: "start",
           threadId: "subagent-agent-1",
         });
-        trace.recordReportDisposition({
+        yield* trace.recordReportDisposition({
           handle,
           sessionId: "s1",
           disposition: "reviewed",
           parentRunId: "parent-1",
         });
-        const claimId = trace.finalizeAnswerClaim({
+        const claimId = yield* trace.finalizeAnswerClaim({
           projectId: "p1",
           sessionId: "s1",
           parentRunId: "parent-1",
@@ -232,9 +232,9 @@ describe("Work Trace knowledge promotion", () => {
         expect(
           (yield* knowledge.promote({ ...common, disposition: "reject" })).memoryNodeId,
         ).toBeNull();
-        expect(
-          db.sqlite.prepare("SELECT count(*) AS count FROM nodes WHERE kind = 'topic'").get(),
-        ).toEqual({ count: 0 });
+        expect(yield* sqlGet("SELECT count(*) AS count FROM nodes WHERE kind = 'topic'")).toEqual({
+          count: 0,
+        });
       }),
     ),
   );

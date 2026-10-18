@@ -1,5 +1,4 @@
 import { NodeServices } from "@effect/platform-node";
-import { DatabaseSync } from "node:sqlite";
 import {
   Clock,
   Config,
@@ -15,7 +14,7 @@ import {
 import { defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { readStructuredEvidence } from "../src/memory/evidence.ts";
-import { listOAuthProfiles } from "../src/oauth/accounts.ts";
+import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
 import {
   createKeychainProfileCredentialStore,
@@ -320,18 +319,9 @@ const program = Effect.gen(function* () {
       `Prepared ${snapshots.flat().length} contexts; no model requests. ${output}`,
     );
 
-  const profile = yield* Effect.acquireUseRelease(
-    Effect.try({
-      try: () => new DatabaseSync(path.join(defaultStorageRoot, "agent.db"), { readOnly: true }),
-      catch: () => BenchmarkFailed.make({ reason: "profile" }),
-    }),
-    (sqlite) =>
-      Effect.try({
-        try: () =>
-          listOAuthProfiles({ sqlite, provider: "anthropic" }).find((entry) => entry.selected),
-        catch: () => BenchmarkFailed.make({ reason: "profile" }),
-      }),
-    (sqlite) => Effect.sync(() => sqlite.close()),
+  const profile = yield* storedOAuthProfiles("anthropic").pipe(
+    Effect.map((profiles) => profiles.find((entry) => entry.selected)),
+    Effect.mapError(() => BenchmarkFailed.make({ reason: "profile" })),
   );
   if (profile === undefined) return yield* BenchmarkFailed.make({ reason: "profile" });
   const client = createSubscriptionOAuthClient({

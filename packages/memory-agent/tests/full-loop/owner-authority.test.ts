@@ -23,7 +23,7 @@ import {
 } from "effect";
 import { expect, vi } from "vite-plus/test";
 import type { ChatExecutionCapabilities } from "../../src/agent/chat-execution.ts";
-import { compaction } from "../../src/agent/compaction.ts";
+import { compaction, lookupSources } from "../../src/agent/compaction.ts";
 import { handoffNotice, modelHandoffHistory } from "../../src/agent/model-handoff.ts";
 import { Database } from "../../src/db/database.ts";
 import { makePermissionGateMiddleware } from "../../src/permissions/gate.ts";
@@ -479,7 +479,7 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
               middleware: [
                 compaction(
                   metadata,
-                  { toolResultId: () => null, nodeText: () => null },
+                  lookupSources({ toolResultId: () => null, nodeText: () => null }),
                   { compactAt: 0, leaveOutAt: 1_000_000 },
                   undefined,
                   modelHandoffHistory({
@@ -489,7 +489,7 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
                     model: "new",
                     provider: "openai",
                     loadHistory: () => Promise.resolve(past),
-                    toolResultId: () => null,
+                    toolResultIds: () => Effect.succeed(new Map()),
                   }),
                 ),
                 {

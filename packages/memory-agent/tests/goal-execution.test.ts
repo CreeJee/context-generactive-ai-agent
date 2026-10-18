@@ -1,6 +1,7 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Context, Effect, FileSystem, Layer, Path } from "effect";
+import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ExecutionAdmission } from "../src/runtime/execution-admission.ts";
@@ -12,6 +13,7 @@ import {
   GoalExecutions,
   goalExecutionLayer,
 } from "../src/workflow/goal-execution.ts";
+import { sqlAll, sqlGet, sqlRun, sqlExec } from "./support/sql.ts";
 
 const payload: GoalExecutionPayload = {
   _tag: "GoalExecutionPayload",
@@ -34,7 +36,7 @@ const binding = {
 } as const;
 
 const withGoalExecutions = <A, E, R>(
-  use: (database: Database["Service"]) => Effect.Effect<A, E, R | GoalExecutions>,
+  use: () => Effect.Effect<A, E, R | GoalExecutions | SqlClient.SqlClient>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -44,14 +46,13 @@ const withGoalExecutions = <A, E, R>(
       const databaseContext = yield* Layer.build(Database.layer(path.join(directory, "owner.db")));
       return yield* Effect.provideContext(
         Effect.gen(function* () {
-          const database = yield* Database;
           const context = yield* Layer.build(
             goalExecutionLayer.pipe(
               Layer.provide(Layer.succeedContext(databaseContext)),
               Layer.provide(ExecutionAdmission.layer()),
             ),
           );
-          return yield* Effect.provideContext(use(database), context);
+          return yield* Effect.provideContext(use(), Context.merge(databaseContext, context));
         }),
         databaseContext,
       );
@@ -60,7 +61,7 @@ const withGoalExecutions = <A, E, R>(
 
 describe("GoalExecution workflow", () => {
   it.live("atomically admits, suspends, completes and replays without rerunning binding", () =>
-    withGoalExecutions((database) =>
+    withGoalExecutions(() =>
       Effect.gen(function* () {
         const goals = yield* GoalExecutions;
         let binds = 0;
@@ -75,11 +76,10 @@ describe("GoalExecution workflow", () => {
 
         const executionId = yield* GoalExecution.executionId(payload);
         expect(
-          database.sqlite
-            .prepare(
-              "SELECT execution_id, workflow_name FROM owner_workflow_executions WHERE execution_id = ?",
-            )
-            .get(executionId),
+          yield* sqlGet(
+            "SELECT execution_id, workflow_name FROM owner_workflow_executions WHERE execution_id = ?",
+            executionId,
+          ),
         ).toEqual({ execution_id: executionId, workflow_name: GoalExecution._tag });
 
         yield* goals.succeed(payload);
@@ -100,7 +100,7 @@ describe("GoalExecution workflow", () => {
   it.live(
     "rejects owner ID and generation changes without rebinding or creating another execution",
     () =>
-      withGoalExecutions((database) =>
+      withGoalExecutions(() =>
         Effect.gen(function* () {
           const goals = yield* GoalExecutions;
           let binds = 0;
@@ -133,15 +133,15 @@ describe("GoalExecution workflow", () => {
             );
           }
           expect(binds).toBe(1);
-          expect(
-            database.sqlite.prepare("SELECT count(*) AS n FROM owner_workflow_executions").get(),
-          ).toEqual({ n: 1 });
+          expect(yield* sqlGet("SELECT count(*) AS n FROM owner_workflow_executions")).toEqual({
+            n: 1,
+          });
         }),
       ),
   );
 
   it.live("persists a failed durable completion before returning", () =>
-    withGoalExecutions((database) =>
+    withGoalExecutions(() =>
       Effect.gen(function* () {
         const goals = yield* GoalExecutions;
         yield* goals.admitAndStart(
@@ -153,36 +153,32 @@ describe("GoalExecution workflow", () => {
           operationId: "1",
           state: "uncertain",
         });
-        expect(
-          database.sqlite.prepare("SELECT status FROM owner_workflow_executions").get(),
-        ).toEqual({ status: "completed" });
+        expect(yield* sqlGet("SELECT status FROM owner_workflow_executions")).toEqual({
+          status: "completed",
+        });
       }),
     ),
   );
 
   it.live("rolls back both binding work and durable request when owner binding refuses", () =>
-    withGoalExecutions((database) =>
+    withGoalExecutions(() =>
       Effect.gen(function* () {
-        database.sqlite.exec("CREATE TABLE goal_execution_binding_probe (id TEXT PRIMARY KEY)");
+        yield* sqlExec("CREATE TABLE goal_execution_binding_probe (id TEXT PRIMARY KEY)");
+        const sql = yield* SqlClient.SqlClient;
         const goals = yield* GoalExecutions;
         const failure = yield* goals
           .admitAndStart(
             payload,
-            Effect.sync((): Admission => {
-              database.sqlite
-                .prepare("INSERT INTO goal_execution_binding_probe VALUES (?)")
-                .run("rolled-back");
-              return { status: "refused", reason: "workflow_changed" };
-            }),
+            sqlRun("INSERT INTO goal_execution_binding_probe VALUES (?)", "rolled-back").pipe(
+              Effect.as<Admission>({ status: "refused", reason: "workflow_changed" }),
+              Effect.provideService(SqlClient.SqlClient, sql),
+              Effect.orDie,
+            ),
           )
           .pipe(Effect.flip);
         expect(failure).toBeInstanceOf(GoalExecutionAdmissionRefused);
-        expect(
-          database.sqlite.prepare("SELECT id FROM goal_execution_binding_probe").all(),
-        ).toEqual([]);
-        expect(
-          database.sqlite.prepare("SELECT execution_id FROM owner_workflow_executions").all(),
-        ).toEqual([]);
+        expect(yield* sqlAll("SELECT id FROM goal_execution_binding_probe")).toEqual([]);
+        expect(yield* sqlAll("SELECT execution_id FROM owner_workflow_executions")).toEqual([]);
       }),
     ),
   );

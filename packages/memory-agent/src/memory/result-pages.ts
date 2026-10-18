@@ -1,6 +1,5 @@
-// SQLite is a synchronous host boundary; only bounded BLOB slices cross into JavaScript.
-import type { DatabaseSync } from "node:sqlite";
 import { Effect, MutableHashMap, Option, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import type { EvidencePage } from "./nodes.ts";
 
 export class ResultPageReadFailed extends Schema.TaggedError<ResultPageReadFailed>()(
@@ -26,12 +25,22 @@ interface TextIndex {
   readonly points: readonly Checkpoint[];
 }
 
-/** Append-only node text. Cache IDs are strings; no schema migration or persisted copy is needed. */
-export const createResultPageReader = (sqlite: DatabaseSync) => {
-  const metadata = sqlite.prepare(`SELECT length(CAST(text AS BLOB)) AS size FROM nodes
-    WHERE id = ? AND kind = 'tool_result' AND project_id = ? AND session_id = ?`);
-  const block = sqlite.prepare(`SELECT substr(CAST(text AS BLOB), ?, ?) AS bytes FROM nodes
-    WHERE id = ? AND kind = 'tool_result' AND project_id = ? AND session_id = ?`);
+/**
+ * Append-only node text. Cache IDs are strings; no schema migration or persisted copy is needed.
+ * Only bounded BLOB slices cross into JavaScript.
+ */
+export const createResultPageReader = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const failed = (cause: unknown) =>
+    ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } });
+  const metadata = (id: string, projectId: string, sessionId: string) =>
+    sql`SELECT length(CAST(text AS BLOB)) AS size FROM nodes
+      WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
+        AND session_id = ${sessionId}`.pipe(Effect.mapError(failed));
+  const block = (start: number, length: number, id: string, projectId: string, sessionId: string) =>
+    sql`SELECT substr(CAST(text AS BLOB), ${start}, ${length}) AS bytes FROM nodes
+      WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
+        AND session_id = ${sessionId}`.pipe(Effect.mapError(failed));
   const cache = MutableHashMap.empty<string, TextIndex>();
   let generation = 0;
   const read = Effect.fnUntraced(function* (
@@ -41,11 +50,13 @@ export const createResultPageReader = (sqlite: DatabaseSync) => {
     byte: number,
     size: number,
   ) {
-    const row = yield* Effect.try({
-      try: () =>
-        block.get(byte + 1, Math.min(blockBytes + 4, size - byte), id, projectId, sessionId),
-      catch: (cause) => ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } }),
-    });
+    const [row] = yield* block(
+      byte + 1,
+      Math.min(blockBytes + 4, size - byte),
+      id,
+      projectId,
+      sessionId,
+    );
     if (row === undefined) return null;
     const { bytes } = yield* Schema.decodeUnknownEffect(Block)(row).pipe(
       Effect.mapError((cause) =>
@@ -70,10 +81,7 @@ export const createResultPageReader = (sqlite: DatabaseSync) => {
   ): Effect.fn.Return<EvidencePage | null, ResultPageReadFailed> {
     const started = generation;
     // Authorization happens before text retrieval, including for cached indexes and deleted nodes.
-    const row = yield* Effect.try({
-      try: () => metadata.get(id, projectId, sessionId),
-      catch: (cause) => ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } }),
-    });
+    const [row] = yield* metadata(id, projectId, sessionId);
     if (row === undefined) return null;
     const { size } = yield* Schema.decodeUnknownEffect(Metadata)(row).pipe(
       Effect.mapError((cause) =>
@@ -159,4 +167,4 @@ export const createResultPageReader = (sqlite: DatabaseSync) => {
       }
     },
   };
-};
+});

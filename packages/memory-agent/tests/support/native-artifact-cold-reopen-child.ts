@@ -6,7 +6,7 @@ import { Config, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { SecretStore } from "../../src/config/secrets.ts";
-import { Database } from "../../src/db/database.ts";
+import { SqlClient } from "effect/sql";
 import { memoryAgentLayer } from "../../src/layers.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -16,7 +16,7 @@ import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { NodeServices } from "@effect/platform-node";
-import { Cause, Context, FileSystem, Path } from "effect";
+import { Cause, Context, Exit, FileSystem, Path } from "effect";
 const sdkCall = <A>(operation: () => PromiseLike<A>) =>
   Effect.tryPromise({ try: operation, catch: (cause) => new Cause.UnknownError(cause) });
 const encodeJson = EffectFunction.flow(
@@ -89,17 +89,21 @@ await Effect.runPromise(
         thread: Schema.String,
         pid: Schema.Finite,
       });
-      let sqlite: Database["Service"]["sqlite"] | undefined;
+      let sql: SqlClient.SqlClient | undefined;
       let verifiedOld = false;
       try {
         const services = yield* sdkCall(() =>
           runtime.runPromise(
             Effect.gen(function* () {
-              return { nodes: yield* Nodes, db: yield* Database, state: yield* ChatState };
+              return {
+                nodes: yield* Nodes,
+                sql: yield* SqlClient.SqlClient,
+                state: yield* ChatState,
+              };
             }),
           ),
         );
-        sqlite = services.db.sqlite;
+        sql = services.sql;
         const previous =
           phase === "second"
             ? EffectFunction.flow(
@@ -119,16 +123,14 @@ await Effect.runPromise(
             ),
           ));
         const oldNodes = () =>
-          encodeJson(
-            services.nodes
-              .session(binding.sessionId)
-              .filter((node) => node.runId === "first" || node.text === "first"),
+          Effect.map(services.nodes.session(binding.sessionId), (session) =>
+            encodeJson(session.filter((node) => node.runId === "first" || node.text === "first")),
           );
         const oldRun = () =>
           services.state.persistence.stores.runs.get("first").then((run) => encodeJson(run));
         if (previous !== undefined) {
           assert.notEqual(previous.pid, process.pid);
-          assert.equal(oldNodes(), previous.nodes);
+          assert.equal(yield* oldNodes(), previous.nodes);
           assert.equal(yield* sdkCall(() => oldRun()), previous.run);
           assert.equal(
             encodeJson(
@@ -144,7 +146,7 @@ await Effect.runPromise(
         const artifact: typeof NativeArtifact = yield* sdkCall(
           () => import(pathToFileURL(artifactPath).href),
         );
-        const user = services.nodes.append({ ...binding, kind: "user", text: phase });
+        const user = yield* services.nodes.append({ ...binding, kind: "user", text: phase });
         const recording = yield* sdkCall(() =>
           runtime.runPromise(
             artifact.makeRecordingMiddleware({ ...binding, runId: phase, userNodeId: user.id }),
@@ -164,23 +166,23 @@ await Effect.runPromise(
             stream: false,
           }),
         );
-        const rows = services.nodes
-          .session(binding.sessionId)
-          .filter((node) => node.kind === "assistant" && node.runId === phase);
+        const rows = (yield* services.nodes.session(binding.sessionId)).filter(
+          (node) => node.kind === "assistant" && node.runId === phase,
+        );
         assert.equal(rows.length, 1);
         assert.equal(rows[0]!.text, phase);
         const current = yield* sdkCall(() => services.state.persistence.stores.runs.get(phase));
         assert.equal(current?.status, "completed");
         assert.equal(current?.threadId, binding.sessionId);
         if (previous !== undefined) {
-          assert.equal(oldNodes(), previous.nodes);
+          assert.equal(yield* oldNodes(), previous.nodes);
           assert.equal(yield* sdkCall(() => oldRun()), previous.run);
         } else {
           yield* fs.writeFileString(
             path.join(base, "snapshot.json"),
             encodeJson({
               ...binding,
-              nodes: oldNodes(),
+              nodes: yield* oldNodes(),
               run: yield* sdkCall(() => oldRun()),
               thread: encodeJson(
                 yield* sdkCall(() =>
@@ -196,8 +198,8 @@ await Effect.runPromise(
         yield* Effect.uninterruptible(sdkCall(() => runtime.dispose()));
       }
       assert.deepEqual(counts, { acquired: 1, released: 1 });
-      assert.ok(sqlite);
-      assert.throws(() => sqlite.prepare("SELECT 1"));
+      assert.ok(sql);
+      assert.ok(Exit.isFailure(yield* Effect.exit(sql`SELECT 1`)));
       yield* fs.writeFileString(
         path.join(base, `${phase}.json`),
         encodeJson({ ...counts, sqliteClosed: true, pid: process.pid, verifiedOld }),

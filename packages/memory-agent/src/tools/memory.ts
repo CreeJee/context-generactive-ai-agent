@@ -150,7 +150,7 @@ function createMemoryToolsBody(
           search.find({ query, projectId, crossProject }),
         );
         if (binding !== undefined) {
-          const ids = yield* Effect.map(KnowledgePromotions, (knowledge) =>
+          const ids = yield* Effect.flatMap(KnowledgePromotions, (knowledge) =>
             knowledge.recordRetrieval({
               projectId,
               sessionId: binding.sessionId,
@@ -265,7 +265,7 @@ function createMemoryToolsBody(
       if (!isTruthy(ctx.currentMessageId) || usedDraft.length === 0) return;
       const parentMessageId = ctx.currentMessageId;
       return run(
-        Effect.map(KnowledgePromotions, (knowledge) =>
+        Effect.flatMap(KnowledgePromotions, (knowledge) =>
           knowledge.recordUsed({
             projectId,
             sessionId: binding.sessionId,

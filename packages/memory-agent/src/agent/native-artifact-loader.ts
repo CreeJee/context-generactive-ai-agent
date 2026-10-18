@@ -1,7 +1,6 @@
 import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
-import { fileURLToPath, pathToFileURL } from "node:url";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { Effect, FileSystem, ManagedRuntime, Option, Predicate, Schema } from "effect";
 import type * as NativeArtifact from "./native-artifact-entry.ts";
@@ -92,9 +91,10 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
   const url = yield* boundary("path", () => new URL(descriptor.fileUrl));
   if (url.protocol !== "file:" || url.search.length > 0 || url.hash.length > 0)
     return yield* pathError("Expected canonical file URL");
-  const path = yield* boundary("path", () => fileURLToPath(url));
+  const path = yield* platformPath.fromFileUrl(url).pipe(Effect.mapError(pathError));
   const canonical = yield* fs.realPath(path).pipe(Effect.mapError(pathError));
-  if (pathToFileURL(canonical).href !== descriptor.fileUrl)
+  const canonicalUrl = yield* platformPath.toFileUrl(canonical).pipe(Effect.mapError(pathError));
+  if (canonicalUrl.href !== descriptor.fileUrl)
     return yield* pathError("Noncanonical or symlink artifact path");
   const bytes = yield* readRegularFile(path);
   if (hashSha256(bytes) !== descriptor.sha256)
@@ -118,7 +118,10 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
   );
   const file = join(directory, "artifact.mjs");
   yield* fs.writeFile(file, bytes, { flag: "wx", mode: 0o400 }).pipe(Effect.mapError(stagingError));
-  const stagedUrl = pathToFileURL(file).href;
+  const stagedUrl = (yield* platformPath
+    .toFileUrl(file)
+    .pipe(Effect.mapError((cause) => NativeArtifactLoadError.make({ reason: "staging", cause }))))
+    .href;
   // Native import cannot be cancelled. Wait for evaluation to settle before scope removes bytes.
   const module: unknown = yield* Effect.tryPromise({
     try: () => import(/* @vite-ignore */ stagedUrl),

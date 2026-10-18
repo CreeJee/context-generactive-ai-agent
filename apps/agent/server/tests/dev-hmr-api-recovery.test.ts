@@ -12,7 +12,7 @@ import { Array as EffectArray } from "effect";
 // Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
-import { AgentChat, Database, Sessions, Workflows } from "memory-agent";
+import { AgentChat, Sessions, Workflows } from "memory-agent";
 import { createServer } from "vite-plus";
 import { expect } from "vite-plus/test";
 import {
@@ -22,6 +22,7 @@ import {
 } from "../../../../packages/memory-agent/tests/support/test-env.ts";
 import { developmentApiProxy } from "../../vite.config";
 import { createDevelopmentBoundary, developmentRequestDecision } from "../dev-safety";
+import { sqlAll } from "../../../../packages/memory-agent/tests/support/sql.ts";
 
 // Node HTTP and Vite are real interoperability boundaries; Scope closes both
 // listeners even when an assertion fails. No user dev server or storage is used.
@@ -49,10 +50,9 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
             const context = yield* TestEnv;
             const services = yield* Effect.context<AgentServices>();
             yield* selectTestModel();
-            const { chat, db, sessions, workflows } = yield* Effect.provideContext(
+            const { chat, sessions, workflows } = yield* Effect.provideContext(
               Effect.all({
                 chat: AgentChat,
-                db: Database,
                 sessions: Sessions,
                 workflows: Workflows,
               }),
@@ -220,9 +220,9 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                 expect(EffectArray.dedupe(resumedIds).length).toBe(resumedIds.length);
                 expect(context.provider!.adapter.invocations).toHaveLength(calls);
                 expect(
-                  db.sqlite
-                    .prepare("SELECT run_id, session_id FROM workflow_run_bindings ORDER BY run_id")
-                    .all(),
+                  yield* sqlAll(
+                    "SELECT run_id, session_id FROM workflow_run_bindings ORDER BY run_id",
+                  ),
                 ).toEqual([
                   { run_id: "run-a", session_id: context.session.id },
                   { run_id: "run-b", session_id: second.id },

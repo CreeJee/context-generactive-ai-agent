@@ -20,12 +20,11 @@ import { expect } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../../src/agent/chat.ts";
 import { chatPersistence } from "../../src/chat-state/persistence.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { createOAuthAccountLoginManager } from "../../src/oauth/account-login.ts";
-import { createProfileCredentialStore } from "../../src/oauth/accounts.ts";
+import { createProfileCredentialStore, OAuthProfiles } from "../../src/oauth/accounts.ts";
 import { providerProtocols, type NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import {
   OAuthValidationHarness,
@@ -56,6 +55,7 @@ import {
   rows,
   send,
 } from "./goal-session.ts";
+import { sqlGet } from "../support/sql.ts";
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -208,7 +208,6 @@ testAgent({
     "account callback and PKCE survive actual SDK worker termination without restarting login",
     () =>
       Effect.gen(function* () {
-        const { sqlite } = yield* Database;
         const entered = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
@@ -261,7 +260,7 @@ testAgent({
         expect(workers).toHaveLength(1);
         expect(workers[0]!.threadId).not.toBe(threadId);
         const manager = createOAuthAccountLoginManager({
-          sqlite,
+          profiles: yield* OAuthProfiles,
           accounts: createProfileCredentialStore(store),
           startLogin: (_provider, slot) => {
             loginStarts++;
@@ -285,22 +284,22 @@ testAgent({
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(streaming);
         yield* waitUntil(
-          () =>
-            Schema.is(Schema.Struct({ status: Schema.Literal("failed") }))(
-              sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
-            ),
+          Effect.map(
+            sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId),
+            Schema.is(Schema.Struct({ status: Schema.Literal("failed") })),
+          ),
           "terminated worker run fails",
           1000,
         );
-        expect(manager.profiles("openai").login.status).toBe("pending");
+        expect((yield* manager.profiles("openai")).login.status).toBe("pending");
         const client = yield* testHttpClient();
         expect((yield* client.get(callback.toString())).status).toBe(200);
         yield* waitUntil(
-          () => manager.profiles("openai").login.status === "completed",
+          Effect.map(manager.profiles("openai"), (state) => state.login.status === "completed"),
           "owner login completes",
           1000,
         );
-        expect(manager.profiles("openai").profiles).toMatchObject([
+        expect((yield* manager.profiles("openai")).profiles).toMatchObject([
           { label: "owner account", selected: true },
         ]);
         expect(writes).toEqual([threadId]);
@@ -326,18 +325,19 @@ testAgent({
         wrongCallback.searchParams.set("state", "wrong-state");
         expect((yield* client.get(wrongCallback.toString())).status).toBe(400);
         yield* waitUntil(
-          () =>
+          Effect.map(manager.profiles("openai"), (state) =>
             Schema.is(
               Schema.Struct({
                 status: Schema.Literal("error"),
                 error: Schema.Literal("login_failed"),
               }),
-            )(manager.profiles("openai").login),
+            )(state.login),
+          ),
           "wrong OAuth state rejected",
           1000,
         );
         expect(grants).toHaveLength(1);
-        expect(manager.profiles("openai").profiles).toHaveLength(1);
+        expect((yield* manager.profiles("openai")).profiles).toHaveLength(1);
       }),
     20_000,
   );
@@ -443,8 +443,7 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
             expect(text).toContain("RUN_FINISHED");
             expect(log.released).toHaveLength(owner);
             expect(
-              nodes
-                .session(id)
+              (yield* nodes.session(id))
                 .filter((node) => node.kind === "assistant")
                 .map((node) => node.text),
             ).toContain(answer);

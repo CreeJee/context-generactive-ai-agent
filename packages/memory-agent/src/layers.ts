@@ -53,6 +53,8 @@ import { ActiveProvider } from "./providers/active-provider.ts";
 import { CrossProviderMediaConsent } from "./providers/cross-provider-media-consent.ts";
 import { ProviderRegistry } from "./providers/registry.ts";
 import { AccountSubscriptionProviderRegistry } from "./providers/subscriptions.ts";
+import { OAuthProfiles } from "./oauth/accounts.ts";
+import { OAuthAccountLogins } from "./oauth/account-login.ts";
 import {
   ProviderToolCapabilityRegistry,
   providerToolDescriptors,
@@ -162,15 +164,19 @@ export const memoryAgentLayer: {
 function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOptions = {}) {
   // Each tier only depends on the tiers below it.
   // The settings are read by services in every tier above, the embedder among them.
-  const foundation = GlobalConfig.layer.pipe(
+  const foundation = OAuthProfiles.layer.pipe(
     Layer.provideMerge(
-      Layer.mergeAll(
-        StorageRoot.layer(storageRoot),
-        Database.layer(join(storageRoot, "agent.db"), options.openDatabase),
-        ExecutionAdmission.layer(options.executionAdmission),
+      GlobalConfig.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            StorageRoot.layer(storageRoot),
+            Database.layer(join(storageRoot, "agent.db"), options.openDatabase),
+            ExecutionAdmission.layer(options.executionAdmission),
+          ),
+        ),
+        Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
-    Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
   );
   const harness = HarnessStore.layer.pipe(Layer.provide(foundation));
   const compatibleSettings = (options.compatibleSettings ?? OpenAICompatibleSettings.layer).pipe(
@@ -238,6 +244,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     providerRetryLayer,
     OwnerReadRecovery.layer,
     WorkTraceStore.layer,
+    OAuthAccountLogins.layer,
     SubscriptionQuota.layer.pipe(Layer.provide(SubscriptionUsage.layer)),
     providerToolRegistry,
     modelFeatureFlags,

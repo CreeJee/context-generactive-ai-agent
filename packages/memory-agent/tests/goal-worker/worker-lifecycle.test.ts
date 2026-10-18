@@ -5,7 +5,6 @@ import * as workerExecution from "../../src/agent/full-loop-execution.ts";
 import { makeOwnerNativeArtifacts } from "../../src/agent/owner-native-artifacts.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { Database } from "../../src/db/database.ts";
 import type { ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -20,6 +19,7 @@ import {
   send,
   sessionEvidence,
 } from "./goal-session.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const noEvidence = {
   bindings: [],
@@ -139,14 +139,12 @@ testAgent({ testProvider: { responder } })("Goal worker admission", (it) => {
  */
 const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed") {
   const env = yield* TestEnv;
-  const db = yield* Database;
   const id = yield* goalSession("Never replay an uncertain effect");
   const revision = yield* Schema.decodeUnknownEffect(LatestRevision)(
-    db.sqlite
-      .prepare(
-        "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(id),
+    yield* sqlGet(
+      "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+      id,
+    ),
   );
   const artifacts = yield* makeOwnerNativeArtifacts({
     directory: `${env.storage}/native-artifacts`,
@@ -155,9 +153,13 @@ const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed")
   const admission = yield* (yield* workflowRunBindings).bind(id, `${id}-old`, revision.id);
   expect(admission.status).toBe("bound");
   if (admission.status !== "bound") return yield* Effect.die("the earlier run was not bound");
-  db.sqlite
-    .prepare("INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, ?, ?)")
-    .run(`${id}-old`, id, status, yield* Clock.currentTimeMillis);
+  yield* sqlRun(
+    "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, ?, ?)",
+    `${id}-old`,
+    id,
+    status,
+    yield* Clock.currentTimeMillis,
+  );
   const ledger = yield* makeSqliteOwnerRpcLedger;
   const key = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(admission.binding);
   expect(yield* ledger.reserve(key, 1, "old-effect", true)).toEqual({ type: "reserved" });

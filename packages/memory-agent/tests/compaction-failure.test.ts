@@ -3,7 +3,7 @@ import { assertExitFailure } from "@effect/vitest/utils";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { compactEffect, compactionStateEffect } from "../src/agent/compaction.ts";
+import { compactEffect, compactionStateEffect, lookupSources } from "../src/agent/compaction.ts";
 
 const state = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
 const messages: readonly ModelMessage[] = [
@@ -44,12 +44,12 @@ describe("Compaction failure boundaries", () => {
         const exit = yield* compactEffect({
           messages,
           state,
-          sources: {
+          sources: lookupSources({
             toolResultId: () => {
               throw defect;
             },
             nodeText: () => null,
-          },
+          }),
           budget: { compactAt: 0, leaveOutAt: 10_000 },
         }).pipe(Effect.exit);
         assertExitFailure(exit, Cause.die(defect));

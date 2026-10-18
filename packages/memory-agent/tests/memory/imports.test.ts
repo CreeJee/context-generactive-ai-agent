@@ -17,13 +17,13 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
-import { Database } from "../../src/db/database.ts";
 import { Importer } from "../../src/imports/importer.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { type AgentServices, TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlGet } from "../support/sql.ts";
 
 type TranscriptLine = { readonly [key: string]: JsonValue };
 const serialize = Effect.fn("imports.serialize")((lines: readonly TranscriptLine[]) =>
@@ -166,17 +166,16 @@ const migrated = Effect.fnUntraced(function* (source: "claude-code" | "codex") {
 /** The migrated session's nodes in order. */
 const migratedNodes = Effect.fnUntraced(function* (source: "claude-code" | "codex") {
   const session = yield* migrated(source);
-  const { sqlite } = yield* Database;
   return yield* decodeNodes(
-    sqlite
-      .prepare("SELECT kind, text, created_at, run_id FROM nodes WHERE session_id = ? ORDER BY seq")
-      .all(session.id),
+    yield* sqlAll(
+      "SELECT kind, text, created_at, run_id FROM nodes WHERE session_id = ? ORDER BY seq",
+      session.id,
+    ),
   );
 });
 
 const count = Effect.fnUntraced(function* (sql: string) {
-  const { sqlite } = yield* Database;
-  return (yield* decodeCount(sqlite.prepare(sql).get())).count;
+  return (yield* decodeCount(yield* sqlGet(sql))).count;
 });
 
 /** Importing reads the whole home and writes into the whole store, so each test owns its agent. */
@@ -203,13 +202,13 @@ alone("writes a conversation with the recorded times and the live recorder's evi
     ]);
     // Everything answering one user turn shares its run, which is how the transcript renders.
     expect(EffectArray.dedupe(rows.map((row) => row.run_id)).length).toBe(1);
-    const { sqlite } = yield* Database;
     const edges = yield* decodeEdges(
-      sqlite
-        .prepare(`
+      yield* sqlAll(
+        `
           SELECT e.kind, n.kind AS from_kind FROM edges e JOIN nodes n ON n.id = e.from_id
-          WHERE n.project_id = ? ORDER BY e.kind, n.seq`)
-        .all(project.id),
+          WHERE n.project_id = ? ORDER BY e.kind, n.seq`,
+        project.id,
+      ),
     );
     expect(edges).toContainEqual({ kind: "calls", from_kind: "assistant" });
     expect(edges).toContainEqual({ kind: "returns", from_kind: "tool_call" });
@@ -299,13 +298,10 @@ alone("a tool call read in a later pass belongs to the turn still open", () =>
       ]),
     ]);
     expect(yield* runOnce).toBe(2);
-    const { sqlite } = yield* Database;
     const calledFrom = yield* decodeNodes(
-      sqlite
-        .prepare(`
+      yield* sqlAll(`
           SELECT n.kind, n.text, n.created_at, n.run_id FROM edges e
-          JOIN nodes n ON n.id = e.from_id WHERE e.kind = 'calls'`)
-        .all(),
+          JOIN nodes n ON n.id = e.from_id WHERE e.kind = 'calls'`),
     );
     // Not the first turn's answer: an empty stand-in in the second turn made the call.
     expect(calledFrom.map((row) => [row.kind, row.text])).toEqual([["assistant", ""]]);
@@ -459,7 +455,7 @@ alone("indexes what was said today before a migrated backlog", () =>
     const { project, session } = yield* TestEnv;
     yield* writeClaude;
     // The transcript is from March; this is now. Its rows land last but it must index first.
-    const today = (yield* Nodes).append({
+    const today = yield* (yield* Nodes).append({
       projectId: project.id,
       sessionId: session.id,
       kind: "user",
@@ -467,13 +463,10 @@ alone("indexes what was said today before a migrated backlog", () =>
     });
     yield* runOnce;
     yield* (yield* Indexer).indexUpTo(1);
-    const { sqlite } = yield* Database;
     const indexed = yield* decodeIndexed(
-      sqlite
-        .prepare(
-          "SELECT n.text FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq ORDER BY n.seq",
-        )
-        .all(),
+      yield* sqlAll(
+        "SELECT n.text FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq ORDER BY n.seq",
+      ),
     );
     expect(indexed.map((row) => row.text)).toEqual([today.text]);
   }),
@@ -492,7 +485,7 @@ alone("reads Codex rollouts too, and queues migrated statements for interpretati
     expect(
       yield* count("SELECT count(*) AS count FROM interpret_jobs WHERE status = 'pending'"),
     ).toBe(1);
-    const rendered = sessionMessages((yield* Nodes).session(session.id), () => []);
+    const rendered = sessionMessages(yield* (yield* Nodes).session(session.id), () => []);
     expect(rendered).toHaveLength(1);
     expect(rendered[0]?.role).toBe("user");
     expect(rendered[0]?.parts).toEqual([{ type: "text", content: "이어서" }]);

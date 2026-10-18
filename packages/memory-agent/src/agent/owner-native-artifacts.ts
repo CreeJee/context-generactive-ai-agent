@@ -2,7 +2,6 @@
 import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { dirname, join } = platformPath;
-import { pathToFileURL } from "node:url";
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -39,6 +38,11 @@ type Registration = typeof Registration.Type;
 
 const boundary = <A>(work: () => A) =>
   Effect.try({ try: work, catch: (cause) => NativeRegistrationError.make({ cause }) });
+const fileUrl = (path: string) =>
+  platformPath.toFileUrl(path).pipe(
+    Effect.map((url) => url.href),
+    Effect.mapError((cause) => NativeRegistrationError.make({ cause })),
+  );
 
 const loadManifest = Effect.fn("OwnerNativeArtifacts.loadManifest")(function* (
   manifestPath: string,
@@ -73,7 +77,7 @@ const loadManifest = Effect.fn("OwnerNativeArtifacts.loadManifest")(function* (
     nativePath,
     workerPath,
     registration: {
-      fileUrl: pathToFileURL(nativePath).href,
+      fileUrl: yield* fileUrl(nativePath),
       sha256: decoded.native.sha256,
       contractVersion: decoded.native.contractVersion,
       sourceHash: decoded.native.sourceHash,
@@ -157,7 +161,7 @@ export const makeOwnerNativeArtifacts = Effect.fnUntraced(function* (owner: {
     );
     const verified: Registration = {
       ...prebuilt.registration,
-      fileUrl: pathToFileURL(durablePath).href,
+      fileUrl: yield* fileUrl(durablePath),
     };
     // The durable path is content-addressed owner storage, checked once right before it is recorded.
     yield* files.verify(durablePath, durablePath, verified.sha256);

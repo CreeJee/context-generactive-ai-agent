@@ -1,5 +1,3 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
 import {
   MutableHashMap,
   HashSet,
@@ -10,8 +8,7 @@ import {
   Layer,
   Schema,
 } from "effect";
-import { SqlClient } from "effect/sql";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Embedder } from "./embedding/embedder.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
@@ -132,36 +129,16 @@ export function namesSomethingExactly(query: string) {
     );
 }
 
-const Id = Schema.Struct({ id: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(Id), Result.getOrThrow);
-const Count = Schema.Struct({ count: Schema.Finite });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCount = EffectFunction.flow(Schema.decodeUnknownResult(Count), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeName = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ name: Schema.String })),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeChallenge = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({ from_id: Schema.String, kind: Schema.Literals(["corrects", "retracts"]) }),
-  ),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeChainSource = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({
-      id: Schema.String,
-      seq: Schema.Finite,
-      text: Schema.String,
-      created_at: Schema.String,
-    }),
-  ),
-  Result.getOrThrow,
-);
+const Challenge = Schema.Struct({
+  from_id: Schema.String,
+  kind: Schema.Literals(["corrects", "retracts"]),
+});
+const ChainSource = Schema.Struct({
+  id: Schema.String,
+  seq: Schema.Finite,
+  text: Schema.String,
+  created_at: Schema.String,
+});
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {
@@ -194,44 +171,52 @@ export const searchTuning: SearchTuning = {
 
 const make = (tuning: SearchTuning) =>
   Effect.gen(function* () {
-    const { sqlite } = yield* Database;
     const sql = yield* SqlClient.SqlClient;
     const embedder = yield* Embedder;
     const vectors = yield* VectorIndex;
     const graph = yield* Graph;
     const analyzer = yield* MorphAnalyzer;
-    const supersededBy = sqlite.prepare(`
-    SELECT e.from_id, e.kind FROM edges e
-    JOIN nodes n ON n.id = e.from_id JOIN nodes t ON t.id = e.to_id
-    WHERE e.to_id = ? AND e.kind IN ('corrects', 'retracts') AND ${changeAuthoritySql("n", "t")}
-    ORDER BY n.seq`);
+    const authority = sql.literal(changeAuthoritySql("n", "t"));
+    const supersededBy = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Challenge,
+      execute: (id) => sql`
+        SELECT e.from_id, e.kind FROM edges e
+        JOIN nodes n ON n.id = e.from_id JOIN nodes t ON t.id = e.to_id
+        WHERE e.to_id = ${id} AND e.kind IN ('corrects', 'retracts') AND ${authority}
+        ORDER BY n.seq`,
+    });
     // A question later resolved into an applied relation is no longer unconfirmed.
-    const unconfirmedOf = sqlite.prepare(`
-    SELECT count(*) AS count FROM interpretations i
-    JOIN nodes n ON n.id = i.node_id JOIN nodes t ON t.id = i.target_id
-    WHERE i.target_id = ? AND i.status = 'unconfirmed' AND i.kind IN ('corrects', 'retracts')
-      AND ${changeAuthoritySql("n", "t")}
-      AND NOT EXISTS (
-        SELECT 1 FROM edges e WHERE e.from_id = i.node_id AND e.to_id = i.target_id AND e.kind = i.kind
-      )`);
-    const sourceRow = sqlite.prepare("SELECT id, seq, text, created_at FROM nodes WHERE id = ?");
-    // Synchronous native SQLite reads; a failure stops the search instead of hiding later changes.
-    const storageRead = <A>(read: () => A) =>
-      Effect.try({
-        try: read,
-        catch: () => NativeMemorySearchFailed.make({ reason: "read-failed" }),
-      });
+    const unconfirmedOf = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ count: Schema.Finite }),
+      execute: (id) => sql`
+        SELECT count(*) AS count FROM interpretations i
+        JOIN nodes n ON n.id = i.node_id JOIN nodes t ON t.id = i.target_id
+        WHERE i.target_id = ${id} AND i.status = 'unconfirmed'
+          AND i.kind IN ('corrects', 'retracts') AND ${authority}
+          AND NOT EXISTS (SELECT 1 FROM edges e
+            WHERE e.from_id = i.node_id AND e.to_id = i.target_id AND e.kind = i.kind)`,
+    });
+    const sourceRow = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: ChainSource,
+      execute: (id) => sql`SELECT id, seq, text, created_at FROM nodes WHERE id = ${id}`,
+    });
+    // A failed read stops the search instead of hiding later changes.
+    const storageRead = <A, E>(read: Effect.Effect<A, E>) =>
+      Effect.mapError(read, () => NativeMemorySearchFailed.make({ reason: "read-failed" }));
+    const appliedChanges = (id: string) => storageRead(supersededBy(id));
+    const unconfirmedCount = (id: string) =>
+      storageRead(Effect.map(unconfirmedOf(id), (row) => row.count));
     const latest = latestResolver({
       appliedChanges: (id) =>
-        storageRead(() =>
-          supersededBy.all(id).map((row) => {
-            const change = decodeChallenge(row);
-            return { sourceId: change.from_id, relation: change.kind };
-          }),
+        Effect.map(appliedChanges(id), (rows) =>
+          rows.map((change) => ({ sourceId: change.from_id, relation: change.kind })),
         ),
-      hasUnconfirmed: (id) => storageRead(() => decodeCount(unconfirmedOf.get(id)).count > 0),
+      hasUnconfirmed: (id) => Effect.map(unconfirmedCount(id), (count) => count > 0),
       source: (id) =>
-        storageRead(() => decodeChainSource(sourceRow.get(id))).pipe(
+        storageRead(sourceRow(id)).pipe(
           Effect.map((row) => ({
             id: row.id,
             seq: row.seq,
@@ -241,7 +226,17 @@ const make = (tuning: SearchTuning) =>
         ),
     });
 
-    const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
+    const nameOf = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({ name: Schema.String }),
+      execute: (projectId) => sql`SELECT name FROM projects WHERE id = ${projectId}`,
+    });
+    const otherProjects = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (projectId) =>
+        sql`SELECT id FROM projects WHERE cross_recall_excluded = 0 AND id != ${projectId}`,
+    });
     const ChunkSpans = Schema.Array(
       Schema.Struct({ vector_id: Schema.Finite, ...ChunkSpan.fields }),
     );
@@ -253,21 +248,23 @@ const make = (tuning: SearchTuning) =>
             WHERE embedder = ${embedder.identity} AND vector_id IN ${sql.in(vectorIds)}`.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(ChunkSpans)),
           );
-    const projectName = (projectId: string) => {
-      const row = nameOf.get(projectId);
-      return isTruthy(row) ? decodeName(row).name : projectId;
-    };
+    const projectName = (projectId: string) =>
+      storageRead(
+        Effect.map(
+          nameOf(projectId),
+          Option.match({ onNone: () => projectId, onSome: (row) => row.name }),
+        ),
+      );
 
     const allowedProjects = (projectId: string, crossProject: boolean) =>
       crossProject
-        ? [
-            projectId,
-            ...sqlite
-              .prepare("SELECT id FROM projects WHERE cross_recall_excluded = 0 AND id != ?")
-              .all(projectId)
-              .map((row) => decodeId(row).id),
-          ]
-        : [projectId];
+        ? storageRead(
+            Effect.map(otherProjects(projectId), (rows) => [
+              projectId,
+              ...rows.map((row) => row.id),
+            ]),
+          )
+        : Effect.succeed([projectId]);
 
     const collectSeeds = Effect.fnUntraced(function* (
       input: FindInput,
@@ -351,7 +348,7 @@ const make = (tuning: SearchTuning) =>
     const find = (input: FindInput) =>
       Effect.gen(function* () {
         const limit = input.limit ?? defaultLimit;
-        const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
+        const allowed = yield* allowedProjects(input.projectId, input.crossProject ?? true);
         const degraded: ("vector" | "morph")[] = [];
 
         const { byVector, byText, byMorph, coverage, spans } = yield* collectSeeds(
@@ -372,7 +369,7 @@ const make = (tuning: SearchTuning) =>
             : fuseRanks({ lists: [byVector, byText, ...morph] });
         const vectorIds = HashSet.fromIterable(byVector);
 
-        const walk = graph.traverse(seeds, {
+        const walk = yield* graph.traverse(seeds, {
           budget: limit * 4,
           minUtility: 0.2,
           projectIds: allowed,
@@ -381,38 +378,45 @@ const make = (tuning: SearchTuning) =>
         const { unindexed, uninterpreted } = coverage;
 
         const matches = yield* Effect.forEach(walk.visits.slice(0, limit), (visit) =>
-          Effect.map(latest(visit.node.id), (latest): Match => {
-            const matched = Option.getOrUndefined(MutableHashMap.get(spans, visit.node.id));
-            const start = matched?.start ?? 0;
-            return {
-              id: visit.node.id,
-              kind: visit.node.kind,
-              projectId: visit.node.projectId,
-              sessionId: visit.node.sessionId,
-              createdAt: visit.node.createdAt,
-              snippet: visit.node.text.slice(start, start + snippetLength),
-              ...optionalProperty(
-                "matchedSpan",
-                matched === undefined ? undefined : { ...matched, unit: "utf16" as const },
-              ),
-              utility: Math.round(visit.utility * 1000) / 1000,
-              foundBy:
-                visit.path.length > 0
-                  ? "graph"
-                  : HashSet.has(vectorIds, visit.node.id)
-                    ? "vector"
-                    : "text",
-              path: visit.path,
-              projectName: projectName(visit.node.projectId),
-              fromOtherProject: visit.node.projectId !== input.projectId,
-              supersededBy: supersededBy.all(visit.node.id).map((row) => {
-                const challenge = decodeChallenge(row);
-                return { id: challenge.from_id, relation: challenge.kind };
-              }),
-              unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
-              latest,
-            };
-          }),
+          Effect.all({
+            latest: latest(visit.node.id),
+            projectName: projectName(visit.node.projectId),
+            supersededBy: appliedChanges(visit.node.id),
+            unconfirmedChallenges: unconfirmedCount(visit.node.id),
+          }).pipe(
+            Effect.map(({ latest, projectName, supersededBy, unconfirmedChallenges }): Match => {
+              const matched = Option.getOrUndefined(MutableHashMap.get(spans, visit.node.id));
+              const start = matched?.start ?? 0;
+              return {
+                id: visit.node.id,
+                kind: visit.node.kind,
+                projectId: visit.node.projectId,
+                sessionId: visit.node.sessionId,
+                createdAt: visit.node.createdAt,
+                snippet: visit.node.text.slice(start, start + snippetLength),
+                ...optionalProperty(
+                  "matchedSpan",
+                  matched === undefined ? undefined : { ...matched, unit: "utf16" as const },
+                ),
+                utility: Math.round(visit.utility * 1000) / 1000,
+                foundBy:
+                  visit.path.length > 0
+                    ? "graph"
+                    : HashSet.has(vectorIds, visit.node.id)
+                      ? "vector"
+                      : "text",
+                path: visit.path,
+                projectName,
+                fromOtherProject: visit.node.projectId !== input.projectId,
+                supersededBy: supersededBy.map((change) => ({
+                  id: change.from_id,
+                  relation: change.kind,
+                })),
+                unconfirmedChallenges,
+                latest,
+              };
+            }),
+          ),
         );
         return {
           matches,

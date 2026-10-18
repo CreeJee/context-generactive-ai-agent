@@ -1,17 +1,17 @@
 import { Cause } from "effect";
 import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
-import { DatabaseSync } from "node:sqlite";
-import { Clock, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import { Clock, Context, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import { SqlClient } from "effect/sql";
 import { EventType } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
-import { migrations } from "../src/db/migrations.ts";
+import { Database } from "../src/db/database.ts";
 import { createAccountBoundSubscriptionClients } from "../src/oauth/account-bound.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
-import { oauthProfileInUse } from "../src/oauth/run-leases.ts";
+import { OAuthProfiles } from "../src/oauth/accounts.ts";
 import { createSubscriptionOAuthClient } from "../src/oauth/subscription-oauth.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { createSubscriptionProvider } from "../src/providers/subscription-provider.ts";
@@ -50,29 +50,20 @@ it.live(
         const effectClock = yield* Clock.Clock;
 
         const storage = yield* temporary;
-        const sqlite = yield* Effect.acquireRelease(
-          Effect.sync(() => new DatabaseSync(":memory:")),
-          (db) => Effect.sync(() => db.close()),
+        const database = yield* Layer.build(Database.layer(":memory:"));
+        const sql = Context.get(database, SqlClient.SqlClient);
+        yield* sql`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
+          VALUES ('first', 'openai', 'first', 1, 0), ('second', 'openai', 'second', 0, 1)`;
+        const profiles = Context.get(
+          yield* Layer.build(
+            OAuthProfiles.layer.pipe(Layer.provide(Layer.succeedContext(database))),
+          ),
+          OAuthProfiles,
         );
-        sqlite.exec(
-          migrations
-            .filter(
-              (sql) =>
-                sql.includes("CREATE TABLE oauth_profiles (") ||
-                sql.includes("CREATE TABLE oauth_legacy_removed ("),
-            )
-            .join("\n"),
-        );
-        for (const [index, id] of ["first", "second"].entries())
-          sqlite
-            .prepare(
-              "INSERT INTO oauth_profiles(id, provider, label, selected, created_at) VALUES (?, 'openai', ?, ?, ?)",
-            )
-            .run(id, id, index === 0 ? 1 : 0, index);
         const requests: string[] = [];
         const created: string[] = [];
         const clients = createAccountBoundSubscriptionClients({
-          sqlite: sqlite,
+          profiles,
           provider: "openai",
           createClient: (id) => {
             created.push(id!);
@@ -137,9 +128,12 @@ it.live(
             expect(oldRuntime.contextWindow("gpt-5")).toBe(111);
             const first = oldRuntime.adapter(selection);
             yield* Effect.addFinalizer(() => Effect.sync(() => first.releaseRun?.()));
-            sqlite.exec(
-              "UPDATE oauth_profiles SET selected = CASE WHEN id = 'second' THEN 1 ELSE 0 END",
-            );
+            yield* profiles.select("openai", "second", {
+              read: () =>
+                Promise.resolve({ accessToken: "second", refreshToken: "fixture", expiresAt: 0 }),
+              write: () => Promise.reject(new Error("unexpected profile write")),
+              remove: () => Promise.reject(new Error("unexpected profile removal")),
+            });
             expect(oldRuntime.contextWindowKnown?.("gpt-5")).toBe(false);
             yield* provider.models.list;
             const fresh = implementation.bind(yield* registry.subscriptionDependencies!("openai"));
@@ -170,14 +164,14 @@ it.live(
             }
             expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
             expect(created).toEqual(["first", "second"]);
-            expect(oauthProfileInUse(sqlite, "openai", "first")).toBe(true);
-            expect(oauthProfileInUse(sqlite, "openai", "second")).toBe(true);
+            expect(profiles.inUse("openai", "first")).toBe(true);
+            expect(profiles.inUse("openai", "second")).toBe(true);
             first.releaseRun?.();
             second.releaseRun?.();
-            expect(oauthProfileInUse(sqlite, "openai", "first")).toBe(false);
-            expect(oauthProfileInUse(sqlite, "openai", "second")).toBe(true);
+            expect(profiles.inUse("openai", "first")).toBe(false);
+            expect(profiles.inUse("openai", "second")).toBe(true);
             legacy.releaseRun?.();
-            expect(oauthProfileInUse(sqlite, "openai", "second")).toBe(false);
+            expect(profiles.inUse("openai", "second")).toBe(false);
             const missing = yield* Effect.result(registry.subscriptionDependencies!("anthropic"));
             expect(Result.isFailure(missing) && missing.failure).toMatchObject({
               _tag: "ProviderUnavailable",

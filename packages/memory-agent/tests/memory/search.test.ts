@@ -16,7 +16,6 @@ import {
 } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../../src/config/storage-root.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { kiwiModel, MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -30,6 +29,7 @@ import { fakeTerms } from "../../src/testing/fake-morph.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlGet } from "../support/sql.ts";
 
 /**
  * A new project with one session. Search ranks within a project, so each test gets its own and
@@ -50,7 +50,7 @@ const freshProject = Effect.gen(function* () {
 /** A fresh project whose only node is a user statement. */
 const otherProject = Effect.fnUntraced(function* (text: string) {
   const { project, session } = yield* freshProject;
-  const node = (yield* Nodes).append({
+  const node = yield* (yield* Nodes).append({
     projectId: project.id,
     sessionId: session.id,
     kind: "user",
@@ -65,19 +65,19 @@ const earlierSession = Effect.gen(function* () {
   const nodes = yield* Nodes;
   const at = { projectId: project.id, sessionId: session.id };
   const runId = `${session.id}:old-run`;
-  const decision = nodes.append({
+  const decision = yield* nodes.append({
     ...at,
     kind: "user",
     text: "저장소는 SQLite로 결정했다. Postgres는 과하다.",
   });
-  const answer = nodes.append({
+  const answer = yield* nodes.append({
     ...at,
     runId,
     kind: "assistant",
     text: "스키마를 확인할게요.",
     links: [{ kind: "reply", nodeId: decision.id }],
   });
-  const call = nodes.append({
+  const call = yield* nodes.append({
     ...at,
     runId,
     kind: "tool_call",
@@ -85,7 +85,7 @@ const earlierSession = Effect.gen(function* () {
     links: [{ kind: "calls", nodeId: answer.id }],
     refs: ["schema.sql"],
   });
-  const result = nodes.append({
+  const result = yield* nodes.append({
     ...at,
     runId,
     kind: "tool_result",
@@ -153,35 +153,39 @@ testAgent()("MemorySearch.find", (it) => {
       const { project, session } = yield* freshProject;
       const nodes = yield* Nodes;
       const at = { projectId: project.id, sessionId: session.id };
-      const read = (content: string, sha256: string) => {
-        const call = nodes.append({
+      const read = Effect.fnUntraced(function* (content: string, sha256: string) {
+        const call = yield* nodes.append({
           ...at,
           kind: "tool_call",
           text: 'read_file {"path":"config.toml"}',
           detail: { toolName: "read_file" },
           refs: ["config.toml"],
         });
-        return nodes.append({
+        return yield* nodes.append({
           ...at,
           kind: "tool_result",
-          text: JSON.stringify({ path: "config.toml", sha256, content }),
+          text: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            path: "config.toml",
+            sha256,
+            content,
+          }),
           detail: { toolName: "read_file", ok: true },
           links: [{ kind: "returns", nodeId: call.id }],
         });
-      };
+      });
       const found = Effect.map(
         find({ query: "retries", projectId: project.id, crossProject: false }),
         (result) => result.matches.map((match) => match.id),
       );
-      const first = read("retries = 2", "a".repeat(64));
-      const unchanged = read("retries = 2", "a".repeat(64));
+      const first = yield* read("retries = 2", "a".repeat(64));
+      const unchanged = yield* read("retries = 2", "a".repeat(64));
       expect(yield* found).toEqual(expect.arrayContaining([first.id, unchanged.id]));
-      const changed = read("retries = 5", "b".repeat(64));
+      const changed = yield* read("retries = 5", "b".repeat(64));
       const after = yield* found;
       expect(after).toContain(changed.id);
       expect(after).not.toContain(first.id);
       expect(after).not.toContain(unchanged.id);
-      expect(nodes.get(first.id)?.text).toContain("retries = 2");
+      expect((yield* nodes.get(first.id))?.text).toContain("retries = 2");
     }),
   );
 
@@ -194,16 +198,14 @@ testAgent()("MemorySearch.find", (it) => {
       yield* indexer.analyzeAll();
       const append = (text: string) =>
         nodes.append({ projectId: project.id, sessionId: session.id, kind: "user", text });
-      const target = append("결제모듈은 토스페이먼츠로 연동하기로 했다");
-      append("회의실 예약은 금요일까지");
-      append("디자인 시안은 다음 주에 공유");
+      const target = yield* append("결제모듈은 토스페이먼츠로 연동하기로 했다");
+      yield* append("회의실 예약은 금요일까지");
+      yield* append("디자인 시안은 다음 주에 공유");
       yield* indexAll;
       expect(yield* indexer.analyzeAll()).toBe(3);
       expect(yield* indexer.analyzeAll()).toBe(0);
       const stored = yield* Schema.decodeUnknownEffect(Schema.Struct({ terms: Schema.String }))(
-        (yield* Database).sqlite
-          .prepare("SELECT terms FROM nodes_morph WHERE rowid = ?")
-          .get(target.seq),
+        yield* sqlGet("SELECT terms FROM nodes_morph WHERE rowid = ?", target.seq),
       );
       expect(stored.terms).toBe(fakeTerms("결제모듈은 토스페이먼츠로 연동하기로 했다").join(" "));
       // "결제모듈을" never occurs as text, so only the morpheme terms tie the question to it.
@@ -226,7 +228,7 @@ testAgent()("MemorySearch.find", (it) => {
       yield* indexAll;
       const newSession = yield* (yield* Sessions).create(project.id);
       const nodes = yield* Nodes;
-      const question = nodes.append({
+      const question = yield* nodes.append({
         projectId: project.id,
         sessionId: newSession.id,
         kind: "user",
@@ -268,8 +270,7 @@ testAgent()("MemorySearch.find", (it) => {
         ),
       );
       const results = MutableHashMap.fromIterable(
-        nodes
-          .session(newSession.id)
+        (yield* nodes.session(newSession.id))
           .filter((node) => node.kind === "tool_result")
           .map((node) => [node.detail.toolCallId, node.text]),
       );
@@ -312,13 +313,6 @@ testAgent()("MemorySearch.find", (it) => {
       expect(refused).toEqual({ error: "not_found", id: hidden.node.id });
     }),
   );
-
-  it.effect("Database is shared by every service in one agent", () =>
-    Effect.gen(function* () {
-      const [a, b] = yield* Effect.all([Database, Database]);
-      expect(a.sqlite).toBe(b.sqlite);
-    }),
-  );
 });
 
 testAgent({ morphAnalyzer: MorphAnalyzer.disabled })(
@@ -329,7 +323,7 @@ testAgent({ morphAnalyzer: MorphAnalyzer.disabled })(
         const { project, session } = yield* freshProject;
         const excluded = yield* otherProject("shared vector text");
         const nodes = yield* Nodes;
-        const distractors = Array.from({ length: 50 }, () =>
+        const distractors = yield* Effect.forEach(Array.from({ length: 50 }), () =>
           nodes.append({
             projectId: excluded.project.id,
             sessionId: excluded.node.sessionId,
@@ -337,7 +331,7 @@ testAgent({ morphAnalyzer: MorphAnalyzer.disabled })(
             text: "shared vector text",
           }),
         );
-        const target = nodes.append({
+        const target = yield* nodes.append({
           projectId: project.id,
           sessionId: session.id,
           kind: "user",
@@ -363,13 +357,13 @@ testAgent({ morphAnalyzer: MorphAnalyzer.disabled })(
           const { project, session } = yield* freshProject;
           const nodes = yield* Nodes;
           const at = { projectId: project.id, sessionId: session.id };
-          nodes.append({ ...at, kind: "user", text: "개발 서버를 띄워 줘" });
-          const output = nodes.append({
+          yield* nodes.append({ ...at, kind: "user", text: "개발 서버를 띄워 줘" });
+          const output = yield* nodes.append({
             ...at,
             kind: "tool_result",
             text: "Error: listen EADDRINUSE: address already in use 127.0.0.1:5174",
           });
-          nodes.append({ ...at, kind: "assistant", text: "다른 포트로 옮길게요." });
+          yield* nodes.append({ ...at, kind: "assistant", text: "다른 포트로 옮길게요." });
           yield* indexAll;
           // Only the statements have vectors, so the vector ranking is all statements.
           const result = yield* find({ query: "EADDRINUSE 5174", projectId: project.id });

@@ -41,28 +41,33 @@ const fixture = Effect.gen(function* () {
       ('foreign-node',5,'source','q','tool_result','2026-01-05','private','{}');
     ALTER TABLE nodes ADD COLUMN run_id TEXT;`);
   const tools = yield* over(db)(
-    reportToolsForSession("report", "p", redactSecret, () => [
-      {
-        id: "task",
-        projectId: "p",
-        originSessionId: "source",
-        status: "failed",
-        title: "SECRET trace",
-        request: "SECRET request",
-        parentToolCallId: "call-1",
-        createdAt: 12,
-      },
-      {
-        id: "foreign-task",
-        projectId: "q",
-        originSessionId: "foreign",
-        status: "failed",
-        title: "private",
-        request: "private",
-        parentToolCallId: "x",
-        createdAt: 13,
-      },
-    ]),
+    reportToolsForSession(
+      "report",
+      "p",
+      redactSecret,
+      Effect.succeed([
+        {
+          id: "task",
+          projectId: "p",
+          originSessionId: "source",
+          status: "failed",
+          title: "SECRET trace",
+          request: "SECRET request",
+          parentToolCallId: "call-1",
+          createdAt: 12,
+        },
+        {
+          id: "foreign-task",
+          projectId: "q",
+          originSessionId: "foreign",
+          status: "failed",
+          title: "private",
+          request: "private",
+          parentToolCallId: "x",
+          createdAt: 13,
+        },
+      ]),
+    ),
   );
   const invoke = (name: string, input: Schema.Json) =>
     Effect.tryPromise({
@@ -94,7 +99,9 @@ describe("report evidence tools", () => {
       );
       expect(yield* read(reportBinding("report", "q"))).toEqual(Option.none());
       expect(yield* read(reportBinding("bad-report", "p"))).toEqual(Option.none());
-      expect(yield* read(reportToolsForSession("bad-report", "p", keep, () => []))).toEqual([]);
+      expect(
+        yield* read(reportToolsForSession("bad-report", "p", keep, Effect.succeed([]))),
+      ).toEqual([]);
     }),
   );
 
@@ -137,28 +144,33 @@ describe("report evidence tools", () => {
           "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
         ).run();
         const context = yield* over(db)(
-          initialReportEvidence("report", "p", redactSecret, () => [
-            {
-              id: "source-task",
-              projectId: "p",
-              originSessionId: "source",
-              status: "failed",
-              title: "SECRET trace",
-              request: "",
-              parentToolCallId: "call-1",
-              createdAt: 12,
-            },
-            {
-              id: "private-task",
-              projectId: "q",
-              originSessionId: "foreign",
-              status: "failed",
-              title: "private",
-              request: "",
-              parentToolCallId: "x",
-              createdAt: 13,
-            },
-          ]),
+          initialReportEvidence(
+            "report",
+            "p",
+            redactSecret,
+            Effect.succeed([
+              {
+                id: "source-task",
+                projectId: "p",
+                originSessionId: "source",
+                status: "failed",
+                title: "SECRET trace",
+                request: "",
+                parentToolCallId: "call-1",
+                createdAt: 12,
+              },
+              {
+                id: "private-task",
+                projectId: "q",
+                originSessionId: "foreign",
+                status: "failed",
+                title: "private",
+                request: "",
+                parentToolCallId: "x",
+                createdAt: 13,
+              },
+            ]),
+          ),
         );
         expect(context).toContain("old failed output");
         expect(context).toContain("[redacted] result");
@@ -170,7 +182,9 @@ describe("report evidence tools", () => {
         expect(context).not.toContain("private");
         expect(context.length).toBeLessThanOrEqual(20_100);
         db.exec("DROP TABLE permission_reviews");
-        const missing = yield* over(db)(initialReportEvidence("report", "p", keep, () => []));
+        const missing = yield* over(db)(
+          initialReportEvidence("report", "p", keep, Effect.succeed([])),
+        );
         expect(missing).toContain("approvals: failed");
       }),
   );

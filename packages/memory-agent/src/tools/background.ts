@@ -117,14 +117,11 @@ const make = Effect.gen(function* () {
           ),
         );
   });
-  const traceEffect = <A>(operation: () => A) =>
-    Effect.try({
-      try: operation,
-      catch: (cause) => new BackgroundTraceFailed({ cause }),
-    });
+  const traceEffect = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.mapError(effect, (cause) => new BackgroundTraceFailed({ cause }));
 
   const owned = Effect.fn("BackgroundTasks.owned")(function* (sessionId: string, taskId: string) {
-    const detail = yield* traceEffect(() => trace.taskDetail(sessionId, taskId));
+    const detail = yield* traceEffect(trace.taskDetail(sessionId, taskId));
     if (
       !isTruthy(detail) ||
       !detail.task.agentName.startsWith("background_") ||
@@ -178,7 +175,7 @@ const make = Effect.gen(function* () {
                 "This operation was already dispatched. Retrieve its result; do not resend it.",
             };
           }
-          const handle = yield* traceEffect(() =>
+          const handle = yield* traceEffect(
             trace.startAttempt({
               sessionId: binding.sessionId,
               parentRunId: binding.runId,
@@ -226,7 +223,7 @@ const make = Effect.gen(function* () {
             // Persist once. A storage failure is not a second operation failure to save again.
             const stored = yield* Effect.exit(save(outcome.status, outcome.result));
             const status = Exit.isSuccess(stored) ? outcome.status : "failed";
-            yield* traceEffect(() =>
+            yield* traceEffect(
               trace.transitionAttempt(
                 handle,
                 binding.sessionId,
@@ -247,7 +244,7 @@ const make = Effect.gen(function* () {
             yield* Effect.sync(() => onCompletion?.(binding.sessionId));
           });
           const job = Effect.gen(function* () {
-            yield* traceEffect(() =>
+            yield* traceEffect(
               trace.transitionAttempt(
                 handle,
                 binding.sessionId,
@@ -297,7 +294,7 @@ const make = Effect.gen(function* () {
     ) {
       const waiting = Effect.gen(function* () {
         while (true) {
-          const cursor = trace.latestCursor(sessionId);
+          const cursor = yield* traceEffect(trace.latestCursor(sessionId));
           const result = yield* readResult(sessionId, taskId);
           if (result !== null) return result;
           yield* Effect.tryPromise({

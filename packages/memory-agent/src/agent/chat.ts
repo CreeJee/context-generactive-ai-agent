@@ -523,7 +523,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // This infrastructure stays outside the Goal registry (which retains code only).
   const workflowRuleContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const nativeOwnerContext = yield* Effect.context<
-    Nodes | PermissionReviews | SecretRedactor | PermissionClassifier
+    Nodes | PermissionReviews | SecretRedactor | PermissionClassifier | SqlClient.SqlClient
   >();
   const nativeMemoryOwner = yield* Effect.all({
     search: MemorySearch,
@@ -703,7 +703,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
   const knowledge = yield* KnowledgePromotions;
-  workTrace.recoverLifecycleOperations();
+  yield* workTrace.recoverLifecycleOperations();
   yield* attachments.purgeOrphans;
   const places: SettingsPlaces = {
     storageRoot: (yield* StorageRoot).path,
@@ -818,8 +818,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     profile: HarnessProfile = baselineProfile,
   ): CompactionSources => {
     const base: CompactionSources = {
-      toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
-      nodeText: (id) => nodes.get(id)?.text ?? null,
+      toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
+      nodeTexts: nodes.texts,
     };
     if (!(project !== undefined)) return base;
     return {
@@ -830,8 +830,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ) =>
         runEffect(
           Effect.gen(function* () {
-            const sessionNodes = nodes.session(sessionId);
-            const currentUser = nodes.latestOfKind(sessionId, "user");
+            const sessionNodes = yield* nodes.session(sessionId);
+            const currentUser = yield* nodes.latestOfKind(sessionId, "user");
             if (!isTruthy(currentUser)) return null;
             // A node can remain as raw text or as a tool-result pointer. Do not retrieve either again.
             const visible = MutableHashSet.fromIterable(
@@ -848,7 +848,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 .map((node) => node.id),
             );
             MutableHashSet.add(visible, currentUser.id);
-            const recentTurns = nodes.recentOfKind(sessionId, "user", 3).map((node) => node.text);
+            const recentTurns = (yield* nodes.recentOfKind(sessionId, "user", 3)).map(
+              (node) => node.text,
+            );
             const query = EffectArray.dedupe([...retrievalSeed, ...recentTurns])
               .filter((text) => text.length > 0)
               .join("\n")
@@ -1117,7 +1119,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const stopSessionRuns = (sessionId: string) =>
     Effect.gen(function* () {
       yield* execution.stop(sessionId);
-      workTrace.holdParentNotifications(sessionId);
+      yield* workTrace.holdParentNotifications(sessionId);
       yield* background.stopSession(sessionId);
       const parent = liveRuns.get(sessionId);
       if (isTruthy(parent)) {
@@ -1125,8 +1127,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* parent.cancel;
         yield* parent.ended;
       }
-      const activeTasks = workTrace
-        .taskTree(sessionId)
+      const activeTasks = (yield* workTrace.taskTree(sessionId))
         .filter((task) => task.activeAttemptId !== null)
         .map((task) => task.id);
       yield* Effect.forEach(
@@ -1143,8 +1144,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
         return json(200, {
-          cursor: workTrace.latestCursor(sessionId),
-          tasks: workTrace.taskTree(sessionId),
+          cursor: yield* workTrace.latestCursor(sessionId),
+          tasks: yield* workTrace.taskTree(sessionId),
         });
       }).pipe(
         Effect.catchTags({
@@ -1159,8 +1160,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* projects.get(projectId);
         return json(200, {
-          cursor: workTrace.projectLatestCursor(projectId),
-          tasks: workTrace.projectTaskTree(projectId),
+          cursor: yield* workTrace.projectLatestCursor(projectId),
+          tasks: yield* workTrace.projectTaskTree(projectId),
         });
       }).pipe(
         Effect.catchTag("ProjectNotFound", () =>
@@ -1173,12 +1174,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
-        const detail = workTrace.taskDetail(sessionId, taskId);
+        const detail = yield* workTrace.taskDetail(sessionId, taskId);
         return isTruthy(detail)
           ? json(200, {
               ...detail,
-              memoryCandidates: knowledge.candidatesForTask(taskId),
-              memoryUsage: knowledge.usageForTask(taskId),
+              memoryCandidates: yield* knowledge.candidatesForTask(taskId),
+              memoryUsage: yield* knowledge.usageForTask(taskId),
             })
           : json(404, { error: "trace_task_not_found" });
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
@@ -1195,7 +1196,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
         if (!leases.permits(sessionId, holder)) return inUse();
-        const requested = workTrace.requestTaskLifecycle({
+        const requested = yield* workTrace.requestTaskLifecycle({
           sessionId,
           taskId,
           intent,
@@ -1203,14 +1204,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         if (requested.status === "blocked") return json(409, requested);
         if (requested.status === "completed") return json(200, requested);
-        if ("activeAttemptId" in requested && requested.activeAttemptId !== null)
+        if (isTruthy(requested.activeAttemptId))
           yield* agentPromise("stop-subagent", () => subagents.stopTask(taskId)).pipe(
             Effect.andThen(background.stopTask(taskId)),
             Effect.timeoutOption(cancelWaitMs),
           );
-        if (!("operationId" in requested) || requested.operationId === undefined)
+        if (requested.operationId === null)
           return json(409, { status: "blocked", blocker: "operation_not_found" });
-        const completed = workTrace.finalizeTaskLifecycle(requested.operationId);
+        const completed = yield* workTrace.finalizeTaskLifecycle(requested.operationId);
         return completed.status === "completed" ? json(200, completed) : json(202, completed);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -1226,7 +1227,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
         if (!leases.permits(sessionId, holder)) return inUse();
-        const result = workTrace.requestResume({
+        const result = yield* workTrace.requestResume({
           sessionId,
           taskId,
           expectedAttemptId,
@@ -1240,12 +1241,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* projects.get(projectId);
-        const detail = workTrace.projectTaskDetail(projectId, taskId);
+        const detail = yield* workTrace.projectTaskDetail(projectId, taskId);
         return isTruthy(detail)
           ? json(200, {
               ...detail,
-              memoryCandidates: knowledge.candidatesForTask(taskId),
-              memoryUsage: knowledge.usageForTask(taskId),
+              memoryCandidates: yield* knowledge.candidatesForTask(taskId),
+              memoryUsage: yield* knowledge.usageForTask(taskId),
             })
           : json(404, { error: "trace_task_not_found" });
       }).pipe(
@@ -1527,11 +1528,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (attached.length > 0 && !readsImages)
           return json(422, { error: "images_not_supported", model: selection?.model ?? external });
 
-        let userNode = turn !== null ? null : nodes.latestOfKind(sessionId, "user");
+        let userNode = turn !== null ? null : yield* nodes.latestOfKind(sessionId, "user");
         const keptTurn = turn !== null ? (yield* redactor.redactText(turn.text)).text : null;
         const persistUserTurn = Effect.gen(function* () {
           if (keptTurn === null) return;
-          const appended = nodes.append({ projectId, sessionId, kind: "user", text: keptTurn });
+          const appended = yield* nodes.append({
+            projectId,
+            sessionId,
+            kind: "user",
+            text: keptTurn,
+          });
           userNode = appended;
           yield* attachments.link(appended.id, attached);
           if (title === null) events.publishProject(projectId, "sessions");
@@ -1558,7 +1564,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           );
           if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
-          if (turn !== null) workTrace.resumeParentNotifications(sessionId);
+          if (turn !== null) yield* workTrace.resumeParentNotifications(sessionId);
           yield* events.publishSession(sessionId, "run-state");
           if (isTruthy(queuedId)) {
             yield* queue.markDelivered(queuedId, "next_turn", runId);
@@ -1694,7 +1700,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             yield* previousMainModel(sessionId).pipe(Effect.orElseSucceed(Option.none)),
           ),
           loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
-          toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
+          toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
         });
         // Refresh model-advertised limits before choosing this run's compaction budget. A catalog
         // failure must not prevent an otherwise valid request; the runtime has a safe fallback.
@@ -1772,7 +1778,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const last = yield* chatState.lastRun(sessionId);
           if (
             current.archivedAt !== null ||
-            workTrace.parentNotificationsHeld(sessionId) ||
+            (yield* workTrace.parentNotificationsHeld(sessionId)) ||
             last?.status !== "completed"
           )
             return json(409, { error: "notification_followup_deferred" });
@@ -1898,7 +1904,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const sharedTools =
           reportSource !== null
             ? yield* withSql(
-                reportToolsForSession(sessionId, projectId, redactReport, () =>
+                reportToolsForSession(
+                  sessionId,
+                  projectId,
+                  redactReport,
                   workTrace.taskTree(reportSource.sourceSessionId),
                 ),
               )
@@ -1931,7 +1940,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             : { ...resolved, degraded: [...resolved.degraded, "source" as const] };
         const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
         const workflowPrompt = workflowInstructions(workflow, resolvedRules, goalInstanceId);
-        const parentNotifications = workTrace.consumeParentNotifications(sessionId, runId);
+        const parentNotifications = yield* workTrace.consumeParentNotifications(sessionId, runId);
         const parentNotificationPrompt =
           parentNotifications.length === 0
             ? ""
@@ -1946,7 +1955,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const reportSnapshot =
           reportSource !== null
             ? yield* withSql(
-                initialReportEvidence(sessionId, projectId, redactReport, () =>
+                initialReportEvidence(
+                  sessionId,
+                  projectId,
+                  redactReport,
                   workTrace.taskTree(reportSource.sourceSessionId),
                 ),
               ).pipe(
@@ -2270,7 +2282,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A Goal worker's answer is never cut: stopping it early would end the Goal step.
         if (workerCapability === null) MutableHashMap.set(steerCuts, sessionId, steering);
         stopSteeringOnExit = stopSteering;
-        if (turn !== null) workTrace.resumeParentNotifications(sessionId);
+        if (turn !== null) yield* workTrace.resumeParentNotifications(sessionId);
         yield* events.publishSession(sessionId, "run-state");
         if (isTruthy(queuedId)) {
           yield* queue.markDelivered(queuedId, "next_turn", runId);
@@ -2534,7 +2546,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             return pendingExecution
               ? json(200, { runId: "", stopped: true, status: "completed" })
               : json(409, { error: "no_running_run" });
-          workTrace.holdParentNotifications(sessionId);
+          yield* workTrace.holdParentNotifications(sessionId);
           const stopped = yield* agentPromise("stop-session", () =>
             subagents.stopSession(sessionId),
           ).pipe(
@@ -2552,7 +2564,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* agentPromise("cancel-run", () =>
           requestRunCancel(chatState.persistence.stores.runs, live.runId),
         );
-        workTrace.holdParentNotifications(sessionId);
+        yield* workTrace.holdParentNotifications(sessionId);
         live.controller.abort(RUN_CANCEL_REASON);
         const stopped = yield* Effect.all(
           [
@@ -2855,7 +2867,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
-        const requested = workTrace.requestSessionLifecycle({
+        const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
           intent: archived ? "archive" : "restore",
           idempotencyKey,
@@ -2865,7 +2877,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           return json(200, yield* sessions.get(sessionId));
         }
         yield* stopSessionRuns(sessionId);
-        const completed = workTrace.finalizeSessionLifecycle(requested.operationId);
+        const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
         if (completed.status !== "completed") return json(202, completed);
         return json(200, yield* sessions.get(sessionId));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
@@ -2875,7 +2887,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
-        const requested = workTrace.requestSessionLifecycle({
+        const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
           intent: "delete",
           idempotencyKey,
@@ -2885,23 +2897,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           return json(200, requested);
         }
         yield* stopSessionRuns(sessionId);
-        for (const task of workTrace.taskTree(sessionId)) {
+        for (const task of yield* workTrace.taskTree(sessionId)) {
           if (task.deletedAt !== null) continue;
-          const taskRequest = workTrace.requestTaskLifecycle({
+          const taskRequest = yield* workTrace.requestTaskLifecycle({
             sessionId,
             taskId: task.id,
             intent: "delete",
             idempotencyKey: `session:${requested.operationId}:task:${task.id}`,
           });
           if (taskRequest.status === "blocked") return json(409, taskRequest);
-          if (
-            taskRequest.status !== "completed" &&
-            "operationId" in taskRequest &&
-            taskRequest.operationId !== undefined
-          )
-            workTrace.finalizeTaskLifecycle(taskRequest.operationId);
+          if (taskRequest.status !== "completed" && isTruthy(taskRequest.operationId))
+            yield* workTrace.finalizeTaskLifecycle(taskRequest.operationId);
         }
-        const completed = workTrace.finalizeSessionLifecycle(requested.operationId);
+        const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
         if (completed.status === "completed") {
           yield* attachments.purgeOrphans;
           return json(200, completed);
@@ -3054,7 +3062,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.flatMap(drain),
       );
       const automatic = Effect.gen(function* () {
-        if (workTrace.parentNotificationsHeld(sessionId) || session.agent !== null) return;
+        if ((yield* workTrace.parentNotificationsHeld(sessionId)) || session.agent !== null) return;
         // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
         // a run a restart cut off before it ran any tool.
         const restarted = last.status !== "completed";
@@ -3065,7 +3073,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           : yield* execution.canContinue(sessionId, last.runId, workflow);
         if (
           !continuing &&
-          (restarted || !workTrace.pendingParentNotificationSessions().includes(sessionId))
+          (restarted || !(yield* workTrace.pendingParentNotificationSessions).includes(sessionId))
         )
           return;
         // A user's queued request or pending approval takes precedence over automatic work.

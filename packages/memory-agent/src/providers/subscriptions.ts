@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
-import { Database } from "../db/database.ts";
+import { OAuthProfiles } from "../oauth/accounts.ts";
 import { createAccountBoundSubscriptionClients } from "../oauth/account-bound.ts";
 import { providerProtocols } from "../oauth/protocol.ts";
 import { createSubscriptionOAuthClient } from "../oauth/subscription-oauth.ts";
@@ -48,13 +48,10 @@ export const SubscriptionProviderRegistry = Layer.effect(ProviderRegistry, make)
 /** App runtime: dynamically select only for NEW calls and pin the selected client per run. */
 const makeForAccounts = Effect.gen(function* () {
   const config = yield* GlobalConfig;
-  const { sqlite } = yield* Database;
-  const openaiClient = createAccountBoundSubscriptionClients({
-    sqlite: sqlite,
-    provider: "openai",
-  });
+  const profiles = yield* OAuthProfiles;
+  const openaiClient = createAccountBoundSubscriptionClients({ profiles, provider: "openai" });
   const anthropicClient = createAccountBoundSubscriptionClients({
-    sqlite: sqlite,
+    profiles,
     provider: "anthropic",
   });
   const openai = createSubscriptionProvider({

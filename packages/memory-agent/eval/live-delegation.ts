@@ -10,7 +10,6 @@ import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { DatabaseSync } from "node:sqlite";
 import { DateTime, Clock, Effect, Layer, Schema } from "effect";
 import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -24,7 +23,7 @@ import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import type { ProviderId } from "../src/providers/contracts.ts";
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
-import { listOAuthProfiles } from "../src/oauth/accounts.ts";
+import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
 import {
   createKeychainProfileCredentialStore,
@@ -62,12 +61,9 @@ const selection = EffectFunction.flow(
     ),
   ),
 );
-const accountDatabase = new DatabaseSync(join(defaultStorageRoot, "agent.db"), { readOnly: true });
-const selectedProfile = listOAuthProfiles({
-  sqlite: accountDatabase,
-  provider: selection.provider,
-}).find((profile) => profile.selected)?.id;
-accountDatabase.close();
+const selectedProfile = (await runOAuthNodeEffect(storedOAuthProfiles(selection.provider))).find(
+  (profile) => profile.selected,
+)?.id;
 const client = createSubscriptionOAuthClient({
   protocol: providerProtocols.openai,
   ...optionalProperty(

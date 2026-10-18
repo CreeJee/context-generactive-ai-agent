@@ -321,7 +321,7 @@ testAgent({ testProvider: {} })("direct external agent conversations", (it) => {
       Effect.gen(function* () {
         const { project, sessionId: earlier, trust } = yield* fakeAgentProject();
         const nodes = yield* Nodes;
-        nodes.append({
+        yield* nodes.append({
           projectId: project.id,
           sessionId: earlier,
           kind: "user",
@@ -348,7 +348,7 @@ testAgent({ testProvider: {} })("direct external agent conversations", (it) => {
         expect(events).toContain("Memory from context-generactive-agent");
         expect(events).toContain("logfmt");
 
-        const recorded = nodes.session(direct.id);
+        const recorded = yield* nodes.session(direct.id);
         expect(recorded.map((node) => node.kind)).toEqual(["user", "assistant"]);
         expect(recorded[0]?.text).toBe("로그 포맷 뭐였지?");
         expect(recorded[1]?.detail).toMatchObject({ externalAgent: "fake" });

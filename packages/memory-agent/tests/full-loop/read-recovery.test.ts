@@ -7,13 +7,13 @@ import { makeOwnerNativeArtifacts } from "../../src/agent/owner-native-artifacts
 import { OwnerReadRecovery } from "../../src/agent/owner-read-recovery.ts";
 import { migrateOwnerRpcFingerprintBatch } from "../../src/agent/owner-rpc-fingerprint-migration.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
-import { Database } from "../../src/db/database.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { GoalExecutions } from "../../src/workflow/goal-execution.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const toJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const goal = {
@@ -40,7 +40,6 @@ const failedRead = Effect.fnUntraced(function* (
   readCall: { readonly name: string; readonly args: Schema.Json } = backgroundRead,
 ) {
   const env = yield* TestEnv;
-  const db = yield* Database;
   const workflows = yield* Workflows;
   const executions = yield* GoalExecutions;
   const session = (yield* (yield* Sessions).create(env.project.id)).id;
@@ -49,11 +48,10 @@ const failedRead = Effect.fnUntraced(function* (
   const revision = yield* Schema.decodeUnknownEffect(
     Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.String }),
   )(
-    db.sqlite
-      .prepare(
-        "SELECT id,goal_instance_id FROM workflow_state_revisions WHERE session_id=? ORDER BY id DESC LIMIT 1",
-      )
-      .get(session),
+    yield* sqlGet(
+      "SELECT id,goal_instance_id FROM workflow_state_revisions WHERE session_id=? ORDER BY id DESC LIMIT 1",
+      session,
+    ),
   );
   const owner = yield* workflowRunBindings;
   const artifacts = yield* makeOwnerNativeArtifacts({
@@ -76,11 +74,11 @@ const failedRead = Effect.fnUntraced(function* (
   );
   if (admitted.type !== "admitted") return yield* Effect.die("new admission expected");
   const key = yield* toJson(admitted.value);
-  db.sqlite
-    .prepare(
-      "INSERT INTO chat_runs(run_id,thread_id,status,started_at,finished_at,error_code) VALUES(?,?,'failed',1,2,'worker_execution_failed')",
-    )
-    .run(runId, session);
+  yield* sqlRun(
+    "INSERT INTO chat_runs(run_id,thread_id,status,started_at,finished_at,error_code) VALUES(?,?,'failed',1,2,'worker_execution_failed')",
+    runId,
+    session,
+  );
   const ledger = yield* makeSqliteOwnerRpcLedger;
   const call = { ...readCall, toolCallId: "read-call" };
   const fingerprint = (operation: string) =>
@@ -111,7 +109,6 @@ const failedRead = Effect.fnUntraced(function* (
   return {
     session,
     runId,
-    db,
     owner,
     revision,
     key,
@@ -126,20 +123,20 @@ const failedRead = Effect.fnUntraced(function* (
       },
     },
     /** Every historical row recovery must leave untouched. */
-    history: () => tables.map((table) => db.sqlite.prepare(`SELECT * FROM ${table}`).all()),
+    history: Effect.forEach(tables, (table) => sqlAll(`SELECT * FROM ${table}`)),
     /** Durable receipts for this run. */
-    receipts: () =>
-      db.sqlite
-        .prepare("SELECT count(*) AS n FROM owner_read_recoveries WHERE run_id=?")
-        .get(runId),
+    receipts: sqlGet("SELECT count(*) AS n FROM owner_read_recoveries WHERE run_id=?", runId),
     /** Model calls made for this session. */
     modelCalls: () =>
       env.provider!.adapter.invocations.filter((invocation) => invocation.threadId === session),
     /** Rewrite one owner RPC row of this run. */
     updateOperation: (operationId: number, assignment: string, ...values: string[]) =>
-      db.sqlite
-        .prepare(`UPDATE owner_rpc_operations SET ${assignment} WHERE run_id=? AND operation_id=?`)
-        .run(...values, runId, operationId),
+      sqlRun(
+        `UPDATE owner_rpc_operations SET ${assignment} WHERE run_id=? AND operation_id=?`,
+        ...values,
+        runId,
+        operationId,
+      ),
   };
 });
 
@@ -166,15 +163,15 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
             break;
         }
         const f = yield* failedRead({ name, args });
-        const before = f.history();
+        const before = yield* f.history;
         expect((yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).type).toBe(
           "recovered",
         );
-        expect(f.history()).toEqual(before);
+        expect(yield* f.history).toEqual(before);
         expect(
           (yield* f.owner.preview(f.session, `${f.session}:next-report`, f.revision.id)).status,
         ).toBe("bound");
-        f.updateOperation(
+        yield* f.updateOperation(
           1,
           "fingerprint=?",
           yield* toJson({
@@ -209,7 +206,7 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         let session = f.session;
         switch (reason) {
           case "write_tool":
-            f.updateOperation(
+            yield* f.updateOperation(
               2,
               "fingerprint=?",
               yield* toJson({
@@ -219,30 +216,31 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
             );
             break;
           case "pending":
-            f.updateOperation(2, "status='pending'");
+            yield* f.updateOperation(2, "status='pending'");
             break;
           case "later_operation":
-            f.db.sqlite
-              .prepare(
-                "INSERT INTO owner_rpc_operations SELECT run_id,run_key,3,'{}',0,'{}','succeeded' FROM owner_rpc_operations WHERE run_id=? AND operation_id=2",
-              )
-              .run(f.runId);
+            yield* sqlRun(
+              "INSERT INTO owner_rpc_operations SELECT run_id,run_key,3,'{}',0,'{}','succeeded' FROM owner_rpc_operations WHERE run_id=? AND operation_id=2",
+              f.runId,
+            );
             break;
           case "missing_authorization":
-            f.updateOperation(1, "fingerprint='{}'");
+            yield* f.updateOperation(1, "fingerprint='{}'");
             break;
           case "authorization_key_mismatch":
-            f.updateOperation(1, "run_key='{}'");
+            yield* f.updateOperation(1, "run_key='{}'");
             break;
           case "other_uncertain":
-            f.updateOperation(1, "status='uncertain'");
+            yield* f.updateOperation(1, "status='uncertain'");
             break;
           case "active_task":
-            f.db.sqlite
-              .prepare(
-                "INSERT INTO work_tasks(id,project_id,origin_session_id,parent_run_id,parent_tool_call_id,agent_name,status,title,request,created_at,updated_at) VALUES(?,?,?,?,'read-call','background_shell','running','','',1,1)",
-              )
-              .run(`${f.session}:active`, (yield* TestEnv).project.id, f.session, f.runId);
+            yield* sqlRun(
+              "INSERT INTO work_tasks(id,project_id,origin_session_id,parent_run_id,parent_tool_call_id,agent_name,status,title,request,created_at,updated_at) VALUES(?,?,?,?,'read-call','background_shell','running','','',1,1)",
+              `${f.session}:active`,
+              (yield* TestEnv).project.id,
+              f.session,
+              f.runId,
+            );
             break;
           case "wrong_goal":
           case "stale_preview":
@@ -251,23 +249,22 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
               statement: "Changed revision",
               outcomes: [],
             });
-            if (reason === "wrong_goal") f.updateOperation(2, "run_key='{}'");
+            if (reason === "wrong_goal") yield* f.updateOperation(2, "run_key='{}'");
             break;
           case "wrong_failure":
-            f.db.sqlite
-              .prepare(
-                "UPDATE owner_workflow_executions SET result_json='{}' WHERE instr(payload_json, ?) > 0",
-              )
-              .run(f.runId);
+            yield* sqlRun(
+              "UPDATE owner_workflow_executions SET result_json='{}' WHERE instr(payload_json, ?) > 0",
+              f.runId,
+            );
             break;
           case "wrong_session":
             session = `${f.session}:other`;
             break;
         }
-        const before = f.history();
+        const before = yield* f.history;
         expect((yield* f.recovery.confirm(session, f.runId, f.confirmation)).type).toBe("blocked");
-        expect(f.history()).toEqual(before);
-        expect(f.receipts()).toEqual({ n: 0 });
+        expect(yield* f.history).toEqual(before);
+        expect(yield* f.receipts).toEqual({ n: 0 });
         expect(f.modelCalls()).toHaveLength(0);
       }),
   );
@@ -278,16 +275,16 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
       Effect.gen(function* () {
         const f = yield* failedRead();
         const task = `${f.session}:historical`;
-        f.db.sqlite
-          .prepare(
-            "INSERT INTO work_tasks(id,project_id,origin_session_id,parent_run_id,parent_tool_call_id,agent_name,status,title,request,created_at,updated_at) VALUES(?,?,?,'older-run','old-call','background_shell',?,'','',1,1)",
-          )
-          .run(task, (yield* TestEnv).project.id, f.session, status);
+        yield* sqlRun(
+          "INSERT INTO work_tasks(id,project_id,origin_session_id,parent_run_id,parent_tool_call_id,agent_name,status,title,request,created_at,updated_at) VALUES(?,?,?,'older-run','old-call','background_shell',?,'','',1,1)",
+          task,
+          (yield* TestEnv).project.id,
+          f.session,
+          status,
+        );
         expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("eligible");
         expect(
-          f.db.sqlite
-            .prepare("SELECT status,active_attempt_id FROM work_tasks WHERE id=?")
-            .get(task),
+          yield* sqlGet("SELECT status,active_attempt_id FROM work_tasks WHERE id=?", task),
         ).toEqual({ status, active_attempt_id: null });
       }),
   );
@@ -297,7 +294,7 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
     () =>
       Effect.gen(function* () {
         const f = yield* failedRead();
-        const before = f.history();
+        const before = yield* f.history;
         const receipt = yield* f.recovery.confirm(f.session, f.runId, f.confirmation);
         if (receipt.type !== "recovered") return yield* Effect.die("recovery expected");
         const input = {
@@ -307,11 +304,11 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         const result = yield* f.recovery.revoke(f.session, f.runId, input);
         expect(result.type).toBe("revoked");
         expect(yield* f.recovery.revoke(f.session, f.runId, input)).toEqual(result);
-        expect(f.history()).toEqual(before);
+        expect(yield* f.history).toEqual(before);
         expect(yield* f.owner.bind(f.session, `${f.session}:new-run`, f.revision.id)).toEqual(
           refused,
         );
-        expect(f.receipts()).toEqual({ n: 1 });
+        expect(yield* f.receipts).toEqual({ n: 1 });
         expect(f.modelCalls()).toHaveLength(0);
       }),
   );
@@ -361,9 +358,7 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         expect(body).not.toContain("worker_execution_failed");
         expect(f.modelCalls().length).toBeGreaterThan(0);
         expect(
-          f.db.sqlite
-            .prepare("SELECT status,error_code FROM chat_runs WHERE run_id=?")
-            .get(f.runId),
+          yield* sqlGet("SELECT status,error_code FROM chat_runs WHERE run_id=?", f.runId),
         ).toEqual({ status: "failed", error_code: "worker_execution_failed" });
       }),
     20000,
@@ -378,13 +373,13 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
       expect((yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).type).toBe(
         "recovered",
       );
-      const before = f.history();
+      const before = yield* f.history;
       expect(yield* migrateOwnerRpcFingerprintBatch(0, 4)).toMatchObject({
         migrated: 0,
         retained: 2,
         done: true,
       });
-      expect(f.history()).toEqual(before);
+      expect(yield* f.history).toEqual(before);
       expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("recovered");
       expect((yield* f.owner.preview(f.session, `${f.session}:fresh`, f.revision.id)).status).toBe(
         "bound",
@@ -400,7 +395,7 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
         sql.withTransaction(f.recovery.confirm(f.session, f.runId, f.confirmation)),
       );
       expect(result._tag).toBe("Failure");
-      expect(f.receipts()).toEqual({ n: 0 });
+      expect(yield* f.receipts).toEqual({ n: 0 });
     }),
   );
 });
@@ -414,30 +409,37 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         const env = yield* TestEnv;
         const f = yield* failedRead();
         const next = `${f.session}:next`;
-        const before = f.history();
+        const before = yield* f.history;
         expect(yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).toEqual(
           refused,
         );
         expect(yield* f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
         const result = yield* f.recovery.confirm(f.session, f.runId, f.confirmation);
         expect(result.type).toBe("recovered");
-        expect(f.history()).toEqual(before);
+        expect(yield* f.history).toEqual(before);
         expect(
           (yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).status,
         ).toBe("bound");
-        expect(f.history()).toEqual(before);
+        expect(yield* f.history).toEqual(before);
         expect(yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).toEqual(result);
-        expect(f.receipts()).toEqual({ n: 1 });
-        expect(() =>
-          f.db.sqlite
-            .prepare(
-              "UPDATE owner_read_recoveries SET policy='background-result-read-v1' WHERE run_id=?",
-            )
-            .run(f.runId),
-        ).toThrow("immutable");
-        expect(() =>
-          f.db.sqlite.prepare("DELETE FROM owner_read_recoveries WHERE run_id=?").run(f.runId),
-        ).toThrow("retained");
+        expect(yield* f.receipts).toEqual({ n: 1 });
+        expect(
+          String(
+            (yield* Effect.flip(
+              sqlRun(
+                "UPDATE owner_read_recoveries SET policy='background-result-read-v1' WHERE run_id=?",
+                f.runId,
+              ),
+            )).reason.cause,
+          ),
+        ).toContain("immutable");
+        expect(
+          String(
+            (yield* Effect.flip(
+              sqlRun("DELETE FROM owner_read_recoveries WHERE run_id=?", f.runId),
+            )).reason.cause,
+          ),
+        ).toContain("retained");
         expect((yield* f.ledger.reserve(f.key, 2, "different", true)).type).toBe("existing");
         for (const [fingerprint, sideEffect] of [
           ["new-read", false],
@@ -450,17 +452,16 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         const authorization = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ fingerprint: Schema.String }),
         )(
-          f.db.sqlite
-            .prepare(
-              "SELECT fingerprint FROM owner_rpc_operations WHERE run_id=? AND operation_id=1",
-            )
-            .get(f.runId),
+          yield* sqlGet(
+            "SELECT fingerprint FROM owner_rpc_operations WHERE run_id=? AND operation_id=1",
+            f.runId,
+          ),
         );
-        f.updateOperation(1, "fingerprint='{}'");
+        yield* f.updateOperation(1, "fingerprint='{}'");
         expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("blocked");
         expect(yield* f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
-        f.updateOperation(1, "fingerprint=?", authorization.fingerprint);
-        expect(f.history()).toEqual(before);
+        yield* f.updateOperation(1, "fingerprint=?", authorization.fingerprint);
+        expect(yield* f.history).toEqual(before);
         yield* env.reopen;
         expect((yield* (yield* env.use(OwnerReadRecovery)).assess(f.session, f.runId)).type).toBe(
           "recovered",

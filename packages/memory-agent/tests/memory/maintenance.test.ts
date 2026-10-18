@@ -1,14 +1,13 @@
 import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
 import { layer } from "@effect/vitest";
-import { expect, vi } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
+import { expect } from "vite-plus/test";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { EmbeddingSetup } from "../../src/memory/embedding/setup.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { Graph } from "../../src/memory/graph.ts";
 import { MemoryGraphMaintenance } from "../../src/memory/maintenance.ts";
-import { createSupersededReads } from "../../src/memory/superseded-reads.ts";
+import { supersededReadSql } from "../../src/memory/superseded-reads.ts";
 import { Nodes, type Node } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -19,6 +18,7 @@ import {
   type TestEnvOptions,
   testAgent,
 } from "../support/test-env.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 /**
  * A store written by an older version: a reversed `returns` edge, an empty answer linked to topics
@@ -27,60 +27,72 @@ import {
 const legacy = Effect.gen(function* () {
   const { project, session } = yield* TestEnv;
   const nodes = yield* Nodes;
-  const { sqlite } = yield* Database;
   const at = { projectId: project.id, sessionId: session.id };
-  const user = nodes.append({ ...at, kind: "user", text: "원문 SQLite 결정" });
-  const empty = nodes.append({
+  const user = yield* nodes.append({ ...at, kind: "user", text: "원문 SQLite 결정" });
+  const empty = yield* nodes.append({
     ...at,
     kind: "assistant",
     text: " \n\t",
     links: [{ kind: "reply", nodeId: user.id }],
   });
-  const call = nodes.append({
+  const call = yield* nodes.append({
     ...at,
     kind: "tool_call",
     text: "read_file",
     links: [{ kind: "calls", nodeId: empty.id }],
   });
-  const result = nodes.append({
+  const result = yield* nodes.append({
     ...at,
     kind: "tool_result",
     text: "CREATE TABLE",
     links: [{ kind: "returns", nodeId: call.id }],
   });
-  sqlite
-    .prepare("DELETE FROM edges WHERE from_id = ? AND to_id = ? AND kind = 'returns'")
-    .run(call.id, result.id);
-  sqlite
-    .prepare("INSERT INTO edges VALUES (?, ?, 'returns', 'structure', 0.95, ?)")
-    .run(result.id, call.id, result.createdAt);
+  yield* sqlRun(
+    "DELETE FROM edges WHERE from_id = ? AND to_id = ? AND kind = 'returns'",
+    call.id,
+    result.id,
+  );
+  yield* sqlRun(
+    "INSERT INTO edges VALUES (?, ?, 'returns', 'structure', 0.95, ?)",
+    result.id,
+    call.id,
+    result.createdAt,
+  );
   const topic = { projectId: project.id, sessionId: null, kind: "topic" } as const;
-  const emptyTopic = nodes.append({ ...topic, text: "내용 없는 응답" });
-  const shared = nodes.append({ ...topic, text: "SQLite 저장소" });
-  const protectedTopic = nodes.append({
+  const emptyTopic = yield* nodes.append({ ...topic, text: "내용 없는 응답" });
+  const shared = yield* nodes.append({ ...topic, text: "SQLite 저장소" });
+  const protectedTopic = yield* nodes.append({
     ...topic,
     text: "사용자가 저장한 기억",
     detail: { authorizedByUserNodeId: user.id },
   });
-  nodes.append({ ...topic, text: "다른 독립 주제" });
-  const link = (source: Node, target: Node, kind = "about") => {
-    sqlite
-      .prepare("INSERT INTO edges VALUES (?, ?, ?, 'llm', 0.8, ?)")
-      .run(source.id, target.id, kind, source.createdAt);
-    sqlite
-      .prepare(
-        "INSERT INTO interpretations (node_id, kind, target_id, status, reason, model, created_at) VALUES (?, ?, ?, 'applied', 'legacy', 'old', ?)",
-      )
-      .run(source.id, kind, target.id, source.createdAt);
-  };
-  link(empty, emptyTopic);
-  link(empty, shared);
-  link(user, shared);
-  link(empty, protectedTopic);
-  sqlite
-    .prepare("INSERT INTO interpret_jobs (node_id, status, updated_at) VALUES (?, 'pending', ?)")
-    .run(empty.id, empty.createdAt);
-  return { nodes, sqlite, user, empty, call, result, topic: emptyTopic, link };
+  yield* nodes.append({ ...topic, text: "다른 독립 주제" });
+  const link = Effect.fnUntraced(function* (source: Node, target: Node, kind = "about") {
+    yield* sqlRun(
+      "INSERT INTO edges VALUES (?, ?, ?, 'llm', 0.8, ?)",
+      source.id,
+      target.id,
+      kind,
+      source.createdAt,
+    );
+    yield* sqlRun(
+      "INSERT INTO interpretations (node_id, kind, target_id, status, reason, model, created_at) VALUES (?, ?, ?, 'applied', 'legacy', 'old', ?)",
+      source.id,
+      kind,
+      target.id,
+      source.createdAt,
+    );
+  });
+  yield* link(empty, emptyTopic);
+  yield* link(empty, shared);
+  yield* link(user, shared);
+  yield* link(empty, protectedTopic);
+  yield* sqlRun(
+    "INSERT INTO interpret_jobs (node_id, status, updated_at) VALUES (?, 'pending', ?)",
+    empty.id,
+    empty.createdAt,
+  );
+  return { nodes, user, empty, call, result, topic: emptyTopic, link };
 });
 
 const run = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.run);
@@ -88,14 +100,12 @@ const run = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.
  * The pass the agent starts on its own saw the store before `legacy` wrote into it. Forget it, as
  * if the store came from a version without repairs.
  */
-const asOlderStore = run.pipe(
-  Effect.andThen(Database),
-  Effect.map(({ sqlite }) => sqlite.prepare("DELETE FROM memory_graph_maintenance").run()),
-);
+const asOlderStore = run.pipe(Effect.andThen(sqlRun("DELETE FROM memory_graph_maintenance")));
 const overview = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.overview);
 const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
 const vectorCount = Effect.map(VectorIndex, (vectors) => vectors.size());
-const chainLength = (id: string) => Effect.map(Graph, (graph) => graph.trace(id)?.chain.length);
+const chainLength = (id: string) =>
+  Effect.flatMap(Graph, (graph) => Effect.map(graph.trace(id), (trace) => trace?.chain.length));
 
 /** Repairs scan and rewrite the whole store, so each test owns its agent. */
 const alone = <E>(
@@ -106,17 +116,8 @@ const alone = <E>(
 
 alone("superseded-read repairs look up file references without scanning the project", () =>
   Effect.gen(function* () {
-    const { sqlite } = yield* Database;
-    const prepare = vi.spyOn(sqlite, "prepare");
-    let statement: string;
-    try {
-      createSupersededReads(sqlite);
-      statement = prepare.mock.calls[0]![0];
-    } finally {
-      prepare.mockRestore();
-    }
-    // Check the real prepared query's access path, without a machine-dependent time threshold.
-    const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${statement}`).all(3, "read-result");
+    // Check the real query's access path, without a machine-dependent time threshold.
+    const plan = yield* sqlAll(`EXPLAIN QUERY PLAN ${supersededReadSql}`, 3, "read-result");
     expect(plan).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ detail: expect.stringContaining("node_refs_ref (ref=?)") }),
@@ -135,7 +136,7 @@ alone("other fibers can run between repair batches", () =>
     const c = yield* legacy;
     const { project, session } = yield* TestEnv;
     for (let i = 0; i < 256; i++) {
-      c.nodes.append({
+      yield* c.nodes.append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",
@@ -166,23 +167,23 @@ alone("a crash after saving removals resumes the queue before index size reconci
     const before = yield* vectorCount;
     const embedder = yield* Embedder;
     const vectors = yield* VectorIndex;
-    c.sqlite
-      .prepare("INSERT INTO memory_graph_suppressed_nodes VALUES (?, 1, 'empty_statement_topic')")
-      .run(c.topic.seq);
-    c.sqlite
-      .prepare("INSERT INTO memory_graph_vector_removals VALUES (?, ?)")
-      .run(c.topic.seq, embedder.identity);
+    yield* sqlRun(
+      "INSERT INTO memory_graph_suppressed_nodes VALUES (?, 1, 'empty_statement_topic')",
+      c.topic.seq,
+    );
+    yield* sqlRun(
+      "INSERT INTO memory_graph_vector_removals VALUES (?, ?)",
+      c.topic.seq,
+      embedder.identity,
+    );
     yield* vectors.remove([c.topic.seq]);
     yield* vectors.save;
     // The process stopped here: SQLite still records the vector and the removal intent.
     yield* env.reopen;
     expect(yield* env.use(vectorCount)).toBe(before - 1);
     expect(yield* env.use(indexAll)).toBe(0);
-    const { sqlite } = yield* env.use(Database);
-    expect(sqlite.prepare("SELECT * FROM memory_graph_vector_removals").all()).toEqual([]);
-    expect(
-      sqlite.prepare("SELECT * FROM node_vectors WHERE node_seq = ?").all(c.topic.seq),
-    ).toEqual([]);
+    expect(yield* sqlAll("SELECT * FROM memory_graph_vector_removals")).toEqual([]);
+    expect(yield* sqlAll("SELECT * FROM node_vectors WHERE node_seq = ?", c.topic.seq)).toEqual([]);
   }),
 );
 
@@ -201,31 +202,31 @@ alone("repairs already embedded nodes while preserving originals and useful vect
     const env = yield* TestEnv;
     const c = yield* legacy;
     yield* indexAll;
-    const original = c.sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
+    const original = yield* sqlAll("SELECT * FROM nodes ORDER BY seq");
     const before = yield* vectorCount;
-    c.sqlite.prepare("INSERT INTO node_vectors VALUES (?, 'inactive-model')").run(c.topic.seq);
+    yield* sqlRun("INSERT INTO node_vectors VALUES (?, 'inactive-model')", c.topic.seq);
     yield* asOlderStore;
     yield* run;
-    expect((yield* Graph).trace(c.result.id)?.chain.map((node) => node.id)).toEqual([
+    expect((yield* (yield* Graph).trace(c.result.id))?.chain.map((node) => node.id)).toEqual([
       c.result.id,
       c.call.id,
       c.empty.id,
       c.user.id,
     ]);
-    expect(c.sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(original);
-    expect(c.sqlite.prepare("SELECT node_seq FROM memory_graph_suppressed_nodes").all()).toEqual([
+    expect(yield* sqlAll("SELECT * FROM nodes ORDER BY seq")).toEqual(original);
+    expect(yield* sqlAll("SELECT node_seq FROM memory_graph_suppressed_nodes")).toEqual([
       { node_seq: c.topic.seq },
     ]);
     expect(yield* vectorCount).toBe(before - 1);
-    expect(c.sqlite.prepare("SELECT * FROM memory_graph_vector_removals").all()).toEqual([
+    expect(yield* sqlAll("SELECT * FROM memory_graph_vector_removals")).toEqual([
       { node_seq: c.topic.seq, embedder: "inactive-model" },
     ]);
     expect(yield* indexAll).toBe(0);
     expect(
-      c.sqlite.prepare("SELECT * FROM interpret_jobs WHERE node_id = ?").get(c.empty.id),
+      yield* sqlGet("SELECT * FROM interpret_jobs WHERE node_id = ?", c.empty.id),
     ).toBeUndefined();
-    expect(c.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(c.sqlite.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(yield* sqlAll("PRAGMA foreign_key_check")).toEqual([]);
+    expect(yield* sqlGet("PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
     const state = yield* overview;
     expect(state).toMatchObject({
       status: "completed",
@@ -281,7 +282,7 @@ alone("a failed index save resumes targeted removals without rebuilding valid ve
     yield* asOlderStore;
     yield* run;
     expect(yield* overview).toMatchObject({ status: "failed" });
-    expect(c.sqlite.prepare("SELECT node_seq FROM memory_graph_vector_removals").all()).toEqual([
+    expect(yield* sqlAll("SELECT node_seq FROM memory_graph_vector_removals")).toEqual([
       { node_seq: c.topic.seq },
     ]);
     yield* fs.remove(blocker, { recursive: true });
@@ -311,7 +312,7 @@ alone(
   "concurrent indexing and duplicate repair requests share only batch permits",
   () =>
     Effect.gen(function* () {
-      const c = yield* legacy;
+      yield* legacy;
       yield* asOlderStore;
       const indexing = yield* Effect.forkChild(indexAll);
       yield* Deferred.await(entered);
@@ -327,9 +328,9 @@ alone(
       expect(yield* vectorCount).toBe(4);
       expect(yield* (yield* Indexer).pending).toBe(0);
       expect(
-        c.sqlite
-          .prepare("SELECT count(*) AS n FROM memory_graph_edge_repairs WHERE action = 'reverse'")
-          .get(),
+        yield* sqlGet(
+          "SELECT count(*) AS n FROM memory_graph_edge_repairs WHERE action = 'reverse'",
+        ),
       ).toEqual({ n: 1 });
     }),
   { embedder: gatedEmbedder },
@@ -342,55 +343,59 @@ alone(
       const { project, session } = yield* TestEnv;
       const c = yield* legacy;
       const another = yield* (yield* Sessions).create(project.id);
-      const cross = c.nodes.append({
+      const cross = yield* c.nodes.append({
         projectId: project.id,
         sessionId: another.id,
         kind: "user",
         text: "도구 없이 1부터 60까지 써줘",
       });
-      const same = c.nodes.append({
+      const same = yield* c.nodes.append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",
         text: "아니 SQLite 대신 Postgres로 바꾸자",
       });
-      const demoted = c.nodes.append({
+      const demoted = yield* c.nodes.append({
         projectId: project.id,
         sessionId: another.id,
         kind: "user",
         text: "SQLite 말고 DuckDB로 하자",
       });
-      c.link(cross, c.user, "corrects");
-      c.link(same, c.user, "corrects");
-      c.link(demoted, c.user, "corrects");
+      yield* c.link(cross, c.user, "corrects");
+      yield* c.link(same, c.user, "corrects");
+      yield* c.link(demoted, c.user, "corrects");
       // What version 1 did to a cross-session correction: archive it, demote it, drop the edge.
-      c.sqlite
-        .prepare(
-          "INSERT INTO memory_graph_edge_repairs (version, from_id, to_id, kind, origin, weight, created_at, action) VALUES (1, ?, ?, 'corrects', 'llm', 0.8, ?, 'suppress')",
-        )
-        .run(demoted.id, c.user.id, demoted.createdAt);
-      c.sqlite
-        .prepare(
-          "INSERT INTO memory_graph_interpretation_repairs SELECT 1, id, status FROM interpretations WHERE node_id = ?",
-        )
-        .run(demoted.id);
-      c.sqlite
-        .prepare("UPDATE interpretations SET status = 'unconfirmed' WHERE node_id = ?")
-        .run(demoted.id);
-      c.sqlite.prepare("DELETE FROM edges WHERE from_id = ?").run(demoted.id);
+      yield* sqlRun(
+        "INSERT INTO memory_graph_edge_repairs (version, from_id, to_id, kind, origin, weight, created_at, action) VALUES (1, ?, ?, 'corrects', 'llm', 0.8, ?, 'suppress')",
+        demoted.id,
+        c.user.id,
+        demoted.createdAt,
+      );
+      yield* sqlRun(
+        "INSERT INTO memory_graph_interpretation_repairs SELECT 1, id, status FROM interpretations WHERE node_id = ?",
+        demoted.id,
+      );
+      yield* sqlRun(
+        "UPDATE interpretations SET status = 'unconfirmed' WHERE node_id = ?",
+        demoted.id,
+      );
+      yield* sqlRun("DELETE FROM edges WHERE from_id = ?", demoted.id);
       yield* asOlderStore;
       yield* run;
       const status = (node: Node) =>
-        c.sqlite
-          .prepare("SELECT status FROM interpretations WHERE node_id = ? AND kind = 'corrects'")
-          .get(node.id);
-      expect(status(cross)).toEqual({ status: "applied" });
-      expect(status(same)).toEqual({ status: "applied" });
-      expect(status(demoted)).toEqual({ status: "applied" });
+        sqlGet(
+          "SELECT status FROM interpretations WHERE node_id = ? AND kind = 'corrects'",
+          node.id,
+        );
+      expect(yield* status(cross)).toEqual({ status: "applied" });
+      expect(yield* status(same)).toEqual({ status: "applied" });
+      expect(yield* status(demoted)).toEqual({ status: "applied" });
       expect(
-        c.sqlite
-          .prepare("SELECT kind FROM edges WHERE from_id = ? AND to_id = ?")
-          .all(demoted.id, c.user.id),
+        yield* sqlAll(
+          "SELECT kind FROM edges WHERE from_id = ? AND to_id = ?",
+          demoted.id,
+          c.user.id,
+        ),
       ).toEqual([{ kind: "corrects" }]);
     }),
 );

@@ -20,9 +20,11 @@ import {
   compactionState,
   estimateConversation,
   linedUp,
+  memoryLookups,
   sameTurn,
   turnSummariesNamespace,
   userTurns,
+  type CompactionSources,
   type SummaryBlock,
   type SummaryOutcome,
 } from "./compaction.ts";
@@ -149,8 +151,12 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       const messages = yield* summaryPromise("load-messages", () =>
         messageStore.loadThread(sessionId),
       );
-      const nodeText = (id: string) => nodes.get(id)?.text ?? null;
       const state = yield* summaryPromise("load-state", () => compactionState(metadata, sessionId));
+      const sources: CompactionSources = {
+        toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
+        nodeTexts: nodes.texts,
+      };
+      const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
       const blocks: SummaryBlock[] = linedUp(messages, state.blocks, nodeText);
       if (!whole && blocks.length === 0) {
         const runtime = yield* active.runtime(selection);
@@ -158,13 +164,13 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         const unsummarized = yield* compactEffect({
           messages,
           state: { manual: state.manual, blocks: [] },
-          sources: { toolResultId: (id) => nodes.toolResultId(sessionId, id), nodeText },
+          sources,
           budget: { compactAt: 0, leaveOutAt: Number.POSITIVE_INFINITY },
         });
         if (estimateConversation(unsummarized.messages) <= threshold) return "done" as const;
       }
       const turns = userTurns(messages);
-      const sessionNodes = nodes.session(sessionId);
+      const sessionNodes = yield* nodes.session(sessionId);
       const turnNodes = sessionNodes.filter((node) => node.kind === "user");
       const limit = Math.min(turns.length, turnNodes.length) - recentRawUserTurns;
       const lines = (index: number) => {

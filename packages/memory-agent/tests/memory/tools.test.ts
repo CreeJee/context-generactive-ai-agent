@@ -2,9 +2,8 @@ import { chat } from "@tanstack/ai";
 import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
-import { Graph } from "../../src/memory/graph.ts";
+import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -15,6 +14,7 @@ import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlRun } from "../support/sql.ts";
 
 const environment = Effect.gen(function* () {
   return {
@@ -63,13 +63,17 @@ testAgent()("structured memory evidence", (it) => {
     Effect.gen(function* () {
       const at = yield* freshSession;
       const env = yield* environment;
-      const original = env.nodes.append({ ...at, kind: "user", text: "original ".repeat(600) });
-      const replacement = env.nodes.append({
+      const original = yield* env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "original ".repeat(600),
+      });
+      const replacement = yield* env.nodes.append({
         ...at,
         kind: "user",
         text: "x".repeat(599) + "😀 replacement",
       });
-      env.interpretations.record({
+      yield* env.interpretations.record({
         nodeId: replacement.id,
         targetId: original.id,
         kind: "corrects",
@@ -77,12 +81,12 @@ testAgent()("structured memory evidence", (it) => {
         reason: "changed decision",
         model: "fixture",
       });
-      const retraction = env.nodes.append({
+      const retraction = yield* env.nodes.append({
         ...at,
         kind: "user",
         text: "Withdraw that replacement.",
       });
-      env.interpretations.record({
+      yield* env.interpretations.record({
         nodeId: retraction.id,
         targetId: replacement.id,
         kind: "retracts",
@@ -91,8 +95,12 @@ testAgent()("structured memory evidence", (it) => {
         model: "fixture",
       });
       for (let index = 0; index < 9; index++) {
-        const pending = env.nodes.append({ ...at, kind: "user", text: `possible change ${index}` });
-        env.interpretations.record({
+        const pending = yield* env.nodes.append({
+          ...at,
+          kind: "user",
+          text: `possible change ${index}`,
+        });
+        yield* env.interpretations.record({
           nodeId: pending.id,
           targetId: original.id,
           kind: "corrects",
@@ -106,7 +114,7 @@ testAgent()("structured memory evidence", (it) => {
       expect(result).toHaveProperty("evidenceContext.changes.length", 8);
       expect(result).toHaveProperty("evidenceContext.changes.0.source.id", replacement.id);
       expect(result).toMatchObject({
-        ...env.nodes.read(original.id, 4000),
+        ...(yield* env.nodes.read(original.id, 4000)),
         evidenceContext: {
           assessment: { kind: "recorded_change" },
           hasUnconfirmedChanges: true,
@@ -150,15 +158,15 @@ testAgent()("structured memory evidence", (it) => {
       Effect.gen(function* () {
         const at = yield* freshSession;
         const env = yield* environment;
-        const older = env.nodes.append({ ...at, kind: "user", text: "earlier statement" });
-        const original = env.nodes.append({ ...at, kind: "user", text: "decision" });
-        const assistant = env.nodes.append({
+        const older = yield* env.nodes.append({ ...at, kind: "user", text: "earlier statement" });
+        const original = yield* env.nodes.append({ ...at, kind: "user", text: "decision" });
+        const assistant = yield* env.nodes.append({
           ...at,
           kind: "assistant",
           text: "I changed your decision",
         });
         for (const source of [older, assistant]) {
-          env.interpretations.record({
+          yield* env.interpretations.record({
             nodeId: source.id,
             targetId: original.id,
             kind: "corrects",
@@ -171,8 +179,8 @@ testAgent()("structured memory evidence", (it) => {
         expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
           evidenceContext: { assessment: { kind: "no_recorded_change" }, changes: [] },
         });
-        const pending = env.nodes.append({ ...at, kind: "user", text: "Maybe change that" });
-        env.interpretations.record({
+        const pending = yield* env.nodes.append({ ...at, kind: "user", text: "Maybe change that" });
+        yield* env.interpretations.record({
           nodeId: pending.id,
           targetId: original.id,
           kind: "retracts",
@@ -194,7 +202,7 @@ testAgent()("structured memory evidence", (it) => {
             ],
           },
         });
-        env.interpretations.record({
+        yield* env.interpretations.record({
           nodeId: pending.id,
           targetId: original.id,
           kind: "retracts",
@@ -216,16 +224,20 @@ testAgent()("structured memory evidence", (it) => {
     Effect.gen(function* () {
       const at = yield* freshSession;
       const env = yield* environment;
-      const older = env.nodes.append({ ...at, kind: "user", text: "earlier note" });
-      const original = env.nodes.append({
+      const older = yield* env.nodes.append({ ...at, kind: "user", text: "earlier note" });
+      const original = yield* env.nodes.append({
         ...at,
         kind: "user",
         text: "배포 창구는 화요일 오후로 정했다",
       });
-      const assistant = env.nodes.append({ ...at, kind: "assistant", text: "changed it" });
-      const later = env.nodes.append({ ...at, kind: "user", text: "수요일 오전으로 바꾸자" });
+      const assistant = yield* env.nodes.append({ ...at, kind: "assistant", text: "changed it" });
+      const later = yield* env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "수요일 오전으로 바꾸자",
+      });
       for (const source of [older, assistant, later])
-        env.interpretations.record({
+        yield* env.interpretations.record({
           nodeId: source.id,
           targetId: original.id,
           kind: "corrects",
@@ -233,7 +245,7 @@ testAgent()("structured memory evidence", (it) => {
           reason: "fixture",
           model: "fixture",
         });
-      env.interpretations.record({
+      yield* env.interpretations.record({
         nodeId: later.id,
         targetId: original.id,
         kind: "corrects",
@@ -285,17 +297,17 @@ testAgent()("structured memory evidence", (it) => {
           reason: "fixture",
           model: "fixture",
         });
-      const root = user("Orion 캐시 포트는 7000으로 정했다");
-      const second = user("Orion 캐시 포트를 7100으로 바꾼다");
-      const third = user("Orion 캐시 포트는 7200이 맞다");
-      const withdrawn = user("Orion 7200 결정은 철회한다");
-      const branch = user("Orion 스테이징만 7300으로 둔다");
-      const maybe = user("Orion 철회도 다시 생각해 보자");
-      change(second, root, "corrects");
-      change(third, second, "corrects");
-      change(withdrawn, third, "retracts");
-      change(branch, root, "corrects");
-      change(maybe, withdrawn, "retracts", "unconfirmed");
+      const root = yield* user("Orion 캐시 포트는 7000으로 정했다");
+      const second = yield* user("Orion 캐시 포트를 7100으로 바꾼다");
+      const third = yield* user("Orion 캐시 포트는 7200이 맞다");
+      const withdrawn = yield* user("Orion 7200 결정은 철회한다");
+      const branch = yield* user("Orion 스테이징만 7300으로 둔다");
+      const maybe = yield* user("Orion 철회도 다시 생각해 보자");
+      yield* change(second, root, "corrects");
+      yield* change(third, second, "corrects");
+      yield* change(withdrawn, third, "retracts");
+      yield* change(branch, root, "corrects");
+      yield* change(maybe, withdrawn, "retracts", "unconfirmed");
       yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
       const [find] = createMemoryTools(env, at.projectId).tools;
       expect(yield* call(() => find.execute!({ query: "Orion 캐시 포트 7000" }))).toMatchObject({
@@ -325,25 +337,29 @@ testAgent()("structured memory evidence", (it) => {
     Effect.gen(function* () {
       const at = yield* freshSession;
       const env = yield* environment;
-      const read = (content: string, sha256: string) => {
-        const call = env.nodes.append({
+      const read = Effect.fnUntraced(function* (content: string, sha256: string) {
+        const call = yield* env.nodes.append({
           ...at,
           kind: "tool_call",
           text: 'read_file {"path":"config.toml"}',
           detail: { toolName: "read_file" },
           refs: ["config.toml"],
         });
-        const result = env.nodes.append({
+        const result = yield* env.nodes.append({
           ...at,
           kind: "tool_result",
-          text: JSON.stringify({ path: "config.toml", sha256, content }),
+          text: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            path: "config.toml",
+            sha256,
+            content,
+          }),
           detail: { toolName: "read_file", ok: true },
           links: [{ kind: "returns", nodeId: call.id }],
         });
         return { call, result };
-      };
-      const first = read("retries = 2", "a".repeat(64));
-      read("retries = 5", "b".repeat(64));
+      });
+      const first = yield* read("retries = 2", "a".repeat(64));
+      yield* read("retries = 5", "b".repeat(64));
       const [, readEvidence, trace] = createMemoryTools(env, at.projectId).tools;
       expect(yield* call(() => readEvidence.execute!({ id: first.result.id }))).toMatchObject({
         evidenceContext: {
@@ -361,29 +377,33 @@ testAgent()("structured memory evidence", (it) => {
     Effect.gen(function* () {
       const at = yield* freshSession;
       const env = yield* environment;
-      const user = env.nodes.append({ ...at, kind: "user", text: "Read the staging settings." });
-      const assistant = env.nodes.append({
+      const user = yield* env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "Read the staging settings.",
+      });
+      const assistant = yield* env.nodes.append({
         ...at,
         kind: "assistant",
         text: "Reading staging",
         detail: { partial: true },
         links: [{ kind: "reply", nodeId: user.id }],
       });
-      const tool = env.nodes.append({
+      const tool = yield* env.nodes.append({
         ...at,
         kind: "tool_call",
         text: "read settings",
         links: [{ kind: "calls", nodeId: assistant.id }],
       });
-      const result = env.nodes.append({
+      const result = yield* env.nodes.append({
         ...at,
         kind: "tool_result",
         text: "read failed",
         detail: { ok: false },
         links: [{ kind: "returns", nodeId: tool.id }],
       });
-      const changed = env.nodes.append({ ...at, kind: "user", text: "I meant production." });
-      env.interpretations.record({
+      const changed = yield* env.nodes.append({ ...at, kind: "user", text: "I meant production." });
+      yield* env.interpretations.record({
         nodeId: changed.id,
         targetId: user.id,
         kind: "corrects",
@@ -425,20 +445,24 @@ testAgent()("structured memory evidence", (it) => {
       const other = yield* projects.add(yield* fs.makeTempDirectory({ directory: fixture.base }));
       const session = yield* (yield* Sessions).create(other.id);
       const otherAt = { projectId: other.id, sessionId: session.id };
-      const hidden = env.nodes.append({ ...otherAt, kind: "user", text: "other project source" });
-      const root = env.nodes.append({
+      const hidden = yield* env.nodes.append({
+        ...otherAt,
+        kind: "user",
+        text: "other project source",
+      });
+      const root = yield* env.nodes.append({
         ...at,
         kind: "assistant",
         text: "visible source",
         links: [{ kind: "reply", nodeId: hidden.id }],
       });
-      const foreignChange = env.nodes.append({
+      const foreignChange = yield* env.nodes.append({
         ...otherAt,
         kind: "user",
         text: "foreign correction",
       });
       for (const status of ["applied", "unconfirmed"] as const) {
-        env.interpretations.record({
+        yield* env.interpretations.record({
           nodeId: foreignChange.id,
           targetId: root.id,
           kind: "corrects",
@@ -474,9 +498,9 @@ testAgent()("structured memory evidence", (it) => {
     Effect.gen(function* () {
       const at = yield* freshSession;
       const env = yield* environment;
-      const node = env.nodes.append({ ...at, kind: "user", text: "evidence" });
+      const node = yield* env.nodes.append({ ...at, kind: "user", text: "evidence" });
       const untraced = createMemoryTools(
-        { ...env, graph: { ...env.graph, trace: () => null } },
+        { ...env, graph: { ...env.graph, trace: () => Effect.succeed(null) } },
         at.projectId,
       ).tools[1];
       expect(yield* call(() => untraced.execute!({ id: node.id }))).toMatchObject({
@@ -487,9 +511,12 @@ testAgent()("structured memory evidence", (it) => {
           ...env,
           graph: {
             ...env.graph,
-            trace: () => {
-              throw new DOMException("private storage detail", "InvalidStateError");
-            },
+            trace: () =>
+              Effect.fail(
+                GraphReadFailed.make({
+                  cause: new DOMException("private storage detail", "InvalidStateError"),
+                }),
+              ),
           },
         },
         at.projectId,
@@ -528,8 +555,8 @@ layer(
             kind: "user",
             text,
           });
-        const a = append(envA, first, "first owner evidence");
-        const b = append(envB, second, "second owner evidence");
+        const a = yield* append(envA, first, "first owner evidence");
+        const b = yield* append(envB, second, "second owner evidence");
         const toolsA = createMemoryTools(envA, first.project.id).tools;
         const toolsB = createMemoryTools(envB, second.project.id).tools;
         expect(yield* call(() => toolsA[1].execute!({ id: a.id }))).toMatchObject({ text: a.text });
@@ -557,7 +584,7 @@ testAgent()("memory tools per run", (it) => {
       Effect.gen(function* () {
         const at = yield* freshSession;
         const env = yield* environment;
-        const user = env.nodes.append({ ...at, kind: "user", text: "save" });
+        const user = yield* env.nodes.append({ ...at, kind: "user", text: "save" });
         let currentUser = "missing";
         let readsA = 0;
         let readsB = 0;
@@ -606,7 +633,7 @@ testAgent()("memory tools per run", (it) => {
       const at = yield* freshSession;
       const env = yield* environment;
       let reads = 0;
-      const user = env.nodes.append({ ...at, kind: "user", text: "explicit save" });
+      const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
       const prepared = (yield* MemoryTools).forRun({
         ...at,
         runId: `${at.sessionId}:deferred-run`,
@@ -630,23 +657,23 @@ testAgent()("memory tools per run", (it) => {
       const at = yield* freshSession;
       const { sessionId } = at;
       const env = yield* environment;
-      const db = yield* Database;
       const trace = yield* WorkTraceStore;
       const agentId = `${sessionId}:factory-agent`;
       const parentRunId = `${sessionId}:parent`;
-      db.sqlite
-        .prepare(
-          `INSERT INTO subagents
+      yield* sqlRun(
+        `INSERT INTO subagents
           (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
           VALUES (?, ?, 'factory', 'research', 'interrupted', ?, 'task', 1, 1)`,
-        )
-        .run(agentId, sessionId, parentRunId);
-      const user = env.nodes.append({
+        agentId,
+        sessionId,
+        parentRunId,
+      );
+      const user = yield* env.nodes.append({
         ...at,
         kind: "user",
         text: "Save this fixture decision: isolated-memory-state.",
       });
-      const handle = trace.startAttempt({
+      const handle = yield* trace.startAttempt({
         sessionId,
         parentRunId,
         parentToolCallId: `${sessionId}:factory-call`,
@@ -656,13 +683,18 @@ testAgent()("memory tools per run", (it) => {
         kind: "start",
         threadId: `${sessionId}:factory-thread`,
       });
-      const evidence = trace.recordEvidence({
+      const evidence = yield* trace.recordEvidence({
         handle,
         locator: { kind: "message", threadId: handle.threadId, messageId: "verified-answer" },
         verification: "verified",
       });
-      trace.recordReportDisposition({ handle, sessionId, disposition: "reviewed", parentRunId });
-      const claimId = trace.finalizeAnswerClaim({
+      yield* trace.recordReportDisposition({
+        handle,
+        sessionId,
+        disposition: "reviewed",
+        parentRunId,
+      });
+      const claimId = yield* trace.finalizeAnswerClaim({
         ...at,
         parentRunId,
         parentMessageId: "research-answer",
@@ -719,23 +751,22 @@ testAgent()("memory tools per run", (it) => {
           }),
         );
       yield* finish(second.middleware);
-      expect(env.knowledge.usageForTask(handle.taskId).map((usage) => usage.kind)).toEqual([
-        "retrieved",
-      ]);
+      expect((yield* env.knowledge.usageForTask(handle.taskId)).map((usage) => usage.kind)).toEqual(
+        ["retrieved"],
+      );
       yield* finish(first.middleware);
       const usage = () =>
-        env.knowledge.usageForTask(handle.taskId).map((entry) => ({
-          kind: entry.kind,
-          parentRunId: entry.parentRunId,
-        }));
-      expect(usage()).toEqual([
+        Effect.map(env.knowledge.usageForTask(handle.taskId), (entries) =>
+          entries.map((entry) => ({ kind: entry.kind, parentRunId: entry.parentRunId })),
+        );
+      expect(yield* usage()).toEqual([
         { kind: "retrieved", parentRunId: runA },
         { kind: "used", parentRunId: runA },
       ]);
       yield* call(() => second.tools[0].execute!({ query: "isolated-memory-state" }));
       second.tools[5].execute!({ memoryNodeIds });
       yield* finish(second.middleware);
-      expect(usage()).toEqual([
+      expect(yield* usage()).toEqual([
         { kind: "retrieved", parentRunId: runA },
         { kind: "used", parentRunId: runA },
         { kind: "retrieved", parentRunId: runB },

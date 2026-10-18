@@ -2,12 +2,9 @@ import { isTruthy } from "../../truthy.ts";
 import { Effect, Result, Schema } from "effect";
 import {
   AppEvents,
-  Database,
+  OAuthAccountLogins,
+  OAuthProfiles,
   SubscriptionAccountProvider,
-  importLegacyOAuthProfile,
-  removeOAuthProfile,
-  renameOAuthProfile,
-  selectOAuthProfile,
 } from "memory-agent";
 import { agent } from "~/.server/agent";
 import {
@@ -15,7 +12,6 @@ import {
   compatibleAccountAction,
   compatibleAccounts,
 } from "~/.server/compatible-handlers";
-import { accountLoginManager } from "~/.server/oauth-accounts";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/accounts";
 
@@ -46,12 +42,9 @@ export function loader({ request }: Route.LoaderArgs) {
       if (!Schema.is(SubscriptionAccountProvider)(provider))
         return reply({ error: "invalid_provider" }, 400);
       return yield* Effect.gen(function* () {
-        const { sqlite } = yield* Database;
         // Preserve existing auth even if OS keychain import fails. Subsequent requests retry.
-        yield* Effect.promise(() =>
-          importLegacyOAuthProfile({ sqlite: sqlite, provider: provider }).catch(() => null),
-        );
-        return reply(subscriptionView(accountLoginManager(sqlite).profiles(provider)));
+        yield* (yield* OAuthProfiles).importLegacy(provider).pipe(Effect.ignore);
+        return reply(subscriptionView(yield* (yield* OAuthAccountLogins).profiles(provider)));
       }).pipe(
         Effect.catchCause(() => Effect.succeed(reply({ error: "account_list_unavailable" }, 503))),
       );
@@ -87,8 +80,8 @@ export function action({ request }: Route.ActionArgs) {
       )
         return reply({ error: "invalid_account_id" }, 400);
       return yield* Effect.gen(function* () {
-        const { sqlite } = yield* Database;
-        const manager = accountLoginManager(sqlite);
+        const profiles = yield* OAuthProfiles;
+        const manager = yield* OAuthAccountLogins;
         const events = yield* AppEvents;
         if (intent === "add") {
           const started = yield* Effect.tryPromise(() => manager.start(provider, label!));
@@ -102,16 +95,18 @@ export function action({ request }: Route.ActionArgs) {
         }
         if (intent === "cancel")
           return reply(subscriptionView(yield* Effect.tryPromise(() => manager.cancel(provider))));
-        if (intent === "remove")
-          yield* Effect.tryPromise(() =>
-            removeOAuthProfile({ sqlite: sqlite, provider: provider, id: accountId! }),
-          );
-        else if (intent === "rename") renameOAuthProfile(sqlite, provider, accountId!, label!);
-        else
-          yield* Effect.tryPromise(() =>
-            selectOAuthProfile({ sqlite: sqlite, provider: provider, id: accountId! }),
-          );
-        return reply(subscriptionView(manager.profiles(provider)));
+        switch (intent) {
+          case "remove":
+            yield* profiles.remove(provider, accountId!);
+            break;
+          case "rename":
+            yield* profiles.rename(provider, accountId!, label!);
+            break;
+          case "select":
+            yield* profiles.select(provider, accountId!);
+            break;
+        }
+        return reply(subscriptionView(yield* manager.profiles(provider)));
       }).pipe(
         // Never expose keychain/native OAuth errors or tokens to the browser.
         Effect.catchCause(() => Effect.succeed(reply({ error: "account_action_failed" }, 409))),

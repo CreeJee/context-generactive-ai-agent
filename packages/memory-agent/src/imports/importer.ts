@@ -1,4 +1,3 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 import { homedir } from "node:os";
@@ -17,7 +16,7 @@ import {
 } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Projects } from "../projects/projects.ts";
@@ -98,27 +97,6 @@ export class ImportWorkerFailed extends Data.TaggedError("ImportWorkerFailed")<{
 }> {}
 
 const decodeReply = Schema.decodeUnknownOption(ImportWorkerReply);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSourceTotals = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({ migrated: Schema.Finite, nodes: Schema.Finite, failed: Schema.Finite }),
-  ),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeFailure = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({ source: ImportSourceName, path: Schema.String, reason: Schema.String }),
-  ),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSkipped = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Finite }),
-  ),
-  Result.getOrThrow,
-);
 
 const progressOf = (reply: PassProgress): PassProgress => ({
   checked: reply.checked,
@@ -129,7 +107,7 @@ const progressOf = (reply: PassProgress): PassProgress => ({
 
 const make = (watching: boolean, home: string) =>
   Effect.gen(function* () {
-    const { sqlite } = yield* Database;
+    const sql = yield* SqlClient.SqlClient;
     const storage = yield* StorageRoot;
     const config = yield* GlobalConfig;
     const events = yield* AppEvents;
@@ -139,19 +117,43 @@ const make = (watching: boolean, home: string) =>
     const context = yield* Effect.context<never>();
     const runSync = Effect.runSyncWith(context);
 
-    const sourceTotals = sqlite.prepare(`
-      SELECT
-        coalesce(sum(skipped IS NULL AND failure IS NULL), 0) AS migrated,
-        coalesce(sum(CASE WHEN skipped IS NULL AND failure IS NULL THEN imported END), 0) AS nodes,
-        coalesce(sum(failure IS NOT NULL), 0) AS failed
-      FROM import_cursors WHERE source = ?`);
-    const skippedFolders = sqlite.prepare(`
-      SELECT cwd, skipped AS reason, count(*) AS transcripts FROM import_cursors
-      WHERE skipped IS NOT NULL AND cwd IS NOT NULL
-      GROUP BY cwd, skipped ORDER BY transcripts DESC, cwd`);
-    const failedTranscripts = sqlite.prepare(`
-      SELECT source, path, failure AS reason FROM import_cursors
-      WHERE failure IS NOT NULL ORDER BY source, path LIMIT ?`);
+    const sourceTotals = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({
+        migrated: Schema.Finite,
+        nodes: Schema.Finite,
+        failed: Schema.Finite,
+      }),
+      execute: (source) => sql`
+        SELECT
+          coalesce(sum(skipped IS NULL AND failure IS NULL), 0) AS migrated,
+          coalesce(sum(CASE WHEN skipped IS NULL AND failure IS NULL THEN imported END), 0) AS nodes,
+          coalesce(sum(failure IS NOT NULL), 0) AS failed
+        FROM import_cursors WHERE source = ${source}`,
+    });
+    const skippedFolders = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Schema.Struct({
+        cwd: Schema.String,
+        reason: Schema.String,
+        transcripts: Schema.Finite,
+      }),
+      execute: () => sql`
+        SELECT cwd, skipped AS reason, count(*) AS transcripts FROM import_cursors
+        WHERE skipped IS NOT NULL AND cwd IS NOT NULL
+        GROUP BY cwd, skipped ORDER BY transcripts DESC, cwd`,
+    });
+    const failedTranscripts = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Schema.Struct({
+        source: ImportSourceName,
+        path: Schema.String,
+        reason: Schema.String,
+      }),
+      execute: () => sql`
+        SELECT source, path, failure AS reason FROM import_cursors
+        WHERE failure IS NOT NULL ORDER BY source, path LIMIT ${listedFailures}`,
+    });
 
     // The worker: started on first use and kept. It answers each request with any number of
     // `progress` replies and then one final reply.
@@ -399,19 +401,18 @@ const make = (watching: boolean, home: string) =>
       return {
         enabled: settings.importsEnabled ?? false,
         interpret: settings.importsInterpret ?? true,
-        sources: importSources.map((source) => {
-          const totals = decodeSourceTotals(sourceTotals.get(source.name));
-          return {
+        sources: yield* Effect.forEach(importSources, (source) =>
+          Effect.map(sourceTotals(source.name), (totals) => ({
             name: source.name,
             root: source.root(home),
             transcripts: counts.find((entry) => entry.source === source.name)?.transcripts ?? 0,
             migrated: totals.migrated,
             nodes: totals.nodes,
             failed: totals.failed,
-          };
-        }),
-        unplaced: skippedFolders.all().map((row) => decodeSkipped(row)),
-        failures: failedTranscripts.all(listedFailures).map((row) => decodeFailure(row)),
+          })),
+        ),
+        unplaced: yield* skippedFolders(),
+        failures: yield* failedTranscripts(),
         unindexed: yield* indexer.pending,
         activity: current,
       } satisfies ImportOverview;

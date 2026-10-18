@@ -2,9 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { Effect, Layer, Schema, Result, Function as EffectFunction } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
+import { SqlClient } from "effect/sql";
 import { Database } from "../db/database.ts";
 import { HistoryProjectionReader, type HistoryPageRequest } from "./history-projection-reader.ts";
 import { historyProjectionSchema, historyProjectionSql as sql } from "./history-projection-sql.ts";
+import { sqlRun, sqlExec } from "../../tests/support/sql.ts";
 const encodeJson = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -12,34 +14,32 @@ const encodeJson = EffectFunction.flow(
 
 const database = Database.over(
   Effect.acquireRelease(
-    Effect.try(() => {
-      const sqlite = new DatabaseSync(":memory:");
-      sqlite.exec(
-        "CREATE TABLE chat_threads(thread_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at INTEGER NOT NULL);",
-      );
-      sqlite.exec(historyProjectionSchema);
-      return sqlite;
-    }),
+    Effect.sync(() => new DatabaseSync(":memory:")),
     (sqlite) => Effect.sync(() => sqlite.close()),
   ),
 );
-const layer = HistoryProjectionReader.layer.pipe(Layer.provideMerge(database));
-function run<A, E>(program: Effect.Effect<A, E, Database | HistoryProjectionReader>) {
+const schema = Layer.effectDiscard(
+  Effect.gen(function* () {
+    yield* sqlExec(
+      "CREATE TABLE chat_threads(thread_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at INTEGER NOT NULL);",
+    );
+    yield* sqlExec(historyProjectionSchema);
+  }),
+).pipe(Layer.provideMerge(database));
+const layer = HistoryProjectionReader.layer.pipe(Layer.provideMerge(schema));
+function run<A, E>(program: Effect.Effect<A, E, SqlClient.SqlClient | HistoryProjectionReader>) {
   return program.pipe(provideFixture(layer));
 }
 const seed = Effect.fnUntraced(function* (count: number) {
-  const { sqlite } = yield* Database;
-  yield* Effect.try(() => {
-    const messages = Array.from({ length: count }, (_, ordinal) => ({
-      id: `m-${ordinal}`,
-      role: "user",
-      content: `Message ${ordinal}`,
-    }));
-    sqlite.prepare("INSERT INTO chat_threads VALUES(?, ?, ?)").run("a", encodeJson(messages), 1);
-    for (const [ordinal, message] of messages.entries())
-      sqlite.prepare(sql.insertGroup).run("a", ordinal, message.id, encodeJson([message]));
-    sqlite.prepare(sql.publish).run("a");
-  });
+  const messages = Array.from({ length: count }, (_, ordinal) => ({
+    id: `m-${ordinal}`,
+    role: "user",
+    content: `Message ${ordinal}`,
+  }));
+  yield* sqlRun("INSERT INTO chat_threads VALUES(?, ?, ?)", "a", encodeJson(messages), 1);
+  for (const [ordinal, message] of messages.entries())
+    yield* sqlRun(sql.insertGroup, "a", ordinal, message.id, encodeJson([message]));
+  yield* sqlRun(sql.publish, "a");
 });
 
 describe("Effect history projection reader boundary", () => {
@@ -60,20 +60,15 @@ describe("Effect history projection reader boundary", () => {
         Effect.gen(function* () {
           yield* seed(2);
           const reader = yield* HistoryProjectionReader;
-          const { sqlite } = yield* Database;
-          yield* Effect.try(() =>
-            sqlite.exec(
-              "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET format_version = 2 WHERE thread_id = 'a';",
-            ),
+          yield* sqlExec(
+            "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET format_version = 2 WHERE thread_id = 'a';",
           );
           expect(yield* reader.read({ type: "initial", threadId: "a", limit: 3 })).toEqual({
             type: "not-ready",
             reason: "unsupported-format",
           });
-          yield* Effect.try(() =>
-            sqlite.exec(
-              "UPDATE chat_history_projection SET format_version = 1 WHERE thread_id = 'a'; UPDATE chat_history_groups SET ui_id = '' WHERE thread_id = 'a' AND ordinal = 0;",
-            ),
+          yield* sqlExec(
+            "UPDATE chat_history_projection SET format_version = 1 WHERE thread_id = 'a'; UPDATE chat_history_groups SET ui_id = '' WHERE thread_id = 'a' AND ordinal = 0;",
           );
           const failure = yield* reader
             .read({ type: "initial", threadId: "a", limit: 3 })
@@ -142,20 +137,13 @@ describe("Effect history projection reader boundary", () => {
           expect(
             yield* reader.read({ type: "older", threadId: "a", before: "m-0", limit: 3 }),
           ).toEqual({ type: "page", groups: [], truncated: false, nextCursor: null });
-          const { sqlite } = yield* Database;
-          yield* Effect.try(() =>
-            sqlite
-              .prepare("UPDATE chat_threads SET messages = ? WHERE thread_id = ?")
-              .run("[]", "a"),
-          );
+          yield* sqlRun("UPDATE chat_threads SET messages = ? WHERE thread_id = ?", "[]", "a");
           expect(yield* reader.read({ type: "initial", threadId: "a", limit: 3 })).toEqual({
             type: "not-ready",
             reason: "stale",
           });
-          yield* Effect.try(() => {
-            sqlite.prepare(sql.removeGroups).run("a");
-            sqlite.prepare(sql.publish).run("a");
-          });
+          yield* sqlRun(sql.removeGroups, "a");
+          yield* sqlRun(sql.publish, "a");
           expect(yield* reader.read({ type: "initial", threadId: "a", limit: 3 })).toEqual({
             type: "page",
             groups: [],
@@ -195,17 +183,14 @@ describe("Effect history projection reader boundary", () => {
         Effect.gen(function* () {
           yield* seed(2);
           const reader = yield* HistoryProjectionReader;
-          const { sqlite } = yield* Database;
-          yield* Effect.try(() =>
-            sqlite.exec(
-              "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET ready = 2 WHERE thread_id = 'a';",
-            ),
+          yield* sqlExec(
+            "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET ready = 2 WHERE thread_id = 'a';",
           );
           const invalid = yield* reader
             .read({ type: "initial", threadId: "a", limit: 3 })
             .pipe(Effect.flip);
           expect(invalid.reason._tag).toBe("InvalidSnapshot");
-          yield* Effect.try(() => sqlite.exec("DROP TABLE chat_history_groups"));
+          yield* sqlExec("DROP TABLE chat_history_groups");
           const failed = yield* reader
             .read({ type: "initial", threadId: "a", limit: 3 })
             .pipe(Effect.flip);

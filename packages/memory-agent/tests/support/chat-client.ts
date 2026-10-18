@@ -91,7 +91,7 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
           : [],
       )
       .join("");
-  const until = <E = never>(condition: WaitCondition<E>, what: string) =>
+  const until = <E = never, R = never>(condition: WaitCondition<E, R>, what: string) =>
     waitUntil(condition, what, 6_000);
   return {
     client,

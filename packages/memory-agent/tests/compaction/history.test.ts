@@ -45,20 +45,20 @@ testAgent()("compaction over recorded history", (it) => {
       Effect.gen(function* () {
         const at = yield* freshSession;
         const nodes = yield* Nodes;
-        const first = nodes.append({
+        const first = yield* nodes.append({
           ...at,
           kind: "tool_result",
           text: "first",
           detail: { toolCallId: "same-call" },
         });
-        nodes.append({
+        yield* nodes.append({
           ...at,
           kind: "tool_result",
           text: "second",
           detail: { toolCallId: "same-call" },
         });
-        expect(nodes.toolResultId(at.sessionId, "same-call")).toBe(first.id);
-        expect(nodes.toolResultId(at.sessionId, "missing")).toBeNull();
+        expect(yield* nodes.toolResultId(at.sessionId, "same-call")).toBe(first.id);
+        expect(yield* nodes.toolResultId(at.sessionId, "missing")).toBeNull();
       }),
   );
 
@@ -70,9 +70,9 @@ testAgent()("compaction over recorded history", (it) => {
         const other = yield* freshSession;
         const nodes = yield* Nodes;
         const text = "saved original".repeat(500);
-        const own = nodes.append({ ...at, kind: "tool_result", text });
-        const foreign = nodes.append({ ...other, kind: "tool_result", text });
-        const wrongKind = nodes.append({ ...at, kind: "assistant", text });
+        const own = yield* nodes.append({ ...at, kind: "tool_result", text });
+        const foreign = yield* nodes.append({ ...other, kind: "tool_result", text });
+        const wrongKind = yield* nodes.append({ ...at, kind: "assistant", text });
         const execute = (yield* MemoryTools).forRun({
           ...at,
           runId: `${at.sessionId}:r1`,
@@ -127,7 +127,7 @@ testAgent()("compaction over recorded history", (it) => {
       const at = yield* freshSession;
       const nodes = yield* Nodes;
       const metadata = yield* metadataStore;
-      const { messages } = conversation(nodes, at, ["one", "two", "three", "four"]);
+      const { messages } = yield* conversation(nodes, at, ["one", "two", "three", "four"]);
       const middleware = compaction(metadata, sourcesOf(nodes, at.sessionId), {
         compactAt: noLimit,
         leaveOutAt: noLimit,
@@ -163,27 +163,27 @@ testAgent()("compaction over recorded history", (it) => {
         const tools = (yield* MemoryTools).forProject(at.projectId);
         const output = "빌드 로그 ".repeat(1_000);
         const lint = "린트 경고 ".repeat(200);
-        nodes.append({ ...at, kind: "user", text: "린트 돌려 줘" });
-        nodes.append({
+        yield* nodes.append({ ...at, kind: "user", text: "린트 돌려 줘" });
+        yield* nodes.append({
           ...at,
           kind: "tool_call",
           text: 'run_shell {"command":"pnpm lint"}',
           detail: { toolName: "run_shell", toolCallId: "older-1" },
         });
-        const lintResult = nodes.append({
+        const lintResult = yield* nodes.append({
           ...at,
           kind: "tool_result",
           text: lint,
           detail: { toolName: "run_shell", toolCallId: "older-1", ok: true },
         });
-        nodes.append({ ...at, kind: "user", text: "빌드 로그 봐 줘" });
-        nodes.append({
+        yield* nodes.append({ ...at, kind: "user", text: "빌드 로그 봐 줘" });
+        yield* nodes.append({
           ...at,
           kind: "tool_call",
           text: 'run_shell {"command":"pnpm build"}',
           detail: { toolName: "run_shell", toolCallId: "old-1" },
         });
-        const result = nodes.append({
+        const result = yield* nodes.append({
           ...at,
           kind: "tool_result",
           text: output,
@@ -279,7 +279,13 @@ testAgent()("compaction over recorded history", (it) => {
         const nodes = yield* Nodes;
         const metadata = yield* metadataStore;
         const long = "배포 절차를 설명해요. ".repeat(50);
-        const { userNodes, messages } = conversation(nodes, at, [long, long, long, long, long]);
+        const { userNodes, messages } = yield* conversation(nodes, at, [
+          long,
+          long,
+          long,
+          long,
+          long,
+        ]);
         const summaries = (blocks: readonly { end: number; text: string }[]) =>
           call(() =>
             metadata.set(turnSummariesNamespace, at.sessionId, {

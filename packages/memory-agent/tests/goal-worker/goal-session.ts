@@ -1,11 +1,11 @@
 import { Cause, Effect, MutableHashMap, Option, Schema } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { Database } from "../../src/db/database.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv } from "../support/test-env.ts";
+import { sqlAll } from "../support/sql.ts";
 
 /** The shared model answers each session from that session's own responder. */
 const responders = MutableHashMap.empty<string, ScriptedResponder>();
@@ -124,9 +124,7 @@ export const responseJson = (response: Response) =>
 /** Rows of the open agent's database, read through `env.use` so they follow a reopen. */
 export const rows = Effect.fnUntraced(function* (sql: string, ...parameters: string[]) {
   const env = yield* TestEnv;
-  return yield* env.use(
-    Effect.map(Database, ({ sqlite }) => sqlite.prepare(sql).all(...parameters)),
-  );
+  return yield* env.use(sqlAll(sql, ...parameters));
 });
 
 const sessionRuns = "SELECT run_id FROM workflow_run_bindings WHERE session_id = ?";

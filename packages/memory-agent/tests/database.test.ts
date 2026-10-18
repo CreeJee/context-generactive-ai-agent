@@ -13,18 +13,30 @@ const databaseFile = Effect.fn("databaseFile")(function* () {
   return path.join(directory, "nested", "agent.db");
 });
 
-const withDatabase = <A>(file: string, use: (db: Database["Service"]) => A) =>
+/** The schema boundary itself: the connection the app's open path migrated, read directly. */
+interface RawDatabase {
+  readonly sqlite: DatabaseSync;
+}
+
+const withDatabase = <A>(file: string, use: (db: RawDatabase) => A) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const services = yield* Layer.build(Database.layer(file));
-      return yield* Effect.map(Database, use).pipe(Effect.provideContext(services));
+      const opened: DatabaseSync[] = [];
+      yield* Layer.build(
+        Database.layer(file, (file) => {
+          const sqlite = new DatabaseSync(file);
+          opened.push(sqlite);
+          return sqlite;
+        }),
+      );
+      return use({ sqlite: opened[0]! });
     }),
   );
 
 // Build a genuinely older schema rather than downgrading user_version on newer tables.
 const withPreBindingCheckDatabase = Effect.fn("withPreBindingCheckDatabase")(function* (
   file: string,
-  use: (db: Database["Service"]) => void,
+  use: (db: RawDatabase) => void,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -37,13 +49,13 @@ const withPreBindingCheckDatabase = Effect.fn("withPreBindingCheckDatabase")(fun
     sqlite.exec("PRAGMA foreign_keys = ON");
     for (const step of migrations.slice(0, version)) sqlite.exec(step);
     sqlite.exec(`PRAGMA user_version = ${version}`);
-    use({ sqlite, atomic: (work) => work() });
+    use({ sqlite });
   } finally {
     sqlite.close();
   }
 }, Effect.scoped);
 
-function seed(db: Database["Service"]) {
+function seed(db: RawDatabase) {
   const now = DateTime.formatIso(DateTime.nowUnsafe());
   db.sqlite
     .prepare(
@@ -69,7 +81,7 @@ describe("Database", () => {
       sqlite.exec("PRAGMA foreign_keys=ON");
       for (const step of migrations.slice(0, 47)) sqlite.exec(step);
       sqlite.exec("PRAGMA user_version=47; CREATE TABLE owner_read_recoveries(existing_data TEXT)");
-      seed({ sqlite, atomic: (work) => work() });
+      seed({ sqlite });
       const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
       expect(() => migrateDatabase(sqlite)).toThrow(/already exists/);
       expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 47 });
@@ -108,7 +120,7 @@ describe("Database", () => {
       sqlite.exec("PRAGMA foreign_keys=ON");
       for (const step of migrations.slice(0, 48)) sqlite.exec(step);
       sqlite.exec("PRAGMA user_version=48");
-      seed({ sqlite, atomic: (work) => work() });
+      seed({ sqlite });
       const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
       sqlite.exec("PRAGMA query_only=ON");
       expect(() => migrateDatabase(sqlite)).toThrow(/readonly|read-only/i);
@@ -166,7 +178,7 @@ describe("Database", () => {
           old.exec("PRAGMA foreign_keys = ON");
           for (const step of migrations.slice(0, releasedVersion)) old.exec(step);
           old.exec(`PRAGMA user_version = ${releasedVersion}`);
-          seed({ sqlite: old, atomic: (work) => work() });
+          seed({ sqlite: old });
           old.prepare("INSERT INTO session_workflows VALUES ('s1', ?, 'released')").run(state);
         } finally {
           old.close();
@@ -350,55 +362,6 @@ describe("Database", () => {
         );
         edge.run("n1", "n2", now);
         expect(() => edge.run("n1", "missing", now)).toThrow();
-      });
-    }).pipe(withTestPlatform),
-  );
-
-  it.live("atomic rolls back the whole unit, including nested work", () =>
-    Effect.gen(function* () {
-      yield* withDatabase(yield* databaseFile(), (db) => {
-        seed(db);
-        const count = () => db.sqlite.prepare("SELECT count(*) AS n FROM sessions").get();
-        expect(() =>
-          db.atomic(() => {
-            db.sqlite
-              .prepare(
-                "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, 'now')",
-              )
-              .run();
-            db.atomic(() => {
-              db.sqlite
-                .prepare(
-                  "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s3', 'p1', NULL, 'now')",
-                )
-                .run();
-            });
-            throw new Error("abort after nested commit");
-          }),
-        ).toThrow("abort after nested commit");
-        expect(count()).toEqual({ n: 1 });
-
-        db.atomic(() => {
-          db.sqlite
-            .prepare(
-              "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s4', 'p1', NULL, 'now')",
-            )
-            .run();
-          expect(() =>
-            db.atomic(() => {
-              db.sqlite
-                .prepare(
-                  "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s5', 'p1', NULL, 'now')",
-                )
-                .run();
-              throw new Error("nested only");
-            }),
-          ).toThrow("nested only");
-        });
-        expect(db.sqlite.prepare("SELECT id FROM sessions ORDER BY id").all()).toEqual([
-          { id: "s1" },
-          { id: "s4" },
-        ]);
       });
     }).pipe(withTestPlatform),
   );

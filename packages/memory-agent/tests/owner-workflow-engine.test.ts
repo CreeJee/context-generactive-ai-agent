@@ -1,11 +1,13 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ownerWorkflowEngineLayer } from "../src/workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowAdmission } from "../src/workflow/owner-workflow-storage.ts";
+import { sqlAll, sqlRun, sqlExec } from "./support/sql.ts";
 
 const ContractWorkflow = Workflow.make("OwnerWorkflowEngineContract", {
   payload: { value: Schema.String },
@@ -21,25 +23,30 @@ class ActivityRefused extends Schema.TaggedError<ActivityRefused>()("ActivityRef
   value: Schema.String,
 }) {}
 
-const withDatabase = <A, E, R>(use: (database: Database["Service"]) => Effect.Effect<A, E, R>) =>
+const withDatabase = <A, E, R>(use: () => Effect.Effect<A, E, R>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "owner-workflow-engine-" });
       const context = yield* Layer.build(Database.layer(path.join(directory, "owner.db")));
-      return yield* Effect.provideContext(Effect.flatMap(Database, use), context);
+      return yield* Effect.provideContext(Effect.suspend(use), context);
     }),
   ).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer]));
 
 /** A fresh engine scope over the database `withDatabase` provides. */
 const withEngine = <A, E, R>(
-  use: Effect.Effect<A, E, R | WorkflowEngine.WorkflowEngine | OwnerWorkflowAdmission>,
+  use: Effect.Effect<
+    A,
+    E,
+    R | SqlClient.SqlClient | WorkflowEngine.WorkflowEngine | OwnerWorkflowAdmission
+  >,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const context = yield* Layer.build(ownerWorkflowEngineLayer);
-      return yield* Effect.provideContext(use, context);
+      const database = yield* Effect.context<SqlClient.SqlClient>();
+      return yield* Effect.provideContext(use, Context.merge(database, context));
     }),
   );
 
@@ -153,10 +160,11 @@ describe("owner workflow engine", () => {
   );
 
   it.live("commits owner binding and the first request in one transaction", () =>
-    withDatabase((database) =>
+    withDatabase(() =>
       withEngine(
         Effect.gen(function* () {
-          database.sqlite.exec("CREATE TABLE owner_workflow_binding_probe (id TEXT PRIMARY KEY)");
+          yield* sqlExec("CREATE TABLE owner_workflow_binding_probe (id TEXT PRIMARY KEY)");
+          const sql = yield* SqlClient.SqlClient;
           const admission = yield* OwnerWorkflowAdmission;
           const request = {
             workflowName: ContractWorkflow._tag,
@@ -167,36 +175,27 @@ describe("owner workflow engine", () => {
           const failed = yield* admission
             .admit(
               request,
-              Effect.sync(() =>
-                database.sqlite
-                  .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
-                  .run("rolled-back"),
-              ).pipe(Effect.andThen(Effect.fail("reject binding" as const))),
+              sqlRun("INSERT INTO owner_workflow_binding_probe VALUES (?)", "rolled-back").pipe(
+                Effect.andThen(Effect.fail("reject binding" as const)),
+                Effect.provideService(SqlClient.SqlClient, sql),
+              ),
             )
             .pipe(Effect.flip);
           expect(failed).toBe("reject binding");
-          expect(
-            database.sqlite.prepare("SELECT id FROM owner_workflow_binding_probe").all(),
-          ).toEqual([]);
-          expect(
-            database.sqlite.prepare("SELECT execution_id FROM owner_workflow_executions").all(),
-          ).toEqual([]);
+          expect(yield* sqlAll("SELECT id FROM owner_workflow_binding_probe")).toEqual([]);
+          expect(yield* sqlAll("SELECT execution_id FROM owner_workflow_executions")).toEqual([]);
 
           yield* admission.admit(
             request,
-            Effect.sync(() =>
-              database.sqlite
-                .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
-                .run("committed"),
+            sqlRun("INSERT INTO owner_workflow_binding_probe VALUES (?)", "committed").pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
             ),
           );
+          expect(yield* sqlAll("SELECT id FROM owner_workflow_binding_probe")).toEqual([
+            { id: "committed" },
+          ]);
           expect(
-            database.sqlite.prepare("SELECT id FROM owner_workflow_binding_probe").all(),
-          ).toEqual([{ id: "committed" }]);
-          expect(
-            database.sqlite
-              .prepare("SELECT execution_id, workflow_name FROM owner_workflow_executions")
-              .all(),
+            yield* sqlAll("SELECT execution_id, workflow_name FROM owner_workflow_executions"),
           ).toEqual([
             {
               execution_id: "atomic-execution",

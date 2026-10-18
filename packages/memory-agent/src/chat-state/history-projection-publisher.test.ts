@@ -1,6 +1,7 @@
 import { Effect, Layer, Schema, Result, Function as EffectFunction } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
+import { SqlClient } from "effect/sql";
 import type { ModelMessage } from "@tanstack/ai";
 import { Database } from "../db/database.ts";
 import { groupHistoryMessages } from "./history-groups.ts";
@@ -9,6 +10,7 @@ import {
   HistoryProjectionPublisher,
   type HistoryProjectionPublication,
 } from "./history-projection-publisher.ts";
+import { sqlGet, sqlRun, sqlExec } from "../../tests/support/sql.ts";
 const encodeJson = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -18,7 +20,11 @@ const ownedDatabase = Database.layer(":memory:");
 const publisher = HistoryProjectionPublisher.layer.pipe(Layer.provideMerge(ownedDatabase));
 const layer = HistoryProjectionReader.layer.pipe(Layer.provideMerge(publisher));
 function run<A, E>(
-  program: Effect.Effect<A, E, Database | HistoryProjectionReader | HistoryProjectionPublisher>,
+  program: Effect.Effect<
+    A,
+    E,
+    SqlClient.SqlClient | HistoryProjectionReader | HistoryProjectionPublisher
+  >,
 ) {
   return program.pipe(provideFixture(layer));
 }
@@ -44,22 +50,20 @@ const latest = publication([
   { id: "new", role: "assistant", content: "Later answer" },
 ]);
 const writeOriginal = Effect.fnUntraced(function* (sourceJSON: string) {
-  const { sqlite } = yield* Database;
-  yield* Effect.try(() =>
-    sqlite
-      .prepare(
-        "INSERT INTO chat_threads VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET messages=excluded.messages, updated_at=excluded.updated_at",
-      )
-      .run("a", sourceJSON, 1),
+  yield* sqlRun(
+    "INSERT INTO chat_threads VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET messages=excluded.messages, updated_at=excluded.updated_at",
+    "a",
+    sourceJSON,
+    1,
   );
 });
 
 describe("Effect history projection publication", () => {
   it.effect("reports a read-only install failure rather than running a partial publisher", () =>
     Effect.gen(function* () {
-      const readOnly = Layer.effectDiscard(
-        Effect.flatMap(Database, (db) => Effect.try(() => db.sqlite.exec("PRAGMA query_only=ON"))),
-      ).pipe(Layer.provideMerge(ownedDatabase));
+      const readOnly = Layer.effectDiscard(sqlExec("PRAGMA query_only=ON")).pipe(
+        Layer.provideMerge(ownedDatabase),
+      );
       const failed = yield* Effect.void.pipe(
         provideFixture(HistoryProjectionPublisher.layer.pipe(Layer.provide(readOnly))),
         Effect.flip,
@@ -69,7 +73,7 @@ describe("Effect history projection publication", () => {
           expect(failed.reason).toEqual({ _tag: "SqliteWrite", phase: "install" });
           break;
         case "DatabaseOpenError":
-        case "UnknownError":
+        case "SqlError":
           expect.fail("read-only fixture setup should succeed");
       }
     }),
@@ -88,10 +92,9 @@ describe("Effect history projection publication", () => {
     () =>
       run(
         Effect.gen(function* () {
-          const db = yield* Database;
           const service = yield* HistoryProjectionPublisher;
           const reader = yield* HistoryProjectionReader;
-          const before = yield* Effect.try(() => db.sqlite.prepare("PRAGMA user_version").get());
+          const before = yield* sqlGet("PRAGMA user_version");
           yield* writeOriginal(first.sourceJSON);
           expect(yield* service.publish(first)).toEqual({ type: "published", groupCount: 1 });
           expect(yield* service.publish(first)).toEqual({ type: "published", groupCount: 1 });
@@ -106,14 +109,10 @@ describe("Effect history projection publication", () => {
             case "unknown-cursor":
               expect.fail("publication should be ready");
           }
-          expect(
-            yield* Effect.try(() =>
-              db.sqlite.prepare("SELECT messages FROM chat_threads WHERE thread_id=?").get("a"),
-            ),
-          ).toEqual({ messages: first.sourceJSON });
-          expect(yield* Effect.try(() => db.sqlite.prepare("PRAGMA user_version").get())).toEqual(
-            before,
+          expect(yield* sqlGet("SELECT messages FROM chat_threads WHERE thread_id=?", "a")).toEqual(
+            { messages: first.sourceJSON },
           );
+          expect(yield* sqlGet("PRAGMA user_version")).toEqual(before);
         }),
       ),
   );
@@ -121,7 +120,6 @@ describe("Effect history projection publication", () => {
   it.effect("rolls back stale publication and does not resurrect a deleted source", () =>
     run(
       Effect.gen(function* () {
-        const db = yield* Database;
         const service = yield* HistoryProjectionPublisher;
         const reader = yield* HistoryProjectionReader;
         yield* writeOriginal(latest.sourceJSON);
@@ -129,20 +127,14 @@ describe("Effect history projection publication", () => {
         const current = yield* reader.read({ type: "initial", threadId: "a", limit: 50 });
         expect(yield* service.publish(first)).toEqual({ type: "source-changed" });
         expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(current);
-        yield* Effect.try(() =>
-          db.sqlite.prepare("DELETE FROM chat_threads WHERE thread_id=?").run("a"),
-        );
+        yield* sqlRun("DELETE FROM chat_threads WHERE thread_id=?", "a");
         expect(yield* service.publish(latest)).toEqual({ type: "source-changed" });
         expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual({
           type: "not-ready",
           reason: "unprepared",
         });
         expect(
-          yield* Effect.try(() =>
-            db.sqlite
-              .prepare("SELECT COUNT(*) AS count FROM chat_history_groups WHERE thread_id=?")
-              .get("a"),
-          ),
+          yield* sqlGet("SELECT COUNT(*) AS count FROM chat_history_groups WHERE thread_id=?", "a"),
         ).toEqual({ count: 0 });
       }),
     ),

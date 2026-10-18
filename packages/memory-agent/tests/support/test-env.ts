@@ -1,6 +1,7 @@
 import { layer } from "@effect/vitest";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Context, Effect, Exit, FileSystem, Layer, Path, Ref, Scope } from "effect";
+import { Context, Effect, Exit, FileSystem, Layer, Option, Path, Ref, Scope } from "effect";
+import { SqlClient } from "effect/sql";
 import { memoryAgentLayer, type MemoryAgentLayerOptions, Projects, Sessions } from "memory-agent";
 import type { Project } from "../../src/projects/projects.ts";
 import type { Session } from "../../src/sessions/sessions.ts";
@@ -12,6 +13,7 @@ import {
   type TestProvider,
   type TestProviderOptions,
 } from "./provider.ts";
+import { OpenSqlClient } from "./sql.ts";
 
 type AgentLayer = ReturnType<typeof memoryAgentLayer>;
 /** Every service the composition root provides. */
@@ -26,7 +28,7 @@ export interface TestEnvOptions extends MemoryAgentLayerOptions {
  * A real memory-agent over a throwaway storage root, with one registered project and session.
  *
  * `TestEnv.layer` provides this service together with every agent service, so a test can yield
- * `Workflows` or `Database` directly. `reopen` restarts the agent over the same storage; services
+ * `Workflows` or `SqlClient` directly. `reopen` restarts the agent over the same storage; services
  * yielded before it belong to the closed agent, so a test that reopens reads them again through
  * `use`.
  */
@@ -94,8 +96,11 @@ const makeTestEnv = Effect.fnUntraced(function* (overrides: TestEnvOptions) {
   });
   const current = yield* Ref.make(yield* open);
 
+  // Inside `use` the open agent's own `SqlClient` is the one fixture SQL reaches.
   const use = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(Ref.get(current), ({ context }) => Effect.provideContext(effect, context));
+    Effect.flatMap(Ref.get(current), ({ context }) =>
+      Effect.provideContext(effect, Context.add(context, OpenSqlClient, Option.none())),
+    );
   const reopen = Effect.gen(function* () {
     yield* Scope.close((yield* Ref.get(current)).scope, Exit.void);
     yield* Ref.set(current, yield* open);
@@ -110,10 +115,12 @@ const makeTestEnv = Effect.fnUntraced(function* (overrides: TestEnvOptions) {
     }),
     context,
   );
-  return Context.add(
-    context,
-    TestEnv,
-    TestEnv.of({ project, session, base, home, storage, provider, use, reopen }),
+  return context.pipe(
+    Context.add(
+      TestEnv,
+      TestEnv.of({ project, session, base, home, storage, provider, use, reopen }),
+    ),
+    Context.add(OpenSqlClient, Option.some(use(SqlClient.SqlClient))),
   );
 });
 

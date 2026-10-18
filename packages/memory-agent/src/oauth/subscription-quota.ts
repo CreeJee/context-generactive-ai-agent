@@ -10,9 +10,8 @@ import {
   Result,
   Schema,
 } from "effect";
-import { Database } from "../db/database.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
-import { listOAuthProfiles } from "./accounts.ts";
+import { OAuthProfiles } from "./accounts.ts";
 import {
   anthropicSubscriptionUsage,
   openAiSubscriptionUsage,
@@ -135,7 +134,7 @@ export class SubscriptionQuota extends Context.Service<
   static readonly layer = Layer.effect(
     SubscriptionQuota,
     Effect.gen(function* () {
-      const { sqlite } = yield* Database;
+      const oauthProfiles = yield* OAuthProfiles;
       const usage = yield* SubscriptionUsage;
       const lastObserved = yield* Ref.make<ReadonlyMap<string, ObservedQuota>>(new Map());
       const observe = Effect.fn("SubscriptionQuota.observe")(function* (
@@ -192,10 +191,13 @@ export class SubscriptionQuota extends Context.Service<
       const accounts = Effect.fn("SubscriptionQuota.accounts")(function* (
         provider: SubscriptionAccountProvider,
       ) {
-        const profiles = yield* Effect.try({
-          try: () => listOAuthProfiles({ sqlite, provider }),
-          catch: (cause) => SubscriptionQuotaError.make({ reason: "profiles_unreadable", cause }),
-        });
+        const profiles = yield* oauthProfiles
+          .list(provider)
+          .pipe(
+            Effect.mapError((cause) =>
+              SubscriptionQuotaError.make({ reason: "profiles_unreadable", cause }),
+            ),
+          );
         const checkedAt = DateTime.formatIso(yield* DateTime.now);
         const quotas = yield* Effect.forEach(
           profiles,

@@ -1,16 +1,5 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import {
-  Cache,
-  Context,
-  Duration,
-  Effect,
-  Exit,
-  Result,
-  Scheduler,
-  Schema,
-  Semaphore,
-  Stream,
-} from "effect";
+import { Cache, Context, Duration, Effect, Exit, Result, Schema, Semaphore, Stream } from "effect";
 import { Reactivity } from "effect/reactivity";
 import { SqlClient, SqlConnection, SqlError, Statement } from "effect/sql";
 
@@ -109,7 +98,7 @@ export const sqlClientOver = Effect.fn("sqlClientOver")(function* (
     semaphore,
     isTransaction: (current) => current.isTransaction(),
   });
-  const client = yield* SqlClient.make({
+  return yield* SqlClient.make({
     acquirer,
     transactionAcquirer,
     onCommitFailure,
@@ -118,12 +107,4 @@ export const sqlClientOver = Effect.fn("sqlClientOver")(function* (
     beginTransaction: "BEGIN IMMEDIATE",
     releaseSavepoint: (name) => `RELEASE SAVEPOINT ${name}`,
   }).pipe(Effect.provideService(Reactivity.Reactivity, yield* Reactivity.make));
-  // Legacy synchronous SQL on this connection bypasses the lease. A transaction body made only of
-  // statements must therefore not be preempted by the scheduler's operation budget, or that SQL
-  // would run inside it. Explicit asynchronous waits inside a transaction still yield.
-  const withTransaction = client.withTransaction;
-  return Object.assign(client, {
-    withTransaction: <R, E, A>(self: Effect.Effect<A, E, R>) =>
-      withTransaction(Effect.provideService(self, Scheduler.PreventSchedulerYield, true)),
-  });
 });

@@ -2,7 +2,7 @@ import { selectTestModel } from "../../../../packages/memory-agent/tests/support
 import { isTruthy } from "../../app/truthy.ts";
 import { Cause, Effect, Schema } from "effect";
 import { RouterContextProvider } from "react-router";
-import { Database, SessionLeases, Sessions, Workflows } from "memory-agent";
+import { SessionLeases, Sessions, Workflows } from "memory-agent";
 import { expect } from "vite-plus/test";
 import {
   TestEnv,
@@ -26,6 +26,7 @@ const callRoute = Effect.fn("devChatBoundaryTest.callRoute")(function* (
 });
 
 import { makeChatHandlers } from "../../app/.server/chat-handlers";
+import { sqlAll, sqlGet } from "../../../../packages/memory-agent/tests/support/sql.ts";
 
 const request = Effect.fn("devChatBoundaryTest.request")(function* (
   sessionId: string,
@@ -66,8 +67,8 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           runPromise: Effect.runPromiseWith(services),
         });
         yield* Effect.provideContext(selectTestModel(), services);
-        const { leases, workflows, db } = yield* Effect.provideContext(
-          Effect.all({ leases: SessionLeases, workflows: Workflows, db: Database }),
+        const { leases, workflows } = yield* Effect.provideContext(
+          Effect.all({ leases: SessionLeases, workflows: Workflows }),
           services,
         );
         yield* Effect.provideContext(
@@ -109,7 +110,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "chat_runs",
           "nodes",
         ])
-          expect(db.sqlite.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+          expect(yield* sqlGet(`SELECT count(*) AS n FROM ${table}`)).toEqual({ n: 0 });
         const valid = yield* callRoute(
           action,
           routeArgs(
@@ -124,11 +125,12 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         expect(valid.status).toBe(200);
         expect(yield* sdkCall(() => valid.text())).toContain("Hello from fast-1");
         expect(
-          db.sqlite
-            .prepare(`SELECT b.session_id, b.goal_instance_id = i.goal_instance_id AS current_goal
+          yield* sqlGet(
+            `SELECT b.session_id, b.goal_instance_id = i.goal_instance_id AS current_goal
       FROM workflow_run_bindings b JOIN workflow_goal_identities i ON i.session_id = b.session_id
-      WHERE b.run_id = ?`)
-            .get("owned-local-run"),
+      WHERE b.run_id = ?`,
+            "owned-local-run",
+          ),
         ).toEqual({ session_id: context.session.id, current_goal: 1 });
         const hydrate = yield* callRoute(
           loader,
@@ -167,8 +169,8 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           runPromise: Effect.runPromiseWith(services),
         });
         yield* Effect.provideContext(selectTestModel(), services);
-        const { leases, workflows, db } = yield* Effect.provideContext(
-          Effect.all({ leases: SessionLeases, workflows: Workflows, db: Database }),
+        const { leases, workflows } = yield* Effect.provideContext(
+          Effect.all({ leases: SessionLeases, workflows: Workflows }),
           services,
         );
         yield* Effect.provideContext(
@@ -196,9 +198,10 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "workflow_state_revisions",
           "workflow_goal_identities",
         ];
-        const before = tables.map((table) =>
-          db.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+        const snapshot = Effect.forEach(tables, (table) =>
+          sqlAll(`SELECT * FROM ${table} ORDER BY rowid`),
         );
+        const before = yield* snapshot;
         const cases = [
           { site: "cross-site", origin: "http://localhost" },
           { site: "same-site", origin: "http://localhost" },
@@ -216,9 +219,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           expect((yield* callRoute(action, routeArgs(value))).status).toBe(403);
         }
         expect(context.provider!.adapter.invocations).toHaveLength(0);
-        expect(
-          tables.map((table) => db.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),
-        ).toEqual(before);
+        expect(yield* snapshot).toEqual(before);
       }),
     20000,
   );
@@ -235,13 +236,8 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           runPromise: Effect.runPromiseWith(services),
         });
         yield* Effect.provideContext(selectTestModel(), services);
-        const { leases, workflows, sessions, db } = yield* Effect.provideContext(
-          Effect.all({
-            leases: SessionLeases,
-            workflows: Workflows,
-            sessions: Sessions,
-            db: Database,
-          }),
+        const { leases, workflows, sessions } = yield* Effect.provideContext(
+          Effect.all({ leases: SessionLeases, workflows: Workflows, sessions: Sessions }),
           services,
         );
         const second = yield* Effect.provideContext(sessions.create(context.project.id), services);
@@ -283,9 +279,10 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "workflow_run_events",
           "workflow_goal_worker_generations",
         ];
-        const before = tables.map((table) =>
-          db.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+        const snapshot = Effect.forEach(tables, (table) =>
+          sqlAll(`SELECT * FROM ${table} ORDER BY rowid`),
         );
+        const before = yield* snapshot;
         const calls = context.provider!.adapter.invocations.length;
         expect(
           (yield* callRoute(action, yield* native(second.id, "missing-holder", null))).status,
@@ -297,9 +294,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           (yield* callRoute(action, yield* native(second.id, "session-a-run", "page-b"))).status,
         ).toBe(409);
         expect(context.provider!.adapter.invocations).toHaveLength(calls);
-        expect(
-          tables.map((table) => db.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),
-        ).toEqual(before);
+        expect(yield* snapshot).toEqual(before);
         leases.release(second.id, "page-b");
         const allowed = yield* callRoute(action, yield* native(second.id, "session-b-run", null));
         expect(
@@ -308,9 +303,10 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         ).toBe(200);
         yield* sdkCall(() => allowed.text());
         expect(
-          db.sqlite
-            .prepare("SELECT session_id FROM workflow_run_bindings WHERE run_id = ?")
-            .get("session-b-run"),
+          yield* sqlGet(
+            "SELECT session_id FROM workflow_run_bindings WHERE run_id = ?",
+            "session-b-run",
+          ),
         ).toEqual({ session_id: second.id });
       }),
     20000,

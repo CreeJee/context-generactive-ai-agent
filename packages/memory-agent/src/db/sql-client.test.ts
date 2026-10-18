@@ -2,7 +2,7 @@ import { Deferred, Effect, Fiber, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
-import { Database, TransactionInterleaving } from "./database.ts";
+import { Database } from "./database.ts";
 
 it.effect("keeps another fibre's statement out of a suspended transaction", () =>
   Effect.gen(function* () {
@@ -30,25 +30,6 @@ it.effect("keeps another fibre's statement out of a suspended transaction", () =
     expect(yield* Fiber.join(transaction).pipe(Effect.flip)).toBe("rolled back");
     yield* Fiber.join(outside);
     expect(yield* sql`SELECT id FROM sql_client_fixture ORDER BY id`).toEqual([{ id: 2 }]);
-  }).pipe(provideFixture(Database.layer(":memory:"))),
-);
-
-it.effect("refuses a legacy atomic inside another fibre's open transaction", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const db = yield* Database;
-    const opened = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const transaction = yield* Effect.forkChild(
-      sql.withTransaction(
-        Deferred.succeed(opened, undefined).pipe(Effect.andThen(Deferred.await(release))),
-      ),
-    );
-    yield* Deferred.await(opened);
-    expect(() => db.atomic(() => undefined)).toThrow(TransactionInterleaving);
-    yield* Deferred.succeed(release, undefined);
-    yield* Fiber.join(transaction);
-    expect(db.atomic(() => "committed")).toBe("committed");
   }).pipe(provideFixture(Database.layer(":memory:"))),
 );
 

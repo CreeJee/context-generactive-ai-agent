@@ -11,7 +11,6 @@ import {
 } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { Database } from "../../src/db/database.ts";
 import type { JsonValue as Json } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -29,6 +28,7 @@ import {
 } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlGet } from "../support/sql.ts";
 
 const goal = {
   statement: "Finish the approved work",
@@ -109,19 +109,18 @@ const citeProof = Effect.fnUntraced(function* (sessionId: string, toolCall: Scri
     toolCall.arguments,
   );
   if (input.verification?.status !== "passed") return toolCall;
-  const { sqlite } = yield* Database;
   const { state_json: state } = yield* Schema.decodeUnknownEffect(LatestRevision)(
-    sqlite
-      .prepare(
-        "SELECT state_json FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(sessionId),
+    yield* sqlGet(
+      "SELECT state_json FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+      sessionId,
+    ),
   );
   const proof = yield* Schema.decodeUnknownEffect(Proof)(
-    sqlite
-      .prepare(`SELECT n.id, n.run_id FROM nodes n JOIN chat_runs r ON r.run_id = n.run_id
-        WHERE n.session_id = ? AND n.kind = 'tool_result' AND json_extract(n.detail, '$.ok') = 1 AND r.status = 'completed' ORDER BY n.seq DESC LIMIT 1`)
-      .get(sessionId),
+    yield* sqlGet(
+      `SELECT n.id, n.run_id FROM nodes n JOIN chat_runs r ON r.run_id = n.run_id
+        WHERE n.session_id = ? AND n.kind = 'tool_result' AND json_extract(n.detail, '$.ok') = 1 AND r.status = 'completed' ORDER BY n.seq DESC LIMIT 1`,
+      sessionId,
+    ),
   );
   const step = state.plan?.steps.find((candidate) => candidate.status === "completed");
   if (state.goal === null || step === undefined)
@@ -270,7 +269,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       );
       expect(invocations[3]?.systemPrompts.join("\n")).toContain("Workflow phase: verify");
       expect(
-        (yield* Nodes).session(session.id).filter((node) => node.kind === "user"),
+        (yield* (yield* Nodes).session(session.id)).filter((node) => node.kind === "user"),
       ).toHaveLength(1);
       expect(yield* session.execution).toEqual({ kind: "stopped", reason: "completed" });
     }),

@@ -24,7 +24,6 @@ import {
 } from "../../src/agent/owner-native-artifacts.ts";
 import { OwnerNativeBuild } from "../../src/agent/owner-native-build.ts";
 import { StorageRoot } from "../../src/config/storage-root.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Graph } from "../../src/memory/graph.ts";
@@ -42,6 +41,7 @@ import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { freshSession, goalSession, responder, responseText, rows, send } from "./goal-session.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -232,11 +232,11 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       const bundles = yield* NativeBundles;
       const env = yield* memoryServices;
       const sessionId = yield* freshSession();
-      const before = env.nodes.session(sessionId).length;
+      const before = (yield* env.nodes.session(sessionId)).length;
       const owners = embedderOwners.count;
       const counts = { ...embedderOwners };
       const artifact = yield* bundles.load(bundles.a, "factory");
-      expect(env.nodes.session(sessionId)).toHaveLength(before);
+      expect(yield* env.nodes.session(sessionId)).toHaveLength(before);
       expect(embedderOwners).toEqual(counts);
       let clients = 0;
       const subscription = artifact.createSubscriptionRuntimeImplementation("openai").bind({
@@ -250,7 +250,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       });
       expect(subscription.runMiddleware().name).toContain("subscription-run");
       for (const runId of [`${sessionId}-artifact-1`, `${sessionId}-artifact-2`]) {
-        const user = env.nodes.append({
+        const user = yield* env.nodes.append({
           projectId: project.id,
           sessionId,
           kind: "user",
@@ -295,9 +295,9 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           }),
         );
         expect(
-          env.nodes
-            .session(sessionId)
-            .filter((node) => node.runId === runId && node.kind === "assistant"),
+          (yield* env.nodes.session(sessionId)).filter(
+            (node) => node.runId === runId && node.kind === "assistant",
+          ),
         ).toHaveLength(1);
       }
       expect(clients).toBe(0);
@@ -406,24 +406,23 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       const bundles = yield* NativeBundles;
       const env = yield* memoryServices;
       const trace = yield* WorkTraceStore;
-      const { sqlite } = yield* Database;
       const owners = embedderOwners.count;
       const sessionId = yield* freshSession();
       const agentId = `${sessionId}-factory-agent`;
-      sqlite
-        .prepare(
-          `INSERT INTO subagents
+      yield* sqlRun(
+        `INSERT INTO subagents
           (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
           VALUES (?, ?, 'factory', 'research', 'interrupted', 'parent', 'task', 1, 1)`,
-        )
-        .run(agentId, sessionId);
-      const user = env.nodes.append({
+        agentId,
+        sessionId,
+      );
+      const user = yield* env.nodes.append({
         projectId: project.id,
         sessionId,
         kind: "user",
         text: "Save this fixture decision: isolated-memory-state.",
       });
-      const handle = trace.startAttempt({
+      const handle = yield* trace.startAttempt({
         sessionId,
         parentRunId: "parent",
         parentToolCallId: "factory-call",
@@ -433,18 +432,18 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         kind: "start",
         threadId: `${sessionId}-factory-thread`,
       });
-      const evidence = trace.recordEvidence({
+      const evidence = yield* trace.recordEvidence({
         handle,
         locator: { kind: "message", threadId: handle.threadId, messageId: "verified-answer" },
         verification: "verified",
       });
-      trace.recordReportDisposition({
+      yield* trace.recordReportDisposition({
         handle,
         sessionId,
         disposition: "reviewed",
         parentRunId: "parent",
       });
-      const claimId = trace.finalizeAnswerClaim({
+      const claimId = yield* trace.finalizeAnswerClaim({
         projectId: project.id,
         sessionId,
         parentRunId: "parent",
@@ -481,9 +480,9 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
       const memoryNodeIds = [promoted.memoryNodeId];
       const usage = () =>
-        env.knowledge
-          .usageForTask(handle.taskId)
-          .map(({ kind, parentRunId }) => ({ kind, parentRunId }));
+        Effect.map(env.knowledge.usageForTask(handle.taskId), (entries) =>
+          entries.map(({ kind, parentRunId }) => ({ kind, parentRunId })),
+        );
       const expectedUsage: { kind: string; parentRunId: string }[] = [];
       const sessions: string[] = [];
       for (const [label, artifact, prefix] of [
@@ -494,7 +493,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         const runSession = yield* freshSession();
         sessions.push(runSession);
         const runId = `${runSession}-${label}`;
-        const runUser = env.nodes.append({
+        const runUser = yield* env.nodes.append({
           projectId: project.id,
           sessionId: runSession,
           kind: "user",
@@ -525,7 +524,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           }),
         );
         yield* finish;
-        expect(usage()).toEqual(expectedUsage);
+        expect(yield* usage()).toEqual(expectedUsage);
         expect(
           yield* sdkCall(() => prepared.tools[0].execute!({ query: "isolated-memory-state" })),
         ).toMatchObject({
@@ -538,10 +537,10 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           usedMemoryCount: 1,
         });
         expectedUsage.push({ kind: "retrieved", parentRunId: runId });
-        expect(usage()).toEqual(expectedUsage);
+        expect(yield* usage()).toEqual(expectedUsage);
         yield* finish;
         expectedUsage.push({ kind: "used", parentRunId: runId });
-        expect(usage()).toEqual(expectedUsage);
+        expect(yield* usage()).toEqual(expectedUsage);
         // Narrow observable acquisition counter, not a DB/vector/OAuth singleton proof.
         expect(embedderOwners.count).toBe(owners);
       }
@@ -561,11 +560,8 @@ const Registered = Schema.Struct({
 /** The Goal instance of a fresh session with an active Goal. */
 const goalInstance = Effect.fnUntraced(function* (statement: string) {
   const id = yield* goalSession(statement);
-  const { sqlite } = yield* Database;
   return (yield* Schema.decodeUnknownEffect(GoalInstance)(
-    sqlite
-      .prepare("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?")
-      .get(id),
+    yield* sqlGet("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?", id),
   )).goal_instance_id;
 });
 
@@ -618,14 +614,14 @@ testAgent()("owner native artifacts", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const storage = yield* StorageRoot;
-        const { sqlite } = yield* Database;
         const id = yield* goalInstance("Prebuilt native artifact");
         const { directory, manifest } = yield* prebuiltCopy("prebuilt-runtime");
         yield* acquire(manifest, id);
         const registered = yield* Schema.decodeUnknownEffect(Registered)(
-          sqlite
-            .prepare("SELECT * FROM workflow_goal_native_artifacts WHERE goal_instance_id = ?")
-            .get(id),
+          yield* sqlGet(
+            "SELECT * FROM workflow_goal_native_artifacts WHERE goal_instance_id = ?",
+            id,
+          ),
         );
         const goalDigest = yield* (yield* Crypto.Crypto).digest(
           "SHA-256",
@@ -670,7 +666,6 @@ testAgent()("owner native artifacts", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { sqlite } = yield* Database;
       const { directory, manifest } = yield* prebuiltCopy("prebuilt-failures");
       const id = yield* goalInstance("Reject corrupt build");
       const rejected = Effect.flip(acquire(manifest, id));
@@ -686,9 +681,14 @@ testAgent()("owner native artifacts", (it) => {
       expect(yield* rejected).toMatchObject({ _tag: "NativeRegistrationError" });
       yield* fs.copy(runtimeArtifact("artifact-manifest.json"), manifest);
 
-      sqlite
-        .prepare("INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)")
-        .run(id, "historical-sdk-only", "0".repeat(64), "file:///tmp/old-worker.mjs", "test");
+      yield* sqlRun(
+        "INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)",
+        id,
+        "historical-sdk-only",
+        "0".repeat(64),
+        "file:///tmp/old-worker.mjs",
+        "test",
+      );
       expect(yield* rejected).toMatchObject({
         _tag: "NativeRegistrationError",
         reason: "historical_goal",

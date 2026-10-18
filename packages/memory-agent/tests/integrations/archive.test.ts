@@ -55,7 +55,7 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
       );
       const session = yield* sessions.create(project.id);
       const kept = yield* sessions.create(project.id, "kept");
-      const node = (yield* Nodes).append({
+      const node = yield* (yield* Nodes).append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",

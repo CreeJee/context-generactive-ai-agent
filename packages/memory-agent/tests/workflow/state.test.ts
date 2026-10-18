@@ -2,13 +2,13 @@ import { Cause, Effect, Result, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
-import { Database } from "../../src/db/database.ts";
 import { AppEvents } from "../../src/events/app-events.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { evaluateWorkflowAction, workflowActions } from "../../src/workflow/actions.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
+import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
 const goal = {
   statement: "Ship a durable planning workflow",
@@ -195,7 +195,6 @@ testAgent()("Workflows", (it) => {
   it.effect("upgrades persisted legacy statuses and missing evidence fields", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
-      const { sqlite } = yield* Database;
       const legacy = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         phase: "execute",
         goal: {
@@ -221,11 +220,12 @@ testAgent()("Workflows", (it) => {
         },
         ledger: [],
       });
-      sqlite
-        .prepare(
-          "INSERT INTO session_workflows (session_id, state_json, updated_at) VALUES (?, ?, ?)",
-        )
-        .run(id, legacy, "2026-01-01T00:00:00.000Z");
+      yield* sqlRun(
+        "INSERT INTO session_workflows (session_id, state_json, updated_at) VALUES (?, ?, ?)",
+        id,
+        legacy,
+        "2026-01-01T00:00:00.000Z",
+      );
       const state = yield* (yield* Workflows).get(id);
       expect(state.goal).toMatchObject({
         status: "active",
@@ -264,14 +264,11 @@ testAgent()("Workflows", (it) => {
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
-      const { sqlite } = yield* Database;
       const revisions = () =>
-        sqlite
-          .prepare("SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id")
-          .all(id);
+        sqlAll("SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id", id);
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
-      const original = revisions();
+      const original = yield* revisions();
       expect(original).toHaveLength(2);
       const goalId = original[0]?.goal_instance_id;
       expect(goalId).toEqual(expect.any(String));
@@ -286,7 +283,7 @@ testAgent()("Workflows", (it) => {
       yield* workflows.updatePlan(id, { ...plan, summary: "Another method" });
       yield* workflows.updateGoal(id, { ...goal, outcomes: ["New outcome"] });
       yield* workflows.updatePlan(id, { ...plan, summary: "New method" });
-      const rows = revisions();
+      const rows = yield* revisions();
       expect(rows.map((row) => [row.goal_version, row.plan_version])).toEqual([
         [1, null],
         [1, 1],
@@ -304,11 +301,10 @@ testAgent()("Workflows", (it) => {
       const latest = yield* decode(String(rows.at(-1)?.state_json));
       expect(latest.goal).toMatchObject({ version: 2, outcomes: ["New outcome"], evidence: [] });
       expect(latest.plan).toMatchObject({ version: 3, goalVersion: 2 });
-      expect(() =>
-        sqlite
-          .prepare("UPDATE workflow_state_revisions SET state_json = '{}' WHERE id = ?")
-          .run(rows[0]?.id),
-      ).toThrow("workflow revisions are immutable");
+      const rewrite = yield* Effect.flip(
+        sqlRun("UPDATE workflow_state_revisions SET state_json = '{}' WHERE id = ?", rows[0]!.id),
+      );
+      expect(String(rewrite.reason.cause)).toContain("workflow revisions are immutable");
     }),
   );
 
@@ -690,7 +686,6 @@ testAgent()("server workflow action policy", (it) => {
       Effect.gen(function* () {
         const id = yield* freshSession;
         const workflows = yield* Workflows;
-        const { sqlite } = yield* Database;
         yield* workflows.updateGoal(id, goal);
         const state = yield* workflows.updatePlan(id, plan);
         const states: WorkflowState[] = [
@@ -709,16 +704,18 @@ testAgent()("server workflow action policy", (it) => {
           { ...state, phase: "verify", plan: { ...state.plan!, status: "executing" } },
         ];
         const reset = (current: WorkflowState) =>
-          sqlite
-            .prepare("UPDATE session_workflows SET state_json = ? WHERE session_id = ?")
-            .run(JSON.stringify(current), id);
+          sqlRun(
+            "UPDATE session_workflows SET state_json = ? WHERE session_id = ?",
+            JSON.stringify(current),
+            id,
+          );
         // Each advertised decision must match what the server does with the same persisted state.
         const matches = Effect.fnUntraced(function* (
           current: WorkflowState,
           decision: ReturnType<typeof workflowActions>["phases"]["chat"],
           attempt: Effect.Effect<unknown, unknown>,
         ) {
-          reset(current);
+          yield* reset(current);
           const result = yield* Effect.result(attempt);
           expect(Result.isSuccess(result)).toBe(decision.allowed);
           if (!decision.allowed && Result.isFailure(result))
@@ -802,8 +799,7 @@ testAgent()("Workflows snapshot failure", (it) => {
   it.effect("rolls back a new Goal identity and current state if its evidence snapshot fails", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
-      const { sqlite } = yield* Database;
-      sqlite.exec(`
+      yield* sqlExec(`
         CREATE TRIGGER reject_workflow_revision BEFORE INSERT ON workflow_state_revisions
         BEGIN SELECT RAISE(ABORT, 'snapshot unavailable'); END;
       `);
@@ -812,11 +808,9 @@ testAgent()("Workflows snapshot failure", (it) => {
         cause: { _tag: "SqlError" },
       });
       expect(
-        sqlite.prepare("SELECT * FROM workflow_goal_identities WHERE session_id = ?").all(id),
+        yield* sqlAll("SELECT * FROM workflow_goal_identities WHERE session_id = ?", id),
       ).toEqual([]);
-      expect(
-        sqlite.prepare("SELECT * FROM session_workflows WHERE session_id = ?").all(id),
-      ).toEqual([]);
+      expect(yield* sqlAll("SELECT * FROM session_workflows WHERE session_id = ?", id)).toEqual([]);
     }),
   );
 });

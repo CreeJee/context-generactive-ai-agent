@@ -29,7 +29,10 @@ const shellRequest = Effect.fnUntraced(function* (command: string) {
   return {
     sessionId,
     tab,
-    shellResult: () => nodes.session(sessionId).find((node) => node.kind === "tool_result"),
+    shellResult: () =>
+      Effect.map(nodes.session(sessionId), (session) =>
+        session.find((node) => node.kind === "tool_result"),
+      ),
     review: reviews.latest(sessionId, scopedCallId("call-shell", sessionId)),
   };
 });
@@ -91,7 +94,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
         decidedBy: "classifier",
         reason: "검토 결과: allow",
       });
-      expect(shellResult()?.detail).toMatchObject({
+      expect((yield* shellResult())?.detail).toMatchObject({
         ok: true,
         permission: { decision: "allow", decidedBy: "classifier" },
       });
@@ -105,7 +108,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       expect(tab.client.getInterrupts()).toHaveLength(0);
       expect(tab.text()).toContain("blocked_by_permission_review");
       expect(tab.text()).not.toContain("block-me-output\\n");
-      expect(shellResult()?.detail).toMatchObject({
+      expect((yield* shellResult())?.detail).toMatchObject({
         ok: false,
         permission: { decision: "block" },
       });
@@ -121,7 +124,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
         definitionId: "permission-review",
         payload: { toolName: "save_shell_skill", reason: "검토 결과: ask" },
       });
-      expect(shellResult()).toBeUndefined();
+      expect(yield* shellResult()).toBeUndefined();
       tab.client.resolveInterrupts((item) => {
         if (item.kind === "generic" && item.binding.definitionId === permissionReviewInterrupt.id)
           item.resolveInterrupt({ approved: true });
@@ -129,7 +132,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       yield* tab.answered("Shell said", "the answer");
       expect(tab.text()).toContain('"scriptSha256"');
       expect(yield* review).toMatchObject({ decision: "approved", decidedBy: "user" });
-      expect(shellResult()?.detail).toMatchObject({
+      expect((yield* shellResult())?.detail).toMatchObject({
         ok: true,
         permission: { decision: "approved" },
       });
@@ -145,7 +148,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       });
       yield* tab.answered("Shell said", "the answer");
       expect(tab.text()).toContain('"approved":false');
-      expect(shellResult()?.detail).toMatchObject({
+      expect((yield* shellResult())?.detail).toMatchObject({
         ok: false,
         permission: { decision: "denied", decidedBy: "user" },
       });
@@ -157,7 +160,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       const { tab, review, shellResult } = yield* shellRequest("printf broken-review");
       yield* tab.pendingInterrupt;
       expect(yield* review).toMatchObject({ decision: "ask", decidedBy: "fallback" });
-      expect(shellResult()).toBeUndefined();
+      expect(yield* shellResult()).toBeUndefined();
     }),
   );
 
@@ -171,10 +174,13 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       reloaded.client.resolveInterrupts((item) => {
         if (item.kind === "generic") item.resolveInterrupt({ approved: true });
       });
-      yield* reloaded.until(() => shellResult() !== undefined, "approved call to execute");
+      yield* reloaded.until(
+        Effect.map(shellResult(), (result) => result !== undefined),
+        "approved call to execute",
+      );
       yield* reloaded.until(() => !reloaded.client.getIsLoading(), "resumed run to finish");
       expect(reloaded.client.getInterrupts()).toHaveLength(0);
-      expect(shellResult()?.detail).toMatchObject({ ok: true });
+      expect((yield* shellResult())?.detail).toMatchObject({ ok: true });
     }),
   );
 });

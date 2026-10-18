@@ -13,7 +13,6 @@ import { runNativeEffect } from "memory-agent/native-effect";
 import { isSea } from "node:sea";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeStream, NodeSink } from "@effect/platform-node";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
@@ -28,7 +27,8 @@ import { unpackRuntime } from "./runtime-assets.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve } from "./serve.ts";
 
-const { dirname } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const { dirname } = nodePath;
 
 const usage = `사용법:
   context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]
@@ -204,7 +204,7 @@ if (positionals[0] === "acp") {
   );
   const clientDirectory =
     runtime === null
-      ? fileURLToPath(new URL("../build/client", import.meta.url))
+      ? await runNativeEffect(nodePath.fromFileUrl(new URL("../build/client", import.meta.url)))
       : `${runtime}/client`;
   await serve({
     build,

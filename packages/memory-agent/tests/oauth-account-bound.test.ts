@@ -2,10 +2,11 @@ import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 import { nativeStream } from "../src/runtime/native-stream.ts";
 import { Array as EffectArray } from "effect";
 import { it as effectTest } from "@effect/vitest";
-import { DatabaseSync } from "node:sqlite";
 import {
   Cause,
+  Context,
   Deferred,
+  Layer,
   Fiber,
   MutableHashMap,
   Option,
@@ -16,15 +17,10 @@ import {
   Stream,
 } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { migrations } from "../src/db/migrations.ts";
+import { SqlClient } from "effect/sql";
+import { Database } from "../src/db/database.ts";
 import { createAccountBoundSubscriptionClients } from "../src/oauth/account-bound.ts";
-import {
-  listOAuthProfiles,
-  removeOAuthProfile,
-  selectOAuthProfile,
-  type ProfileCredentialStore,
-} from "../src/oauth/accounts.ts";
-import { acquireOAuthProfileRun } from "../src/oauth/run-leases.ts";
+import { OAuthProfiles, type ProfileCredentialStore } from "../src/oauth/accounts.ts";
 import {
   OAuthHarnessError,
   type CredentialStore,
@@ -45,18 +41,18 @@ const sdkCall = Effect.fn("oauthBound.sdkCall")(function* <A>(operation: () => A
     catch: (cause) => new Cause.UnknownError(cause),
   });
 });
-const rejects = Effect.fn("oauthBound.rejects")(function* <A>(
-  operation: () => PromiseLike<A>,
+const rejects = Effect.fn("oauthBound.rejects")(function* <A, E>(
+  operation: Effect.Effect<A, E>,
   message: string,
 ) {
-  const result = yield* Effect.result(sdkCall(operation));
+  const result = yield* Effect.result(operation);
   Result.match(result, {
     onSuccess: () => {
       throw new Error("Expected SDK failure");
     },
     onFailure: (error) =>
       expect(() => {
-        throw error.cause;
+        throw error instanceof Cause.UnknownError ? error.cause : error;
       }).toThrow(message),
   });
 });
@@ -64,41 +60,44 @@ const rejects = Effect.fn("oauthBound.rejects")(function* <A>(
 function sdkCompletion<A, E>(program: Effect.Effect<A, E>, scope: Scope.Scope): Promise<A> {
   return Effect.runPromise(program.pipe(Effect.forkIn(scope), Effect.flatMap(Fiber.join)));
 }
-const sqliteFixture = Effect.acquireRelease(
-  Effect.sync(() => new DatabaseSync(":memory:")),
-  (db) =>
-    Effect.sync(() => {
-      if (db.isOpen) db.close();
-    }),
-);
-
-const oauthSchema = migrations
-  .filter(
-    (sql) =>
-      sql.includes("CREATE TABLE oauth_profiles (") ||
-      sql.includes("CREATE TABLE oauth_legacy_removed ("),
-  )
-  .join("\n");
 const ids = [
   "00000000-0000-4000-8000-000000000001",
   "00000000-0000-4000-8000-000000000002",
 ] as const;
-const dbFixture = Effect.fn("oauthBound.dbFixture")(function* (provider: OAuthProvider = "openai") {
-  const db = yield* sqliteFixture;
-  db.exec(oauthSchema);
-  for (const [index, id] of ids.entries())
-    db.prepare(
-      "INSERT INTO oauth_profiles(id, provider, label, selected, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(id, provider, `account ${index}`, index === 0 ? 1 : 0, index);
-  return db;
-});
-const select = (db: DatabaseSync, id: string, provider: OAuthProvider = "openai") => {
-  db.prepare("UPDATE oauth_profiles SET selected = 0 WHERE provider = ?").run(provider);
-  db.prepare("UPDATE oauth_profiles SET selected = 1 WHERE id = ? AND provider = ?").run(
-    id,
-    provider,
-  );
+const storedCredential: StoredCredential = {
+  accessToken: "fake",
+  refreshToken: "fake",
+  expiresAt: 123,
 };
+/** A profile store over a fresh database that `seed` filled before the store first read it. */
+const seededProfiles = Effect.fn("oauthBound.seededProfiles")(function* <E>(
+  seed: Effect.Effect<unknown, E, SqlClient.SqlClient>,
+) {
+  const database = yield* Layer.build(Database.layer(":memory:"));
+  yield* Effect.provideContext(seed, database);
+  const services = yield* Layer.build(
+    OAuthProfiles.layer.pipe(Layer.provide(Layer.succeedContext(database))),
+  );
+  return Context.get(services, OAuthProfiles);
+});
+/** Two profiles with intact vault slots; the first is selected. */
+const dbFixture = Effect.fn("oauthBound.dbFixture")(function* (provider: OAuthProvider = "openai") {
+  const profiles = yield* seededProfiles(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      for (const [index, id] of ids.entries())
+        yield* sql`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
+          VALUES (${id}, ${provider}, ${`account ${index}`}, ${index === 0 ? 1 : 0}, ${index})`;
+    }),
+  );
+  const vault: ProfileCredentialStore = {
+    read: () => Promise.resolve().then(() => storedCredential),
+    write: () => Promise.resolve().then(() => {}),
+    remove: () => Promise.resolve().then(() => {}),
+  };
+  const select = (id: string) => profiles.select(provider, id, vault);
+  return { profiles, select };
+});
 
 describe("account-bound subscription provider", () => {
   effectTest.live.each(["openai", "anthropic"] as const)(
@@ -106,12 +105,14 @@ describe("account-bound subscription provider", () => {
     (provider) =>
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
-        const db = new DatabaseSync(":memory:");
-        db.exec(oauthSchema);
         const legacyId = `legacy-${provider}`;
-        db.prepare(
-          "INSERT INTO oauth_profiles(id, provider, label, selected, created_at) VALUES (?, ?, ?, 1, 0)",
-        ).run(legacyId, provider, "old account");
+        const profiles = yield* seededProfiles(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
+              VALUES (${legacyId}, ${provider}, 'old account', 1, 0)`;
+          }),
+        );
         const credential: StoredCredential = {
           accessToken: "fake",
           refreshToken: "fake",
@@ -145,82 +146,76 @@ describe("account-bound subscription provider", () => {
         };
         const created: string[] = [];
         let finish!: () => void;
-        try {
-          const bound = createAccountBoundSubscriptionClients({
-            sqlite: db,
-            provider: provider,
-            createClient: (id) => ({
-              status: () =>
-                Promise.resolve().then(() => ({
+        const bound = createAccountBoundSubscriptionClients({
+          profiles,
+          provider: provider,
+          createClient: (id) => ({
+            status: () =>
+              Promise.resolve().then(() => ({
+                provider,
+                connected: MutableHashMap.has(vault, id!),
+                expiresAt: null,
+              })),
+            modelCatalog: () => Promise.resolve().then(() => []),
+            stream: () => nativeStream(Stream.empty),
+            refreshForValidation: () =>
+              Promise.resolve().then(() => ({ provider, connected: true, expiresAt: null })),
+            disconnect: () =>
+              Promise.resolve().then(() => ({ provider, connected: false, expiresAt: null })),
+            startLogin: () =>
+              Promise.resolve().then(() => {
+                expect(id).not.toBeNull();
+                created.push(id!);
+                const completion = Deferred.makeUnsafe<OAuthConnectionStatus>();
+                finish = () => {
+                  MutableHashMap.set(vault, id!, credential);
+                  Deferred.doneUnsafe(
+                    completion,
+                    Effect.succeed({ provider, connected: true, expiresAt: null }),
+                  );
+                };
+                const completed = sdkCompletion(Deferred.await(completion), scope);
+                return {
                   provider,
-                  connected: MutableHashMap.has(vault, id!),
-                  expiresAt: null,
-                })),
-              modelCatalog: () => Promise.resolve().then(() => []),
-              stream: () => nativeStream(Stream.empty),
-              refreshForValidation: () =>
-                Promise.resolve().then(() => ({ provider, connected: true, expiresAt: null })),
-              disconnect: () =>
-                Promise.resolve().then(() => ({ provider, connected: false, expiresAt: null })),
-              startLogin: () =>
-                Promise.resolve().then(() => {
-                  expect(id).not.toBeNull();
-                  created.push(id!);
-                  const completion = Deferred.makeUnsafe<OAuthConnectionStatus>();
-                  finish = () => {
-                    MutableHashMap.set(vault, id!, credential);
-                    Deferred.doneUnsafe(
-                      completion,
-                      Effect.succeed({ provider, connected: true, expiresAt: null }),
-                    );
-                  };
-                  const completed = sdkCompletion(Deferred.await(completion), scope);
-                  return {
-                    provider,
-                    authorizationUrl: "https://example.com/login",
-                    completed,
-                    cancel: () => {},
-                  };
-                }),
-            }),
-            accounts: accounts,
-            legacy: legacy,
-          });
-          const configured = createSubscriptionProvider({
-            protocol: providerProtocols[provider],
-            config: { read: Effect.succeed({}), update: (patch) => Effect.succeed(patch) },
-            client: bound.client,
-            catalogKey: bound.catalogKey,
-          });
-          for (let round = 0; round < 2; round++) {
-            expect((yield* configured.auth.disconnect).status).toBe("signed-out");
-            expect(listOAuthProfiles({ sqlite: db, provider: provider })).toEqual([]);
-            expect(() => bound.forRun()).toThrow("not_connected");
-            expect((yield* configured.auth.connect).status).toBe("pending");
-            expect(listOAuthProfiles({ sqlite: db, provider: provider })).toEqual([]);
-            finish();
-            expect(
-              (yield* configured.auth.status.pipe(
-                Effect.repeat({
-                  while: (status) => status.status !== "signed-in",
-                  schedule: Schedule.spaced("20 millis"),
-                }),
-                Effect.timeout("1000 millis"),
-              )).status,
-            ).toBe("signed-in");
-            expect(listOAuthProfiles({ sqlite: db, provider: provider })).toMatchObject([
-              { id: created[round], provider, selected: true },
-            ]);
-            bound.forRun().releaseRun();
-          }
-          expect(legacyRemoved).toBe(true);
-          expect(EffectArray.dedupe(created).length).toBe(2);
-          expect(db.prepare("SELECT provider FROM oauth_legacy_removed").get()).toEqual({
-            provider,
-          });
-        } finally {
-          db.close();
+                  authorizationUrl: "https://example.com/login",
+                  completed,
+                  cancel: () => {},
+                };
+              }),
+          }),
+          accounts: accounts,
+          legacy: legacy,
+        });
+        const configured = createSubscriptionProvider({
+          protocol: providerProtocols[provider],
+          config: { read: Effect.succeed({}), update: (patch) => Effect.succeed(patch) },
+          client: bound.client,
+          catalogKey: bound.catalogKey,
+        });
+        for (let round = 0; round < 2; round++) {
+          expect((yield* configured.auth.disconnect).status).toBe("signed-out");
+          expect(yield* profiles.list(provider)).toEqual([]);
+          expect(() => bound.forRun()).toThrow("not_connected");
+          expect((yield* configured.auth.connect).status).toBe("pending");
+          expect(yield* profiles.list(provider)).toEqual([]);
+          finish();
+          expect(
+            (yield* configured.auth.status.pipe(
+              Effect.repeat({
+                while: (status) => status.status !== "signed-in",
+                schedule: Schedule.spaced("20 millis"),
+              }),
+              Effect.timeout("1000 millis"),
+            )).status,
+          ).toBe("signed-in");
+          expect(yield* profiles.list(provider)).toMatchObject([
+            { id: created[round], provider, selected: true },
+          ]);
+          bound.forRun().releaseRun();
         }
+        expect(legacyRemoved).toBe(true);
+        expect(EffectArray.dedupe(created).length).toBe(2);
+        expect(profiles.committed(provider).legacyRemoved).toBe(true);
       }),
   );
 
@@ -229,11 +224,12 @@ describe("account-bound subscription provider", () => {
     (intent) =>
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
-        const db = new DatabaseSync(":memory:");
-        db.exec(oauthSchema);
-        db.prepare(
-          "INSERT INTO oauth_legacy_removed(provider, removed_at) VALUES ('openai', 0)",
-        ).run();
+        const profiles = yield* seededProfiles(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`INSERT INTO oauth_legacy_removed(provider, removed_at) VALUES ('openai', 0)`;
+          }),
+        );
         const removed: string[] = [];
         const accounts: ProfileCredentialStore = {
           read: () => Promise.resolve().then(() => null),
@@ -244,72 +240,68 @@ describe("account-bound subscription provider", () => {
             }),
         };
         let finish!: () => void;
-        try {
-          const bound = createAccountBoundSubscriptionClients({
-            sqlite: db,
-            provider: "openai",
-            createClient: () => ({
-              status: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: false,
-                  expiresAt: null,
-                })),
-              modelCatalog: () => Promise.resolve().then(() => []),
-              stream: () => nativeStream(Stream.empty),
-              refreshForValidation: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: false,
-                  expiresAt: null,
-                })),
-              disconnect: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: false,
-                  expiresAt: null,
-                })),
-              startLogin: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  authorizationUrl: "https://example.com/login",
-                  completed: (() => {
-                    const completion = Deferred.makeUnsafe<
-                      OAuthConnectionStatus,
-                      OAuthHarnessError
-                    >();
-                    finish = () =>
-                      Deferred.doneUnsafe(
-                        completion,
-                        intent === "reject"
-                          ? Effect.fail(new OAuthHarnessError("provider_rejected"))
-                          : Effect.succeed({
-                              provider: "openai",
-                              connected: true,
-                              expiresAt: null,
-                            }),
-                      );
-                    return sdkCompletion(Deferred.await(completion), scope);
-                  })(),
-                  cancel: () => {},
-                })),
-            }),
-            accounts: accounts,
-          });
-          const attempt = yield* sdkCall(() => bound.client.startLogin());
-          if (intent === "cancel") attempt.cancel();
-          finish();
-          yield* rejects(
-            () => attempt.completed,
-            intent === "cancel" ? "cancelled" : "provider_rejected",
-          );
-          expect(removed).toHaveLength(1);
-          expect(listOAuthProfiles({ sqlite: db, provider: "openai" })).toEqual([]);
-          expect((yield* sdkCall(() => bound.client.status())).connected).toBe(false);
-          expect(() => bound.forRun()).toThrow("not_connected");
-        } finally {
-          db.close();
-        }
+        const bound = createAccountBoundSubscriptionClients({
+          profiles,
+          provider: "openai",
+          createClient: () => ({
+            status: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: false,
+                expiresAt: null,
+              })),
+            modelCatalog: () => Promise.resolve().then(() => []),
+            stream: () => nativeStream(Stream.empty),
+            refreshForValidation: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: false,
+                expiresAt: null,
+              })),
+            disconnect: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: false,
+                expiresAt: null,
+              })),
+            startLogin: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                authorizationUrl: "https://example.com/login",
+                completed: (() => {
+                  const completion = Deferred.makeUnsafe<
+                    OAuthConnectionStatus,
+                    OAuthHarnessError
+                  >();
+                  finish = () =>
+                    Deferred.doneUnsafe(
+                      completion,
+                      intent === "reject"
+                        ? Effect.fail(new OAuthHarnessError("provider_rejected"))
+                        : Effect.succeed({
+                            provider: "openai",
+                            connected: true,
+                            expiresAt: null,
+                          }),
+                    );
+                  return sdkCompletion(Deferred.await(completion), scope);
+                })(),
+                cancel: () => {},
+              })),
+          }),
+          accounts: accounts,
+        });
+        const attempt = yield* sdkCall(() => bound.client.startLogin());
+        if (intent === "cancel") attempt.cancel();
+        finish();
+        yield* rejects(
+          sdkCall(() => attempt.completed),
+          intent === "cancel" ? "cancelled" : "provider_rejected",
+        );
+        expect(removed).toHaveLength(1);
+        expect(yield* profiles.list("openai")).toEqual([]);
+        expect((yield* sdkCall(() => bound.client.status())).connected).toBe(false);
+        expect(() => bound.forRun()).toThrow("not_connected");
       }),
   );
 
@@ -317,19 +309,89 @@ describe("account-bound subscription provider", () => {
     "%s keeps A's stream/refresh bound after switching to B",
     (provider) =>
       Effect.gen(function* () {
-        const db = yield* dbFixture(provider);
+        const { profiles, select } = yield* dbFixture(provider);
         const calls: string[] = [];
-        try {
-          const bound = createAccountBoundSubscriptionClients({
-            sqlite: db,
-            provider: provider,
-            createClient: (id) => ({
+        const bound = createAccountBoundSubscriptionClients({
+          profiles,
+          provider: provider,
+          createClient: (id) => ({
+            status: () =>
+              Promise.resolve().then(() => ({ provider, connected: true, expiresAt: null })),
+            modelCatalog: () =>
+              Promise.resolve().then(() => {
+                calls.push(`catalog:${id}`);
+                return [];
+              }),
+            stream: () =>
+              nativeStream(
+                Stream.suspend(() =>
+                  Stream.fromIterable(
+                    (function* (): Generator<NormalizedStreamEvent> {
+                      calls.push(`stream:${id}`);
+                      yield* [];
+                    })(),
+                  ),
+                ),
+              ),
+            refreshForValidation: () =>
+              Promise.resolve().then(() => {
+                calls.push(`refresh:${id}`);
+                return { provider, connected: true, expiresAt: null };
+              }),
+            disconnect: () =>
+              Promise.resolve().then(() => ({ provider, connected: false, expiresAt: null })),
+            startLogin: () =>
+              Promise.resolve().then(() => {
+                throw new Error("unexpected login");
+              }),
+          }),
+        });
+        const a = bound.forRun();
+        yield* select(ids[1]);
+        const b = bound.forRun();
+        yield* sdkCall(() => bound.client.modelCatalog());
+        yield* Stream.runDrain(
+          Stream.fromAsyncIterable(a.stream("{}"), (cause) => new Cause.UnknownError(cause)),
+        );
+        yield* Stream.runDrain(
+          Stream.fromAsyncIterable(b.stream("{}"), (cause) => new Cause.UnknownError(cause)),
+        );
+        yield* sdkCall(() => a.refreshForValidation());
+        yield* sdkCall(() => b.refreshForValidation());
+        expect(calls).toEqual([
+          `catalog:${ids[1]}`,
+          `stream:${ids[0]}`,
+          `stream:${ids[1]}`,
+          `refresh:${ids[0]}`,
+          `refresh:${ids[1]}`,
+        ]);
+        a.releaseRun();
+        b.releaseRun();
+      }),
+  );
+
+  effectTest.live(
+    "catalog/status and a pinned run keep their original account on A/B switches",
+    () =>
+      Effect.gen(function* () {
+        const { profiles, select } = yield* dbFixture();
+        const calls: string[] = [];
+        const created: string[] = [];
+        const bound = createAccountBoundSubscriptionClients({
+          profiles,
+          provider: "openai",
+          createClient: (id) => {
+            created.push(id ?? "legacy");
+            return {
               status: () =>
-                Promise.resolve().then(() => ({ provider, connected: true, expiresAt: null })),
+                Promise.resolve().then(() => {
+                  calls.push(`status:${id}`);
+                  return { provider: "openai", connected: true, expiresAt: null };
+                }),
               modelCatalog: () =>
                 Promise.resolve().then(() => {
                   calls.push(`catalog:${id}`);
-                  return [];
+                  return [{ models: [{ slug: `model-${id}` }] }];
                 }),
               stream: () =>
                 nativeStream(
@@ -345,135 +407,57 @@ describe("account-bound subscription provider", () => {
               refreshForValidation: () =>
                 Promise.resolve().then(() => {
                   calls.push(`refresh:${id}`);
-                  return { provider, connected: true, expiresAt: null };
+                  return { provider: "openai", connected: true, expiresAt: null };
                 }),
               disconnect: () =>
-                Promise.resolve().then(() => ({ provider, connected: false, expiresAt: null })),
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: false,
+                  expiresAt: null,
+                })),
               startLogin: () =>
                 Promise.resolve().then(() => {
                   throw new Error("unexpected login");
                 }),
-            }),
-          });
-          const a = bound.forRun();
-          select(db, ids[1], provider);
-          const b = bound.forRun();
-          yield* sdkCall(() => bound.client.modelCatalog());
-          yield* Stream.runDrain(
-            Stream.fromAsyncIterable(a.stream("{}"), (cause) => new Cause.UnknownError(cause)),
-          );
-          yield* Stream.runDrain(
-            Stream.fromAsyncIterable(b.stream("{}"), (cause) => new Cause.UnknownError(cause)),
-          );
-          yield* sdkCall(() => a.refreshForValidation());
-          yield* sdkCall(() => b.refreshForValidation());
-          expect(calls).toEqual([
-            `catalog:${ids[1]}`,
-            `stream:${ids[0]}`,
-            `stream:${ids[1]}`,
-            `refresh:${ids[0]}`,
-            `refresh:${ids[1]}`,
-          ]);
-          a.releaseRun();
-          b.releaseRun();
-        } finally {
-          db.close();
-        }
-      }),
-  );
-
-  effectTest.live(
-    "catalog/status and a pinned run keep their original account on A/B switches",
-    () =>
-      Effect.gen(function* () {
-        const db = yield* dbFixture();
-        const calls: string[] = [];
-        const created: string[] = [];
-        try {
-          const bound = createAccountBoundSubscriptionClients({
-            sqlite: db,
-            provider: "openai",
-            createClient: (id) => {
-              created.push(id ?? "legacy");
-              return {
-                status: () =>
-                  Promise.resolve().then(() => {
-                    calls.push(`status:${id}`);
-                    return { provider: "openai", connected: true, expiresAt: null };
-                  }),
-                modelCatalog: () =>
-                  Promise.resolve().then(() => {
-                    calls.push(`catalog:${id}`);
-                    return [{ models: [{ slug: `model-${id}` }] }];
-                  }),
-                stream: () =>
-                  nativeStream(
-                    Stream.suspend(() =>
-                      Stream.fromIterable(
-                        (function* (): Generator<NormalizedStreamEvent> {
-                          calls.push(`stream:${id}`);
-                          yield* [];
-                        })(),
-                      ),
-                    ),
-                  ),
-                refreshForValidation: () =>
-                  Promise.resolve().then(() => {
-                    calls.push(`refresh:${id}`);
-                    return { provider: "openai", connected: true, expiresAt: null };
-                  }),
-                disconnect: () =>
-                  Promise.resolve().then(() => ({
-                    provider: "openai",
-                    connected: false,
-                    expiresAt: null,
-                  })),
-                startLogin: () =>
-                  Promise.resolve().then(() => {
-                    throw new Error("unexpected login");
-                  }),
-              } satisfies SubscriptionOAuthClient;
-            },
-          });
-          const runtime = createSubscriptionRuntime("openai", bound.forRun);
-          const selection = {
-            provider: "openai",
-            model: "gpt-test",
-            reasoningEffort: "low",
-          } as const;
-          const firstAdapter = runtime.adapter(selection);
-          const aRun = bound.forRun();
-          expect(bound.catalogKey()).toBe(ids[0]);
-          select(db, ids[1]);
-          const secondAdapter = runtime.adapter(selection);
-          expect(firstAdapter).not.toBe(secondAdapter);
-          const bRun = bound.forRun();
-          yield* sdkCall(() => bound.client.status());
-          yield* sdkCall(() => bound.client.modelCatalog());
-          yield* Stream.runDrain(
-            Stream.fromAsyncIterable(aRun.stream("{}"), (cause) => new Cause.UnknownError(cause)),
-          );
-          yield* Stream.runDrain(
-            Stream.fromAsyncIterable(bRun.stream("{}"), (cause) => new Cause.UnknownError(cause)),
-          );
-          yield* sdkCall(() => aRun.refreshForValidation());
-          yield* sdkCall(() => bRun.refreshForValidation());
-          expect(created).toEqual([ids[0], ids[1]]);
-          expect(calls).toEqual([
-            `status:${ids[1]}`,
-            `catalog:${ids[1]}`,
-            `stream:${ids[0]}`,
-            `stream:${ids[1]}`,
-            `refresh:${ids[0]}`,
-            `refresh:${ids[1]}`,
-          ]);
-          releaseSubscriptionRun(firstAdapter);
-          releaseSubscriptionRun(secondAdapter);
-          aRun.releaseRun();
-          bRun.releaseRun();
-        } finally {
-          db.close();
-        }
+            } satisfies SubscriptionOAuthClient;
+          },
+        });
+        const runtime = createSubscriptionRuntime("openai", bound.forRun);
+        const selection = {
+          provider: "openai",
+          model: "gpt-test",
+          reasoningEffort: "low",
+        } as const;
+        const firstAdapter = runtime.adapter(selection);
+        const aRun = bound.forRun();
+        expect(bound.catalogKey()).toBe(ids[0]);
+        yield* select(ids[1]);
+        const secondAdapter = runtime.adapter(selection);
+        expect(firstAdapter).not.toBe(secondAdapter);
+        const bRun = bound.forRun();
+        yield* sdkCall(() => bound.client.status());
+        yield* sdkCall(() => bound.client.modelCatalog());
+        yield* Stream.runDrain(
+          Stream.fromAsyncIterable(aRun.stream("{}"), (cause) => new Cause.UnknownError(cause)),
+        );
+        yield* Stream.runDrain(
+          Stream.fromAsyncIterable(bRun.stream("{}"), (cause) => new Cause.UnknownError(cause)),
+        );
+        yield* sdkCall(() => aRun.refreshForValidation());
+        yield* sdkCall(() => bRun.refreshForValidation());
+        expect(created).toEqual([ids[0], ids[1]]);
+        expect(calls).toEqual([
+          `status:${ids[1]}`,
+          `catalog:${ids[1]}`,
+          `stream:${ids[0]}`,
+          `stream:${ids[1]}`,
+          `refresh:${ids[0]}`,
+          `refresh:${ids[1]}`,
+        ]);
+        releaseSubscriptionRun(firstAdapter);
+        releaseSubscriptionRun(secondAdapter);
+        aRun.releaseRun();
+        bRun.releaseRun();
       }),
   );
 
@@ -481,16 +465,11 @@ describe("account-bound subscription provider", () => {
     "OpenAI model cache and context window cannot leak across selected profiles",
     () =>
       Effect.gen(function* () {
-        const db = yield* dbFixture();
+        const { profiles, select } = yield* dbFixture();
         const requests: string[] = [];
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            if (db.isOpen) db.close();
-          }),
-        );
 
         const bound = createAccountBoundSubscriptionClients({
-          sqlite: db,
+          profiles,
           provider: "openai",
           createClient: (id) => ({
             status: () =>
@@ -540,7 +519,7 @@ describe("account-bound subscription provider", () => {
         });
         expect((yield* provider.models.list).map((m) => m.id)).toEqual(["model-a"]);
         expect(provider.contextWindow("model-a")).toBe(100_000);
-        select(db, ids[1]);
+        yield* select(ids[1]);
         expect(provider.contextWindow("model-a")).toBeNull();
         expect((yield* provider.models.list).map((m) => m.id)).toEqual(["model-b"]);
         expect(provider.contextWindow("model-b")).toBe(200_000);
@@ -552,7 +531,7 @@ describe("account-bound subscription provider", () => {
     "an active run blocks only its own profile deletion until released, even after A/B switch",
     () =>
       Effect.gen(function* () {
-        const db = yield* dbFixture();
+        const { profiles, select } = yield* dbFixture();
         const credential: StoredCredential = {
           accessToken: "fake",
           refreshToken: "fake",
@@ -580,83 +559,51 @@ describe("account-bound subscription provider", () => {
           write: () => Promise.resolve().then(() => {}),
           remove: () => Promise.resolve().then(() => {}),
         };
-        try {
-          const bound = createAccountBoundSubscriptionClients({
-            sqlite: db,
-            provider: "openai",
-            createClient: () => ({
-              status: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: true,
-                  expiresAt: null,
-                })),
-              modelCatalog: () => Promise.resolve().then(() => []),
-              stream: () => nativeStream(Stream.empty),
-              refreshForValidation: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: true,
-                  expiresAt: null,
-                })),
-              disconnect: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: false,
-                  expiresAt: null,
-                })),
-              startLogin: () =>
-                Promise.resolve().then(() => {
-                  throw new Error("unexpected login");
-                }),
-            }),
-          });
-          const pinnedA = bound.forRun();
-          select(db, ids[1]);
-          const pinnedB = bound.forRun();
-          yield* rejects(
-            () =>
-              removeOAuthProfile({
-                sqlite: db,
+        const bound = createAccountBoundSubscriptionClients({
+          profiles,
+          provider: "openai",
+          createClient: () => ({
+            status: () =>
+              Promise.resolve().then(() => ({
                 provider: "openai",
-                id: ids[0],
-                accounts: accounts,
-                legacy: legacy,
-              }),
-            "oauth_profile_in_use",
-          );
-          expect(MutableHashMap.has(vault, ids[0])).toBe(true);
-          pinnedA.releaseRun();
-          pinnedA.releaseRun(); // release is idempotent
-          yield* sdkCall(() =>
-            removeOAuthProfile({
-              sqlite: db,
-              provider: "openai",
-              id: ids[0],
-              accounts: accounts,
-              legacy: legacy,
-            }),
-          );
-          expect(MutableHashMap.has(vault, ids[0])).toBe(false);
-          expect(MutableHashMap.has(vault, ids[1])).toBe(true);
-          expect(db.prepare("SELECT id FROM oauth_profiles WHERE selected = 1").get()).toEqual({
-            id: ids[1],
-          });
-          yield* rejects(
-            () =>
-              removeOAuthProfile({
-                sqlite: db,
+                connected: true,
+                expiresAt: null,
+              })),
+            modelCatalog: () => Promise.resolve().then(() => []),
+            stream: () => nativeStream(Stream.empty),
+            refreshForValidation: () =>
+              Promise.resolve().then(() => ({
                 provider: "openai",
-                id: ids[1],
-                accounts: accounts,
-                legacy: legacy,
+                connected: true,
+                expiresAt: null,
+              })),
+            disconnect: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: false,
+                expiresAt: null,
+              })),
+            startLogin: () =>
+              Promise.resolve().then(() => {
+                throw new Error("unexpected login");
               }),
-            "oauth_profile_in_use",
-          );
-          pinnedB.releaseRun();
-        } finally {
-          db.close();
-        }
+          }),
+        });
+        const pinnedA = bound.forRun();
+        yield* select(ids[1]);
+        const pinnedB = bound.forRun();
+        yield* rejects(profiles.remove("openai", ids[0], accounts, legacy), "oauth_profile_in_use");
+        expect(MutableHashMap.has(vault, ids[0])).toBe(true);
+        pinnedA.releaseRun();
+        pinnedA.releaseRun(); // release is idempotent
+        yield* profiles.remove("openai", ids[0], accounts, legacy);
+        expect(MutableHashMap.has(vault, ids[0])).toBe(false);
+        expect(MutableHashMap.has(vault, ids[1])).toBe(true);
+        expect((yield* profiles.list("openai")).filter((p) => p.selected).map((p) => p.id)).toEqual(
+          [ids[1]],
+        );
+        yield* rejects(profiles.remove("openai", ids[1], accounts, legacy), "oauth_profile_in_use");
+        pinnedB.releaseRun();
       }),
   );
 
@@ -665,7 +612,7 @@ describe("account-bound subscription provider", () => {
     () =>
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
-        const db = yield* dbFixture();
+        const { profiles } = yield* dbFixture();
         const reading = yield* Deferred.make<void>();
         const held = yield* Deferred.make<void>();
         const credential: StoredCredential = {
@@ -693,7 +640,7 @@ describe("account-bound subscription provider", () => {
         };
         try {
           const bound = createAccountBoundSubscriptionClients({
-            sqlite: db,
+            profiles,
             provider: "openai",
             createClient: () => ({
               status: () =>
@@ -723,28 +670,11 @@ describe("account-bound subscription provider", () => {
             }),
           });
           const removal = yield* Effect.forkChild(
-            sdkCall(() =>
-              removeOAuthProfile({
-                sqlite: db,
-                provider: "openai",
-                id: ids[0],
-                accounts: accounts,
-                legacy: legacy,
-              }),
-            ).pipe(Effect.uninterruptible),
+            profiles.remove("openai", ids[0], accounts, legacy).pipe(Effect.uninterruptible),
           );
           yield* Deferred.await(reading);
           expect(() => bound.forRun()).toThrow("oauth_profile_removing");
-          yield* rejects(
-            () =>
-              selectOAuthProfile({
-                sqlite: db,
-                provider: "openai",
-                id: ids[0],
-                accounts: accounts,
-              }),
-            "oauth_profile_removing",
-          );
+          yield* rejects(profiles.select("openai", ids[0], accounts), "oauth_profile_removing");
           yield* Deferred.succeed(held, undefined);
           yield* Fiber.join(removal);
           const next = bound.forRun(); // fallback selected B can run
@@ -757,15 +687,11 @@ describe("account-bound subscription provider", () => {
 
   effectTest.live("leases are provider-scoped on the same database", () =>
     Effect.gen(function* () {
-      const db = yield* dbFixture();
-      try {
-        const release = acquireOAuthProfileRun(db, "openai", ids[0]);
-        const releaseOther = acquireOAuthProfileRun(db, "anthropic", ids[0]);
-        releaseOther();
-        release();
-      } finally {
-        db.close();
-      }
+      const { profiles } = yield* dbFixture();
+      const release = profiles.acquireRun("openai", ids[0]);
+      const releaseOther = profiles.acquireRun("anthropic", ids[0]);
+      releaseOther();
+      release();
     }),
   );
 });

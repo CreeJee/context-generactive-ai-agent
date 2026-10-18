@@ -103,7 +103,7 @@ const savedConversation = Effect.fnUntraced(function* (
   at: { readonly projectId: string; readonly sessionId: string },
   answers: readonly string[],
 ) {
-  const recorded = conversation(yield* Nodes, at, answers);
+  const recorded = yield* conversation(yield* Nodes, at, answers);
   const { stores } = (yield* ChatState).persistence;
   yield* call(() => stores.messages.saveThread(at.sessionId, recorded.messages));
   return recorded;

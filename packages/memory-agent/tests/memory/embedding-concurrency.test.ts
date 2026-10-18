@@ -1,7 +1,6 @@
 import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import * as nativeClient from "../../src/memory/native-search/client.ts";
-import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
@@ -11,6 +10,7 @@ import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 // Pause the real native save boundary without replacing its execution or publication protocol.
 const beforeSave = Ref.makeUnsafe<Effect.Effect<void>>(Effect.void);
@@ -44,20 +44,19 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
       Effect.gen(function* () {
         const env = yield* TestEnv;
         const nodes = yield* Nodes;
-        const first = nodes.append({
+        const first = yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
           text: "first removal",
         });
-        const second = nodes.append({
+        const second = yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
           text: "second removal",
         });
         yield* (yield* Indexer).indexAll();
-        const { sqlite } = yield* Database;
         const vectors = yield* VectorIndex;
         const saving = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -65,21 +64,21 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
           beforeSave,
           Deferred.succeed(saving, undefined).pipe(Effect.andThen(Deferred.await(release))),
         );
-        sqlite.prepare("DELETE FROM node_vectors WHERE node_seq=?").run(first.seq);
+        yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", first.seq);
         const flush = yield* vectors.flushRemovals.pipe(Effect.forkChild);
         yield* Deferred.await(saving);
-        sqlite.prepare("DELETE FROM node_vectors WHERE node_seq=?").run(second.seq);
+        yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", second.seq);
         yield* Ref.set(beforeSave, Effect.void);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(flush);
-        expect(
-          sqlite.prepare("SELECT count(*) AS n FROM memory_chunk_vector_removals").get()!.n,
-        ).toBe(1);
+        expect((yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n).toBe(
+          1,
+        );
         yield* vectors.flushRemovals;
         expect(vectors.size()).toBe(0);
-        expect(
-          sqlite.prepare("SELECT count(*) AS n FROM memory_chunk_vector_removals").get()!.n,
-        ).toBe(0);
+        expect((yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n).toBe(
+          0,
+        );
       }),
     );
   },
@@ -91,7 +90,7 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
     it.effect("rejects a purged parent at commit without poisoning other agents' searches", () =>
       Effect.gen(function* () {
         const env = yield* TestEnv;
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
@@ -107,7 +106,7 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
         const indexing = yield* indexer.indexAll().pipe(Effect.forkChild);
         yield* Deferred.await(saving);
         const trace = yield* WorkTraceStore;
-        const request = trace.requestSessionLifecycle({
+        const request = yield* trace.requestSessionLifecycle({
           sessionId: env.session.id,
           intent: "delete",
           idempotencyKey: "purge-during-save",
@@ -115,7 +114,9 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
         const { operationId } = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ operationId: Schema.String }),
         )(request);
-        expect(trace.finalizeSessionLifecycle(operationId)).toMatchObject({ status: "completed" });
+        expect(yield* trace.finalizeSessionLifecycle(operationId)).toMatchObject({
+          status: "completed",
+        });
         yield* Ref.set(beforeSave, Effect.void);
         yield* Deferred.succeed(release, undefined);
         expect(yield* Fiber.join(indexing)).toBe(0);

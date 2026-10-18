@@ -118,9 +118,8 @@ const make = Effect.gen(function* () {
   const nodes = yield* Nodes;
   const crypto = yield* Crypto.Crypto;
 
-  const prompt = (request: ReviewRequest) => {
-    const turns = nodes
-      .recentOfKind(request.sessionId, "user", userTurns)
+  const prompt = Effect.fnUntraced(function* (request: ReviewRequest) {
+    const turns = (yield* nodes.recentOfKind(request.sessionId, "user", userTurns))
       .map((node, index) => `${index + 1}. ${node.text.slice(0, turnCharacters)}`)
       .join("\n");
     return [
@@ -129,7 +128,7 @@ const make = Effect.gen(function* () {
       `Tool: ${request.toolName}`,
       `Arguments (JSON): ${request.argumentsJson}`,
     ].join("\n\n");
-  };
+  });
 
   const fallback: Verdict = {
     decision: "ask",
@@ -143,10 +142,11 @@ const make = Effect.gen(function* () {
       const { services } = yield* active.resolve(request.selection);
       const cheap = yield* services.models.cheapestEffort(request.selection);
       const threadId = yield* crypto.randomUUIDv4();
+      const content = yield* prompt(request);
       const answer = yield* sdkPromise((abortController) =>
         chat({
           adapter: services.runtime.adapter(cheap),
-          messages: [{ role: "user", content: prompt(request) }],
+          messages: [{ role: "user", content }],
           systemPrompts: [reviewInstructions],
           threadId,
           middleware: [
