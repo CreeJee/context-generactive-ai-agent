@@ -9,6 +9,9 @@ export type ChunkSpan = typeof ChunkSpan.Type;
 
 export const chunkPolicy = { tokens: 512, overlap: 128, version: 1 } as const;
 
+/** First `node_vector_chunks.vector_id` (the migration's CHECK); node seqs stay below it. */
+export const chunkVectorIdFloor = 2 ** 52;
+
 export class ChunkingFailed extends Schema.TaggedError<
   ChunkingFailed,
   { readonly brand: unique symbol }

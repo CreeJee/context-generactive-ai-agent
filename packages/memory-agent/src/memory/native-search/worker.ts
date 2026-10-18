@@ -125,8 +125,10 @@ const main = Effect.gen(function* () {
         yield* native(() => index.add(command.vectors, [...command.ids]));
         return yield* native(ack);
       case "remove": {
-        yield* ids([command.id]);
-        const removed = yield* native(() => index.remove(command.id));
+        yield* ids(command.ids);
+        const removed = yield* native(() =>
+          command.ids.reduce((count, id) => (index.remove(id) ? count + 1 : count), 0),
+        );
         return yield* native((): OwnerReply => ({
           kind: "removed",
           requestId: command.requestId,
