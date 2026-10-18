@@ -417,7 +417,8 @@ const make = (home: string) =>
 
       /**
        * Reads what is new in every transcript. A file that cannot be read, or a line that cannot be
-       * written, fails that transcript alone: it is recorded and tried again on the next pass.
+       * written, fails that transcript alone: it is recorded and tried again on the next pass. A
+       * defect stops the pass.
        */
       run: <E, R>(onProgress: (progress: PassProgress) => Effect.Effect<void, E, R>) =>
         Effect.gen(function* () {
@@ -441,10 +442,12 @@ const make = (home: string) =>
           for (const transcript of found) {
             const outcome = yield* migrate(transcript, interpret, placement).pipe(
               Effect.map((written) => ({ written, failed: 0 })),
-              Effect.catchCauseIf(
-                (cause) => !Cause.hasInterruptsOnly(cause),
-                (cause) =>
-                  Effect.as(stored(recordFailure(transcript, cause)), { written: 0, failed: 1 }),
+              // A defect is not the transcript's: it stops the pass, and the watcher reports it.
+              Effect.catch((error) =>
+                Effect.as(stored(recordFailure(transcript, Cause.fail(error))), {
+                  written: 0,
+                  failed: 1,
+                }),
               ),
             );
             progress = {

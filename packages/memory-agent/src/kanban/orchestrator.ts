@@ -45,7 +45,8 @@ import {
 } from "./human-decision.ts";
 import { GoalSchedules } from "./goal-schedules.ts";
 import { failureCode, worktreeFailure, type CardFailure } from "./failures.ts";
-import { stopLogged } from "../runtime/logged-failures.ts";
+import { loopStopped } from "../runtime/loop-health.ts";
+import { BoardHealth, type BoardRef } from "./board-health.ts";
 import { GoalMerges } from "./merge-queue.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 
@@ -146,6 +147,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const scheduler = yield* ProjectScheduler;
     const merges = yield* GoalMerges;
     const schedules = yield* GoalSchedules;
+    const health = yield* BoardHealth;
     const pollInterval = Duration.fromInputUnsafe(options.pollInterval ?? Duration.seconds(5));
     const backoff = Duration.fromInputUnsafe(options.backoff ?? Duration.minutes(2));
     const loops = yield* FiberMap.make<string>();
@@ -526,8 +528,9 @@ const make = (options: KanbanOrchestratorOptions) =>
         integrations,
         `${goal.goalInstanceId}:${cardId}`,
         verifyAndIntegrate(goal, cardId, report).pipe(
-          // The card stays in verify and the next look starts its integration again.
-          stopLogged("Kanban card integration stopped", { cardId }),
+          // The card stays in verify. A failure that outlasts the retries stops the board, and the
+          // look after a restart starts the integration again.
+          health.supervise(goal, "Kanban card integration stopped", { cardId }),
           Effect.ensuring(PubSub.publish(pokes, goal.goalInstanceId)),
         ),
         { onlyIfMissing: true },
@@ -904,24 +907,24 @@ const make = (options: KanbanOrchestratorOptions) =>
 
     /**
      * The board's loop: a look after every recorded outcome, poke or poll interval. A look that
-     * fails is logged and the next one tries again; the board and records are unchanged by it.
+     * fails is retried with backoff (`loopRetrySchedule`); the board and records are unchanged by
+     * it. When the retries run out or a defect happens, here or in an integration or merge step
+     * beside the loop, the loop stops and the board shows why until a person restarts it.
      */
-    const loop = (goalInstanceId: string) =>
+    const loop = (board: BoardRef) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const { goalInstanceId } = board;
           const wakeups = yield* PubSub.subscribe(pokes);
           yield* attempts.recordedOutcomes(goalInstanceId).pipe(
             Stream.runForEach(() => PubSub.publish(pokes, goalInstanceId)),
             Effect.forkScoped,
           );
-          while (true) {
-            const status = yield* looking
+          while (!loopStopped(yield* health.get(goalInstanceId))) {
+            const step = yield* looking
               .withPermits(1)(tick(goalInstanceId))
-              .pipe(
-                stopLogged("Kanban board look failed", { goalInstanceId }),
-                Effect.map((result) => result ?? ("running" as const)),
-              );
-            if (status === "stopped") return;
+              .pipe(health.supervise(board, "Kanban board look failed", {}));
+            if (step._tag === "Stopped" || step.value === "stopped") return;
             yield* PubSub.take(wakeups).pipe(
               Effect.repeat({ until: (woken) => woken === goalInstanceId }),
               Effect.timeoutOption(pollInterval),
@@ -930,8 +933,8 @@ const make = (options: KanbanOrchestratorOptions) =>
         }),
       );
 
-    const run = (goalInstanceId: string) =>
-      FiberMap.run(loops, goalInstanceId, loop(goalInstanceId), { onlyIfMissing: true });
+    const run = (board: BoardRef) =>
+      FiberMap.run(loops, board.goalInstanceId, loop(board), { onlyIfMissing: true });
 
     /**
      * Offers attempts whose workflow never started, with the notes the card holds; a started one
@@ -960,7 +963,7 @@ const make = (options: KanbanOrchestratorOptions) =>
 
     yield* Effect.forEach(
       yield* attempts.activeGoals,
-      (goal) => Effect.andThen(recover(goal), run(goal.goalInstanceId)),
+      (goal) => Effect.andThen(recover(goal), run(goal)),
       { discard: true },
     );
 
@@ -1010,9 +1013,12 @@ const make = (options: KanbanOrchestratorOptions) =>
           mode,
           goalVersion: state.goal.version,
         });
-        yield* run(goalInstanceId);
+        yield* run({ sessionId, goalInstanceId });
         return { goalInstanceId, mode };
       }),
+
+      /** Runs a board's loop again after it stopped on exhausted retries or a defect. */
+      restart: (board: BoardRef) => Effect.andThen(health.restart(board), run(board)),
 
       /** Wakes a board's loop now, after a change the loop should see. */
       poke: (goalInstanceId: string) => PubSub.publish(pokes, goalInstanceId),

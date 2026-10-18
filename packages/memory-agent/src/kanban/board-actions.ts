@@ -23,6 +23,8 @@ import { CardWorktrees } from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { GoalSchedules, type GoalMergeState, type GoalPriority } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
+import { BoardHealth } from "./board-health.ts";
+import type { LoopHealth } from "../runtime/loop-health.ts";
 
 /**
  * What the orchestrator model does on a kanban board (docs/kanban-orchestration.md "수정 권한",
@@ -115,6 +117,8 @@ export interface KanbanBoardView {
   readonly goalChange: AssignmentHold | null;
   readonly cards: readonly KanbanCardView[];
   readonly schedule: KanbanScheduleView | null;
+  /** How the board's loop stands; a stopped one waits for `restartLoop`. */
+  readonly loop: LoopHealth;
 }
 
 /** A card attempt is running or waiting in the queue while the card is in these columns. */
@@ -135,6 +139,7 @@ const make = Effect.gen(function* () {
   const schedules = yield* GoalSchedules;
   const scheduler = yield* ProjectScheduler;
   const sessions = yield* Sessions;
+  const health = yield* BoardHealth;
 
   const refuse = (reason: KanbanActionRefused["reason"]) => KanbanActionRefused.make({ reason });
 
@@ -626,6 +631,7 @@ const make = Effect.gen(function* () {
         goalChange: hold,
         cards,
         schedule: yield* scheduleView(goal.value),
+        loop: yield* health.get(goalInstanceId),
       });
     }),
 
@@ -648,6 +654,12 @@ const make = Effect.gen(function* () {
     ) {
       const goal = yield* board(sessionId);
       return yield* scheduler.setDependencies(goal.goalInstanceId, dependsOn);
+    }),
+
+    /** Runs the board's loop again after it stopped on exhausted retries or a defect. */
+    restartLoop: Effect.fn("KanbanBoardActions.restartLoop")(function* (sessionId: string) {
+      const goal = yield* board(sessionId);
+      yield* orchestrator.restart({ sessionId, goalInstanceId: goal.goalInstanceId });
     }),
 
     /** Puts a dead-lettered card back on the queue. */

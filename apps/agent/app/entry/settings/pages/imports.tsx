@@ -29,6 +29,7 @@ import { type ImportActivity, refusalOf } from "../../api";
 import { useImportsQuery } from "../../queries/global";
 import { useImportMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError, shortPath } from "../shared";
+import { LoopHealthStatus } from "../../shared/loop-health";
 
 const sourceNames = { "claude-code": "Claude Code", codex: "Codex CLI" } as const;
 
@@ -153,7 +154,9 @@ export function ImportSettings() {
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const apply = (
-    command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
+    command:
+      | { action: "run" | "restart_watch" | "enable" | "disable" }
+      | { action: "interpret"; interpret: boolean },
   ) =>
     runUiEffect(
       Effect.gen(function* () {
@@ -201,6 +204,14 @@ export function ImportSettings() {
           onCheckedChange={(checked) => void apply({ action: checked ? "enable" : "disable" })}
         />
       </Field>
+      {overview.enabled && overview.watch !== null && (
+        <LoopHealthStatus
+          label="감시"
+          health={overview.watch}
+          disabled={busy}
+          onRestart={() => void apply({ action: "restart_watch" })}
+        />
+      )}
 
       <Field orientation="horizontal">
         <FieldContent>

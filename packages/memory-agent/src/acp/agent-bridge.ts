@@ -41,6 +41,8 @@ import {
   runFailureText,
   type ShownFailure,
 } from "../runtime/shown-failure.ts";
+import { Schedule } from "effect";
+import { superviseLoopStep } from "../runtime/loop-health.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
 const leaseRenewMs = 20_000;
@@ -319,13 +321,18 @@ export function startAcpAgent(options: {
         message: "session_in_use (423)",
         reason: { _tag: "RequestRejected" },
       });
-    const renew = yield* Effect.forever(
-      Effect.sleep(leaseRenewMs).pipe(
-        Effect.andThen(nativePromise(() => api.lease(sessionId, holder, "claim"))),
-        // A missed renewal is retried on the next tick; the lease outlives several of them.
-        Effect.catchTag("UnknownError", () => Effect.void),
-      ),
-    ).pipe(Effect.forkDetach);
+    // A failed renewal is retried with backoff. When the retries run out, or on a defect, renewal
+    // stops: the app drops the lease and shows the session read-only (decided 2026-10-18).
+    const renew = yield* nativePromise(() => api.lease(sessionId, holder, "claim")).pipe(
+      superviseLoopStep({ message: "acp_lease_renewal_stopped", setHealth: () => Effect.void }),
+      Effect.repeat({
+        schedule: Schedule.spaced(leaseRenewMs),
+        while: (step) => step._tag === "Continued",
+      }),
+      Effect.delay(leaseRenewMs),
+      Effect.asVoid,
+      Effect.forkDetach,
+    );
     const session: BridgeSession = {
       id: sessionId,
       holder,
@@ -401,38 +408,39 @@ export function startAcpAgent(options: {
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = MutableHashSet.empty<string>();
     const timer = Effect.runFork(
-      Effect.forever(
-        Effect.sleep(relayPollMs).pipe(
-          Effect.andThen(
-            Effect.gen(function* () {
-              const approvals = yield* nativePromise(() => api.approvals(session.id));
-              yield* Effect.forEach(
-                approvals,
-                (approval) => {
-                  if (MutableHashSet.has(asked, approval.id)) return Effect.void;
-                  MutableHashSet.add(asked, approval.id);
-                  return askEditor(turn, session.id, {
-                    toolCallId: approval.id,
-                    toolName: approval.toolName,
-                    argumentsJson: approval.argumentsJson,
-                    requester: requesterLabel(approval.requester),
-                  }).pipe(
-                    Effect.flatMap((approved) =>
-                      nativePromise(() =>
-                        api.answerApproval(session.id, session.holder, approval.id, approved),
-                      ),
-                    ),
-                    // An unanswered approval stays pending in the app, where the page can answer it.
-                    Effect.catchTag("UnknownError", () => Effect.void),
-                  );
-                },
-                { concurrency: "unbounded", discard: true },
-              );
-            }),
-          ),
-          // A failed poll is retried on the next tick while the turn runs.
-          Effect.catchTag("UnknownError", () => Effect.void),
-        ),
+      Effect.gen(function* () {
+        const approvals = yield* nativePromise(() => api.approvals(session.id));
+        yield* Effect.forEach(
+          approvals,
+          (approval) => {
+            if (MutableHashSet.has(asked, approval.id)) return Effect.void;
+            MutableHashSet.add(asked, approval.id);
+            return askEditor(turn, session.id, {
+              toolCallId: approval.id,
+              toolName: approval.toolName,
+              argumentsJson: approval.argumentsJson,
+              requester: requesterLabel(approval.requester),
+            }).pipe(
+              Effect.flatMap((approved) =>
+                nativePromise(() =>
+                  api.answerApproval(session.id, session.holder, approval.id, approved),
+                ),
+              ),
+              // An unanswered approval stays pending in the app, where the page can answer it.
+              Effect.catchTag("UnknownError", () => Effect.void),
+            );
+          },
+          { concurrency: "unbounded", discard: true },
+        );
+      }).pipe(
+        // A failed poll is retried with backoff. When the retries run out, or on a defect, relaying
+        // stops for this turn; the waiting approvals stay answerable in the app (decided 2026-10-18).
+        superviseLoopStep({ message: "acp_approval_relay_stopped", setHealth: () => Effect.void }),
+        Effect.repeat({
+          schedule: Schedule.spaced(relayPollMs),
+          while: (step) => step._tag === "Continued",
+        }),
+        Effect.delay(relayPollMs),
       ),
     );
     return () => {

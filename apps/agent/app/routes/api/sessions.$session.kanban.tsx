@@ -16,6 +16,7 @@ import type { Route } from "./+types/sessions.$session.kanban";
 
 const KanbanAction = Schema.Union([
   Schema.TaggedStruct("Start", {}),
+  Schema.TaggedStruct("RestartLoop", {}),
   Schema.TaggedStruct("SetPriority", { priority: GoalPriority }),
   Schema.TaggedStruct("SetDependencies", { dependsOn: Schema.Array(Schema.String) }),
   BoardIntent,
@@ -39,7 +40,8 @@ export function loader({ params }: Route.LoaderArgs) {
 }
 
 /**
- * POST /api/sessions/:session/kanban { _tag: "Start" } runs the executing Plan as a kanban board.
+ * POST /api/sessions/:session/kanban { _tag: "Start" } runs the executing Plan as a kanban board;
+ * { _tag: "RestartLoop" } runs a board's loop again after it stopped.
  * A `BoardIntent` (Reorder, Requeue, Hold, Release, ChangeRequest, Cancel) is what a person meant
  * by dragging a card; the owner decides the card's status and refuses (409) an intent the card's
  * state does not fit. A change request to an executing card is stored (202).
@@ -63,6 +65,10 @@ export function action({ request, params }: Route.ActionArgs) {
           const started = yield* (yield* KanbanOrchestrator).start(params.session);
           yield* events.publishSession(params.session, "run-state");
           return Response.json(started);
+        }
+        case "RestartLoop": {
+          yield* (yield* KanbanBoardActions).restartLoop(params.session);
+          return Response.json({ restarted: true });
         }
         case "Reorder":
         case "Requeue":

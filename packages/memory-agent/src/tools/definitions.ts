@@ -45,6 +45,7 @@ export {
   type ShownFailure,
 } from "../runtime/shown-failure.ts";
 export type { SubagentStatus, SubagentView } from "../subagents/subagent-state.ts";
+export { loopRetrySchedule, type LoopHealth } from "../runtime/loop-health.ts";
 export type { ProviderRetryView } from "../workflow/provider-retry.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "../approvals/relayed-state.ts";
 export {

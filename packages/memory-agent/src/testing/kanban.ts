@@ -20,6 +20,7 @@ import {
   type GoalVerification,
 } from "../kanban/card-agent.ts";
 import { GoalSchedules } from "../kanban/goal-schedules.ts";
+import { BoardHealth } from "../kanban/board-health.ts";
 import { GoalMerges } from "../kanban/merge-queue.ts";
 import { ProjectScheduler } from "../kanban/scheduler.ts";
 import { CardAttempts } from "../kanban/card-attempts.ts";
@@ -140,6 +141,7 @@ export const kanbanBoardOwner = (owner: {
       KanbanOrchestrator.layer({ pollInterval: "50 millis", backoff: "50 millis" }),
     ),
     Layer.provideMerge(GoalMerges.layer),
+    Layer.provideMerge(BoardHealth.layer),
     Layer.provideMerge(ProjectScheduler.layer),
     Layer.provideMerge(owner.verifier),
     Layer.provideMerge(owner.goalVerifier ?? passingGoalVerifier),

@@ -3,6 +3,7 @@ import { Effect, Fiber, Schedule } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
+import { loopRetrySchedule } from "memory-agent/definitions";
 import { api, type LeaseView, type SessionRunState } from "../api";
 import { useProjectScope } from "../events/context";
 import { useObservedRunStateQuery } from "../queries/session";
@@ -155,11 +156,15 @@ export function useSessionLease(sessionId: string) {
       leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
     const task = Effect.runFork(
       uiPromise(tick).pipe(
-        // A missed renewal is retried on the next tick; the lease view shows who holds it.
-        Effect.catchTag("UnknownError", () => Effect.void),
-        Effect.forkChild,
+        // A missed renewal is retried with backoff (decided 2026-10-18).
+        Effect.retry(loopRetrySchedule),
         Effect.repeat(Schedule.spaced(renewMs)),
         Effect.delay(renewMs),
+        // The retries ran out: the page stops renewing and treats the session as free, so the
+        // observed run state asks the server who holds it and claims it again when it can.
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() => current && setLease({ state: "free" })),
+        ),
       ),
     );
     return () => {

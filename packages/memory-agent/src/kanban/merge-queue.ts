@@ -11,7 +11,7 @@ import { GoalSchedules, mergeSettled, type GoalMergeState } from "./goal-schedul
 import { goalDecisionCardId, HumanDecisions, type DecisionKind } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 import { CardWorktrees, goalBranchName, type GoalRef } from "./worktree.ts";
-import { stopLogged } from "../runtime/logged-failures.ts";
+import { BoardHealth } from "./board-health.ts";
 
 /**
  * The merge queue of the project scheduler (docs/kanban-orchestration.md "브랜치 흐름" 5,
@@ -44,6 +44,7 @@ const make = Effect.gen(function* () {
   const workflows = yield* Workflows;
   const attempts = yield* CardAttempts;
   const scheduler = yield* ProjectScheduler;
+  const health = yield* BoardHealth;
   const events = yield* AppEvents;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fs = yield* FileSystem.FileSystem;
@@ -381,11 +382,9 @@ const make = Effect.gen(function* () {
         `target:${goal.projectRoot}:${target ?? ""}`,
         serially(`goal:${goal.goalInstanceId}`, work),
       ).pipe(
-        // The stored merge state stays; the next look at the board runs the step again.
-        stopLogged("Kanban merge queue step stopped", {
-          goalInstanceId: goal.goalInstanceId,
-          name,
-        }),
+        // The stored merge state stays. A failure is retried; one that outlasts the retries stops
+        // the board, and the look after a restart runs the step again.
+        health.supervise(goal, "Kanban merge queue step stopped", { name }),
         Effect.ensuring(scheduler.poke(goal.goalInstanceId)),
       ),
       { onlyIfMissing: true },

@@ -42,16 +42,13 @@ export const ignoreLogged =
     );
 
 /**
- * Ends a background step whose expected failure a later look takes up again. A defect is logged
- * the same way and stays in the step's exit.
+ * Logs a defect by the `Defect` tag only. Every defect an owner records instead of letting it end
+ * the process goes through here.
  */
-export const stopLogged =
-  (message: string, annotations: Annotations) =>
-  <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.catch((error) => Effect.as(logFailure(message, annotations)(error), undefined)),
-      Effect.tapDefect(() => Effect.logError(message, { ...annotations, error: "Defect" })),
-    );
+export const logDefect =
+  (message: string, annotations: Annotations = {}) =>
+  (_cause: Cause.Cause<unknown>) =>
+    Effect.logError(message, { ...annotations, error: "Defect" });
 
 const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
 const decodeReasonTag = Schema.decodeUnknownOption(

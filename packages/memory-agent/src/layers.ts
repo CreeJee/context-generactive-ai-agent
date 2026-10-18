@@ -37,6 +37,7 @@ import {
 import { KanbanOrchestrator } from "./kanban/orchestrator.ts";
 import { subagentCardAgentsLayer } from "./kanban/subagent-card-agent.ts";
 import { GoalSchedules } from "./kanban/goal-schedules.ts";
+import { BoardHealth } from "./kanban/board-health.ts";
 import { GoalMerges } from "./kanban/merge-queue.ts";
 import { ProjectScheduler } from "./kanban/scheduler.ts";
 import { KanbanTools } from "./kanban/tools.ts";
@@ -364,6 +365,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Layer.provideMerge(KanbanBoardActions.layer),
     Layer.provideMerge(KanbanOrchestrator.layer()),
     Layer.provideMerge(GoalMerges.layer),
+    Layer.provideMerge(BoardHealth.layer),
     Layer.provideMerge(ProjectScheduler.layer),
     Layer.provideMerge(Layer.mergeAll(cardQueueWorkerLayer, cardAttemptExecutionLayer)),
     Layer.provideMerge(subagentCardAgentsLayer),

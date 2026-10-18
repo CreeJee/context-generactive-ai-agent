@@ -68,6 +68,7 @@ function useAnswerDecisionMutationBody(projectId: string, holder: string) {
 /** A kanban board action: start, a person's intent for a card, or the Goal's schedule. */
 export type KanbanAction =
   | { readonly _tag: "Start" }
+  | { readonly _tag: "RestartLoop" }
   | { readonly _tag: "Intent"; readonly intent: BoardIntent }
   | { readonly _tag: "SetPriority"; readonly priority: GoalPriority }
   | { readonly _tag: "SetDependencies"; readonly dependsOn: readonly string[] };
@@ -86,6 +87,8 @@ function useKanbanMutationBody(projectId: string, sessionId: string, holder: str
       switch (action._tag) {
         case "Start":
           return api.startKanban(sessionId, holder);
+        case "RestartLoop":
+          return api.restartKanbanLoop(sessionId, holder);
         case "Intent":
           return api.boardIntent(sessionId, holder, action.intent);
         case "SetPriority":

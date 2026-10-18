@@ -639,6 +639,14 @@ export const api = {
     call<BoardEditResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/kanban`, intent, {
       [sessionHolderHeader]: holder,
     }),
+  /** Runs the board's loop again after it stopped on exhausted retries or a defect. */
+  restartKanbanLoop: (sessionId: string, holder: string) =>
+    call<{ readonly restarted: true }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
+      { _tag: "RestartLoop" },
+      { [sessionHolderHeader]: holder },
+    ),
   /** How the Goal shares card slots with the project's other Goals. */
   setGoalPriority: (sessionId: string, holder: string, priority: GoalPriority) =>
     call<{ readonly priority: GoalPriority }>(
@@ -796,7 +804,9 @@ export const api = {
 
   imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
   importAction: (
-    command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
+    command:
+      | { action: "run" | "restart_watch" | "enable" | "disable" }
+      | { action: "interpret"; interpret: boolean },
   ) => call<ImportOverview>("POST", "/api/settings/imports", command),
 
   embedding: () => call<EmbeddingOverview>("GET", "/api/settings/embedding"),

@@ -56,6 +56,7 @@ import {
   type KanbanAction,
 } from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
+import { LoopHealthStatus } from "../shared/loop-health";
 import { boardColumns, cardStatusLabels, withPending, type PendingMove } from "./board/board-moves";
 import { authorLabel, StatusIcon, type CardSignals } from "./board/card-face";
 import { CardPeek, type Peek } from "./board/card-peek";
@@ -171,13 +172,28 @@ export function WorkflowBoard({
       { onError: (error) => setStartError(editErrorText(error)) },
     );
   };
+  const restart = () => {
+    setStartError(null);
+    kanbanAction.mutate(
+      { _tag: "RestartLoop" },
+      { onError: (error) => setStartError(editErrorText(error)) },
+    );
+  };
 
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Plan v{plan.version}</span>
         {loop !== null ? (
-          <Badge variant="secondary">칸반 실행 중</Badge>
+          <>
+            <Badge variant="secondary">칸반 실행 중</Badge>
+            <LoopHealthStatus
+              label="보드 루프"
+              health={loop.loop}
+              disabled={disabled || kanbanAction.isPending}
+              onRestart={restart}
+            />
+          </>
         ) : (
           plan.status === "executing" && (
             <Button
@@ -393,6 +409,16 @@ function BoardSheet({
             <span className="flex flex-wrap items-center gap-2">
               <span>Plan v{plan.version}</span>
               {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
+              {loop !== null && (
+                <LoopHealthStatus
+                  label="보드 루프"
+                  health={loop.loop}
+                  disabled={disabled || kanbanAction.isPending}
+                  onRestart={() =>
+                    kanbanAction.mutate({ _tag: "RestartLoop" }, { onError: refused })
+                  }
+                />
+              )}
               <span>
                 완료 {view.cards.filter(({ card }) => card.status === "done").length}/
                 {view.cards.length}
