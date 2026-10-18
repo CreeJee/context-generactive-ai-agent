@@ -117,6 +117,8 @@ const make = Effect.gen(function* () {
       yield* cancellation.release;
       return json(409, { error: "run_in_progress" });
     }
+    // Tool calls run on this request's context, so their spans join `BtwChat.handle`'s trace.
+    const caller = yield* Effect.context<never>();
     const stream = createChatExecution<typeof adapter>().execute(
       {
         messages,
@@ -128,7 +130,7 @@ const make = Effect.gen(function* () {
       {
         model: { adapter, agentLoopStrategy: runtime.agentLoop },
         tools: toolCalling
-          ? redactor.withHiddenResults(btwEvidenceTools(memory, thread.projectId))
+          ? redactor.withHiddenResults(btwEvidenceTools({ ...memory, caller }, thread.projectId))
           : [],
         middleware: [
           withPersistence(threads.persistence),
