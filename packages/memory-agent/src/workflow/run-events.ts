@@ -25,6 +25,8 @@ const Row = Schema.Struct({
 });
 type Row = typeof Row.Type;
 const JsonText = Schema.fromJsonString(Schema.Json);
+// Chunks carry optional fields as `undefined`; they are dropped, not refused, as JSON.
+const PayloadText = Schema.fromJsonString(Schema.Unknown);
 
 /** Central-owner receipts for bound runs; not an authorization or an SSE adapter. */
 export const workflowRunEvents = Effect.gen(function* () {
@@ -70,7 +72,7 @@ export const workflowRunEvents = Effect.gen(function* () {
       payload: StreamChunk | Schema.Json,
     ) =>
       Effect.gen(function* () {
-        const json = yield* Schema.encodeUnknownEffect(JsonText)(payload);
+        const json = yield* Schema.encodeUnknownEffect(PayloadText)(payload);
         return yield* sql.withTransaction(
           Effect.gen(function* () {
             if (!(yield* permitted(sessionId, runId)))
