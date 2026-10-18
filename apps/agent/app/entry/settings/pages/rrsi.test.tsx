@@ -1,7 +1,6 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect } from "effect";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ok } from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, afterEach, expect, test, vi } from "vite-plus/test";
 import { AppliedSettings, ExperimentSummary } from "./rrsi-summary";
@@ -37,8 +36,9 @@ it.live(
         const loading = render();
         expect(loading).toContain("동작 개선 실험");
         expect(loading).toContain("개선 실험 설정을 불러오는 중이에요.");
-        const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
-        ok(query);
+        const query = yield* Effect.fromNullishOr(
+          client.getQueryCache().find({ queryKey: ["settings", "rrsi"] }),
+        );
         yield* sdkCall(() => expect(query.fetch()).rejects.toThrow("앱 서버를 재시작"));
         const failure = render();
         expect(failure).toContain("동작 개선 실험");
@@ -94,8 +94,9 @@ it.live("a failed query can recover and display experiment controls", () =>
     try {
       vi.stubGlobal("fetch", () => Promise.reject(new TypeError("connection unavailable")));
       render();
-      const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
-      ok(query);
+      const query = yield* Effect.fromNullishOr(
+        client.getQueryCache().find({ queryKey: ["settings", "rrsi"] }),
+      );
       yield* sdkCall(() => expect(query.fetch()).rejects.toThrow("connection unavailable"));
       expect(render()).toContain("connection unavailable");
       vi.stubGlobal("fetch", () =>

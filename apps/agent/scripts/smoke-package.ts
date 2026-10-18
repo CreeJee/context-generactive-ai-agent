@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import {
   Cause,
   Clock,
@@ -16,7 +17,6 @@ import {
 } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { createServer, type AddressInfo } from "node:net";
 // This smoke fixture seeds and inspects only its temporary database with the same synchronous driver as the executable.
 import { DatabaseSync } from "node:sqlite";
 import { isTruthy } from "../app/truthy.ts";
@@ -62,24 +62,17 @@ const program = Effect.gen(function* () {
     if (!ok) failures.push(name);
   });
 
-  // Reserve and release a loopback port using the low-level Node TCP callback boundary.
+  // Reserve and release a loopback port.
   const freePort = Effect.fn("smoke.freePort")(function* () {
-    return yield* Effect.acquireUseRelease(
-      Effect.sync(() => createServer()),
-      Effect.fnUntraced(function* (listener) {
-        yield* Effect.callback<void, Cause.UnknownError>((resume) => {
-          listener.once("error", (cause) => resume(Effect.fail(new Cause.UnknownError(cause))));
-          listener.listen(0, "127.0.0.1", () => resume(Effect.void));
-        });
-        // SAFETY: listen(0, "127.0.0.1") completed; a TCP listener reports AddressInfo.
-        return (listener.address() as AddressInfo).port;
-      }),
-      (listener) =>
-        Effect.callback<void>((resume) => {
-          listener.close(() => resume(Effect.void));
-        }),
-    );
-  });
+    const { address } = yield* NodeSocketServer.make({ port: 0, host: "127.0.0.1" });
+    switch (address._tag) {
+      case "InetAddressV4":
+      case "InetAddressV6":
+        return address.port;
+      case "UnixPathAddress":
+        return yield* new Cause.UnknownError(new Error("loopback listener has no TCP port"));
+    }
+  }, Effect.scoped);
   const until = Effect.fn("smoke.until")(function* <T, E, R>(
     what: string,
     probe: Effect.Effect<T | null, E, R>,

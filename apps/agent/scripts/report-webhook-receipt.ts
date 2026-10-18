@@ -1,8 +1,9 @@
-import { NodeRuntime } from "@effect/platform-node";
-import { ConfigProvider, Console, Effect, Layer } from "effect";
+import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import { ConfigProvider, Console, Effect, Layer, Schema, Stdio } from "effect";
+import { Flag } from "effect/cli";
 import { ReportDelivery } from "memory-agent";
-import { parseArgs } from "node:util";
 import { loadEnv } from "vite-plus";
+import { parseCommandLine } from "../server/command-line.ts";
 
 // One real delivery through the app's report path, to confirm the developer channel receives it.
 // The webhook comes from `DISCORD_WEBHOOK_URL` in the env files of `--env-dir`, loaded the way the
@@ -10,12 +11,28 @@ import { loadEnv } from "vite-plus";
 //
 //   node scripts/report-webhook-receipt.ts --env-dir <folder with the app's env file>
 
-const { values } = parseArgs({ options: { "env-dir": { type: "string" } } });
-const envDir = values["env-dir"];
-if (envDir === undefined || envDir === "") {
-  Effect.runSync(Console.error("사용법: report-webhook-receipt.ts --env-dir <폴더>"));
-  process.exit(2);
-}
+/** `ReportDelivery` configured from the env files of `--env-dir`. */
+const deliveryLayer = Layer.unwrap(
+  Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args).pipe(
+    Effect.flatMap((args) =>
+      parseCommandLine(
+        "report-webhook-receipt.ts",
+        { envDir: Flag.String("env-dir").pipe(Flag.withSchema(Schema.NonEmptyString)) },
+        "사용법: report-webhook-receipt.ts --env-dir <폴더>",
+        args,
+      ),
+    ),
+    // The parse failure already printed the usage and its details.
+    Effect.catch(() => Effect.sync(() => process.exit(2))),
+    Effect.map(({ envDir }) =>
+      ReportDelivery.layer().pipe(
+        Layer.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown(loadEnv("development", envDir, ""))),
+        ),
+      ),
+    ),
+  ),
+).pipe(Layer.provide(NodeServices.layer));
 
 /** Synthetic text only: no user, session or evidence data. */
 const text = [
@@ -43,13 +60,7 @@ const program = Effect.gen(function* () {
   ),
   // Script entry point: the whole program gets its layer here.
   // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.provide(
-    ReportDelivery.layer().pipe(
-      Layer.provide(
-        ConfigProvider.layer(ConfigProvider.fromUnknown(loadEnv("development", envDir, ""))),
-      ),
-    ),
-  ),
+  Effect.provide(deliveryLayer),
 );
 
 NodeRuntime.runMain(program);

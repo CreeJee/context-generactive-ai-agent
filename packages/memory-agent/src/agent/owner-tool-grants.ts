@@ -1,6 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Equal, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { isDeepStrictEqual } from "node:util";
 import { MutableHashMap, Option, Schema } from "effect";
 import type { StreamChunk } from "@tanstack/ai";
 type OwnerToolObservation =
@@ -15,6 +14,8 @@ const Invocation = Schema.Struct({
   args: Schema.Unknown,
 });
 type Invocation = typeof Invocation.Type;
+/** Adapter-observed argument text; unparseable text matches no invocation. */
+const decodeObservedArgs = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
 type Call = {
   name: string;
   raw: string;
@@ -78,7 +79,7 @@ export function makeOwnerToolGrants() {
         !isTruthy(call?.complete) ||
         call.used ||
         call.name !== invocation.name ||
-        !isDeepStrictEqual(JSON.parse(call.raw || "{}"), invocation.args)
+        !Option.contains(decodeObservedArgs(call.raw || "{}"), invocation.args)
       )
         throw new Error("Unobserved owner tool invocation");
       return structuredClone(invocation);
@@ -95,7 +96,7 @@ export function makeOwnerToolGrants() {
         isTruthy(call.grant) ||
         call.used ||
         call.name !== invocation.name ||
-        !isDeepStrictEqual(JSON.parse(call.raw || "{}"), invocation.args)
+        !Option.contains(decodeObservedArgs(call.raw || "{}"), invocation.args)
       )
         throw new Error("Invalid or duplicate owner tool grant observation");
       // Keep the immutable adapter observation in call.raw/name. Only an owner
@@ -112,7 +113,7 @@ export function makeOwnerToolGrants() {
           Result.getOrThrow,
         )(input);
         const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
-        return !!isTruthy(call?.grant) && !call.used && isDeepStrictEqual(call.grant, invocation);
+        return !!isTruthy(call?.grant) && !call.used && Equal.equals(call.grant, invocation);
       } catch {
         return false;
       }
@@ -126,7 +127,7 @@ export function makeOwnerToolGrants() {
         Result.getOrThrow,
       )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
-      if (!isTruthy(call?.grant) || call.started || !isDeepStrictEqual(call.grant, invocation))
+      if (!isTruthy(call?.grant) || call.started || !Equal.equals(call.grant, invocation))
         throw new Error("Invalid or repeated owner tool implementation grant");
       call.started = true;
       return structuredClone(call.grant);
@@ -140,7 +141,7 @@ export function makeOwnerToolGrants() {
         Result.getOrThrow,
       )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
-      if (!isTruthy(call?.grant) || call.used || !isDeepStrictEqual(call.grant, invocation))
+      if (!isTruthy(call?.grant) || call.used || !Equal.equals(call.grant, invocation))
         throw new Error("Invalid owner tool grant");
       call.used = true;
       return structuredClone(call.grant);

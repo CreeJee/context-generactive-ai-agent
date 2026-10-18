@@ -1,5 +1,4 @@
-import { performance } from "node:perf_hooks";
-import { Effect, Schema } from "effect";
+import { Duration, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { SqlClient } from "effect/sql";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
@@ -54,15 +53,14 @@ testAgent()("Work Trace release limits", (it) => {
         // Warm SQLite's page cache before measuring the user-facing projections.
         yield* trace.projectTaskTree(project.id);
         yield* trace.snapshot(session.id, 0);
-        const started = performance.now();
-        const tasks = yield* trace.projectTaskTree(project.id);
-        const snapshot = yield* trace.snapshot(session.id, 0);
-        const elapsedMs = performance.now() - started;
+        const [elapsed, [tasks, snapshot]] = yield* Effect.timed(
+          Effect.all([trace.projectTaskTree(project.id), trace.snapshot(session.id, 0)]),
+        );
         expect(tasks).toHaveLength(1_000);
         // Replay is deliberately page-bounded even when the durable cursor contains more events.
         expect(snapshot.events).toHaveLength(500);
         expect(snapshot.cursor).toBe(500);
-        expect(elapsedMs).toBeLessThan(1_000);
+        expect(Duration.toMillis(elapsed)).toBeLessThan(1_000);
       }),
     10_000,
   );

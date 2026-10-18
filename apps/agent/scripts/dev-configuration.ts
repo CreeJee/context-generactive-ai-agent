@@ -1,8 +1,8 @@
 import { NodePath } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
-import { Effect, Schema } from "effect";
-// Node CLI/environment boundary; no application runtime or storage is opened here.
-import { parseArgs } from "node:util";
+import { Effect, Option, Schema } from "effect";
+import { Argument, Flag } from "effect/cli";
+import { parseCommandLine } from "../server/command-line.ts";
 
 const { resolve, join } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
@@ -16,35 +16,18 @@ export class DevConfigurationError extends Schema.TaggedError<DevConfigurationEr
 }
 
 const Port = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(65535));
-const Mode = Schema.Literals(["all", "agent", "web"]);
 
 export const readDevConfiguration = Effect.fn("dev.readConfiguration")(function* (
   args: readonly string[],
   environment: NodeJS.ProcessEnv,
   app: string,
 ) {
-  const parsed = yield* Effect.try({
-    try: () =>
-      parseArgs({
-        args: [...args],
-        allowPositionals: true,
-        options: {
-          "backend-port": { type: "string" },
-          "web-port": { type: "string" },
-          storage: { type: "string" },
-          manifest: { type: "string" },
-          help: { type: "boolean", short: "h" },
-        },
-      }),
-    catch: () => DevConfigurationError.make({ detail: "Invalid dev arguments; use --help." }),
-  });
-  const mode = yield* Schema.decodeUnknownEffect(Mode)(parsed.positionals[0] ?? "all").pipe(
+  const parsed = yield* parseCommandLine("dev", devCommandLine, devHelp, args).pipe(
     Effect.mapError(() =>
-      DevConfigurationError.make({ detail: "Dev mode must be all, agent or web." }),
+      DevConfigurationError.make({ detail: "Invalid dev arguments; use --help." }),
     ),
   );
-  if (parsed.positionals.length > 1)
-    return yield* DevConfigurationError.make({ detail: "Only one dev mode may be specified." });
+  const { mode } = parsed;
   const port = Effect.fnUntraced(function* (value: string, name: string) {
     return yield* Schema.decodeEffect(Port)(Number(value)).pipe(
       Effect.mapError(() =>
@@ -53,22 +36,24 @@ export const readDevConfiguration = Effect.fn("dev.readConfiguration")(function*
     );
   });
   const backendPort = yield* port(
-    parsed.values["backend-port"] ?? environment.CONTEXT_AGENT_DEV_BACKEND_PORT ?? "5180",
+    Option.getOrUndefined(parsed.backendPort) ??
+      environment.CONTEXT_AGENT_DEV_BACKEND_PORT ??
+      "5180",
     "backend-port",
   );
   const webPort = yield* port(
-    parsed.values["web-port"] ?? environment.CONTEXT_AGENT_DEV_WEB_PORT ?? "5173",
+    Option.getOrUndefined(parsed.webPort) ?? environment.CONTEXT_AGENT_DEV_WEB_PORT ?? "5173",
     "web-port",
   );
   if (mode === "all" && backendPort === webPort)
     return yield* DevConfigurationError.make({
       detail: "Backend and web ports must differ in all mode.",
     });
-  const storage = parsed.values.storage ?? environment.CONTEXT_AGENT_HOME;
-  const manifest = parsed.values.manifest ?? environment.CONTEXT_AGENT_DEV_MANIFEST;
+  const storage = Option.getOrUndefined(parsed.storage) ?? environment.CONTEXT_AGENT_HOME;
+  const manifest = Option.getOrUndefined(parsed.manifest) ?? environment.CONTEXT_AGENT_DEV_MANIFEST;
   return {
     mode,
-    help: parsed.values.help ?? false,
+    help: parsed.help,
     backendPort,
     webPort,
     storage: storage === undefined ? undefined : resolve(storage),
@@ -87,3 +72,12 @@ export const devHelp = `Usage: vp run dev [all|agent|web] [options]
   -h, --help            Show configuration help without starting servers
 CLI options override CONTEXT_AGENT_DEV_BACKEND_PORT, CONTEXT_AGENT_DEV_WEB_PORT,
 CONTEXT_AGENT_HOME and CONTEXT_AGENT_DEV_MANIFEST. Backend changes require a manual restart.`;
+
+const devCommandLine = {
+  mode: Argument.Literals("mode", ["all", "agent", "web"]).pipe(Argument.withDefault("all")),
+  backendPort: Flag.String("backend-port").pipe(Flag.optional),
+  webPort: Flag.String("web-port").pipe(Flag.optional),
+  storage: Flag.String("storage").pipe(Flag.optional),
+  manifest: Flag.String("manifest").pipe(Flag.optional),
+  help: Flag.Boolean("help").pipe(Flag.withAlias("h"), Flag.withDefault(false)),
+};
