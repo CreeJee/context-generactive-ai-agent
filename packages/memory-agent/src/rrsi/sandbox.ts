@@ -1,4 +1,5 @@
-import { nativeFailure, nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { ignoreLogged } from "../runtime/best-effort.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
@@ -69,7 +70,7 @@ function evaluateSandboxBody(
 ): Promise<Measurement> {
   return runOAuthNodeEffect(
     Effect.gen(function* () {
-      const name = `rrsi-${yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie)}`;
+      const name = `rrsi-${yield* oauthProtocolCrypto.randomUUIDv4()}`;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const input = yield* Queue.make<Uint8Array, Cause.Done>();
       const encoder = new TextEncoder();
@@ -129,8 +130,10 @@ function evaluateSandboxBody(
               forceKillAfter: "1 second",
             }),
           )
-          .pipe(Effect.timeout(5000), Effect.ignore);
-        yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
+          .pipe(Effect.timeout(5000), ignoreLogged("rrsi_container_kill_failed"));
+        yield* child
+          .kill({ forceKillAfter: "1 second" })
+          .pipe(ignoreLogged("rrsi_child_kill_failed"));
       });
       const abort = () => {
         void runNativeEffect(abortEffect);
@@ -139,7 +142,13 @@ function evaluateSandboxBody(
         Effect.gen(function* () {
           signal.removeEventListener("abort", abort);
           yield* Queue.shutdown(input);
-          if (yield* child.isRunning.pipe(Effect.orElseSucceed(() => false))) yield* abortEffect;
+          // An unknown state is treated as stopped, as before: the container runs with --rm.
+          const running = yield* child.isRunning.pipe(
+            Effect.catchTag("PlatformError", () =>
+              Effect.as(Effect.logDebug("rrsi_child_state_unknown"), false),
+            ),
+          );
+          if (running) yield* abortEffect;
         }),
       );
       signal.addEventListener("abort", abort, { once: true });
@@ -181,8 +190,17 @@ function evaluateSandboxBody(
                   ),
                 );
                 modelCalls++;
-                consume(raw);
-                const usage = reportedTokens(raw);
+                // `consume` is the owner's synchronous callback; it throws its own EvaluationFailed.
+                const usage = yield* Effect.try({
+                  try: () => {
+                    consume(raw);
+                    return reportedTokens(raw);
+                  },
+                  catch: (error) =>
+                    Schema.is(EvaluationFailed)(error)
+                      ? error
+                      : EvaluationFailed.make({ reason: "protocol_invalid" }),
+                });
                 totalTokens = totalTokens === null || usage === null ? null : totalTokens + usage;
                 yield* Queue.offer(
                   input,
@@ -208,14 +226,16 @@ function evaluateSandboxBody(
                   EffectArray.dedupe(frame.results.map((item) => item.id)).length !== expected
                 )
                   return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
-                const score = (domain: "coding" | "memory") => {
-                  const items = frame.results.filter((item) => item.domain === domain);
-                  if (items.length !== expected / 2)
-                    throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
-                  return items.reduce((sum, item) => sum + item.score, 0) / items.length;
-                };
-                const coding = score("coding");
-                const memory = score("memory");
+                const scores = (domain: "coding" | "memory") =>
+                  frame.results.filter((item) => item.domain === domain).map((item) => item.score);
+                const codingScores = scores("coding");
+                const memoryScores = scores("memory");
+                if (codingScores.length !== expected / 2 || memoryScores.length !== expected / 2)
+                  return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
+                const average = (values: readonly number[]) =>
+                  values.reduce((sum, value) => sum + value, 0) / values.length;
+                const coding = average(codingScores);
+                const memory = average(memoryScores);
                 state.result = {
                   score: (coding + memory) / 2,
                   coding,
@@ -236,18 +256,24 @@ function evaluateSandboxBody(
             }
           }),
         ),
-        Effect.catchCause((cause) =>
+        // The first expected failure is the evaluation's outcome; a broken stdout is a protocol
+        // failure. Defects and interruptions stay in the fiber's exit.
+        Effect.catch((error) =>
           Effect.gen(function* () {
-            const error = nativeFailure(cause).cause;
-            state.failure ??= Schema.is(EvaluationFailed)(error)
-              ? error
-              : EvaluationFailed.make({ reason: "protocol_invalid" });
+            state.failure ??=
+              error._tag === "EvaluationFailed"
+                ? error
+                : EvaluationFailed.make({ reason: "protocol_invalid" });
             yield* abortEffect;
           }),
         ),
         Effect.forkChild,
       );
-      yield* child.stderr.pipe(Stream.runDrain, Effect.ignore, Effect.forkChild);
+      yield* child.stderr.pipe(
+        Stream.runDrain,
+        ignoreLogged("rrsi_stderr_drain_failed"),
+        Effect.forkChild,
+      );
       const code = yield* child.exitCode;
       yield* Fiber.join(requests);
       if (state.failure !== null) return yield* state.failure;
