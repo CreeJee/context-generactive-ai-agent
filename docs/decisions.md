@@ -2117,3 +2117,12 @@
 - CLI 인자는 `effect/cli`로 파싱한다. 내장 전역 플래그는 끄고(`CliConfig.builtIns: []`) 기존 옵션 이름·사용법 문구를 유지한다. `isDeepStrictEqual`은 `Equal.equals`로, 포트 점유 확인은 `NodeSocketServer`의 scoped bind로, 측정 시간은 `Clock`·`Effect.timed`로, 테스트 단언은 vitest `expect`로 바꾼다.
 - 홈 폴더·임시 폴더·전체 메모리는 Effect에 대응 서비스가 없어 `runtime/host-system.ts`만 `node:os`를 쓰고 나머지는 그 Effect 값을 읽는다.
 - 남기는 `node:*`와 이유: `sqlite`(Effect의 SQLite 드라이버는 별도 네이티브 패키지라 SEA 제약과 맞지 않아 자체 `SqlClient`가 `node:sqlite`를 감싼다), `sea`(실행 파일 자산), `module`(`createRequire`: SEA 본문은 네이티브 패키지를 require로만 부른다), `zlib`(설치본에는 HTTP 응답 압축만 있고 zstd 해제가 없다), 테스트의 `async_hooks`·모듈 로더 hook의 `url`(Effect 런타임 밖에서 동기로 돈다).
+
+## 개발용 관측과 프로파일링 도구 (2026-10-18)
+
+- 사용자 결정: 기본 관측 경로는 OTLP, Effect devtools는 개발용 보조 경로로 둔다. clinic.js처럼 사람이 보는 HTML 대신 에이전트도 읽을 수 있는 텍스트 요약을 만든다.
+- `@effect/opentelemetry`는 쓰지 않는다. 설치본 `effect/observability`의 `OtlpTracer`·`OtlpMetrics`를 `layerFromConfig`로 쓰고, 기존 OpenTelemetry SDK가 없으므로 Effect 문서가 권하는 내장 경로를 택한다.
+- 에이전트 런타임(`apps/agent/app/.server/agent.ts`) 최하단에 관측 Layer를 둔다. 표준 `OTEL_*` 변수가 없으면 아무것도 내보내지 않는다. 로그는 프롬프트와 공급자 응답을 담을 수 있어 OTLP로 내보내지 않는다. `CONTEXT_AGENT_DEVTOOLS_URL`이 있으면 devtools tracer가 OTLP tracer를 감싼다.
+- `tools/profile/main.ts`가 OTLP·devtools 수집기와 요약기를 맡는다. 두 수집기는 같은 span NDJSON을 쓰고, span 속성은 숫자·불리언만 남긴다. CPU는 Node의 `--cpu-prof` 결과(`.cpuprofile`)를 같은 요약기로 읽는다.
+- worker 내부 span과 `Effect.runPromiseWith`로 고정한 context의 SDK 도구 콜백 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
+- 절차는 `.agents/skills/effect-profile` 스킬에 둔다.
