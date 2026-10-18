@@ -1,40 +1,26 @@
-// Native child-process and socket callbacks stay at this interoperability boundary.
-import { createServer } from "node:net";
-import { Data, Effect, Function as EffectFunction } from "effect";
+import { NodeSocketServer } from "@effect/platform-node";
+import { Effect, Schema } from "effect";
 
-class DevelopmentProcessError extends Data.TaggedError("DevelopmentProcessError")<{
-  readonly message: string;
-}> {}
-
-export const assertPortAvailable: {
-  (host: string, label: string): (port: number) => Promise<void>;
-} & typeof assertPortAvailableBody = EffectFunction.dual(3, assertPortAvailableBody);
-function assertPortAvailableBody(port: number, host: string, label: string) {
-  return Effect.runPromise(
-    Effect.callback<void, DevelopmentProcessError>((resume) => {
-      const probe = createServer();
-      const onError = (error: Error) =>
-        resume(
-          Effect.fail(
-            new DevelopmentProcessError({
-              message: `${label} port ${port} (${host}) is unavailable: ${error.message}. Stop the existing dev server or choose another port.`,
-            }),
-          ),
-        );
-      probe.once("error", onError);
-      probe.listen(port, host, () =>
-        probe.close((error) =>
-          resume(
-            error !== undefined
-              ? Effect.fail(new DevelopmentProcessError({ message: error.message }))
-              : Effect.void,
-          ),
-        ),
-      );
-      return Effect.sync(() => {
-        probe.off("error", onError);
-        if (probe.listening) probe.close();
-      });
-    }),
-  );
+export class DevelopmentPortUnavailable extends Schema.TaggedError<DevelopmentPortUnavailable>()(
+  "DevelopmentPortUnavailable",
+  { label: Schema.String, host: Schema.String, port: Schema.Int, cause: Schema.Defect() },
+) {
+  override get message() {
+    return `${this.label} port ${this.port} (${this.host}) is unavailable: ${String(this.cause)}. Stop the existing dev server or choose another port.`;
+  }
 }
+
+/** Binds and releases `host:port`, failing when another listener already holds it. */
+export const assertPortAvailable = Effect.fn("dev.assertPortAvailable")(function* (
+  port: number,
+  host: string,
+  label: string,
+) {
+  yield* Effect.scoped(NodeSocketServer.make({ port, host })).pipe(
+    Effect.catchTag("SocketServerError", (error) =>
+      Effect.fail(
+        DevelopmentPortUnavailable.make({ label, host, port, cause: error.reason.cause }),
+      ),
+    ),
+  );
+});

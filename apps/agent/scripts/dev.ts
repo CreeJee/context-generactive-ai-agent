@@ -190,7 +190,7 @@ const stop = Effect.fn("dev.stop")(function* (
 }, Effect.ignore());
 
 const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
-  yield* nativePromise(() => assertPortAvailable(webPort, "localhost", "Frontend"));
+  yield* assertPortAvailable(webPort, "localhost", "Frontend");
   const manifest = yield* readManifest();
   yield* waitForBackend(manifest.backendUrl, manifest.buildId);
   yield* Console.log(`Stable agent backend: ${manifest.backendUrl}`);
@@ -199,8 +199,8 @@ const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
 });
 
 const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: boolean) {
-  yield* nativePromise(() => assertPortAvailable(backendPort, "127.0.0.1", "Backend"));
-  if (includeWeb) yield* nativePromise(() => assertPortAvailable(webPort, "localhost", "Frontend"));
+  yield* assertPortAvailable(backendPort, "127.0.0.1", "Backend");
+  if (includeWeb) yield* assertPortAvailable(webPort, "localhost", "Frontend");
   const buildId = yield* nativePromise(() => developmentBuildId(app));
   yield* buildBackend(buildId);
   const backend = yield* stableBackend(buildId);
