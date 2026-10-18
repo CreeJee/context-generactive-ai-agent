@@ -116,12 +116,18 @@ interface WorkerSession {
 /** The worker thread behind a session, over Effect RPC. Its Scope stops the worker. */
 const rpcSession = (setup: ImportWorkerSetup) =>
   Effect.gen(function* () {
-    const spawned = yield* Deferred.make<Worker>();
+    const spawned = yield* Deferred.make<Worker, ImportWorkerFailed>();
     const workers = NodeWorker.layer(() => {
-      const worker = new Worker(runtimeWorker("import-worker"), runtimeWorkerOptions(setup));
-      worker.unref();
-      Deferred.doneUnsafe(spawned, Exit.succeed(worker));
-      return worker;
+      // A spawn that throws is only retried by the protocol; settle the wait below with it.
+      try {
+        const worker = new Worker(runtimeWorker("import-worker"), runtimeWorkerOptions(setup));
+        worker.unref();
+        Deferred.doneUnsafe(spawned, Exit.succeed(worker));
+        return worker;
+      } catch (cause) {
+        Deferred.doneUnsafe(spawned, Exit.fail(ImportWorkerFailed.make({ reason: "start" })));
+        throw cause;
+      }
     });
     // A count may be asked for while a pass streams; each holds a slot until it is answered.
     const protocol = yield* Layer.build(
