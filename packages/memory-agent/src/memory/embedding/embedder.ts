@@ -385,8 +385,12 @@ export function modelWorker(
           return reply.spans;
         case "failed":
           return yield* new EmbeddingError({ cause: reply.reason });
-        default:
-          return yield* new EmbeddingError({ cause: "invalid chunk response" });
+        case "counts":
+        case "rows":
+        case "loaded":
+          return yield* new EmbeddingError({
+            cause: "the embedding worker answered a chunking with something else",
+          });
       }
     }),
     embed: Effect.fnUntraced(function* (texts: readonly string[]) {
