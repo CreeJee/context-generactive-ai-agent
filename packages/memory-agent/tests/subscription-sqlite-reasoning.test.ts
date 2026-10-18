@@ -3,10 +3,10 @@ import { nativeStream } from "../src/runtime/native-stream.ts";
 import { it } from "@effect/vitest";
 import { chat, EventType, type ModelMessage } from "@tanstack/ai";
 import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
-import { Cause, Context, Effect, Layer, Schema, Stream } from "effect";
+import { Cause, Effect, Layer, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { ownedSqliteChatPersistence } from "../src/chat-state/persistence.ts";
+import { ownedChatPersistence } from "../src/chat-state/persistence.ts";
 import { SubscriptionTextAdapter } from "../src/providers/subscription-adapter.ts";
 import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 
@@ -28,11 +28,8 @@ it.effect(
   "production SQLite SDK persistence restores public reasoning in bounded pages and preserves opaque model context",
   () =>
     Effect.gen(function* () {
-      const database = Context.get(
-        yield* Layer.build(Layer.fresh(Database.layer(":memory:"))),
-        Database,
-      );
-      const store = ownedSqliteChatPersistence(database);
+      const database = yield* Layer.build(Layer.fresh(Database.layer(":memory:")));
+      const store = yield* Effect.provideContext(ownedChatPersistence, database);
       const threadId = "sqlite-reasoning-fixture";
       const previous: ModelMessage[] = Array.from({ length: 25 }, (_, index) => ({
         id: `old-${index}`,
@@ -117,7 +114,7 @@ it.effect(
         ),
       ).toBe(true);
       // Startup/reopening the production adapter must preserve both projection and model context.
-      const reopened = ownedSqliteChatPersistence(database);
+      const reopened = yield* Effect.provideContext(ownedChatPersistence, database);
       expect(yield* Effect.tryPromise(() => reopened.stores.messages.loadThread(threadId))).toEqual(
         original,
       );

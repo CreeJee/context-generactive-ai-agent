@@ -18,7 +18,7 @@ import {
 } from "effect";
 import { expect } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../../src/agent/chat.ts";
-import { sqliteChatPersistence } from "../../src/chat-state/persistence.ts";
+import { chatPersistence } from "../../src/chat-state/persistence.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
 import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
@@ -415,7 +415,7 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
     Effect.gen(function* () {
       const id = yield* freshSession();
       const nodes = yield* Nodes;
-      const persistence = sqliteChatPersistence((yield* Database).sqlite);
+      const persistence = yield* chatPersistence;
       const log: DependencyLog = { acquired: [], released: [] };
       const streamed: number[] = [];
       for (const owner of [1, 2]) {

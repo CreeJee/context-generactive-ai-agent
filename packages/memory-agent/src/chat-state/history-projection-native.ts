@@ -1,7 +1,7 @@
 import type { ModelMessage } from "@tanstack/ai";
 import type { MessagePage } from "@tanstack/ai-persistence";
-import { Function as EffectFunction, Result, Schema } from "effect";
-import type { Database } from "../db/database.ts";
+import { Effect, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { groupHistoryMessages, historyProjectionMessages } from "./history-groups.ts";
 import { HistoryPageRequest, HistorySnapshotRows } from "./history-projection-reader.ts";
 import {
@@ -16,59 +16,92 @@ export class HistoryPageUnavailable extends Schema.TaggedError<HistoryPageUnavai
     reason: Schema.Literals(["not-ready", "id-collision", "invalid-transcript"]),
   },
 ) {}
-const decodeRequest = EffectFunction.flow(
-  Schema.decodeUnknownResult(HistoryPageRequest),
-  Result.getOrThrow,
-);
-const decodeRows = EffectFunction.flow(
-  Schema.decodeUnknownResult(HistorySnapshotRows),
-  Result.getOrThrow,
-);
-const Thread = Schema.Struct({ thread_id: Schema.String, messages: Schema.String });
-const decodeThread = EffectFunction.flow(Schema.decodeUnknownResult(Thread), Result.getOrThrow);
-const validateStored = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.fromJsonString(
-      Schema.Array(
-        Schema.Struct({
-          role: Schema.Literals(["user", "assistant", "tool"]),
-          id: Schema.optional(Schema.String),
-        }),
-      ),
+const unavailable = (reason: HistoryPageUnavailable["reason"]) =>
+  Effect.fail(HistoryPageUnavailable.make({ reason }));
+const validateStored = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        role: Schema.Literals(["user", "assistant", "tool"]),
+        id: Schema.optional(Schema.String),
+      }),
     ),
   ),
-  Result.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
-  Result.getOrThrow,
 );
+const encodeGroup = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const Identity = Schema.Struct({ ordinal: Schema.Natural, ui_id: Schema.String });
 
-/** Synchronous SQLite/SDK edge. The caller owns Database and the original model codec. */
-export function nativeHistoryProjection(input: {
-  readonly database: Database["Service"];
-  readonly decodeMessages: (json: string) => ModelMessage[];
-}) {
-  const { database, decodeMessages } = input;
-  database.atomic(() => database.sqlite.exec(historyProjectionSchema));
-  const initial = database.sqlite.prepare(historyProjectionSnapshots.initial);
-  const older = database.sqlite.prepare(historyProjectionSnapshots.older);
-  const identities = database.sqlite.prepare(sql.groupIdentities);
-  const removeInvalidOrdinals = database.sqlite.prepare(sql.removeInvalidOrdinals);
-  const removeOrdinal = database.sqlite.prepare(sql.removeOrdinal);
-  const removeTail = database.sqlite.prepare(sql.removeTail);
-  const update = database.sqlite.prepare(sql.updateGroup);
-  const publish = database.sqlite.prepare(sql.publishIfCurrent);
-  const prepared = (snapshot: {
-    threadId: string;
-    sourceJSON: string;
-    models?: readonly ModelMessage[];
-  }) => {
-    // Only the typed SDK writer supplies models; startup/import still validates
-    // and decodes stored JSON. Avoid reparsing the writer's freshly serialized snapshot.
-    if (snapshot.models === undefined) validateStored(snapshot.sourceJSON);
-    const retained = Result.getOrThrow(
-      Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ ui_id: Schema.String })))(
-        identities.all(snapshot.threadId),
-      ),
+/** A transcript snapshot to project; only the typed SDK writer supplies `models`. */
+export interface HistorySnapshot {
+  readonly threadId: string;
+  readonly sourceJSON: string;
+  readonly models?: readonly ModelMessage[];
+}
+
+/**
+ * The UI history projection beside the authoritative transcript, on the app's SqlClient. The
+ * caller supplies the original model codec.
+ */
+export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
+  decodeMessages: (json: string) => ModelMessage[],
+) {
+  const client = yield* SqlClient.SqlClient;
+  yield* client.withTransaction(client.unsafe(historyProjectionSchema).unprepared);
+  // Before the ordinal repair, only the retained IDs are read: a fractional ordinal is still there.
+  const retainedIds = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ ui_id: Schema.String }),
+    execute: (threadId) => client.unsafe(sql.groupIdentities, [threadId]),
+  });
+  const identities = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Identity,
+    execute: (threadId) => client.unsafe(sql.groupIdentities, [threadId]),
+  });
+  const snapshotRows = (request: HistoryPageRequest) =>
+    Effect.flatMap(
+      request.type === "initial"
+        ? client.unsafe(historyProjectionSnapshots.initial, [request.threadId, request.limit])
+        : client.unsafe(historyProjectionSnapshots.older, [
+            request.threadId,
+            request.before,
+            request.limit,
+          ]),
+      Schema.decodeUnknownEffect(HistorySnapshotRows),
     );
+  const threadExists = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: Schema.Struct({ present: Schema.Literals([0, 1]) }),
+    execute: (threadId) =>
+      client`SELECT EXISTS(SELECT 1 FROM chat_threads WHERE thread_id = ${threadId}) AS present`,
+  });
+  const pendingThreads = SqlSchema.findAll({
+    Request: Schema.NullOr(Schema.String),
+    Result: Schema.Struct({ thread_id: Schema.String }),
+    execute: (threadId) =>
+      client.unsafe(
+        `SELECT thread_id FROM chat_threads WHERE (?1 IS NULL OR thread_id=?1) AND NOT EXISTS (
+          SELECT 1 FROM chat_history_projection
+          WHERE chat_history_projection.thread_id=chat_threads.thread_id AND ready=1 AND format_version=1
+        )`,
+        [threadId],
+      ),
+  });
+  const storedThread = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: Schema.Struct({ thread_id: Schema.String, messages: Schema.String }),
+    execute: (threadId) =>
+      client`SELECT thread_id, messages FROM chat_threads WHERE thread_id = ${threadId}`,
+  });
+
+  const prepared = Effect.fnUntraced(function* (snapshot: HistorySnapshot) {
+    // Startup/import still validates and decodes stored JSON. Avoid reparsing the writer's
+    // freshly serialized snapshot.
+    if (snapshot.models === undefined)
+      yield* validateStored(snapshot.sourceJSON).pipe(
+        Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
+      );
+    const retained = yield* retainedIds(snapshot.threadId);
     const normalized = historyProjectionMessages(
       snapshot.threadId,
       snapshot.models ?? decodeMessages(snapshot.sourceJSON),
@@ -76,7 +109,7 @@ export function nativeHistoryProjection(input: {
     );
     switch (normalized.type) {
       case "id-collision":
-        throw HistoryPageUnavailable.make({ reason: "id-collision" });
+        return yield* unavailable("id-collision");
       case "ready":
         break;
     }
@@ -88,98 +121,81 @@ export function nativeHistoryProjection(input: {
         case "tool":
           break;
         default:
-          throw HistoryPageUnavailable.make({ reason: "invalid-transcript" });
+          return yield* unavailable("invalid-transcript");
       }
     }
     const grouping = groupHistoryMessages(snapshot.threadId, models);
     switch (grouping.type) {
       case "id-collision":
-        throw HistoryPageUnavailable.make({ reason: "id-collision" });
+        return yield* unavailable("id-collision");
       case "ready":
         return grouping.groups;
     }
-  };
-  const replace = (snapshot: {
-    threadId: string;
-    sourceJSON: string;
-    models?: readonly ModelMessage[];
-  }) => {
-    const groups = prepared(snapshot);
-    database.atomic(() => {
-      database.sqlite.prepare(sql.markUnready).run(snapshot.threadId);
-      // Disposable non-STRICT SQLite rows can contain fractional ordinals.
-      // Repair them before decoding metadata, and discard out-of-window values.
-      removeInvalidOrdinals.run(snapshot.threadId);
-      removeTail.run(snapshot.threadId, groups.length);
-      const existing = Result.getOrThrow(
-        Schema.decodeUnknownResult(
-          Schema.Array(Schema.Struct({ ordinal: Schema.Natural, ui_id: Schema.String })),
-        )(identities.all(snapshot.threadId)),
-      );
-      // Delete only changed identities before upserting, so moved/swapped IDs
-      // cannot collide with the unique cursor index. Unchanged JSON is not rewritten.
-      for (const row of existing) {
-        if (row.ordinal < groups.length && groups[row.ordinal]?.id !== row.ui_id)
-          removeOrdinal.run(snapshot.threadId, row.ordinal);
-      }
-      for (const [ordinal, group] of groups.entries())
-        update.run(snapshot.threadId, ordinal, group.id, JSON.stringify(group.messages));
-      if (publish.run(snapshot.threadId, snapshot.sourceJSON).changes === 0)
-        throw HistoryPageUnavailable.make({ reason: "not-ready" });
-    });
-  };
+  });
+
+  /** Replaces a thread's groups; joins the caller's transaction, or opens one. */
+  const replace = (snapshot: HistorySnapshot) =>
+    client.withTransaction(
+      Effect.gen(function* () {
+        const groups = yield* prepared(snapshot);
+        const { threadId } = snapshot;
+        yield* client.unsafe(sql.markUnready, [threadId]);
+        // Disposable non-STRICT SQLite rows can contain fractional ordinals.
+        // Repair them before decoding metadata, and discard out-of-window values.
+        yield* client.unsafe(sql.removeInvalidOrdinals, [threadId]);
+        yield* client.unsafe(sql.removeTail, [threadId, groups.length]);
+        const existing = yield* identities(threadId);
+        // Delete only changed identities before upserting, so moved/swapped IDs
+        // cannot collide with the unique cursor index. Unchanged JSON is not rewritten.
+        for (const row of existing)
+          if (row.ordinal < groups.length && groups[row.ordinal]?.id !== row.ui_id)
+            yield* client.unsafe(sql.removeOrdinal, [threadId, row.ordinal]);
+        for (const [ordinal, group] of groups.entries())
+          yield* client.unsafe(sql.updateGroup, [
+            threadId,
+            ordinal,
+            group.id,
+            yield* encodeGroup(group.messages),
+          ]);
+        const published = yield* client.unsafe(`${sql.publishIfCurrent} RETURNING thread_id`, [
+          threadId,
+          snapshot.sourceJSON,
+        ]);
+        if (published.length === 0) return yield* unavailable("not-ready");
+      }),
+    );
+
   return {
     // Explicit startup/import preparation, never a page-read fallback. Read one
     // unprepared original at a time, preserving the released authoritative table.
-    prepare(threadId?: string) {
-      const statement = database.sqlite
-        .prepare(`SELECT thread_id FROM chat_threads WHERE (?1 IS NULL OR thread_id=?1) AND NOT EXISTS (
-        SELECT 1 FROM chat_history_projection WHERE chat_history_projection.thread_id=chat_threads.thread_id AND ready=1 AND format_version=1
-      )`);
-      const pending = statement.all(threadId ?? null);
-      const ids = Result.getOrThrow(
-        Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ thread_id: Schema.String })))(
-          pending,
+    prepare: (threadId?: string) =>
+      Effect.flatMap(pendingThreads(threadId ?? null), (ids) =>
+        Effect.forEach(
+          ids,
+          ({ thread_id }) =>
+            Effect.flatMap(storedThread(thread_id), (stored) =>
+              replace({ threadId: stored.thread_id, sourceJSON: stored.messages }),
+            ).pipe(
+              // A corrupt/ambiguous UI projection must not stop unrelated sessions.
+              // Its original stays authoritative and reads report not-ready explicitly.
+              Effect.catchTag("HistoryPageUnavailable", () => Effect.void),
+            ),
+          { discard: true },
         ),
-      );
-      const select = database.sqlite.prepare(
-        "SELECT thread_id, messages FROM chat_threads WHERE thread_id=?",
-      );
-      for (const { thread_id } of ids) {
-        const snapshot = decodeThread(select.get(thread_id));
-        try {
-          replace({ threadId: snapshot.thread_id, sourceJSON: snapshot.messages });
-        } catch (failure) {
-          // A corrupt/ambiguous UI projection must not stop unrelated sessions.
-          // Its original stays authoritative and reads report not-ready explicitly.
-          if (Schema.is(HistoryPageUnavailable)(failure)) continue;
-          throw failure;
-        }
-      }
-    },
-    // Called within the original writer's owner transaction immediately after
-    // the authoritative upsert, so failure rolls back both original and projection.
+      ),
+    // Called within the original writer's transaction immediately after the authoritative
+    // upsert, so failure rolls back both original and projection.
     replace,
-    load(request: HistoryPageRequest): MessagePage {
-      const checked = decodeRequest(request);
-      const raw =
-        checked.type === "initial"
-          ? initial.all(checked.threadId, checked.limit)
-          : older.all(checked.threadId, checked.before, checked.limit);
-      const rows = decodeRows(raw);
+    load: Effect.fnUntraced(function* (request: HistoryPageRequest) {
+      const checked = yield* Schema.decodeEffect(HistoryPageRequest)(request);
+      const rows = yield* snapshotRows(checked);
       const state = rows[0];
       if (state === undefined || state.ready !== 1 || state.format_version !== 1) {
-        const exists = Result.getOrThrow(
-          Schema.decodeUnknownResult(Schema.Struct({ present: Schema.Literals([0, 1]) }))(
-            database.sqlite
-              .prepare("SELECT EXISTS(SELECT 1 FROM chat_threads WHERE thread_id=?) AS present")
-              .get(checked.threadId),
-          ),
-        );
-        if (exists.present === 0) return { messages: [], truncated: false };
-        throw HistoryPageUnavailable.make({ reason: "not-ready" });
+        const { present } = yield* threadExists(checked.threadId);
+        if (present === 0) return { messages: [], truncated: false } satisfies MessagePage;
+        return yield* unavailable("not-ready");
       }
-      if (state.cursor_valid === 0) return { messages: [], truncated: false };
+      if (state.cursor_valid === 0) return { messages: [], truncated: false } satisfies MessagePage;
       const selected = rows
         .filter((row) => row.ordinal !== null)
         .toSorted((a, b) => Number(a.ordinal) - Number(b.ordinal));
@@ -188,11 +204,15 @@ export function nativeHistoryProjection(input: {
       );
       if (state.has_earlier === 1) {
         const cursor = selected[0]?.ui_id;
-        if (cursor === undefined || cursor.length === 0)
-          throw HistoryPageUnavailable.make({ reason: "not-ready" });
-        return { messages, truncated: true, cursor };
+        if (cursor === undefined || cursor.length === 0) return yield* unavailable("not-ready");
+        return { messages, truncated: true, cursor } satisfies MessagePage;
       }
-      return { messages, truncated: false };
-    },
+      return { messages, truncated: false } satisfies MessagePage;
+    }),
   };
-}
+});
+
+export type HistoryProjection = Effect.Success<ReturnType<typeof historyProjection>>;
+
+/** `Option` of a projection, for stores that run without one (tests, the SDK testkit). */
+export type MaybeHistoryProjection = Option.Option<HistoryProjection>;

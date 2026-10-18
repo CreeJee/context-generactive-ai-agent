@@ -24,7 +24,8 @@ import { ActiveProvider } from "../src/providers/active-provider.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { describe, expect } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
-import { sqliteChatPersistence } from "../src/chat-state/persistence.ts";
+import { chatPersistence } from "../src/chat-state/persistence.ts";
+import { connectionContext } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
@@ -696,7 +697,9 @@ describe("OpenAI compatible settings", () => {
               }),
           );
           for (const step of migrations) sqlite.exec(step);
-          const persistence = sqliteChatPersistence(sqlite);
+          const persistence = yield* Effect.flatMap(connectionContext(sqlite), (context) =>
+            Effect.provideContext(chatPersistence, context),
+          );
           const f = fixture(
             nativeFetch(() =>
               Effect.sync(() => {

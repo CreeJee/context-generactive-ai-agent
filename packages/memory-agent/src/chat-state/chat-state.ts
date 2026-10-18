@@ -11,7 +11,6 @@ import type { Attachment } from "../attachments/attachments.ts";
 import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { messageText } from "../messages/text.ts";
-import { Database } from "../db/database.ts";
 import { SqlClient } from "effect/sql";
 import { Nodes } from "../memory/nodes.ts";
 import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run-state.ts";
@@ -19,14 +18,10 @@ import {
   latestChatRun,
   migrateLegacyChatThreads,
   migrateMissingChatThread,
-  ownedSqliteChatPersistence,
+  ownedChatPersistence,
 } from "./persistence.ts";
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
-
-  const database = yield* Database;
-  const { sqlite, atomic } = database;
   const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
@@ -48,8 +43,8 @@ const make = Effect.gen(function* () {
       );
     });
   yield* migrateLegacyChatThreads(fallbackThread);
-  const persistence = ownedSqliteChatPersistence(database);
-  const lastRun = latestChatRun(sqlite);
+  const persistence = yield* ownedChatPersistence;
+  const lastRun = yield* latestChatRun();
 
   // Reconstruction otherwise gives id-less stored messages random IDs on every GET. Use the
   // central store's existing full-thread index IDs for both paged and unpaged hydration. Keep
@@ -89,24 +84,22 @@ const make = Effect.gen(function* () {
   // interrupts pending makes a reloaded page offer an approval that can only fail. Retire the
   // interrupts and runs together, then let the user decide whether to send the request again (R10).
   const restartedAt = yield* Clock.currentTimeMillis;
-  atomic(() => {
-    sqlite
-      .prepare(
-        `UPDATE chat_interrupts
-         SET status = 'cancelled', resolved_at = ?
-         WHERE status = 'pending' AND run_id IN (
-           SELECT run_id FROM chat_runs WHERE status IN ('running', 'interrupted')
-         )`,
-      )
-      .run(restartedAt);
-    sqlite
-      .prepare(
-        `UPDATE chat_runs
-         SET status = 'failed', finished_at = ?, error = ?, error_code = ?
-         WHERE status IN ('running', 'interrupted')`,
-      )
-      .run(restartedAt, "The server stopped before this answer finished.", serverRestartedCode);
-  });
+  yield* sql.withTransaction(
+    Effect.andThen(
+      sql`
+        UPDATE chat_interrupts
+        SET status = 'cancelled', resolved_at = ${restartedAt}
+        WHERE status = 'pending' AND run_id IN (
+          SELECT run_id FROM chat_runs WHERE status IN ('running', 'interrupted')
+        )`,
+      sql`
+        UPDATE chat_runs
+        SET status = 'failed', finished_at = ${restartedAt},
+            error = 'The server stopped before this answer finished.',
+            error_code = ${serverRestartedCode}
+        WHERE status IN ('running', 'interrupted')`,
+    ),
+  );
 
   /**
    * A cancelled or failed run has no finish to save its transcript, and the answer it was writing
@@ -147,22 +140,13 @@ const make = Effect.gen(function* () {
           return runNativeEffect(
             Effect.gen(function* () {
               yield* keepPartialAnswer(ctx);
-              if (signal?.reason === "service_shutdown") {
-                atomic(() => {
-                  sqlite
-                    .prepare(
-                      `UPDATE chat_runs
-                   SET status = 'failed', finished_at = ?, error = ?, error_code = ?
-                   WHERE run_id = ? AND status = 'aborted'`,
-                    )
-                    .run(
-                      effectClock.currentTimeMillisUnsafe(),
-                      "The server stopped before this answer finished.",
-                      serverRestartedCode,
-                      ctx.runId,
-                    );
-                });
-              }
+              if (signal?.reason === "service_shutdown")
+                yield* sql`
+                  UPDATE chat_runs
+                  SET status = 'failed', finished_at = ${yield* Clock.currentTimeMillis},
+                      error = 'The server stopped before this answer finished.',
+                      error_code = ${serverRestartedCode}
+                  WHERE run_id = ${ctx.runId} AND status = 'aborted'`;
             }),
           );
         },
@@ -178,7 +162,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // Imports may create sessions after this service's startup migration has already run.
         if (yield* migrateMissingChatThread(sessionId, fallbackThread))
-          persistence.prepareThread(sessionId);
+          yield* persistence.prepareThread(sessionId);
         return yield* nativePromise(() =>
           reconstructChat(hydrationPersistence, request, {
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -209,42 +193,27 @@ const make = Effect.gen(function* () {
             persistence.stores.interrupts.listPending(sessionId),
           );
           if (pending.length === 0) return 0;
-          const discardedAt = effectClock.currentTimeMillisUnsafe();
-          yield* Effect.try(() => {
-            sqlite.exec("BEGIN IMMEDIATE");
-            try {
-              sqlite
-                .prepare(
-                  `UPDATE chat_interrupts
-             SET status = 'cancelled', resolved_at = ?
-             WHERE thread_id = ? AND status = 'pending'`,
-                )
-                .run(discardedAt, sessionId);
-              sqlite
-                .prepare(
-                  `UPDATE chat_runs
-             SET status = 'failed', finished_at = ?, error = ?, error_code = ?
-             WHERE thread_id = ? AND status IN ('running', 'interrupted')`,
-                )
-                .run(
-                  discardedAt,
-                  "The approval continuation was no longer available, so the request was discarded.",
-                  interruptContinuationLostCode,
-                  sessionId,
-                );
-              sqlite.exec("COMMIT");
-            } catch (error) {
-              sqlite.exec("ROLLBACK");
-              throw error;
-            }
-          });
+          const discardedAt = yield* Clock.currentTimeMillis;
+          yield* sql.withTransaction(
+            Effect.andThen(
+              sql`
+                UPDATE chat_interrupts
+                SET status = 'cancelled', resolved_at = ${discardedAt}
+                WHERE thread_id = ${sessionId} AND status = 'pending'`,
+              sql`
+                UPDATE chat_runs
+                SET status = 'failed', finished_at = ${discardedAt},
+                    error = 'The approval continuation was no longer available, so the request was discarded.',
+                    error_code = ${interruptContinuationLostCode}
+                WHERE thread_id = ${sessionId} AND status IN ('running', 'interrupted')`,
+            ),
+          );
           return pending.length;
         }),
       ),
 
     /** The session's most recent run, if any. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    lastRun: (sessionId: string) => runNativeEffect(Effect.sync(() => lastRun(sessionId))),
+    lastRun,
   };
 });
 

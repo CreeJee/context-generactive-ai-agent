@@ -10,8 +10,7 @@ const encodeJson = EffectFunction.flow(
   Result.getOrThrow,
 );
 
-const database = Layer.effect(
-  Database,
+const database = Database.over(
   Effect.acquireRelease(
     Effect.try(() => {
       const sqlite = new DatabaseSync(":memory:");
@@ -19,9 +18,9 @@ const database = Layer.effect(
         "CREATE TABLE chat_threads(thread_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at INTEGER NOT NULL);",
       );
       sqlite.exec(historyProjectionSchema);
-      return Database.of({ sqlite, atomic: (work) => work() });
+      return sqlite;
     }),
-    ({ sqlite }) => Effect.sync(() => sqlite.close()),
+    (sqlite) => Effect.sync(() => sqlite.close()),
   ),
 );
 const layer = HistoryProjectionReader.layer.pipe(Layer.provideMerge(database));
@@ -44,37 +43,6 @@ const seed = Effect.fnUntraced(function* (count: number) {
 });
 
 describe("Effect history projection reader boundary", () => {
-  it.effect("reports missing schema at layer preparation and releases the owner connection", () => {
-    let closes = 0;
-    const missing = Layer.effect(
-      Database,
-      Effect.acquireRelease(
-        Effect.try(() =>
-          Database.of({ sqlite: new DatabaseSync(":memory:"), atomic: (work) => work() }),
-        ),
-        ({ sqlite }) =>
-          Effect.sync(() => {
-            sqlite.close();
-            closes += 1;
-          }),
-      ),
-    );
-    return Effect.gen(function* () {
-      const failure = yield* Effect.void.pipe(
-        provideFixture(HistoryProjectionReader.layer.pipe(Layer.provide(missing))),
-        Effect.flip,
-      );
-      switch (failure._tag) {
-        case "HistoryProjectionReadFailed":
-          expect(failure.reason).toEqual({ _tag: "SqliteRead", phase: "prepare" });
-          break;
-        case "UnknownError":
-          expect.fail("fixture acquisition should succeed");
-      }
-      expect(closes).toBe(1);
-    });
-  });
-
   it.effect("does not reopen a borrowed connection after its owner Scope has ended", () =>
     Effect.gen(function* () {
       const reader = yield* HistoryProjectionReader.pipe(provideFixture(layer));

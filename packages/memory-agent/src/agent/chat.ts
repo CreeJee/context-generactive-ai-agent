@@ -1781,7 +1781,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const abortController = cancellation.controller;
         if (notificationFollowup) {
           const current = yield* sessions.get(sessionId);
-          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const last = yield* chatState.lastRun(sessionId);
           if (
             current.archivedAt !== null ||
             workTrace.parentNotificationsHeld(sessionId) ||
@@ -1791,7 +1791,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         }
         if (internalFollowup?.kind === "workflow") {
           const current = yield* sessions.get(sessionId);
-          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const last = yield* chatState.lastRun(sessionId);
           const state = yield* workflows.get(sessionId);
           if (
             current.archivedAt !== null ||
@@ -2566,7 +2566,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Effect.timeoutOption(cancelWaitMs),
             Effect.map(Option.isSome),
           );
-          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const last = yield* chatState.lastRun(sessionId);
           return json(200, {
             runId: last?.runId ?? "",
             stopped,
@@ -2775,7 +2775,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = liveRuns.get(sessionId);
-        const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+        const last = yield* chatState.lastRun(sessionId);
         const usage = yield* agentPromise("load-usage", () =>
           lastContextUsage(metadata, sessionId),
         );
@@ -2945,7 +2945,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     queued: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+        const last = yield* chatState.lastRun(sessionId);
         return json(200, yield* queue.snapshot(sessionId, last?.runId ?? null));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -3067,7 +3067,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       if (isTruthy(liveRuns.get(sessionId))) return;
       const session = yield* sessions.get(sessionId);
       if (session.archivedAt !== null) return;
-      const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+      const last = yield* chatState.lastRun(sessionId);
       if (!isTruthy(last)) return;
       // A steered message reaches the model whether or not a page is open: after a normal finish
       // the server sends it as the next turn. If that cannot start, the user confirms it instead.

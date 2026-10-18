@@ -10,7 +10,7 @@ import { migrations } from "../src/db/migrations.ts";
 import {
   migrateLegacyChatThreads,
   migrateMissingChatThread,
-  sqliteChatPersistence,
+  chatPersistence,
 } from "../src/chat-state/persistence.ts";
 
 const conformanceDatabases: DatabaseSync[] = [];
@@ -36,7 +36,7 @@ function freshPersistence() {
   const sqlite = new DatabaseSync(":memory:");
   for (const migration of migrations) sqlite.exec(migration);
   conformanceDatabases.push(sqlite);
-  return sqliteChatPersistence(sqlite);
+  return Effect.runPromise(over(sqlite)(chatPersistence));
 }
 
 // The TanStack contract suite: full-replace threads, idempotent runs and interrupts, ordering,
@@ -48,7 +48,7 @@ runPersistenceConformance("sqlite chat state", freshPersistence, {
 it.live("does not persist empty user text, preserving tool-only answers and media", () =>
   Effect.gen(function* () {
     const sqlite = yield* database;
-    const persistence = sqliteChatPersistence(sqlite);
+    const persistence = yield* over(sqlite)(chatPersistence);
     const attachmentMessage = { role: "user" as const, content: "", attachments: ["attachment"] };
     const retained: ModelMessage[] = [
       { role: "user", content: "continue" },
@@ -107,7 +107,7 @@ it.live("materializes legacy session transcripts without overwriting persisted c
     expect(migrated).toBe(1);
     expect(yield* over(sqlite)(migrateLegacyChatThreads(() => Effect.succeed([])))).toBe(0);
 
-    const persistence = sqliteChatPersistence(sqlite);
+    const persistence = yield* over(sqlite)(chatPersistence);
     expect(yield* call(() => persistence.stores.messages.loadThread("legacy"))).toEqual([
       { role: "user", content: "rebuilt legacy" },
     ]);
@@ -135,7 +135,7 @@ it.live("materializes a session imported after startup when its chat is first op
     expect(yield* missing("imported", rebuilt)).toBe(true);
     expect(yield* missing("imported", () => Effect.succeed([]))).toBe(false);
     expect(yield* missing("unknown", rebuilt)).toBe(false);
-    const persistence = sqliteChatPersistence(sqlite);
+    const persistence = yield* over(sqlite)(chatPersistence);
     expect(yield* call(() => persistence.stores.messages.loadThread("imported"))).toEqual(
       transcript,
     );
