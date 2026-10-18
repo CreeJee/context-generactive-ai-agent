@@ -1,11 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-import {
-  deepStrictEqual,
-  strictEqual,
-  assertTrue,
-  assertInstanceOf,
-  throws,
-} from "@effect/vitest/utils";
+import { deepStrictEqual, strictEqual, assertTrue } from "@effect/vitest/utils";
 import { Context, Effect, Layer } from "effect";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { Database } from "../src/db/database.ts";
@@ -16,7 +10,7 @@ effectTest.effect(
     Effect.gen(function* () {
       const services = yield* Layer.build(layer);
       const usage = Context.get(services, ApiUsage);
-      usage.record({
+      yield* usage.record({
         rootSessionId: "compatible",
         purpose: "main",
         provider: "openai-compatible",
@@ -26,7 +20,7 @@ effectTest.effect(
         cacheReadTokens: 60,
         cacheWriteTokens: 0,
       });
-      deepStrictEqual(usage.byRootSession("compatible"), {
+      deepStrictEqual(yield* usage.byRootSession("compatible"), {
         responses: 1,
         inputTokens: 100,
         outputTokens: 20,
@@ -35,22 +29,21 @@ effectTest.effect(
         uncachedInputTokens: 40,
         totalInputTokens: 100,
       });
-      throws(
-        () =>
-          usage.record({
-            rootSessionId: "compatible",
-            purpose: "main",
-            provider: "openai-compatible",
-            model: "local",
-            inputTokens: 1,
-            cacheReadTokens: 2,
-          }),
-        (error) => {
-          assertInstanceOf(error, RangeError);
-          return undefined;
-        },
+      const rejected = yield* Effect.flip(
+        usage.record({
+          rootSessionId: "compatible",
+          purpose: "main",
+          provider: "openai-compatible",
+          model: "local",
+          inputTokens: 1,
+          cacheReadTokens: 2,
+        }),
       );
-      usage.record({
+      deepStrictEqual(
+        rejected._tag === "ApiUsageRejected" && rejected.reason,
+        "cache-exceeds-input",
+      );
+      yield* usage.record({
         rootSessionId: "compatible",
         purpose: "main",
         provider: "openai-compatible",
@@ -58,7 +51,7 @@ effectTest.effect(
         inputTokens: 10,
         outputTokens: 2,
       });
-      deepStrictEqual(usage.byRootSession("compatible"), {
+      deepStrictEqual(yield* usage.byRootSession("compatible"), {
         responses: 2,
         inputTokens: 110,
         outputTokens: 22,
@@ -77,7 +70,7 @@ effectTest.effect("records individual provider responses and sums cache exactly 
   Effect.gen(function* () {
     const services = yield* Layer.build(layer);
     const usage = Context.get(services, ApiUsage);
-    const first = usage.record({
+    const first = yield* usage.record({
       rootSessionId: "root",
       runId: "run",
       threadId: "thread",
@@ -89,7 +82,7 @@ effectTest.effect("records individual provider responses and sums cache exactly 
       cacheWriteTokens: 0,
       outputTokens: 20,
     });
-    const second = usage.record({
+    const second = yield* usage.record({
       rootSessionId: "root",
       purpose: "summary",
       provider: "anthropic",
@@ -100,7 +93,7 @@ effectTest.effect("records individual provider responses and sums cache exactly 
       outputTokens: 8,
     });
     assertTrue(first !== second);
-    deepStrictEqual(usage.byRootSession("root"), {
+    deepStrictEqual(yield* usage.byRootSession("root"), {
       responses: 2,
       inputTokens: 110,
       outputTokens: 28,
@@ -109,7 +102,7 @@ effectTest.effect("records individual provider responses and sums cache exactly 
       uncachedInputTokens: 50,
       totalInputTokens: 145,
     });
-    strictEqual(usage.byRootSession("other").responses, 0);
+    strictEqual((yield* usage.byRootSession("other")).responses, 0);
   }),
 );
 
@@ -120,7 +113,7 @@ effectTest.effect(
       const services = yield* Layer.build(layer);
       const usage = Context.get(services, ApiUsage);
       const { sqlite } = Context.get(services, Database);
-      usage.record({
+      yield* usage.record({
         rootSessionId: "root",
         purpose: "tool",
         provider: "openai",
@@ -130,13 +123,13 @@ effectTest.effect(
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
       });
-      usage.record({
+      yield* usage.record({
         rootSessionId: "root",
         purpose: "subagent",
         provider: "anthropic",
         model: "claude",
       });
-      deepStrictEqual(usage.byRootSession("root"), {
+      deepStrictEqual(yield* usage.byRootSession("root"), {
         responses: 2,
         inputTokens: null,
         outputTokens: null,
@@ -166,21 +159,16 @@ effectTest.effect(
         ].sort(),
       );
       strictEqual(columns[1]?.input_tokens, null);
-      throws(
-        () =>
-          usage.record({
-            rootSessionId: "root",
-            purpose: "main",
-            provider: "openai",
-            model: "gpt",
-            inputTokens: 1,
-            cacheReadTokens: 2,
-          }),
-        (error) => {
-          assertInstanceOf(error, RangeError);
-          return undefined;
-        },
+      yield* Effect.flip(
+        usage.record({
+          rootSessionId: "root",
+          purpose: "main",
+          provider: "openai",
+          model: "gpt",
+          inputTokens: 1,
+          cacheReadTokens: 2,
+        }),
       );
-      strictEqual(usage.byRootSession("root").responses, 2);
+      strictEqual((yield* usage.byRootSession("root")).responses, 2);
     }),
 );

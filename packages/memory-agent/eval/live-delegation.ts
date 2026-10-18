@@ -292,7 +292,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     toolCalls: calls.map((call) => call.function.name),
     correctTotals: answer.includes("10") && answer.includes("18"),
     answer,
-    usage: services.usage.byRootSession(services.session.id),
+    usage: yield* services.usage.byRootSession(services.session.id),
   };
 }, Effect.scoped);
 const results = [

@@ -1,8 +1,8 @@
-import { Result, Function as EffectFunction } from "effect";
 import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
-import { Clock, Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { runNativeEffect } from "../runtime/native-effect.ts";
+import { Clock, Context, Effect, Function as EffectFunction, Layer, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import type { ProviderId } from "../providers/contracts.ts";
 
 export type ApiUsageProvider = ProviderId;
@@ -41,75 +41,104 @@ const CountRow = Schema.Struct({
   uncached_input_tokens: Schema.NullOr(Schema.Finite),
   total_input_tokens: Schema.NullOr(Schema.Finite),
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCount = EffectFunction.flow(Schema.decodeUnknownResult(CountRow), Result.getOrThrow);
+/** A usage record the ledger refuses: it would make the totals wrong or unattributed. */
+export class ApiUsageRejected extends Schema.TaggedError<ApiUsageRejected>()("ApiUsageRejected", {
+  reason: Schema.Literals([
+    "attribution-missing",
+    "invalid-count",
+    "unknown-cache-mode",
+    "cache-exceeds-input",
+  ]),
+}) {}
 
-function count(value: number | null | undefined): number | null {
-  if (value == null) return null;
-  if (!Number.isSafeInteger(value) || value < 0)
-    throw new RangeError("Token counts must be nonnegative safe integers");
-  return value;
-}
+const count = (value: number | null | undefined) =>
+  value == null
+    ? Effect.succeed(null)
+    : Number.isSafeInteger(value) && value >= 0
+      ? Effect.succeed(value)
+      : Effect.fail(ApiUsageRejected.make({ reason: "invalid-count" }));
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
-
-  const { sqlite } = yield* Database;
-  const insert = sqlite.prepare(`INSERT INTO api_usage_responses
-    (root_session_id, run_id, thread_id, purpose, provider, model, input_tokens,
-     output_tokens, cache_read_tokens, cache_write_tokens, cache_mode, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const sql = yield* SqlClient.SqlClient;
   // A NULL count is unknown, not zero. SUM by itself silently drops unknown rows.
-  const totals = sqlite.prepare(`SELECT count(*) AS responses,
-    CASE WHEN count(input_tokens) = count(*) THEN sum(input_tokens) ELSE NULL END AS input_tokens,
-    CASE WHEN count(output_tokens) = count(*) THEN sum(output_tokens) ELSE NULL END AS output_tokens,
-    CASE WHEN count(cache_read_tokens) = count(*) THEN sum(cache_read_tokens) ELSE NULL END AS cache_read_tokens,
-    CASE WHEN count(cache_write_tokens) = count(*) THEN sum(cache_write_tokens) ELSE NULL END AS cache_write_tokens,
-    CASE WHEN count(input_tokens) = count(*) AND count(cache_read_tokens) = count(*)
-      THEN sum(CASE WHEN cache_mode = 'included' THEN input_tokens - cache_read_tokens ELSE input_tokens END)
-      ELSE NULL END AS uncached_input_tokens,
-    CASE WHEN count(input_tokens) = count(*) AND count(cache_read_tokens) = count(*)
-      AND count(cache_write_tokens) = count(*)
-      THEN sum(CASE WHEN cache_mode = 'included' THEN input_tokens + cache_write_tokens
-        ELSE input_tokens + cache_read_tokens + cache_write_tokens END)
-      ELSE NULL END AS total_input_tokens
-    FROM api_usage_responses WHERE root_session_id = ?`);
+  const totals = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: CountRow,
+    execute: (rootSessionId) => sql`SELECT count(*) AS responses,
+      CASE WHEN count(input_tokens) = count(*) THEN sum(input_tokens) ELSE NULL END AS input_tokens,
+      CASE WHEN count(output_tokens) = count(*) THEN sum(output_tokens) ELSE NULL END AS output_tokens,
+      CASE WHEN count(cache_read_tokens) = count(*) THEN sum(cache_read_tokens) ELSE NULL END AS cache_read_tokens,
+      CASE WHEN count(cache_write_tokens) = count(*) THEN sum(cache_write_tokens) ELSE NULL END AS cache_write_tokens,
+      CASE WHEN count(input_tokens) = count(*) AND count(cache_read_tokens) = count(*)
+        THEN sum(CASE WHEN cache_mode = 'included' THEN input_tokens - cache_read_tokens ELSE input_tokens END)
+        ELSE NULL END AS uncached_input_tokens,
+      CASE WHEN count(input_tokens) = count(*) AND count(cache_read_tokens) = count(*)
+        AND count(cache_write_tokens) = count(*)
+        THEN sum(CASE WHEN cache_mode = 'included' THEN input_tokens + cache_write_tokens
+          ELSE input_tokens + cache_read_tokens + cache_write_tokens END)
+        ELSE NULL END AS total_input_tokens
+      FROM api_usage_responses WHERE root_session_id = ${rootSessionId}`,
+  });
+  const insert = SqlSchema.findOne({
+    Request: Schema.Struct({
+      rootSessionId: Schema.String,
+      runId: Schema.NullOr(Schema.String),
+      threadId: Schema.NullOr(Schema.String),
+      purpose: Schema.String,
+      provider: Schema.String,
+      model: Schema.String,
+      input: Schema.NullOr(Schema.Finite),
+      output: Schema.NullOr(Schema.Finite),
+      read: Schema.NullOr(Schema.Finite),
+      write: Schema.NullOr(Schema.Finite),
+      cacheMode: Schema.Literals(["included", "separate"]),
+      createdAt: Schema.Finite,
+    }),
+    Result: Schema.Struct({ id: Schema.Finite }),
+    execute: (row) => sql`INSERT INTO api_usage_responses
+      (root_session_id, run_id, thread_id, purpose, provider, model, input_tokens,
+       output_tokens, cache_read_tokens, cache_write_tokens, cache_mode, created_at)
+      VALUES (${row.rootSessionId}, ${row.runId}, ${row.threadId}, ${row.purpose}, ${row.provider},
+        ${row.model}, ${row.input}, ${row.output}, ${row.read}, ${row.write}, ${row.cacheMode},
+        ${row.createdAt})
+      RETURNING id`,
+  });
   return {
     /** Call once for each *actual provider response*, including auxiliary responses. Returns its unique row id. */
-    record(response: ApiUsageResponse): number {
+    record: Effect.fn("ApiUsage.record")(function* (response: ApiUsageResponse) {
       if (
         !(response.rootSessionId.length > 0) ||
         !(response.purpose.length > 0) ||
         !(response.model.length > 0)
       )
-        throw new Error("Usage attribution is required");
-      const input = count(response.inputTokens);
-      const read = count(response.cacheReadTokens);
-      const write = count(response.cacheWriteTokens);
-      const output = count(response.outputTokens);
+        return yield* ApiUsageRejected.make({ reason: "attribution-missing" });
+      const input = yield* count(response.inputTokens);
+      const read = yield* count(response.cacheReadTokens);
+      const write = yield* count(response.cacheWriteTokens);
+      const output = yield* count(response.outputTokens);
       const included = response.provider === "openai" || response.provider === "openai-compatible";
-      if (!included && response.provider !== "anthropic") throw new Error("Unknown cache mode");
+      if (!included && response.provider !== "anthropic")
+        return yield* ApiUsageRejected.make({ reason: "unknown-cache-mode" });
       if (included && input !== null && read !== null && read > input)
-        throw new RangeError("Cache reads exceed included input tokens");
-      const result = insert.run(
-        response.rootSessionId,
-        response.runId ?? null,
-        response.threadId ?? null,
-        response.purpose,
-        response.provider,
-        response.model,
+        return yield* ApiUsageRejected.make({ reason: "cache-exceeds-input" });
+      const { id } = yield* insert({
+        rootSessionId: response.rootSessionId,
+        runId: response.runId ?? null,
+        threadId: response.threadId ?? null,
+        purpose: response.purpose,
+        provider: response.provider,
+        model: response.model,
         input,
         output,
         read,
         write,
-        included ? "included" : "separate",
-        effectClock.currentTimeMillisUnsafe(),
-      );
-      return Number(result.lastInsertRowid);
-    },
-    byRootSession(rootSessionId: string): ApiUsageTotals {
-      const row = decodeCount(totals.get(rootSessionId));
-      return {
+        cacheMode: included ? "included" : "separate",
+        createdAt: yield* Clock.currentTimeMillis,
+      });
+      return id;
+    }),
+    byRootSession: (rootSessionId: string) =>
+      Effect.map(totals(rootSessionId), (row): ApiUsageTotals => ({
         responses: row.responses,
         inputTokens: row.input_tokens,
         outputTokens: row.output_tokens,
@@ -117,35 +146,39 @@ const make = Effect.gen(function* () {
         cacheWriteTokens: row.cache_write_tokens,
         uncachedInputTokens: row.uncached_input_tokens,
         totalInputTokens: row.total_input_tokens,
-      };
-    },
+      })),
   };
 });
 
+type UsageLedger = Pick<Effect.Success<typeof make>, "record">;
+
 /** Counts-only provider response capture; never persist prompts, messages or tool arguments. */
 const collectApiUsageBody = (
-  ledger: { record: (response: ApiUsageResponse) => number },
+  ledger: UsageLedger,
   source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
 ): ChatMiddleware => ({
   name: "memory-agent/api-usage",
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   onUsage(ctx, usage) {
-    ledger.record({
-      ...source,
-      runId: ctx.runId,
-      threadId: ctx.threadId,
-      inputTokens: usage.promptTokens,
-      outputTokens: usage.completionTokens,
-      ...optionalProperty("cacheReadTokens", usage.promptTokensDetails?.cachedTokens),
-      ...optionalProperty("cacheWriteTokens", usage.promptTokensDetails?.cacheWriteTokens),
-    });
+    return runNativeEffect(
+      Effect.asVoid(
+        ledger.record({
+          ...source,
+          runId: ctx.runId,
+          threadId: ctx.threadId,
+          inputTokens: usage.promptTokens,
+          outputTokens: usage.completionTokens,
+          ...optionalProperty("cacheReadTokens", usage.promptTokensDetails?.cachedTokens),
+          ...optionalProperty("cacheWriteTokens", usage.promptTokensDetails?.cacheWriteTokens),
+        }),
+      ),
+    );
   },
 });
 export const collectApiUsage: {
   (
     source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
-  ): (ledger: {
-    record: (response: ApiUsageResponse) => number;
-  }) => ReturnType<typeof collectApiUsageBody>;
+  ): (ledger: UsageLedger) => ReturnType<typeof collectApiUsageBody>;
 } & typeof collectApiUsageBody = EffectFunction.dual(2, collectApiUsageBody);
 
 export class ApiUsage extends Context.Service<ApiUsage, Effect.Success<typeof make>>()(
