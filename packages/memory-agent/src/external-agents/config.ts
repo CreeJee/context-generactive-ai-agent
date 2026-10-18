@@ -59,7 +59,8 @@ const readAgentsFileBody = Effect.fn("agents.readConfig")(function* (
   scope: AgentScope,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))))
+  // A file whose presence cannot be checked is treated as absent, like a missing one.
+  if (!(yield* fs.exists(path).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(false)))))
     return { path, agents: [], error: null } satisfies AgentsFileRead;
   const text = yield* fs.readFileString(path).pipe(Effect.result);
   if (Result.isFailure(text))

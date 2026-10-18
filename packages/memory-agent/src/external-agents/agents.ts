@@ -12,13 +12,11 @@ import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SdkStreams } from "../acp/web-streams.ts";
 import {
-  Cause,
   HashSet,
   MutableHashMap,
   DateTime,
   Clock,
   Context,
-  Data,
   Effect,
   FiberMap,
   FileSystem,
@@ -31,7 +29,7 @@ import {
   Schema,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { expandVariables } from "../mcp/config.ts";
+import { expandVariablesResult } from "../mcp/config.ts";
 import type { Project } from "../projects/projects.ts";
 import {
   AgentScope,
@@ -44,10 +42,20 @@ import {
 /** After this many failed connection attempts in a row, reconnecting waits for the user (R17). */
 export const maxConsecutiveFailures = 2;
 
-export class ExternalAgentOperationFailed extends Data.TaggedError("ExternalAgentOperationFailed")<{
-  readonly operation: "reconnect";
-  readonly cause: unknown;
-}> {}
+export class ExternalAgentOperationFailed extends Schema.TaggedError<ExternalAgentOperationFailed>()(
+  "ExternalAgentOperationFailed",
+  { operation: Schema.Literal("reconnect"), cause: Schema.Defect() },
+) {}
+
+/** The agent process started but did not answer `initialize` in time. */
+export class ExternalAgentInitializeTimedOut extends Schema.TaggedError<ExternalAgentInitializeTimedOut>()(
+  "ExternalAgentInitializeTimedOut",
+  {},
+) {
+  override get message() {
+    return "initialize timed out";
+  }
+}
 const connectTimeoutMs = 30_000;
 const retryDelayMs = 100;
 
@@ -198,8 +206,12 @@ export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation
       for (const directory of directories) {
         for (const extension of extensions) {
           const candidate = path.resolve(cwd, directory, `${name}${extension}`);
-          const info = yield* fs.stat(candidate).pipe(Effect.option);
-          if (Option.isSome(info) && info.value.type === "File") return candidate;
+          // A candidate that cannot be inspected is not a launcher.
+          const isFile = yield* fs.stat(candidate).pipe(
+            Effect.map((info) => info.type === "File"),
+            Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+          );
+          if (isFile) return candidate;
         }
       }
       return undefined;
@@ -208,7 +220,8 @@ export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation
     if (executable !== undefined && !/\.(com|exe)$/i.test(executable)) {
       const firstLine = yield* fs.readFileString(executable).pipe(
         Effect.map((text) => text.split(/\r?\n/, 1)[0] ?? ""),
-        Effect.orElseSucceed(() => ""),
+        // An unreadable launcher has no shebang to follow.
+        Effect.catchTag("PlatformError", () => Effect.succeed("")),
       );
       if (firstLine.startsWith("#!")) {
         const [interpreterPath, ...flags] = firstLine.slice(2).trim().split(/\s+/);
@@ -324,20 +337,21 @@ const make = Effect.gen(function* () {
   const startProcess = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> =>
     runNativeEffect(
       Effect.gen(function* () {
+        const expand = (value: string) =>
+          Effect.fromResult(expandVariablesResult(value, process.env));
         const env = {
           // The agent logs in its own official way; the app's ChatGPT and Kagi secrets are not passed.
           ...getDefaultEnvironment(),
           ...Object.fromEntries(
-            Object.entries(agent.command.env).map(([name, value]) => [
-              name,
-              expandVariables(value, process.env),
-            ]),
+            yield* Effect.forEach(Object.entries(agent.command.env), ([name, value]) =>
+              Effect.map(expand(value), (expanded) => [name, expanded] as const),
+            ),
           ),
         };
         const owner = yield* Scope.fork(serviceScope, "parallel");
         const { command, args, shell } = yield* agentCommandInvocation({
-          command: expandVariables(agent.command.command, process.env),
-          args: agent.command.args.map((arg) => expandVariables(arg, process.env)),
+          command: yield* expand(agent.command.command),
+          args: yield* Effect.forEach(agent.command.args, expand),
           cwd: project.root,
           env,
         }).pipe(
@@ -405,7 +419,7 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.timeoutOrElse({
               duration: connectTimeoutMs,
-              orElse: () => Effect.fail(new Cause.UnknownError(new Error("initialize timed out"))),
+              orElse: () => Effect.fail(new ExternalAgentInitializeTimedOut()),
             }),
           );
           const live: Live = {
@@ -418,7 +432,8 @@ const make = Effect.gen(function* () {
           };
           yield* child.exitCode.pipe(
             Effect.onExit(() => Effect.sync(() => onLost(project, agent, link, live))),
-            Effect.ignore,
+            // Any end of the process is the lost connection handled above.
+            Effect.catchTag("PlatformError", () => Effect.void),
             Effect.forkIn(owner),
           );
           void connection.closed.finally(() => onLost(project, agent, link, live));

@@ -1,7 +1,6 @@
-import { nativePromise, nativeFailure } from "../runtime/native-effect.ts";
+import { nativePromise } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
-import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime } from "effect";
-import { isTruthy } from "../truthy.ts";
+import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime, Schema } from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   EventType,
@@ -30,18 +29,45 @@ type Item =
   | { readonly kind: "done"; readonly outcome: ExternalPromptOutcome }
   | { readonly kind: "error"; readonly error: Error };
 
-/** Why a turn did not produce an answer, as the page shows it. */
-function failureOf(outcome: ExternalPromptOutcome): string | null {
+/** A turn that ended without an answer; the SDK shows its message as the run's error. */
+export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTurnFailed>()(
+  "ExternalAgentTurnFailed",
+  {
+    reason: Schema.Union([
+      /** `detail` is the agent's or the connection's own reason. */
+      Schema.TaggedStruct("Unavailable", { detail: Schema.String }),
+      Schema.TaggedStruct("Failed", { detail: Schema.String }),
+      /** The connection dropped mid-answer; the prompt was not sent again. */
+      Schema.TaggedStruct("Disconnected", {}),
+    ]),
+  },
+) {
+  override get message() {
+    switch (this.reason._tag) {
+      case "Unavailable":
+        return `외부 에이전트를 쓸 수 없어요: ${this.reason.detail}`;
+      case "Failed":
+        return `외부 에이전트가 오류로 끝냈어요: ${this.reason.detail}`;
+      case "Disconnected":
+        return "외부 에이전트 연결이 끊겼어요. 보낸 요청은 다시 보내지 않았어요.";
+    }
+  }
+}
+
+/** Why a turn did not produce an answer, or null when it did. */
+function failureOf(outcome: ExternalPromptOutcome): ExternalAgentTurnFailed | null {
   switch (outcome.status) {
     case "completed":
     case "cancelled":
       return null;
     case "unavailable":
-      return `외부 에이전트를 쓸 수 없어요: ${outcome.reason}`;
+      return new ExternalAgentTurnFailed({
+        reason: { _tag: "Unavailable", detail: outcome.reason },
+      });
     case "failed":
-      return `외부 에이전트가 오류로 끝냈어요: ${outcome.error}`;
+      return new ExternalAgentTurnFailed({ reason: { _tag: "Failed", detail: outcome.error } });
     case "disconnected":
-      return "외부 에이전트 연결이 끊겼어요. 보낸 요청은 다시 보내지 않았어요.";
+      return new ExternalAgentTurnFailed({ reason: { _tag: "Disconnected" } });
   }
 }
 
@@ -136,13 +162,13 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
                 });
                 push({ kind: "done", outcome });
               }).pipe(
-                Effect.catchCause((cause) =>
+                // The preamble or the turn rejected; the SDK receives the rejection as thrown.
+                Effect.catchTag("UnknownError", ({ cause }) =>
                   Effect.sync(() => {
-                    const error = nativeFailure(cause).cause;
                     if (signal?.aborted !== true)
                       push({
                         kind: "error",
-                        error: error instanceof Error ? error : new Error(String(error)),
+                        error: cause instanceof Error ? cause : new Error(String(cause)),
                       });
                   }),
                 ),
@@ -181,7 +207,8 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
             case "done": {
               if (signal?.aborted === true) return;
               const failure = failureOf(item.outcome);
-              if (isTruthy(failure)) throw new Error(failure);
+              // Synchronous SDK iterator: a failed turn is thrown as its typed error.
+              if (failure !== null) throw failure;
               if (MutableHashMap.size(toolTitles) > 0) {
                 const list = [...MutableHashMap.values(toolTitles)]
                   .map((call) => `- ${call.title} (${call.status})`)

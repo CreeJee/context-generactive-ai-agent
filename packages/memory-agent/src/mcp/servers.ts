@@ -1,4 +1,4 @@
-import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Cause, Function as EffectFunction } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
@@ -14,7 +14,6 @@ import {
   DateTime,
   Clock,
   Context,
-  Data,
   Effect,
   FileSystem,
   Layer,
@@ -66,10 +65,19 @@ export interface McpOverview {
  */
 export const mcpToolPrefix = "mcp_";
 
-export class McpOperationFailed extends Data.TaggedError("McpOperationFailed")<{
-  readonly operation: "trust" | "tools";
-  readonly cause: unknown;
-}> {}
+export class McpOperationFailed extends Schema.TaggedError<McpOperationFailed>()(
+  "McpOperationFailed",
+  { operation: Schema.Literals(["trust", "tools"]), cause: Schema.Defect() },
+) {}
+
+/** A server did not finish a step in time; its message is the server state settings show. */
+export class McpStepTimedOut extends Schema.TaggedError<McpStepTimedOut>()("McpStepTimedOut", {
+  step: Schema.Literals(["connect", "tools/list"]),
+}) {
+  override get message() {
+    return `${this.step} timed out`;
+  }
+}
 
 /** OpenAI function names allow at most 64 characters of [A-Za-z0-9_-]. */
 export const mcpToolName: {
@@ -125,11 +133,11 @@ const describeFailure = (error: Error) => {
   return `${error.message}${cause}`.slice(0, 300);
 };
 
-const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) =>
+const withTimeout = <A>(promise: Promise<A>, ms: number, step: McpStepTimedOut["step"]) =>
   nativePromise(() => promise).pipe(
     Effect.timeoutOrElse({
       duration: ms,
-      orElse: () => Effect.fail(new Cause.UnknownError(new Error(`${what} timed out`))),
+      orElse: () => Effect.fail(new McpStepTimedOut({ step })),
     }),
   );
 
@@ -311,9 +319,10 @@ const make = Effect.gen(function* () {
           ];
         });
       }).pipe(
-        Effect.catchCause((cause) =>
+        // A server that fails to start or list is remembered as failed and offers no tools.
+        Effect.catch((failure) =>
           Effect.sync(() => {
-            const error = nativeFailure(cause).cause;
+            const error = Cause.isUnknownError(failure) ? failure.cause : failure;
             // Stop whatever did start; the next run starts it again.
             void connection.client.then((client) => client.close()).catch(() => undefined);
             if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
@@ -374,7 +383,8 @@ const make = Effect.gen(function* () {
       (connection) =>
         nativePromise(() => connection.client).pipe(
           Effect.flatMap((client) => nativePromise(() => client.close())),
-          Effect.ignore,
+          // Shutdown is best-effort: a client that never started or fails to close is dropped.
+          Effect.catchTag("UnknownError", () => Effect.void),
         ),
       { concurrency: "unbounded", discard: true },
     ),
