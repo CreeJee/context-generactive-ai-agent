@@ -199,7 +199,8 @@ export function ConfigEntry({
   name: string;
   scope: keyof typeof scopeLabels;
   state: ReactNode;
-  target: string;
+  /** `null` when the server could not check it for secrets. */
+  target: string | null;
   secretKind: string;
   secretNames: readonly string[];
   problem: ConfigProblem | null;
@@ -216,7 +217,7 @@ export function ConfigEntry({
           {state}
         </ItemTitle>
         <ItemDescription className="break-all">
-          <code>{target}</code>
+          {target === null ? "비밀정보 확인에 실패해 명령줄을 숨겼어요." : <code>{target}</code>}
         </ItemDescription>
         {secretNames.length > 0 && (
           <ItemDescription>

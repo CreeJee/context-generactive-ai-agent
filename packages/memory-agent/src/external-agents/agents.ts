@@ -93,7 +93,8 @@ export type AgentTrustState =
 export interface ExternalAgentView {
   readonly scope: AgentScope;
   readonly name: string;
-  readonly target: string;
+  /** `command args…` as configured, with secrets hidden; `null` when they could not be checked. */
+  readonly target: string | null;
   readonly envNames: readonly string[];
   readonly shadowed: boolean;
   readonly state: AgentTrustState;
@@ -585,27 +586,31 @@ const make = Effect.gen(function* () {
     project: Project,
   ): Effect.fn.Return<ExternalAgentsOverview, SqlError.SqlError | Schema.SchemaError> {
     const { files, agents } = yield* configured(project);
-    return {
-      files,
-      agents: agents.map((entry) => ({
-        scope: entry.agent.scope,
-        name: entry.agent.name,
-        target: [entry.agent.command.command, ...entry.agent.command.args].join(" "),
-        envNames: Object.keys(entry.agent.command.env),
-        shadowed: entry.shadowed,
-        state:
-          entry.trusted === null
-            ? { status: "untrusted" }
-            : entry.trusted !== entry.agent.fingerprint
-              ? { status: "changed" }
-              : {
-                  status: "trusted",
-                  link: Option.getOrUndefined(
-                    MutableHashMap.get(links, linkKey(project, entry.agent)),
-                  )?.state ?? { status: "idle" },
-                },
-      })),
-    };
+    const views = yield* Effect.forEach(agents, (entry) =>
+      Effect.map(
+        // A command line can carry a key (`--api-key=…`); the page gets it hidden.
+        redactor.shownDetail([entry.agent.command.command, ...entry.agent.command.args].join(" ")),
+        (target): ExternalAgentView => ({
+          scope: entry.agent.scope,
+          name: entry.agent.name,
+          target,
+          envNames: Object.keys(entry.agent.command.env),
+          shadowed: entry.shadowed,
+          state:
+            entry.trusted === null
+              ? { status: "untrusted" }
+              : entry.trusted !== entry.agent.fingerprint
+                ? { status: "changed" }
+                : {
+                    status: "trusted",
+                    link: Option.getOrUndefined(
+                      MutableHashMap.get(links, linkKey(project, entry.agent)),
+                    )?.state ?? { status: "idle" },
+                  },
+        }),
+      ),
+    );
+    return { files, agents: views };
   });
 
   yield* Effect.addFinalizer(() =>

@@ -52,8 +52,11 @@ export interface McpServerView {
   readonly scope: McpScope;
   readonly name: string;
   readonly transport: McpServerConfig["_tag"];
-  /** `command args…` or the URL, as configured (variables not expanded). */
-  readonly target: string;
+  /**
+   * `command args…` or the URL, as configured (variables not expanded), with secrets hidden;
+   * `null` when they could not be checked.
+   */
+  readonly target: string | null;
   readonly envNames: readonly string[];
   readonly headerNames: readonly string[];
   /** A project server with the same name replaces this global one. */
@@ -399,23 +402,29 @@ const make = Effect.gen(function* () {
 
   const overview = Effect.fn("mcp.overview")(function* (project: Project) {
     const { files, servers } = yield* configured(project);
-    return {
-      files,
-      servers: servers.map((entry) => ({
-        scope: entry.server.scope,
-        name: entry.server.name,
-        transport: entry.server.config._tag,
-        target:
+    const views = yield* Effect.forEach(servers, (entry) =>
+      Effect.map(
+        // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
+        redactor.shownDetail(
           entry.server.config._tag === "stdio"
             ? [entry.server.config.command, ...entry.server.config.args].join(" ")
             : entry.server.config.url,
-        envNames: entry.server.config._tag === "stdio" ? Object.keys(entry.server.config.env) : [],
-        headerNames:
-          entry.server.config._tag === "http" ? Object.keys(entry.server.config.headers) : [],
-        shadowed: entry.shadowed,
-        state: stateOf(project, entry),
-      })),
-    } satisfies McpOverview;
+        ),
+        (target): McpServerView => ({
+          scope: entry.server.scope,
+          name: entry.server.name,
+          transport: entry.server.config._tag,
+          target,
+          envNames:
+            entry.server.config._tag === "stdio" ? Object.keys(entry.server.config.env) : [],
+          headerNames:
+            entry.server.config._tag === "http" ? Object.keys(entry.server.config.headers) : [],
+          shadowed: entry.shadowed,
+          state: stateOf(project, entry),
+        }),
+      ),
+    );
+    return { files, servers: views } satisfies McpOverview;
   });
 
   yield* Effect.addFinalizer(() =>

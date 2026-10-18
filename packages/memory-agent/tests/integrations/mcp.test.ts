@@ -249,8 +249,9 @@ testAgent()("MCP configuration errors", (it) => {
         status: "failed",
         failure: { code: "start_failed", detail: expect.stringContaining("API_KEY=") },
       });
-      // The settings page shows the configured command itself; only the failure text is the server's.
-      expect(yield* encodeJson(failed.servers[0]?.state)).not.toContain("zq81Hd72kdP0xQ");
+      // The settings page shows the configured command too, with the same value hidden.
+      expect(failed.servers[0]?.target).toContain("API_KEY=");
+      expect(yield* encodeJson(failed)).not.toContain("zq81Hd72kdP0xQ");
     }),
   );
 });

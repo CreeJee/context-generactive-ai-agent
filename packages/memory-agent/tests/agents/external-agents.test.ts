@@ -141,7 +141,10 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       const failure = { code: "spawn_failed", detail: expect.stringContaining("API_KEY=") };
       expect(outcome).toEqual({ status: "unavailable", failure });
       expect(yield* link).toEqual({ status: "retrying", failures: 1, failure });
-      expect(yield* encodeJson([outcome, yield* link])).not.toContain("zq81Hd72kdP0xQ");
+      // The settings page's command line hides the same value.
+      const listed = yield* agents.overview(project);
+      expect(listed.agents[0]?.target).toContain("API_KEY=");
+      expect(yield* encodeJson([outcome, yield* link, listed])).not.toContain("zq81Hd72kdP0xQ");
     }),
   );
 
