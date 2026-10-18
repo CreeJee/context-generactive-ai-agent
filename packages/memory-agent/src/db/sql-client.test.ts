@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Layer } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -30,6 +30,52 @@ it.effect("keeps another fibre's statement out of a suspended transaction", () =
     expect(yield* Fiber.join(transaction).pipe(Effect.flip)).toBe("rolled back");
     yield* Fiber.join(outside);
     expect(yield* sql`SELECT id FROM sql_client_fixture ORDER BY id`).toEqual([{ id: 2 }]);
+  }).pipe(provideFixture(Database.layer(":memory:"))),
+);
+
+it.effect("rolls back a failed nested transaction without discarding outer work", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE nested_fixture(id INTEGER PRIMARY KEY)`;
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`INSERT INTO nested_fixture VALUES (1)`;
+        const nested = yield* sql
+          .withTransaction(
+            sql`INSERT INTO nested_fixture VALUES (2)`.pipe(
+              Effect.andThen(Effect.fail("nested failed" as const)),
+            ),
+          )
+          .pipe(Effect.flip);
+        expect(nested).toBe("nested failed");
+        yield* sql.withTransaction(sql`INSERT INTO nested_fixture VALUES (3)`);
+      }),
+    );
+    expect(yield* sql`SELECT id FROM nested_fixture ORDER BY id`).toEqual([{ id: 1 }, { id: 3 }]);
+  }).pipe(provideFixture(Database.layer(":memory:"))),
+);
+
+it.effect("reports a deferred COMMIT failure, rolls back and permits the next transaction", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE parent_fixture(id INTEGER PRIMARY KEY)`;
+    yield* sql`CREATE TABLE child_fixture(parent_id INTEGER REFERENCES parent_fixture(id) DEFERRABLE INITIALLY DEFERRED)`;
+    const failed = yield* sql
+      .withTransaction(sql`INSERT INTO child_fixture VALUES (99)`)
+      .pipe(Effect.flip);
+    // SQLITE_CONSTRAINT_FOREIGNKEY from COMMIT, not a later rollback or savepoint error.
+    expect(
+      (yield* Schema.decodeUnknownEffect(Schema.Struct({ errcode: Schema.Finite }))(
+        failed.reason.cause,
+      )).errcode,
+    ).toBe(787);
+    expect(yield* sql`SELECT COUNT(*) AS count FROM child_fixture`).toEqual([{ count: 0 }]);
+    yield* sql.withTransaction(
+      sql`INSERT INTO parent_fixture VALUES (99)`.pipe(
+        Effect.andThen(sql`INSERT INTO child_fixture VALUES (99)`),
+      ),
+    );
+    expect(yield* sql`SELECT COUNT(*) AS count FROM child_fixture`).toEqual([{ count: 1 }]);
   }).pipe(provideFixture(Database.layer(":memory:"))),
 );
 
