@@ -1,17 +1,12 @@
 import { isTruthy } from "../truthy.ts";
-import type { DatabaseSync } from "node:sqlite";
-import { Function as EffectFunction, Result, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 
 const MAX_NODES = 16;
 const MAX_TEXT = 1200;
 const MAX_DETAIL_TEXT = 8000;
 const MAX_TRANSCRIPT = 8;
 const MAX_RUNS = 3;
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const optionalText = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.NullOr(Schema.String)),
-  Result.getOrThrow,
-);
 
 import type { EvidenceSection, ReportEvidence } from "../entry/report/report-contracts";
 export type {
@@ -20,212 +15,234 @@ export type {
   ReportEvidence,
 } from "../entry/report/report-contracts";
 
-export const reportEvidenceResponse: {
-  (
-    request: Request,
-    traceTasks: (sessionId: string) => ReportEvidence["trace"]["items"],
-  ): (sqlite: DatabaseSync) => ReturnType<typeof reportEvidenceResponseBody>;
-} & typeof reportEvidenceResponseBody = EffectFunction.dual(3, reportEvidenceResponseBody);
-function reportEvidenceResponseBody(
-  sqlite: DatabaseSync,
-  request: Request,
-  traceTasks: (sessionId: string) => ReportEvidence["trace"]["items"],
-): Response {
-  const url = new URL(request.url);
-  const projectId = url.searchParams.get("project");
-  const sessionId = url.searchParams.get("session");
-  if (
-    !isTruthy(projectId) ||
-    !isTruthy(sessionId) ||
-    projectId.length > 256 ||
-    sessionId.length > 256
-  )
-    return Response.json({ error: "project_and_session_required" }, { status: 400 });
-  const session = reportSession(sqlite, projectId, sessionId);
-  if (!(session !== null)) return Response.json({ error: "session_not_found" }, { status: 404 });
-  return Response.json(
-    collectReportEvidence(sqlite, session, () => traceTasks(sessionId)),
-    {
-      headers: { "Cache-Control": "no-store" },
-    },
-  );
-}
+const SessionRow = Schema.Struct({
+  id: Schema.String,
+  project_id: Schema.String,
+  title: Schema.NullOr(Schema.String),
+});
+const SessionKey = Schema.Struct({ projectId: Schema.String, sessionId: Schema.String });
+const RunRow = Schema.Struct({
+  run_id: Schema.String,
+  status: Schema.String,
+  started_at: Schema.Finite,
+  finished_at: Schema.NullOr(Schema.Finite),
+  error: Schema.NullOr(Schema.String),
+  error_cut: Schema.NullOr(Schema.Finite),
+});
+const ApprovalRow = Schema.Struct({
+  run_id: Schema.String,
+  status: Schema.String,
+  requested_at: Schema.Finite,
+  resolved_at: Schema.NullOr(Schema.Finite),
+});
+const ExcerptRow = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.String,
+  run_id: Schema.NullOr(Schema.String),
+  created_at: Schema.String,
+  excerpt: Schema.String,
+  cut: Schema.Finite,
+  tool_call_id: Schema.NullOr(Schema.String),
+  tool_name: Schema.NullOr(Schema.String),
+});
+const CallRow = Schema.Struct({ ...ExcerptRow.fields, ok: Schema.NullOr(Schema.Finite) });
 
-export const reportEvidenceItemResponse: {
-  (request: Request): (sqlite: DatabaseSync) => ReturnType<typeof reportEvidenceItemResponseBody>;
-} & typeof reportEvidenceItemResponseBody = EffectFunction.dual(2, reportEvidenceItemResponseBody);
-function reportEvidenceItemResponseBody(sqlite: DatabaseSync, request: Request): Response {
-  const url = new URL(request.url);
-  const projectId = url.searchParams.get("project");
-  const sessionId = url.searchParams.get("session");
-  const itemId = url.searchParams.get("item");
-  if (
-    !isTruthy(projectId) ||
-    !isTruthy(sessionId) ||
-    !isTruthy(itemId) ||
-    projectId.length > 256 ||
-    sessionId.length > 256 ||
-    itemId.length > 256
-  )
-    return Response.json({ error: "project_session_item_required" }, { status: 400 });
-  const session = reportSession(sqlite, projectId, sessionId);
-  if (!(session !== null)) return Response.json({ error: "session_not_found" }, { status: 404 });
-  const row = sqlite
-    .prepare(
-      `SELECT id, kind, run_id, created_at, substr(text, 1, ?) AS excerpt,
-      length(text) > ? AS cut,
-      substr(json_extract(detail, '$.toolCallId'), 1, 128) AS tool_call_id,
-      substr(json_extract(detail, '$.toolName'), 1, 128) AS tool_name
-      FROM nodes WHERE id = ? AND session_id = ? AND project_id = ?
-      AND kind IN ('tool_call', 'tool_result')`,
-    )
-    .get(MAX_DETAIL_TEXT, MAX_DETAIL_TEXT, itemId, session.id, session.projectId);
-  if (!isTruthy(row)) return Response.json({ error: "item_not_found" }, { status: 404 });
-  return Response.json(
-    {
-      id: String(row.id),
-      kind: String(row.kind),
-      runId: optionalText(row.run_id),
-      createdAt: String(row.created_at),
-      toolCallId: optionalText(row.tool_call_id),
-      toolName: optionalText(row.tool_name),
-      text: String(row.excerpt),
-      truncated: Boolean(row.cut),
-    },
-    { headers: { "Cache-Control": "no-store" } },
-  );
-}
+const json = <Body>(body: Body, status = 200) =>
+  Response.json(body, {
+    status,
+    headers: status === 200 ? { "Cache-Control": "no-store" } : undefined,
+  });
 
-export const reportSession: {
-  (
-    projectId: string,
-    sessionId: string,
-  ): (sqlite: DatabaseSync) => ReturnType<typeof reportSessionBody>;
-} & typeof reportSessionBody = EffectFunction.dual(3, reportSessionBody);
-function reportSessionBody(
-  sqlite: DatabaseSync,
+/** The project hint is not an authority. Enforce the pair before reading any report evidence. */
+export const reportSession = Effect.fn("reportSession")(function* (
   projectId: string,
   sessionId: string,
-): ReportEvidence["session"] | null {
-  // The project hint is not an authority. Enforce the pair before reading any report evidence.
-  const row = sqlite
-    .prepare("SELECT id, project_id, title FROM sessions WHERE id = ? AND project_id = ?")
-    .get(sessionId, projectId);
-  if (!isTruthy(row)) return null;
-  return {
-    id: String(row.id),
-    projectId: String(row.project_id),
-    title: optionalText(row.title),
-  };
-}
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const row = yield* SqlSchema.findOneOption({
+    Request: SessionKey,
+    Result: SessionRow,
+    execute: (key) =>
+      sql`SELECT id, project_id, title FROM sessions WHERE id = ${key.sessionId} AND project_id = ${key.projectId}`,
+  })({ projectId, sessionId });
+  return Option.map(row, (found): ReportEvidence["session"] => ({
+    id: found.id,
+    projectId: found.project_id,
+    title: found.title,
+  }));
+});
+
+const queryIdentifiers = (request: Request) => {
+  const url = new URL(request.url);
+  const projectId = url.searchParams.get("project");
+  const sessionId = url.searchParams.get("session");
+  return isTruthy(projectId) &&
+    isTruthy(sessionId) &&
+    projectId.length <= 256 &&
+    sessionId.length <= 256
+    ? Option.some({ projectId, sessionId, itemId: url.searchParams.get("item") })
+    : Option.none();
+};
+
+export const reportEvidenceResponse = Effect.fn("reportEvidenceResponse")(function* <E>(
+  request: Request,
+  traceTasks: (sessionId: string) => Effect.Effect<ReportEvidence["trace"]["items"], E>,
+) {
+  const query = queryIdentifiers(request);
+  if (Option.isNone(query)) return json({ error: "project_and_session_required" }, 400);
+  const { projectId, sessionId } = query.value;
+  const session = yield* reportSession(projectId, sessionId);
+  if (Option.isNone(session)) return json({ error: "session_not_found" }, 404);
+  return json(yield* collectReportEvidence(session.value, traceTasks(sessionId)));
+});
+
+export const reportEvidenceItemResponse = Effect.fn("reportEvidenceItemResponse")(function* (
+  request: Request,
+) {
+  const query = queryIdentifiers(request);
+  if (Option.isNone(query) || !isTruthy(query.value.itemId) || query.value.itemId.length > 256)
+    return json({ error: "project_session_item_required" }, 400);
+  const { projectId, sessionId, itemId } = query.value;
+  const session = yield* reportSession(projectId, sessionId);
+  if (Option.isNone(session)) return json({ error: "session_not_found" }, 404);
+  const sql = yield* SqlClient.SqlClient;
+  const row = yield* SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: ExcerptRow,
+    execute: (id) => sql`
+      SELECT id, kind, run_id, created_at, substr(text, 1, ${MAX_DETAIL_TEXT}) AS excerpt,
+      length(text) > ${MAX_DETAIL_TEXT} AS cut,
+      substr(json_extract(detail, '$.toolCallId'), 1, 128) AS tool_call_id,
+      substr(json_extract(detail, '$.toolName'), 1, 128) AS tool_name
+      FROM nodes WHERE id = ${id} AND session_id = ${session.value.id}
+      AND project_id = ${session.value.projectId}
+      AND kind IN ('tool_call', 'tool_result')`,
+  })(itemId);
+  if (Option.isNone(row)) return json({ error: "item_not_found" }, 404);
+  const found = row.value;
+  return json({
+    id: found.id,
+    kind: found.kind,
+    runId: found.run_id,
+    createdAt: found.created_at,
+    toolCallId: found.tool_call_id,
+    toolName: found.tool_name,
+    text: found.excerpt,
+    truncated: Boolean(found.cut),
+  });
+});
 
 const section = <T>(items: readonly T[], limit: number): EvidenceSection<T> => ({
   status: isTruthy(items.length) ? "available" : "empty",
   truncated: items.length > limit,
   items: items.slice(0, limit),
 });
-const failed = <T>(): EvidenceSection<T> => ({ status: "failed", items: [], truncated: false });
 
-function guarded<T>(load: () => EvidenceSection<T>): EvidenceSection<T> {
-  try {
-    return load();
-  } catch {
-    return failed();
-  }
-}
+/** A broken evidence source marks only its own section failed; the report still opens. */
+const guarded = <T, E, R>(
+  load: Effect.Effect<readonly T[], E, R>,
+  limit: number,
+): Effect.Effect<EvidenceSection<T>, never, R> =>
+  load.pipe(
+    Effect.map((items) => section(items, limit)),
+    Effect.orElseSucceed((): EvidenceSection<T> => ({
+      status: "failed",
+      items: [],
+      truncated: false,
+    })),
+  );
 
 /** Read only bounded excerpts, not entire transcript blobs or unredacted provider wire output. */
-export const collectReportEvidence: {
-  (
-    session: ReportEvidence["session"],
-    traceTasks: () => ReportEvidence["trace"]["items"],
-  ): (sqlite: DatabaseSync) => ReturnType<typeof collectReportEvidenceBody>;
-} & typeof collectReportEvidenceBody = EffectFunction.dual(3, collectReportEvidenceBody);
-function collectReportEvidenceBody(
-  sqlite: DatabaseSync,
+export const collectReportEvidence = Effect.fn("collectReportEvidence")(function* <E>(
   session: ReportEvidence["session"],
-  traceTasks: () => ReportEvidence["trace"]["items"],
-): ReportEvidence {
-  const runs: ReportEvidence["runs"] = guarded(() => {
-    const rows = sqlite
-      .prepare(
-        `SELECT run_id, status, started_at, finished_at, substr(error, 1, ?) AS error,
-          length(error) > ? AS error_cut FROM chat_runs
-         WHERE thread_id = ? ORDER BY started_at DESC LIMIT ?`,
-      )
-      .all(MAX_TEXT, MAX_TEXT, session.id, MAX_RUNS + 1);
-    return section(
+  traceTasks: Effect.Effect<ReportEvidence["trace"]["items"], E>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const runs = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: RunRow,
+    execute: (threadId) => sql`
+      SELECT run_id, status, started_at, finished_at, substr(error, 1, ${MAX_TEXT}) AS error,
+        length(error) > ${MAX_TEXT} AS error_cut FROM chat_runs
+      WHERE thread_id = ${threadId} ORDER BY started_at DESC LIMIT ${MAX_RUNS + 1}`,
+  })(session.id).pipe(
+    Effect.map((rows) =>
       rows.map((row) => ({
-        runId: String(row.run_id),
-        status: String(row.status),
-        startedAt: Number(row.started_at),
-        finishedAt: row.finished_at === null ? null : Number(row.finished_at),
-        error: optionalText(row.error),
+        runId: row.run_id,
+        status: row.status,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        error: row.error,
         truncated: Boolean(row.error_cut),
       })),
-      MAX_RUNS,
-    );
-  });
-  const approvals: ReportEvidence["approvals"] = guarded(() => {
-    const rows = sqlite
-      .prepare(
-        `SELECT run_id, status, requested_at, resolved_at FROM chat_interrupts
-         WHERE thread_id = ? ORDER BY requested_at DESC LIMIT 4`,
-      )
-      .all(session.id);
-    return section(
+    ),
+  );
+  const approvals = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: ApprovalRow,
+    execute: (threadId) => sql`
+      SELECT run_id, status, requested_at, resolved_at FROM chat_interrupts
+      WHERE thread_id = ${threadId} ORDER BY requested_at DESC LIMIT 4`,
+  })(session.id).pipe(
+    Effect.map((rows) =>
       rows.map((row) => ({
-        runId: String(row.run_id),
-        status: String(row.status),
-        requestedAt: Number(row.requested_at),
-        resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at),
+        runId: row.run_id,
+        status: row.status,
+        requestedAt: row.requested_at,
+        resolvedAt: row.resolved_at,
       })),
-      3,
-    );
-  });
-  const excerpts = (kinds: readonly string[], limit: number) => {
-    const slots = kinds.map(() => "?").join(", ");
-    return sqlite
-      .prepare(
-        `SELECT id, kind, run_id, created_at, substr(text, 1, ?) AS excerpt,
-          length(text) > ? AS cut,
+    ),
+  );
+  const excerpts = (kinds: readonly string[], limit: number) =>
+    SqlSchema.findAll({
+      Request: Schema.Array(Schema.String),
+      Result: CallRow,
+      execute: (wanted) => sql`
+        SELECT id, kind, run_id, created_at, substr(text, 1, ${MAX_TEXT}) AS excerpt,
+          length(text) > ${MAX_TEXT} AS cut,
           substr(json_extract(detail, '$.toolCallId'), 1, 128) AS tool_call_id,
           substr(json_extract(detail, '$.toolName'), 1, 128) AS tool_name,
           json_extract(detail, '$.ok') AS ok FROM nodes
-         WHERE session_id = ? AND project_id = ? AND kind IN (${slots})
-         ORDER BY seq DESC LIMIT ?`,
-      )
-      .all(MAX_TEXT, MAX_TEXT, session.id, session.projectId, ...kinds, limit + 1);
-  };
-  const transcript: ReportEvidence["transcript"] = guarded(() =>
-    section(
-      excerpts(["user", "assistant"], MAX_TRANSCRIPT).map((row) => ({
-        id: String(row.id),
-        kind: String(row.kind),
-        runId: optionalText(row.run_id),
-        createdAt: String(row.created_at),
-        text: String(row.excerpt),
+        WHERE session_id = ${session.id} AND project_id = ${session.projectId}
+          AND kind IN ${sql.in(wanted)}
+        ORDER BY seq DESC LIMIT ${limit + 1}`,
+    })(kinds);
+  const transcript = excerpts(["user", "assistant"], MAX_TRANSCRIPT).pipe(
+    Effect.map((rows) =>
+      rows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        runId: row.run_id,
+        createdAt: row.created_at,
+        text: row.excerpt,
         truncated: Boolean(row.cut),
       })),
-      MAX_TRANSCRIPT,
     ),
   );
-  const calls: ReportEvidence["calls"] = guarded(() =>
-    section(
-      excerpts(["tool_call", "tool_result"], MAX_NODES).map((node) => ({
-        id: String(node.id),
-        kind: String(node.kind),
-        runId: optionalText(node.run_id),
-        toolCallId: optionalText(node.tool_call_id),
-        toolName: optionalText(node.tool_name),
+  const calls = excerpts(["tool_call", "tool_result"], MAX_NODES).pipe(
+    Effect.map((rows) =>
+      rows.map((node) => ({
+        id: node.id,
+        kind: node.kind,
+        runId: node.run_id,
+        toolCallId: node.tool_call_id,
+        toolName: node.tool_name,
         ok: node.ok === null ? null : Boolean(node.ok),
-        createdAt: String(node.created_at),
-        text: String(node.excerpt),
+        createdAt: node.created_at,
+        text: node.excerpt,
         truncated: Boolean(node.cut),
       })),
-      MAX_NODES,
     ),
   );
-  const trace = guarded(() => section(traceTasks(), 5));
-  return { session, runs, approvals, transcript, calls, trace };
-}
+  return yield* Effect.all(
+    {
+      session: Effect.succeed(session),
+      runs: guarded(runs, MAX_RUNS),
+      approvals: guarded(approvals, 3),
+      transcript: guarded(transcript, MAX_TRANSCRIPT),
+      calls: guarded(calls, MAX_NODES),
+      trace: guarded(traceTasks, 5),
+    },
+    { concurrency: 1 },
+  );
+});

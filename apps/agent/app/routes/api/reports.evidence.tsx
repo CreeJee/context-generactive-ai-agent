@@ -1,5 +1,5 @@
 import { isTruthy } from "../../truthy.ts";
-import { Database, WorkTraceStore } from "memory-agent";
+import { WorkTraceStore } from "memory-agent";
 import { Effect } from "effect";
 import { agent } from "~/.server/agent";
 import { reportEvidenceItemResponse, reportEvidenceResponse } from "~/.server/report-evidence";
@@ -24,14 +24,10 @@ export function loader({ request }: Route.LoaderArgs) {
       if (itemId !== null) {
         if (!(itemId.length > 0) || itemId.length > 256)
           return Response.json({ error: "project_session_item_required" }, { status: 400 });
-        {
-          const { sqlite } = yield* Database;
-          return reportEvidenceItemResponse(sqlite, request);
-        }
+        return yield* reportEvidenceItemResponse(request);
       }
 
       {
-        const { sqlite } = yield* Database;
         const trace = yield* WorkTraceStore;
         const recent = (yield* trace.taskTree(sessionId))
           .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -43,7 +39,7 @@ export function loader({ request }: Route.LoaderArgs) {
             parentToolCallId: task.parentToolCallId,
             updatedAt: task.updatedAt,
           }));
-        return reportEvidenceResponse(sqlite, request, () => recent);
+        return yield* reportEvidenceResponse(request, () => Effect.succeed(recent));
       }
     }),
   );

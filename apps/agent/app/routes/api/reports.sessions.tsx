@@ -1,5 +1,5 @@
 import { Effect, Result, Schema } from "effect";
-import { AppEvents, Database } from "memory-agent";
+import { AppEvents } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import { openReportSession } from "~/.server/report-sessions";
@@ -24,8 +24,7 @@ export function action({ request }: Route.ActionArgs) {
       if (projectId.length > 256 || sourceSessionId.length > 256)
         return Response.json({ error: "invalid_report_source" }, { status: 400 });
       {
-        const { sqlite } = yield* Database;
-        const result = yield* openReportSession(sqlite, projectId, sourceSessionId);
+        const result = yield* openReportSession(projectId, sourceSessionId);
         if (!(result !== null))
           return Response.json({ error: "report_source_not_found" }, { status: 404 });
         (yield* AppEvents).publishProject(projectId, "sessions");
