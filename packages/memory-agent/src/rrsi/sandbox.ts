@@ -1,5 +1,5 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { ignoreLogged } from "../runtime/best-effort.ts";
+import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";

@@ -22,7 +22,7 @@ import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
-import { ignoreLogged } from "../../runtime/best-effort.ts";
+import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import {
   type EmbeddingDevice,

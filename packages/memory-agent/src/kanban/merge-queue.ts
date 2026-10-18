@@ -11,7 +11,7 @@ import { GoalSchedules, mergeSettled, type GoalMergeState } from "./goal-schedul
 import { goalDecisionCardId, HumanDecisions, type DecisionKind } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 import { CardWorktrees, goalBranchName, type GoalRef } from "./worktree.ts";
-import { stopLogged } from "./background.ts";
+import { stopLogged } from "../runtime/logged-failures.ts";
 
 /**
  * The merge queue of the project scheduler (docs/kanban-orchestration.md "브랜치 흐름" 5,

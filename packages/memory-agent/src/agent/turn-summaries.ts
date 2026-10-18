@@ -15,7 +15,7 @@ import {
   summaryBlockTurns,
 } from "./compaction-policy.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
-import { fallbackLogged } from "./logged-fallback.ts";
+import { fallbackLogged } from "../runtime/logged-failures.ts";
 import {
   compactEffect,
   compactionState,

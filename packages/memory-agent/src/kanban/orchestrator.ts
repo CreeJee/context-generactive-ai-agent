@@ -45,7 +45,7 @@ import {
 } from "./human-decision.ts";
 import { GoalSchedules } from "./goal-schedules.ts";
 import { failureCode, worktreeFailure, type CardFailure } from "./failures.ts";
-import { stopLogged } from "./background.ts";
+import { stopLogged } from "../runtime/logged-failures.ts";
 import { GoalMerges } from "./merge-queue.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 

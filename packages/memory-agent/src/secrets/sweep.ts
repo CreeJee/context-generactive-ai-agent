@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { ignoreLogged } from "../runtime/best-effort.ts";
+import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { DateTime, Semaphore } from "effect";
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";

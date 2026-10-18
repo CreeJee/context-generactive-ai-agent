@@ -18,7 +18,7 @@ import { ChatState } from "../chat-state/chat-state.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
-import { failureTags } from "../runtime/failure-tags.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {

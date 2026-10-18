@@ -1,5 +1,5 @@
 import { NodeWorker } from "@effect/platform-node";
-import { ignoreLogged } from "../runtime/best-effort.ts";
+import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 // NodeWorker spawns the thread this constructor makes.

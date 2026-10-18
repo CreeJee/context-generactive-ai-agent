@@ -1,7 +1,7 @@
 import { NodeCrypto, NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
 import { requireRuntime, runtimeWorkerOptions } from "../../runtime/resources.ts";
-import { ignoreLogged } from "../../runtime/best-effort.ts";
+import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import {
   Context,
   Crypto,

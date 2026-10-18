@@ -20,7 +20,7 @@ import { RpcClient, type RpcClientError } from "effect/rpc";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { ArchiveInstaller, archiveInstallerLayer } from "../../runtime/archive.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
-import { ignoreLogged } from "../../runtime/best-effort.ts";
+import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { KiwiRpcs, type KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
 
 export class MorphAnalysisFailed extends Schema.TaggedError<MorphAnalysisFailed>()(

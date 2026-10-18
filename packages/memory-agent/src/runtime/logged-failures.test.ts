@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit } from "effect";
-import { KanbanStorageFailed } from "./card-attempts.ts";
-import { stopLogged } from "./background.ts";
+import { KanbanStorageFailed } from "../kanban/card-attempts.ts";
+import { stopLogged } from "./logged-failures.ts";
 
 describe("stopLogged", () => {
   it.effect("ends a step on its typed failure but keeps a defect in the exit", () =>

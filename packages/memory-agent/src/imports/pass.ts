@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { failureTags } from "../runtime/failure-tags.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";

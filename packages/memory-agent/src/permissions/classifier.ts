@@ -1,5 +1,5 @@
 import { Function as EffectFunction } from "effect";
-import { failureTags } from "../runtime/failure-tags.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 import { isTruthy } from "../truthy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { chat } from "@tanstack/ai";

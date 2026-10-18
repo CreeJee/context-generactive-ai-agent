@@ -137,7 +137,7 @@ import {
 import { contextView, lastContextUsage, recordContextUsage } from "./context-usage.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
-import { fallbackLogged, logFailure } from "./logged-fallback.ts";
+import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
