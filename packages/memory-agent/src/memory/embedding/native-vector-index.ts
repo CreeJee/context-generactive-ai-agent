@@ -77,25 +77,37 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     }
   });
   const flush = Effect.gen(function* () {
-    const removedChunks = yield* readSeqs(
-      "SELECT vector_id AS seq FROM memory_chunk_vector_removals WHERE embedder=?",
-      [embedder.identity],
-    );
-    const pending = yield* io("remove", () =>
-      sqlite
-        .prepare(
-          "SELECT node_seq AS seq FROM memory_graph_vector_removals WHERE embedder = ? ORDER BY node_seq",
-        )
-        .all(embedder.identity),
-    ).pipe(
-      Effect.flatMap(
-        Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ seq: Schema.Finite }))),
-      ),
-      Effect.mapError((cause) => new VectorIndexError({ operation: "remove", cause })),
-    );
+    // Snapshot both journals and live mappings in one synchronous DB boundary. Other agents
+    // can invalidate nodes while native remove/save awaits; acknowledge only these exact IDs.
+    const { pending, removedChunks } = yield* io("remove", () => {
+      const decode = Schema.decodeUnknownResult(
+        Schema.Array(Schema.Struct({ seq: Schema.Finite })),
+      );
+      const pending = Result.getOrThrow(
+        decode(
+          sqlite
+            .prepare(
+              "SELECT node_seq AS seq FROM memory_graph_vector_removals WHERE embedder=? ORDER BY node_seq",
+            )
+            .all(embedder.identity),
+        ),
+      );
+      const removedChunks = Result.getOrThrow(
+        decode(
+          sqlite
+            .prepare(`
+        SELECT vector_id AS seq FROM memory_chunk_vector_removals WHERE embedder=?
+        UNION SELECT c.vector_id AS seq FROM node_vector_chunks c
+        JOIN memory_graph_vector_removals r ON r.node_seq=c.node_seq AND r.embedder=c.embedder
+        WHERE c.embedder=?
+      `)
+            .all(embedder.identity, embedder.identity),
+        ),
+      );
+      return { pending, removedChunks };
+    });
     if (pending.length === 0 && removedChunks.length === 0) return;
-    yield* removeIds(removedChunks.map(({ seq }) => seq));
-    yield* remove(pending.map(({ seq }) => seq));
+    yield* removeIds([...removedChunks.map(({ seq }) => seq), ...pending.map(({ seq }) => seq)]);
     yield* save;
     yield* io("remove", () =>
       atomic(() => {
@@ -107,9 +119,10 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
             .prepare("DELETE FROM memory_graph_vector_removals WHERE node_seq = ? AND embedder = ?")
             .run(seq, embedder.identity);
         }
-        sqlite
-          .prepare("DELETE FROM memory_chunk_vector_removals WHERE embedder=?")
-          .run(embedder.identity);
+        for (const { seq } of removedChunks)
+          sqlite
+            .prepare("DELETE FROM memory_chunk_vector_removals WHERE vector_id=? AND embedder=?")
+            .run(seq, embedder.identity);
       }),
     );
   });

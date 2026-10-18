@@ -135,8 +135,35 @@ const make = Effect.gen(function* () {
             commit: Effect.try({
               try: () =>
                 atomic(() => {
-                  for (const seq of nodeSeqs) markIndexed.run(seq, embedder.identity);
-                  return nodeSeqs.length;
+                  // Native add/save yielded to other agents. A purge or redaction can have
+                  // removed/changed the source since prepare, without taking this publication gate.
+                  let committed = 0;
+                  for (const seq of nodeSeqs) {
+                    const original = pending.find((node) => node.seq === seq)!;
+                    const current = sqlite
+                      .prepare(`SELECT n.seq, n.text FROM nodes n
+                      LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=?
+                      WHERE n.seq=? AND v.node_seq IS NULL AND ${meaningfulNodeFilter}
+                        AND ${embeddedKindFilter}`)
+                      .get(embedder.identity, seq);
+                    if (current !== undefined && decodePending(current).text === original.text) {
+                      markIndexed.run(seq, embedder.identity);
+                      committed++;
+                    } else if (spans !== undefined) {
+                      // The deletion trigger preserves removal IDs even if a purge already
+                      // cascaded these rows. Uncommitted chunks never enter the search allowlist.
+                      for (const [row, chunk] of accepted.entries())
+                        if (chunk.seq === seq)
+                          sqlite
+                            .prepare("DELETE FROM node_vector_chunks WHERE vector_id=?")
+                            .run(seqs[row]!);
+                    } else {
+                      sqlite
+                        .prepare("INSERT OR IGNORE INTO memory_graph_vector_removals VALUES (?,?)")
+                        .run(seq, embedder.identity);
+                    }
+                  }
+                  return committed;
                 }),
               catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
             }),

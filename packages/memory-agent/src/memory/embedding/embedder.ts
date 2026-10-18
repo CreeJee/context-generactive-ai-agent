@@ -3,6 +3,7 @@ import { Array as EffectArray, Function as EffectFunction } from "effect";
 import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Worker } from "node:worker_threads";
+import type { EventEmitter } from "node:events";
 import {
   Path,
   DateTime,
@@ -16,6 +17,7 @@ import {
   Layer,
   Option,
   Schema,
+  Semaphore,
 } from "effect";
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -217,7 +219,31 @@ function embeddingModeForBody(settings: Settings, memoryBytes: number = totalmem
  * minute. Releasing the model when idle was measured and dropped: the freed memory mostly stays with
  * the allocator (quint8: ~40 MB back) and each reload grows the footprint a little.
  */
-function modelWorker(cacheDir: string, setup: ModelSetup) {
+/** Minimal native transport contract; lifecycle tests supply a controlled worker. */
+interface EmbeddingWorker {
+  on: EventEmitter["on"];
+  ref(): void;
+  unref(): void;
+  postMessage(message: {
+    readonly id: number;
+    readonly kind: "count" | "embed" | "chunks";
+    readonly texts: readonly string[];
+  }): void;
+  terminate(): Promise<number>;
+}
+
+export function modelWorker(
+  cacheDir: string,
+  setup: ModelSetup,
+  createWorker: (data: {
+    readonly cacheDir: string;
+    readonly modelId: string;
+    readonly modelFileName: string;
+    readonly maxTokens: number;
+    readonly devices: readonly EmbeddingDevice[];
+  }) => EmbeddingWorker = (data) =>
+    new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(data)),
+) {
   const workerData = {
     cacheDir,
     modelId: localModel.id,
@@ -225,9 +251,12 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
     maxTokens: localModel.maxTokens,
     devices: setup.devices,
   };
-  let worker: Worker | null = null;
+  let worker: EmbeddingWorker | null = null;
   let device: EmbeddingDevice | null = null;
   let nextId = 1;
+  // Bound physical worker work, not an entire document embedding. Queries can acquire a
+  // permit between backfill batches; a cancelled waiter never starts a worker request.
+  const oneRequest = Semaphore.makeUnsafe(1);
   const pending = Ref.makeUnsafe(HashMap.empty<number, Deferred.Deferred<Reply>>());
 
   const stop = (reason: string) => {
@@ -241,7 +270,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
   };
 
   const start = () => {
-    const created = new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(workerData));
+    const created = createWorker(workerData);
     const lost = () => {
       if (worker === created) void stop("embedding worker stopped");
     };
@@ -295,6 +324,15 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
         }),
       ),
       Effect.andThen(Deferred.await(done)),
+      // ONNX inference cannot be interrupted in-place. Only one request owns this worker,
+      // so terminate it and await exit before handing the permit to another agent.
+      Effect.onInterrupt(() =>
+        Effect.tryPromise({
+          try: () =>
+            Promise.resolve(worker === current ? stop("embedding request interrupted") : undefined),
+          catch: (cause) => new EmbeddingError({ cause }),
+        }).pipe(Effect.asVoid),
+      ),
       Effect.ensuring(
         Ref.updateAndGet(pending, HashMap.remove(id)).pipe(
           Effect.map((remaining) => {
@@ -303,7 +341,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
         ),
       ),
     );
-  });
+  }, oneRequest.withPermits(1));
 
   const tokenCounts = Effect.fnUntraced(function* (texts: readonly string[]) {
     const reply = yield* request("count", texts);
