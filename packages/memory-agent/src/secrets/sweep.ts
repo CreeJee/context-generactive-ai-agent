@@ -1,13 +1,15 @@
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Semaphore } from "effect";
+import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
+import { RpcClient } from "effect/rpc";
 import { Nodes } from "../memory/nodes.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { VectorIndex } from "../memory/embedding/vector-index.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
-import { RedactReply, type RedactRequest } from "./redact-protocol.ts";
+import { RedactionFailed, type RedactKind, RedactRpcs } from "./redact-protocol.ts";
 import type { Redaction } from "./redactor.ts";
 
 /**
@@ -91,7 +93,6 @@ const decodeColumnRows = Schema.decodeUnknownEffect(
 );
 const decodeRowKey = Schema.decodeUnknownEffect(Schema.Finite);
 const decodeCell = Schema.decodeUnknownEffect(Schema.NullOr(Schema.String));
-const decodeReply = Schema.decodeUnknownOption(RedactReply);
 
 /** A column value after sweeping; `null` stays `null`. */
 interface SweptCell {
@@ -99,14 +100,11 @@ interface SweptCell {
   readonly hidden: number;
 }
 
-/** The redaction worker could not hide secrets in a batch; the sweep resumes there next time. */
-export class RedactionFailed extends Data.TaggedError("RedactionFailed")<{
-  readonly reason: string;
-}> {}
+export { RedactionFailed } from "./redact-protocol.ts";
 
 /** Secrets hidden in a batch of texts, one redaction per text in order. */
 type Redact = (
-  kind: RedactRequest["kind"],
+  kind: RedactKind,
   texts: readonly string[],
 ) => Effect.Effect<readonly Redaction[], RedactionFailed>;
 
@@ -114,67 +112,33 @@ type Redact = (
  * A redaction worker for one sweep, stopped when the sweep ends: a sweep runs once per start, and
  * the checks it needs stay loaded only while it runs.
  */
-const redactionWorker = Effect.map(
-  Effect.acquireRelease(
-    Effect.sync(() => new Worker(runtimeWorker("redact-worker"), runtimeWorkerOptions({}))),
-    (worker) => Effect.promise(() => worker.terminate()),
+const redactionWorker = Effect.gen(function* () {
+  const workers = NodeWorker.layer(
+    () => new Worker(runtimeWorker("redact-worker"), runtimeWorkerOptions({})),
+  );
+  const protocol = yield* Layer.build(
+    RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
+  );
+  const client = yield* RpcClient.make(RedactRpcs).pipe(Effect.provideContext(protocol));
+  const redact: Redact = (kind, texts) =>
+    texts.length === 0
+      ? Effect.succeed([])
+      : client
+          .Redact({ kind, texts })
+          .pipe(
+            Effect.catchTag("RpcClientError", () =>
+              Effect.fail(RedactionFailed.make({ reason: "worker-lost" })),
+            ),
+          );
+  return redact;
+}).pipe(
+  Effect.catchTag("WorkerError", () =>
+    Effect.fail(RedactionFailed.make({ reason: "worker-lost" })),
   ),
-  (worker): Redact => {
-    let nextId = 1;
-    const waiting = Ref.makeUnsafe(HashMap.empty<number, Deferred.Deferred<RedactReply>>());
-    let stopped: string | null = null;
-    const lost = (reason: string) => {
-      stopped = reason;
-      const requests = Effect.runSync(Ref.getAndSet(waiting, HashMap.empty()));
-      for (const [id, done] of requests)
-        Deferred.doneUnsafe(done, Effect.succeed({ id, kind: "failed", reason }));
-    };
-    worker.on("message", (message) => {
-      const decoded = decodeReply(message);
-      if (Option.isNone(decoded)) return lost("invalid redaction worker reply");
-      const reply = decoded.value;
-      const answer = Option.getOrUndefined(HashMap.get(Effect.runSync(Ref.get(waiting)), reply.id));
-      Effect.runSync(Ref.update(waiting, HashMap.remove(reply.id)));
-      if (answer !== undefined) Deferred.doneUnsafe(answer, Effect.succeed(reply));
-    });
-    worker.on("error", (error) =>
-      lost(error instanceof Error ? error.message : "the redaction worker failed"),
-    );
-    worker.on("exit", () => lost("the redaction worker stopped"));
-
-    return Effect.fnUntraced(function* (kind, texts) {
-      if (texts.length === 0) return [];
-      if (stopped !== null) return yield* new RedactionFailed({ reason: stopped });
-      const id = nextId++;
-      const done = yield* Deferred.make<RedactReply>();
-      const reply = yield* Ref.update(waiting, HashMap.set(id, done)).pipe(
-        Effect.andThen(
-          Effect.try({
-            try: () => {
-              worker.postMessage({ id, kind, texts } satisfies RedactRequest);
-            },
-            catch: () => new RedactionFailed({ reason: "the redaction worker request failed" }),
-          }),
-        ),
-        Effect.andThen(Deferred.await(done)),
-        Effect.ensuring(Ref.update(waiting, HashMap.remove(id))),
-      );
-      switch (reply.kind) {
-        case "redacted":
-          return reply.redactions;
-        case "failed":
-          return yield* new RedactionFailed({ reason: reply.reason });
-      }
-    });
-  },
 );
 
 /** One column's cells after sweeping, in order; a `null` cell is not sent and stays `null`. */
-const redactCells = (
-  redact: Redact,
-  kind: RedactRequest["kind"],
-  cells: ReadonlyArray<string | null>,
-) =>
+const redactCells = (redact: Redact, kind: RedactKind, cells: ReadonlyArray<string | null>) =>
   Effect.map(
     redact(
       kind,
