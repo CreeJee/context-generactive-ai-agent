@@ -1,10 +1,10 @@
 import { NodeServices } from "@effect/platform-node";
 import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { expect } from "vite-plus/test";
 // Native child-process fixture: real SQLite locks coordinate two independent startup owners.
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import assert from "node:assert/strict";
 import { migrateDatabase } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 
@@ -18,8 +18,7 @@ await Effect.runPromise(
             sqlite.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
             process.stdout.write("ready\n");
             migrateDatabase(sqlite);
-            assert.equal(
-              sqlite.prepare("PRAGMA user_version").get()?.user_version,
+            expect(sqlite.prepare("PRAGMA user_version").get()?.user_version).toBe(
               migrations.length,
             );
           } finally {
@@ -68,7 +67,7 @@ await Effect.runPromise(
               const exit = yield* Effect.gen(function* () {
                 const code = yield* child.exitCode;
                 const stderr = yield* Fiber.join(errors);
-                assert.equal(code, 0, stderr);
+                expect(code, stderr).toBe(0);
               }).pipe(Effect.forkScoped);
               starts.push({ ready, exit });
             }
@@ -77,11 +76,10 @@ await Effect.runPromise(
             yield* Effect.sleep("100 millis");
             sqlite.exec("COMMIT");
             yield* Effect.forEach(starts, (start) => Fiber.join(start.exit));
-            assert.equal(
-              sqlite.prepare("PRAGMA user_version").get()?.user_version,
+            expect(sqlite.prepare("PRAGMA user_version").get()?.user_version).toBe(
               migrations.length,
             );
-            assert.equal(sqlite.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+            expect(sqlite.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
             process.stdout.write("passed\n");
           } finally {
             sqlite.close();
