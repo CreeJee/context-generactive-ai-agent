@@ -417,7 +417,7 @@ testAgent({ embedder: nativeTestEmbedderLayer })(
 const brokenEmbedder = Layer.succeed(Embedder, {
   identity: "broken",
   dimensions: 64,
-  embed: () => Effect.fail(new EmbeddingError({ cause: new Error("model not downloaded") })),
+  embed: () => Effect.fail(EmbeddingError.make({ cause: new Error("model not downloaded") })),
   runtime: () => ({ kind: "other" }),
 });
 

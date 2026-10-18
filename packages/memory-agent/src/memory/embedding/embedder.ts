@@ -7,7 +7,6 @@ import {
   DateTime,
   Clock,
   Context,
-  Data,
   Deferred,
   Effect,
   Exit,
@@ -23,6 +22,7 @@ import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { ignoreLogged } from "../../runtime/best-effort.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import {
   type EmbeddingDevice,
@@ -31,9 +31,9 @@ import {
   EmbeddingWorkerFailed,
 } from "./embedding-rpc.ts";
 
-export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
-  readonly cause: unknown;
-}> {}
+export class EmbeddingError extends Schema.TaggedError<EmbeddingError>()("EmbeddingError", {
+  cause: Schema.Defect(),
+}) {}
 
 export { EmbeddingDevice } from "./embedding-rpc.ts";
 
@@ -231,7 +231,9 @@ const rpcSession = (data: EmbeddingWorkerData) =>
       countTokens: (texts) => call(client.CountTokens({ texts })),
       embed: (texts) => call(client.Embed({ texts })),
       chunk: (texts) => call(client.Chunk({ texts })),
-      terminate: Effect.promise(() => worker.terminate()).pipe(Effect.asVoid),
+      terminate: Effect.tryPromise(() => worker.terminate()).pipe(
+        ignoreLogged("embedding_worker_terminate_failed"),
+      ),
       busy: (work) =>
         Effect.acquireUseRelease(
           Effect.sync(() => worker.ref()),
@@ -309,7 +311,7 @@ export const modelWorker = Effect.fnUntraced(function* (
         Effect.tapError((error) => (keepsSession(error) ? Effect.void : discard)),
       ),
     ).pipe(
-      Effect.mapError((cause) => new EmbeddingError({ cause })),
+      Effect.mapError((cause) => EmbeddingError.make({ cause })),
       oneRequest.withPermits(1),
     );
 
@@ -401,10 +403,10 @@ export const checkGpu = (storageRoot: string) =>
             checkedAt: DateTime.formatIso(
               DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
             ),
-            reason: (error.cause instanceof Error
-              ? error.cause.message
-              : String(error.cause)
-            ).slice(0, 300),
+            // A code, not the worker's text: that can hold paths and native messages.
+            reason: Schema.is(EmbeddingWorkerFailed)(error.cause)
+              ? `worker_${error.cause.stage}_failed`
+              : "embedding_failed",
           }),
         ),
       );

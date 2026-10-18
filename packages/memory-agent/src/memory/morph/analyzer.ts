@@ -20,6 +20,7 @@ import { RpcClient, type RpcClientError } from "effect/rpc";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { ArchiveInstaller, archiveInstallerLayer } from "../../runtime/archive.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { ignoreLogged } from "../../runtime/best-effort.ts";
 import { KiwiRpcs, type KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
 
 export class MorphAnalysisFailed extends Schema.TaggedError<MorphAnalysisFailed>()(
@@ -189,7 +190,12 @@ const makeKiwi = Effect.gen(function* () {
     ready: () => Option.isSome(ScopedRef.getUnsafe(session)),
     // Starting the session loads the model; failures (offline, no model) just leave it not ready.
     warm: () => {
-      fork(Effect.forkIn(live.pipe(oneRequest.withPermits(1), Effect.ignore), layerScope));
+      fork(
+        Effect.forkIn(
+          live.pipe(oneRequest.withPermits(1), ignoreLogged("morph_warm_failed")),
+          layerScope,
+        ),
+      );
     },
     terms: Effect.fnUntraced(function* (texts: readonly string[]) {
       const all: string[][] = [];

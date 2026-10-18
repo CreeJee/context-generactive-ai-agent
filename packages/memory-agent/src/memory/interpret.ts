@@ -4,7 +4,7 @@ import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Semaphore } fr
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { chat } from "@tanstack/ai";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -56,9 +56,10 @@ const decodeAnswer = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ statements: Schema.Array(Labelled) })),
 );
 
-export class InterpretationFailed extends Data.TaggedError("InterpretationFailed")<{
-  readonly reason: "model_call_failed" | "unreadable_answer";
-}> {}
+export class InterpretationFailed extends Schema.TaggedError<InterpretationFailed>()(
+  "InterpretationFailed",
+  { reason: Schema.Literals(["model_call_failed", "unreadable_answer"]) },
+) {}
 
 const Job = Schema.Struct({ node_id: Schema.String, session_id: Schema.NullOr(Schema.String) });
 
@@ -89,14 +90,12 @@ const make = Effect.gen(function* () {
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
-  yield* sql`UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'`.pipe(
-    Effect.orDie,
-  );
+  yield* sql`UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'`;
   // Earlier builds queued assistant answers too; only the user's words are interpreted now.
   // EXISTS looks up each pending job's node by id; `IN (SELECT ... WHERE kind = ...)` scanned every
   // node on each startup and blocked the event loop past the native index's startup deadline.
   yield* sql`DELETE FROM interpret_jobs WHERE status = 'pending' AND EXISTS (SELECT 1 FROM nodes n
-    WHERE n.id = interpret_jobs.node_id AND n.kind = 'assistant')`.pipe(Effect.orDie);
+    WHERE n.id = interpret_jobs.node_id AND n.kind = 'assistant')`;
 
   // The newest pending statement picks the session, so the conversation just held is interpreted
   // before an old backlog; inside that session statements still go oldest first. "Newest" is when
@@ -172,7 +171,14 @@ const make = Effect.gen(function* () {
           crossProject: false,
           limit: candidatesPerStatement,
         })
-        .pipe(Effect.orElseSucceed(() => ({ matches: [] })));
+        .pipe(
+          // Matches are only extra context for the model; without them it sees recent statements.
+          Effect.catch((error) =>
+            Effect.as(Effect.logDebug("interpret_candidates_unavailable", { error: error._tag }), {
+              matches: [],
+            }),
+          ),
+        );
       const matched = (yield* Effect.forEach(found.matches, (match) => nodes.get(match.id))).filter(
         (node) => node !== null,
       );
@@ -262,18 +268,18 @@ const make = Effect.gen(function* () {
               abortController,
               stream: false,
             }),
-          catch: () => new InterpretationFailed({ reason: "model_call_failed" }),
+          catch: () => InterpretationFailed.make({ reason: "model_call_failed" }),
         });
       }).pipe(
         Effect.scoped,
         Effect.timeoutOrElse({
           duration: interpretTimeoutMs,
-          orElse: () => Effect.fail(new InterpretationFailed({ reason: "model_call_failed" })),
+          orElse: () => Effect.fail(InterpretationFailed.make({ reason: "model_call_failed" })),
         }),
       );
       const labelled = Option.getOrUndefined(decodeAnswer(answer.match(/\{[\s\S]*\}/)?.[0] ?? ""));
       if (!isTruthy(labelled))
-        return yield* new InterpretationFailed({ reason: "unreadable_answer" });
+        return yield* InterpretationFailed.make({ reason: "unreadable_answer" });
 
       yield* Effect.gen(function* () {
         for (const statement of batch) {
@@ -364,7 +370,7 @@ const make = Effect.gen(function* () {
           Effect.catch((error) =>
             Effect.gen(function* () {
               const reason =
-                error instanceof InterpretationFailed ? error.reason : "interpret_failed";
+                error._tag === "InterpretationFailed" ? error.reason : "interpret_failed";
               const failedAt = yield* nowIso;
               yield* Effect.forEach(
                 batch,

@@ -40,7 +40,7 @@ export const fakeEmbedderLayer = Layer.succeed(Embedder, {
   embed: (texts) =>
     Effect.forEach(texts, vectorEffect).pipe(
       Effect.provideContext(cryptoContext),
-      Effect.mapError((cause) => new EmbeddingError({ cause })),
+      Effect.mapError((cause) => EmbeddingError.make({ cause })),
     ),
   runtime: () => ({ kind: "other" }),
 });
