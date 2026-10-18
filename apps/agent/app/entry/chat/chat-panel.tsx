@@ -812,7 +812,7 @@ function ChatPanel({
                 setDraft("");
                 setNotice(null);
                 return yield* uiPromise(() => slash.run(command)).pipe(
-                  Effect.catch(() =>
+                  Effect.catchTag("UnknownError", () =>
                     Effect.sync(() => setNotice(problem("명령을 실행하지 못했어요."))),
                   ),
                 );

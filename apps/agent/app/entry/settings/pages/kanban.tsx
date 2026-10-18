@@ -59,7 +59,7 @@ function ConcurrencyField() {
       Effect.gen(function* () {
         setError(null);
         const saved = yield* uiPromise(() => mutation.mutateAsync(concurrency)).pipe(
-          Effect.catch((failure) =>
+          Effect.catchTag("UnknownError", (failure) =>
             Effect.as(
               Effect.sync(() => setError(failureText(failure))),
               null,
@@ -133,7 +133,7 @@ function ProtectedBranchesField({ project }: { project: Project }) {
       Effect.gen(function* () {
         setError(null);
         const saved = yield* uiPromise(() => mutation.mutateAsync(branchList(draft))).pipe(
-          Effect.catch((failure) =>
+          Effect.catchTag("UnknownError", (failure) =>
             Effect.as(
               Effect.sync(() => setError(failureText(failure))),
               null,

@@ -60,7 +60,7 @@ export function ChatHistory({
           pinnedToBottom.current = false;
           setOlderLoadFailed(false);
           yield* uiPromise(loadOlderMessages).pipe(
-            Effect.catch(() =>
+            Effect.catchTag("UnknownError", () =>
               Effect.sync(() => {
                 pendingPrepend.current = null;
                 setOlderLoadFailed(true);

@@ -44,7 +44,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
           setCancelPending(!result.stopped);
           return "requested" as const;
         }),
-        Effect.catch((failure) =>
+        Effect.catchTag("UnknownError", (failure) =>
           Effect.sync(() => {
             if (isApiError(failure.cause) && failure.cause.code === "no_running_run") {
               setCancelPending(false);

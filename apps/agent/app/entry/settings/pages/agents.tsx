@@ -92,7 +92,7 @@ function AgentSettingsContent({ project }: { project: Project }) {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync(change)).pipe(
-          Effect.catch((_failure) =>
+          Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
               setError("바꾸지 못했어요.");
             }),

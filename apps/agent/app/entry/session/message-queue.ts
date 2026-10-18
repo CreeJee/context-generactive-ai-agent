@@ -43,7 +43,7 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
     runUiEffect(
       uiPromise(() => enqueue.mutateAsync({ text, attachmentIds, mode })).pipe(
         Effect.as<AddOutcome>({ kind: "queued" }),
-        Effect.catch((failure) =>
+        Effect.catchTag("UnknownError", (failure) =>
           Effect.sync((): AddOutcome => {
             if (isApiError(failure.cause) && failure.cause.code === "not_running")
               return { kind: "not-running" };

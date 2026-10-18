@@ -66,7 +66,7 @@ function McpSettingsContent({ project }: { project: Project }) {
         yield* uiPromise(() =>
           mutation.mutateAsync({ scope: server.scope, name: server.name, trusted }),
         ).pipe(
-          Effect.catch((_failure) =>
+          Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
               setError("바꾸지 못했어요.");
             }),

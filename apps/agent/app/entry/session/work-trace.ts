@@ -44,7 +44,7 @@ export function useWorkTrace(sessionId: string) {
             );
           }
         }).pipe(
-          Effect.catch(() =>
+          Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
               if (active) setConnection("reconnecting");
             }),
