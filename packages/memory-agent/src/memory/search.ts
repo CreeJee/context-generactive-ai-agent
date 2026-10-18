@@ -10,6 +10,7 @@ import {
   Layer,
   Schema,
 } from "effect";
+import { SqlClient } from "effect/sql";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
@@ -194,6 +195,7 @@ export const searchTuning: SearchTuning = {
 const make = (tuning: SearchTuning) =>
   Effect.gen(function* () {
     const { sqlite } = yield* Database;
+    const sql = yield* SqlClient.SqlClient;
     const embedder = yield* Embedder;
     const vectors = yield* VectorIndex;
     const graph = yield* Graph;
@@ -240,9 +242,17 @@ const make = (tuning: SearchTuning) =>
     });
 
     const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
-    const chunkSpanOf = sqlite.prepare(
-      "SELECT start_offset AS start, end_offset AS end FROM node_vector_chunks WHERE vector_id=? AND embedder=?",
+    const ChunkSpans = Schema.Array(
+      Schema.Struct({ vector_id: Schema.Finite, ...ChunkSpan.fields }),
     );
+    /** Spans of the matched chunk ids, in one read; one-vector nodes have none. */
+    const chunkSpans = (vectorIds: readonly number[]) =>
+      vectorIds.length === 0
+        ? Effect.succeed([])
+        : sql`SELECT vector_id, start_offset AS start, end_offset AS end FROM node_vector_chunks
+            WHERE embedder = ${embedder.identity} AND vector_id IN ${sql.in(vectorIds)}`.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(ChunkSpans)),
+          );
     const projectName = (projectId: string) => {
       const row = nameOf.get(projectId);
       return isTruthy(row) ? decodeName(row).name : projectId;
@@ -308,25 +318,20 @@ const make = (tuning: SearchTuning) =>
           return yield* Effect.interrupt;
         case "success": {
           if (result.vectorUnavailable && !degraded.includes("vector")) degraded.unshift("vector");
+          const spanOf = new Map(
+            (yield* chunkSpans(result.vectorSeqs.map(Number)).pipe(
+              Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
+            )).map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
+          );
           // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
           // span stored for a node wins.
-          const spans = yield* Effect.try({
-            try: () =>
-              result.vectorSeqs.reduce((spans, seq, index) => {
-                const id = result.vectorIds[index]!;
-                const row = MutableHashMap.has(spans, id)
-                  ? undefined
-                  : chunkSpanOf.get(seq, embedder.identity);
-                if (row !== undefined)
-                  MutableHashMap.set(
-                    spans,
-                    id,
-                    Result.getOrThrow(Schema.decodeUnknownResult(ChunkSpan)(row)),
-                  );
-                return spans;
-              }, MutableHashMap.empty<string, ChunkSpan>()),
-            catch: () => NativeMemorySearchFailed.make({ reason: "read-failed" }),
-          });
+          const spans = result.vectorSeqs.reduce((spans, seq, index) => {
+            const id = result.vectorIds[index]!;
+            const span = spanOf.get(Number(seq));
+            if (span !== undefined && !MutableHashMap.has(spans, id))
+              MutableHashMap.set(spans, id, span);
+            return spans;
+          }, MutableHashMap.empty<string, ChunkSpan>());
           return {
             byVector: result.vectorIds,
             byText: result.textIds,
