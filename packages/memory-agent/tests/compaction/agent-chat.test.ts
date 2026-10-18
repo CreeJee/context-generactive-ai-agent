@@ -307,7 +307,7 @@ testAgent({
         cacheRatio: 0,
         compactionStage: "none",
       });
-      expect((yield* ApiUsage).byRootSession(sessionId)).toMatchObject({
+      expect(yield* (yield* ApiUsage).byRootSession(sessionId)).toMatchObject({
         responses: 2,
         inputTokens: 240,
         outputTokens: 10,

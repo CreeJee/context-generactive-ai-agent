@@ -1670,7 +1670,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           isTruthy(nativeGoal)
             ? runNativeFactory(nativeGoal.makeRecordingMiddleware(binding))
             : recorder.forRun(binding);
-        const harness = harnessStore.forGoal(implementationGoal);
+        const harness = yield* harnessStore.forGoal(implementationGoal);
         const runtime = yield* runtimeForAdapter(selection, implementationGoal);
         // Pin the profile-specific client before later async preparation and tool/model turns.
         const runAdapter = runtime.adapter(selection);

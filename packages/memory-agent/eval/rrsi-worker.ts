@@ -144,11 +144,6 @@ const transport: typeof fetch = (_url, init) =>
     }),
   );
 
-const filesystem = <A>(operation: () => A) =>
-  Effect.try({
-    try: operation,
-    catch: () => EvaluationFailed.make({ reason: "worker_failed" }),
-  });
 const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
   const input = yield* (yield* WorkerGateway).input;
   const fs = yield* FileSystem.FileSystem;
@@ -253,7 +248,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
     });
     const correct = yield* Effect.gen(function* () {
       const harness = yield* HarnessStore;
-      yield* filesystem(() => harness.adopt(input.profile, harness.current().id));
+      yield* harness.adopt(input.profile, (yield* harness.current).id);
       const projects = yield* Projects;
       const project = yield* projects.add(projectRoot);
       yield* projects.setPermissionMode(project.id, "full");

@@ -1,9 +1,16 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import type { DatabaseSync } from "node:sqlite";
-import { Config, ConfigProvider, DateTime, Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import {
+  Config,
+  ConfigProvider,
+  DateTime,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import {
   baselineProfile,
   defaultSettings,
@@ -15,202 +22,203 @@ import {
   type ExperimentRecord,
 } from "./contracts.ts";
 
-const Row = Schema.Struct({ payload: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeVersion = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Version)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeExperiment = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Experiment)),
-  Result.getOrThrow,
-);
+export class HarnessStoreError extends Schema.TaggedError<HarnessStoreError>()(
+  "HarnessStoreError",
+  {
+    reason: Schema.Literals(["integrity_failed", "frontier_changed", "storage"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+const VersionJson = Schema.fromJsonString(Version);
+const ExperimentJson = Schema.fromJsonString(Experiment);
+const SettingsJson = Schema.fromJsonString(Settings);
+const encodeVersion = Schema.encodeEffect(VersionJson);
+const encodeExperiment = Schema.encodeEffect(ExperimentJson);
+const encodeSettings = Schema.encodeEffect(SettingsJson);
+
 export const profileHash = (profile: HarnessProfile) =>
   Buffer.from(
     Effect.runSync(
       oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(JSON.stringify(profile))),
     ),
   ).toString("hex");
-export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: () => A) => A }) {
-  const { sqlite, atomic } = db;
-  const insert = sqlite.prepare("INSERT INTO rrsi_versions VALUES (?, ?)");
-  const read = sqlite.prepare("SELECT payload FROM rrsi_versions WHERE id=?");
-  const state = sqlite.prepare("SELECT version_id, settings FROM rrsi_state WHERE id=1");
-  const pin = sqlite.prepare("SELECT version_id FROM rrsi_goal_pins WHERE goal_id=?");
-  const get = (id: string): HarnessVersion => {
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    const version = decodeVersion(
-      EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(read.get(id)).payload,
+
+/** Storage and codec failures keep their cause; integrity and frontier refusals pass through. */
+const stored = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.catchIf(
+    effect,
+    (error: E): error is Exclude<E, HarnessStoreError> =>
+      !Predicate.isTagged(error, "HarnessStoreError"),
+    (cause) => Effect.fail(HarnessStoreError.make({ reason: "storage", cause })),
+  );
+
+export const makeHarnessStore = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const readVersion = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ payload: VersionJson }),
+    execute: (id) => sql`SELECT payload FROM rrsi_versions WHERE id=${id}`,
+  });
+  const readState = SqlSchema.findOneOption({
+    Request: Schema.Void,
+    Result: Schema.Struct({ version_id: Schema.String, settings: SettingsJson }),
+    execute: () => sql`SELECT version_id, settings FROM rrsi_state WHERE id=1`,
+  });
+  const readPin = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ version_id: Schema.String }),
+    execute: (goalId) => sql`SELECT version_id FROM rrsi_goal_pins WHERE goal_id=${goalId}`,
+  });
+  const versionIds = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ payload: VersionJson }),
+    execute: () => sql`SELECT payload FROM rrsi_versions ORDER BY rowid DESC`,
+  });
+  const recentExperiments = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ payload: ExperimentJson }),
+    execute: () => sql`SELECT payload FROM rrsi_experiments ORDER BY rowid DESC LIMIT 30`,
+  });
+  const runningExperiments = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ payload: ExperimentJson }),
+    execute: () =>
+      sql`SELECT payload FROM rrsi_experiments WHERE json_extract(payload, '$.status')='running'`,
+  });
+  const nowMillis = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+
+  const get = (id: string) =>
+    stored(
+      readVersion(id).pipe(
+        Effect.flatMap((row) =>
+          Option.isSome(row) &&
+          row.value.payload.artifactHash === profileHash(row.value.payload.profile)
+            ? Effect.succeed(row.value.payload)
+            : Effect.fail(HarnessStoreError.make({ reason: "integrity_failed" })),
+        ),
+      ),
     );
-    if (version.artifactHash !== profileHash(version.profile))
-      throw new Error("harness_integrity_failed");
-    return version;
-  };
-  atomic(() => {
-    const base: HarnessVersion = {
-      id: "baseline",
-      parentId: null,
-      profile: baselineProfile,
-      kind: "profile",
-      sourceCommit: null,
-      artifactHash: profileHash(baselineProfile),
-      createdAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
-    };
-    if (!isTruthy(read.get(base.id))) insert.run(base.id, JSON.stringify(base));
-    sqlite
-      .prepare("INSERT OR IGNORE INTO rrsi_state VALUES (1, ?, ?)")
-      .run(base.id, JSON.stringify(defaultSettings));
-    sqlite
-      .prepare(
-        "INSERT OR IGNORE INTO rrsi_goal_pins SELECT goal_instance_id, 'baseline' FROM workflow_goal_identities",
-      )
-      .run();
-    // Interrupted local experiments have uncertain measurements, never auto-adopt them after restart.
-    const interrupted = sqlite
-      .prepare(
-        "SELECT payload FROM rrsi_experiments WHERE json_extract(payload, '$.status')='running'",
-      )
-      .all();
-    for (const row of interrupted) {
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const prior = decodeExperiment(
-        EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(row).payload,
-      );
-      sqlite.prepare("UPDATE rrsi_experiments SET payload=? WHERE id=?").run(
-        JSON.stringify({
+  const state = readState().pipe(
+    Effect.flatMap((row) =>
+      Effect.fromOption(row).pipe(
+        Effect.mapError(() => HarnessStoreError.make({ reason: "integrity_failed" })),
+      ),
+    ),
+  );
+  const settings = stored(Effect.map(state, (row) => row.settings));
+  const current = stored(Effect.flatMap(state, (row) => get(row.version_id)));
+  const insertVersion = (version: HarnessVersion) =>
+    encodeVersion(version).pipe(
+      Effect.flatMap(
+        (payload) => sql`INSERT INTO rrsi_versions VALUES (${version.id}, ${payload})`,
+      ),
+    );
+  const setFrontier = (id: string) => sql`UPDATE rrsi_state SET version_id=${id} WHERE id=1`;
+
+  yield* stored(
+    Effect.gen(function* () {
+      const base: HarnessVersion = {
+        id: "baseline",
+        parentId: null,
+        profile: baselineProfile,
+        kind: "profile",
+        sourceCommit: null,
+        artifactHash: profileHash(baselineProfile),
+        createdAt: yield* nowMillis,
+      };
+      if (Option.isNone(yield* readVersion(base.id))) yield* insertVersion(base);
+      yield* sql`INSERT OR IGNORE INTO rrsi_state VALUES (1, ${base.id}, ${yield* encodeSettings(defaultSettings)})`;
+      yield* sql`INSERT OR IGNORE INTO rrsi_goal_pins
+        SELECT goal_instance_id, 'baseline' FROM workflow_goal_identities`;
+      // Interrupted local experiments have uncertain measurements, never auto-adopt them after restart.
+      for (const { payload: prior } of yield* runningExperiments()) {
+        const cancelled = yield* encodeExperiment({
           ...prior,
           status: "cancelled",
-          finishedAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
+          finishedAt: yield* nowMillis,
           reason: "owner_restarted",
-        }),
-        prior.id,
-      );
-    }
-  });
-  const settings = () =>
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    EffectFunction.flow(
-      Schema.decodeResult(Schema.fromJsonString(Settings)),
-      Result.getOrThrow,
-    )(
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(Schema.Struct({ settings: Schema.String })),
-        Result.getOrThrow,
-      )(state.get()).settings,
-    );
-  const current = () =>
-    get(
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(Schema.Struct({ version_id: Schema.String })),
-        Result.getOrThrow,
-      )(state.get()).version_id,
-    );
+        });
+        yield* sql`UPDATE rrsi_experiments SET payload=${cancelled} WHERE id=${prior.id}`;
+      }
+    }).pipe(sql.withTransaction),
+  );
+
   return {
     get,
     current,
     settings,
-    versions: () =>
-      sqlite
-        .prepare("SELECT payload FROM rrsi_versions ORDER BY rowid DESC")
-        .all()
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        .map((row) =>
-          get(
-            decodeVersion(
-              EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(row).payload,
-            ).id,
-          ),
-        ),
+    versions: stored(
+      versionIds().pipe(
+        Effect.flatMap((rows) => Effect.forEach(rows, (row) => get(row.payload.id))),
+      ),
+    ),
     configure: (input: typeof Settings.Type) =>
-      sqlite
-        .prepare("UPDATE rrsi_state SET settings=? WHERE id=1")
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        .run(
-          JSON.stringify(
-            EffectFunction.flow(Schema.decodeResult(Settings), Result.getOrThrow)(input),
-          ),
+      stored(
+        encodeSettings(input).pipe(
+          Effect.flatMap((encoded) => sql`UPDATE rrsi_state SET settings=${encoded} WHERE id=1`),
+          Effect.asVoid,
         ),
+      ),
     forGoal: (goalId: string | null) =>
-      atomic(() => {
-        if (!isTruthy(goalId))
-          // Native host/SDK configuration boundary reads or forwards the host environment.
-          return Effect.runSync(
-            Config.String("CONTEXT_AGENT_RRSI_WORKER")
+      stored(
+        Effect.gen(function* () {
+          if (goalId === null || goalId.length === 0) {
+            // Native host/SDK configuration boundary reads or forwards the host environment.
+            const worker = yield* Config.String("CONTEXT_AGENT_RRSI_WORKER")
               .pipe(Config.withDefault(""))
               .parse(ConfigProvider.fromEnv())
-              .pipe(Effect.orDie),
-          ) === "1"
-            ? current()
-            : get("baseline");
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const saved = EffectFunction.flow(
-          Schema.decodeUnknownResult(
-            Schema.UndefinedOr(Schema.Struct({ version_id: Schema.String })),
-          ),
-          Result.getOrThrow,
-        )(pin.get(goalId));
-        if (isTruthy(saved)) return get(saved.version_id);
-        // Old Goals retain baseline semantics even if their first run with this build is a resume.
-        const version = current();
-        sqlite.prepare("INSERT INTO rrsi_goal_pins VALUES (?, ?)").run(goalId, version.id);
-        return version;
-      }),
+              .pipe(Effect.orDie);
+            return worker === "1" ? yield* current : yield* get("baseline");
+          }
+          const saved = yield* readPin(goalId);
+          if (Option.isSome(saved)) return yield* get(saved.value.version_id);
+          // Old Goals retain baseline semantics even if their first run with this build is a resume.
+          const version = yield* current;
+          yield* sql`INSERT INTO rrsi_goal_pins VALUES (${goalId}, ${version.id})`;
+          return version;
+        }).pipe(sql.withTransaction),
+      ),
     adopt: (profile: HarnessProfile, expected: string, sourceCommit: string | null = null) =>
-      atomic(() => {
-        if (current().id !== expected) throw new Error("harness_frontier_changed");
-        const version: HarnessVersion = {
-          id: Effect.runSync(oauthProtocolCrypto.randomUUIDv4()),
-          parentId: expected,
-          profile,
-          kind: "profile",
-          sourceCommit,
-          artifactHash: profileHash(profile),
-          createdAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
-        };
-        insert.run(version.id, JSON.stringify(version));
-        sqlite.prepare("UPDATE rrsi_state SET version_id=? WHERE id=1").run(version.id);
-        return version;
-      }),
+      stored(
+        Effect.gen(function* () {
+          if ((yield* current).id !== expected)
+            return yield* HarnessStoreError.make({ reason: "frontier_changed" });
+          const version: HarnessVersion = {
+            id: yield* oauthProtocolCrypto.randomUUIDv4(),
+            parentId: expected,
+            profile,
+            kind: "profile",
+            sourceCommit,
+            artifactHash: profileHash(profile),
+            createdAt: yield* nowMillis,
+          };
+          yield* insertVersion(version);
+          yield* setFrontier(version.id);
+          return version;
+        }).pipe(sql.withTransaction),
+      ),
     restore: (id: string) =>
-      atomic(() => {
-        get(id);
-        sqlite.prepare("UPDATE rrsi_state SET version_id=? WHERE id=1").run(id);
-      }),
-    saveExperiment: (record: ExperimentRecord) => {
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const parsed = EffectFunction.flow(
-        Schema.decodeResult(Experiment),
-        Result.getOrThrow,
-      )(record);
-      sqlite
-        .prepare(
-          "INSERT INTO rrsi_experiments VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-        )
-        .run(parsed.id, JSON.stringify(parsed));
-    },
-    experiments: () =>
-      sqlite
-        .prepare("SELECT payload FROM rrsi_experiments ORDER BY rowid DESC LIMIT 30")
-        .all()
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        .map((row) =>
-          decodeExperiment(
-            EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(row).payload,
+      stored(get(id).pipe(Effect.andThen(setFrontier(id)), Effect.asVoid, sql.withTransaction)),
+    saveExperiment: (record: ExperimentRecord) =>
+      stored(
+        encodeExperiment(record).pipe(
+          Effect.flatMap(
+            (payload) => sql`INSERT INTO rrsi_experiments VALUES (${record.id}, ${payload})
+              ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`,
           ),
+          Effect.asVoid,
         ),
+      ),
+    experiments: stored(
+      recentExperiments().pipe(Effect.map((rows) => rows.map((row) => row.payload))),
+    ),
   };
-}
+});
+
 export class HarnessStore extends Context.Service<
   HarnessStore,
-  ReturnType<typeof makeHarnessStore>
+  Effect.Success<typeof makeHarnessStore>
 >()("memory-agent/rrsi/store/HarnessStore") {
-  static readonly layer = Layer.effect(
-    HarnessStore,
-    Effect.gen(function* () {
-      return makeHarnessStore(yield* Database);
-    }),
-  );
+  static readonly layer = Layer.effect(HarnessStore, makeHarnessStore);
 }
