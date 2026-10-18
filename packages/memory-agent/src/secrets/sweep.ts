@@ -1,10 +1,9 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { DateTime, Clock, Semaphore } from "effect";
+import { DateTime, Semaphore } from "effect";
 import { Worker } from "node:worker_threads";
 import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
 import { Nodes } from "../memory/nodes.ts";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { VectorIndex } from "../memory/embedding/vector-index.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
@@ -87,28 +86,11 @@ const Progress = Schema.Struct({
   done: Schema.Literals([0, 1]),
   hidden: Schema.Finite,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeProgress = EffectFunction.flow(Schema.decodeUnknownResult(Progress), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeNodeRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite, text: Schema.String })),
-  Result.getOrThrow,
+const decodeColumnRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
 );
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRefRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ row_key: Schema.Finite, ref: Schema.String })),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRowKey = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ row_key: Schema.Finite })),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCell = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.NullOr(Schema.String)),
-  Result.getOrThrow,
-);
+const decodeRowKey = Schema.decodeUnknownEffect(Schema.Finite);
+const decodeCell = Schema.decodeUnknownEffect(Schema.NullOr(Schema.String));
 const decodeReply = Schema.decodeUnknownOption(RedactReply);
 
 /** A column value after sweeping; `null` stays `null`. */
@@ -214,47 +196,76 @@ export interface SweepProgress {
   readonly hidden: number;
 }
 
+/** The sweep could not read or record its progress; it resumes from the last record next time. */
+export class SweepStoreFailed extends Schema.TaggedError<SweepStoreFailed>()("SweepStoreFailed", {
+  cause: Schema.Defect(),
+}) {}
+const stored = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.mapError(effect, (cause) => SweepStoreFailed.make({ cause }));
+
 const make = (running: boolean) =>
   Effect.gen(function* () {
-    const { sqlite, atomic } = yield* Database;
+    const sql = yield* SqlClient.SqlClient;
     const indexer = yield* Indexer;
     const nodes = yield* Nodes;
     const vectors = yield* VectorIndex;
     const onePassAtATime = yield* Semaphore.make(1);
 
-    const readProgress = sqlite.prepare(
-      "SELECT version, after, done, hidden FROM secret_sweeps WHERE target = ?",
-    );
-    const saveProgress = sqlite.prepare(`
-      INSERT INTO secret_sweeps (target, version, after, done, hidden, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (target) DO UPDATE SET version = excluded.version, after = excluded.after,
-        done = excluded.done, hidden = excluded.hidden, updated_at = excluded.updated_at`);
+    const readProgress = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Progress,
+      execute: (target) =>
+        sql`SELECT version, after, done, hidden FROM secret_sweeps WHERE target = ${target}`,
+    });
+    const saveProgress = (target: Target, after: number, done: boolean, hidden: number) =>
+      Effect.flatMap(
+        DateTime.now,
+        (now) => sql`
+          INSERT INTO secret_sweeps ${sql.insert({
+            target: targetName(target),
+            version: sweepVersion,
+            after,
+            done: done ? 1 : 0,
+            hidden,
+            updated_at: DateTime.formatIso(now),
+          })}
+          ON CONFLICT (target) DO UPDATE SET version = excluded.version, after = excluded.after,
+            done = excluded.done, hidden = excluded.hidden, updated_at = excluded.updated_at`,
+      );
 
     /** Where a target's sweep stands; a sweep by an older detector counts as not started. */
-    const progressOf = (target: Target) => {
-      const row = readProgress.get(targetName(target));
-      const saved = isTruthy(row) ? decodeProgress(row) : null;
-      return saved?.version === sweepVersion ? saved : { after: 0, done: 0, hidden: 0 };
-    };
+    const progressOf = (target: Target) =>
+      Effect.map(readProgress(targetName(target)), (row) =>
+        Option.isSome(row) && row.value.version === sweepVersion
+          ? row.value
+          : { after: 0, done: 0, hidden: 0 },
+      );
 
     // Nodes: the text changes under a permit, and what was derived from the old text goes with it.
-    const nodeBatch = sqlite.prepare(
-      "SELECT seq, text FROM nodes WHERE seq > ? ORDER BY seq LIMIT ?",
-    );
-    const grant = sqlite.prepare("INSERT INTO secret_sweep_permits VALUES (?)");
-    const revoke = sqlite.prepare("DELETE FROM secret_sweep_permits WHERE node_seq = ?");
-    const updateText = sqlite.prepare("UPDATE nodes SET text = ? WHERE seq = ?");
-    const unindexText = sqlite.prepare(
-      "INSERT INTO nodes_fts (nodes_fts, rowid, text) VALUES ('delete', ?, ?)",
-    );
-    const indexText = sqlite.prepare("INSERT INTO nodes_fts (rowid, text) VALUES (?, ?)");
-    const forgetTerms = sqlite.prepare("DELETE FROM nodes_morph WHERE rowid = ?");
-    const forgetAnalysis = sqlite.prepare("DELETE FROM node_morphs WHERE node_seq = ?");
-    const forgetVector = sqlite.prepare("DELETE FROM node_vectors WHERE node_seq = ?");
+    const nodeBatch = SqlSchema.findAll({
+      Request: Schema.Finite,
+      Result: Schema.Struct({ seq: Schema.Finite, text: Schema.String }),
+      execute: (after) =>
+        sql`SELECT seq, text FROM nodes WHERE seq > ${after} ORDER BY seq LIMIT ${batchSize}`,
+    });
+    const rewriteNode = Effect.fnUntraced(function* (row: {
+      readonly seq: number;
+      readonly text: string;
+      readonly hidden: string;
+    }) {
+      yield* sql`INSERT INTO secret_sweep_permits VALUES (${row.seq})`;
+      yield* sql`INSERT INTO nodes_fts (nodes_fts, rowid, text) VALUES ('delete', ${row.seq}, ${row.text})`;
+      yield* sql`UPDATE nodes SET text = ${row.hidden} WHERE seq = ${row.seq}`;
+      yield* sql`INSERT INTO nodes_fts (rowid, text) VALUES (${row.seq}, ${row.hidden})`;
+      yield* sql`DELETE FROM secret_sweep_permits WHERE node_seq = ${row.seq}`;
+      yield* sql`DELETE FROM nodes_morph WHERE rowid = ${row.seq}`;
+      yield* sql`DELETE FROM node_morphs WHERE node_seq = ${row.seq}`;
+      yield* sql`DELETE FROM node_vectors WHERE node_seq = ${row.seq}`;
+    });
 
     const sweepNodes = (redact: Redact, after: number) =>
       Effect.gen(function* () {
-        const rows = nodeBatch.all(after, batchSize).map((row) => decodeNodeRow(row));
+        const rows = yield* stored(nodeBatch(after));
         const redactions = yield* redact(
           "text",
           rows.map((row) => row.text),
@@ -275,19 +286,10 @@ const make = (running: boolean) =>
               yield* vectors.remove(changed.map((row) => row.seq));
               yield* vectors.save;
             }
-            atomic(() => {
-              if (changed.length > 0) nodes.invalidateResultPages();
-              for (const row of changed) {
-                grant.run(row.seq);
-                unindexText.run(row.seq, row.text);
-                updateText.run(row.hidden, row.seq);
-                indexText.run(row.seq, row.hidden);
-                revoke.run(row.seq);
-                forgetTerms.run(row.seq);
-                forgetAnalysis.run(row.seq);
-                forgetVector.run(row.seq);
-              }
-            });
+            if (changed.length > 0) nodes.invalidateResultPages();
+            yield* stored(
+              Effect.forEach(changed, rewriteNode, { discard: true }).pipe(sql.withTransaction),
+            );
           }),
         );
         return { rows: rows.length, last: rows.at(-1)?.seq ?? after, hidden: changed.length };
@@ -295,28 +297,35 @@ const make = (running: boolean) =>
 
     // References: a URL a call named. Replacing keeps the row; a clash with an identical, already
     // hidden reference of the same node just leaves that one.
-    const refBatch = sqlite.prepare(
-      "SELECT rowid AS row_key, ref FROM node_refs WHERE rowid > ? ORDER BY rowid LIMIT ?",
-    );
-    const updateRef = sqlite.prepare("UPDATE OR REPLACE node_refs SET ref = ? WHERE rowid = ?");
+    const refBatch = SqlSchema.findAll({
+      Request: Schema.Finite,
+      Result: Schema.Struct({ row_key: Schema.Finite, ref: Schema.String }),
+      execute: (after) => sql`SELECT rowid AS row_key, ref FROM node_refs
+        WHERE rowid > ${after} ORDER BY rowid LIMIT ${batchSize}`,
+    });
 
     const sweepRefs = (redact: Redact, after: number) =>
       Effect.gen(function* () {
-        const rows = refBatch.all(after, batchSize).map((row) => decodeRefRow(row));
+        const rows = yield* stored(refBatch(after));
         const redactions = yield* redact(
           "text",
           rows.map((row) => row.ref),
         );
-        let hidden = 0;
-        atomic(() =>
-          rows.forEach((row, index) => {
-            const redaction = redactions[index];
-            if (!isTruthy(redaction) || redaction.hidden === 0) return;
-            updateRef.run(redaction.text, row.row_key);
-            hidden += 1;
-          }),
+        const changed = rows.flatMap((row, index) => {
+          const redaction = redactions[index];
+          return isTruthy(redaction) && redaction.hidden > 0
+            ? [{ rowKey: row.row_key, ref: redaction.text }]
+            : [];
+        });
+        yield* stored(
+          Effect.forEach(
+            changed,
+            ({ rowKey, ref }) =>
+              sql`UPDATE OR REPLACE node_refs SET ref = ${ref} WHERE rowid = ${rowKey}`,
+            { discard: true },
+          ).pipe(sql.withTransaction),
         );
-        return { rows: rows.length, last: rows.at(-1)?.row_key ?? after, hidden };
+        return { rows: rows.length, last: rows.at(-1)?.row_key ?? after, hidden: changed.length };
       });
 
     const sweepColumns = (redact: Redact, table: ColumnTable, after: number) =>
@@ -324,15 +333,18 @@ const make = (running: boolean) =>
         const columns: readonly Column[] = columnTables[table];
         const names = columns.map((column) => column.name);
         // Aliased: a table with an INTEGER PRIMARY KEY returns `rowid` under that column's name.
-        const rows = sqlite
-          .prepare(
-            `SELECT rowid AS row_key, ${names.join(", ")} FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`,
-          )
-          .all(after, batchSize);
-        const update = sqlite.prepare(
-          `UPDATE ${table} SET ${names.map((name) => `${name} = ?`).join(", ")} WHERE rowid = ?`,
+        const rows = yield* stored(
+          sql`SELECT rowid AS row_key, ${sql.literal(names.join(", "))} FROM ${sql.literal(table)}
+            WHERE rowid > ${after} ORDER BY rowid LIMIT ${batchSize}`.pipe(
+            Effect.flatMap(decodeColumnRows),
+          ),
         );
-        const cells = rows.map((row) => columns.map((column) => decodeCell(row[column.name])));
+        const rowKeys = yield* stored(Effect.forEach(rows, (row) => decodeRowKey(row.row_key)));
+        const cells = yield* stored(
+          Effect.forEach(rows, (row) =>
+            Effect.forEach(columns, (column) => decodeCell(row[column.name])),
+          ),
+        );
         // One request per column rather than per cell: `swept[column][row]`.
         const swept = yield* Effect.forEach(columns, (column, index) =>
           redactCells(
@@ -341,26 +353,27 @@ const make = (running: boolean) =>
             cells.map((row) => row[index] ?? null),
           ),
         );
-        let hidden = 0;
-        const updates: Array<{ rowid: number; values: Array<string | null> }> = [];
-        rows.forEach((row, rowIndex) => {
+        const updates = rowKeys.flatMap((rowid, rowIndex) => {
           const values = swept.map((column) => column[rowIndex] ?? { text: null, hidden: 0 });
-          if (values.every((cell) => cell.hidden === 0)) return;
-          hidden += 1;
-          updates.push({
-            rowid: decodeRowKey(row).row_key,
-            values: values.map((cell) => cell.text),
-          });
+          if (values.every((cell) => cell.hidden === 0)) return [];
+          return [
+            {
+              rowid,
+              values: Object.fromEntries(
+                columns.map((column, index) => [column.name, values[index]?.text ?? null]),
+              ),
+            },
+          ];
         });
-        atomic(() => {
-          for (const { rowid, values } of updates) update.run(...values, rowid);
-        });
-        const last = rows.at(-1);
-        return {
-          rows: rows.length,
-          last: isTruthy(last) ? decodeRowKey(last).row_key : after,
-          hidden,
-        };
+        yield* stored(
+          Effect.forEach(
+            updates,
+            ({ rowid, values }) =>
+              sql`UPDATE ${sql.literal(table)} SET ${sql.update(values)} WHERE rowid = ${rowid}`,
+            { discard: true },
+          ).pipe(sql.withTransaction),
+        );
+        return { rows: rows.length, last: rowKeys.at(-1) ?? after, hidden: updates.length };
       });
 
     const batchOf = (redact: Redact, target: Target, after: number) => {
@@ -398,7 +411,7 @@ const make = (running: boolean) =>
     /** Sweeps one table to the end, recording where it got after every batch. */
     const sweep = (redact: Redact, target: Target) =>
       Effect.gen(function* () {
-        const start = progressOf(target);
+        const start = yield* stored(progressOf(target));
         let after = resumesFrom(target, start.after);
         let hidden = start.hidden;
         let sweptNow = 0;
@@ -408,14 +421,7 @@ const make = (running: boolean) =>
           hidden += batch.hidden;
           sweptNow += batch.hidden;
           const finished = batch.rows < batchSize;
-          saveProgress.run(
-            targetName(target),
-            sweepVersion,
-            after,
-            finished ? 1 : 0,
-            hidden,
-            DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-          );
+          yield* stored(saveProgress(target, after, finished, hidden));
           if (finished) return sweptNow;
         }
       });
@@ -446,11 +452,15 @@ const make = (running: boolean) =>
 
     return {
       run,
-      progress: (): SweepProgress[] =>
-        targets.map((target) => {
-          const saved = progressOf(target);
-          return { target: targetName(target), done: saved.done === 1, hidden: saved.hidden };
-        }),
+      progress: stored(
+        Effect.forEach(targets, (target) =>
+          Effect.map(progressOf(target), (saved): SweepProgress => ({
+            target: targetName(target),
+            done: saved.done === 1,
+            hidden: saved.hidden,
+          })),
+        ),
+      ),
     };
   });
 

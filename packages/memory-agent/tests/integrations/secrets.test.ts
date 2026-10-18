@@ -207,7 +207,7 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
         yield* sweep.run;
         // A second pass finds nothing more to hide.
         expect(yield* sweep.run).toBe(0);
-        expect(sweep.progress().every((entry) => entry.done)).toBe(true);
+        expect((yield* sweep.progress).every((entry) => entry.done)).toBe(true);
         expect(yield* value("SELECT ref AS value FROM node_refs WHERE node_id = ?", call.id)).toBe(
           "https://api.example.com/?token=[redacted:github]",
         );
