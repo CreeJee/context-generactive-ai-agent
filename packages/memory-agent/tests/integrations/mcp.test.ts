@@ -273,7 +273,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
         });
         yield* finished;
         expect(text()).toContain("echo: hi from mcp");
-        expect((yield* PermissionReviews).latest(session, callId)).toMatchObject({
+        expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
           decision: "approved",
           decidedBy: "user",
         });
@@ -303,7 +303,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
         yield* finished;
         expect(client.getInterrupts()).toHaveLength(0);
         expect(text()).toContain("echo: reviewed");
-        expect((yield* PermissionReviews).latest(session, callId)).toMatchObject({
+        expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
           decision: "allow",
           decidedBy: "classifier",
         });

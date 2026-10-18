@@ -320,8 +320,8 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       ] as const) {
         const sessionId = yield* freshSession();
         const reason = `central-${label}`;
-        expect(reviews.latest(sessionId, "blocked-id")).toBeNull();
-        const blocked = reviews.record({
+        expect(yield* reviews.latest(sessionId, "blocked-id")).toBeNull();
+        const blocked = yield* reviews.record({
           sessionId,
           toolCallId: "blocked-id",
           toolName: "blocked_tool",
@@ -330,7 +330,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           decidedBy: "classifier",
           reason,
         });
-        const allowed = reviews.record({
+        const allowed = yield* reviews.record({
           sessionId,
           toolCallId: "allowed-id",
           toolName: "allowed_tool",
@@ -391,8 +391,8 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           }),
         );
         expect(toolResult("allowed-id")).toContain(`allowed-${label}`);
-        expect(reviews.latest(sessionId, "blocked-id")).toEqual(blocked);
-        expect(reviews.latest(sessionId, "allowed-id")).toEqual(allowed);
+        expect(yield* reviews.latest(sessionId, "blocked-id")).toEqual(blocked);
+        expect(yield* reviews.latest(sessionId, "allowed-id")).toEqual(allowed);
         // Observable embedder acquisition only, not a full singleton ownership proof.
         expect(embedderOwners.count).toBe(owners);
       }

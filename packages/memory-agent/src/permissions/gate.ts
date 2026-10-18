@@ -92,7 +92,7 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
               },
             });
           for (const call of pendingGatedCalls(ctx.messages, gated)) {
-            const latest = reviews.latest(sessionId, call.id);
+            const latest = yield* reviews.latest(sessionId, call.id);
             let review =
               latest?.toolName === call.function.name && latest.input === call.function.arguments
                 ? latest
@@ -111,7 +111,7 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
                   argumentsJson: call.function.arguments,
                 }),
               );
-              review = reviews.record({
+              review = yield* reviews.record({
                 sessionId,
                 toolCallId: call.id,
                 toolName: call.function.name,
@@ -128,38 +128,52 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
       );
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     onInterruptResolution(_ctx, resolutions) {
-      for (const resolution of resolutions.for(permissionReviewInterrupt)) {
-        const { payload } = resolution.request;
-        if (!isTruthy(payload)) continue;
-        const approved = resolution.status === "resolved" && resolution.response.approved;
-        reviews.record({
-          sessionId,
-          toolCallId: payload.toolCallId,
-          toolName: payload.toolName,
-          input: payload.arguments,
-          decision: approved ? "approved" : "denied",
-          decidedBy: "user",
-          reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
-        });
-      }
+      // Answers are recorded in the order the user gave them, each its own append.
+      return runNativeEffect(
+        Effect.forEach(
+          resolutions.for(permissionReviewInterrupt).flatMap((resolution) => {
+            const { payload } = resolution.request;
+            return isTruthy(payload) ? [{ payload, resolution }] : [];
+          }),
+          ({ payload, resolution }) => {
+            const approved = resolution.status === "resolved" && resolution.response.approved;
+            return reviews.record({
+              sessionId,
+              toolCallId: payload.toolCallId,
+              toolName: payload.toolName,
+              input: payload.arguments,
+              decision: approved ? "approved" : "denied",
+              decidedBy: "user",
+              reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+            });
+          },
+          { discard: true },
+        ),
+      );
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     onBeforeToolCall(ctx, hook) {
       if (!HashSet.has(gated, hook.toolName)) return undefined;
       const call = ctx.messages
         .flatMap((message) => (message.role === "assistant" ? (message.toolCalls ?? []) : []))
         .findLast((entry) => entry.id === hook.toolCallId);
-      const latest = reviews.latest(sessionId, hook.toolCallId);
-      const review =
-        isTruthy(call) &&
-        call.function.name === hook.toolName &&
-        latest?.toolName === hook.toolName &&
-        latest.input === call.function.arguments
-          ? latest
-          : null;
-      if (review?.decision === "allow" || review?.decision === "approved") return undefined;
-      return { type: "skip", result: refusal(review) };
+      return runNativeEffect(
+        Effect.map(reviews.latest(sessionId, hook.toolCallId), (latest) => {
+          const review =
+            isTruthy(call) &&
+            call.function.name === hook.toolName &&
+            latest?.toolName === hook.toolName &&
+            latest.input === call.function.arguments
+              ? latest
+              : null;
+          return review?.decision === "allow" || review?.decision === "approved"
+            ? undefined
+            : { type: "skip" as const, result: refusal(review) };
+        }),
+      );
     },
   };
 });

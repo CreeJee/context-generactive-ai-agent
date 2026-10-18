@@ -303,12 +303,12 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       expect(deniedAnswer).not.toContain("scriptSha256");
       const reviews = yield* PermissionReviews;
       const children = subagents.list(sessionId);
-      expect(reviews.latest(sessionId, `subagent-${children[0]!.id}:call-shell`)?.decision).toBe(
-        "approved",
-      );
-      expect(reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`)?.decision).toBe(
-        "denied",
-      );
+      expect(
+        (yield* reviews.latest(sessionId, `subagent-${children[0]!.id}:call-shell`))?.decision,
+      ).toBe("approved");
+      expect(
+        (yield* reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`))?.decision,
+      ).toBe("denied");
       const toolEvidenceCount = (agentId: string) =>
         db.sqlite
           .prepare(

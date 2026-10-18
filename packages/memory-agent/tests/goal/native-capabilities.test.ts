@@ -150,7 +150,7 @@ const ownerRun = Effect.fnUntraced(function* (
       stream: false,
     }),
   );
-  expect(reviews.latest(session, "shared-call")).toMatchObject({
+  expect(yield* reviews.latest(session, "shared-call")).toMatchObject({
     decision: index === 0 ? "allow" : "block",
     reason: runId,
   });

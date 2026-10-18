@@ -102,17 +102,17 @@ testAgent()("permission gate", (it) => {
 
         yield* gatedRun(allowed, tool, "same-call-id", "{}");
         expect(runs.count).toBe(1);
-        expect(reviews.latest(session, "same-call-id")).toMatchObject({ decision: "allow" });
-        expect(reviews.latest(nextSession, "same-call-id")).toBeNull();
+        expect(yield* reviews.latest(session, "same-call-id")).toMatchObject({ decision: "allow" });
+        expect(yield* reviews.latest(nextSession, "same-call-id")).toBeNull();
 
         yield* gatedRun(blocked, tool, "same-call-id", "{}");
         expect(runs.count).toBe(1);
         expect(classified).toEqual([`${session}:{}`, `${nextSession}:{}`]);
-        expect(reviews.latest(nextSession, "same-call-id")).toMatchObject({
+        expect(yield* reviews.latest(nextSession, "same-call-id")).toMatchObject({
           decision: "block",
           reason: "current run blocked",
         });
-        expect(reviews.latest(session, "same-call-id")).toMatchObject({
+        expect(yield* reviews.latest(session, "same-call-id")).toMatchObject({
           decision: "allow",
           reason: "old run allowed",
         });
@@ -146,7 +146,7 @@ testAgent()("permission gate", (it) => {
         `${session}:{"action":"dangerous"}`,
       ]);
       expect(runs.count).toBe(1);
-      expect(reviews.latest(session, "repeat-id")).toMatchObject({
+      expect(yield* reviews.latest(session, "repeat-id")).toMatchObject({
         input: '{"action":"dangerous"}',
         decision: "block",
       });
@@ -157,7 +157,7 @@ testAgent()("permission gate", (it) => {
     Effect.gen(function* () {
       const session = yield* freshSession;
       const reviews = yield* PermissionReviews;
-      const original = reviews.record({
+      const original = yield* reviews.record({
         sessionId: session,
         toolCallId: "reused-id",
         toolName: "old_tool",
@@ -172,7 +172,7 @@ testAgent()("permission gate", (it) => {
       const { tool, runs } = countedTool("new_tool");
       yield* gatedRun(gate, tool, "reused-id", "{}");
       expect(runs.count).toBe(0);
-      expect(reviews.latest(session, "reused-id")).toEqual(original);
+      expect(yield* reviews.latest(session, "reused-id")).toEqual(original);
     }),
   );
 
@@ -182,7 +182,7 @@ testAgent()("permission gate", (it) => {
       Effect.gen(function* () {
         const session = yield* freshSession;
         const reviews = yield* PermissionReviews;
-        const original = reviews.record({
+        const original = yield* reviews.record({
           sessionId: session,
           toolCallId: "approved-id",
           toolName: "owner_tool",
@@ -199,10 +199,10 @@ testAgent()("permission gate", (it) => {
         });
         yield* run(original.input);
         expect(runs.count).toBe(1);
-        expect(reviews.latest(session, "approved-id")).toEqual(original);
+        expect(yield* reviews.latest(session, "approved-id")).toEqual(original);
         yield* run('{"action":"write"}');
         expect(runs.count).toBe(1);
-        expect(reviews.latest(session, "approved-id")).toEqual(original);
+        expect(yield* reviews.latest(session, "approved-id")).toEqual(original);
       }),
   );
 });

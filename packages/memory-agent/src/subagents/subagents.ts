@@ -439,7 +439,7 @@ const make = Effect.gen(function* () {
                 argumentsJson,
               }),
             );
-            record(verdict.decision, verdict.decidedBy, verdict.reason);
+            yield* record(verdict.decision, verdict.decidedBy, verdict.reason);
             switch (verdict.decision) {
               case "allow":
                 return undefined;
@@ -476,7 +476,7 @@ const make = Effect.gen(function* () {
           events.publishSession(binding.sessionId, "relayed-approvals");
           const approved = yield* nativePromise(() => decision);
           events.publishSession(binding.sessionId, "relayed-approvals");
-          record(
+          yield* record(
             approved ? "approved" : "denied",
             "user",
             approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
