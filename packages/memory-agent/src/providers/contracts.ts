@@ -1,6 +1,6 @@
 import type { GlobalConfigFailed } from "../config/global-config.ts";
 import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware } from "@tanstack/ai";
-import { Data, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 /** Persisted model connection ID. Compatible endpoints are not an OpenAI vendor identity. */
 export const ProviderId = Schema.Literals(["openai", "anthropic", "openai-compatible"]);
@@ -92,20 +92,21 @@ export const ProviderModel = Schema.Struct({
 });
 export type ProviderModel = typeof ProviderModel.Type;
 
-export class ProviderUnavailable extends Data.TaggedError("ProviderUnavailable")<{
-  readonly provider: ProviderId;
-}> {}
+export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
+  "ProviderUnavailable",
+  { provider: ProviderId },
+) {}
 
-export class ModelUnavailable extends Data.TaggedError("ModelUnavailable")<{
-  readonly provider: ProviderId;
-  readonly model: string;
-  readonly reasoningEffort?: string;
-}> {}
+export class ModelUnavailable extends Schema.TaggedError<ModelUnavailable>()("ModelUnavailable", {
+  provider: ProviderId,
+  model: Schema.String,
+  reasoningEffort: Schema.optionalKey(Schema.String),
+}) {}
 
-export class ProviderOperationFailed extends Data.TaggedError("ProviderOperationFailed")<{
-  readonly provider: ProviderId;
-  readonly operation: "auth" | "catalog" | "model";
-}> {}
+export class ProviderOperationFailed extends Schema.TaggedError<ProviderOperationFailed>()(
+  "ProviderOperationFailed",
+  { provider: ProviderId, operation: Schema.Literals(["auth", "catalog", "model"]) },
+) {}
 
 export type AuthConnectionState =
   | { readonly provider: ProviderId; readonly status: "signed-out" }

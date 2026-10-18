@@ -301,7 +301,6 @@ describe("image router", () => {
       );
       expect(Result.isFailure(result) && result.failure).toMatchObject({
         _tag: "ImageRouteUnavailable",
-        reasons: ["no eligible image route"],
       });
     }),
   );

@@ -168,6 +168,7 @@ describe("RouteCatalog", () => {
             : Effect.fail(
                 new RouteCatalogRefreshFailed({
                   operation: "models",
+                  reason: { _tag: "Failed" },
                   cause: new Error("unavailable"),
                 }),
               );
