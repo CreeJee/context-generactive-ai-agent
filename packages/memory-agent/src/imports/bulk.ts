@@ -1,12 +1,11 @@
-import { Array as EffectArray, HashSet, Result, Function as EffectFunction } from "effect";
+import { Array as EffectArray, HashSet, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import type { SQLOutputValue } from "node:sqlite";
-import { Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { NodeCrypto } from "@effect/platform-node";
+import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { edgeWeights, type EdgeKind } from "../memory/edges.ts";
 import { hasStatementText } from "../memory/quality.ts";
-import type { NodeDetail, NodeKind } from "../memory/nodes.ts";
+import { NodeDetail, type NodeKind } from "../memory/nodes.ts";
 import type { ImportSourceName, TranscriptItem } from "./items.ts";
 
 /** Statements worth interpreting, the same rule live nodes follow (`interpretedKinds` in nodes.ts). */
@@ -29,168 +28,182 @@ export interface MigrationCount {
   readonly repeated: number;
 }
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeId = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String })),
-  Result.getOrThrow,
-);
-const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
-  isTruthy(row) ? decodeId(row).id : null;
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCall = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({ id: Schema.String, tool_name: Schema.NullOr(Schema.String) }),
-  ),
-  Result.getOrThrow,
-);
+/** A migrated conversation could not be written; nothing of that piece was kept. */
+export class BulkWriteFailed extends Schema.TaggedError<BulkWriteFailed>()("BulkWriteFailed", {
+  cause: Schema.Defect(),
+}) {}
+
+const IdRow = Schema.Struct({ id: Schema.String });
+const encodeDetail = Schema.encodeEffect(Schema.fromJsonString(NodeDetail));
 
 const make = Effect.gen(function* () {
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
+  const idOf = Effect.map(
+    Option.match({ onNone: () => null, onSome: (row: typeof IdRow.Type) => row.id }),
+  );
 
-  const insertNode = sqlite.prepare(
-    "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  );
-  const insertEdge = sqlite.prepare(
-    "INSERT INTO edges VALUES (?, ?, ?, 'structure', ?, ?) ON CONFLICT DO NOTHING",
-  );
-  const insertRef = sqlite.prepare("INSERT INTO node_refs VALUES (?, ?) ON CONFLICT DO NOTHING");
-  const latestWithRef = sqlite.prepare(`
-    SELECT r.node_id AS id FROM node_refs r JOIN nodes n ON n.id = r.node_id
-    WHERE r.ref = ? AND n.project_id = ? ORDER BY n.seq DESC LIMIT 1`);
-  const insertJob = sqlite.prepare(
-    "INSERT INTO interpret_jobs (node_id, status, updated_at) VALUES (?, 'pending', ?)",
-  );
-  const lastInSession = sqlite.prepare(
-    "SELECT id FROM nodes WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
-  );
-  const lastUser = sqlite.prepare(
-    "SELECT id FROM nodes WHERE session_id = ? AND kind = 'user' ORDER BY seq DESC LIMIT 1",
-  );
+  const latestWithRef = SqlSchema.findOneOption({
+    Request: Schema.Struct({ ref: Schema.String, projectId: Schema.String }),
+    Result: IdRow,
+    execute: ({ ref, projectId }) => sql`
+      SELECT r.node_id AS id FROM node_refs r JOIN nodes n ON n.id = r.node_id
+      WHERE r.ref = ${ref} AND n.project_id = ${projectId} ORDER BY n.seq DESC LIMIT 1`,
+  });
+  const lastInSession = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: IdRow,
+    execute: (sessionId) =>
+      sql`SELECT id FROM nodes WHERE session_id = ${sessionId} ORDER BY seq DESC LIMIT 1`,
+  });
+  const lastUser = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: IdRow,
+    execute: (sessionId) => sql`SELECT id FROM nodes WHERE session_id = ${sessionId}
+      AND kind = 'user' ORDER BY seq DESC LIMIT 1`,
+  });
   // Only an answer in the turn still open: after a user message nothing has answered yet.
-  const answerInOpenTurn = sqlite.prepare(`
-    SELECT id FROM nodes WHERE session_id = ? AND kind = 'assistant'
-    AND seq > coalesce((SELECT max(seq) FROM nodes WHERE session_id = ? AND kind = 'user'), 0)
-    ORDER BY seq DESC LIMIT 1`);
-  const callNode = sqlite.prepare(`
-    SELECT id, json_extract(detail, '$.toolName') AS tool_name FROM nodes
-    WHERE session_id = ? AND kind = 'tool_call'
-    AND json_extract(detail, '$.toolCallId') = ? ORDER BY seq LIMIT 1`);
-  const markImported = sqlite.prepare(
-    "INSERT INTO imported_nodes (source, external_id, node_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-  );
-  const alreadyImported = sqlite.prepare(
-    "SELECT node_id AS id FROM imported_nodes WHERE source = ? AND external_id = ?",
-  );
+  const answerInOpenTurn = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: IdRow,
+    execute: (sessionId) => sql`
+      SELECT id FROM nodes WHERE session_id = ${sessionId} AND kind = 'assistant'
+      AND seq > coalesce((SELECT max(seq) FROM nodes
+        WHERE session_id = ${sessionId} AND kind = 'user'), 0)
+      ORDER BY seq DESC LIMIT 1`,
+  });
+  const callNode = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, toolCallId: Schema.String }),
+    Result: Schema.Struct({ id: Schema.String, tool_name: Schema.NullOr(Schema.String) }),
+    execute: ({ sessionId, toolCallId }) => sql`
+      SELECT id, json_extract(detail, '$.toolName') AS tool_name FROM nodes
+      WHERE session_id = ${sessionId} AND kind = 'tool_call'
+      AND json_extract(detail, '$.toolCallId') = ${toolCallId} ORDER BY seq LIMIT 1`,
+  });
+  const alreadyImported = SqlSchema.findOneOption({
+    Request: Schema.Struct({ source: Schema.String, externalId: Schema.String }),
+    Result: IdRow,
+    execute: ({ source, externalId }) => sql`SELECT node_id AS id FROM imported_nodes
+      WHERE source = ${source} AND external_id = ${externalId}`,
+  });
+
+  const link = (fromId: string, toId: string, kind: EdgeKind, at: string) =>
+    sql`INSERT INTO edges VALUES (${fromId}, ${toId}, ${kind}, 'structure', ${edgeWeights[kind]},
+      ${at}) ON CONFLICT DO NOTHING`;
 
   /**
    * Writes one conversation as nodes, keeping the times the other tool recorded. This is the bulk
    * path on purpose: `Nodes.append` stamps the present and opens a transaction per node, which is
    * right for a live turn and wrong for a transcript of thousands of lines.
    */
-  const write = (migration: Migration): MigrationCount =>
-    atomic(() => {
+  const write = (migration: Migration) =>
+    Effect.gen(function* () {
       const { source, projectId, sessionId } = migration;
       // Resuming mid-transcript (a later pass, or the next piece of a long one) must continue the
       // turn it stopped in, so the state comes from the session rather than from this batch.
-      let previousId = idOf(lastInSession.get(sessionId));
-      let userNodeId = idOf(lastUser.get(sessionId));
-      let assistantNodeId = idOf(answerInOpenTurn.get(sessionId, sessionId));
+      let previousId = yield* idOf(lastInSession(sessionId));
+      let userNodeId = yield* idOf(lastUser(sessionId));
+      let assistantNodeId = yield* idOf(answerInOpenTurn(sessionId));
       let written = 0;
       let repeated = 0;
 
-      const link = (fromId: string, toId: string, kind: EdgeKind, at: string) =>
-        insertEdge.run(fromId, toId, kind, edgeWeights[kind], at);
-
-      const append = (
+      const append = Effect.fnUntraced(function* (
         kind: NodeKind,
         text: string,
         at: string,
         externalId: string | null,
         detail: NodeDetail,
-      ) => {
-        const id = randomUUID();
+      ) {
+        const id = yield* crypto.randomUUIDv4();
         // A user turn opens its own run, and what answers it joins that run. `history.ts` groups a
         // transcript by run id, so this is what makes a migrated conversation render as turns.
         const runId = kind === "user" ? `imported:${id}` : `imported:${userNodeId ?? sessionId}`;
-        insertNode.run(
+        yield* sql`INSERT INTO nodes ${sql.insert({
           id,
-          projectId,
-          sessionId,
-          runId,
+          project_id: projectId,
+          session_id: sessionId,
+          run_id: runId,
           kind,
           text,
-          JSON.stringify({ ...detail, importedFrom: source }),
-          at,
-        );
-        if (isTruthy(previousId)) link(previousId, id, "next", at);
+          detail: yield* encodeDetail({ ...detail, importedFrom: source }),
+          created_at: at,
+        })}`;
+        if (isTruthy(previousId)) yield* link(previousId, id, "next", at);
         previousId = id;
         // An empty answer is not a statement; interpreting it would cost a model call for nothing.
         if (migration.interpret && HashSet.has(interpretedKinds, kind) && hasStatementText(text))
-          insertJob.run(id, at);
-        if (externalId !== null) markImported.run(source, externalId, id);
+          yield* sql`INSERT INTO interpret_jobs (node_id, status, updated_at)
+            VALUES (${id}, 'pending', ${at})`;
+        if (externalId !== null)
+          yield* sql`INSERT INTO imported_nodes (source, external_id, node_id)
+            VALUES (${source}, ${externalId}, ${id}) ON CONFLICT DO NOTHING`;
         written += 1;
         return id;
-      };
+      });
 
       /**
        * The assistant turn a tool call belongs to. When the assistant called a tool without saying
        * anything, there is no statement to hang the call on, so an empty one stands in — the same
        * node the live recorder writes in that case, so both look alike to `trace_evidence`.
        */
-      const assistantFor = (at: string) => {
+      const assistantFor = Effect.fnUntraced(function* (at: string) {
         if (isTruthy(assistantNodeId)) return assistantNodeId;
-        const id = append("assistant", "", at, null, {});
-        if (isTruthy(userNodeId)) link(id, userNodeId, "reply", at);
+        const id = yield* append("assistant", "", at, null, {});
+        if (isTruthy(userNodeId)) yield* link(id, userNodeId, "reply", at);
         assistantNodeId = id;
         return id;
-      };
+      });
 
       for (const item of migration.items) {
         if (item.kind === "session" || item.kind === "ignored") continue;
-        if (isTruthy(alreadyImported.get(source, item.externalId))) {
+        if (Option.isSome(yield* alreadyImported({ source, externalId: item.externalId }))) {
           repeated += 1;
           continue;
         }
         switch (item.kind) {
           case "message": {
-            const id = append(item.role, item.text, item.at, item.externalId, {});
+            const id = yield* append(item.role, item.text, item.at, item.externalId, {});
             if (item.role === "user") {
               userNodeId = id;
               assistantNodeId = null;
               continue;
             }
-            if (isTruthy(userNodeId)) link(id, userNodeId, "reply", item.at);
+            if (isTruthy(userNodeId)) yield* link(id, userNodeId, "reply", item.at);
             assistantNodeId = id;
             continue;
           }
           case "tool_call": {
-            const calledBy = assistantFor(item.at);
-            const id = append("tool_call", item.text, item.at, item.externalId, {
+            const calledBy = yield* assistantFor(item.at);
+            const id = yield* append("tool_call", item.text, item.at, item.externalId, {
               toolName: item.toolName,
               toolCallId: item.toolCallId,
             });
-            link(calledBy, id, "calls", item.at);
+            yield* link(calledBy, id, "calls", item.at);
             for (const ref of EffectArray.dedupe(item.refs)) {
-              const earlier = idOf(latestWithRef.get(ref, projectId));
-              insertRef.run(id, ref);
-              if (isTruthy(earlier)) link(id, earlier, "touches", item.at);
+              const earlier = yield* idOf(latestWithRef({ ref, projectId }));
+              yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
+              if (isTruthy(earlier)) yield* link(id, earlier, "touches", item.at);
             }
             continue;
           }
           case "tool_result": {
-            const row = callNode.get(sessionId, item.toolCallId);
-            const called = isTruthy(row) ? decodeCall(row) : null;
-            const id = append("tool_result", item.text, item.at, item.externalId, {
+            const called = Option.getOrNull(
+              yield* callNode({ sessionId, toolCallId: item.toolCallId }),
+            );
+            const id = yield* append("tool_result", item.text, item.at, item.externalId, {
               toolName: called?.tool_name ?? undefined,
               toolCallId: item.toolCallId,
               ok: item.ok,
             });
-            if (isTruthy(called)) link(called.id, id, "returns", item.at);
+            if (isTruthy(called)) yield* link(called.id, id, "returns", item.at);
           }
         }
       }
-      return { written, repeated };
-    });
+      return { written, repeated } satisfies MigrationCount;
+    }).pipe(
+      sql.withTransaction,
+      Effect.mapError((cause) => BulkWriteFailed.make({ cause })),
+    );
 
   return { write };
 });
@@ -202,5 +215,5 @@ const make = Effect.gen(function* () {
 export class BulkNodes extends Context.Service<BulkNodes, Effect.Success<typeof make>>()(
   "memory-agent/imports/bulk/BulkNodes",
 ) {
-  static readonly layer = Layer.effect(BulkNodes, make);
+  static readonly layer = Layer.effect(BulkNodes, make).pipe(Layer.provide(NodeCrypto.layer));
 }
