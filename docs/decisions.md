@@ -2067,6 +2067,9 @@
 - 동시 에이전트 실행 시 모델 worker는 요청 배치 단위 Semaphore(1)로 물리 실행량을 제한한다. 전체 문서 임베딩을 잠그지 않아 backfill 배치 사이에 검색이 들어갈 수 있다. 대기 중 취소는 전송하지 않고, 실행 중 취소는 해당 worker를 종료한 뒤 종료 확인까지 기다린다. 다음 요청은 새 worker에서 실행하며 다른 에이전트의 대기를 실패시키지 않는다.
 - native remove/save 동안 다른 에이전트가 만든 제거 journal을 보존한다. 제거할 journal과 live chunk ID를 하나의 동기 DB 경계에서 읽고 실제 제거·저장한 ID만 확인 처리한다.
 - chunk 예약 후 native 저장 중 세션 purge·원문 변경이 가능하므로 marker commit에서도 원문을 재검증한다. 사라지거나 변경된 부모는 완료 처리하지 않고 해당 청크를 제거 journal로 회수하여 다른 에이전트의 검색 publication을 실패 상태로 만들지 않는다. 이 경쟁 구간은 Deferred gate로 재현한다.
+- 리뷰 반영(2026-10-18): `Database.atomic`은 모든 fiber가 공유하는 depth로 SAVEPOINT를 중첩하므로, 트랜잭션 안에서는 재검증과 쓰기만 동기로 수행하고 Effect를 `yield`하지 않는다. 노드별 처리 결과는 서로소 유니온(`NodeOutcome`)으로 정한 뒤 `switch`로 쓴다. native await 전에 필요한 청크 ID·제거 journal은 한 트랜잭션에서 읽는다. fiber별 트랜잭션 연결을 주는 `effect/sql`의 `SqlClient.withTransaction`으로 옮기는 일은 리포 전체의 동기 SQLite 사용과 `@effect/sql-sqlite-node`의 `effect ^4.0.5` 요구 때문에 별도 작업으로 둔다.
+- native owner는 명령을 하나씩 처리하므로 id별 명령을 병렬로 보내도 빨라지지 않는다. `remove`는 `add`처럼 `ids` 배열을 받는 한 owner 단계로 처리하고 제거된 개수를 돌려준다. 검색 중 매핑이 사라진 청크 ID(2^52 이상)는 원문 seq로 해석하지 않고 버린다. 검색 k 확장은 이전 결과에 의존하므로 순차로 둔다.
+- turbovec `VectorIndex`에 `close`를 추가하고 native owner가 인덱스를 `ScopedRef`로 소유한다. reset 교체, 호환되지 않는 저장 인덱스 교체, worker 종료 때 GC를 기다리지 않고 바로 해제한다. 닫힌 인덱스 호출은 해제된 메모리에 닿지 않고 오류를 반환한다. native 경계의 실패는 원래 예외를 `NativeOwnerFailed.cause`로 프로세스 안에 보존하고 IPC로는 reason 코드만 보낸다.
 
 ## OpenAI 호환 엔드포인트의 계정화 (2026-10-18)
 
