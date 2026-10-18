@@ -4,7 +4,6 @@ import { isTruthy } from "../truthy.ts";
 import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { basename, dirname, join, resolve } = platformPath;
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect, FileSystem, MutableHashMap, Option, Schema, Semaphore } from "effect";
 import { runtimeArtifact } from "../runtime/resources.ts";
 
@@ -61,6 +60,8 @@ const attempt = <A>(run: () => A) =>
   Effect.try({ try: run, catch: (cause) => GoalWorkerAssetsFailed.make({ cause }) });
 const failure = (cause: import("effect/PlatformError").PlatformError) =>
   GoalWorkerAssetsFailed.make({ cause });
+const invalidPath = (cause: import("effect/PlatformError").BadArgument) =>
+  GoalWorkerAssetsFailed.make({ cause });
 
 export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegistry")(function* (
   options: {
@@ -109,30 +110,38 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
     return { path, bytes, hash: manifest.worker.sha256 };
   });
 
-  const snapshotLocation = (saved: SavedGoalExecutionAssets) => {
-    active(saved.goalInstanceId);
-    if (!/^[a-f0-9]{64}$/.test(saved.sourceGeneration))
-      throw new Error("Inactive Goal asset registry");
-    const url = new URL(saved.canonicalWorkerUrl);
-    if (url.protocol !== "file:" || url.href !== saved.canonicalWorkerUrl)
-      throw new Error("Noncanonical Goal worker URL");
-    const workerPath = fileURLToPath(url);
+  const snapshotLocation = Effect.fnUntraced(function* (saved: SavedGoalExecutionAssets) {
+    const url = yield* attempt(() => {
+      active(saved.goalInstanceId);
+      if (!/^[a-f0-9]{64}$/.test(saved.sourceGeneration))
+        throw new Error("Inactive Goal asset registry");
+      const url = new URL(saved.canonicalWorkerUrl);
+      if (url.protocol !== "file:" || url.href !== saved.canonicalWorkerUrl)
+        throw new Error("Noncanonical Goal worker URL");
+      return url;
+    });
+    const workerPath = yield* platformPath.fromFileUrl(url).pipe(Effect.mapError(invalidPath));
+    const canonicalUrl = yield* platformPath
+      .toFileUrl(workerPath)
+      .pipe(Effect.mapError(invalidPath));
     const destination = dirname(workerPath);
-    if (
-      workerPath !== join(destination, "full-loop-worker.mjs") ||
-      basename(dirname(destination)) !== saved.sourceGeneration ||
-      pathToFileURL(workerPath).href !== saved.canonicalWorkerUrl
-    )
-      throw new Error("Goal snapshot identity mismatch");
+    yield* attempt(() => {
+      if (
+        workerPath !== join(destination, "full-loop-worker.mjs") ||
+        basename(dirname(destination)) !== saved.sourceGeneration ||
+        canonicalUrl.href !== saved.canonicalWorkerUrl
+      )
+        throw new Error("Goal snapshot identity mismatch");
+    });
     return { workerPath, destination };
-  };
+  });
   const snapshotIdentity = (
     saved: SavedGoalExecutionAssets,
+    workerPath: string,
     canonical: string,
     workerBytes: Uint8Array,
     bytes: Uint8Array,
   ): GoalExecutionAssets => {
-    const { workerPath } = snapshotLocation(saved);
     if (canonical !== workerPath) throw new Error("Goal snapshot identity mismatch");
     const workerHash = digest(workerBytes);
     if (
@@ -165,13 +174,13 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
     });
   };
   const verify = Effect.fn("GoalWorkerAssets.verify")(function* (saved: SavedGoalExecutionAssets) {
-    const { workerPath, destination } = yield* attempt(() => snapshotLocation(saved));
+    const { workerPath, destination } = yield* snapshotLocation(saved);
     const canonical = yield* fs.realPath(workerPath).pipe(Effect.mapError(failure));
     const workerBytes = yield* fs.readFile(workerPath).pipe(Effect.mapError(failure));
     const bytes = yield* fs
       .readFile(join(destination, manifestName))
       .pipe(Effect.mapError(failure));
-    return yield* attempt(() => snapshotIdentity(saved, canonical, workerBytes, bytes));
+    return yield* attempt(() => snapshotIdentity(saved, workerPath, canonical, workerBytes, bytes));
   });
 
   return {
@@ -197,7 +206,9 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
             if (digest(copied) !== source.hash)
               throw new Error("Goal worker copy differs from build manifest");
           });
-          const canonicalWorkerUrl = pathToFileURL(workerPath).href;
+          const canonicalWorkerUrl = (yield* platformPath
+            .toFileUrl(workerPath)
+            .pipe(Effect.mapError(invalidPath))).href;
           const encodedManifest = yield* Schema.encodeEffect(
             Schema.fromJsonString(snapshotManifest),
           )({ goalInstanceId, sourceGeneration, canonicalWorkerUrl, workerHash: source.hash }).pipe(
