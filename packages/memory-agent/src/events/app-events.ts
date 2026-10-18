@@ -1,4 +1,3 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
   Cause,
@@ -12,7 +11,7 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 
 export type SessionEventTopic = "all" | "run-state" | "queue" | "subagents" | "relayed-approvals";
 export type ProjectEventTopic = "all" | "sessions";
@@ -45,7 +44,11 @@ export type AppEventInput =
 
 export interface AppEventsApi {
   readonly publish: (input: AppEventInput) => AppChangedEvent;
-  readonly publishSession: (sessionId: string, topic: SessionEventTopic) => AppChangedEvent | null;
+  /** Null when the session is unknown. A failed lookup is logged; events are advisory. */
+  readonly publishSession: (
+    sessionId: string,
+    topic: SessionEventTopic,
+  ) => Effect.Effect<AppChangedEvent | null>;
   readonly publishProject: (projectId: string, topic: ProjectEventTopic) => AppChangedEvent;
   readonly publishGlobal: (topic: GlobalEventTopic) => AppChangedEvent;
   readonly revision: () => number;
@@ -64,7 +67,7 @@ const frame = (event: string, payload: SsePayload, id?: number) =>
   `${id === undefined ? "" : `id: ${id}\n`}event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 
 const make = (options: {
-  readonly projectForSession: (sessionId: string) => string | null;
+  readonly projectForSession: (sessionId: string) => Effect.Effect<string | null>;
   readonly context: Context.Context<never>;
   readonly ownerSignal: AbortSignal | undefined;
 }): AppEventsApi => {
@@ -136,12 +139,10 @@ const make = (options: {
 
   return {
     publish,
-    publishSession(sessionId: string, topic: SessionEventTopic) {
-      const projectId = options.projectForSession(sessionId);
-      return isTruthy(projectId)
-        ? publish({ scope: "session", projectId, sessionId, topic })
-        : null;
-    },
+    publishSession: (sessionId: string, topic: SessionEventTopic) =>
+      Effect.map(options.projectForSession(sessionId), (projectId) =>
+        isTruthy(projectId) ? publish({ scope: "session", projectId, sessionId, topic }) : null,
+      ),
     publishProject: (projectId: string, topic: ProjectEventTopic) =>
       publish({ scope: "project", projectId, topic }),
     publishGlobal: (topic: GlobalEventTopic) => publish({ scope: "global", topic }),
@@ -156,7 +157,7 @@ const make = (options: {
 };
 
 const create = Effect.fnUntraced(function* (
-  projectForSession: (sessionId: string) => string | null,
+  projectForSession: (sessionId: string) => Effect.Effect<string | null>,
 ) {
   const context = yield* Effect.context<never>();
   const ownerScope = yield* Effect.serviceOption(Scope.Scope);
@@ -166,20 +167,24 @@ const create = Effect.fnUntraced(function* (
   return make({ projectForSession, context, ownerSignal });
 });
 
-export const makeAppEvents: Effect.Effect<AppEventsApi> = create(() => null);
+export const makeAppEvents: Effect.Effect<AppEventsApi> = create(() => Effect.succeed(null));
 
 const liveAppEvents = Effect.gen(function* () {
-  const { sqlite } = yield* Database;
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  const decodeProject = EffectFunction.flow(
-    Schema.decodeUnknownResult(Schema.Struct({ project_id: Schema.String })),
-    Result.getOrThrow,
-  );
-  const statement = sqlite.prepare("SELECT project_id FROM sessions WHERE id = ?");
-  return yield* create((sessionId) => {
-    const row = statement.get(sessionId);
-    return isTruthy(row) ? decodeProject(row).project_id : null;
+  const sql = yield* SqlClient.SqlClient;
+  const projectOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ project_id: Schema.String }),
+    execute: (sessionId) => sql`SELECT project_id FROM sessions WHERE id = ${sessionId}`,
   });
+  return yield* create((sessionId) =>
+    projectOf(sessionId).pipe(
+      Effect.map((row) => Option.getOrNull(Option.map(row, ({ project_id }) => project_id))),
+      // A missed hint only delays a page's reload; the change it announces is already stored.
+      Effect.catch((error) =>
+        Effect.as(Effect.logWarning("Session event was not published", error), null),
+      ),
+    ),
+  );
 });
 
 export class AppEvents extends Context.Service<AppEvents, AppEventsApi>()(

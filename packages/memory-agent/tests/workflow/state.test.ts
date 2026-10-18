@@ -612,14 +612,16 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const events = yield* AppEvents;
         const beforeRevision = events.revision();
         const persistedAtPublish: unknown[] = [];
-        const runSync = Effect.runSyncWith(yield* Effect.context<Workflows>());
+        const published: unknown[] = [];
         const publishSession = events.publishSession;
-        const publish = vi
-          .spyOn(events, "publishSession")
-          .mockImplementation((sessionId, topic) => {
-            persistedAtPublish.push(runSync(workflows.get(sessionId)));
-            return publishSession(sessionId, topic);
-          });
+        const publish = vi.spyOn(events, "publishSession").mockImplementation((sessionId, topic) =>
+          workflows.get(sessionId).pipe(
+            Effect.orDie,
+            Effect.tap((state) => Effect.sync(() => persistedAtPublish.push(state))),
+            Effect.andThen(publishSession(sessionId, topic)),
+            Effect.tap((event) => Effect.sync(() => published.push(event))),
+          ),
+        );
         yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
         const tool = yield* serverTool(id, name === "update_goal" ? "goal" : "execute", name);
         const input =
@@ -635,13 +637,15 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const result = yield* tool(input);
         const state = yield* workflows.get(id);
         expect(publish).toHaveBeenCalledExactlyOnceWith(id, "run-state");
-        expect(publish.mock.results[0]?.value).toEqual({
-          scope: "session",
-          projectId: project.id,
-          sessionId: id,
-          topic: "run-state",
-          revision: beforeRevision + 1,
-        });
+        expect(published).toEqual([
+          {
+            scope: "session",
+            projectId: project.id,
+            sessionId: id,
+            topic: "run-state",
+            revision: beforeRevision + 1,
+          },
+        ]);
         expect(persistedAtPublish).toEqual([state]);
         expect(result).toMatchObject({ phase: state.phase });
         expect(state.goal?.version).toBe(name === "update_goal" ? 2 : 1);

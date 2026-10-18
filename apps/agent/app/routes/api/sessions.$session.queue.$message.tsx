@@ -29,7 +29,7 @@ export function action({ request, params }: Route.ActionArgs) {
         chat.editQueued(params.session, holder, params.message, body.success),
       ).pipe(
         Effect.tap(() =>
-          Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
+          Effect.flatMap(AppEvents, (events) => events.publishSession(params.session, "queue")),
         ),
       );
     }),

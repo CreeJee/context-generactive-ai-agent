@@ -79,7 +79,7 @@ export function action({ request, params }: Route.ActionArgs) {
           }
           case "Phase": {
             const workflow = yield* chat.setWorkflowPhase(params.session, holder, change.phase);
-            events.publishSession(params.session, "run-state");
+            yield* events.publishSession(params.session, "run-state");
             return workflow;
           }
           case "Control": {
@@ -88,7 +88,7 @@ export function action({ request, params }: Route.ActionArgs) {
               holder,
               change.workflowAction,
             );
-            events.publishSession(params.session, "run-state");
+            yield* events.publishSession(params.session, "run-state");
             return workflow;
           }
         }

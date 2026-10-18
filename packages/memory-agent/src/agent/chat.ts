@@ -713,8 +713,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   leases.onExpired((sessionId) =>
     Effect.gen(function* () {
       if (!isTruthy(liveRuns.get(sessionId))) yield* queue.holdWaiting(sessionId, "pageLeft");
-      events.publishSession(sessionId, "queue");
-      events.publishSession(sessionId, "run-state");
+      yield* events.publishSession(sessionId, "queue");
+      yield* events.publishSession(sessionId, "run-state");
     }).pipe(
       // No caller waits on the sweep; a failed hold is reported, and the next sweep goes on.
       Effect.catch((error) => Effect.logWarning("Queued messages were not held", error)),
@@ -872,8 +872,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           return;
       }
     } finally {
-      events.publishSession(sessionId, "queue");
-      events.publishSession(sessionId, "run-state");
+      yield* events.publishSession(sessionId, "queue");
+      yield* events.publishSession(sessionId, "run-state");
       wakeNotifications(sessionId);
     }
   });
@@ -1026,7 +1026,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (completed && unresolved === undefined)
           yield* execution.finish(sessionId, runId, state, [...toolResults]);
         else yield* execution.stop(sessionId, "run_failed", runId);
-        events.publishSession(sessionId, "run-state");
+        yield* events.publishSession(sessionId, "run-state");
       });
     });
     return { middleware, settle };
@@ -1549,10 +1549,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
           if (turn !== null) workTrace.resumeParentNotifications(sessionId);
-          events.publishSession(sessionId, "run-state");
+          yield* events.publishSession(sessionId, "run-state");
           if (isTruthy(queuedId)) {
             yield* queue.markDelivered(queuedId, "next_turn", runId);
-            events.publishSession(sessionId, "queue");
+            yield* events.publishSession(sessionId, "queue");
           }
           const answeredBy = external;
           const adapter = new ExternalAgentAdapter(
@@ -1577,9 +1577,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                         },
                         signal,
                       );
-                      events.publishSession(sessionId, "relayed-approvals");
+                      yield* events.publishSession(sessionId, "relayed-approvals");
                       const approved = yield* nativePromise(() => decision);
-                      events.publishSession(sessionId, "relayed-approvals");
+                      yield* events.publishSession(sessionId, "relayed-approvals");
                       return approved;
                     }),
                   ),
@@ -2288,10 +2288,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (workerCapability === null) MutableHashMap.set(steerCuts, sessionId, steering);
         stopSteeringOnExit = stopSteering;
         if (turn !== null) workTrace.resumeParentNotifications(sessionId);
-        events.publishSession(sessionId, "run-state");
+        yield* events.publishSession(sessionId, "run-state");
         if (isTruthy(queuedId)) {
           yield* queue.markDelivered(queuedId, "next_turn", runId);
-          events.publishSession(sessionId, "queue");
+          yield* events.publishSession(sessionId, "queue");
         }
         let workerLease: Effect.Success<ReturnType<WorkerAssetsRegistry["use"]>> | undefined;
         const releaseWorker = () => {
@@ -2354,7 +2354,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     providerRetries.wait(
                       { ...request, sessionId, runId },
                       signal,
-                      Effect.sync(() => events.publishSession(sessionId, "run-state")),
+                      events.publishSession(sessionId, "run-state"),
                     ),
                 },
                 lastOperationId: 0,
@@ -2548,7 +2548,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const pendingExecution = (yield* execution.get(sessionId)).kind === "ready";
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
-        events.publishSession(sessionId, "run-state");
+        yield* events.publishSession(sessionId, "run-state");
         const live = liveRuns.get(sessionId);
         if (!isTruthy(live)) {
           const children =
@@ -2655,7 +2655,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "blocked":
             return json(409, result);
           case "revoked":
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return json(200, result);
         }
       }).pipe(
@@ -2684,7 +2684,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "blocked":
             return json(409, result);
           case "recovered":
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return json(200, result);
         }
       }).pipe(
@@ -2716,7 +2716,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "refused":
             return json(409, { error: result.reason });
           case "acknowledged":
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return json(200, result);
         }
       }).pipe(Effect.catchTags({ SessionNotFound: sessionNotFound })),
@@ -3071,7 +3071,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       // A steered message reaches the model whether or not a page is open: after a normal finish
       // the server sends it as the next turn. If that cannot start, the user confirms it instead.
       const unsent = queue.holdWaiting(sessionId, "stopped").pipe(
-        Effect.andThen(Effect.sync(() => events.publishSession(sessionId, "queue"))),
+        Effect.andThen(events.publishSession(sessionId, "queue")),
         Effect.catch((error) => Effect.logWarning("Unsent steered message was not held", error)),
       );
       const steered = send({ kind: "steered" }).pipe(
@@ -3117,7 +3117,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
             evidence: [`HTTP ${response.status}`],
           });
-          events.publishSession(sessionId, "run-state");
+          yield* events.publishSession(sessionId, "run-state");
         }
         yield* drain(response);
       });

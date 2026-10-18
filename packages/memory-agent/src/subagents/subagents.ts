@@ -473,9 +473,9 @@ const make = Effect.gen(function* () {
             },
             signal,
           );
-          events.publishSession(binding.sessionId, "relayed-approvals");
+          yield* events.publishSession(binding.sessionId, "relayed-approvals");
           const approved = yield* nativePromise(() => decision);
-          events.publishSession(binding.sessionId, "relayed-approvals");
+          yield* events.publishSession(binding.sessionId, "relayed-approvals");
           yield* record(
             approved ? "approved" : "denied",
             "user",
@@ -511,7 +511,7 @@ const make = Effect.gen(function* () {
   ): Promise<ChildOutcome> =>
     runEffect(
       Effect.gen(function* () {
-        events.publishSession(binding.sessionId, "subagents");
+        yield* events.publishSession(binding.sessionId, "subagents");
         const threadId = subagentThreadId(row.id);
         // Named messages may have waited behind another attempt. Publish the task now executing.
         startAgain.get(
@@ -822,7 +822,7 @@ const make = Effect.gen(function* () {
           binding.runId,
         );
         finish.run(status, answer, failure, effectClock.currentTimeMillisUnsafe(), row.id);
-        events.publishSession(binding.sessionId, "subagents");
+        yield* events.publishSession(binding.sessionId, "subagents");
         return {
           status,
           subagentId: row.id,
@@ -956,9 +956,10 @@ const make = Effect.gen(function* () {
                       row.id,
                     );
                   runEffectSync(Deferred.succeed(done, undefined));
-                  events.publishSession(binding.sessionId, "subagents");
-                  completionListener?.(binding.sessionId);
-                }),
+                }).pipe(
+                  Effect.andThen(events.publishSession(binding.sessionId, "subagents")),
+                  Effect.andThen(Effect.sync(() => completionListener?.(binding.sessionId))),
+                ),
               ),
               Effect.orDie,
             ),
