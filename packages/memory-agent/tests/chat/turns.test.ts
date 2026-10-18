@@ -183,7 +183,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
           (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
           VALUES (?, ?, ?, 'test', 'running', 'parent-flag', 'test', 1, 1)`)
         .run(agentId, sessionId, agentId);
-      const handle = (yield* WorkTraceStore).startAttempt({
+      const handle = yield* (yield* WorkTraceStore).startAttempt({
         sessionId,
         parentRunId: "parent-flag",
         parentToolCallId: "call-flag",

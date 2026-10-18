@@ -33,19 +33,17 @@ export function loader({ request }: Route.LoaderArgs) {
       {
         const { sqlite } = yield* Database;
         const trace = yield* WorkTraceStore;
-        return reportEvidenceResponse(sqlite, request, (id) =>
-          trace
-            .taskTree(id)
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, 6)
-            .map((task) => ({
-              id: task.id,
-              status: task.status,
-              parentRunId: task.parentRunId,
-              parentToolCallId: task.parentToolCallId,
-              updatedAt: task.updatedAt,
-            })),
-        );
+        const recent = (yield* trace.taskTree(sessionId))
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .slice(0, 6)
+          .map((task) => ({
+            id: task.id,
+            status: task.status,
+            parentRunId: task.parentRunId,
+            parentToolCallId: task.parentToolCallId,
+            updatedAt: task.updatedAt,
+          }));
+        return reportEvidenceResponse(sqlite, request, () => recent);
       }
     }),
   );

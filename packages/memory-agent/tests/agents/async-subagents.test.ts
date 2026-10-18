@@ -204,7 +204,9 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       for (const attempt of attempts)
         expect(
-          trace.taskDetail(sessionId, attempt.taskId)?.adoptions.map((entry) => entry.disposition),
+          (yield* trace.taskDetail(sessionId, attempt.taskId))?.adoptions.map(
+            (entry) => entry.disposition,
+          ),
         ).toEqual(["returned", "reviewed", "used"]);
     }),
   );
@@ -252,7 +254,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         const db = yield* Database;
         const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
         expect((yield* children.list(sessionId))[0]?.status).toBe("running");
-        expect(trace.taskDetail(sessionId, receipt.taskId)?.adoptions).toEqual([]);
+        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.adoptions).toEqual([]);
         expect(yield* send(sessionId, "unrelated parent work")).toContain("Hello");
         yield* turns.release("nap");
         yield* until(
@@ -263,7 +265,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         yield* until(() => followUp() && runningRuns(db, sessionId) === 0, "idle follow-up");
         expect(deliveredCompletions(db, sessionId)).toBe(1);
         expect(userNodes(db, sessionId)).toBe(2);
-        expect(trace.taskDetail(sessionId, receipt.taskId)?.adoptions).toEqual([]);
+        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.adoptions).toEqual([]);
         const { persistence } = yield* ChatState;
         const messages = yield* sdk(() => persistence.stores.messages.loadThread(sessionId));
         expect(
@@ -333,11 +335,11 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       expect(yield* wait({ timeoutMs: 0 })).toContain('"status":"pending"');
       expect(yield* wait({ timeoutMs: 1 })).toContain('"status":"timed_out"');
-      expect(trace.taskDetail(sessionId, ids.taskId)?.adoptions).toEqual([]);
+      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.adoptions).toEqual([]);
       yield* turns.release("nap");
       expect(yield* wait({ timeoutMs: 5000 })).toContain('"status":"completed"');
       expect(yield* wait({})).toContain('"status":"completed"');
-      expect(trace.taskDetail(sessionId, ids.taskId)?.adoptions).toEqual([]);
+      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.adoptions).toEqual([]);
       const adopt = callTool(sessionId, "adopt_subagent_reports", {
         reports: [{ ...ids, evidenceRefIds: [] }],
       });
@@ -345,7 +347,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       expect(yield* send(sessionId, `review-and-adopt ${yield* encodeJson(ids)}`)).toContain(
         "Used the reviewed report",
       );
-      const detail = trace.taskDetail(sessionId, ids.taskId);
+      const detail = yield* trace.taskDetail(sessionId, ids.taskId);
       expect(detail?.adoptions.map((entry) => entry.disposition)).toEqual([
         "returned",
         "reviewed",
@@ -395,7 +397,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         yield* send(sessionId, 'call run_subagent {"task":"shell: printf dispatch only"}'),
       );
       yield* until(
-        () => trace.taskDetail(sessionId, receipt.taskId)?.attempts[0]?.status === "waiting",
+        Effect.map(
+          trace.taskDetail(sessionId, receipt.taskId),
+          (detail) => detail?.attempts[0]?.status === "waiting",
+        ),
         "child approval wait",
       );
       expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
@@ -436,8 +441,12 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       expect(first.subagentId).toBe(second.subagentId);
       expect(first.attemptId).not.toBe(second.attemptId);
       expect(yield* sdk(() => children.stopTask(second.taskId))).toBe("stopped");
-      expect(trace.taskDetail(sessionId, second.taskId)?.attempts[0]?.status).toBe("cancelled");
-      expect(trace.taskDetail(sessionId, first.taskId)?.attempts[0]?.status).toBe("running");
+      expect((yield* trace.taskDetail(sessionId, second.taskId))?.attempts[0]?.status).toBe(
+        "cancelled",
+      );
+      expect((yield* trace.taskDetail(sessionId, first.taskId))?.attempts[0]?.status).toBe(
+        "running",
+      );
       yield* turns.release("nap first");
       yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(first)], timeoutMs: 5000 });
       const firstReport = yield* reportFrom(
@@ -497,22 +506,24 @@ testAgent({ testProvider })("subagent reports across restart", (it) => {
       const before = yield* reportFrom(
         yield* callTool(sessionId, "get_subagent_report", idsOf(receipt)),
       );
-      const notificationId = trace.notifyParent({
+      const notificationId = yield* trace.notifyParent({
         taskId: receipt.taskId,
         kind: "completed",
         summary: "Undelivered after crash",
         idempotencyKey: `${sessionId}:crash-delivery`,
       });
       expect(
-        trace
-          .consumeParentNotifications(sessionId, `${sessionId}:crashed-before-run-persisted`)
-          .map((entry) => entry.id),
+        (yield* trace.consumeParentNotifications(
+          sessionId,
+          `${sessionId}:crashed-before-run-persisted`,
+        )).map((entry) => entry.id),
       ).toContain(notificationId);
       yield* env.reopen;
       expect(
-        (yield* env.use(WorkTraceStore))
-          .consumeParentNotifications(sessionId, `${sessionId}:retry-parent`)
-          .map((entry) => entry.id),
+        (yield* (yield* env.use(WorkTraceStore)).consumeParentNotifications(
+          sessionId,
+          `${sessionId}:retry-parent`,
+        )).map((entry) => entry.id),
       ).toContain(notificationId);
       expect(
         yield* reportFrom(yield* callTool(sessionId, "get_subagent_report", idsOf(receipt))),
@@ -528,21 +539,21 @@ testAgent({ testProvider })("held parent notifications across restart", (it) => 
       const { sessionId } = yield* parentSession;
       const trace = yield* WorkTraceStore;
       const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
-      trace.holdParentNotifications(sessionId);
-      const notificationId = trace.notifyParent({
+      yield* trace.holdParentNotifications(sessionId);
+      const notificationId = yield* trace.notifyParent({
         taskId: receipt.taskId,
         kind: "completed",
         summary: "Wait for an explicit user turn",
         idempotencyKey: `${sessionId}:held-notification`,
       });
       expect(notificationId).not.toBeNull();
-      expect(trace.pendingParentNotificationSessions()).not.toContain(sessionId);
+      expect(yield* trace.pendingParentNotificationSessions).not.toContain(sessionId);
       yield* env.reopen;
       const reopened = yield* env.use(WorkTraceStore);
-      expect(reopened.parentNotificationsHeld(sessionId)).toBe(true);
-      expect(reopened.pendingParentNotificationSessions()).not.toContain(sessionId);
-      reopened.resumeParentNotifications(sessionId);
-      expect(reopened.pendingParentNotificationSessions()).toContain(sessionId);
+      expect(yield* reopened.parentNotificationsHeld(sessionId)).toBe(true);
+      expect(yield* reopened.pendingParentNotificationSessions).not.toContain(sessionId);
+      yield* reopened.resumeParentNotifications(sessionId);
+      expect(yield* reopened.pendingParentNotificationSessions).toContain(sessionId);
     }),
   );
 });
@@ -554,7 +565,7 @@ testAgent({ testProvider })("background children when the agent closes", (it) =>
       const { sessionId } = yield* parentSession;
       const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* env.reopen;
-      const detail = (yield* env.use(WorkTraceStore)).taskDetail(sessionId, receipt.taskId);
+      const detail = yield* (yield* env.use(WorkTraceStore)).taskDetail(sessionId, receipt.taskId);
       expect(detail?.attempts[0]?.status).toBe("cancelled");
       expect(detail?.checkpoints.length).toBeGreaterThan(0);
     }),

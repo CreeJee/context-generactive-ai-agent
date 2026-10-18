@@ -44,11 +44,11 @@ const seed = (db: Database["Service"]) => {
     .run();
 };
 
-const interruptedAttempt = (
+const interruptedAttempt = Effect.fnUntraced(function* (
   trace: WorkTraceStore["Service"],
   uncertain: readonly string[] = [],
-) => {
-  const handle = trace.startAttempt({
+) {
+  const handle = yield* trace.startAttempt({
     sessionId: "s1",
     parentRunId: "parent-1",
     parentToolCallId: "call-1",
@@ -58,17 +58,23 @@ const interruptedAttempt = (
     kind: "start",
     threadId: "subagent-agent-1",
   });
-  trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-  trace.checkpoint("s1", {
+  yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
+  yield* trace.checkpoint("s1", {
     handle,
     completedToolCallIds: ["tool-complete"],
     uncertainToolCallIds: uncertain,
     pendingApprovalIds: ["approval-expired"],
     remainingWork: "Write the verified report.",
   });
-  trace.transitionAttempt(handle, "s1", "interrupted", "attempt_interrupted", "Server restarted");
+  yield* trace.transitionAttempt(
+    handle,
+    "s1",
+    "interrupted",
+    "attempt_interrupted",
+    "Server restarted",
+  );
   return handle;
-};
+});
 
 describe("Work Trace logical resume", () => {
   it.effect(
@@ -79,8 +85,8 @@ describe("Work Trace logical resume", () => {
           const db = yield* Database;
           const trace = yield* WorkTraceStore;
           seed(db);
-          const previous = interruptedAttempt(trace);
-          const resumed = trace.claimResume({
+          const previous = yield* interruptedAttempt(trace);
+          const resumed = yield* trace.claimResume({
             sessionId: "s1",
             taskId: previous.taskId,
             expectedAttemptId: previous.id,
@@ -103,7 +109,7 @@ describe("Work Trace logical resume", () => {
           });
 
           expect(
-            trace.claimResume({
+            yield* trace.claimResume({
               sessionId: "s1",
               taskId: previous.taskId,
               expectedAttemptId: previous.id,
@@ -151,7 +157,7 @@ describe("Work Trace logical resume", () => {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
         seed(db);
-        const handle = trace.startAttempt({
+        const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
           parentToolCallId: "call-1",
@@ -161,15 +167,21 @@ describe("Work Trace logical resume", () => {
           kind: "start",
           threadId: "subagent-agent-1",
         });
-        trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-        trace.checkpoint("s1", {
+        yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
+        yield* trace.checkpoint("s1", {
           handle,
           completedToolCallIds: ["tool-complete"],
           uncertainToolCallIds: [],
           pendingApprovalIds: [],
           remainingWork: "Finish the report.",
         });
-        trace.transitionAttempt(handle, "s1", "interrupted", "attempt_interrupted", "Interrupted");
+        yield* trace.transitionAttempt(
+          handle,
+          "s1",
+          "interrupted",
+          "attempt_interrupted",
+          "Interrupted",
+        );
         db.sqlite
           .prepare(
             `INSERT INTO work_recovery_jobs
@@ -179,8 +191,8 @@ describe("Work Trace logical resume", () => {
           )
           .run(handle.taskId, handle.id);
 
-        const first = trace.claimRecoveryJobs("s1", "parent-recovery-1");
-        const second = trace.claimRecoveryJobs("s1", "parent-recovery-2");
+        const first = yield* trace.claimRecoveryJobs("s1", "parent-recovery-1");
+        const second = yield* trace.claimRecoveryJobs("s1", "parent-recovery-2");
         expect(first).toHaveLength(1);
         expect(first[0]?.claim.handle.attemptNumber).toBe(2);
         expect(second).toEqual([]);
@@ -204,7 +216,7 @@ describe("Work Trace logical resume", () => {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
         seed(db);
-        const previous = interruptedAttempt(trace, ["tool-uncertain"]);
+        const previous = yield* interruptedAttempt(trace, ["tool-uncertain"]);
         const input = {
           sessionId: "s1",
           taskId: previous.taskId,
@@ -212,11 +224,11 @@ describe("Work Trace logical resume", () => {
           parentRunId: "parent-2",
           parentToolCallId: "call-resume-1",
         } as const;
-        expect(trace.claimResume({ ...input, confirmUncertain: false })).toEqual({
+        expect(yield* trace.claimResume({ ...input, confirmUncertain: false })).toEqual({
           status: "blocked",
           reason: "uncertain_side_effect",
         });
-        const confirmed = trace.claimResume({ ...input, confirmUncertain: true });
+        const confirmed = yield* trace.claimResume({ ...input, confirmUncertain: true });
         expect(confirmed.status).toBe("started");
         if (confirmed.status === "started")
           expect(confirmed.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
@@ -230,17 +242,17 @@ describe("Work Trace logical resume", () => {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
         seed(db);
-        const previous = interruptedAttempt(trace, ["tool-uncertain"]);
+        const previous = yield* interruptedAttempt(trace, ["tool-uncertain"]);
         const request = {
           sessionId: "s1",
           taskId: previous.taskId,
           expectedAttemptId: previous.id,
         } as const;
-        expect(trace.requestResume({ ...request, confirmUncertain: false })).toEqual({
+        expect(yield* trace.requestResume({ ...request, confirmUncertain: false })).toEqual({
           status: "blocked",
           reason: "uncertain_side_effect",
         });
-        const queued = trace.requestResume({ ...request, confirmUncertain: true });
+        const queued = yield* trace.requestResume({ ...request, confirmUncertain: true });
         expect(queued).toMatchObject({
           status: "queued",
           taskId: previous.taskId,
@@ -252,11 +264,11 @@ describe("Work Trace logical resume", () => {
             .get(previous.taskId),
         ).toEqual({ status: "queued", confirm_uncertain: 1 });
 
-        const [claimed] = trace.claimRecoveryJobs("s1", "parent-http-resume");
+        const [claimed] = yield* trace.claimRecoveryJobs("s1", "parent-http-resume");
         expect(claimed?.claim.status).toBe("started");
         if (claimed?.claim.status === "started")
           expect(claimed.claim.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
-        expect(trace.claimRecoveryJobs("s1", "parent-race")).toEqual([]);
+        expect(yield* trace.claimRecoveryJobs("s1", "parent-race")).toEqual([]);
       }),
     ),
   );
@@ -267,13 +279,13 @@ describe("Work Trace logical resume", () => {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
         seed(db);
-        const handle = interruptedAttempt(trace);
+        const handle = yield* interruptedAttempt(trace);
         db.sqlite.prepare("DELETE FROM subagents WHERE id = 'agent-1'").run();
         db.sqlite.prepare("DELETE FROM sessions WHERE id = 's1'").run();
 
-        expect(trace.taskTree("s1")).toEqual([]);
-        expect(trace.projectLatestCursor("p1")).toBeGreaterThan(0);
-        expect(trace.projectTaskTree("p1")).toEqual([
+        expect(yield* trace.taskTree("s1")).toEqual([]);
+        expect(yield* trace.projectLatestCursor("p1")).toBeGreaterThan(0);
+        expect(yield* trace.projectTaskTree("p1")).toEqual([
           expect.objectContaining({
             id: handle.taskId,
             projectId: "p1",
@@ -282,12 +294,12 @@ describe("Work Trace logical resume", () => {
             agentName: "researcher",
           }),
         ]);
-        expect(trace.projectTaskDetail("p1", handle.taskId)).toMatchObject({
+        expect(yield* trace.projectTaskDetail("p1", handle.taskId)).toMatchObject({
           task: { id: handle.taskId, originSessionId: null },
           attempts: [{ id: handle.id, status: "interrupted" }],
           events: expect.arrayContaining([expect.objectContaining({ taskId: handle.taskId })]),
         });
-        expect(trace.projectTaskDetail("another-project", handle.taskId)).toBeNull();
+        expect(yield* trace.projectTaskDetail("another-project", handle.taskId)).toBeNull();
       }),
     ),
   );
@@ -298,16 +310,16 @@ describe("Work Trace logical resume", () => {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
         seed(db);
-        const handle = interruptedAttempt(trace);
+        const handle = yield* interruptedAttempt(trace);
 
-        expect(trace.archiveTask("s1", handle.taskId)).toEqual({
+        expect(yield* trace.archiveTask("s1", handle.taskId)).toEqual({
           status: "archived",
           taskId: handle.taskId,
         });
-        expect(trace.taskTree("s1")[0]?.status).toBe("archived");
-        expect(trace.taskDetail("s1", handle.taskId)?.attempts).toHaveLength(1);
+        expect((yield* trace.taskTree("s1"))[0]?.status).toBe("archived");
+        expect((yield* trace.taskDetail("s1", handle.taskId))?.attempts).toHaveLength(1);
         expect(
-          trace.claimResume({
+          yield* trace.claimResume({
             sessionId: "s1",
             taskId: handle.taskId,
             expectedAttemptId: handle.id,
@@ -326,7 +338,7 @@ describe("Work Trace logical resume", () => {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
         seed(db);
-        const handle = trace.startAttempt({
+        const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
           parentToolCallId: "call-1",
@@ -336,8 +348,8 @@ describe("Work Trace logical resume", () => {
           kind: "start",
           threadId: "subagent-agent-1",
         });
-        trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-        trace.transitionAttempt(handle, "s1", "failed", "attempt_failed", "Failed");
+        yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
+        yield* trace.transitionAttempt(handle, "s1", "failed", "attempt_failed", "Failed");
         const base = {
           sessionId: "s1",
           taskId: handle.taskId,
@@ -345,11 +357,11 @@ describe("Work Trace logical resume", () => {
           parentToolCallId: "call-2",
           confirmUncertain: false,
         } as const;
-        expect(trace.claimResume({ ...base, expectedAttemptId: "stale" })).toEqual({
+        expect(yield* trace.claimResume({ ...base, expectedAttemptId: "stale" })).toEqual({
           status: "blocked",
           reason: "stale_attempt",
         });
-        expect(trace.claimResume({ ...base, expectedAttemptId: handle.id })).toEqual({
+        expect(yield* trace.claimResume({ ...base, expectedAttemptId: handle.id })).toEqual({
           status: "blocked",
           reason: "missing_checkpoint",
         });

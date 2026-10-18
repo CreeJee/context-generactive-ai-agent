@@ -73,11 +73,11 @@ const ReportRow = Schema.Struct({
 const reportRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
 
 /** Small, failure-first snapshot for the first diagnostic request. Source text is untrusted data. */
-export const initialReportEvidence = Effect.fnUntraced(function* <E>(
+export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
   reportSessionId: string,
   projectId: string,
   redact: Redact<E>,
-  taskTree: () => readonly TraceItem[],
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const binding = yield* reportBinding(reportSessionId, projectId);
@@ -85,9 +85,9 @@ export const initialReportEvidence = Effect.fnUntraced(function* <E>(
     return "원본 바인딩을 확인할 수 없음; 증상만으로 계속 진행하고 추측을 사실로 적지 마세요.";
   const { sourceSessionId } = binding.value;
   // A failed section is reported as unverified evidence; the snapshot still covers the others.
-  const collect = <R>(
+  const collect = <LoadE, R>(
     name: keyof typeof INITIAL_LIMITS,
-    load: Effect.Effect<ReadonlyArray<unknown>, unknown, R>,
+    load: Effect.Effect<ReadonlyArray<unknown>, LoadE, R>,
   ) =>
     Effect.match(load, {
       onFailure: () => `${name}: failed (조회 실패; 이 근거를 확보한 것으로 주장하지 마세요)`,
@@ -129,8 +129,8 @@ export const initialReportEvidence = Effect.fnUntraced(function* <E>(
     ),
     collect(
       "trace",
-      Effect.try(() =>
-        taskTree()
+      Effect.map(taskTree, (items) =>
+        items
           .filter(
             (item) => item.projectId === projectId && item.originSessionId === sourceSessionId,
           )
@@ -158,11 +158,11 @@ export const initialReportEvidence = Effect.fnUntraced(function* <E>(
 });
 
 /** The trace callback must already be scoped to the source session; no session id is passed to it. */
-export const reportToolsForSession = Effect.fnUntraced(function* <E>(
+export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
   reportSessionId: string,
   projectId: string,
   redact: Redact<E>,
-  taskTree: () => readonly TraceItem[],
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const found = yield* reportBinding(reportSessionId, projectId);
@@ -184,11 +184,12 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E>(
     const cleaned = yield* redact(text.slice(0, TEXT));
     return { text: cleaned.slice(0, TEXT), truncated: text.length > TEXT || cleaned.length > TEXT };
   });
-  const traces = () =>
-    taskTree().filter(
+  const traces = Effect.map(taskTree, (items) =>
+    items.filter(
       (item) =>
         item.projectId === bound.projectId && item.originSessionId === bound.sourceSessionId,
-    );
+    ),
+  );
   const absent = { error: "not_found" as const };
   const listed = (
     section: Exclude<(typeof ListInput.Type)["section"], "trace">,
@@ -241,7 +242,8 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E>(
         const { section, offset } = yield* Schema.decodeEffect(ListInput)(input);
         if (!(yield* current)) return absent;
         if (section === "trace") {
-          const items = traces().slice(offset, offset + PAGE);
+          const all = yield* traces;
+          const items = all.slice(offset, offset + PAGE);
           return {
             section,
             items: yield* Effect.forEach(
@@ -258,8 +260,7 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E>(
                 }),
               { concurrency: "unbounded" },
             ),
-            nextOffset:
-              traces().length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
+            nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
           };
         }
         const rows = yield* listed(section, offset).pipe(Effect.flatMap(reportRows));
@@ -296,7 +297,7 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E>(
         const { section, id } = yield* Schema.decodeEffect(ReadInput)(input);
         if (!(yield* current)) return absent;
         if (section === "trace") {
-          const item = traces().find((entry) => entry.id === id);
+          const item = (yield* traces).find((entry) => entry.id === id);
           if (!isTruthy(item)) return absent;
           return {
             id,

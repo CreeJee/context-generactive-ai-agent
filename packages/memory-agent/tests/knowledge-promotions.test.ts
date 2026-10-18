@@ -59,7 +59,7 @@ describe("Work Trace knowledge promotion", () => {
             kind: "user",
             text: "Save this project decision.",
           });
-          const handle = trace.startAttempt({
+          const handle = yield* trace.startAttempt({
             sessionId: "s1",
             parentRunId: "parent-1",
             parentToolCallId: "call-1",
@@ -69,22 +69,22 @@ describe("Work Trace knowledge promotion", () => {
             kind: "start",
             threadId: "subagent-agent-1",
           });
-          const evidence = trace.recordEvidence({
+          const evidence = yield* trace.recordEvidence({
             handle,
             locator: { kind: "message", threadId: handle.threadId, messageId: "child-answer" },
             verification: "verified",
           });
-          const pending = trace.recordEvidence({
+          const pending = yield* trace.recordEvidence({
             handle,
             locator: { kind: "tool_result", threadId: handle.threadId, toolCallId: "pending-tool" },
           });
-          trace.recordReportDisposition({
+          yield* trace.recordReportDisposition({
             handle,
             sessionId: "s1",
             disposition: "reviewed",
             parentRunId: "parent-1",
           });
-          const claimId = trace.finalizeAnswerClaim({
+          const claimId = yield* trace.finalizeAnswerClaim({
             projectId: "p1",
             sessionId: "s1",
             parentRunId: "parent-1",
@@ -192,7 +192,7 @@ describe("Work Trace knowledge promotion", () => {
           kind: "user",
           text: "Do not save this.",
         });
-        const handle = trace.startAttempt({
+        const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
           parentToolCallId: "call-1",
@@ -202,13 +202,13 @@ describe("Work Trace knowledge promotion", () => {
           kind: "start",
           threadId: "subagent-agent-1",
         });
-        trace.recordReportDisposition({
+        yield* trace.recordReportDisposition({
           handle,
           sessionId: "s1",
           disposition: "reviewed",
           parentRunId: "parent-1",
         });
-        const claimId = trace.finalizeAnswerClaim({
+        const claimId = yield* trace.finalizeAnswerClaim({
           projectId: "p1",
           sessionId: "s1",
           parentRunId: "parent-1",

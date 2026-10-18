@@ -673,7 +673,7 @@ testAgent()("memory tools per run", (it) => {
         kind: "user",
         text: "Save this fixture decision: isolated-memory-state.",
       });
-      const handle = trace.startAttempt({
+      const handle = yield* trace.startAttempt({
         sessionId,
         parentRunId,
         parentToolCallId: `${sessionId}:factory-call`,
@@ -683,13 +683,18 @@ testAgent()("memory tools per run", (it) => {
         kind: "start",
         threadId: `${sessionId}:factory-thread`,
       });
-      const evidence = trace.recordEvidence({
+      const evidence = yield* trace.recordEvidence({
         handle,
         locator: { kind: "message", threadId: handle.threadId, messageId: "verified-answer" },
         verification: "verified",
       });
-      trace.recordReportDisposition({ handle, sessionId, disposition: "reviewed", parentRunId });
-      const claimId = trace.finalizeAnswerClaim({
+      yield* trace.recordReportDisposition({
+        handle,
+        sessionId,
+        disposition: "reviewed",
+        parentRunId,
+      });
+      const claimId = yield* trace.finalizeAnswerClaim({
         ...at,
         parentRunId,
         parentMessageId: "research-answer",

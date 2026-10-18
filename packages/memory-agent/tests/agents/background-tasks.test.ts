@@ -114,9 +114,9 @@ testAgent()("background task lifecycle", (it) => {
       const result = yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
       expect(result).toMatchObject({ status: "failed" });
       expect(result?.result).toContain("execution failed");
-      expect((yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId)?.task.status).toBe(
-        "failed",
-      );
+      expect(
+        (yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId))?.task.status,
+      ).toBe("failed");
     }),
   );
 
@@ -182,7 +182,7 @@ testAgent()("background task lifecycle", (it) => {
         result: "x".repeat(2000),
         nextOffset: null,
       });
-      const requested = trace.requestTaskLifecycle({
+      const requested = yield* trace.requestTaskLifecycle({
         sessionId,
         taskId: receipt.taskId,
         intent: "delete",
@@ -190,7 +190,9 @@ testAgent()("background task lifecycle", (it) => {
       });
       switch (requested.status) {
         case "requested":
-          expect(trace.finalizeTaskLifecycle(requested.operationId).status).toBe("completed");
+          expect((yield* trace.finalizeTaskLifecycle(requested.operationId)).status).toBe(
+            "completed",
+          );
           break;
         default:
           expect.unreachable(`delete not requested: ${requested.status}`);
@@ -240,9 +242,9 @@ testAgent()("background result storage failure", (it) => {
         const result = yield* tasks.waitResult(session.id, receipt.taskId, 2000);
         expect(result).toMatchObject({ status: "failed" });
         expect(result?.result).toContain("background_result_storage_failed");
-        expect((yield* WorkTraceStore).taskDetail(session.id, receipt.taskId)?.task.status).toBe(
-          "failed",
-        );
+        expect(
+          (yield* (yield* WorkTraceStore).taskDetail(session.id, receipt.taskId))?.task.status,
+        ).toBe("failed");
         expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
           status: "failed",
         });
@@ -269,7 +271,7 @@ testAgent()("read-only background results", (it) => {
         Effect.succeed("saved result"),
       );
       yield* tasks.waitResult(session.id, receipt.taskId, 2000);
-      expect(trace.taskDetail(session.id, receipt.taskId)?.task.status).toBe("completed");
+      expect((yield* trace.taskDetail(session.id, receipt.taskId))?.task.status).toBe("completed");
       const changes = db.sqlite.prepare("SELECT total_changes() AS n").get();
       const get = tasks
         .forSession(session.id)

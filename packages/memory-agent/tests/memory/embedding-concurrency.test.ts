@@ -107,7 +107,7 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
         const indexing = yield* indexer.indexAll().pipe(Effect.forkChild);
         yield* Deferred.await(saving);
         const trace = yield* WorkTraceStore;
-        const request = trace.requestSessionLifecycle({
+        const request = yield* trace.requestSessionLifecycle({
           sessionId: env.session.id,
           intent: "delete",
           idempotencyKey: "purge-during-save",
@@ -115,7 +115,9 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
         const { operationId } = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ operationId: Schema.String }),
         )(request);
-        expect(trace.finalizeSessionLifecycle(operationId)).toMatchObject({ status: "completed" });
+        expect(yield* trace.finalizeSessionLifecycle(operationId)).toMatchObject({
+          status: "completed",
+        });
         yield* Ref.set(beforeSave, Effect.void);
         yield* Deferred.succeed(release, undefined);
         expect(yield* Fiber.join(indexing)).toBe(0);

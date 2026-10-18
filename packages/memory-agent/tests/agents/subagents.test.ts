@@ -552,7 +552,10 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
             .get(ids.task_id),
         ).toEqual({ attempts: 2 });
         const trace = yield* env.use(WorkTraceStore);
-        const notifications = trace.consumeParentNotifications(sessionId, `${sessionId}:next`);
+        const notifications = yield* trace.consumeParentNotifications(
+          sessionId,
+          `${sessionId}:next`,
+        );
         // Resumed may already have reached the active parent's next model boundary. Completion
         // remains durable until either the active turn, idle follow-up, or this explicit consumer.
         expect(
@@ -569,7 +572,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
             )
             .get(sessionId),
         ).toEqual({ count: 3 });
-        expect(trace.consumeParentNotifications(sessionId, `${sessionId}:another`)).toEqual([]);
+        expect(yield* trace.consumeParentNotifications(sessionId, `${sessionId}:another`)).toEqual(
+          [],
+        );
       }),
     );
   },

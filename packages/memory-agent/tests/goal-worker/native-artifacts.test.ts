@@ -423,7 +423,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         kind: "user",
         text: "Save this fixture decision: isolated-memory-state.",
       });
-      const handle = trace.startAttempt({
+      const handle = yield* trace.startAttempt({
         sessionId,
         parentRunId: "parent",
         parentToolCallId: "factory-call",
@@ -433,18 +433,18 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         kind: "start",
         threadId: `${sessionId}-factory-thread`,
       });
-      const evidence = trace.recordEvidence({
+      const evidence = yield* trace.recordEvidence({
         handle,
         locator: { kind: "message", threadId: handle.threadId, messageId: "verified-answer" },
         verification: "verified",
       });
-      trace.recordReportDisposition({
+      yield* trace.recordReportDisposition({
         handle,
         sessionId,
         disposition: "reviewed",
         parentRunId: "parent",
       });
-      const claimId = trace.finalizeAnswerClaim({
+      const claimId = yield* trace.finalizeAnswerClaim({
         projectId: project.id,
         sessionId,
         parentRunId: "parent",

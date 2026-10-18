@@ -38,7 +38,7 @@ import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
-import { WorkTraceStore, type AttemptHandle } from "../work-trace/store.ts";
+import { WorkTraceRejected, WorkTraceStore, type AttemptHandle } from "../work-trace/store.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { childTools } from "./role.ts";
@@ -500,7 +500,7 @@ const make = Effect.gen(function* () {
                 askedBy = "review";
             }
           }
-          trace.transitionAttempt(
+          yield* trace.transitionAttempt(
             handle,
             binding.sessionId,
             "waiting",
@@ -527,7 +527,7 @@ const make = Effect.gen(function* () {
             "user",
             approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
           );
-          trace.transitionAttempt(
+          yield* trace.transitionAttempt(
             handle,
             binding.sessionId,
             "running",
@@ -584,7 +584,7 @@ const make = Effect.gen(function* () {
                 return [];
             }
           });
-        trace.transitionAttempt(
+        yield* trace.transitionAttempt(
           handle,
           binding.sessionId,
           "running",
@@ -666,58 +666,67 @@ const make = Effect.gen(function* () {
           };
           const traceMiddleware: ChatMiddleware = {
             name: "memory-agent/subagent-trace",
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
             onBeforeToolCall(_ctx, hook) {
               MutableHashMap.set(toolStates, hook.toolCallId, { status: "running" });
-              trace.appendEvent({
-                handle,
-                sessionId: binding.sessionId,
-                kind: "tool_requested",
-                summary: `Requested ${hook.toolName}`,
-                payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
-              });
-              return undefined;
-            },
-            onAfterToolCall(_ctx, hook) {
-              const completed =
-                hook.ok &&
-                Option.getOrUndefined(MutableHashMap.get(toolStates, hook.toolCallId))?.status !==
-                  "denied";
-              MutableHashMap.set(
-                toolStates,
-                hook.toolCallId,
-                completed ? { status: "completed" } : { status: "failed" },
+              return runEffect(
+                trace
+                  .appendEvent({
+                    handle,
+                    sessionId: binding.sessionId,
+                    kind: "tool_requested",
+                    summary: `Requested ${hook.toolName}`,
+                    payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+                  })
+                  .pipe(Effect.as(undefined)),
               );
-              trace.appendEvent({
-                handle,
-                sessionId: binding.sessionId,
-                kind: completed ? "tool_completed" : "tool_failed",
-                summary: completed ? `Completed ${hook.toolName}` : `Failed ${hook.toolName}`,
-                payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
-              });
-              if (
-                completed &&
-                (hook.toolName === "write_file" || hook.toolName === "edit_file") &&
-                Schema.is(FileArtifactResult)(hook.result)
-              )
-                trace.recordArtifact({
-                  handle,
-                  kind: "file",
-                  locator: { kind: "file", path: hook.result.path, sha256: hook.result.sha256 },
-                  mediaType: "text/plain",
-                  verification: "verified",
-                });
-              const saved = trace.checkpoint(binding.sessionId, {
-                handle,
-                completedToolCallIds: completedTools(),
-                uncertainToolCallIds: runningTools(),
-                pendingApprovalIds: [],
-                remainingWork: "Continue the assigned task from the saved transcript.",
-              });
-              trace.recordEvidence({
-                handle,
-                locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
-                verification: "verified",
-              });
+            },
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            onAfterToolCall(_ctx, hook) {
+              return runEffect(
+                Effect.gen(function* () {
+                  const completed =
+                    hook.ok &&
+                    Option.getOrUndefined(MutableHashMap.get(toolStates, hook.toolCallId))
+                      ?.status !== "denied";
+                  MutableHashMap.set(
+                    toolStates,
+                    hook.toolCallId,
+                    completed ? { status: "completed" } : { status: "failed" },
+                  );
+                  yield* trace.appendEvent({
+                    handle,
+                    sessionId: binding.sessionId,
+                    kind: completed ? "tool_completed" : "tool_failed",
+                    summary: completed ? `Completed ${hook.toolName}` : `Failed ${hook.toolName}`,
+                    payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+                  });
+                  if (
+                    completed &&
+                    (hook.toolName === "write_file" || hook.toolName === "edit_file") &&
+                    Schema.is(FileArtifactResult)(hook.result)
+                  )
+                    yield* trace.recordArtifact({
+                      handle,
+                      kind: "file",
+                      locator: { kind: "file", path: hook.result.path, sha256: hook.result.sha256 },
+                      mediaType: "text/plain",
+                      verification: "verified",
+                    });
+                  const saved = yield* trace.checkpoint(binding.sessionId, {
+                    handle,
+                    completedToolCallIds: completedTools(),
+                    uncertainToolCallIds: runningTools(),
+                    pendingApprovalIds: [],
+                    remainingWork: "Continue the assigned task from the saved transcript.",
+                  });
+                  yield* trace.recordEvidence({
+                    handle,
+                    locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
+                    verification: "verified",
+                  });
+                }),
+              );
             },
           };
           const middleware: ChatMiddleware[] = [
@@ -796,7 +805,7 @@ const make = Effect.gen(function* () {
         );
         for (const toolCallId of MutableHashMap.keys(toolStates))
           if (HashSet.has(persistedToolCalls, toolCallId))
-            trace.recordEvidence({
+            yield* trace.recordEvidence({
               handle,
               locator: { kind: "tool_call", threadId, toolCallId },
               verification: "verified",
@@ -806,7 +815,7 @@ const make = Effect.gen(function* () {
             (state.status === "completed" || state.status === "failed") &&
             HashSet.has(persistedToolResults, toolCallId)
           )
-            trace.recordEvidence({
+            yield* trace.recordEvidence({
               handle,
               locator: { kind: "tool_result", threadId, toolCallId },
               // The result is authentic provenance even when it records denial or execution failure.
@@ -821,7 +830,7 @@ const make = Effect.gen(function* () {
           : isTruthy(failure)
             ? "failed"
             : "completed";
-        const saved = trace.checkpoint(binding.sessionId, {
+        const saved = yield* trace.checkpoint(binding.sessionId, {
           handle,
           transcriptMessageId: lastMessageId,
           completedToolCallIds: completedTools(),
@@ -829,7 +838,7 @@ const make = Effect.gen(function* () {
           pendingApprovalIds: [],
           remainingWork: status === "completed" ? "" : "Resume the unfinished assigned task.",
         });
-        trace.recordEvidence({
+        yield* trace.recordEvidence({
           handle,
           locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
           verification: "verified",
@@ -839,11 +848,11 @@ const make = Effect.gen(function* () {
           isTruthy(lastMessageId) &&
           HashSet.has(persistedMessageIds, lastMessageId)
         )
-          trace.recordEvidence({
+          yield* trace.recordEvidence({
             handle,
             locator: { kind: "message", threadId, messageId: lastMessageId },
           });
-        trace.transitionAttempt(
+        yield* trace.transitionAttempt(
           handle,
           binding.sessionId,
           status,
@@ -869,7 +878,7 @@ const make = Effect.gen(function* () {
           agent: row.name,
           taskId: handle.taskId,
           attemptId: handle.id,
-          evidenceRefIds: trace.evidenceIdsForAttempt(handle.id),
+          evidenceRefIds: yield* trace.evidenceIdsForAttempt(handle.id),
           answer,
           error: failure,
         };
@@ -883,7 +892,9 @@ const make = Effect.gen(function* () {
     row: SubagentRow,
     task: string,
     handle: AttemptHandle,
-    onSettled?: (outcome: ChildOutcome | null) => void,
+    onSettled?: (
+      outcome: ChildOutcome | null,
+    ) => Effect.Effect<unknown, SqlError.SqlError | Schema.SchemaError>,
   ): Promise<SubagentReceipt> => {
     // The SDK requires this controller across receipt delivery and the service-owned job.
     const controller = new AbortController();
@@ -925,7 +936,7 @@ const make = Effect.gen(function* () {
           Effect.catch((error) =>
             Effect.gen(function* () {
               const detail = String(error.cause);
-              trace.transitionAttempt(
+              yield* trace.transitionAttempt(
                 handle,
                 binding.sessionId,
                 "failed",
@@ -962,16 +973,16 @@ const make = Effect.gen(function* () {
             Effect.gen(function* () {
               if (isTruthy(pending)) {
                 const outcome = yield* nativePromise(() => pending!.catch(() => null));
-                onSettled?.(outcome);
+                if (onSettled !== undefined) yield* onSettled(outcome);
               } else {
-                trace.checkpoint(binding.sessionId, {
+                yield* trace.checkpoint(binding.sessionId, {
                   handle,
                   completedToolCallIds: [],
                   uncertainToolCallIds: [],
                   pendingApprovalIds: [],
                   remainingWork: task,
                 });
-                trace.transitionAttempt(
+                yield* trace.transitionAttempt(
                   handle,
                   binding.sessionId,
                   "cancelled",
@@ -981,7 +992,7 @@ const make = Effect.gen(function* () {
                   false,
                   binding.runId,
                 );
-                onSettled?.(null);
+                if (onSettled !== undefined) yield* onSettled(null);
               }
             }).pipe(
               Effect.ensuring(
@@ -1026,7 +1037,7 @@ const make = Effect.gen(function* () {
       parentRunId: binding.runId,
       task,
     });
-    const handle = trace.startAttempt({
+    const handle = yield* trace.startAttempt({
       sessionId: binding.sessionId,
       parentRunId: binding.runId,
       parentToolCallId,
@@ -1055,7 +1066,7 @@ const make = Effect.gen(function* () {
         parentRunId: binding.runId,
         task: message,
       });
-      const handle = trace.startAttempt({
+      const handle = yield* trace.startAttempt({
         sessionId: binding.sessionId,
         parentRunId: binding.runId,
         parentToolCallId,
@@ -1075,7 +1086,7 @@ const make = Effect.gen(function* () {
         message,
         known.id,
       );
-      const handle = trace.startAttempt({
+      const handle = yield* trace.startAttempt({
         sessionId: binding.sessionId,
         parentRunId: binding.runId,
         parentToolCallId,
@@ -1094,7 +1105,7 @@ const make = Effect.gen(function* () {
     parentToolCallId: string,
     input: typeof ResumeSubagentInput.Type,
   ) {
-    const claim = trace.claimResume({
+    const claim = yield* trace.claimResume({
       sessionId: binding.sessionId,
       taskId: input.taskId,
       expectedAttemptId: input.expectedAttemptId,
@@ -1156,7 +1167,7 @@ const make = Effect.gen(function* () {
   const recoverForRun = (binding: SubagentBinding) =>
     runEffect(
       Effect.gen(function* () {
-        const jobs = trace.claimRecoveryJobs(binding.sessionId, binding.runId);
+        const jobs = yield* trace.claimRecoveryJobs(binding.sessionId, binding.runId);
         yield* nativePromise(() =>
           Promise.all(
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -1165,7 +1176,7 @@ const make = Effect.gen(function* () {
                 Effect.gen(function* () {
                   const existing = yield* byId(binding.sessionId, claim.agentId);
                   if (Option.isNone(existing)) {
-                    trace.finishRecoveryJob(jobId, false);
+                    yield* trace.finishRecoveryJob(jobId, false);
                     return;
                   }
                   const known = existing.value;
@@ -1203,8 +1214,12 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const attemptState = (sessionId: string, taskId: string, attemptId: string) => {
-    const detail = trace.taskDetail(sessionId, taskId);
+  const attemptState = Effect.fnUntraced(function* (
+    sessionId: string,
+    taskId: string,
+    attemptId: string,
+  ) {
+    const detail = yield* trace.taskDetail(sessionId, taskId);
     const attempt = detail?.attempts.find((candidate) => candidate.id === attemptId);
     if (
       !isTruthy(detail) ||
@@ -1212,9 +1227,12 @@ const make = Effect.gen(function* () {
       detail.task.deletedAt !== null ||
       detail.task.deleteRequestedAt !== null
     )
-      throw new Error("Subagent attempt not found in this session");
+      return yield* WorkTraceRejected.make({
+        reason: "attempt_not_found",
+        message: "Subagent attempt not found in this session",
+      });
     return { detail, attempt };
-  };
+  });
   const terminal = (status: string) => !["queued", "running", "waiting"].includes(status);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const getReport = (
@@ -1224,7 +1242,7 @@ const make = Effect.gen(function* () {
   ): Promise<SubagentReport> =>
     runEffect(
       Effect.gen(function* () {
-        const { detail, attempt } = attemptState(sessionId, taskId, attemptId);
+        const { detail, attempt } = yield* attemptState(sessionId, taskId, attemptId);
         if (!isTruthy(detail.task.agentId))
           return yield* new Cause.UnknownError(new Error("Subagent no longer exists"));
         const found = yield* byId(sessionId, detail.task.agentId);
@@ -1262,7 +1280,7 @@ const make = Effect.gen(function* () {
           answer,
           error:
             attempt.status === "failed" ? "Subagent failed; inspect Work Trace for details." : null,
-          evidenceRefIds: trace.evidenceIdsForAttempt(attemptId),
+          evidenceRefIds: yield* trace.evidenceIdsForAttempt(attemptId),
         };
       }),
     );
@@ -1411,18 +1429,18 @@ const make = Effect.gen(function* () {
         runEffect(
           Effect.gen(function* () {
             const input = yield* Schema.decodeEffect(WaitSubagentsInput)(raw);
-            const snapshot = () =>
-              input.attempts.map(({ taskId, attemptId }) => ({
-                taskId,
-                attemptId,
-                status: trace.subagentAttemptStatus(binding.sessionId, taskId, attemptId),
-              }));
-            const ready = (states: ReturnType<typeof snapshot>) =>
+            const snapshot = Effect.forEach(input.attempts, ({ taskId, attemptId }) =>
+              Effect.map(
+                trace.subagentAttemptStatus(binding.sessionId, taskId, attemptId),
+                (status) => ({ taskId, attemptId, status }),
+              ),
+            );
+            const ready = (states: Effect.Success<typeof snapshot>) =>
               input.mode === "all"
                 ? states.every((entry) => terminal(entry.status))
                 : states.some((entry) => terminal(entry.status));
             if (input.timeoutMs === 0) {
-              const states = snapshot();
+              const states = yield* snapshot;
               if (ready(states)) return { status: "completed" as const, attempts: states };
               return {
                 status: "pending" as const,
@@ -1434,8 +1452,8 @@ const make = Effect.gen(function* () {
             const waiting = Effect.gen(function* () {
               while (true) {
                 // Read the cursor before status; waitForChange rechecks after registration.
-                const cursor = trace.latestCursor(binding.sessionId);
-                const states = snapshot();
+                const cursor = yield* trace.latestCursor(binding.sessionId);
+                const states = yield* snapshot;
                 if (ready(states)) return { status: "completed" as const, attempts: states };
                 yield* Effect.tryPromise({
                   try: (signal) => trace.waitForChange(binding.sessionId, cursor, signal),
@@ -1443,15 +1461,9 @@ const make = Effect.gen(function* () {
                 });
               }
             });
-            return yield* waiting.pipe(
-              Effect.timeoutOption(input.timeoutMs),
-              Effect.map((result) =>
-                Option.match(result, {
-                  onNone: () => ({ status: "timed_out" as const, attempts: snapshot() }),
-                  onSome: (value) => value,
-                }),
-              ),
-            );
+            const result = yield* Effect.timeoutOption(waiting, input.timeoutMs);
+            if (Option.isSome(result)) return result.value;
+            return { status: "timed_out" as const, attempts: yield* snapshot };
           }),
           { signal: binding.abortSignal },
         ),
@@ -1504,29 +1516,37 @@ const make = Effect.gen(function* () {
             ).pipe(Effect.asVoid),
           );
         },
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onConfig(ctx, config) {
           if (ctx.phase !== "beforeModel") return;
-          const notifications = trace.consumeParentNotifications(binding.sessionId, binding.runId);
-          if (notifications.length === 0) return;
-          for (const notification of notifications)
-            deliveredNotificationIds = HashSet.add(deliveredNotificationIds, notification.id);
-          return {
-            systemPrompts: [
-              ...config.systemPrompts,
-              [
-                "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports or get_subagent_report, and background operation results with get_background_result before using them:",
-                ...notifications.map(
-                  (notification) =>
-                    `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
-                ),
-              ].join("\n"),
-            ],
-          };
+          return runEffect(
+            Effect.gen(function* () {
+              const notifications = yield* trace.consumeParentNotifications(
+                binding.sessionId,
+                binding.runId,
+              );
+              if (notifications.length === 0) return;
+              for (const notification of notifications)
+                deliveredNotificationIds = HashSet.add(deliveredNotificationIds, notification.id);
+              return {
+                systemPrompts: [
+                  ...config.systemPrompts,
+                  [
+                    "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports or get_subagent_report, and background operation results with get_background_result before using them:",
+                    ...notifications.map(
+                      (notification) =>
+                        `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
+                    ),
+                  ].join("\n"),
+                ],
+              };
+            }),
+          );
         },
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onAfterToolCall(_ctx, info) {
           return runEffect(
-            Effect.sync(() => {
+            Effect.gen(function* () {
               if (
                 !["get_subagent_report", "get_subagent_reports"].includes(info.toolName) ||
                 !info.ok
@@ -1538,16 +1558,16 @@ const make = Effect.gen(function* () {
                 if (outcome.status !== "completed") continue;
                 const key = `${outcome.taskId}:${outcome.attemptId}`;
                 if (MutableHashMap.has(reviewed, key)) continue;
-                const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
+                const handle = yield* trace.attemptHandle(outcome.taskId, outcome.attemptId);
                 if (!isTruthy(handle)) continue;
                 MutableHashMap.set(reviewed, key, outcome);
-                trace.recordReportDisposition({
+                yield* trace.recordReportDisposition({
                   handle,
                   sessionId: binding.sessionId,
                   disposition: "returned",
                   parentRunId: binding.runId,
                 });
-                trace.recordReportDisposition({
+                yield* trace.recordReportDisposition({
                   handle,
                   sessionId: binding.sessionId,
                   disposition: "reviewed",
@@ -1557,6 +1577,7 @@ const make = Effect.gen(function* () {
             }),
           );
         },
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onFinish(ctx) {
           if (
             (MutableHashMap.size(reviewed) === 0 && adoptionDraft === null) ||
@@ -1564,20 +1585,28 @@ const make = Effect.gen(function* () {
           )
             return;
           const draft = adoptionDraft ?? { reports: [], reflectedNotificationIds: [] };
-          trace.finalizeAnswerClaim({
-            projectId: binding.project.id,
-            sessionId: binding.sessionId,
-            parentRunId: binding.runId,
-            parentMessageId: ctx.currentMessageId,
-            usedReports: draft.reports,
-            reflectedNotificationIds: draft.reflectedNotificationIds,
-          });
+          return runEffect(
+            trace
+              .finalizeAnswerClaim({
+                projectId: binding.project.id,
+                sessionId: binding.sessionId,
+                parentRunId: binding.runId,
+                parentMessageId: ctx.currentMessageId,
+                usedReports: draft.reports,
+                reflectedNotificationIds: draft.reflectedNotificationIds,
+              })
+              .pipe(Effect.asVoid),
+          );
         },
         onAbort() {
-          trace.releaseParentNotifications(binding.sessionId, binding.runId);
+          return runEffect(
+            Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
+          );
         },
         onError() {
-          trace.releaseParentNotifications(binding.sessionId, binding.runId);
+          return runEffect(
+            Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
+          );
         },
       };
 
