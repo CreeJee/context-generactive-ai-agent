@@ -1,7 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
-import { Semaphore } from "effect";
-import { Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../../db/database.ts";
+import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../../events/app-events.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
 import { meaningfulNodeFilter } from "../quality.ts";
@@ -21,7 +19,8 @@ export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies r
 export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
 export class IndexingError extends Schema.TaggedError<IndexingError>()("IndexingError", {
-  reason: Schema.Literals(["revalidation-failed", "mapping-commit-failed"]),
+  reason: Schema.Literals(["read-failed", "revalidation-failed", "mapping-commit-failed"]),
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
@@ -37,55 +36,78 @@ type NodeOutcome =
   | { readonly kind: "indexed"; readonly seq: number }
   | { readonly kind: "stale-chunks"; readonly vectorIds: readonly number[] }
   | { readonly kind: "stale-whole"; readonly seq: number };
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodePending = EffectFunction.flow(Schema.decodeUnknownResult(Pending), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCount = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
-  Result.getOrThrow,
-);
+
+const failed = (reason: IndexingError["reason"]) => (cause: unknown) =>
+  IndexingError.make({ reason, cause });
 
 const make = Effect.gen(function* () {
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const events = yield* AppEvents;
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
   const analyzer = yield* MorphAnalyzer;
 
+  const unindexed = sql.literal(
+    `v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`,
+  );
   // Newest by the time the statement was made, not by the order rows landed here. A migrated
   // transcript arrives with high seqs and old times; without this it would be indexed ahead of the
   // conversation just held, and a backlog of thousands would push today's words to the back.
-  const selectPending = sqlite.prepare(`
-    SELECT n.seq, n.text FROM nodes n
-    LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}
-    ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
-  const markIndexed = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
-  const countPending = sqlite.prepare(`
-    SELECT count(*) AS count FROM nodes n
-    LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`);
-  const selectUnanalyzed = sqlite.prepare(`
-    SELECT n.seq, n.text FROM nodes n
-    LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ?
-    WHERE m.node_seq IS NULL AND ${meaningfulNodeFilter}
-    ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
-  const deleteTerms = sqlite.prepare("DELETE FROM nodes_morph WHERE rowid = ?");
-  const insertTerms = sqlite.prepare("INSERT INTO nodes_morph (rowid, terms) VALUES (?, ?)");
-  const markAnalyzed = sqlite.prepare(
-    "INSERT INTO node_morphs (node_seq, analyzer) VALUES (?, ?) ON CONFLICT (node_seq) DO UPDATE SET analyzer = excluded.analyzer",
-  );
-  const selectUnindexed = sqlite.prepare(`
-    SELECT n.seq, n.text FROM nodes n
-    LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE n.seq = ? AND v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`);
-  const reserveChunk = sqlite.prepare(
-    "INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset) VALUES (?,?,?,?,?)",
-  );
-  const deleteChunk = sqlite.prepare("DELETE FROM node_vector_chunks WHERE vector_id=?");
-  const journalRemoval = sqlite.prepare(
-    "INSERT OR IGNORE INTO memory_graph_vector_removals VALUES (?,?)",
-  );
+  const selectPending = SqlSchema.findAll({
+    Request: Schema.Finite,
+    Result: Pending,
+    execute: (limit) => sql`
+      SELECT n.seq, n.text FROM nodes n
+      LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ${embedder.identity}
+      WHERE ${unindexed}
+      ORDER BY n.created_at DESC, n.seq DESC LIMIT ${limit}`,
+  });
+  const selectFresh = SqlSchema.findAll({
+    Request: Schema.Array(Schema.Finite),
+    Result: Pending,
+    execute: (seqs) => sql`
+      SELECT n.seq, n.text FROM nodes n
+      LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ${embedder.identity}
+      WHERE ${unindexed} AND n.seq IN ${sql.in(seqs)}`,
+  });
+  const selectUnindexed = SqlSchema.findOneOption({
+    Request: Schema.Finite,
+    Result: Pending,
+    execute: (seq) => sql`
+      SELECT n.seq, n.text FROM nodes n
+      LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ${embedder.identity}
+      WHERE n.seq = ${seq} AND ${unindexed}`,
+  });
+  const countPending = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: Schema.Struct({ count: Schema.Finite }),
+    execute: () => sql`
+      SELECT count(*) AS count FROM nodes n
+      LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ${embedder.identity}
+      WHERE ${unindexed}`,
+  });
+  const reserveChunk = SqlSchema.findOne({
+    Request: Schema.Struct({
+      seq: Schema.Finite,
+      ordinal: Schema.Finite,
+      start: Schema.Finite,
+      end: Schema.Finite,
+    }),
+    Result: Schema.Struct({ vector_id: Schema.Finite }),
+    execute: (chunk) => sql`
+      INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset)
+      VALUES (${chunk.seq},${embedder.identity},${chunk.ordinal},${chunk.start},${chunk.end})
+      RETURNING vector_id`,
+  });
+  const selectUnanalyzed = SqlSchema.findAll({
+    Request: Schema.Finite,
+    Result: Pending,
+    execute: (limit) => sql`
+      SELECT n.seq, n.text FROM nodes n
+      LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ${analyzer.identity}
+      WHERE m.node_seq IS NULL AND ${sql.literal(meaningfulNodeFilter)}
+      ORDER BY n.created_at DESC, n.seq DESC LIMIT ${limit}`,
+  });
   const oneMorphBatchAtATime = yield* Semaphore.make(1);
   // Runs end concurrently; two batches picking the same pending nodes would index them twice.
   const oneBatchAtATime = yield* Semaphore.make(1);
@@ -94,43 +116,39 @@ const make = Effect.gen(function* () {
    * Re-reads one node inside the commit transaction. Only a node still unindexed with the text
    * that was embedded is published; anything else drops the native ids it was given.
    */
-  const outcomeOf = (
-    node: Pending,
-    segmentation: Segmentation,
-    vectorIds: readonly number[],
-  ): NodeOutcome => {
-    const current = selectUnindexed.get(embedder.identity, node.seq);
-    if (current !== undefined && decodePending(current).text === node.text)
-      return { kind: "indexed", seq: node.seq };
-    switch (segmentation.kind) {
-      case "whole":
-        return { kind: "stale-whole", seq: node.seq };
-      case "chunked":
-        return { kind: "stale-chunks", vectorIds };
-    }
-  };
+  const outcomeOf = (node: Pending, segmentation: Segmentation, vectorIds: readonly number[]) =>
+    selectUnindexed(node.seq).pipe(
+      Effect.map((current): NodeOutcome => {
+        if (Option.exists(current, ({ text }) => text === node.text))
+          return { kind: "indexed", seq: node.seq };
+        switch (segmentation.kind) {
+          case "whole":
+            return { kind: "stale-whole", seq: node.seq };
+          case "chunked":
+            return { kind: "stale-chunks", vectorIds };
+        }
+      }),
+    );
 
-  /** Writes one outcome. Synchronous: it runs inside the caller's `atomic`. */
+  /** Writes one outcome inside the caller's transaction. */
   const settle = (outcome: NodeOutcome) => {
     switch (outcome.kind) {
       case "indexed":
-        markIndexed.run(outcome.seq, embedder.identity);
-        return;
+        return sql`INSERT INTO node_vectors VALUES (${outcome.seq}, ${embedder.identity})`;
       case "stale-chunks":
         // The deletion trigger preserves removal IDs even if a purge already cascaded these rows.
         // Uncommitted chunks never enter the search allowlist.
-        for (const vectorId of outcome.vectorIds) deleteChunk.run(vectorId);
-        return;
+        return sql`DELETE FROM node_vector_chunks WHERE vector_id IN ${sql.in(outcome.vectorIds)}`;
       case "stale-whole":
-        journalRemoval.run(outcome.seq, embedder.identity);
-        return;
+        return sql`INSERT OR IGNORE INTO memory_graph_vector_removals
+          VALUES (${outcome.seq}, ${embedder.identity})`;
     }
   };
 
   /** Embeds one batch of not-yet-indexed nodes. Returns how many were indexed. */
   const indexBatch = (limit: number) =>
     Effect.gen(function* () {
-      const pending = selectPending.all(embedder.identity, limit).map((row) => decodePending(row));
+      const pending = yield* selectPending(limit).pipe(Effect.mapError(failed("read-failed")));
       if (pending.length === 0) return 0;
       // Chunking and embedding are both requests to the one model worker, which serves a single
       // request at a time, and embedding needs the spans: the steps are sequential by data.
@@ -153,18 +171,9 @@ const make = Effect.gen(function* () {
       // permit with add/save/commit, so a concurrent invalidation cannot create an obsolete mapping.
       const published = yield* vectors.publish(
         Effect.gen(function* () {
-          const fresh = yield* Effect.try({
-            try: () =>
-              sqlite
-                .prepare(`
-            SELECT n.seq, n.text FROM nodes n
-            LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-            WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}
-              AND n.seq IN (${pending.map(() => "?").join(",")})`)
-                .all(embedder.identity, ...pending.map((node) => node.seq))
-                .map((row) => decodePending(row)),
-            catch: () => IndexingError.make({ reason: "revalidation-failed" }),
-          });
+          const fresh = yield* selectFresh(pending.map((node) => node.seq)).pipe(
+            Effect.mapError(failed("revalidation-failed")),
+          );
           const accepted = inputs.flatMap(({ node, ordinal, start, end }, row) =>
             fresh.some((current) => current.seq === node.seq && current.text === node.text)
               ? [{ node, vector: embedded[row]!, ordinal, start, end }]
@@ -175,29 +184,22 @@ const make = Effect.gen(function* () {
           );
           // Reserve mappings inside the publication gate, before saving vectors. Only node_vectors
           // marks a fully committed node. Startup removes reserved chunks without that marker.
-          const ids = yield* Effect.try({
-            try: () => {
-              switch (segmentation.kind) {
-                case "whole":
-                  return accepted.map((chunk) => chunk.node.seq);
-                case "chunked":
-                  return atomic(() =>
-                    accepted.map((chunk) =>
-                      Number(
-                        reserveChunk.run(
-                          chunk.node.seq,
-                          embedder.identity,
-                          chunk.ordinal,
-                          chunk.start,
-                          chunk.end,
-                        ).lastInsertRowid,
-                      ),
+          // One connection runs a transaction's statements in order, so the inserts are sequential
+          // and each RETURNING id lines up with its chunk.
+          const ids = yield* Effect.suspend(() => {
+            switch (segmentation.kind) {
+              case "whole":
+                return Effect.succeed(accepted.map((chunk) => chunk.node.seq));
+              case "chunked":
+                return sql.withTransaction(
+                  Effect.forEach(accepted, (chunk) =>
+                    reserveChunk({ seq: chunk.node.seq, ...chunk }).pipe(
+                      Effect.map(({ vector_id }) => vector_id),
                     ),
-                  );
-              }
-            },
-            catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
-          });
+                  ),
+                );
+            }
+          }).pipe(Effect.mapError(failed("mapping-commit-failed")));
           const idsOf = (node: Pending) =>
             accepted.flatMap((chunk, row) => (chunk.node.seq === node.seq ? [ids[row]!] : []));
           return {
@@ -205,19 +207,23 @@ const make = Effect.gen(function* () {
             vectors: accepted.map((chunk) => chunk.vector),
             // Native add/save yielded to other agents. A purge or redaction can have
             // removed/changed the source since prepare, without taking this publication gate.
-            // Each node's re-read and its write share one transaction, and nothing inside it
-            // yields: `atomic` nests by a depth every fibre shares.
-            commit: Effect.try({
-              try: () =>
-                atomic(() =>
-                  acceptedNodes.reduce((committed, node) => {
-                    const outcome = outcomeOf(node, segmentation, idsOf(node));
-                    settle(outcome);
-                    return outcome.kind === "indexed" ? committed + 1 : committed;
-                  }, 0),
+            // Each node's re-read and its write share this transaction.
+            commit: sql
+              .withTransaction(
+                Effect.forEach(acceptedNodes, (node) =>
+                  outcomeOf(node, segmentation, idsOf(node)).pipe(Effect.tap(settle)),
                 ),
-              catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
-            }),
+              )
+              .pipe(
+                Effect.map((outcomes) =>
+                  outcomes.reduce(
+                    (committed, outcome) =>
+                      outcome.kind === "indexed" ? committed + 1 : committed,
+                    0,
+                  ),
+                ),
+                Effect.mapError(failed("mapping-commit-failed")),
+              ),
           };
         }),
       );
@@ -231,18 +237,28 @@ const make = Effect.gen(function* () {
   /** Stores morpheme terms for one batch of nodes the current analyzer has not seen. */
   const analyzeBatch = (limit: number) =>
     Effect.gen(function* () {
-      const pending = selectUnanalyzed
-        .all(analyzer.identity, limit)
-        .map((row) => decodePending(row));
+      const pending = yield* selectUnanalyzed(limit).pipe(Effect.mapError(failed("read-failed")));
       if (pending.length === 0) return 0;
       const terms = yield* analyzer.terms(pending.map((node) => node.text));
-      atomic(() => {
-        pending.forEach((node, index) => {
-          deleteTerms.run(node.seq);
-          insertTerms.run(node.seq, (terms[index] ?? []).join(" "));
-          markAnalyzed.run(node.seq, analyzer.identity);
-        });
-      });
+      yield* sql
+        .withTransaction(
+          Effect.forEach(
+            pending,
+            (node, index) =>
+              Effect.all(
+                [
+                  sql`DELETE FROM nodes_morph WHERE rowid = ${node.seq}`,
+                  sql`INSERT INTO nodes_morph (rowid, terms)
+                    VALUES (${node.seq}, ${(terms[index] ?? []).join(" ")})`,
+                  sql`INSERT INTO node_morphs (node_seq, analyzer) VALUES (${node.seq}, ${analyzer.identity})
+                    ON CONFLICT (node_seq) DO UPDATE SET analyzer = excluded.analyzer`,
+                ],
+                { discard: true },
+              ),
+            { discard: true },
+          ),
+        )
+        .pipe(Effect.mapError(failed("mapping-commit-failed")));
       return pending.length;
     }).pipe(oneMorphBatchAtATime.withPermits(1));
 
@@ -267,7 +283,10 @@ const make = Effect.gen(function* () {
      * Statements this embedder has not embedded yet; vectors of other embedders do not count, and
      * tool calls and results are never embedded.
      */
-    pending: Effect.sync(() => decodeCount(countPending.get(embedder.identity)).count),
+    pending: countPending().pipe(
+      Effect.map(({ count }) => count),
+      Effect.mapError(failed("read-failed")),
+    ),
     indexBatch,
     analyzeBatch,
     /**
