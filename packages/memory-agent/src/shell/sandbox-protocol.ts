@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 /** What one sandboxed command may do, sent to its worker as `workerData.sandbox`. */
 export const SandboxSetup = Schema.Struct({
@@ -20,15 +21,27 @@ export const SandboxUnavailableReason = Schema.Literals([
   "setup_failed",
 ]);
 
-export const SandboxReply = Schema.Union([
-  /** The command line to run instead of the original one. */
-  Schema.TaggedStruct("Wrapped", { command: Schema.String }),
-  Schema.TaggedStruct("Unavailable", { reason: SandboxUnavailableReason, detail: Schema.String }),
-  /** The command's stderr with what the sandbox blocked appended; null if that could not be read. */
-  Schema.TaggedStruct("Finished", { stderr: Schema.NullOr(Schema.String) }),
-]);
-export type SandboxReply = typeof SandboxReply.Type;
+export class SandboxUnavailable extends Schema.TaggedError<SandboxUnavailable>()(
+  "SandboxUnavailable",
+  { reason: SandboxUnavailableReason, detail: Schema.String },
+) {
+  override get message() {
+    return `sandbox_unavailable (${this.reason}): ${this.detail}`;
+  }
+}
 
-/** Sent once the command has exited, so the worker can report what it blocked and stop. */
-export const SandboxFinish = Schema.TaggedStruct("Finish", { stderr: Schema.String });
-export type SandboxFinish = typeof SandboxFinish.Type;
+/** The sandbox's violation log could not be read; the command's own stderr stands. */
+export class SandboxReportFailed extends Schema.TaggedError<SandboxReportFailed>()(
+  "SandboxReportFailed",
+  { reason: Schema.Literals(["annotate_failed"]) },
+) {}
+
+/** The command line to run instead of the original one, or why the sandbox cannot run it. */
+export const Prepare = Rpc.make("Prepare", { success: Schema.String, error: SandboxUnavailable });
+/** Sent once the command has exited: its stderr with what the sandbox blocked appended. */
+export const Finish = Rpc.make("Finish", {
+  payload: { stderr: Schema.String },
+  success: Schema.String,
+  error: SandboxReportFailed,
+});
+export const SandboxRpcs = RpcGroup.make(Prepare, Finish);
