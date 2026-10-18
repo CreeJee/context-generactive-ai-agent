@@ -1,4 +1,4 @@
-import { NodeWorkerRunner } from "@effect/platform-node";
+import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Cause, Effect, Layer, Result, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";

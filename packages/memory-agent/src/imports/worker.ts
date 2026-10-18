@@ -2,7 +2,8 @@
 // as nodes is steady CPU work; on the server's main thread it held up every request meanwhile.
 // In a checkout Node runs this file as TypeScript; the executable ships it bundled
 // (`scripts/package.ts`).
-import { NodePath, NodeWorkerRunner } from "@effect/platform-node";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Clock, Effect, Layer, Path, Queue, Ref, Schema, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { workerData } from "node:worker_threads";

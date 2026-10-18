@@ -1,4 +1,6 @@
-import { NodeFileSystem, NodePath, NodeWorkerRunner } from "@effect/platform-node";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Cause, Effect, FileSystem, HashSet, Layer, Path, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";

@@ -1,4 +1,4 @@
-import { NodeWorkerRunner } from "@effect/platform-node";
+import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Cause, Effect, Function, Layer, Result, Schema, Scope, Stream } from "effect";
 import { RpcClient, RpcServer } from "effect/rpc";
 import { workerData } from "node:worker_threads";
