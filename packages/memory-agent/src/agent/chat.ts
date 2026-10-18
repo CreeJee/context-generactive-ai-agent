@@ -1012,33 +1012,54 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     }
   };
 
+  /** What the queue does once a run's stream ended, by how the run ended. */
+  const settleQueueAfter = Effect.fnUntraced(function* (sessionId: string, runId: string) {
+    const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
+    switch (run?.status) {
+      case "completed":
+        yield* settleNewGoal(sessionId, runId);
+        if (leases.view(sessionId, null).state === "free")
+          yield* queue.holdWaiting(sessionId, "pageLeft");
+        return;
+      case "failed":
+      case "aborted":
+      case undefined:
+        yield* settleNewGoal(sessionId, runId);
+        yield* queue.holdWaiting(sessionId, "stopped");
+        return;
+      case "interrupted":
+      case "running":
+        return;
+    }
+  });
+
+  /**
+   * Settles the queue when a run's stream ends; it never fails the stream (decided 2026-10-18).
+   * When the settlement fails, every waiting message is held for the user to confirm, since nothing
+   * may be sent on its own after a run whose end is unknown. When even that fails, the failure goes
+   * to the defect report. The page always hears about the queue and the run state.
+   */
   const settleQueue = Effect.fn("AgentChat.settleQueue")(function* (
     sessionId: string,
     runId: string,
   ) {
-    try {
-      const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
-      switch (run?.status) {
-        case "completed":
-          yield* settleNewGoal(sessionId, runId);
-          if (leases.view(sessionId, null).state === "free")
-            yield* queue.holdWaiting(sessionId, "pageLeft");
-          return;
-        case "failed":
-        case "aborted":
-        case undefined:
-          yield* settleNewGoal(sessionId, runId);
-          yield* queue.holdWaiting(sessionId, "stopped");
-          return;
-        case "interrupted":
-        case "running":
-          return;
-      }
-    } finally {
-      yield* events.publishSession(sessionId, "queue");
-      yield* events.publishSession(sessionId, "run-state");
-      wakeNotifications(sessionId);
-    }
+    yield* settleQueueAfter(sessionId, runId).pipe(
+      Effect.catch((error) =>
+        logFailure("Queue settlement failed")(error).pipe(
+          Effect.andThen(queue.holdWaiting(sessionId, "stopped")),
+        ),
+      ),
+      Effect.catch((error) =>
+        logDefect("Queue hold after a failed settlement failed", { sessionId })(Cause.fail(error)),
+      ),
+      Effect.ensuring(
+        Effect.gen(function* () {
+          yield* events.publishSession(sessionId, "queue");
+          yield* events.publishSession(sessionId, "run-state");
+          wakeNotifications(sessionId);
+        }),
+      ),
+    );
   });
 
   /**
@@ -1643,7 +1664,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             undefined,
             cancellation.release,
             cancellation.cancel,
-            settleQueue(sessionId, runId).pipe(Effect.orDie),
+            settleQueue(sessionId, runId),
           );
           if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
@@ -2379,7 +2400,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           undefined,
           cancellation.release,
           workerCapability !== null ? cancellation.settled : cancellation.cancel,
-          settleQueue(sessionId, runId).pipe(Effect.orDie),
+          settleQueue(sessionId, runId),
         );
         if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
         cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
