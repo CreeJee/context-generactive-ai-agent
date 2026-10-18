@@ -1057,47 +1057,44 @@ const make = Effect.gen(function* () {
     message: string,
     instructions: string | undefined,
   ) {
-    const existing = yield* stored(byName({ sessionId: binding.sessionId, name: agent }));
-    if (Option.isNone(existing)) {
-      const row = yield* insert({
-        sessionId: binding.sessionId,
-        name: agent,
-        instructions: instructions ?? null,
-        parentRunId: binding.runId,
-        task: message,
-      });
-      const handle = yield* trace.startAttempt({
-        sessionId: binding.sessionId,
-        parentRunId: binding.runId,
-        parentToolCallId,
-        agentId: row.id,
-        title: message.replace(/\s+/gu, " ").trim().slice(0, 80),
-        request: message,
-        kind: "start",
-        threadId: subagentThreadId(row.id),
-      });
-      return yield* nativePromise(() => launch(binding, row, message, handle));
-    }
-    const known = existing.value;
-    {
-      const row = yield* startAgain(
-        instructions === undefined ? known.instructions : instructions,
-        binding.runId,
-        message,
-        known.id,
-      );
-      const handle = yield* trace.startAttempt({
-        sessionId: binding.sessionId,
-        parentRunId: binding.runId,
-        parentToolCallId,
-        agentId: row.id,
-        title: message.replace(/\s+/gu, " ").trim().slice(0, 80),
-        request: message,
-        kind: "continue",
-        threadId: subagentThreadId(row.id),
-      });
-      return yield* nativePromise(() => launch(binding, row, message, handle));
-    }
+    // One transaction: two calls naming the same new agent must not both insert it.
+    const { row, kind } = yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const existing = yield* stored(byName({ sessionId: binding.sessionId, name: agent }));
+        if (Option.isNone(existing))
+          return {
+            row: yield* insert({
+              sessionId: binding.sessionId,
+              name: agent,
+              instructions: instructions ?? null,
+              parentRunId: binding.runId,
+              task: message,
+            }),
+            kind: "start" as const,
+          };
+        const known = existing.value;
+        return {
+          row: yield* startAgain(
+            instructions === undefined ? known.instructions : instructions,
+            binding.runId,
+            message,
+            known.id,
+          ),
+          kind: "continue" as const,
+        };
+      }),
+    );
+    const handle = yield* trace.startAttempt({
+      sessionId: binding.sessionId,
+      parentRunId: binding.runId,
+      parentToolCallId,
+      agentId: row.id,
+      title: message.replace(/\s+/gu, " ").trim().slice(0, 80),
+      request: message,
+      kind,
+      threadId: subagentThreadId(row.id),
+    });
+    return yield* nativePromise(() => launch(binding, row, message, handle));
   });
 
   const resumeTask = Effect.fnUntraced(function* (

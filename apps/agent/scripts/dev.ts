@@ -2,27 +2,27 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import { NodePath, NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
 import { Cause, Clock, Config, Console, Effect, FileSystem, Layer } from "effect";
-import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
+import { nativePromise } from "memory-agent/native-effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-
-import { fileURLToPath } from "node:url";
 import { Option, Schema } from "effect";
 import { developmentBuildId } from "../server/dev-safety.ts";
 import { devHelp, readDevConfiguration } from "./dev-configuration.ts";
 import { assertPortAvailable } from "./dev-process.ts";
 
-const { dirname } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const { dirname } = nodePath;
 
 const developmentRuntime = ManagedRuntime.make(
   Layer.merge(NodeServices.layer, FetchHttpClient.layer),
 );
-const app = fileURLToPath(new URL("..", import.meta.url));
+const app = await developmentRuntime.runPromise(
+  nodePath.fromFileUrl(new URL("..", import.meta.url)),
+);
 // Validate CLI/environment settings before any build, process or storage mutation.
-const configuration = await runNativeEffect(
+const configuration = await developmentRuntime.runPromise(
   readDevConfiguration(process.argv.slice(2), process.env, app).pipe(
     Effect.catchTag("DevConfigurationError", (failure) =>
       Effect.sync(() => {
@@ -190,7 +190,7 @@ const stop = Effect.fn("dev.stop")(function* (
 }, Effect.ignore());
 
 const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
-  yield* nativePromise(() => assertPortAvailable(webPort, "localhost", "Frontend"));
+  yield* assertPortAvailable(webPort, "localhost", "Frontend");
   const manifest = yield* readManifest();
   yield* waitForBackend(manifest.backendUrl, manifest.buildId);
   yield* Console.log(`Stable agent backend: ${manifest.backendUrl}`);
@@ -199,8 +199,8 @@ const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
 });
 
 const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: boolean) {
-  yield* nativePromise(() => assertPortAvailable(backendPort, "127.0.0.1", "Backend"));
-  if (includeWeb) yield* nativePromise(() => assertPortAvailable(webPort, "localhost", "Frontend"));
+  yield* assertPortAvailable(backendPort, "127.0.0.1", "Backend");
+  if (includeWeb) yield* assertPortAvailable(webPort, "localhost", "Frontend");
   const buildId = yield* nativePromise(() => developmentBuildId(app));
   yield* buildBackend(buildId);
   const backend = yield* stableBackend(buildId);

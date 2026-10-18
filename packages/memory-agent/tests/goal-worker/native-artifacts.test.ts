@@ -1,4 +1,3 @@
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { layer } from "@effect/vitest";
 import { chat, toolDefinition } from "@tanstack/ai";
 import {
@@ -628,7 +627,7 @@ testAgent()("owner native artifacts", (it) => {
           new TextEncoder().encode(id),
         );
         expect(registered).toMatchObject({
-          artifact_url: pathToFileURL(
+          artifact_url: (yield* path.toFileUrl(
             path.join(
               storage.path,
               "native-artifacts",
@@ -636,7 +635,7 @@ testAgent()("owner native artifacts", (it) => {
               registered.artifact_hash,
               "native.mjs",
             ),
-          ).href,
+          )).href,
           artifact_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
           source_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
           contract_version: "native-factories/v1",
@@ -650,7 +649,7 @@ testAgent()("owner native artifacts", (it) => {
         );
         yield* acquire(manifest, id);
 
-        const pinned = fileURLToPath(registered.artifact_url);
+        const pinned = yield* path.fromFileUrl(new URL(registered.artifact_url));
         const original = yield* fs.readFile(pinned);
         yield* fs.writeFileString(pinned, "// corrupt durable pin\n");
         expect(yield* Effect.flip(acquire(manifest, id))).toMatchObject({

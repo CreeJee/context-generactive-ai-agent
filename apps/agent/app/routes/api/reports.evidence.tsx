@@ -27,20 +27,24 @@ export function loader({ request }: Route.LoaderArgs) {
         return yield* reportEvidenceItemResponse(request);
       }
 
-      {
-        const trace = yield* WorkTraceStore;
-        const recent = (yield* trace.taskTree(sessionId))
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, 6)
-          .map((task) => ({
-            id: task.id,
-            status: task.status,
-            parentRunId: task.parentRunId,
-            parentToolCallId: task.parentToolCallId,
-            updatedAt: task.updatedAt,
-          }));
-        return yield* reportEvidenceResponse(request, () => Effect.succeed(recent));
-      }
+      const trace = yield* WorkTraceStore;
+      // Read inside the guarded section: a failed trace read marks only that section failed.
+      return yield* reportEvidenceResponse(request, (id) =>
+        trace.taskTree(id).pipe(
+          Effect.map((tasks) =>
+            tasks
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, 6)
+              .map((task) => ({
+                id: task.id,
+                status: task.status,
+                parentRunId: task.parentRunId,
+                parentToolCallId: task.parentToolCallId,
+                updatedAt: task.updatedAt,
+              })),
+          ),
+        ),
+      );
     }),
   );
 }

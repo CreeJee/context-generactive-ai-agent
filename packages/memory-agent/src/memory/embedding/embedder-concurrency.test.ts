@@ -100,3 +100,18 @@ it.effect(
       expect(terminations).toEqual([0]);
     }).pipe(Effect.scoped),
 );
+
+it.effect("a request still loading the model stops when it is cancelled", () =>
+  Effect.gen(function* () {
+    const loading = yield* Deferred.make<void>();
+    const model = yield* modelWorker(
+      "/unused-test-model-cache",
+      { variant: "quint8", devices: ["cpu"] },
+      // A model load that never finishes, like a download that hangs.
+      () => Deferred.succeed(loading, undefined).pipe(Effect.andThen(Effect.never)),
+    );
+    const call = yield* Effect.forkChild(model.chunks(["text"]), { startImmediately: true });
+    yield* Deferred.await(loading);
+    yield* Fiber.interrupt(call);
+  }).pipe(Effect.scoped),
+);

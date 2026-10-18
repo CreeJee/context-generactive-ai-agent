@@ -1,7 +1,6 @@
 import { layer } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { homedir } from "node:os";
 import {
   Cause,
   Config,
@@ -17,7 +16,7 @@ import {
 } from "effect";
 import { Hex } from "effect/encoding";
 import { describe, expect } from "vite-plus/test";
-import { StorageRoot } from "../../src/config/storage-root.ts";
+import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { GlobalConfig, type Settings } from "../../src/config/global-config.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import {
@@ -400,7 +399,7 @@ const cachedModels = await Effect.runPromise(
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const root = yield* Config.String("MEMORY_EMBEDDING_TEST_ROOT").pipe(
-          Config.withDefault(path.join(homedir(), ".context-generactive-agent")),
+          Config.withDefault(defaultStorageRoot),
         );
         const available = (file: string) =>
           fs

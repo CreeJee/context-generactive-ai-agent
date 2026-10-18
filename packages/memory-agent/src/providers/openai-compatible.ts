@@ -3,7 +3,6 @@ import { nativeStream } from "../runtime/native-stream.ts";
 import { ProviderOperationFailed } from "./contracts.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { isDeepStrictEqual } from "node:util";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import {
@@ -12,6 +11,7 @@ import {
   Context,
   Data,
   Effect,
+  Equal,
   Layer,
   Option,
   Schema,
@@ -498,7 +498,7 @@ function makeOpenAICompatibleSettingsBody(
               const reasoning = readCompatibleReasoning(model.id, page);
               return reasoning === undefined ? model : { ...model, reasoning };
             });
-            if (!isDeepStrictEqual(models, account.models)) {
+            if (!Equal.equals(models, account.models)) {
               // Before capability discovery, none meant to omit the wire parameter.
               const legacyDefault =
                 all.selected === id &&
@@ -716,7 +716,7 @@ function makeOpenAICompatibleSettingsBody(
       }).then(
         ({ account: current, key }) => ({
           value: key,
-          failed: !isDeepStrictEqual(compatibleEndpointModel(current, selection.model), settings),
+          failed: !Equal.equals(compatibleEndpointModel(current, selection.model), settings),
         }),
         () => ({ value: null, failed: true }),
       );

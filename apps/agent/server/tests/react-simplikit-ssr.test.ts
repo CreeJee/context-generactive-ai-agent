@@ -1,9 +1,8 @@
 // Separate native Node processes verify import/require without sharing poisoned browser globals.
 import { NodeServices } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Path } from "effect";
 import { it } from "@effect/vitest";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { fileURLToPath } from "node:url";
 import { expect } from "vite-plus/test";
 
 // Node exposes storage getters even without a browser. SSR must not probe them.
@@ -14,6 +13,8 @@ for (const mode of ["import", "require"])
       const result = yield* Effect.provideContext(
         Effect.gen(function* () {
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const path = yield* Path.Path;
+          const cwd = yield* path.fromFileUrl(new URL("../..", import.meta.url));
           return yield* spawner.exitCode(
             ChildProcess.make(
               process.execPath,
@@ -33,7 +34,7 @@ for (const mode of ["import", "require"])
           throw new Error("SSR storage reads: " + reads);
       `,
               ],
-              { cwd: fileURLToPath(new URL("../..", import.meta.url)), stderr: "inherit" },
+              { cwd, stderr: "inherit" },
             ),
           );
         }),

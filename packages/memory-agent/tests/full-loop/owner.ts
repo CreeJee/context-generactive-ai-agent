@@ -1,5 +1,4 @@
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import type { AnyTextAdapter } from "@tanstack/ai";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import {
@@ -90,9 +89,7 @@ export const ownerFixture = Effect.fnUntraced(function* () {
           ),
         ),
       ),
-    workerUrl: new URL(
-      `file://${fileURLToPath(new URL("../../src/agent/full-loop-worker.ts", import.meta.url))}`,
-    ),
+    workerUrl: new URL("../../src/agent/full-loop-worker.ts", import.meta.url),
   };
   return {
     sqlite,

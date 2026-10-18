@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
-import { strict as assert } from "node:assert";
-import { pathToFileURL } from "node:url";
+import { expect } from "vite-plus/test";
 import { chat } from "@tanstack/ai";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
@@ -37,8 +36,8 @@ await Effect.runPromise(
         ),
         Result.getOrThrow,
       )(process.argv.slice(2));
-      assert.equal(yield* fs.exists(path.join(base, "src")), false);
-      assert.equal(yield* fs.exists(path.join(base, "storage", "agent.db")), false);
+      expect(yield* fs.exists(path.join(base, "src"))).toBe(false);
+      expect(yield* fs.exists(path.join(base, "storage", "agent.db"))).toBe(false);
       const home = path.join(base, "home");
       const projectRoot = path.join(base, "project");
       yield* fs.makeDirectory(home);
@@ -88,16 +87,14 @@ await Effect.runPromise(
           ),
         );
         sql = services.sql;
-        for (const [runId, path, prefix] of [
+        for (const [runId, file, prefix] of [
           ["a-first", a, ""],
           ["b", b, "copied-B:"],
           ["a-next", a, ""],
         ] as const) {
-          const artifact: typeof NativeArtifact = yield* sdkCall(
-            () => import(pathToFileURL(path).href),
-          );
-          assert.deepEqual(
-            Object.keys(artifact).sort(),
+          const url = yield* path.toFileUrl(file);
+          const artifact: typeof NativeArtifact = yield* sdkCall(() => import(url.href));
+          expect(Object.keys(artifact).sort()).toStrictEqual(
             [
               "createMemoryTools",
               "createSubscriptionRuntimeImplementation",
@@ -133,17 +130,17 @@ await Effect.runPromise(
           const rows = (yield* services.nodes.session(services.session.id)).filter(
             (node) => node.kind === "assistant" && node.runId === runId,
           );
-          assert.equal(rows.length, 1);
-          assert.equal(rows[0]!.text, `${prefix}${runId}`);
-          assert.equal(counts.acquired, 1);
-          assert.equal(counts.released, 0);
+          expect(rows.length).toBe(1);
+          expect(rows[0]!.text).toBe(`${prefix}${runId}`);
+          expect(counts.acquired).toBe(1);
+          expect(counts.released).toBe(0);
         }
       } finally {
         yield* Effect.uninterruptible(sdkCall(() => runtime.dispose()));
       }
-      assert.deepEqual(counts, { acquired: 1, released: 1 });
-      assert.ok(sql);
-      assert.ok(Exit.isFailure(yield* Effect.exit(sql`SELECT 1`)));
+      expect(counts).toStrictEqual({ acquired: 1, released: 1 });
+      const closedSql = yield* Effect.fromNullishOr(sql);
+      expect(Exit.isFailure(yield* Effect.exit(closedSql`SELECT 1`))).toBe(true);
       yield* fs.writeFileString(
         path.join(base, "result.json"),
         encodeJson({ ...counts, sqliteClosed: true, pid: process.pid }),

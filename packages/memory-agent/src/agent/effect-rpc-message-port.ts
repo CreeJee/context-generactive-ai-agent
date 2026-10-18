@@ -1,192 +1,160 @@
-import { Cause, Effect, Layer, Queue, Schema, Scope } from "effect";
-import { RpcClient, RpcClientError, RpcMessage, RpcSerialization, RpcServer } from "effect/rpc";
+import { Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import { RpcClient, RpcServer } from "effect/rpc";
+import { Worker, WorkerError, WorkerRunner } from "effect/workers";
 import type { MessagePort, Transferable } from "node:worker_threads";
 
-const clientId = 0;
-const inboundCapacity = 64;
-const structuredCloneCodec: RpcSerialization.CodecFor = Schema.toCodecJson;
+// A dedicated MessagePort carries Effect's worker protocol in both directions: the client side
+// is a worker "spawned" from the port, the server side runs a WorkerRunner on the other end.
+// RpcClient/RpcServer keep request IDs, acknowledgements and interruption; this module only
+// adapts the port's listeners and lifetime.
 
-type TransportReason =
-  | "buffer_overflow"
-  | "closed"
-  | "message_error"
-  | "send_failed"
-  | "setup_failed";
+const ready = [0] as const;
+const close = [1] as const;
 
-export class MessagePortTransportError extends Schema.TaggedError<MessagePortTransportError>()(
-  "MessagePortTransportError",
-  {
-    reason: Schema.Literals([
-      "buffer_overflow",
-      "closed",
-      "message_error",
-      "send_failed",
-      "setup_failed",
-    ]),
-  },
-) {
-  override get message() {
-    return `Effect RPC MessagePort transport ${this.reason}`;
-  }
-}
-
-const transportError = (reason: TransportReason) => MessagePortTransportError.make({ reason });
-
-const rpcClientError = (error: MessagePortTransportError) =>
-  RpcClientError.RpcClientError.make({
-    reason: RpcClientError.RpcClientDefect.make({
-      message: error.message,
-      cause: error,
-    }),
+const receiveError = (message: string, cause?: Error) =>
+  WorkerError.WorkerError.make({
+    reason: WorkerError.WorkerReceiveError.make({ message, cause }),
   });
 
-interface PortBridge<A> {
-  readonly inbound: Queue.Queue<A, MessagePortTransportError>;
-  readonly isClosed: () => boolean;
-  readonly send: <A>(
-    value: A,
-    transferables?: Parameters<RpcClient.Protocol["Service"]["send"]>[2],
-  ) => Effect.Effect<void, MessagePortTransportError>;
-  readonly close: Effect.Effect<void>;
-}
+// SAFETY: Node validates Effect's platform-neutral transfer list when posting.
+const nodeTransfers = (transfers: ReadonlyArray<unknown> = []) => transfers as Transferable[];
 
-const makePortBridge = <A>(
-  port: MessagePort,
-  onClose?: () => void,
-): Effect.Effect<PortBridge<A>, MessagePortTransportError, Scope.Scope> =>
-  Effect.gen(function* () {
-    const inbound = yield* Queue.bounded<A, MessagePortTransportError>(inboundCapacity);
-    let closed = false;
-
-    const finish = (reason: TransportReason) => {
-      if (closed) return;
-      closed = true;
-      port.off("message", onMessage);
-      port.off("close", handleClose);
-      port.off("messageerror", handleMessageError);
-      Queue.failCauseUnsafe(inbound, Cause.fail(transportError(reason)));
-      onClose?.();
-      port.close();
-    };
-    const onMessage = (message: A) => {
-      if (!Queue.offerUnsafe(inbound, message)) finish("buffer_overflow");
-    };
-    const handleClose = () => finish("closed");
-    const handleMessageError = () => finish("message_error");
-
-    yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => {
-          port.on("message", onMessage);
-          port.on("close", handleClose);
-          port.on("messageerror", handleMessageError);
-          port.start();
-        },
-        catch: () => {
-          finish("setup_failed");
-          return transportError("setup_failed");
-        },
-      }),
-      () => Effect.sync(() => finish("closed")),
-    );
-
-    return {
-      inbound,
-      isClosed: () => closed,
-      send: (value, transferables) =>
-        Effect.try({
-          try: () => {
-            if (closed) throw transportError("closed");
-            if (transferables === undefined) port.postMessage(value);
-            else {
-              // SAFETY: Node validates this Effect transfer list; unsupported entries become send_failed.
-              port.postMessage(value, [...transferables] as Transferable[]);
-            }
-          },
-          catch: (cause) =>
-            Schema.is(MessagePortTransportError)(cause) ? cause : transportError("send_failed"),
-        }),
-      close: Effect.sync(() => finish("closed")),
-    };
-  });
-
-export const makeMessagePortClientProtocol = (
-  port: MessagePort,
-): Effect.Effect<RpcClient.Protocol["Service"], MessagePortTransportError, Scope.Scope> =>
-  RpcClient.Protocol.make(
-    Effect.fnUntraced(function* (writeResponse, clientIds) {
-      const bridge = yield* makePortBridge<RpcMessage.FromServerEncoded>(port);
-
-      yield* Queue.take(bridge.inbound).pipe(
-        Effect.flatMap((message) =>
-          Effect.forEach(clientIds, (activeClientId) => writeResponse(activeClientId, message), {
-            discard: true,
-          }),
-        ),
-        Effect.forever,
-        Effect.catch((error) =>
-          Effect.forEach(
-            clientIds,
-            (activeClientId) =>
-              writeResponse(activeClientId, {
-                _tag: "ClientProtocolError",
-                error: rpcClientError(error),
-              }),
-            { discard: true },
-          ),
-        ),
-        Effect.forkScoped,
+const layerPortPlatform = (port: MessagePort) =>
+  Layer.effect(Worker.WorkerPlatform)(
+    Effect.gen(function* () {
+      // A closed port cannot be reopened; the worker protocol's reconnect attempts must fail
+      // so requests queued after closure are failed instead of waiting for a handshake.
+      const portClosed = yield* Deferred.make<void>();
+      const onPortClose = () => Deferred.doneUnsafe(portClosed, Exit.void);
+      yield* Effect.acquireRelease(
+        Effect.sync(() => port.once("close", onPortClose)),
+        () => Effect.sync(() => port.off("close", onPortClose)),
       );
-
-      return {
-        send: (_activeClientId, request, transferables) =>
-          bridge.send(request, transferables).pipe(Effect.mapError(rpcClientError)),
-        supportsAck: true,
-        supportsTransferables: true,
-        codecFor: structuredCloneCodec,
-      };
+      return Worker.makePlatform<MessagePort>()({
+        setup: ({ worker, scope }) =>
+          Deferred.isDone(portClosed).pipe(
+            Effect.filterOrFail(
+              (closed) => !closed,
+              () =>
+                WorkerError.WorkerError.make({
+                  reason: WorkerError.WorkerSpawnError.make({ message: "MessagePort is closed" }),
+                }),
+            ),
+            Effect.andThen(
+              Scope.addFinalizer(
+                scope,
+                Effect.sync(() => {
+                  worker.postMessage(close);
+                  worker.close();
+                }),
+              ),
+            ),
+            Effect.as(worker),
+          ),
+        listen: ({ port, emit, deferred, scope }) => {
+          const onMessageError = (cause: Error) =>
+            Deferred.doneUnsafe(
+              deferred,
+              Effect.fail(receiveError("MessagePort messageerror", cause)),
+            );
+          const onClose = () =>
+            Deferred.doneUnsafe(deferred, Effect.fail(receiveError("MessagePort closed")));
+          return Effect.sync(() => {
+            port.on("message", emit);
+            port.on("messageerror", onMessageError);
+            port.on("close", onClose);
+          }).pipe(
+            Effect.andThen(
+              Scope.addFinalizer(
+                scope,
+                Effect.sync(() => {
+                  port.off("message", emit);
+                  port.off("messageerror", onMessageError);
+                  port.off("close", onClose);
+                }),
+              ),
+            ),
+          );
+        },
+      });
     }),
   );
 
 export const layerMessagePortRpcClient = (
   port: MessagePort,
-): Layer.Layer<RpcClient.Protocol, MessagePortTransportError> =>
-  Layer.effect(RpcClient.Protocol)(makeMessagePortClientProtocol(port));
-
-export const makeMessagePortServerProtocol = (
-  port: MessagePort,
-): Effect.Effect<RpcServer.Protocol["Service"], MessagePortTransportError, Scope.Scope> =>
-  RpcServer.Protocol.make(
-    Effect.fnUntraced(function* (writeRequest) {
-      const disconnects = yield* Queue.make<number>();
-      const bridge = yield* makePortBridge<RpcMessage.FromClientEncoded>(port, () => {
-        Queue.offerUnsafe(disconnects, clientId);
-      });
-
-      yield* Queue.take(bridge.inbound).pipe(
-        Effect.flatMap((message) => writeRequest(clientId, message)),
-        Effect.forever,
-        Effect.ignore,
-        Effect.forkScoped,
-      );
-
-      return {
-        disconnects,
-        send: (_clientId, response, transferables) =>
-          bridge.send(response, transferables).pipe(Effect.orDie),
-        end: () => bridge.close,
-        clientIds: Effect.sync(() => (bridge.isClosed() ? new Set<number>() : new Set([clientId]))),
-        initialMessage: Effect.succeedNone,
-        supportsAck: true,
-        supportsTransferables: true,
-        supportsSpanPropagation: true,
-        supportsNotifications: true,
-        codecFor: structuredCloneCodec,
-      };
-    }),
+): Layer.Layer<RpcClient.Protocol, WorkerError.WorkerError> =>
+  RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(
+    Layer.provide(
+      Layer.merge(
+        Worker.layerSpawner(() => port),
+        layerPortPlatform(port),
+      ),
+    ),
   );
 
+const makePortRunner = <O, I>(port: MessagePort): WorkerRunner.WorkerRunner<O, I> => {
+  const sendUnsafe = (_portId: number, message: O, transfers?: ReadonlyArray<unknown>) =>
+    port.postMessage([1, message], nodeTransfers(transfers));
+  return {
+    sendUnsafe,
+    send: (portId, message, transfers) => Effect.sync(() => sendUnsafe(portId, message, transfers)),
+    run: <A, E, R>(handler: (portId: number, message: I) => Effect.Effect<A, E, R> | void) =>
+      Effect.scopedWith(
+        Effect.fnUntraced(function* (scope) {
+          const closed = yield* Deferred.make<void, WorkerError.WorkerError>();
+          const runFork = Effect.runForkWith(yield* Effect.context<R>());
+          const track = Fiber.runIn(scope);
+          const onMessage = (message: WorkerRunner.PlatformMessage<I>) => {
+            switch (message[0]) {
+              case 0: {
+                const result = handler(0, message[1]);
+                if (Effect.isEffect(result)) result.pipe(runFork, track);
+                return;
+              }
+              case 1:
+                Deferred.doneUnsafe(closed, Exit.void);
+                return;
+            }
+          };
+          const onMessageError = (cause: Error) =>
+            Deferred.doneUnsafe(
+              closed,
+              Effect.fail(receiveError("MessagePort messageerror", cause)),
+            );
+          const onClose = () => Deferred.doneUnsafe(closed, Exit.void);
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              port.on("message", onMessage);
+              port.on("messageerror", onMessageError);
+              port.on("close", onClose);
+              port.postMessage(ready);
+            }),
+            () =>
+              Effect.sync(() => {
+                port.off("message", onMessage);
+                port.off("messageerror", onMessageError);
+                port.off("close", onClose);
+                port.close();
+              }),
+          ).pipe(Scope.provide(scope));
+          return yield* Deferred.await(closed);
+        }),
+      ),
+  };
+};
+
+/**
+ * Serves RPCs from the client at the other end of `port`. When that client closes, Effect's
+ * worker-runner protocol interrupts the fiber that built this layer, so build it in a fiber
+ * owned by the port's Scope (for example `Effect.forkIn(Layer.launch(server), scope)`).
+ */
 export const layerMessagePortRpcServer = (
   port: MessagePort,
-): Layer.Layer<RpcServer.Protocol, MessagePortTransportError> =>
-  Layer.effect(RpcServer.Protocol)(makeMessagePortServerProtocol(port));
+): Layer.Layer<RpcServer.Protocol, WorkerError.WorkerError> =>
+  RpcServer.layerProtocolWorkerRunner.pipe(
+    Layer.provide(
+      Layer.succeed(WorkerRunner.WorkerRunnerPlatform)({
+        start: () => Effect.succeed(makePortRunner(port)),
+      }),
+    ),
+  );

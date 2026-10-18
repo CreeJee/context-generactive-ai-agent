@@ -1,6 +1,5 @@
 import { NodePath, NodeWorker } from "@effect/platform-node";
 import { Array as EffectArray, Function as EffectFunction } from "effect";
-import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Worker } from "node:worker_threads";
 import {
@@ -22,6 +21,7 @@ import {
 import { RpcClient, type RpcClientError } from "effect/rpc";
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
+import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import {
@@ -170,11 +170,10 @@ export const gpuMemoryThreshold = 16 * 1024 ** 3;
 
 /** The mode the app runs with, given the settings it starts with. */
 export const embeddingModeFor: {
-  (settings: Settings): EmbeddingMode;
   (settings: Settings, memoryBytes: number): EmbeddingMode;
   (memoryBytes: number): (settings: Settings) => EmbeddingMode;
 } = EffectFunction.dual((args) => !Schema.is(Schema.Finite)(args[0]), embeddingModeForBody);
-function embeddingModeForBody(settings: Settings, memoryBytes: number = totalmem()): EmbeddingMode {
+function embeddingModeForBody(settings: Settings, memoryBytes: number): EmbeddingMode {
   switch (settings.embeddingDevice ?? "auto") {
     case "cpu":
       return "cpu";
@@ -280,7 +279,11 @@ export const modelWorker = Effect.fnUntraced(function* (
     Option.match({
       onSome: Effect.succeed,
       onNone: () =>
-        ScopedRef.set(session, connect(data).pipe(Effect.map(Option.some))).pipe(
+        // `set` acquires uninterruptibly; a model load must still stop when the Scope closes.
+        ScopedRef.set(
+          session,
+          Effect.interruptible(connect(data)).pipe(Effect.map(Option.some)),
+        ).pipe(
           Effect.andThen(ScopedRef.get(session)),
           // `set` just stored the session it acquired.
           Effect.map(Option.getOrThrow),
@@ -415,7 +418,7 @@ export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
   static readonly local = Layer.effect(
     Embedder,
     Effect.gen(function* () {
-      const mode = embeddingModeFor(yield* (yield* GlobalConfig).read);
+      const mode = embeddingModeFor(yield* (yield* GlobalConfig).read, yield* totalMemory);
       return yield* makeLocal(modes[mode], { kind: "app", mode });
     }),
   ).pipe(Layer.provide(NodePath.layer));

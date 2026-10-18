@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
-import { strict as assert } from "node:assert";
-import { pathToFileURL } from "node:url";
+import { expect } from "vite-plus/test";
 import { chat } from "@tanstack/ai";
 import { Config, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
@@ -42,13 +41,13 @@ await Effect.runPromise(
         ),
         Result.getOrThrow,
       )(process.argv.slice(2));
-      assert.equal(yield* fs.exists(path.join(base, "src")), false);
-      assert.equal(yield* fs.exists(path.join(base, "storage", "agent.db")), phase === "second");
+      expect(yield* fs.exists(path.join(base, "src"))).toBe(false);
+      expect(yield* fs.exists(path.join(base, "storage", "agent.db"))).toBe(phase === "second");
       const home = path.join(base, "home");
       const projectRoot = path.join(base, "project");
       yield* fs.makeDirectory(home, { recursive: true });
       yield* fs.makeDirectory(projectRoot, { recursive: true });
-      assert.equal(yield* Config.String("HOME"), home);
+      expect(yield* Config.String("HOME")).toBe(home);
       const counts = { acquired: 0, released: 0 };
       const runtime = ManagedRuntime.make(
         memoryAgentLayer(path.join(base, "storage"), {
@@ -129,23 +128,21 @@ await Effect.runPromise(
         const oldRun = () =>
           services.state.persistence.stores.runs.get("first").then((run) => encodeJson(run));
         if (previous !== undefined) {
-          assert.notEqual(previous.pid, process.pid);
-          assert.equal(yield* oldNodes(), previous.nodes);
-          assert.equal(yield* sdkCall(() => oldRun()), previous.run);
-          assert.equal(
+          expect(previous.pid).not.toBe(process.pid);
+          expect(yield* oldNodes()).toBe(previous.nodes);
+          expect(yield* sdkCall(() => oldRun())).toBe(previous.run);
+          expect(
             encodeJson(
               yield* sdkCall(() =>
                 services.state.persistence.stores.messages.loadThread(binding.sessionId),
               ),
             ),
-            previous.thread,
-          );
+          ).toBe(previous.thread);
           verifiedOld = true;
         }
         // Explicit NEW SDK turn, never replay/resume the first run or claim Goal admission.
-        const artifact: typeof NativeArtifact = yield* sdkCall(
-          () => import(pathToFileURL(artifactPath).href),
-        );
+        const artifactUrl = yield* path.toFileUrl(artifactPath);
+        const artifact: typeof NativeArtifact = yield* sdkCall(() => import(artifactUrl.href));
         const user = yield* services.nodes.append({ ...binding, kind: "user", text: phase });
         const recording = yield* sdkCall(() =>
           runtime.runPromise(
@@ -169,14 +166,14 @@ await Effect.runPromise(
         const rows = (yield* services.nodes.session(binding.sessionId)).filter(
           (node) => node.kind === "assistant" && node.runId === phase,
         );
-        assert.equal(rows.length, 1);
-        assert.equal(rows[0]!.text, phase);
+        expect(rows.length).toBe(1);
+        expect(rows[0]!.text).toBe(phase);
         const current = yield* sdkCall(() => services.state.persistence.stores.runs.get(phase));
-        assert.equal(current?.status, "completed");
-        assert.equal(current?.threadId, binding.sessionId);
+        expect(current?.status).toBe("completed");
+        expect(current?.threadId).toBe(binding.sessionId);
         if (previous !== undefined) {
-          assert.equal(yield* oldNodes(), previous.nodes);
-          assert.equal(yield* sdkCall(() => oldRun()), previous.run);
+          expect(yield* oldNodes()).toBe(previous.nodes);
+          expect(yield* sdkCall(() => oldRun())).toBe(previous.run);
         } else {
           yield* fs.writeFileString(
             path.join(base, "snapshot.json"),
@@ -193,13 +190,13 @@ await Effect.runPromise(
             }),
           );
         }
-        assert.deepEqual(counts, { acquired: 1, released: 0 });
+        expect(counts).toStrictEqual({ acquired: 1, released: 0 });
       } finally {
         yield* Effect.uninterruptible(sdkCall(() => runtime.dispose()));
       }
-      assert.deepEqual(counts, { acquired: 1, released: 1 });
-      assert.ok(sql);
-      assert.ok(Exit.isFailure(yield* Effect.exit(sql`SELECT 1`)));
+      expect(counts).toStrictEqual({ acquired: 1, released: 1 });
+      const closedSql = yield* Effect.fromNullishOr(sql);
+      expect(Exit.isFailure(yield* Effect.exit(closedSql`SELECT 1`))).toBe(true);
       yield* fs.writeFileString(
         path.join(base, `${phase}.json`),
         encodeJson({ ...counts, sqliteClosed: true, pid: process.pid, verifiedOld }),

@@ -2101,3 +2101,19 @@
 - 모델 선택은 기존 전역 `provider`·`model`을 유지한다. 계정을 바꾸면 같은 모델 ID가 새 계정에 있으면 유지하고, 없으면 새 계정의 첫 모델로 바꾼다. 선택 모델을 카탈로그에서 지우면 남은 첫 모델로 옮긴다. 실행 중인 run은 시작한 계정 ID에 고정되어 도중의 계정 전환이 키를 바꾸지 않는다.
 - 0.0.15까지의 `openaiCompatible` 단일 설정은 읽을 때 `default` 계정과 모델 하나로 해석하고 기존 키체인 항목(`openai-compatible-api-key`)을 그대로 쓴다. 다음 계정 쓰기에서 `compatibleAccounts`로 대체하며 키를 옮기는 별도 작업은 하지 않는다.
 - `/api/accounts`가 모든 공급자의 계정 목록과 작업을 맡는다. 응답 view는 연결 종류 태그(`subscription` / `compatible-endpoint`)를 가진 유니온이고, 선택·삭제·이름 변경 intent는 공통이며 로그인(`add`·`cancel`)과 엔드포인트 연결·모델 등록·테스트·후보 조회는 연결 종류별 intent다. 기존 `/api/settings/compatible`과 설정 화면의 호환 공급자 페이지는 제거하고 계정 관리 화면에서 엔드포인트와 모델을 관리한다.
+
+## 남은 node:* 모듈의 Effect 전환 (2026-10-18)
+
+- 사용자 결정: 별도 패키지가 아닌 벤치마크·측정 스크립트(`tools/native-search-*`, `io-range-benchmark`, `suspense-verification`)는 지운다. 나머지 `node:*`는 Effect 추상화가 있으면 그것으로 옮긴다. 앞 절의 "대응 API가 없어 남긴다" 목록 중 `worker_threads`·`util`·`perf_hooks`·`net`·`assert`는 대응이 있어 이 결정으로 대체한다.
+- 모든 worker(가져오기·redaction·샌드박스·Kiwi)는 `RpcGroup` 서버와 `NodeWorker`/`NodeWorkerRunner` RPC로 통신한다. `parentPort`·`postMessage`·요청 ID와 대기자 Map은 두지 않는다. 남는 `node:worker_threads`는 `NodeWorker.layer` 안의 `Worker` 생성자와 시작 설정 `workerData`뿐이다(`NodeWorkerRunner`에 시작 설정을 받는 API가 없다).
+  - worker 종료는 Scope가 맡는다. Scope가 닫히면 `NodeWorker`가 종료를 요청하고 5초 안에 끝나지 않으면 강제로 끈다. 예전에는 바로 `terminate()`했다.
+  - worker 실패는 리터럴 reason(가져오기 `start`/`count`/`pass`/`lost`, redaction `redaction-failed`/`worker-lost`)만 전달한다. 원래 오류 문장은 worker 로그에만 남고, 설정 화면은 코드에 맞는 문구를 보인다.
+  - 샌드박스 worker는 `Prepare`/`Finish` 두 RPC다. `SandboxManager.reset`은 worker Scope의 finalizer로 옮겨 정상 종료와 중단 모두에서 정리된다.
+  - Kiwi 세션은 임베딩처럼 `ScopedRef`가 소유하고, 모델 빌드에 실패한 worker는 다음 요청에서 새로 띄운다.
+- Goal 워커의 역방향 owner RPC는 Effect worker 프로토콜에 MessagePort 플랫폼 어댑터(`effect-rpc-message-port.ts`)를 끼워 쓴다. 원장·권한 검사(`makeOwnerRpcEffect`)는 그대로다. 포트가 닫힌 뒤 들어온 요청은 바로 실패하지 않고 프로토콜 재연결 주기(1초) 안에 실패한다. 서버 layer는 포트 Scope가 소유한 fiber에서 빌드한다.
+- worker 파일은 `@effect/platform-node` 진입점 대신 쓰는 하위 모듈만 불러온다. 진입점은 `NodeRedis`까지 평가해 시작이 느려지고, `redis`가 없는 실행 파일의 runtime 폴더에서는 Kiwi·임베딩 worker가 시작하지 못했다.
+- 실행 파일은 모든 worker를 한 파일(`.mjs`)로 묶는다. Kiwi·임베딩 worker는 자기 모듈만 묶고 모델 패키지는 runtime 폴더의 `node_modules`에서 쓴다. 원본 `.ts`를 복사하던 때는 옆 모듈의 상대 import가 실행 파일 안에서 풀리지 않았다.
+- `ScopedRef.set`은 새 값을 interruption 없이 얻으므로, worker 세션(임베딩·Kiwi·가져오기)은 획득만 `Effect.interruptible`로 연다. 그러지 않으면 모델 로드 중에 받은 SIGTERM이 로드가 끝날 때까지 서버 종료를 막는다. 앞 PR부터 있던 문제로, 실행 파일에서는 임베딩 worker가 시작하지 못해 가려져 있었다.
+- CLI 인자는 `effect/cli`로 파싱한다. 내장 전역 플래그는 끄고(`CliConfig.builtIns: []`) 기존 옵션 이름·사용법 문구를 유지한다. `isDeepStrictEqual`은 `Equal.equals`로, 포트 점유 확인은 `NodeSocketServer`의 scoped bind로, 측정 시간은 `Clock`·`Effect.timed`로, 테스트 단언은 vitest `expect`로 바꾼다.
+- 홈 폴더·임시 폴더·전체 메모리는 Effect에 대응 서비스가 없어 `runtime/host-system.ts`만 `node:os`를 쓰고 나머지는 그 Effect 값을 읽는다.
+- 남기는 `node:*`와 이유: `sqlite`(Effect의 SQLite 드라이버는 별도 네이티브 패키지라 SEA 제약과 맞지 않아 자체 `SqlClient`가 `node:sqlite`를 감싼다), `sea`(실행 파일 자산), `module`(`createRequire`: SEA 본문은 네이티브 패키지를 require로만 부른다), `zlib`(설치본에는 HTTP 응답 압축만 있고 zstd 해제가 없다), 테스트의 `async_hooks`·모듈 로더 hook의 `url`(Effect 런타임 밖에서 동기로 돈다).

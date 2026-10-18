@@ -1,4 +1,4 @@
-import { NodeWorkerRunner } from "@effect/platform-node";
+import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Cause, Effect, Function, Layer, Result, Schema, Scope, Stream } from "effect";
 import { RpcClient, RpcServer } from "effect/rpc";
 import { workerData } from "node:worker_threads";
@@ -13,6 +13,7 @@ import { runNativeEffect } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { decodeFullLoopValue, encodeFullLoopValue } from "./full-loop-codec.ts";
 import {
+  FullLoopCapability,
   FullLoopCapabilityMiddleware,
   FullLoopOwnerRpcGroup,
   FullLoopRpcError,
@@ -35,20 +36,9 @@ function portableSchema(schema: any) {
   };
 }
 
-function sameCapability(left: any, right: any): boolean {
-  return (
-    left?.sessionId === right?.sessionId &&
-    left?.runId === right?.runId &&
-    left?.goalInstanceId === right?.goalInstanceId &&
-    left?.goalVersion === right?.goalVersion &&
-    left?.planVersion === right?.planVersion &&
-    left?.workflowRevisionId === right?.workflowRevisionId &&
-    left?.generation === right?.generation &&
-    left?.token === right?.token
-  );
-}
-
-const trustedCapability = structuredClone(workerData.capability);
+// The owner fixes this run's capability at construction; every RunFullLoop must present it.
+const WorkerSetup = Schema.Struct({ capability: FullLoopCapability });
+const sameCapability = Schema.toEquivalence(FullLoopCapability);
 
 function runFullLoop(
   payload: FullLoopRunPayload,
@@ -267,11 +257,17 @@ function runFullLoop(
 }
 
 const handlers = FullLoopRpcGroup.toLayer({ RunFullLoop: runFullLoop });
-const authorization = Layer.succeed(FullLoopCapabilityMiddleware, (effect, options) =>
-  // SAFETY: middleware runs after the RunFullLoop payload schema decoder.
-  sameCapability((options.payload as any).capability, trustedCapability)
-    ? effect
-    : Effect.fail(FullLoopRpcError.make({ reason: "unauthorized" })),
+const authorization = Layer.effect(FullLoopCapabilityMiddleware)(
+  Schema.decodeUnknownEffect(WorkerSetup)(workerData).pipe(
+    Effect.map(
+      ({ capability: trusted }) =>
+        (effect, options) =>
+          // SAFETY: middleware runs after the RunFullLoop payload schema decoder.
+          sameCapability((options.payload as FullLoopRunPayload).capability, trusted)
+            ? effect
+            : Effect.fail(FullLoopRpcError.make({ reason: "unauthorized" })),
+    ),
+  ),
 );
 const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
 const server = RpcServer.layer(FullLoopRpcGroup, {

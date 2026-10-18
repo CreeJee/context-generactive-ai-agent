@@ -5,10 +5,7 @@ import { Effect } from "effect";
 import { runNativeEffect } from "memory-agent/native-effect";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { homedir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-
+import { homeDirectory } from "memory-agent/host-system";
 import { Schema } from "effect";
 
 /** The folder the app opens as a project, or why it opens none. */
@@ -67,7 +64,7 @@ const launchFolderEffect = Effect.fn("launch.folder")(function* (
   if (Option.isNone(info) || info.value.type !== "Directory")
     return argument === undefined ? { kind: "none" } : { kind: "invalid", path: candidate };
   if (argument !== undefined) return { kind: "folder", root };
-  const home = yield* canonical(homedir());
+  const home = yield* canonical(yield* homeDirectory);
   const storage = yield* canonical(storageRoot);
   const executable = executableFolder === null ? null : yield* canonical(executableFolder);
   if (root === dirname(root) || root === home || isInside(root, storage) || root === executable)

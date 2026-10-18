@@ -1,16 +1,16 @@
 import { NodeServices } from "@effect/platform-node";
-import { Config, Console, Effect, ManagedRuntime } from "effect";
+import { Config, Console, Effect, ManagedRuntime, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL("../../../", import.meta.url));
 const runtime = ManagedRuntime.make(NodeServices.layer);
 const program = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const path = yield* Path.Path;
+  const root = yield* path.fromFileUrl(new URL("../../../", import.meta.url));
   const home = yield* Config.String("HOME");
   const child = yield* spawner.spawn(
     ChildProcess.make(process.execPath, ["scripts/dev.ts", ...process.argv.slice(2)], {
-      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      cwd: yield* path.fromFileUrl(new URL("../", import.meta.url)),
       env: {
         CONTEXT_AGENT_HOME: `${root}.rrsi-local/runtime`,
         CONTEXT_AGENT_DEV_WEB_PORT: "5174",

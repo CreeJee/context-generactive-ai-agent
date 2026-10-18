@@ -1,7 +1,6 @@
 import { layer } from "@effect/vitest";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { chat } from "@tanstack/ai";
-import { homedir } from "node:os";
 import {
   Cause,
   Effect,
@@ -15,7 +14,7 @@ import {
   Stream,
 } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { StorageRoot } from "../../src/config/storage-root.ts";
+import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { kiwiModel, MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -462,7 +461,7 @@ const { kiwiStorage, kiwiCached } = await Effect.runPromise(
       return yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const kiwiStorage = path.join(homedir(), ".context-generactive-agent");
+        const kiwiStorage = defaultStorageRoot;
         const kiwiCached = yield* fs
           .exists(
             path.join(

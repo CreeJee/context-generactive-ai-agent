@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { homedir } from "node:os";
+import { homeDirectory } from "memory-agent/host-system";
 import { describe, expect } from "vite-plus/test";
 import { isThisApp, launchFolder, openProject } from "./launch-project";
 
@@ -48,7 +48,8 @@ describe("launch folder", () => {
           expect(yield* sdkCall(() => launchFolder(undefined, "/", storage, null))).toEqual({
             kind: "none",
           });
-          expect(yield* sdkCall(() => launchFolder(undefined, homedir(), storage, null))).toEqual({
+          const home = yield* homeDirectory;
+          expect(yield* sdkCall(() => launchFolder(undefined, home, storage, null))).toEqual({
             kind: "none",
           });
           expect(

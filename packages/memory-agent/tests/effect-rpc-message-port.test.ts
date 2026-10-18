@@ -1,127 +1,89 @@
-import { Schema } from "effect";
 import { it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Scope } from "effect";
-import { RpcClientError, type RpcMessage } from "effect/rpc";
-import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import { Rpc, RpcClient, RpcClientError, RpcGroup, RpcServer } from "effect/rpc";
+import { MessageChannel } from "node:worker_threads";
 import { describe, expect } from "vite-plus/test";
 import {
-  makeMessagePortClientProtocol,
-  makeMessagePortServerProtocol,
-  MessagePortTransportError,
+  layerMessagePortRpcClient,
+  layerMessagePortRpcServer,
 } from "../src/agent/effect-rpc-message-port.ts";
 
-const nextMessage = <A>(port: MessagePort) =>
-  Effect.callback<A>((resume) => {
-    const listener = (message: A) => resume(Effect.succeed(message));
-    port.once("message", listener);
-    return Effect.sync(() => port.off("message", listener));
-  });
+const Probe = RpcGroup.make(
+  Rpc.make("Echo", { payload: { value: Schema.String }, success: Schema.String }),
+  Rpc.make("Wait"),
+);
 
-const request = <A>(payload: A): RpcMessage.RequestEncoded => ({
-  _tag: "Request",
-  id: 1,
-  tag: "echo",
-  payload,
-  headers: [],
+/** One RPC client and server across a fresh channel, each in its own closable Scope. */
+const connect = Effect.fnUntraced(function* () {
+  const channel = new MessageChannel();
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      channel.port1.close();
+      channel.port2.close();
+    }),
+  );
+  const entered = yield* Deferred.make<void>();
+  const interrupted = yield* Deferred.make<void>();
+  const handlers = Probe.toLayer({
+    Echo: ({ value }) => Effect.succeed(value),
+    Wait: () =>
+      Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      ),
+  });
+  const serverScope = yield* Scope.fork(yield* Effect.scope);
+  const server = yield* Effect.forkIn(
+    Layer.launch(
+      RpcServer.layer(Probe).pipe(
+        Layer.provide(handlers),
+        Layer.provide(layerMessagePortRpcServer(channel.port1)),
+      ),
+    ),
+    serverScope,
+  );
+  const clientScope = yield* Scope.fork(yield* Effect.scope);
+  const protocol = yield* Layer.buildWithScope(
+    layerMessagePortRpcClient(channel.port2),
+    clientScope,
+  );
+  const client = yield* RpcClient.make(Probe).pipe(
+    Effect.provide(protocol),
+    Effect.provideService(Scope.Scope, clientScope),
+  );
+  return { channel, client, clientScope, entered, interrupted, server };
 });
 
-const closeChannel = (channel: MessageChannel) =>
-  Effect.sync(() => {
-    channel.port1.close();
-    channel.port2.close();
-  });
-
-describe("Effect RPC MessagePort protocol", () => {
-  it.effect("bridges the client Protocol with structured clone and scoped cleanup", () =>
+describe("Effect RPC over a dedicated MessagePort", () => {
+  it.live("forwards client interruption and ends the server when the client closes", () =>
     Effect.gen(function* () {
-      const channel = new MessageChannel();
-      yield* Effect.addFinalizer(() => closeChannel(channel));
-      const protocolScope = yield* Scope.make();
-      const protocol = yield* makeMessagePortClientProtocol(channel.port1).pipe(
-        Scope.provide(protocolScope),
-      );
-      const received = yield* Deferred.make<RpcMessage.FromServerEncoded>();
-      yield* Effect.forkIn(
-        protocol.run(17, (message) => Deferred.succeed(received, message)),
-        protocolScope,
-      );
+      const { channel, client, clientScope, entered, interrupted, server } = yield* connect();
+      expect(yield* client.Echo({ value: "ping" })).toBe("ping");
 
-      expect(protocol.supportsAck).toBe(true);
-      expect(protocol.supportsTransferables).toBe(true);
-      expect(channel.port1.listenerCount("message")).toBe(1);
+      const waiting = yield* Effect.forkChild(client.Wait());
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(waiting);
+      yield* Deferred.await(interrupted);
 
-      const transferred = new ArrayBuffer(8);
-      const outbound = yield* Effect.forkChild(
-        nextMessage<RpcMessage.RequestEncoded>(channel.port2),
-      );
-      yield* protocol.send(17, request(transferred), [transferred]);
-      const posted = yield* Fiber.join(outbound);
-      expect(posted._tag).toBe("Request");
-      expect(posted.payload).toBeInstanceOf(ArrayBuffer);
-      expect(transferred.byteLength).toBe(0);
-
-      channel.port2.postMessage({ _tag: "Pong" } satisfies RpcMessage.FromServerEncoded);
-      expect(yield* Deferred.await(received)).toEqual({ _tag: "Pong" });
-
-      yield* Scope.close(protocolScope, Exit.void);
-      expect(channel.port1.listenerCount("message")).toBe(0);
-      expect(channel.port1.listenerCount("close")).toBe(0);
-      expect(channel.port1.listenerCount("messageerror")).toBe(0);
-
-      const closed = yield* Effect.exit(protocol.send(17, { _tag: "Ping" }));
-      expect(Exit.isFailure(closed)).toBe(true);
-      if (Exit.isFailure(closed)) {
-        const error = Cause.squash(closed.cause);
-        expect(error).toBeInstanceOf(RpcClientError.RpcClientError);
-        if (Schema.is(RpcClientError.RpcClientError)(error)) {
-          expect(error.reason._tag).toBe("RpcClientDefect");
-          if (error.reason._tag === "RpcClientDefect") {
-            expect(error.reason.cause).toBeInstanceOf(MessagePortTransportError);
-          }
-        }
-      }
+      yield* Scope.close(clientScope, Exit.void);
+      yield* Fiber.await(server);
+      for (const port of [channel.port1, channel.port2])
+        for (const event of ["message", "messageerror", "close"])
+          expect(port.listenerCount(event)).toBe(0);
     }),
   );
 
-  it.effect("bridges the server Protocol with one client id and scoped cleanup", () =>
+  it.live("fails pending and later client calls once the server port closes", () =>
     Effect.gen(function* () {
-      const channel = new MessageChannel();
-      yield* Effect.addFinalizer(() => closeChannel(channel));
-      const protocolScope = yield* Scope.make();
-      const protocol = yield* makeMessagePortServerProtocol(channel.port1).pipe(
-        Scope.provide(protocolScope),
+      const { channel, client, entered } = yield* connect();
+      const waiting = yield* Effect.forkChild(Effect.flip(client.Wait()));
+      yield* Deferred.await(entered);
+      channel.port1.close();
+
+      expect(yield* Fiber.join(waiting)).toBeInstanceOf(RpcClientError.RpcClientError);
+      expect(yield* Effect.flip(client.Echo({ value: "late" }))).toBeInstanceOf(
+        RpcClientError.RpcClientError,
       );
-      const received = yield* Deferred.make<readonly [number, RpcMessage.FromClientEncoded]>();
-      yield* Effect.forkIn(
-        protocol.run((id, message) => Deferred.succeed(received, [id, message])),
-        protocolScope,
-      );
-
-      expect(protocol.supportsAck).toBe(true);
-      expect(protocol.supportsTransferables).toBe(true);
-      expect(yield* protocol.clientIds).toEqual(new Set([0]));
-
-      channel.port2.postMessage(request({ value: "input" }));
-      const [id, posted] = yield* Deferred.await(received);
-      expect(id).toBe(0);
-      expect(posted).toEqual(request({ value: "input" }));
-
-      const transferred = new ArrayBuffer(8);
-      const outbound = yield* Effect.forkChild(
-        nextMessage<RpcMessage.FromServerEncoded>(channel.port2),
-      );
-      yield* protocol.send(0, { _tag: "Chunk", requestId: 1, values: [transferred] }, [
-        transferred,
-      ]);
-      const response = yield* Fiber.join(outbound);
-      expect(response._tag).toBe("Chunk");
-      expect(transferred.byteLength).toBe(0);
-
-      yield* Scope.close(protocolScope, Exit.void);
-      expect(channel.port1.listenerCount("message")).toBe(0);
-      expect(channel.port1.listenerCount("close")).toBe(0);
-      expect(channel.port1.listenerCount("messageerror")).toBe(0);
-      expect(yield* protocol.clientIds).toEqual(new Set());
     }),
   );
 });
