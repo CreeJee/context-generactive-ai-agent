@@ -2071,6 +2071,17 @@
 - native owner는 명령을 하나씩 처리하므로 id별 명령을 병렬로 보내도 빨라지지 않는다. `remove`는 `add`처럼 `ids` 배열을 받는 한 owner 단계로 처리하고 제거된 개수를 돌려준다. 검색 중 매핑이 사라진 청크 ID(2^52 이상)는 원문 seq로 해석하지 않고 버린다. 검색 k 확장은 이전 결과에 의존하므로 순차로 둔다.
 - turbovec `VectorIndex`에 `close`를 추가하고 native owner가 인덱스를 `ScopedRef`로 소유한다. reset 교체, 호환되지 않는 저장 인덱스 교체, worker 종료 때 GC를 기다리지 않고 바로 해제한다. 닫힌 인덱스 호출은 해제된 메모리에 닿지 않고 오류를 반환한다. native 경계의 실패는 원래 예외를 `NativeOwnerFailed.cause`로 프로세스 안에 보존하고 IPC로는 reason 코드만 보낸다.
 
+## SQL·worker 경계의 Effect 전환 (2026-10-18)
+
+- 사용자 결정: 청크 임베딩 리뷰 PR 위에 `effect/sql`과 `effect/workers`·`effect/rpc` 전환 PR을 하나 더 올린다. 이 PR은 기반과 임베딩 경로만 옮기고 나머지 DB 모듈은 후속 PR에서 옮긴다.
+- SqlClient는 앱이 이미 연 단일 `DatabaseSync` 위에 만든다(`sqlClientOver`). 두 번째 연결을 열면 suspend된 SqlClient 트랜잭션과 동기 `BEGIN IMMEDIATE`가 이벤트 루프를 막아 교착할 수 있기 때문이다. `@effect/sql-sqlite-node`는 `effect ^4.0.5`를 요구하므로 쓰지 않는다.
+- 문장·트랜잭션은 `makeSqliteAcquirers`의 연결 lease(Semaphore 1)를 잡는다. 다른 fiber의 문장은 열린 트랜잭션이 끝날 때까지 기다린다. 전환 기간의 동기 `Database.atomic`은 lease를 잡지 않으므로, 바깥 SqlClient 트랜잭션이 열려 있으면 섞지 않고 `TransactionInterleaving`으로 거부한다.
+- `withTransaction` 본문은 `Scheduler.PreventSchedulerYield`로 실행한다. 스케줄러 선점으로 트랜잭션 도중 다른 fiber의 동기 `atomic`이 끼어드는 일을 줄이기 위해서다. 정확성은 위 거부 규칙이 보장한다.
+- 인덱서·벡터 인덱스·검색 청크 범위 조회는 `SqlClient`와 `SqlSchema`로 옮긴다. 여러 id 조회는 1,000개 단위 `IN` 질의로 묶고, 예약·커밋·정리는 `withTransaction` 하나로 처리한다.
+- 임베딩 worker와 native owner worker는 `RpcGroup` 서버로 바꾼다. host는 `RpcClient.layerProtocolWorker`(size 1, concurrency 1)로 연결하고, 벡터는 `Transferable` 스키마로 버퍼를 넘긴다. worker 종료는 RpcClient Scope가 맡아 별도 close 명령을 두지 않는다.
+- 임베딩 세션은 `ScopedRef<Option<ModelSession>>`와 Semaphore(1)로 소유한다. 실행 중 취소·load 실패·transport 유실은 세션을 버리고, 다음 요청이 새 worker를 연다.
+- native owner host는 요청마다 job fiber를 `FiberMap`에 두고 Semaphore(1) 슬롯과 `Ref` 원장(queued/active)으로 용량 32·중복·취소·조회를 관리한다. 대기 중 떠난 호출자는 전송 전에 제거하고, 실행 중 job은 worker 응답까지 슬롯을 유지한다. worker 종료와 치명적 reason은 남은 대기자를 모두 실패시킨다.
+
 ## OpenAI 호환 엔드포인트의 계정화 (2026-10-18)
 
 - OpenAI 호환 연결을 설정 하나가 아니라 계정 목록으로 관리한다. `ProviderId`의 `openai-compatible`은 연결 종류로 유지하고, 그 아래에 엔드포인트 계정을 여러 개 두며 선택 계정 하나가 새 실행에 쓰인다. 구독 공급자의 계정 목록·선택 계정과 같은 구조다. 엔드포인트마다 `ProviderId`를 만들지 않는 이유는 `ModelSelection`·DB·feature flag·공급자 간 동의가 고정된 `ProviderId`를 키로 쓰기 때문이다.
