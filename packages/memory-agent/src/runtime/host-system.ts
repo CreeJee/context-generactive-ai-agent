@@ -1,7 +1,7 @@
 // Native host boundary: Effect has no service for these operating-system facts (no home folder,
-// temporary folder or memory size in effect/dist or @effect/platform-node/dist), so `node:os`
+// temporary folder, core count or memory size in effect/dist or @effect/platform-node/dist), so `node:os`
 // stays here and callers read them as Effects.
-import { homedir, tmpdir, totalmem } from "node:os";
+import { availableParallelism, homedir, tmpdir, totalmem } from "node:os";
 import { Effect } from "effect";
 
 /** The current user's home folder. */
@@ -12,3 +12,6 @@ export const temporaryDirectory = Effect.sync(() => tmpdir());
 
 /** Physical memory of this machine in bytes. */
 export const totalMemory = Effect.sync(() => totalmem());
+
+/** How many CPU cores this process may use. */
+export const availableCores = Effect.sync(() => availableParallelism());

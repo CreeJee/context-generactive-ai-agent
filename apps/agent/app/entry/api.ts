@@ -5,7 +5,20 @@ import { Effect, Function as EffectFunction } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   Attachment,
+  BoardEdit,
+  BoardEditResult,
+  BoardIntent,
+  BoardView,
   BtwThread,
+  CardStatus,
+  DecisionAnswer,
+  DecisionInboxItem,
+  DecisionKind,
+  HumanDecisionRequest,
+  KanbanBoardView,
+  KanbanScheduleView,
+  GoalMergeState,
+  GoalPriority,
   ProviderModel,
   EmbeddingChoice,
   EmbeddingOverview,
@@ -101,7 +114,22 @@ export type AccountAction =
   | { readonly intent: "remove"; readonly accountId: string }
   | { readonly intent: "rename"; readonly accountId: string; readonly label: string };
 
+/** Whether the session's Goal runs as a kanban board, and what its loop knows about the cards. */
+export type KanbanView = { readonly active: false } | ({ readonly active: true } & KanbanBoardView);
+
 export type {
+  BoardEdit,
+  BoardEditResult,
+  BoardIntent,
+  BoardView,
+  CardStatus,
+  KanbanScheduleView,
+  GoalMergeState,
+  GoalPriority,
+  DecisionAnswer,
+  DecisionInboxItem,
+  DecisionKind,
+  HumanDecisionRequest,
   OAuthProfile,
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
@@ -152,6 +180,8 @@ export type {
 export const ApiErrorCode = Schema.Literals([
   "account_action_failed",
   "account_list_unavailable",
+  "answer_conflict",
+  "answer_invalid",
   "approval_not_pending",
   "attachment_not_found",
   "attachment_rejected",
@@ -159,12 +189,22 @@ export const ApiErrorCode = Schema.Literals([
   "backend_restart_required",
   "backend_restarting",
   "btw_not_found",
+  "card_finished",
+  "card_held",
+  "card_missing",
+  "card_not_blocked",
+  "card_not_held",
+  "card_not_running",
+  "card_not_waiting",
+  "card_status_changed",
+  "card_transition_invalid",
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
   "goal_missing",
   "goal_not_active",
   "goal_not_paused",
+  "goal_superseded",
   "goal_terminal",
   "images_not_supported",
   "image_approval_required",
@@ -177,8 +217,10 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_account_label",
   "invalid_agent_change",
   "invalid_answer",
+  "invalid_board_edit",
   "invalid_chat_request",
   "invalid_conversation_settings",
+  "invalid_decision_answer",
   "invalid_recall_settings",
   "invalid_embedding_action",
   "invalid_import_action",
@@ -187,6 +229,13 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_intent",
   "invalid_json",
   "invalid_kagi_action",
+  "invalid_kanban_action",
+  "invalid_kanban_settings",
+  "dependency_cycle",
+  "self_dependency",
+  "other_project",
+  "goal_missing",
+  "not_kanban",
   "invalid_lease_request",
   "invalid_mcp_change",
   "invalid_origin",
@@ -209,19 +258,29 @@ export const ApiErrorCode = Schema.Literals([
   "no_running_run",
   "no_user_turn",
   "not_running",
+  "plan_closed",
+  "plan_dependencies_rejected",
+  "plan_missing",
+  "plan_not_executing",
   "plan_not_ready",
   "plan_outdated",
+  "plan_version_conflict",
   "project_not_found",
   "project_rejected",
   "project_required",
   "provider_unavailable",
   "provider_auth_unavailable",
+  "worktree_unavailable",
   "queue_delivered",
+  "reorder_across_columns",
   "queue_not_found",
   "queue_not_held",
   "queued_message_not_next",
   "quota_status_unavailable",
+  "request_closed",
   "request_failed",
+  "request_mismatch",
+  "request_missing",
   "run_in_progress",
   "run_not_found",
   "session_in_use",
@@ -238,6 +297,10 @@ export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 /** When long conversations start being summarized, as a percent of the context window. */
 export type ConversationSettings = { readonly summaryStartPercent: number };
+/** Kanban cards run at once across every Goal: the user's value, if any, and the one in use. */
+export type KanbanSettings = { readonly configured: number | null; readonly effective: number };
+/** Branches a project's Goals never merge into on their own. */
+export type ProjectKanbanSettings = { readonly protectedBranches: readonly string[] };
 /** Which memory a run may reach beyond its own project; both start off. */
 export type RecallSettings = {
   readonly crossProjectRecall: boolean;
@@ -516,6 +579,61 @@ export const api = {
       { phase },
       { [sessionHolderHeader]: holder },
     ),
+  board: (sessionId: string) =>
+    call<BoardView>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/board`),
+  /** The user's board change; one to an executing card comes back as a stored request. */
+  editBoard: (sessionId: string, holder: string, edit: BoardEdit) =>
+    call<BoardEditResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/board`, edit, {
+      [sessionHolderHeader]: holder,
+    }),
+  /** The board's cards waiting for a person's decision. */
+  decisions: (sessionId: string) =>
+    call<HumanDecisionRequest[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/decisions`),
+  /** Every unanswered card decision of the project, across conversations and Goals. */
+  decisionInbox: (projectId: string) =>
+    call<DecisionInboxItem[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/decisions`),
+  answerDecision: (
+    holder: string,
+    request: Pick<HumanDecisionRequest, "requestId" | "sessionId" | "goalInstanceId" | "cardId">,
+    answer: DecisionAnswer,
+  ) =>
+    call<HumanDecisionRequest>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(request.sessionId)}/decisions/${encodeURIComponent(request.requestId)}`,
+      { goalInstanceId: request.goalInstanceId, cardId: request.cardId, answer },
+      { [sessionHolderHeader]: holder },
+    ),
+  kanban: (sessionId: string) =>
+    call<KanbanView>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/kanban`),
+  /** Runs the executing Plan as a kanban board. */
+  startKanban: (sessionId: string, holder: string) =>
+    call<unknown>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
+      { _tag: "Start" },
+      { [sessionHolderHeader]: holder },
+    ),
+  /** What a person meant by dragging a card; the server decides the card's status. */
+  boardIntent: (sessionId: string, holder: string, intent: BoardIntent) =>
+    call<BoardEditResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/kanban`, intent, {
+      [sessionHolderHeader]: holder,
+    }),
+  /** How the Goal shares card slots with the project's other Goals. */
+  setGoalPriority: (sessionId: string, holder: string, priority: GoalPriority) =>
+    call<{ readonly priority: GoalPriority }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
+      { _tag: "SetPriority", priority },
+      { [sessionHolderHeader]: holder },
+    ),
+  /** The Goals this Goal waits for; an empty list lifts the wait. */
+  setGoalDependencies: (sessionId: string, holder: string, dependsOn: readonly string[]) =>
+    call<{ readonly dependsOn: readonly string[] }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
+      { _tag: "SetDependencies", dependsOn },
+      { [sessionHolderHeader]: holder },
+    ),
   controlWorkflow: (sessionId: string, holder: string, workflowAction: WorkflowAction) =>
     call<WorkflowState>(
       "POST",
@@ -644,6 +762,16 @@ export const api = {
     call<RecallSettings>("POST", "/api/settings/recall", settings),
   setConversationSettings: (settings: ConversationSettings) =>
     call<ConversationSettings>("POST", "/api/settings/conversation", settings),
+  kanbanSettings: () => call<KanbanSettings>("GET", "/api/settings/kanban"),
+  /** null goes back to the machine default. */
+  setKanbanConcurrency: (concurrency: number | null) =>
+    call<KanbanSettings>("POST", "/api/settings/kanban", { concurrency }),
+  projectKanban: (projectId: string) =>
+    call<ProjectKanbanSettings>("GET", `/api/projects/${encodeURIComponent(projectId)}/kanban`),
+  setProtectedBranches: (projectId: string, protectedBranches: readonly string[]) =>
+    call<ProjectKanbanSettings>("POST", `/api/projects/${encodeURIComponent(projectId)}/kanban`, {
+      protectedBranches,
+    }),
 
   imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
   importAction: (

@@ -1,6 +1,6 @@
 # 칸반 오케스트레이션 설계 (2026-10-18)
 
-상태: 설계 확정, 구현 전. 결정은 [decisions.md](decisions.md)에 있다. 확정(2026-10-18): DurableQueue, 동시 실행 수 사용자 설정과 기본값, worktree 위치, `goalInstanceId` 기준 식별, Goal 변경 시 카드별 영향 분류, squash·자동 merge 브랜치 흐름, 프로젝트 스케줄러.
+상태: 구현됨(슬라이스 A·B·C·D·F, 전체 흐름 검증 E, 보드 UI G 2026-10-18). 결정은 [decisions.md](decisions.md)에 있다. 확정(2026-10-18): DurableQueue, 동시 실행 수 사용자 설정과 기본값, worktree 위치, `goalInstanceId` 기준 식별, Goal 변경 시 카드별 영향 분류, squash·자동 merge 브랜치 흐름, 프로젝트 스케줄러.
 배경 논의: 세션 `c872e018`(2026-10-10~11). 현재 구현 범위 밖으로 둔 결정: decisions.md "Plan step 의존성 기반 스케줄링 (2026-10-13)".
 
 ## 목표
@@ -42,6 +42,23 @@ type BoardAuthor =
 - 오케스트레이터: 분할·병합·재배치·상태 전이, 재계획.
 - 실행 중(`in_progress`) 카드를 사용자가 고치면 바로 덮어쓰지 않는다. `UserChangeRequest`로 오케스트레이터에 전달한다. 오케스트레이터가 반영(진행 중 attempt에 전달), 중단 후 재배정, 거절(사유 표시) 중 하나를 고른다.
 
+## 보드 의도 (확정 2026-10-18)
+
+드래그는 의도, 상태는 서버다. 보드는 드롭을 아래 의도 하나로 보내고(`BoardIntent`, `KanbanBoardActions.applyIntent`), 카드 상태는 owner가 정한다. 맞지 않는 의도는 리터럴 reason으로 거절한다.
+
+| 의도                       | 보드 드롭                | 처리                                                                         | 거절 reason                      |
+| -------------------------- | ------------------------ | ---------------------------------------------------------------------------- | -------------------------------- |
+| `Reorder(cardId, at)`      | 같은 열 안               | 카드 순위 = Plan 순서 = Goal 안 배정 순서                                    | `reorder_across_columns`         |
+| `Requeue`                  | 막힘 → 준비              | dead-letter item을 다시 열거나 실패 기록을 지우고 ready로                    | `card_not_blocked`, `not_kanban` |
+| `Hold`                     | 준비 → 백로그            | `PlanStep.hold { by, at }`를 붙인다. 의존이 끝나도 backlog에 남아 배정 안 됨 | `card_not_waiting`, `card_held`  |
+| `Release`                  | 보류 카드 → 준비         | hold를 떼고 의존을 다시 따른다                                               | `card_not_held`                  |
+| `ChangeRequest(cardId, …)` | 진행 중 카드를 다른 열로 | 이동하지 않고 수정 요청을 쓰게 한 뒤 `UserChangeRequest`로 보낸다            | `card_not_running`               |
+| `Cancel`                   | (peek의 취소)            | 기존 `CancelCard`·중단 경로                                                  | 기존 보드 편집 거절              |
+
+- 매핑이 없는 드롭(진행 중·검증·판단 필요·완료·막힘 열로, 판단 필요·검증·완료 카드에서)은 드래그 중 비활성과 이유를 보인다. 판단 필요 카드는 판단 응답으로 처리한다.
+- 보류는 재시작·같은 id의 replan 뒤에도 유지된다(Plan과 함께 `workflow_state_revisions`에 저장). 이유는 decisions.md "드래그는 의도, 상태는 서버 (2026-10-18)".
+- 화면은 채팅의 요약과 전체 폭 보드 Sheet(`?board`), 카드 peek(`?card`)로 나눈다. 상호작용은 decisions.md "칸반 보드 화면 (2026-10-18)".
+
 ## 실행
 
 - 카드 실행 = 서브에이전트 attempt 1개. 카드가 실행을 시작할 때 Goal 브랜치에서 카드 전용 git worktree를 만든다. 서브에이전트의 파일·셸 도구 cwd는 그 worktree로 고정한다.
@@ -80,7 +97,7 @@ type BoardAuthor =
 - **fence는 그대로 둔다.** 이전 attempt에 `pending`·`uncertain` 도구가 있거나, 결과 기록이 없는 쓰기 도구가 있으면 자동으로 이어가지 않고 `human_decision`으로 보낸다. worktree 밖 부작용(push, 외부 API, Discord)은 계속 owner ledger receipt로만 판정한다.
 - **멱등 키** = `goalId:cardId:attemptNo`. attemptNo는 owner가 저장된 값에서 정한다.
 - **dead-letter.** 시도를 다 쓰면 카드를 `blocked`로 표시하고 이유를 남긴다. 보드에서 사용자나 오케스트레이터가 다시 큐에 넣을 수 있다. dead-letter된 item의 `DurableDeferred`는 자동으로 풀리지 않으므로, 이 경로가 없으면 Goal이 영구 정지한다.
-- **저장소.** `PersistedQueue.layerStoreSql`은 `effect/sql` SqlClient가 필요하다. 지금 owner Database는 `node:sqlite` 래퍼다. 같은 연결을 쓰는 프로젝트 소유 `PersistedQueue` store 어댑터가 필요하다. 별도 DB는 두지 않는다.
+- **저장소.** 프로젝트 소유 `PersistedQueue` store와 칸반 저장소(카드 시도·Goal 스케줄·보드 변경 요청·`human_decision` 닫힘 기록·보드 조회)는 owner Database layer가 제공하는 공유 `SqlClient`(같은 `DatabaseSync` 위, 연결 lease 공유)를 쓴다. 저장소마다 SqlClient를 따로 만들지 않고, 별도 DB도 두지 않는다. 여러 문장을 묶는 쓰기는 `withTransaction` 하나로 처리하고, 원시 `DatabaseSync`나 동기 `atomic`은 쓰지 않는다.
 - 오래 끝난 item 정리에는 `PersistedQueue.layerCleanup`을 쓴다. 이 레이어는 owner 하나에서만 돈다.
 
 ## 식별자와 Goal 변경 (확정 2026-10-18)
@@ -133,11 +150,39 @@ Goal 오케스트레이터만으로는 여러 Goal을 끝까지 자동으로 돌
 
 ## 슬라이스 (Orca worker별 worktree)
 
-| ID  | 내용                                                                                                         | 의존    |
-| --- | ------------------------------------------------------------------------------------------------------------ | ------- |
-| A   | 카드 상태·계약 필드·`BoardAuthor` 기록, 마이그레이션, 수정 가능한 보드 API·UI                                | —       |
-| B   | 카드 worktree 실행기(생성·정리·도구 루트 고정), PersistedQueue store 어댑터, 동시 실행 설정                  | —       |
-| C   | Goal 오케스트레이터 루프, DurableQueue 배정, verify·squash 통합, 재계획·영향 분류 도구, `UserChangeRequest`  | A, B    |
-| D   | `human_decision` DurableDeferred 대기·재개, 보드 응답, 통합 inbox                                            | A       |
-| F   | 프로젝트 스케줄러: round-robin offer, Goal 간 `dependsOn`, merge queue·보호 브랜치, upstream 신호, 파일 겹침 | C, D    |
-| E   | 전체 흐름 검증(재전달·재시작·충돌·dead-letter requeue·다중 Goal), decisions.md 기록                          | C, D, F |
+경로는 `packages/memory-agent/src` 기준이다(앱은 `apps/agent/app`).
+
+| ID  | 내용                                                                                                         | 의존    | 구현 위치                                                                                                                                                                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A   | 카드 상태·계약 필드·`BoardAuthor` 기록, 마이그레이션, 수정 가능한 보드 API·UI                                | —       | `workflow/card.ts`, `workflow/board.ts`, `workflow/board-edit.ts`, `workflow/workflow.ts`, `db/migrations.ts`, 앱 `routes/api/sessions.$session.board.tsx`, `entry/chat/board-panel.tsx`                                                 |
+| B   | 카드 worktree 실행기(생성·정리·도구 루트 고정), PersistedQueue store 어댑터, 동시 실행 설정                  | —       | `kanban/worktree.ts`, `kanban/persisted-queue-store.ts`, `kanban/card-queue.ts`, `config/kanban-settings.ts`, `tools/outside.ts`, `files/paths.ts`                                                                                       |
+| C   | Goal 오케스트레이터 루프, DurableQueue 배정, verify·squash 통합, 재계획·영향 분류 도구, `UserChangeRequest`  | A, B    | `kanban/orchestrator.ts`, `kanban/card-attempts.ts`, `kanban/board-actions.ts`, `kanban/board-ops.ts`, `kanban/tools.ts`, `kanban/card-agent.ts`, `kanban/subagent-card-agent.ts`, `agent/chat.ts`                                       |
+| D   | `human_decision` DurableDeferred 대기·재개, 보드 응답, 통합 inbox                                            | A       | `kanban/human-decision.ts`, 앱 `routes/api/sessions.$session.decisions.*.tsx`, `routes/api/projects.$project.decisions.tsx`, `entry/chat/decision-prompt.tsx`, `entry/navigation/decision-inbox.tsx`                                     |
+| F   | 프로젝트 스케줄러: round-robin offer, Goal 간 `dependsOn`, merge queue·보호 브랜치, upstream 신호, 파일 겹침 | C, D    | `kanban/scheduler.ts`, `kanban/goal-schedules.ts`, `kanban/merge-queue.ts`, 앱 `routes/api/settings.kanban.tsx`, `routes/api/projects.$project.kanban.tsx`, `routes/api/sessions.$session.kanban.tsx`, `entry/settings/pages/kanban.tsx` |
+| E   | 전체 흐름 검증(재전달·재시작·충돌·dead-letter requeue·다중 Goal), decisions.md 기록                          | C, D, F | `kanban/kanban-flow.test.ts`, 기존 슬라이스 테스트(아래 표)                                                                                                                                                                              |
+| G   | 전체 폭 칸반 보드 UI(dnd-kit, 키보드·스크린 리더), 보드 의도(`BoardIntent`)와 카드 보류                      | A, C, F | `workflow/board-edit.ts`, `workflow/plan-schedule.ts`, `kanban/board-actions.ts`, 앱 `entry/chat/board/*`, `entry/chat/board-panel.tsx`                                                                                                  |
+
+## 전체 흐름 검증 (슬라이스 E, 2026-10-18)
+
+실제 임시 git 저장소, owner DB, DurableQueue, WorkflowEngine Layer를 쓰고 카드 에이전트·검증자만 스크립트로 대체한다(`testing/kanban.ts`). 재시작은 owner Layer의 scope를 닫고 같은 파일로 다시 여는 것으로 모사한다.
+
+| 시나리오                                                                                        | 근거 테스트                                                                                                                                                     | 결과         |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Goal 하나: 의존 포함 카드 3개 병렬 → verify → 카드당 squash commit 1개 → Goal 검증 → 자동 merge | `kanban-flow.test.ts` "runs a Goal's cards in parallel…"                                                                                                        | 통과         |
+| ack 전 crash 재전달: 같은 worktree에서 이어가기, 다시 쓰지 않음, uncertain run은 판단 요청      | `kanban-flow.test.ts` "after a crash before the result was recorded…", `card-queue.test.ts`                                                                     | 통과         |
+| 재시작 뒤 대기 복원: human_decision, merge queue(보호 브랜치 판단), Goal 간 dependsOn           | `kanban-flow.test.ts` "keeps waits for a person, a protected merge and another Goal…", `human-decision.test.ts` restart                                         | 통과         |
+| 재시작 뒤 큐 item: 처리 중 item 재전달, 시작 전 attempt의 메모 유지                             | `persisted-queue-store.test.ts`, `kanban-flow.test.ts` "keeps a card's notes when the owner died…"                                                              | 수정 후 통과 |
+| 충돌 → 해결 카드 → 재충돌 판단 요청 → 응답 후 진행                                              | `orchestrator.test.ts` "replaces a conflicting card with a resolution card…"                                                                                    | 통과         |
+| dead-letter: 전달 3회 소진 → blocked → 보드 requeue → 재실행                                    | `persisted-queue-store.test.ts` "dead-letters a card…", `orchestrator.test.ts` "blocks a card whose deliveries ran out…"                                        | 통과         |
+| 다중 Goal: round-robin·전역 상한, upstream 신호로 영향 카드만 재verify, 보호 브랜치 판단        | `scheduler.test.ts`, `merge-queue.test.ts`                                                                                                                      | 통과         |
+| GoalChanged: 카드별 판정, 실행 중 카드 Amend 전달, verify 중 Amend                              | `orchestrator.test.ts` "holds new assignments…", `kanban-flow.test.ts` "sends an amendment…", "does not integrate work verified before the card was amended…"   | 수정 후 통과 |
+| 새 Goal 전환: 이전 instance item `Superseded`, 판단 대기 닫힘                                   | `card-queue.test.ts` "completes an earlier Goal instance's card as Superseded…", `orchestrator.test.ts` "asks a person when a Goal change's effect is unclear…" | 통과         |
+
+브라우저 확인(격리 storage·HOME, 가짜 OpenAI 호환 모델로 카드 에이전트·검증자를 돌림): 보드에서 카드가 준비 → 진행 중 → 검증 → 완료로 옮겨 가고 의존 카드는 선행 카드 완료 뒤 시작했다. 결과를 알 수 없는 run이 있는 카드는 판단 필요로 가고 "판단 대기" inbox에 떴다. inbox에서 "반영됨, 이어서 진행"으로 답하자 카드가 진행 중 → 완료로 옮겨 가고, Goal 검증 뒤 비보호 브랜치(`feature`)로 자동 merge됐다. 설정 "실행 › 칸반 실행"에서 동시 실행 수를 4에서 3으로 바꾸자 `GET /api/settings/kanban`이 `{"configured":3,"effective":3}`을 돌려줬다.
+
+## 알려진 한계
+
+- `UncertainSideEffect` 요청의 `toolNames`는 비어 있다. 카드 run 기록에서 결과가 불확실한 도구 이름을 읽지 않으므로 화면은 일반 문구를 보여 준다.
+- verify 판정 뒤 통합 전에 카드 상태와 Goal 변경 hold를 다시 확인하지만, squash와 `verify → done` 이동 사이에 카드가 Amend되는 짧은 구간은 남는다. 그 경우 Goal 브랜치에는 이전 squash가 남고, 고친 카드의 다음 통합은 같은 `Ctx-Card` trailer 때문에 `AlreadyIntegrated`로 끝난다.
+- 전달 한도 3은 owner 프로세스가 강제 종료될 때만 소진된다. scope를 닫는 정상 종료는 interruption이라 시도를 돌려준다. 그래서 테스트의 dead-letter 경로는 `persisted_queue_items.attempts`를 직접 3으로 두어 모사한다(store 단위 테스트는 실제 실패 3회로 소진한다).
+- `tests/agents/external-agents.test.ts`의 "delegation from a chat needs approval, and the agent's own request is relayed to the page"는 부하가 크면 마지막 `waitUntil`(4초) "the delegation result"에서 시간 초과로 실패한다. 단독 실행은 통과하고, 같은 파일을 6개 동시에 돌리면 칸반 이전 커밋(`9c80e4c`)과 이 브랜치 모두 6/6 같은 지점에서 실패한다. 칸반 변경과는 관련 없다.

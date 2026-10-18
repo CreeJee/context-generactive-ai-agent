@@ -14,6 +14,7 @@ export const appQueryKeys = {
     kagi: ["app", "global", "kagi"] as const,
     conversation: ["app", "global", "conversation"] as const,
     recall: ["app", "global", "recall"] as const,
+    kanban: ["app", "global", "kanban"] as const,
     modelsRoot: ["app", "global", "models"] as const,
     models: (provider: string) => [...appQueryKeys.global.modelsRoot, provider] as const,
     projects: ["app", "global", "projects"] as const,
@@ -25,6 +26,8 @@ export const appQueryKeys = {
     agents: (projectId: string) => ["app", "project", projectId, "agents"] as const,
     skills: (projectId: string) => ["app", "project", projectId, "skills"] as const,
     trace: (projectId: string) => ["app", "project", projectId, "trace"] as const,
+    decisions: (projectId: string) => ["app", "project", projectId, "decisions"] as const,
+    kanban: (projectId: string) => ["app", "project", projectId, "kanban"] as const,
     traceTask: (projectId: string, taskId: string) =>
       ["app", "project", projectId, "trace", "task", taskId] as const,
   },
@@ -43,5 +46,11 @@ export const appQueryKeys = {
       [...appQueryKeys.session.root(projectId, sessionId), "trace"] as const,
     btw: (projectId: string, sessionId: string) =>
       [...appQueryKeys.session.root(projectId, sessionId), "btw"] as const,
+    board: (projectId: string, sessionId: string) =>
+      [...appQueryKeys.session.root(projectId, sessionId), "board"] as const,
+    decisions: (projectId: string, sessionId: string) =>
+      [...appQueryKeys.session.root(projectId, sessionId), "decisions"] as const,
+    kanban: (projectId: string, sessionId: string) =>
+      [...appQueryKeys.session.root(projectId, sessionId), "kanban"] as const,
   },
 };

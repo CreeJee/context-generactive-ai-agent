@@ -138,7 +138,7 @@ testAgent()("Workflows", (it) => {
         version: 2,
         status: "ready",
         summary: "Revised execution scope",
-        steps: [{ status: "pending", evidence: [] }],
+        steps: [{ status: "ready", evidence: [] }],
       });
       expect(state.ledger.slice(-2)).toMatchObject([
         { kind: "plan_replanned", detail: "plan v2 (ready)" },
@@ -236,7 +236,7 @@ testAgent()("Workflows", (it) => {
         status: "executing",
         evidence: [],
         verification: { status: "not_run" },
-        steps: [{ status: "pending", evidence: [] }],
+        steps: [{ status: "ready", evidence: [] }],
       });
     }),
   );
@@ -335,7 +335,7 @@ testAgent()("Workflows", (it) => {
       expect(state.plan).toMatchObject({
         status: "completed",
         verification: { status: "passed" },
-        steps: [{ id: "store", status: "completed", evidence: ["workflow.test.ts passed"] }],
+        steps: [{ id: "store", status: "done", evidence: ["workflow.test.ts passed"] }],
       });
       expect(state.ledger.at(-1)?.kind).toBe("verification_recorded");
     }),
@@ -408,7 +408,7 @@ testAgent()("Workflows", (it) => {
       yield* executing(id);
       const state = yield* (yield* Workflows).finishRun(id, "execute");
       expect(state.phase).toBe("execute");
-      expect(state.plan?.steps[0]?.status).toBe("pending");
+      expect(state.plan?.steps[0]?.status).toBe("ready");
     }),
   );
 

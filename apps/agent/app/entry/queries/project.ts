@@ -38,10 +38,21 @@ export const projectQueries = {
       queryKey: appQueryKeys.project.trace(projectId),
       queryFn: () => api.projectWorkTrace(projectId),
     }),
+  decisions: (projectId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.project.decisions(projectId),
+      queryFn: () => api.decisionInbox(projectId),
+      staleTime: 0,
+    }),
   traceTask: (projectId: string, taskId: string) =>
     queryOptions({
       queryKey: appQueryKeys.project.traceTask(projectId, taskId),
       queryFn: () => api.projectWorkTraceTask(projectId, taskId),
+    }),
+  kanban: (projectId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.project.kanban(projectId),
+      queryFn: () => api.projectKanban(projectId),
     }),
 };
 
@@ -60,6 +71,8 @@ const useSkillsQueryBody = (projectId: string, enabled: boolean) =>
 export const useSkillsQuery: {
   (enabled: boolean): (projectId: string) => ReturnType<typeof useSkillsQueryBody>;
 } & typeof useSkillsQueryBody = EffectFunction.dual(2, useSkillsQueryBody);
+export const useDecisionInboxQuery = (projectId: string) =>
+  useQuery(projectQueries.decisions(projectId));
 export const useProjectTraceQuery = (projectId: string) =>
   useQuery(projectQueries.trace(projectId));
 const useProjectTraceTaskQueryBody = (projectId: string, taskId: string | null) =>
@@ -73,6 +86,8 @@ export const useSuspenseAgentsQuery = (projectId: string) =>
   useSuspenseQuery(projectQueries.agents(projectId));
 export const useSuspenseSkillsQuery = (projectId: string) =>
   useSuspenseQuery(projectQueries.skills(projectId));
+export const useSuspenseProjectKanbanQuery = (projectId: string) =>
+  useSuspenseQuery(projectQueries.kanban(projectId));
 
 export function usableAgents(overview: Awaited<ReturnType<typeof api.externalAgents>>) {
   return overview.agents

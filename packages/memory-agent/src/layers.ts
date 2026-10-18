@@ -18,6 +18,29 @@ import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
 import { DrawingPreviews } from "./attachments/previews.ts";
 import { GlobalConfig } from "./config/global-config.ts";
+import { KanbanSettings } from "./config/kanban-settings.ts";
+import {
+  persistedQueueCleanupLayer,
+  persistedQueueStoreLayer,
+} from "./kanban/persisted-queue-store.ts";
+import { HumanDecisions } from "./kanban/human-decision.ts";
+import { CardWorktrees } from "./kanban/worktree.ts";
+import { KanbanBoardActions } from "./kanban/board-actions.ts";
+import { CardAttempts } from "./kanban/card-attempts.ts";
+import {
+  cardAttemptExecutionLayer,
+  cardQueueFactoryLayer,
+  CardQueueGate,
+  cardQueueWorkerLayer,
+  CardRuns,
+} from "./kanban/card-queue.ts";
+import { KanbanOrchestrator } from "./kanban/orchestrator.ts";
+import { subagentCardAgentsLayer } from "./kanban/subagent-card-agent.ts";
+import { GoalSchedules } from "./kanban/goal-schedules.ts";
+import { GoalMerges } from "./kanban/merge-queue.ts";
+import { ProjectScheduler } from "./kanban/scheduler.ts";
+import { KanbanTools } from "./kanban/tools.ts";
+import { ownerWorkflowEngineLayer } from "./workflow/owner-workflow-engine.ts";
 import { SecretStore } from "./config/secrets.ts";
 import { SubscriptionQuota, SubscriptionUsage } from "./oauth/subscription-quota.ts";
 import { ReportDelivery } from "./report/discord-webhook.ts";
@@ -80,6 +103,7 @@ import { MemoryTools } from "./tools/memory.ts";
 import { OutsideTools } from "./tools/outside.ts";
 import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
+import { Boards } from "./workflow/board.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
 import { goalExecutionLayer } from "./workflow/goal-execution.ts";
 import { providerRetryLayer } from "./workflow/provider-retry.ts";
@@ -151,6 +175,8 @@ export interface MemoryAgentLayerOptions {
    * start. Default true; tests run the sweep themselves.
    */
   readonly sweepSecrets?: boolean;
+  /** Folder holding kanban card worktrees; tests use a temporary one. */
+  readonly kanbanWorktreesBase?: string;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -225,7 +251,17 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
       Layer.provide(providerToolPolicy),
       Layer.provide(providerToolRegistry),
     );
+  // One store per owner: the cleanup schedule shares it with the card queue.
+  const persistedQueueStore = persistedQueueStoreLayer();
+  const kanban = Layer.mergeAll(
+    persistedQueueStore,
+    persistedQueueCleanupLayer().pipe(Layer.provide(persistedQueueStore)),
+    KanbanSettings.layer(),
+    CardWorktrees.layer(options.kanbanWorktreesBase),
+    HumanDecisions.layer,
+  );
   const stores = Layer.mergeAll(
+    kanban,
     AppEvents.layer,
     ApiUsage.layer,
     Projects.layer,
@@ -239,6 +275,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     BulkNodes.layer,
     SecretRedactor.layer,
     Workflows.layer,
+    Boards.layer,
     WorkflowExecution.layer,
     goalExecutionLayer,
     providerRetryLayer,
@@ -322,8 +359,28 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     TurnSummaries.layer(options.summarizeAutomatically),
     ReportDiagnoser.layer,
   ).pipe(Layer.provideMerge(providers));
+  // Kanban boards run their cards as session subagents, so they sit above the tools.
+  const kanbanRuntime = KanbanTools.layer.pipe(
+    Layer.provideMerge(KanbanBoardActions.layer),
+    Layer.provideMerge(KanbanOrchestrator.layer()),
+    Layer.provideMerge(GoalMerges.layer),
+    Layer.provideMerge(ProjectScheduler.layer),
+    Layer.provideMerge(Layer.mergeAll(cardQueueWorkerLayer, cardAttemptExecutionLayer)),
+    Layer.provideMerge(subagentCardAgentsLayer),
+    Layer.provideMerge(cardQueueFactoryLayer),
+    Layer.provideMerge(
+      Layer.mergeAll(
+        CardQueueGate.layer,
+        CardAttempts.layer,
+        CardRuns.layer,
+        GoalSchedules.layer,
+        ownerWorkflowEngineLayer,
+      ),
+    ),
+  );
   return AgentChat.layer.pipe(
     Layer.provide(Layer.succeed(GoalWorkerConfiguration, options.goalWorker ?? {})),
+    Layer.provideMerge(kanbanRuntime),
     Layer.provideMerge(
       Layer.mergeAll(
         MemoryTools.layer,

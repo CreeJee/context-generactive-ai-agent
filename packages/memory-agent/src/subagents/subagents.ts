@@ -25,6 +25,7 @@ import {
   FiberMap,
   Layer,
   Option,
+  Ref,
   Schema,
 } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
@@ -1050,7 +1051,8 @@ const make = Effect.gen(function* () {
     return yield* nativePromise(() => launch(binding, row, task, handle));
   });
 
-  const startNamed = Effect.fnUntraced(function* (
+  /** Creates or continues a named child and starts its next traced attempt. */
+  const namedAttempt = Effect.fnUntraced(function* (
     binding: SubagentBinding,
     parentToolCallId: string,
     agent: string,
@@ -1094,6 +1096,23 @@ const make = Effect.gen(function* () {
       kind,
       threadId: subagentThreadId(row.id),
     });
+    return { row, handle };
+  });
+
+  const startNamed = Effect.fnUntraced(function* (
+    binding: SubagentBinding,
+    parentToolCallId: string,
+    agent: string,
+    message: string,
+    instructions: string | undefined,
+  ) {
+    const { row, handle } = yield* namedAttempt(
+      binding,
+      parentToolCallId,
+      agent,
+      message,
+      instructions,
+    );
     return yield* nativePromise(() => launch(binding, row, message, handle));
   });
 
@@ -1612,6 +1631,70 @@ const make = Effect.gen(function* () {
         middleware,
       };
     },
+
+    /**
+     * Runs one attempt of a named child that no parent chat run started, such as a kanban card's
+     * agent, and waits for its outcome. `register` sees the attempt before the child can call a
+     * tool; when it fails the child never starts. Interrupting the effect stops the child and
+     * waits until its checkpoint is saved.
+     */
+    runAttempt: <E>(
+      binding: Omit<SubagentBinding, "abortSignal" | "deliveredParentNotificationIds">,
+      attempt: { readonly agent: string; readonly message: string; readonly instructions: string },
+      register: (handle: AttemptHandle) => Effect.Effect<void, E>,
+    ) =>
+      Effect.gen(function* () {
+        const settled = yield* Deferred.make<ChildOutcome | null>();
+        const launched = yield* Ref.make(false);
+        const run = Effect.gen(function* () {
+          // Closing this scope aborts the signal, which stops the child.
+          const owned: SubagentBinding = {
+            ...binding,
+            abortSignal: yield* Effect.abortSignal,
+            deliveredParentNotificationIds: HashSet.empty(),
+          };
+          const { row, handle } = yield* namedAttempt(
+            owned,
+            binding.runId,
+            attempt.agent,
+            attempt.message,
+            attempt.instructions,
+          );
+          yield* register(handle).pipe(
+            Effect.tapError(() =>
+              trace
+                .transitionAttempt(
+                  handle,
+                  binding.sessionId,
+                  "cancelled",
+                  "attempt_cancelled",
+                  "Subagent not started",
+                  null,
+                  false,
+                  binding.runId,
+                )
+                .pipe(Effect.andThen(finish("cancelled", "", null, row.id))),
+            ),
+          );
+          yield* Ref.set(launched, true);
+          yield* nativePromise(() =>
+            launch(owned, row, attempt.message, handle, (outcome) =>
+              Deferred.succeed(settled, outcome),
+            ),
+          ).pipe(
+            Effect.mapError((cause) => new SubagentOperationFailed({ operation: "run", cause })),
+          );
+          return yield* Deferred.await(settled);
+        });
+        // A launched child always settles, also after its signal is aborted.
+        return yield* Effect.scoped(run).pipe(
+          Effect.onInterrupt(() =>
+            Effect.flatMap(Ref.get(launched), (started) =>
+              started ? Effect.asVoid(Deferred.await(settled)) : Effect.void,
+            ),
+          ),
+        );
+      }),
 
     onCompletion(listener: (sessionId: string) => void) {
       completionListener = listener;

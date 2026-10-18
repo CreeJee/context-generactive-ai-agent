@@ -15,6 +15,7 @@ import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
+import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -61,6 +62,7 @@ import {
   useDeleteTraceTaskMutation,
   useResumeTraceTaskMutation,
 } from "../queries/mutations/session";
+import { WorkflowBoard } from "./board-panel";
 import {
   WorkflowArtifactPanel,
   phaseLabels,
@@ -233,6 +235,10 @@ function ChatPanel({
   const queryClient = useQueryClient();
   const { projectId } = useSessionEventScope();
   if (!isTruthy(projectId)) throw new Error("Chat requires an active project");
+  // The inbox leads here with the card to open the board on. Closing only the card peek
+  // keeps the board, so the summary holding it stays mounted.
+  const [boardLocation] = useQueryStates({ board: parseAsBoolean, card: parseAsString });
+  const boardOpen = boardLocation.board === true || boardLocation.card !== null;
   const resumeTraceMutation = useResumeTraceTaskMutation(projectId, sessionId, holder);
   const archiveTraceMutation = useArchiveTraceTaskMutation(projectId, sessionId, holder);
   const deleteTraceMutation = useDeleteTraceTaskMutation(projectId, sessionId, holder);
@@ -926,6 +932,16 @@ function ChatPanel({
           onStop={() => void controlGoal("stop")}
           onRevise={() => void revisePlan()}
           onExecute={() => void executePlan()}
+          boardOpen={boardOpen}
+          board={
+            <WorkflowBoard
+              projectId={projectId}
+              sessionId={sessionId}
+              holder={holder}
+              // Board edits need the session lease, not a signed-in model.
+              disabled={readOnly || backendRestartRequired}
+            />
+          }
         />
         <ChatApprovals
           key={approvalBatchKey}

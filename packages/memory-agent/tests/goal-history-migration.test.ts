@@ -50,7 +50,10 @@ it.live(
       let db = yield* scopedDatabase(() => oldDatabase(file));
       const before = snapshot(db);
       migrateDatabase(db);
-      expect(snapshot(db)).toEqual(before);
+      // Later steps only add the nullable board author; every preserved value stays as it was.
+      expect(
+        snapshot(db).map((rows) => rows.map(({ author_json: _author, ...row }) => row)),
+      ).toEqual(before);
       expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(

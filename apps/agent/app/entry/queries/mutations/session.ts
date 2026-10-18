@@ -1,8 +1,110 @@
 import { Function as EffectFunction } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type WorkflowAction, type WorkflowPhase } from "../../api";
+import {
+  api,
+  type BoardEdit,
+  type BoardIntent,
+  type DecisionAnswer,
+  type GoalPriority,
+  type HumanDecisionRequest,
+  type WorkflowAction,
+  type WorkflowPhase,
+} from "../../api";
 import { sessionQueries } from "../session";
 import { projectQueries } from "../project";
+
+export const useEditBoardMutation: {
+  (
+    sessionId: string,
+    holder: string,
+  ): (projectId: string) => ReturnType<typeof useEditBoardMutationBody>;
+} & typeof useEditBoardMutationBody = EffectFunction.dual(3, useEditBoardMutationBody);
+function useEditBoardMutationBody(projectId: string, sessionId: string, holder: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (edit: BoardEdit) => api.editBoard(sessionId, holder, edit),
+    onSettled: () =>
+      Promise.all([
+        client.invalidateQueries({
+          queryKey: sessionQueries.board(projectId, sessionId).queryKey,
+        }),
+        client.invalidateQueries({
+          queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+        }),
+      ]),
+  });
+}
+
+/** Answers a card decision of any session in the project; the board and inbox read it again. */
+export const useAnswerDecisionMutation: {
+  (holder: string): (projectId: string) => ReturnType<typeof useAnswerDecisionMutationBody>;
+} & typeof useAnswerDecisionMutationBody = EffectFunction.dual(2, useAnswerDecisionMutationBody);
+function useAnswerDecisionMutationBody(projectId: string, holder: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      request,
+      answer,
+    }: {
+      request: Pick<HumanDecisionRequest, "requestId" | "sessionId" | "goalInstanceId" | "cardId">;
+      answer: DecisionAnswer;
+    }) => api.answerDecision(holder, request, answer),
+    onSettled: (_answered, _error, { request }) =>
+      Promise.all([
+        client.invalidateQueries({
+          queryKey: sessionQueries.board(projectId, request.sessionId).queryKey,
+        }),
+        client.invalidateQueries({
+          queryKey: sessionQueries.decisions(projectId, request.sessionId).queryKey,
+        }),
+        client.invalidateQueries({
+          queryKey: sessionQueries.kanban(projectId, request.sessionId).queryKey,
+        }),
+        client.invalidateQueries({ queryKey: projectQueries.decisions(projectId).queryKey }),
+      ]),
+  });
+}
+
+/** A kanban board action: start, a person's intent for a card, or the Goal's schedule. */
+export type KanbanAction =
+  | { readonly _tag: "Start" }
+  | { readonly _tag: "Intent"; readonly intent: BoardIntent }
+  | { readonly _tag: "SetPriority"; readonly priority: GoalPriority }
+  | { readonly _tag: "SetDependencies"; readonly dependsOn: readonly string[] };
+
+/** Starts the executing Plan as a kanban board, carries out an intent, or changes the schedule. */
+export const useKanbanMutation: {
+  (
+    sessionId: string,
+    holder: string,
+  ): (projectId: string) => ReturnType<typeof useKanbanMutationBody>;
+} & typeof useKanbanMutationBody = EffectFunction.dual(3, useKanbanMutationBody);
+function useKanbanMutationBody(projectId: string, sessionId: string, holder: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (action: KanbanAction) => {
+      switch (action._tag) {
+        case "Start":
+          return api.startKanban(sessionId, holder);
+        case "Intent":
+          return api.boardIntent(sessionId, holder, action.intent);
+        case "SetPriority":
+          return api.setGoalPriority(sessionId, holder, action.priority);
+        case "SetDependencies":
+          return api.setGoalDependencies(sessionId, holder, action.dependsOn);
+      }
+    },
+    onSettled: () =>
+      Promise.all([
+        client.invalidateQueries({
+          queryKey: sessionQueries.kanban(projectId, sessionId).queryKey,
+        }),
+        client.invalidateQueries({
+          queryKey: sessionQueries.board(projectId, sessionId).queryKey,
+        }),
+      ]),
+  });
+}
 
 export const useRelayedApprovalMutation: {
   (

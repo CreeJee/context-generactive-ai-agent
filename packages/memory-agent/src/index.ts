@@ -380,6 +380,7 @@ export {
 export {
   GoalArtifact,
   PlanArtifact,
+  PlanStep,
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
@@ -391,6 +392,55 @@ export {
   type UpdateWorkflowProgress,
   type Verification,
 } from "./workflow/workflow.ts";
+export { BoardAuthor, CardHold, CardRisk, CardStatus } from "./workflow/card.ts";
+export {
+  BoardEdit,
+  BoardEditRefused,
+  CardDraft,
+  CardPatch,
+  UserChange,
+  cardTransitions,
+  BoardIntent,
+  type BoardEditResult,
+  type CardTransition,
+  type UserChangeRequest,
+} from "./workflow/board-edit.ts";
+export { Boards, type BoardCard, type BoardRevision, type BoardView } from "./workflow/board.ts";
+export {
+  DecisionAnswer,
+  DecisionCloseReason,
+  DecisionKind,
+  HumanDecisionRefused,
+  HumanDecisions,
+  answeredCardStatus,
+  decisionChoices,
+  goalDecisionCardId,
+  type DecisionAnswerInput,
+  type DecisionCloseScope,
+  type DecisionInboxItem,
+  type DecisionRequestInput,
+  type DecisionState,
+  type HumanDecisionRequest,
+} from "./kanban/human-decision.ts";
+export { KanbanOrchestrator, KanbanStartRefused } from "./kanban/orchestrator.ts";
+export {
+  KanbanActionRefused,
+  KanbanBoardActions,
+  type KanbanBoardView,
+  type KanbanCardView,
+  type KanbanGoalOption,
+  type KanbanScheduleView,
+} from "./kanban/board-actions.ts";
+export {
+  GoalMergeState,
+  GoalPriority,
+  GoalScheduleRefused,
+  GoalSchedules,
+  ProtectedBranches,
+} from "./kanban/goal-schedules.ts";
+export { KanbanSettings } from "./config/kanban-settings.ts";
+export { KanbanConcurrency } from "./config/global-config.ts";
+export { PlanDependenciesRejected, type PlanDependencyIssue } from "./workflow/plan-schedule.ts";
 export {
   RuleSource,
   WorkflowRule,

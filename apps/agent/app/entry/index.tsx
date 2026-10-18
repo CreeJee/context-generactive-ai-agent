@@ -53,6 +53,7 @@ import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
+import { DecisionInbox } from "./navigation/decision-inbox";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
@@ -65,6 +66,8 @@ import { providerLabels } from "./navigation/providers";
 const locationParsers = {
   project: parseAsString,
   session: parseAsString,
+  /** A board card the inbox opened; the session's board opens on it. */
+  card: parseAsString,
 };
 
 function Placeholder({
@@ -176,7 +179,7 @@ export function App() {
   }, [projectId, sessions, sessionsQuery.data, setLocation]);
 
   const selectProject = (id: string) =>
-    void setLocation({ project: id, session: null }, { history: "push" });
+    void setLocation({ project: id, session: null, card: null }, { history: "push" });
   useEffect(() => setArchiveError(null), [projectId]);
 
   const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
@@ -486,6 +489,15 @@ export function App() {
               />
             </div>
             <Separator />
+            {projectId && (
+              <DecisionInbox
+                projectId={projectId}
+                holder={pageHolder()}
+                onOpenCard={(session, card) =>
+                  void setLocation({ session, card }, { history: "push" })
+                }
+              />
+            )}
             {projectId && (
               <SessionSection
                 sessions={sessions}

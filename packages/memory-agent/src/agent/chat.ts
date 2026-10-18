@@ -46,11 +46,16 @@ import {
   Option,
   Path,
   Queue,
+  Ref,
   Schema,
   Stream,
   Semaphore,
 } from "effect";
 import type { SqlError } from "effect/sql";
+import { CardAttempts } from "../kanban/card-attempts.ts";
+import { HumanDecisions } from "../kanban/human-decision.ts";
+import { KanbanOrchestrator, type KanbanAttentionReason } from "../kanban/orchestrator.ts";
+import { KanbanTools, kanbanAttentionPrompt, kanbanInstructions } from "../kanban/tools.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { modelBoundMessages, modelImages } from "../attachments/model-images.ts";
@@ -485,7 +490,9 @@ type InternalFollowup =
   | { readonly kind: "notification" }
   | { readonly kind: "workflow"; readonly afterRunId: string }
   /** The next turn is the steered message at the head of the queue, sent with no page needed. */
-  | { readonly kind: "steered" };
+  | { readonly kind: "steered" }
+  /** The kanban loop needs the model's judgement on the board. */
+  | { readonly kind: "kanban"; readonly reasons: readonly KanbanAttentionReason[] };
 
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
@@ -700,6 +707,32 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ),
       );
   const workflowTools = yield* WorkflowTools;
+  const kanbanTools = yield* KanbanTools;
+  const kanbanAttempts = yield* CardAttempts;
+  const kanbanOrchestrator = yield* KanbanOrchestrator;
+  const humanDecisions = yield* HumanDecisions;
+  /** Settles a queued new Goal; once it applies, the replaced Goal's waits for people close. */
+  const settleNewGoal = (sessionId: string, runId: string) =>
+    workflows.settleNewGoalRequest(sessionId, runId).pipe(
+      Effect.tap((settled) => {
+        switch (settled.status) {
+          case "applied":
+            return humanDecisions.closeSuperseded(sessionId);
+          default:
+            return Effect.void;
+        }
+      }),
+    );
+  /** Whether the session's current Goal runs as a kanban board, whose loop executes the cards. */
+  const kanbanBoard = (sessionId: string) =>
+    Effect.flatMap(workflows.goalInstanceId(sessionId), (goalInstanceId) =>
+      goalInstanceId === null
+        ? Effect.succeed(false)
+        : Effect.map(
+            kanbanAttempts.goal(goalInstanceId),
+            Option.exists((goal) => goal.active),
+          ),
+    );
   const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
   const knowledge = yield* KnowledgePromotions;
@@ -788,6 +821,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     runEffectSync(Queue.offer(notificationWakeups, sessionId));
   };
   subagents.onCompletion(wakeNotifications);
+  // What each board's loop last asked the model about, until a follow-up run takes it.
+  const kanbanAttention = yield* Ref.make<
+    Readonly<Record<string, readonly KanbanAttentionReason[]>>
+  >({});
+  yield* kanbanOrchestrator.attention.pipe(
+    Stream.runForEach((needed) =>
+      Effect.andThen(
+        Ref.update(kanbanAttention, (pending) => ({
+          ...pending,
+          [needed.sessionId]: needed.reasons,
+        })),
+        Effect.sync(() => wakeNotifications(needed.sessionId)),
+      ),
+    ),
+    Effect.forkScoped,
+  );
   // An owner that vanished without releasing: like a release, nothing will send its waiting
   // messages, and read-only pages hear the session is free so one can take over.
   leases.onExpired((sessionId) =>
@@ -939,14 +988,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
       switch (run?.status) {
         case "completed":
-          yield* workflows.settleNewGoalRequest(sessionId, runId);
+          yield* settleNewGoal(sessionId, runId);
           if (leases.view(sessionId, null).state === "free")
             yield* queue.holdWaiting(sessionId, "pageLeft");
           return;
         case "failed":
         case "aborted":
         case undefined:
-          yield* workflows.settleNewGoalRequest(sessionId, runId);
+          yield* settleNewGoal(sessionId, runId);
           yield* queue.holdWaiting(sessionId, "stopped");
           return;
         case "interrupted":
@@ -1337,6 +1386,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       internalFollowup: InternalFollowup | null = null,
     ) => {
       const notificationFollowup = internalFollowup?.kind === "notification";
+      const kanbanFollowup = internalFollowup?.kind === "kanban" ? internalFollowup : null;
       let claimedNext: string | null = null;
       let runAdapterToRelease: RunTextAdapter | null = null;
       let cancellationToRelease: Effect.Effect<void> = Effect.void;
@@ -1368,8 +1418,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // asynchronous end callback applies a queued Goal. Recover only terminal runs;
         // running/interrupted ones remain pending and can never prove completion.
         const pendingGoals = yield* acceptedNewGoals(sessionId);
-        for (const pending of pendingGoals)
-          yield* workflows.settleNewGoalRequest(sessionId, pending.run_id);
+        for (const pending of pendingGoals) yield* settleNewGoal(sessionId, pending.run_id);
         // Repair stale persisted phases before choosing tools for the next turn. In particular, an
         // old Verify row with unfinished implementation must regain Execute capabilities.
         const workflow = yield* workflows.reconcile(sessionId);
@@ -1773,7 +1822,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const cancellation = yield* cancellations.allocate("service_shutdown");
         cancellationToRelease = cancellation.cancel;
         const abortController = cancellation.controller;
-        if (notificationFollowup) {
+        if (notificationFollowup || kanbanFollowup !== null) {
           const current = yield* sessions.get(sessionId);
           const last = yield* chatState.lastRun(sessionId);
           if (
@@ -1939,6 +1988,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? resolved
             : { ...resolved, degraded: [...resolved.degraded, "source" as const] };
         const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+        const onKanbanBoard = yield* kanbanBoard(sessionId);
         const workflowPrompt = workflowInstructions(workflow, resolvedRules, goalInstanceId);
         const parentNotifications = yield* workTrace.consumeParentNotifications(sessionId, runId);
         const parentNotificationPrompt =
@@ -1988,6 +2038,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 "This is an automatic continuation of the already approved Plan, not a new user request or approval. Continue the first unfinished step, performing the investigation, preparation, implementation and review yourself. Persist new progress evidence. If all implementation steps are complete, perform verification and persist its result. Do not repeat a promise to work later; record_workflow_blocker only when a confirmed dependency prevents all useful independent work.",
               ]
             : []),
+          ...(onKanbanBoard ? [kanbanInstructions] : []),
+          ...(kanbanFollowup !== null ? [kanbanAttentionPrompt(kanbanFollowup.reasons)] : []),
           ...(notificationFollowup
             ? [
                 "This is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports or get_subagent_report and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.",
@@ -2041,6 +2093,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const reads = parallelReads(
           [
             ...sharedTools,
+            // The board's tools are the parent's alone; card agents never change the board.
+            ...(onKanbanBoard && !workflowReadOnly ? kanbanTools.forSession(sessionId, runId) : []),
             ...redactor.withHiddenResults([
               ...phaseApprovedTools,
               ...(workflowReadOnly || reportSource !== null ? [] : children.tools),
@@ -2277,7 +2331,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
         cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
-        if (!notificationFollowup)
+        if (!notificationFollowup && kanbanFollowup === null)
           yield* execution.start(sessionId, runId, workflow, turn !== null);
         // A Goal worker's answer is never cut: stopping it early would end the Goal step.
         if (workerCapability === null) MutableHashMap.set(steerCuts, sessionId, steering);
@@ -3068,6 +3122,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const restarted = last.status !== "completed";
         if (restarted && (yield* execution.get(sessionId)).kind !== "retrying") return;
         const workflow = yield* workflows.reconcile(sessionId);
+        // A kanban board's loop executes the Plan; the model runs only when the loop needs it.
+        if (yield* kanbanBoard(sessionId)) {
+          const reasons = (yield* Ref.get(kanbanAttention))[sessionId];
+          if (
+            reasons === undefined ||
+            restarted ||
+            (yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
+            (yield* relayed.pending(sessionId)).length > 0
+          )
+            return;
+          yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
+          return yield* drain(yield* send({ kind: "kanban", reasons }));
+        }
         const continuing = restarted
           ? yield* execution.canResume(sessionId, last.runId, workflow)
           : yield* execution.canContinue(sessionId, last.runId, workflow);
