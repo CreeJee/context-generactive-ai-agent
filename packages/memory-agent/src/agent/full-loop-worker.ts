@@ -10,6 +10,7 @@ import {
   type ChatMiddlewareContext,
 } from "@tanstack/ai";
 import { runNativeEffect } from "../runtime/native-effect.ts";
+import { toolResultKey } from "../tools/failure.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { decodeFullLoopValue, encodeFullLoopValue } from "./full-loop-codec.ts";
 import {
@@ -26,12 +27,20 @@ import { layerMessagePortRpcClient } from "./effect-rpc-message-port.ts";
 const sdkAbortController = () => new AbortController();
 
 /**
- * An owner read tool failed. The SDK turns a rejected tool into the result the model reads from
- * `message`, so the owner's tool error text is carried here and nowhere else.
+ * An owner read tool failed. The patched SDK hands the model the owner's `{ error, cause, detail }`
+ * (see `ToolFailed`), so the owner's failure is carried here and nowhere else.
  */
 class OwnerToolFailed extends Schema.TaggedError<OwnerToolFailed>()("OwnerToolFailed", {
-  message: Schema.String,
-}) {}
+  result: Schema.Struct({ error: Schema.String, cause: Schema.String, detail: Schema.String }),
+}) {
+  override get message() {
+    return `${this.result.error}: ${this.result.detail}`;
+  }
+
+  get [toolResultKey]() {
+    return this.result;
+  }
+}
 
 function portableSchema(schema: any) {
   if (schema === undefined) return undefined;
@@ -135,7 +144,7 @@ function runFullLoop(
                   case "succeeded":
                     return result.outcome.value;
                   case "failed":
-                    return yield* OwnerToolFailed.make({ message: result.outcome.message });
+                    return yield* OwnerToolFailed.make({ result: result.outcome.failure });
                   default:
                     return yield* FullLoopRpcError.make({ reason: "owner_rejected" });
                 }

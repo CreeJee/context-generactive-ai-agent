@@ -378,6 +378,7 @@ overrides:
 patchedDependencies:
   '@effect/platform-node-shared@4.0.3': c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56
   '@effect/platform-node@4.0.3': fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a
+  '@tanstack/ai@0.61.0': 2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0
   effect@4.0.3: 7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16
   react-simplikit@0.3.3: 9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3
 
@@ -462,13 +463,13 @@ importers:
         version: 2.0.0(react@19.3.1)
       '@tanstack/ai':
         specifier: 'catalog:'
-        version: 0.61.0(zod@4.6.7)
+        version: 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
-        version: 0.24.1(@tanstack/ai@0.61.0(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
+        version: 0.24.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
       '@tanstack/ai-react':
         specifier: 'catalog:'
-        version: 0.29.1(@tanstack/ai@0.61.0(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
+        version: 0.29.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.104.3(react@19.3.1)
@@ -607,25 +608,25 @@ importers:
         version: 1.1.0
       '@tanstack/ai':
         specifier: 'catalog:'
-        version: 0.61.0(zod@4.6.7)
+        version: 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-anthropic':
         specifier: 'catalog:'
-        version: 0.19.1(@tanstack/ai@0.61.0(zod@4.6.7))(zod@4.6.7)
+        version: 0.19.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(zod@4.6.7)
       '@tanstack/ai-client':
         specifier: 'catalog:'
         version: 0.35.1(zod@4.6.7)
       '@tanstack/ai-compaction':
         specifier: 'catalog:'
-        version: 0.1.17(@tanstack/ai@0.61.0(zod@4.6.7))
+        version: 0.1.17(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))
       '@tanstack/ai-mcp':
         specifier: 'catalog:'
         version: 0.4.6(zod@4.6.7)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
-        version: 0.24.1(@tanstack/ai@0.61.0(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
+        version: 0.24.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
       '@tanstack/ai-persistence':
         specifier: 'catalog:'
-        version: 0.6.7(@tanstack/ai@0.61.0(zod@4.6.7))(vitest@5.0.5)
+        version: 0.6.7(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(vitest@5.0.5)
       cross-spawn:
         specifier: 'catalog:'
         version: 7.0.6
@@ -6755,26 +6756,26 @@ snapshots:
       tailwindcss: 4.3.3
       vite: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
 
-  '@tanstack/ai-anthropic@0.19.1(@tanstack/ai@0.61.0(zod@4.6.7))(zod@4.6.7)':
+  '@tanstack/ai-anthropic@0.19.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.97.1(zod@4.6.7)
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-utils': 0.4.2
     transitivePeerDependencies:
       - zod
 
   '@tanstack/ai-client@0.35.1(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-event-client': 0.13.1
       '@tanstack/ai-utils': 0.4.2
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - zod
 
-  '@tanstack/ai-compaction@0.1.17(@tanstack/ai@0.61.0(zod@4.6.7))':
+  '@tanstack/ai-compaction@0.1.17(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
 
   '@tanstack/ai-event-client@0.13.1':
     dependencies:
@@ -6783,18 +6784,18 @@ snapshots:
   '@tanstack/ai-mcp@0.4.6(zod@4.6.7)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@opentelemetry/api'
       - supports-color
       - zod
 
-  '@tanstack/ai-openai@0.24.1(@tanstack/ai@0.61.0(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)':
+  '@tanstack/ai-openai@0.24.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-utils': 0.4.2
-      '@tanstack/openai-base': 0.11.1(@tanstack/ai@0.61.0(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
+      '@tanstack/openai-base': 0.11.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
       openai: 6.49.0(ws@8.22.0)(zod@4.6.7)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -6803,16 +6804,16 @@ snapshots:
       - ws
       - zod
 
-  '@tanstack/ai-persistence@0.6.7(@tanstack/ai@0.61.0(zod@4.6.7))(vitest@5.0.5)':
+  '@tanstack/ai-persistence@0.6.7(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(vitest@5.0.5)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-utils': 0.4.2
     optionalDependencies:
       vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
-  '@tanstack/ai-react@0.29.1(@tanstack/ai@0.61.0(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
+  '@tanstack/ai-react@0.29.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-client': 0.35.1(zod@4.6.7)
       '@tanstack/markdown': 0.0.13(react@19.3.1)
       '@types/react': 19.3.0
@@ -6826,7 +6827,7 @@ snapshots:
 
   '@tanstack/ai-utils@0.4.2': {}
 
-  '@tanstack/ai@0.61.0(zod@4.6.7)':
+  '@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)':
     dependencies:
       '@ag-ui/core': 1.0.0(zod@4.6.7)
       '@standard-schema/spec': 1.1.0
@@ -6842,9 +6843,9 @@ snapshots:
     optionalDependencies:
       react: 19.3.1
 
-  '@tanstack/openai-base@0.11.1(@tanstack/ai@0.61.0(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)':
+  '@tanstack/openai-base@0.11.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@4.6.7)
+      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
       '@tanstack/ai-utils': 0.4.2
       openai: 6.49.0(ws@8.22.0)(zod@4.6.7)
     transitivePeerDependencies:

@@ -34,6 +34,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
+import { ToolFailed } from "../../src/tools/failure.ts";
 import { parallelReads } from "../../src/tools/parallel-reads.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -547,6 +548,47 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
           expect.objectContaining({ role: "tool", toolCallId: "new", content: "new result" }),
         );
         expect(saved).toContainEqual(expect.objectContaining({ role: "tool", toolCallId: "new" }));
+      }),
+    20000,
+  );
+
+  it.effect(
+    "a failed owner read reaches the worker's model as its code, tag and detail",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* ownerFixture();
+        const failure = ToolFailed.make({
+          code: "not_found",
+          tag: "TextFileRejected",
+          detail: "docs/a.md. Nothing exists at that path.",
+        });
+        const read = toolDefinition({ name: "read_file", description: "read" }).server(() =>
+          Promise.reject(failure),
+        );
+        const chunks = yield* collect(
+          f.owner,
+          capabilities(
+            {
+              adapter: new ScriptedTextAdapter([
+                { toolCalls: [{ id: "missing", name: "read_file", arguments: "{}" }] },
+                { text: "done" },
+              ]),
+              agentLoopStrategy: maxIterations(3),
+            },
+            { tools: [read] },
+          ),
+        );
+        expect(chunks).toContainEqual(
+          expect.objectContaining({
+            type: "TOOL_CALL_RESULT",
+            toolCallId: "missing",
+            content: yield* toJson({
+              error: "not_found",
+              cause: "TextFileRejected",
+              detail: "docs/a.md. Nothing exists at that path.",
+            }),
+          }),
+        );
       }),
     20000,
   );

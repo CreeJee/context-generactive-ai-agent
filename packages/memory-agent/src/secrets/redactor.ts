@@ -8,6 +8,7 @@ import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import type { ShownFailure } from "../runtime/shown-failure.ts";
+import { ToolFailed, toolFailedOf } from "../tools/failure.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
 /**
@@ -258,13 +259,15 @@ const make = Effect.sync(() => {
                 Effect.catchCause((cause) => {
                   const error = nativeFailure(cause).cause;
                   if (!(error instanceof Error)) return Effect.fail(new Cause.UnknownError(error));
-                  return redactText(error.message).pipe(
+                  // The model reads the failure's code, tag and redacted text (ToolFailed).
+                  const failed = toolFailedOf(error);
+                  return redactText(failed.detail).pipe(
                     Effect.flatMap(({ text }) =>
                       Effect.fail(
                         new Cause.UnknownError(
-                          text === error.message
-                            ? error
-                            : new Error(text, { cause: "secret hidden from the message" }),
+                          text === failed.detail
+                            ? failed
+                            : ToolFailed.make({ code: failed.code, tag: failed.tag, detail: text }),
                         ),
                       ),
                     ),

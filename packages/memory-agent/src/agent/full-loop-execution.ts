@@ -1,3 +1,4 @@
+import { toolFailedOf, toolResultKey } from "../tools/failure.ts";
 import { NodeWorker } from "@effect/platform-node";
 import { referenceIds } from "../runtime/reference-ids.ts";
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
@@ -903,23 +904,28 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                               HashSet.has(readOnlyToolNames, input.name)
                                 ? Effect.succeed({
                                     type: "failed" as const,
-                                    message:
+                                    // Owner tools already hid secrets in the failure's text.
+                                    failure: toolFailedOf(
                                       error.cause instanceof Error
-                                        ? error.cause.message
-                                        : "Read tool failed",
+                                        ? error.cause
+                                        : new Error("Read tool failed"),
+                                    )[toolResultKey],
                                   })
                                 : Effect.fail(error),
                           }),
                         );
                         const value =
-                          outcome.type === "succeeded" ? outcome.value : { error: outcome.message };
+                          outcome.type === "succeeded" ? outcome.value : outcome.failure;
                         MutableHashMap.set(completedTools, input.toolCallId, {
                           toolCallId: input.toolCallId,
                           toolName: input.name,
                           toolCall: grants.toolCalls().find((call) => call.id === input.toolCallId),
                           tool,
                           ok: outcome.type === "succeeded",
-                          error: outcome.type === "failed" ? outcome.message : undefined,
+                          error:
+                            outcome.type === "failed"
+                              ? `${outcome.failure.error}: ${outcome.failure.detail}`
+                              : undefined,
                           duration: 0,
                           result: value,
                         });

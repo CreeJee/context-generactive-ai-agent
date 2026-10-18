@@ -28,34 +28,94 @@ const refusalHints = HashMap.fromIterable<string, string>([
   ["exists", "A file already exists there. Read it and pass its sha256 to replace it."],
 ]);
 
+/**
+ * Where the patched SDK (`patches/@tanstack__ai@0.61.0.patch`) finds the result a failed tool
+ * gives the model, in place of `{ error: message }`.
+ */
+export const toolResultKey = Symbol.for("tanstack-ai.toolResult");
+
+/**
+ * What the model reads for a failed tool call: a code, the failure's own tag, and the tool's
+ * text, redacted, so the model can correct a path or an argument and try again.
+ */
+export interface ToolFailureResult {
+  readonly error: string;
+  readonly cause: string;
+  readonly detail: string;
+}
+
+/**
+ * A tool call failed. `code` is the reason (`not_found`, `io_error`, …), `tag` the failure's tag;
+ * the message keeps the `code: detail` form people and memory read.
+ */
+export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
+  code: Schema.String,
+  tag: Schema.String,
+  detail: Schema.String,
+}) {
+  override get message() {
+    return `${this.code}: ${this.detail}`;
+  }
+
+  get [toolResultKey](): ToolFailureResult {
+    return { error: this.code, cause: this.tag, detail: this.detail };
+  }
+}
+
+const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
+
+/** The failure's tag, or its class name when it has none (a plain `Error`, an SDK's error). */
+export const errorTag = (error: Error) =>
+  Option.match(decodeTagged(error), { onNone: () => error.name, onSome: ({ _tag }) => _tag });
+
+const toolAuthored = /^([a-z_]+): ([\s\S]*)$/;
+
+/**
+ * Any tool error as a {@link ToolFailed}. Tool-authored messages already follow the
+ * `code: detail` form; anything else is `tool_failed` with its message as the detail.
+ */
+export const toolFailedOf = (error: Error) => {
+  if (Schema.is(ToolFailed)(error)) return error;
+  const authored = toolAuthored.exec(error.message);
+  return ToolFailed.make({
+    code: authored?.[1] ?? "tool_failed",
+    tag: errorTag(error),
+    detail: authored?.[2] ?? error.message,
+  });
+};
+
 /** A Node.js system error (`ENOENT`, `EACCES`, …). Only its code is kept for the model. */
 export const SystemError = Schema.Struct({ code: Schema.String });
 const decodeSystemError = Schema.decodeUnknownOption(SystemError);
 
 /**
- * Turns a failure into the message the model sees, `reason: path. hint`. Host errors keep only
- * their code, so absolute paths and system messages do not leak into the conversation.
+ * Turns a failure into what the model sees: its reason, its tag and `path. hint`. Host errors
+ * keep only their code, so absolute paths and system messages do not leak into the conversation.
  */
 export const toolFailure: {
   (path: string): (error: Error) => ReturnType<typeof toolFailureBody>;
 } & typeof toolFailureBody = EffectFunction.dual(2, toolFailureBody);
-function toolFailureBody(error: Error, path: string): Error {
+function toolFailureBody(error: Error, path: string): ToolFailed {
+  const tag = errorTag(error);
   const reason = Schema.is(PathRejected)(error)
     ? error.reason
     : Schema.is(TextFileRejected)(error)
       ? error.reason._tag
       : null;
   if (reason !== null)
-    return new Error(
-      `${reason}: ${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, reason)) ?? ""}`.trim(),
-    );
+    return ToolFailed.make({
+      code: reason,
+      tag,
+      detail: `${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, reason)) ?? ""}`.trim(),
+    });
   if (Schema.is(TextFileIoFailed)(error))
-    return new Error(`io_error: ${path} (${error.reason.code})`);
+    return ToolFailed.make({ code: "io_error", tag, detail: `${path} (${error.reason.code})` });
   const systemError = Option.getOrUndefined(decodeSystemError(error));
-  if (systemError !== undefined) return new Error(`io_error: ${path} (${systemError.code})`);
+  if (systemError !== undefined)
+    return ToolFailed.make({ code: "io_error", tag, detail: `${path} (${systemError.code})` });
   // Tool-authored messages already follow the `reason: detail` form.
-  if (/^[a-z_]+: /.test(error.message)) return error;
-  return new Error(`io_error: ${path} (unknown)`);
+  if (Schema.is(ToolFailed)(error) || toolAuthored.test(error.message)) return toolFailedOf(error);
+  return ToolFailed.make({ code: "io_error", tag, detail: `${path} (unknown)` });
 }
 
 /** Runs one tool operation, rethrowing any failure as a model-facing message. */
