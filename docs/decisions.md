@@ -2263,3 +2263,14 @@
 - route는 오류 태그·reason을 HTTP 상태와 안전한 코드로 바꾸는 표(`.server/kanban-failures.ts`, `.server/account-failures.ts`)를 거친다. 표에 없는 오류가 오류 채널에 있으면 컴파일되지 않는다. route에서 난 결함은 `answerDefect`로 500 `internal_error`를 응답하고 원문은 싣지 않는다.
 - 브라우저는 `refusalOf`로 `ApiError`만 골라 코드별 문구를 보이고, 그 밖의 실패에는 고정 문구를 보인다. 저장된 가져오기 실패·GPU 확인·RRSI·sandbox 설정 실패 사유는 알려진 코드에만 문구를 붙이고, 모르는 값(옛 원문 포함)은 일반 문구로 보인다.
 - 사용자 결정을 기다리는 동작은 이번 정리에서 바꾸지 않았다. 결함 뒤에도 계속 도는 루프(가져오기 감시, transcript pass, lease 갱신, 승인 중계), 외부 에이전트·MCP·ACP·채팅 스트림의 원문 오류 표시, 모델이 받는 읽기 도구 오류 원문, 채팅 스트림 종료 시 큐 정리 실패의 `orDie`가 여기에 해당한다.
+
+## 원문 오류 표시와 백그라운드 루프 실패 정책 (2026-10-18)
+
+- 사용자 결정: 외부 에이전트·MCP·ACP·채팅·BTW 스트림의 오류는 `{ code, detail }`로 다룬다. 화면에는 코드 문구를 보이고, 원문은 기본으로 접힌 "자세히"에서 보인다. `detail`은 `SecretRedactor.shownDetail`을 거친다(1000자로 자르고, 가리기에 실패하면 `null`). 코드 문구 표는 `externalAgentFailureText`·`runFailureText`에 둔다. 모르는 코드와 옛 기록은 `run_failed` 일반 문구로 보인다. ACP editor 오류는 message에 코드 문구를, data에 `{ code, detail }`을 담는다.
+- 사용자 결정: 모델이 받는 도구 실패는 `{ error, cause, detail }`이다(`detail`은 redaction된 원문). 모델이 경로 등을 고쳐 재시도할 수 있게 원문을 유지한다. `@tanstack/ai@0.61.0`은 도구 throw를 `{ error: message }`로 고정하므로, catch에서 심볼 속성의 구조화 결과를 쓰게 하는 pnpm patch(`patches/@tanstack__ai@0.61.0.patch`)를 둔다. `@tanstack/ai`를 올리면 이 패치를 다시 만든다. `delegate_to_agent` 결과의 `error`/`reason` 문자열은 `failure: { code, detail }`로 바뀐다.
+- 사용자 결정: 백그라운드 루프는 실패 종류로 나눈다. 예상 실패(공급자·git·네트워크·DB 등)는 10초부터 지수 backoff로 최대 5회 재시도하고 간격 상한은 5분이다. 소진하면 그 루프만 멈춘다. 결함은 재시도 없이 멈춘다. 상태는 `LoopHealth`(Healthy·Retrying n/5·Exhausted·Defected)로 서버 메모리가 소유하고, 화면에 다시 시작 버튼을 둔다. 앱을 재기동하면 정상 상태로 시작한다.
+  - 칸반: 카드 통합·merge 단계가 소진되거나 결함이 나면 그 보드 루프 전체가 멈춘다. 다시 시작하면 다음 look이 그 단계를 다시 실행한다. 카드 단위 실패 사다리(retry_backoff → blocked → dead-letter)는 그대로다.
+  - 가져오기: 감시 상태는 `overview.watch`, 다시 시작은 `restart_watch`다. transcript pass는 typed 실패만 항목 실패로 기록하고, 결함이 나면 pass를 멈춘다.
+  - ACP lease 갱신·승인 중계는 소진·결함 시 그 루프만 멈추고 태그만 로그한다(별도 프로세스라 Discord 보고는 하지 않는다). 갱신이 멈추면 90초 뒤 lease가 만료되어 앱이 읽기 전용이 되고, 중계가 멈추면 승인은 앱 화면에서 답한다. 브라우저 lease 갱신도 같은 schedule로 재시도하고, 소진하면 기존 관찰·claim 경로로 돌아간다.
+- 사용자 결정: 결함은 Discord webhook으로 보고한다(Sentry 대용). `DISCORD_WEBHOOK_URL`을 재사용하고, GlobalConfig `defectReports`(기본 켜짐, webhook이 없으면 무시)와 `/report` 체크박스로 끈다. 메시지는 `[결함] 태그 @ 위치(span) ×n`에 버전·플랫폼·sessionId/goalInstanceId의 SHA-256 앞 12자·redaction된 요약 300자·스택 5줄을 붙인다. fingerprint(태그@위치)당 10분에 1회, 전체 분당 5회로 제한하고, dropping Queue(64)와 동시 2개로 보낸다. 전송 실패는 `defect_report_failed` 태그만 로그한다. 결함 기록은 `logDefect` 한 경로로 모은다(루프·`answerDefect`·finalizer).
+- 채팅 응답 스트림이 끝날 때의 큐 정리(`settleQueue`)가 실패하면 그 세션의 대기 메시지를 모두 보류(`holdWaiting(stopped)`)해 사용자 확인 없이 다음 턴으로 보내지 않는다. 보류도 실패하면 결함으로 보고한다. 스트림은 정상 종료한다.
