@@ -1,6 +1,7 @@
-import { NodeCrypto, NodePath } from "@effect/platform-node";
-import { ManagedRuntime, Option, Path } from "effect";
+import { NodeCrypto, NodePath, NodeServices } from "@effect/platform-node";
+import { ManagedRuntime, Option, Path, Schema, Stdio } from "effect";
 import { Config, Console, Crypto, Effect } from "effect";
+import { Argument, Flag } from "effect/cli";
 import { runNativeEffect } from "memory-agent/native-effect";
 // The app's production entry: `context-agent [folder]` serves the web app, runs the agent in this
 // process and opens the folder (or the folder it was started from) as a project;
@@ -13,7 +14,6 @@ import { runNativeEffect } from "memory-agent/native-effect";
 import { isSea } from "node:sea";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeStream, NodeSink } from "@effect/platform-node";
-import { parseArgs } from "node:util";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { createAppApi, startAcpAgent } from "memory-agent/acp";
@@ -24,6 +24,7 @@ import { isThisApp, launchFolder, openProjectEffect, type LaunchFolder } from ".
 import { readBuildConfig } from "./build-config.ts";
 import { readReleaseInfo } from "./release-info.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
+import { parseCommandLine } from "./command-line.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve } from "./serve.ts";
 
@@ -38,20 +39,28 @@ const usage = `사용법:
   context-agent --version
       실행 파일의 버전, 릴리스 채널과 대상 플랫폼을 표시해요.`;
 
-const { values, positionals } = parseArgs({
-  allowPositionals: true,
-  allowNegative: true,
-  options: {
-    port: { type: "string", default: "5173" },
-    open: { type: "boolean", default: true },
-    storage: { type: "string" },
-    "dev-backend": { type: "boolean", default: false },
-    help: { type: "boolean", short: "h", default: false },
-    version: { type: "boolean", short: "v", default: false },
-  },
-});
+const commandLineOptions = {
+  folder: Argument.String("folder").pipe(Argument.optional),
+  port: Flag.Int("port").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }))),
+    Flag.withDefault(5173),
+  ),
+  open: Flag.Boolean("open").pipe(Flag.withDefault(true)),
+  storage: Flag.String("storage").pipe(Flag.optional),
+  devBackend: Flag.Boolean("dev-backend").pipe(Flag.withDefault(false)),
+  help: Flag.Boolean("help").pipe(Flag.withAlias("h"), Flag.withDefault(false)),
+  version: Flag.Boolean("version").pipe(Flag.withAlias("v"), Flag.withDefault(false)),
+};
+// The parse failure already printed the usage and its details.
+const commandLine = await ManagedRuntime.make(NodeServices.layer).runPromise(
+  Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args).pipe(
+    Effect.flatMap((args) => parseCommandLine("context-agent", commandLineOptions, usage, args)),
+    Effect.catch(() => Effect.sync(() => process.exit(2))),
+  ),
+);
+const folderArgument = Option.getOrUndefined(commandLine.folder);
 
-if (values.version) {
+if (commandLine.version) {
   const release = readReleaseInfo();
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(
@@ -60,12 +69,12 @@ if (values.version) {
   process.exit(0);
 }
 
-const port = Number(values.port);
-if (values.help || !Number.isInteger(port) || port < 1 || port > 65_535 || positionals.length > 1) {
+if (commandLine.help) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.error(usage));
-  process.exit(values.help ? 0 : 2);
+  process.exit(0);
 }
+const { port } = commandLine;
 const baseUrl = `http://127.0.0.1:${port}`;
 
 /** Opens the launch folder on the app at `baseUrl` and returns the page to show. */
@@ -95,7 +104,7 @@ const pageFor = Effect.fn("launch.pageFor")(function* (folder: LaunchFolder) {
   }
 });
 
-if (positionals[0] === "acp") {
+if (folderArgument === "acp") {
   // stdout is the protocol channel: nothing else may be written to it.
   const api = createAppApi(baseUrl);
   const { readable, writable } = await Effect.runPromise(
@@ -132,12 +141,12 @@ if (positionals[0] === "acp") {
   });
   await connection.closed;
 } else {
-  const storageRoot = values.storage ?? defaultStorageRoot;
+  const storageRoot = Option.getOrElse(commandLine.storage, () => defaultStorageRoot);
   // Only the executable has a folder of its own; `node` running the bundle does not count.
   const executableFolder = isSea() ? dirname(process.execPath) : null;
-  const folder: LaunchFolder = values["dev-backend"]
+  const folder: LaunchFolder = commandLine.devBackend
     ? { kind: "none" }
-    : await launchFolder(positionals[0], process.cwd(), storageRoot, executableFolder);
+    : await launchFolder(folderArgument, process.cwd(), storageRoot, executableFolder);
   if (folder.kind === "invalid") {
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
     Effect.runSync(Console.error(`폴더를 찾을 수 없어요: ${folder.path}`));
@@ -149,7 +158,7 @@ if (positionals[0] === "acp") {
     const page = await runNativeEffect(pageFor(folder));
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
     Effect.runSync(Console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`));
-    if (values.open) openInBrowser(page);
+    if (commandLine.open) openInBrowser(page);
     process.exit(0);
   }
 
@@ -228,5 +237,5 @@ if (positionals[0] === "acp") {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`));
   const page = await runNativeEffect(pageFor(folder));
-  if (values.open) openInBrowser(page);
+  if (commandLine.open) openInBrowser(page);
 }

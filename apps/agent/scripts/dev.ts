@@ -2,7 +2,7 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import { NodePath, NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
 import { Cause, Clock, Config, Console, Effect, FileSystem, Layer } from "effect";
-import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
+import { nativePromise } from "memory-agent/native-effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -22,7 +22,7 @@ const developmentRuntime = ManagedRuntime.make(
 );
 const app = fileURLToPath(new URL("..", import.meta.url));
 // Validate CLI/environment settings before any build, process or storage mutation.
-const configuration = await runNativeEffect(
+const configuration = await developmentRuntime.runPromise(
   readDevConfiguration(process.argv.slice(2), process.env, app).pipe(
     Effect.catchTag("DevConfigurationError", (failure) =>
       Effect.sync(() => {
