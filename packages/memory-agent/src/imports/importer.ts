@@ -1,4 +1,5 @@
 import { NodeWorker } from "@effect/platform-node";
+import { ignoreLogged } from "../runtime/best-effort.ts";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 // NodeWorker spawns the thread this constructor makes.
@@ -385,7 +386,8 @@ const make = (watching: boolean, home: string) =>
      * nodes are the newest by time, and that is the order pending nodes come out in.
      */
     const backfill = Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
-      Effect.ignoreCause,
+      // Pending nodes stay pending; the next pass or start indexes them.
+      ignoreLogged("import_backfill_failed"),
       oneDrainAtATime.withPermits(1),
     );
 
@@ -394,7 +396,8 @@ const make = (watching: boolean, home: string) =>
       Effect.forkIn(
         Deferred.await(done).pipe(
           Effect.flatMap((written) => (written > 0 ? backfill : Effect.void)),
-          Effect.ignoreCause,
+          // The pass already recorded its outcome; settings shows it.
+          ignoreLogged("import_pass_failed"),
         ),
         layerScope,
       ),
@@ -420,7 +423,15 @@ const make = (watching: boolean, home: string) =>
       const counts =
         current?.status === "running" && isTruthy(latestCounts)
           ? latestCounts
-          : yield* countTranscripts.pipe(Effect.orElseSucceed(() => latestCounts ?? []));
+          : yield* countTranscripts.pipe(
+              // The worker could not count: the last counts, or none, until it can.
+              Effect.catchTag("ImportWorkerFailed", (error) =>
+                Effect.as(
+                  Effect.logDebug("import_count_failed", { reason: error.reason }),
+                  latestCounts ?? [],
+                ),
+              ),
+            );
       return {
         enabled: settings.importsEnabled ?? false,
         interpret: settings.importsInterpret ?? true,

@@ -60,16 +60,35 @@ export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.mapError(effect, (cause) => ImportStoreFailed.make({ cause }));
 
-/** What settings says went wrong: the error's message, never the transcript's content. */
+const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
+const decodeReasonTag = Schema.decodeUnknownOption(
+  Schema.Struct({ reason: Schema.Struct({ _tag: Schema.String }) }),
+);
+
+/**
+ * What settings says went wrong: the failures' tags, never their messages, which can hold paths or
+ * the transcript's content.
+ */
 const failureOf = (cause: Cause.Cause<unknown>) => {
-  const error = Cause.squash(cause);
-  const reason =
-    error instanceof Error
-      ? error.message.length > 0
-        ? error.message
-        : error.name
-      : String(error);
-  return reason.slice(0, failureLength);
+  const tags = cause.reasons.map((reason) => {
+    switch (reason._tag) {
+      case "Fail":
+        // A tagged reason, such as a platform error's `PermissionDenied`, is named too.
+        return Option.match(decodeTagged(reason.error), {
+          onNone: () => "Failure",
+          onSome: ({ _tag }) =>
+            Option.match(decodeReasonTag(reason.error), {
+              onNone: () => _tag,
+              onSome: (failure) => `${_tag}:${failure.reason._tag}`,
+            }),
+        });
+      case "Die":
+        return "Defect";
+      case "Interrupt":
+        return "Interrupted";
+    }
+  });
+  return [...new Set(tags)].join(",").slice(0, failureLength);
 };
 
 /** True when `candidate` is `root` or below it. Compared by spelling: a recorded cwd may be gone. */
@@ -315,7 +334,8 @@ const make = (home: string) =>
             size: Number(info.size),
             mtimeMs: Option.getOrUndefined(info.mtime)?.getTime() ?? 0,
           })),
-          Effect.orElseSucceed(() => null),
+          // A transcript removed since the walk has nothing new.
+          Effect.catchTag("PlatformError", () => Effect.succeed(null)),
         );
         if (!isTruthy(stats)) return 0;
         const cursor = Option.getOrNull(
