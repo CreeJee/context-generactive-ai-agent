@@ -410,7 +410,14 @@ const make = (watching: boolean, home: string) =>
             const settings = yield* config.read;
             if (settings.importsEnabled !== true) return;
             if ((yield* runOnce) > 0) yield* backfill;
-          }).pipe(Effect.ignoreCause),
+          }).pipe(
+            // The watcher keeps polling after any failed round, a defect included (decided
+            // 2026-10-18); each is logged by tag only.
+            Effect.catch((error) =>
+              Effect.logWarning("import_watch_failed", { error: error._tag }),
+            ),
+            Effect.catchDefect(() => Effect.logError("import_watch_failed", { error: "Defect" })),
+          ),
           Schedule.spaced(pollEvery),
         ),
       );
