@@ -3,6 +3,7 @@ import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
 import { Context, Effect, Layer, Option, Stream } from "effect";
 import { incomingUserTurn } from "../agent/chat.ts";
 import { createChatExecution } from "../agent/chat-execution.ts";
+import { withShownRunErrors } from "../agent/run-errors.ts";
 import { createLiveRuns } from "../agent/live-runs.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { modelImages } from "../attachments/model-images.ts";
@@ -126,27 +127,30 @@ const make = Effect.gen(function* () {
       yield* cancellation.release;
       return json(409, { error: "run_in_progress" });
     }
-    const stream = createChatExecution<typeof adapter>().execute(
-      {
-        messages,
-        threadId,
-        runId,
-        parentRunId,
-        systemPrompts: [btwInstructions, parentConversation],
-      },
-      {
-        model: { adapter, agentLoopStrategy: runtime.agentLoop },
-        tools: toolCalling
-          ? redactor.withHiddenResults(btwEvidenceTools(memory, thread.projectId))
-          : [],
-        middleware: [
-          withPersistence(threads.persistence),
-          btwToolGuard,
-          modelImages(attachments, runEffect),
-          runtime.runMiddleware(),
-        ],
-        stream: { abortController },
-      },
+    const stream = withShownRunErrors(
+      redactor,
+      createChatExecution<typeof adapter>().execute(
+        {
+          messages,
+          threadId,
+          runId,
+          parentRunId,
+          systemPrompts: [btwInstructions, parentConversation],
+        },
+        {
+          model: { adapter, agentLoopStrategy: runtime.agentLoop },
+          tools: toolCalling
+            ? redactor.withHiddenResults(btwEvidenceTools(memory, thread.projectId))
+            : [],
+          middleware: [
+            withPersistence(threads.persistence),
+            btwToolGuard,
+            modelImages(attachments, runEffect),
+            runtime.runMiddleware(),
+          ],
+          stream: { abortController },
+        },
+      ),
     );
     const published = yield* cancellation.publish(stream);
     return toServerSentEventsResponse(Stream.toAsyncIterable(claim.track(published)), {

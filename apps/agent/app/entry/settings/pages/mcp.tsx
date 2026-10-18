@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemDescription, ItemGroup } from "~/components/ui/item";
+import type { McpFailureCode } from "memory-agent/definitions";
 import { type McpServerView, type Project } from "../../api";
 import { useSuspenseMcpQuery } from "../../queries/project";
 import { useMcpTrustMutation } from "../../queries/mutations/project";
@@ -35,6 +36,13 @@ function McpStateBadge({ server }: { server: McpServerView }) {
       return <Badge variant="destructive">시작 실패</Badge>;
   }
 }
+
+const mcpFailureText = {
+  missing_env: "설정이 쓰는 환경 변수가 없어요.",
+  connect_timed_out: "서버가 제시간에 연결되지 않았어요.",
+  tools_list_timed_out: "서버가 제시간에 도구 목록을 주지 않았어요.",
+  start_failed: "서버를 시작하거나 연결하지 못했어요.",
+} as const satisfies Record<McpFailureCode, string>;
 
 /** MCP servers from the user-wide and project config files (R18). */
 const description =
@@ -103,7 +111,14 @@ function McpSettingsContent({ project }: { project: Project }) {
                 target={server.target}
                 secretKind={server.transport === "stdio" ? "환경 변수" : "헤더"}
                 secretNames={[...server.envNames, ...server.headerNames]}
-                problem={server.state.status === "failed" ? server.state.error : null}
+                problem={
+                  server.state.status === "failed"
+                    ? {
+                        text: mcpFailureText[server.state.failure.code],
+                        detail: server.state.failure.detail,
+                      }
+                    : null
+                }
                 actions={
                   !server.shadowed && (
                     <TrustButton

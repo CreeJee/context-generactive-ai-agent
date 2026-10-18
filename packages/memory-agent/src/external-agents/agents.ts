@@ -12,6 +12,7 @@ import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SdkStreams } from "../acp/web-streams.ts";
 import {
+  Cause,
   HashSet,
   MutableHashMap,
   DateTime,
@@ -29,7 +30,14 @@ import {
   Schema,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { expandVariablesResult } from "../mcp/config.ts";
+import { isPlatformError } from "effect/PlatformError";
+import { MissingVariable, expandVariablesResult } from "../mcp/config.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import type {
+  ConfigFileFailureCode,
+  ExternalAgentFailureCode,
+  ShownFailure,
+} from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import {
   AgentScope,
@@ -65,9 +73,17 @@ export type AgentLinkState =
   | { readonly status: "connecting"; readonly failures: number }
   | { readonly status: "connected"; readonly agent: string | null; readonly loadSession: boolean }
   /** The last attempt failed; the next use (or the automatic reconnect) tries again. */
-  | { readonly status: "retrying"; readonly failures: number; readonly error: string }
+  | {
+      readonly status: "retrying";
+      readonly failures: number;
+      readonly failure: ShownFailure<ExternalAgentFailureCode>;
+    }
   /** Gave up after consecutive failures; only a manual reconnect tries again. */
-  | { readonly status: "stopped"; readonly failures: number; readonly error: string };
+  | {
+      readonly status: "stopped";
+      readonly failures: number;
+      readonly failure: ShownFailure<ExternalAgentFailureCode>;
+    };
 
 export type AgentTrustState =
   | { readonly status: "untrusted" }
@@ -84,7 +100,11 @@ export interface ExternalAgentView {
 }
 
 export interface ExternalAgentsOverview {
-  readonly files: ReadonlyArray<{ scope: AgentScope; path: string; error: string | null }>;
+  readonly files: ReadonlyArray<{
+    scope: AgentScope;
+    path: string;
+    error: ShownFailure<ConfigFileFailureCode> | null;
+  }>;
   readonly agents: readonly ExternalAgentView[];
 }
 
@@ -111,11 +131,11 @@ export type ExternalPromptOutcome =
   /** The agent answered the prompt with an error; the connection is still up. */
   | {
       readonly status: "failed";
-      readonly error: string;
+      readonly failure: ShownFailure<ExternalAgentFailureCode>;
       readonly answer: string;
       readonly toolCalls: readonly ReportedToolCall[];
     }
-  | { readonly status: "unavailable"; readonly reason: string };
+  | { readonly status: "unavailable"; readonly failure: ShownFailure<ExternalAgentFailureCode> };
 
 export interface PromptHooks {
   readonly signal: AbortSignal;
@@ -158,17 +178,38 @@ const TrustRow = Schema.Struct({
 const DataMessage = Schema.Struct({ message: Schema.String });
 const decodeDataMessage = Schema.decodeUnknownOption(DataMessage);
 
-/** The message to show; an agent's JSON-RPC error often puts the real reason in `data.message`. */
-const failureText = (error: Error) => {
-  const detail =
-    error instanceof acp.RequestError
-      ? Option.match(decodeDataMessage(error.data), {
-          onNone: () => "",
-          onSome: (data) => `: ${data.message}`,
-        })
-      : "";
-  return `${error.message}${detail}`.slice(0, 500);
-};
+/** The agent's own text; its JSON-RPC error often puts the real reason in `data.message`. */
+const failureText = (error: acp.RequestError) =>
+  Option.match(decodeDataMessage(error.data), {
+    onNone: () => error.message,
+    onSome: (data) => `${error.message}: ${data.message}`,
+  });
+
+/** What a rejected request or attempt said. */
+const rejectionText = (error: Error) =>
+  error instanceof acp.RequestError ? failureText(error) : error.message;
+
+/** Promise rejections can be any value; what the agent did not throw as an error has no class. */
+const rejectionError = (rejection: Cause.UnknownError) =>
+  rejection.cause instanceof Error ? rejection.cause : new Error(String(rejection.cause));
+
+const isMissingVariable = Schema.is(MissingVariable);
+const isInitializeTimedOut = Schema.is(ExternalAgentInitializeTimedOut);
+
+/**
+ * Why a connection attempt failed, from what it rejected with. `detail` is not redacted yet: the
+ * owner hides secrets before anyone sees it.
+ */
+const connectFailure = (error: Error): ShownFailure<ExternalAgentFailureCode> =>
+  isMissingVariable(error)
+    ? { code: "missing_env", detail: error.variable }
+    : isInitializeTimedOut(error)
+      ? { code: "initialize_timed_out", detail: null }
+      : isPlatformError(error)
+        ? { code: "spawn_failed", detail: error.message }
+        : error instanceof acp.RequestError
+          ? { code: "agent_error", detail: failureText(error) }
+          : { code: "connection_failed", detail: rejectionText(error) };
 
 /** The option that allows exactly this once, or rejects; a standing "always" is never chosen. */
 function permissionAnswer(
@@ -266,6 +307,7 @@ const make = Effect.gen(function* () {
 
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
+  const redactor = yield* SecretRedactor;
   const links = MutableHashMap.empty<string, Link>();
   const retries = yield* FiberMap.make<string, void, never>();
   const context = yield* Effect.context<never>();
@@ -310,14 +352,18 @@ const make = Effect.gen(function* () {
       retire(link);
       MutableHashMap.remove(links, key);
     }
-    return {
-      files: [global, local].map((file, index) => ({
-        scope: index === 0 ? ("global" as const) : ("project" as const),
-        path: file.path,
-        error: file.error,
-      })),
-      agents,
-    };
+    const files = yield* Effect.forEach([global, local], (file, index) =>
+      // A decode error can quote the file, environment values included.
+      Effect.map(
+        file.error === null ? Effect.succeed(null) : redactor.hideDetail(file.error),
+        (error) => ({
+          scope: index === 0 ? ("global" as const) : ("project" as const),
+          path: file.path,
+          error,
+        }),
+      ),
+    );
+    return { files, agents };
   });
 
   const shutdown = (link: Link) => {
@@ -469,12 +515,20 @@ const make = Effect.gen(function* () {
       (error) => {
         link.attempt = null;
         link.failures += 1;
-        const text = failureText(error instanceof Error ? error : new Error(String(error)));
-        link.state =
-          link.failures >= maxConsecutiveFailures
-            ? { status: "stopped", failures: link.failures, error: text }
-            : { status: "retrying", failures: link.failures, error: text };
-        throw error;
+        const failures = link.failures;
+        return runNativeEffect(
+          redactor.hideDetail(
+            connectFailure(error instanceof Error ? error : new Error(String(error))),
+          ),
+        ).then((failure) => {
+          // A newer attempt owns the state now.
+          if (link.attempt === null)
+            link.state =
+              failures >= maxConsecutiveFailures
+                ? { status: "stopped", failures, failure }
+                : { status: "retrying", failures, failure };
+          throw error;
+        });
       },
     );
     link.attempt = pending;
@@ -629,26 +683,33 @@ const make = Effect.gen(function* () {
       runNativeEffect(
         Effect.gen(function* () {
           const agent = yield* usable(project, name);
-          if (!isTruthy(agent)) return { status: "unavailable" as const, reason: "not_trusted" };
+          if (!isTruthy(agent))
+            return {
+              status: "unavailable" as const,
+              failure: { code: "not_trusted" as const, detail: null },
+            };
           const link = linkFor(project, agent);
           if (
             link.failures >= maxConsecutiveFailures &&
             !isTruthy(link.live) &&
             !isTruthy(link.attempt)
           )
-            return { status: "unavailable" as const, reason: "stopped_after_failures" };
+            return {
+              status: "unavailable" as const,
+              failure: { code: "stopped_after_failures" as const, detail: null },
+            };
           const connected = yield* Effect.result(
             nativePromise(() =>
               link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
             ),
           );
-          if (Result.isFailure(connected)) {
-            const error = connected.failure.cause;
+          if (Result.isFailure(connected))
             return {
               status: "unavailable" as const,
-              reason: failureText(error instanceof Error ? error : new Error(String(error))),
+              failure: yield* redactor.hideDetail(
+                connectFailure(rejectionError(connected.failure)),
+              ),
             };
-          }
           const live = connected.success;
 
           let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
@@ -662,11 +723,13 @@ const make = Effect.gen(function* () {
               ),
             );
             if (Result.isFailure(created)) {
-              const error = created.failure.cause;
-              const message = error instanceof Error ? error.message : String(error);
+              const error = rejectionError(created.failure);
               return {
                 status: "unavailable" as const,
-                reason: `session_failed: ${message.slice(0, 200)}`,
+                failure: yield* redactor.hideDetail({
+                  code: "session_failed" as const,
+                  detail: rejectionText(error),
+                }),
               };
             }
             sessionId = created.success.sessionId;
@@ -743,10 +806,13 @@ const make = Effect.gen(function* () {
                 answer,
                 toolCalls: [...MutableHashMap.values(toolCalls)],
               };
-            const error = outcome.failure.cause;
+            const error = rejectionError(outcome.failure);
             return {
               status: "failed" as const,
-              error: failureText(error instanceof Error ? error : new Error(String(error))),
+              failure: yield* redactor.hideDetail({
+                code: "agent_error" as const,
+                detail: rejectionText(error),
+              }),
               answer,
               toolCalls: [...MutableHashMap.values(toolCalls)],
             };

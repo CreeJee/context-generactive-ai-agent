@@ -142,6 +142,7 @@ import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { createChatExecution } from "./chat-execution.ts";
+import { withShownRunErrors } from "./run-errors.ts";
 import { createFullLoopExecution, preflightFullLoopExecution } from "./full-loop-execution.ts";
 import { FullLoopAdmissionRejected } from "./full-loop-admission-preflight.ts";
 import type { ChatExecutionTurn, ChatExecutionCapabilities } from "./chat-execution.ts";
@@ -1699,14 +1700,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             }),
             indexInBackground(),
           ];
-          const stream = createChatExecution<typeof adapter>().execute(
-            { messages, threadId, runId, parentRunId },
-            {
-              model: { adapter },
-              tools: [],
-              middleware: externalMiddleware,
-              stream: { abortController },
-            },
+          const stream = withShownRunErrors(
+            redactor,
+            createChatExecution<typeof adapter>().execute(
+              { messages, threadId, runId, parentRunId },
+              {
+                model: { adapter },
+                tools: [],
+                middleware: externalMiddleware,
+                stream: { abortController },
+              },
+            ),
           );
           const published = yield* cancellation.publish(stream);
           const response = toServerSentEventsResponse(
@@ -2513,7 +2517,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   );
                 }),
               )
-            : executionStream;
+            : withShownRunErrors(redactor, executionStream);
         // Commit each bound run's output before delivering it to the page.
         const recorded = isTruthy(boundRun)
           ? Stream.toAsyncIterable(

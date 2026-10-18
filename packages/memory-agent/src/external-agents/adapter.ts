@@ -15,6 +15,7 @@ import {
 } from "@tanstack/ai/adapters";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { messageText } from "../messages/text.ts";
+import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { ExternalPromptOutcome } from "./agents.ts";
 
 /** Sends one user turn to the external agent; updates arrive through `onUpdate`. */
@@ -29,28 +30,17 @@ type Item =
   | { readonly kind: "done"; readonly outcome: ExternalPromptOutcome }
   | { readonly kind: "error"; readonly error: Error };
 
-/** A turn that ended without an answer; the SDK shows its message as the run's error. */
+/**
+ * A turn that ended without an answer. The SDK sends `code` and `message` as the run's
+ * `RUN_ERROR`: the page words the code and shows the message, the agent's own text with secrets
+ * already hidden, only under its details.
+ */
 export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTurnFailed>()(
   "ExternalAgentTurnFailed",
-  {
-    reason: Schema.Union([
-      /** `detail` is the agent's or the connection's own reason. */
-      Schema.TaggedStruct("Unavailable", { detail: Schema.String }),
-      Schema.TaggedStruct("Failed", { detail: Schema.String }),
-      /** The connection dropped mid-answer; the prompt was not sent again. */
-      Schema.TaggedStruct("Disconnected", {}),
-    ]),
-  },
+  { code: ExternalAgentFailureCode, detail: Schema.NullOr(Schema.String) },
 ) {
   override get message() {
-    switch (this.reason._tag) {
-      case "Unavailable":
-        return `외부 에이전트를 쓸 수 없어요: ${this.reason.detail}`;
-      case "Failed":
-        return `외부 에이전트가 오류로 끝냈어요: ${this.reason.detail}`;
-      case "Disconnected":
-        return "외부 에이전트 연결이 끊겼어요. 보낸 요청은 다시 보내지 않았어요.";
-    }
+    return this.detail ?? this.code;
   }
 }
 
@@ -61,13 +51,10 @@ function failureOf(outcome: ExternalPromptOutcome): ExternalAgentTurnFailed | nu
     case "cancelled":
       return null;
     case "unavailable":
-      return new ExternalAgentTurnFailed({
-        reason: { _tag: "Unavailable", detail: outcome.reason },
-      });
     case "failed":
-      return new ExternalAgentTurnFailed({ reason: { _tag: "Failed", detail: outcome.error } });
+      return new ExternalAgentTurnFailed(outcome.failure);
     case "disconnected":
-      return new ExternalAgentTurnFailed({ reason: { _tag: "Disconnected" } });
+      return new ExternalAgentTurnFailed({ code: "disconnected", detail: null });
   }
 }
 

@@ -6,6 +6,8 @@ import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
+import { fallbackLogged } from "../runtime/logged-failures.ts";
+import type { ShownFailure } from "../runtime/shown-failure.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
 /**
@@ -157,6 +159,9 @@ function replaceFindings(text: string, findings: readonly Finding[]): RedactedVi
   return { text: out + text.slice(at), hidden };
 }
 
+/** Longest failure detail shown; an agent's or provider's error can carry a whole response. */
+const maxShownDetail = 1_000;
+
 const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Finite);
 const isBoolean = Schema.is(Schema.Boolean);
@@ -207,11 +212,33 @@ const make = Effect.sync(() => {
       onSome: (json) => Effect.map(redactJson(json), (redacted): A | Json => redacted),
     });
 
+  /**
+   * An outside program's own failure text as a person or the model may read it: secrets hidden,
+   * then cut short. When hiding fails, the text is not shown at all.
+   */
+  const shownDetail = (text: string) =>
+    redactText(text).pipe(
+      Effect.map(({ text: hidden }): string | null =>
+        hidden.length > maxShownDetail ? `${hidden.slice(0, maxShownDetail)}…` : hidden,
+      ),
+      fallbackLogged("Failure detail withheld", () => null),
+    );
+
+  /** The failure with its detail as {@link shownDetail} shows it. */
+  const hideDetail = <Code extends string>(
+    failure: ShownFailure<Code>,
+  ): Effect.Effect<ShownFailure<Code>> =>
+    failure.detail === null
+      ? Effect.succeed(failure)
+      : Effect.map(shownDetail(failure.detail), (detail) => ({ code: failure.code, detail }));
+
   return {
     redactText,
     redactView,
     redactJson,
     redactResult,
+    shownDetail,
+    hideDetail,
 
     /**
      * The same tools, with secrets hidden in what they return and in the errors they throw, before

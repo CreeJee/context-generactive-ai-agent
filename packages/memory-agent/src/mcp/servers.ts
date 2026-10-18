@@ -21,8 +21,15 @@ import {
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import type { Project } from "../projects/projects.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import type {
+  ConfigFileFailureCode,
+  McpFailureCode,
+  ShownFailure,
+} from "../runtime/shown-failure.ts";
 import {
   McpScope,
+  MissingVariable,
   expandVariables,
   globalMcpFile,
   projectMcpFile,
@@ -39,7 +46,7 @@ export type McpServerState =
   /** Trusted, not started yet (it starts with the next run). */
   | { readonly status: "trusted" }
   | { readonly status: "connected"; readonly tools: readonly string[] }
-  | { readonly status: "failed"; readonly error: string };
+  | { readonly status: "failed"; readonly failure: ShownFailure<McpFailureCode> };
 
 export interface McpServerView {
   readonly scope: McpScope;
@@ -55,7 +62,11 @@ export interface McpServerView {
 }
 
 export interface McpOverview {
-  readonly files: ReadonlyArray<{ scope: McpScope; path: string; error: string | null }>;
+  readonly files: ReadonlyArray<{
+    scope: McpScope;
+    path: string;
+    error: ShownFailure<ConfigFileFailureCode> | null;
+  }>;
   readonly servers: readonly McpServerView[];
 }
 
@@ -128,10 +139,13 @@ interface Connection {
   discovering: Promise<AnyServerTool[]> | null;
 }
 
+/** The server's or the SDK's own text, with the cause it wraps. */
 const describeFailure = (error: Error) => {
   const cause = error.cause instanceof Error ? `: ${error.cause.message}` : "";
-  return `${error.message}${cause}`.slice(0, 300);
+  return `${error.message}${cause}`;
 };
+
+const isMissingVariable = Schema.is(MissingVariable);
 
 const withTimeout = <A>(promise: Promise<A>, ms: number, step: McpStepTimedOut["step"]) =>
   nativePromise(() => promise).pipe(
@@ -153,7 +167,34 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
+  const redactor = yield* SecretRedactor;
   const connections = MutableHashMap.empty<string, Connection>();
+
+  /** Why discovery failed, with the server's own text as the hidden detail. */
+  const failureOf = (
+    failure: McpStepTimedOut | Cause.UnknownError | Schema.SchemaError,
+  ): Effect.Effect<ShownFailure<McpFailureCode>> => {
+    switch (failure._tag) {
+      case "McpStepTimedOut":
+        switch (failure.step) {
+          case "connect":
+            return Effect.succeed({ code: "connect_timed_out", detail: null });
+          case "tools/list":
+            return Effect.succeed({ code: "tools_list_timed_out", detail: null });
+        }
+      case "UnknownError": {
+        const error = failure.cause;
+        return isMissingVariable(error)
+          ? Effect.succeed({ code: "missing_env", detail: error.variable })
+          : redactor.hideDetail({
+              code: "start_failed",
+              detail: describeFailure(error instanceof Error ? error : new Error(String(error))),
+            });
+      }
+      case "SchemaError":
+        return Effect.succeed({ code: "start_failed", detail: null });
+    }
+  };
 
   const selectTrust = SqlSchema.findAll({
     Request: Schema.String,
@@ -196,14 +237,18 @@ const make = Effect.gen(function* () {
       )
         close(key);
     }
-    return {
-      files: [global, local].map((file, index) => ({
-        scope: index === 0 ? ("global" as const) : ("project" as const),
-        path: file.path,
-        error: file.error,
-      })),
-      servers,
-    };
+    const files = yield* Effect.forEach([global, local], (file, index) =>
+      // A decode error can quote the file, header and environment values included.
+      Effect.map(
+        file.error === null ? Effect.succeed(null) : redactor.hideDetail(file.error),
+        (error) => ({
+          scope: index === 0 ? ("global" as const) : ("project" as const),
+          path: file.path,
+          error,
+        }),
+      ),
+    );
+    return { files, servers };
   });
 
   const close = (key: string) => {
@@ -320,19 +365,15 @@ const make = Effect.gen(function* () {
         });
       }).pipe(
         // A server that fails to start or list is remembered as failed and offers no tools.
-        Effect.catch((failure) =>
-          Effect.sync(() => {
-            const error = Cause.isUnknownError(failure) ? failure.cause : failure;
-            // Stop whatever did start; the next run starts it again.
-            void connection.client.then((client) => client.close()).catch(() => undefined);
+        Effect.catch((failure) => {
+          // Stop whatever did start; the next run starts it again.
+          void connection.client.then((client) => client.close()).catch(() => undefined);
+          return Effect.map(failureOf(failure), (shown): AnyServerTool[] => {
             if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
-              connection.state = {
-                status: "failed",
-                error: describeFailure(error instanceof Error ? error : new Error(String(error))),
-              };
+              connection.state = { status: "failed", failure: shown };
             return [];
-          }),
-        ),
+          });
+        }),
       ),
     );
     connection.discovering = pending;

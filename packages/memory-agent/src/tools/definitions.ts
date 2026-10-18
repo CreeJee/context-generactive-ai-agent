@@ -34,6 +34,16 @@ export type {
   UncertainToolState,
 } from "../workflow/uncertain-runs.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
+export {
+  ConfigFileFailureCode,
+  ExternalAgentFailureCode,
+  McpFailureCode,
+  RunFailureCode,
+  externalAgentFailureText,
+  runFailureCodeOf,
+  runFailureText,
+  type ShownFailure,
+} from "../runtime/shown-failure.ts";
 export type { SubagentStatus, SubagentView } from "../subagents/subagent-state.ts";
 export type { ProviderRetryView } from "../workflow/provider-retry.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "../approvals/relayed-state.ts";

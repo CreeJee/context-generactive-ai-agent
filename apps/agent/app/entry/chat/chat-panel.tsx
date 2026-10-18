@@ -19,6 +19,7 @@ import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { RunFailureText } from "./run-failure";
 import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
 import { renumberReferences, useDraftImages } from "./draft-images";
@@ -998,11 +999,15 @@ function ChatPanel({
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
               <AlertDescription>
-                {isApiError(error) && error.code === "provider_auth_unavailable"
-                  ? "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
-                  : isApiError(error) && error.code === "provider_unavailable"
-                    ? "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
-                    : error.message}
+                {isApiError(error) && error.code === "provider_auth_unavailable" ? (
+                  "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
+                ) : isApiError(error) && error.code === "provider_unavailable" ? (
+                  "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
+                ) : isApiError(error) ? (
+                  error.message
+                ) : (
+                  <RunFailureText error={error} />
+                )}
               </AlertDescription>
             </Alert>
           )}

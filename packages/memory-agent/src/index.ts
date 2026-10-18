@@ -660,6 +660,16 @@ export {
   type ReportedToolCall,
 } from "./external-agents/agents.ts";
 export {
+  ConfigFileFailureCode,
+  ExternalAgentFailureCode,
+  McpFailureCode,
+  RunFailureCode,
+  externalAgentFailureText,
+  runFailureCodeOf,
+  runFailureText,
+  type ShownFailure,
+} from "./runtime/shown-failure.ts";
+export {
   Subagents,
   childInstructions,
   subagentInstructions,

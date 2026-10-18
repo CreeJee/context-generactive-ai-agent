@@ -6,8 +6,10 @@ import {
   MutableHashSet,
   HashMap,
   MutableHashMap,
+  Context,
   Effect,
   Fiber,
+  Layer,
 } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
@@ -32,6 +34,13 @@ import {
 } from "../tools/definitions.ts";
 import { AppRequestFailed, type AppApi, type ProjectSummary } from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import {
+  RunFailureCode,
+  runFailureCodeOf,
+  runFailureText,
+  type ShownFailure,
+} from "../runtime/shown-failure.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
 const leaseRenewMs = 20_000;
@@ -46,7 +55,7 @@ interface PromptTurn {
   readonly client: AgentContext;
   readonly args: MutableHashMap.MutableHashMap<string, string>;
   cancelled: boolean;
-  failure: string | null;
+  failure: ShownFailure<RunFailureCode> | null;
 }
 
 interface BridgeSession {
@@ -83,8 +92,11 @@ class EditorRequestRefused extends Schema.TaggedError<EditorRequestRefused>()(
       Schema.TaggedStruct("ProjectNotRegistered", { root: Schema.String }),
       Schema.TaggedStruct("SessionNotOpen", {}),
       Schema.TaggedStruct("TurnInProgress", {}),
-      /** The app's run ended with an error; `detail` is the run's own error text. */
-      Schema.TaggedStruct("RunFailed", { detail: Schema.String }),
+      /** The app's run ended with an error; `detail` is the run's own error text, redacted. */
+      Schema.TaggedStruct("RunFailed", {
+        code: RunFailureCode,
+        detail: Schema.NullOr(Schema.String),
+      }),
     ]),
   },
 ) {}
@@ -100,29 +112,59 @@ const refusalMessage = (reason: EditorRequestRefused["reason"]) => {
     case "TurnInProgress":
       return "이미 답하는 중이에요.";
     case "RunFailed":
-      return reason.detail;
+      return runFailureText[reason.code];
   }
 };
 
+/** A failed run as the editor receives it: the code's wording, and `{ code, detail }` as data. */
+const runFailedError = (failure: ShownFailure<RunFailureCode>) =>
+  acp.RequestError.internalError(
+    { code: failure.code, detail: failure.detail },
+    runFailureText[failure.code],
+  );
+
 /** The JSON-RPC error the editor receives. */
-const explain = (error: Error) =>
+const explain = (
+  redactor: SecretRedactor["Service"],
+  error: Error,
+): Effect.Effect<acp.RequestError> =>
   error instanceof acp.RequestError
-    ? error
+    ? Effect.succeed(error)
     : Schema.is(AppRequestFailed)(error)
-      ? requestError(
-          Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
-            `앱 요청이 실패했어요: ${error.code}`,
+      ? Effect.succeed(
+          requestError(
+            Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
+              `앱 요청이 실패했어요: ${error.code}`,
+          ),
         )
       : Schema.is(EditorRequestRefused)(error)
-        ? requestError(refusalMessage(error.reason))
-        : requestError(error.message);
+        ? Effect.succeed(
+            error.reason._tag === "RunFailed"
+              ? runFailedError(error.reason)
+              : requestError(refusalMessage(error.reason)),
+          )
+        : // Anything else can quote a URL or a credential; its text goes out redacted.
+          Effect.map(redactor.shownDetail(error.message), (detail) =>
+            runFailedError({ code: "run_failed", detail }),
+          );
 
-/** Unwraps a rejected app call and answers the editor with its error. */
-const toEditorError = (failure: Error) => {
+/** Unwraps a rejected app call and fails with the editor's error for it. */
+const toEditorError = (redactor: SecretRedactor["Service"]) => (failure: Error) => {
   // Promise callbacks reject with values of any kind.
   const error = Cause.isUnknownError(failure) ? failure.cause : failure;
-  return explain(error instanceof Error ? error : new Error(String(error)));
+  return Effect.flatMap(
+    explain(redactor, error instanceof Error ? error : new Error(String(error))),
+    Effect.fail,
+  );
 };
+
+const decodeErrorCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
+
+/** The chat client's own error: its `RUN_ERROR` code, if it kept one, and message. */
+const chatFailure = (error: Error): ShownFailure<RunFailureCode> => ({
+  code: runFailureCodeOf(Option.getOrUndefined(decodeErrorCode(error))?.code),
+  detail: error.message,
+});
 
 const decodeReview = Schema.decodeUnknownOption(
   Schema.Struct({ payload: PermissionReviewPayload }),
@@ -176,6 +218,11 @@ export function startAcpAgent(options: {
   readonly api: AppApi;
 }): acp.AgentConnection {
   const { api } = options;
+  // The bridge runs in its own process, outside the app's services.
+  const redactor = Effect.runSync(
+    Effect.scoped(Effect.map(Layer.build(SecretRedactor.layer), Context.get(SecretRedactor))),
+  );
+  const editorError = toEditorError(redactor);
   const sessions = MutableHashMap.empty<string, BridgeSession>();
 
   const notify = (turn: PromptTurn, sessionId: string, update: SessionUpdate) =>
@@ -249,7 +296,8 @@ export function startAcpAgent(options: {
         });
         return;
       case "RUN_ERROR":
-        turn.failure = chunk.message;
+        // The app hid secrets in the message before sending it.
+        turn.failure = { code: runFailureCodeOf(chunk.code), detail: chunk.message };
         return;
       default:
         return;
@@ -425,7 +473,7 @@ export function startAcpAgent(options: {
           const created = yield* nativePromise(() => api.createSession(project.id, "ACP"));
           yield* open(created.id, project, []);
           return { sessionId: created.id };
-        }).pipe(Effect.mapError(toEditorError)),
+        }).pipe(Effect.catch(editorError)),
       ),
     )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -475,7 +523,7 @@ export function startAcpAgent(options: {
                   break;
               }
           return {};
-        }).pipe(Effect.mapError(toEditorError)),
+        }).pipe(Effect.catch(editorError)),
       ),
     )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -551,10 +599,11 @@ export function startAcpAgent(options: {
               yield* waitIdle(session.chat);
             }
             if (turn.cancelled) return { stopReason: "cancelled" as const satisfies StopReason };
-            const failure = turn.failure ?? session.chat.getError()?.message ?? null;
+            const error = session.chat.getError();
+            const failure = turn.failure ?? (isTruthy(error) ? chatFailure(error) : null);
             if (isTruthy(failure))
               return yield* new EditorRequestRefused({
-                reason: { _tag: "RunFailed", detail: failure },
+                reason: { _tag: "RunFailed", ...failure },
               });
             return { stopReason: "end_turn" as const satisfies StopReason };
           }).pipe(
@@ -565,7 +614,7 @@ export function startAcpAgent(options: {
               }),
             ),
           );
-        }),
+        }).pipe(Effect.catch(editorError)),
       ),
     )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.

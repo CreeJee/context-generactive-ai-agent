@@ -103,7 +103,10 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           () => Effect.sync(() => vi.unstubAllEnvs()),
         );
         const { project, starts, prompt, trust } = yield* fakeAgentProject();
-        expect(yield* prompt("hi")).toEqual({ status: "unavailable", reason: "not_trusted" });
+        expect(yield* prompt("hi")).toEqual({
+          status: "unavailable",
+          failure: { code: "not_trusted", detail: null },
+        });
         expect(yield* starts).toEqual([]);
 
         const trusted = yield* trust;
@@ -126,6 +129,22 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       }),
   );
 
+  it.effect("a failed start is shown by its code, the agent's own text with secrets hidden", () =>
+    Effect.gen(function* () {
+      const { project, agents, config, link, prompt } = yield* fakeAgentProject();
+      yield* (yield* FileSystem.FileSystem).writeFileString(
+        config,
+        yield* encodeJson({ agents: { fake: { command: "/nonexistent/API_KEY=zq81Hd72kdP0xQ" } } }),
+      );
+      yield* agents.setTrusted(project, "project", "fake", true);
+      const outcome = yield* prompt("hi");
+      const failure = { code: "spawn_failed", detail: expect.stringContaining("API_KEY=") };
+      expect(outcome).toEqual({ status: "unavailable", failure });
+      expect(yield* link).toEqual({ status: "retrying", failures: 1, failure });
+      expect(yield* encodeJson([outcome, yield* link])).not.toContain("zq81Hd72kdP0xQ");
+    }),
+  );
+
   it.effect("removing a configured agent closes its live process", () =>
     Effect.gen(function* () {
       const { project, agents, config, starts, prompt, trust } = yield* fakeAgentProject();
@@ -138,7 +157,10 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       );
       expect((yield* agents.overview(project)).agents).toEqual([]);
       yield* until(() => !processAlive(pid), "the removed agent to stop");
-      expect(yield* prompt("again")).toEqual({ status: "unavailable", reason: "not_trusted" });
+      expect(yield* prompt("again")).toEqual({
+        status: "unavailable",
+        failure: { code: "not_trusted", detail: null },
+      });
     }),
   );
 
@@ -236,7 +258,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         expect(yield* link).toMatchObject({ status: "stopped", failures: 2 });
         expect(yield* prompt("while stopped")).toEqual({
           status: "unavailable",
-          reason: "stopped_after_failures",
+          failure: { code: "stopped_after_failures", detail: null },
         });
 
         yield* fs.remove(refuse);

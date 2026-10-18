@@ -6,6 +6,7 @@ import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
 import { Result, Schema } from "effect";
+import type { ConfigFileFailureCode, ShownFailure } from "../runtime/shown-failure.ts";
 import { McpServerName } from "../mcp/config.ts";
 
 export const AgentScope = Schema.Literals(["global", "project"]);
@@ -42,7 +43,8 @@ export interface ConfiguredAgent {
 export interface AgentsFileRead {
   readonly path: string;
   readonly agents: readonly ConfiguredAgent[];
-  readonly error: string | null;
+  /** Not redacted: the owner hides secrets in `detail` before showing it. */
+  readonly error: ShownFailure<ConfigFileFailureCode> | null;
 }
 
 export const agentFingerprint = (command: AgentCommand) =>
@@ -64,12 +66,19 @@ const readAgentsFileBody = Effect.fn("agents.readConfig")(function* (
     return { path, agents: [], error: null } satisfies AgentsFileRead;
   const text = yield* fs.readFileString(path).pipe(Effect.result);
   if (Result.isFailure(text))
-    return { path, agents: [], error: "unreadable" } satisfies AgentsFileRead;
+    return {
+      path,
+      agents: [],
+      error: { code: "unreadable", detail: null },
+    } satisfies AgentsFileRead;
   return Result.match(decodeAgentsFile(text.success), {
     onFailure: (error) => ({
       path,
       agents: [],
-      error: String(error).split("\n").slice(0, 4).join("\n"),
+      error: {
+        code: "invalid_config" as const,
+        detail: String(error).split("\n").slice(0, 4).join("\n"),
+      },
     }),
     onSuccess: (file) => {
       const entries = Object.entries(file.agents);
@@ -78,7 +87,7 @@ const readAgentsFileBody = Effect.fn("agents.readConfig")(function* (
         path,
         error:
           invalid.length > 0
-            ? `agent names must be 1-32 letters, digits, _ or -: ${invalid.join(", ")}`
+            ? { code: "invalid_names" as const, detail: invalid.join(", ") }
             : null,
         agents: entries
           .filter(([name]) => isAgentName(name))
