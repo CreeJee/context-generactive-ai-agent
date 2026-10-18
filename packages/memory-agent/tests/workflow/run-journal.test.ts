@@ -252,17 +252,17 @@ testAgent()("workflow run bindings", (it) => {
         const old = `${session}:old`;
         const binding = boundRun(yield* bindLatest(session, old));
         finishRun(db, session, old, "completed");
-        const ledger = makeSqliteOwnerRpcLedger(db);
+        const ledger = yield* makeSqliteOwnerRpcLedger;
         const key = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(binding);
-        expect(ledger.reserve(key, 1, "effect", sideEffect)).toEqual({ type: "reserved" });
+        expect(yield* ledger.reserve(key, 1, "effect", sideEffect)).toEqual({ type: "reserved" });
         switch (status) {
           case "pending":
             break;
           case "uncertain":
-            ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
+            yield* ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
             break;
           case "succeeded":
-            ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
+            yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
             break;
         }
         yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["Revised outcome"] });

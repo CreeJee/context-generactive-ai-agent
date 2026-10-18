@@ -82,14 +82,16 @@ const failedRead = Effect.fnUntraced(function* (
       "INSERT INTO chat_runs(run_id,thread_id,status,started_at,finished_at,error_code) VALUES(?,?,'failed',1,2,'worker_execution_failed')",
     )
     .run(runId, session);
-  const ledger = makeSqliteOwnerRpcLedger(db);
+  const ledger = yield* makeSqliteOwnerRpcLedger;
   const call = { ...readCall, toolCallId: "read-call" };
   const fingerprint = (operation: string) =>
     JSON.stringify({ operation, input: encodeFullLoopValue(call) });
-  expect(ledger.reserve(key, 1, fingerprint("toolAuthorize"), true)).toEqual({ type: "reserved" });
-  ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
-  expect(ledger.reserve(key, 2, fingerprint("tool"), true)).toEqual({ type: "reserved" });
-  ledger.settle(key, 2, { type: "uncertain", operationId: 2 });
+  expect(yield* ledger.reserve(key, 1, fingerprint("toolAuthorize"), true)).toEqual({
+    type: "reserved",
+  });
+  yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
+  expect(yield* ledger.reserve(key, 2, fingerprint("tool"), true)).toEqual({ type: "reserved" });
+  yield* ledger.settle(key, 2, { type: "uncertain", operationId: 2 });
   yield* executions.fail(payload, {
     _tag: "SideEffectUncertain",
     operationId: "2",
@@ -378,7 +380,7 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
         "recovered",
       );
       const before = f.history();
-      expect(yield* migrateOwnerRpcFingerprintBatch(f.db, 0, 4)).toMatchObject({
+      expect(yield* migrateOwnerRpcFingerprintBatch(0, 4)).toMatchObject({
         migrated: 0,
         retained: 2,
         done: true,
@@ -437,12 +439,12 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         expect(() =>
           f.db.sqlite.prepare("DELETE FROM owner_read_recoveries WHERE run_id=?").run(f.runId),
         ).toThrow("retained");
-        expect(f.ledger.reserve(f.key, 2, "different", true).type).toBe("existing");
+        expect((yield* f.ledger.reserve(f.key, 2, "different", true)).type).toBe("existing");
         for (const [fingerprint, sideEffect] of [
           ["new-read", false],
           ["new-write", true],
         ] as const)
-          expect(f.ledger.reserve(f.key, 3, fingerprint, sideEffect)).toEqual({
+          expect(yield* f.ledger.reserve(f.key, 3, fingerprint, sideEffect)).toEqual({
             type: "rejected",
             reason: "uncertain_run",
           });
@@ -461,23 +463,20 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         f.updateOperation(1, "fingerprint=?", authorization.fingerprint);
         expect(f.history()).toEqual(before);
         yield* env.reopen;
-        const db = yield* env.use(Database);
         expect((yield* (yield* env.use(OwnerReadRecovery)).assess(f.session, f.runId)).type).toBe(
           "recovered",
         );
-        const bindings = yield* workflowRunBindings.pipe(
-          Effect.provideService(SqlClient.SqlClient, yield* env.use(SqlClient.SqlClient)),
+        const reopened = Effect.provideService(
+          SqlClient.SqlClient,
+          yield* env.use(SqlClient.SqlClient),
         );
+        const bindings = yield* reopened(workflowRunBindings);
         const binding = yield* bindings.bind(f.session, next, f.revision.id);
         expect(binding.status).toBe("bound");
         if (binding.status !== "bound") return yield* Effect.die("new binding expected");
+        const ledger = yield* reopened(makeSqliteOwnerRpcLedger);
         expect(
-          makeSqliteOwnerRpcLedger(db).reserve(
-            yield* toJson(binding.binding),
-            1,
-            "new-effect",
-            true,
-          ),
+          yield* ledger.reserve(yield* toJson(binding.binding), 1, "new-effect", true),
         ).toEqual({ type: "reserved" });
         expect(yield* bindings.bind(f.session, f.runId, f.revision.id)).toEqual({
           status: "refused",

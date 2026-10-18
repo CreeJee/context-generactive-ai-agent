@@ -577,8 +577,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runBindings = yield* workflowRunBindings;
   const uncertain = yield* uncertainRuns;
   const readRecovery = yield* OwnerReadRecovery;
-  const workerAuthority = goalWorkerAuthority({ sqlite, atomic });
-  const workerLedger = makeSqliteOwnerRpcLedger({ sqlite, atomic });
+  const workerAuthority = yield* goalWorkerAuthority;
+  const workerLedger = yield* makeSqliteOwnerRpcLedger;
   const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
   const latestRevisionId = SqlSchema.findOneOption({
@@ -651,7 +651,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   );
   const ownerNativeArtifacts = Context.get(nativeArtifactContext, OwnerNativeArtifacts);
   const adoptedNativeGoals = MutableHashSet.empty<string>();
-  const workerGenerations = GoalWorkerGenerations.makeGoalWorkerGenerationStore({ sqlite, atomic });
+  const workerGenerations = yield* GoalWorkerGenerations.goalWorkerGenerationStore;
   type WorkerAssetsRegistry = Effect.Success<
     ReturnType<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>
   >;
@@ -2196,27 +2196,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 throw new Error("Inactive Goal worker owner");
               return workerGoalId;
             });
-            const pin = yield* Effect.try(() => {
-              const pin = workerGenerations.get(goalId);
-              // Never repair a missing pin by assigning today's code to a Goal that executed.
-              if (!isTruthy(pin) && workerGenerations.hasUnpinnedDispatch(goalId))
-                throw new Error("Historical Goal dispatch has no source generation");
-              return pin;
-            });
+            // Never repair a missing pin by assigning today's code to a Goal that executed.
+            const pin = yield* workerGenerations.pinned(goalId);
             const registry = yield* assetsRegistry;
-            workerAssets = isTruthy(pin)
-              ? yield* registry.adopt({ ...pin, canonicalWorkerUrl: pin.workerUrl })
+            workerAssets = Option.isSome(pin)
+              ? yield* registry.adopt({ ...pin.value, canonicalWorkerUrl: pin.value.workerUrl })
               : yield* registry.resolve(goalId);
-            if (!isTruthy(pin)) {
+            if (Option.isNone(pin)) {
               const admittedAssets = workerAssets;
               yield* Effect.try(() => {
                 if (!workerScopeAlive) throw new Error("Inactive Goal worker owner");
-                return workerGenerations.record({
-                  goalInstanceId: admittedAssets.goalInstanceId,
-                  sourceGeneration: admittedAssets.sourceGeneration,
-                  manifestHash: admittedAssets.manifestHash,
-                  workerUrl: admittedAssets.canonicalWorkerUrl,
-                });
+              });
+              yield* workerGenerations.record({
+                goalInstanceId: admittedAssets.goalInstanceId,
+                sourceGeneration: admittedAssets.sourceGeneration,
+                manifestHash: admittedAssets.manifestHash,
+                workerUrl: admittedAssets.canonicalWorkerUrl,
               });
             }
           }).pipe(
@@ -2225,9 +2220,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 json(409, {
                   error: "goal_source_generation_unavailable",
                   detail:
-                    error.cause instanceof Error
-                      ? error.cause.message
-                      : "Goal snapshot unavailable",
+                    error._tag === "GoalWorkerGenerationError"
+                      ? error.reason
+                      : error.cause instanceof Error
+                        ? error.cause.message
+                        : "Goal snapshot unavailable",
                 }),
               onSuccess: () => null,
             }),
@@ -2270,7 +2267,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             case "accepted":
               if (durableAdmission.result.type === "existing")
                 return json(409, { error: "run_outcome_uncertain" });
-              workerCapability = workerAuthority.issue(durableAdmission.result.value, generation);
+              workerCapability = yield* workerAuthority.issue(
+                durableAdmission.result.value,
+                generation,
+              );
               if (!(workerCapability !== null))
                 return json(409, { error: "run_outcome_uncertain" });
               boundRun = {
@@ -2338,14 +2338,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 },
                 onWorkerStopped: releaseWorker,
                 permits: (capability) =>
-                  workerScopeAlive &&
-                  workerAuthority.permits({ ...capability, requestId: "owner-rpc" }),
+                  workerScopeAlive
+                    ? workerAuthority.permits({ ...capability, requestId: "owner-rpc" })
+                    : Effect.succeed(false),
                 permitsFinalization: (capability) =>
-                  workerScopeAlive &&
-                  workerAuthority.permitsFinalization({
-                    ...capability,
-                    requestId: "owner-finalization",
-                  }),
+                  workerScopeAlive
+                    ? workerAuthority.permitsFinalization({
+                        ...capability,
+                        requestId: "owner-finalization",
+                      })
+                    : Effect.succeed(false),
                 // Audited owner cleanup only: run/transcript persistence, partial answers,
                 // recorded evidence and workflow settling, then background indexing/summaries.
                 // No permission, tool, provider, or worker-supplied name grants terminal access.

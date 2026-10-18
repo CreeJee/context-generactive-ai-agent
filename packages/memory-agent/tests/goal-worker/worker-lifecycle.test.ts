@@ -100,10 +100,10 @@ testAgent({ testProvider: { responder } })("Goal worker admission", (it) => {
           case "pending":
             break;
           case "uncertain":
-            ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
+            yield* ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
             break;
           case "succeeded":
-            ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
+            yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
             break;
         }
         const before = yield* sessionEvidence(id);
@@ -119,7 +119,7 @@ testAgent({ testProvider: { responder } })("Goal worker admission", (it) => {
   it.effect("a completed run with a succeeded side effect admits the next run", () =>
     Effect.gen(function* () {
       const { id, key, ledger } = yield* previousRun("completed");
-      ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
+      yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
       const receipts = () =>
         rows("SELECT * FROM owner_rpc_operations WHERE run_id = ?", `${id}-old`);
       const before = yield* receipts();
@@ -160,9 +160,9 @@ const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed")
   db.sqlite
     .prepare("INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, ?, ?)")
     .run(`${id}-old`, id, status, yield* Clock.currentTimeMillis);
-  const ledger = makeSqliteOwnerRpcLedger(db);
+  const ledger = yield* makeSqliteOwnerRpcLedger;
   const key = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(admission.binding);
-  expect(ledger.reserve(key, 1, "old-effect", true)).toEqual({ type: "reserved" });
+  expect(yield* ledger.reserve(key, 1, "old-effect", true)).toEqual({ type: "reserved" });
   return { id, key, ledger };
 });
 

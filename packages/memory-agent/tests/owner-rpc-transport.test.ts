@@ -6,6 +6,7 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect } from "vite-plus/test";
 import { Cause, Deferred, Effect, Fiber, FileSystem, Path, Scope, Context, Exit } from "effect";
 import { DatabaseSync } from "node:sqlite";
+import { connectionContext } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 import { makeSqliteOwnerRpcLedger } from "../src/agent/owner-rpc-ledger.ts";
 import {
@@ -65,7 +66,7 @@ const fixture = Effect.fn("ownerTransportTest.fixture")(function* (
   const { port1, port2 } = yield* channels();
   let calls = 0;
   const owner = serveOwnerRpcPort<Operations>(port1, {
-    permits: (claim) => claim.token === "secret",
+    permits: (claim) => Effect.sync(() => claim.token === "secret"),
     ledger: makeInMemoryOwnerRpcLedger(),
     handlers: {
       tool: {
@@ -114,20 +115,9 @@ describe("owner MessagePort RPC", () => {
       VALUES (1, 's', '{}', 1, NULL, 'recorded', 'now', 'g');
       INSERT INTO workflow_run_bindings VALUES ('r', 's', 'g', 1, NULL, 1, 'now');`);
         const ledger = () =>
-          makeSqliteOwnerRpcLedger({
-            sqlite,
-            atomic: (work) => {
-              sqlite.exec("BEGIN IMMEDIATE");
-              try {
-                const result = work();
-                sqlite.exec("COMMIT");
-                return result;
-              } catch (error) {
-                sqlite.exec("ROLLBACK");
-                throw error;
-              }
-            },
-          });
+          Effect.flatMap(connectionContext(sqlite), (context) =>
+            Effect.provideContext(makeSqliteOwnerRpcLedger, context),
+          );
         const scope = yield* Scope.fork(yield* Effect.scope);
         const { port1, port2 } = yield* channels();
         const ready = yield* Deferred.make<void>();
@@ -141,8 +131,8 @@ describe("owner MessagePort RPC", () => {
         });
         const endpoint = yield* Effect.provide(
           serveOwnerRpcPortEffect<Operations>(port1, {
-            permits: () => true,
-            ledger: ledger(),
+            permits: () => Effect.succeed(true),
+            ledger: yield* ledger(),
             handlers: {
               tool: {
                 sideEffect: true,
@@ -170,8 +160,8 @@ describe("owner MessagePort RPC", () => {
           sqlite = new DatabaseSync(file);
 
           const rpc = makeOwnerRpc<Operations>({
-            permits: () => true,
-            ledger: ledger(),
+            permits: () => Effect.succeed(true),
+            ledger: yield* ledger(),
             handlers: {
               tool: {
                 sideEffect: true,
@@ -205,7 +195,7 @@ describe("owner MessagePort RPC", () => {
         };
         const acquire = Effect.provide(
           serveOwnerRpcPortEffect<Operations>(port1, {
-            permits: () => true,
+            permits: () => Effect.succeed(true),
             ledger: makeInMemoryOwnerRpcLedger(),
             handlers: { tool: { sideEffect: true, execute: () => Effect.succeed("done") } },
           }),
@@ -239,7 +229,7 @@ describe("owner MessagePort RPC", () => {
       let calls = 0;
       const base = makeInMemoryOwnerRpcLedger();
       const owner = serveOwnerRpcPort<Operations>(port1, {
-        permits: () => true,
+        permits: () => Effect.succeed(true),
         ledger: {
           ...base,
           reserve: (...args) => {
@@ -416,7 +406,7 @@ describe("owner MessagePort RPC", () => {
       const { port1, port2 } = yield* channels();
       let calls = 0;
       const owner = serveOwnerRpcPort<Operations>(port1, {
-        permits: () => true,
+        permits: () => Effect.succeed(true),
         ledger: makeInMemoryOwnerRpcLedger(),
         handlers: {
           tool: {

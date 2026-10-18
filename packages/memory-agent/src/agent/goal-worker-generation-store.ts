@@ -1,7 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import type { DatabaseSync } from "node:sqlite";
-import { DateTime, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
+import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
 const Pin = Schema.Struct({
   goalInstanceId: Schema.String,
@@ -11,54 +9,91 @@ const Pin = Schema.Struct({
 });
 export type GoalWorkerGenerationPin = typeof Pin.Type;
 
+export class GoalWorkerGenerationError extends Schema.TaggedError<GoalWorkerGenerationError>()(
+  "GoalWorkerGenerationError",
+  {
+    reason: Schema.Literals(["already_pinned", "unrecoverable_pin", "storage"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+const rejected = (reason: "already_pinned" | "unrecoverable_pin") =>
+  GoalWorkerGenerationError.make({ reason });
+
+const stored = (
+  cause: GoalWorkerGenerationError | SqlError.SqlError | Schema.SchemaError,
+): GoalWorkerGenerationError => {
+  switch (cause._tag) {
+    case "GoalWorkerGenerationError":
+      return cause;
+    case "SqlError":
+    case "SchemaError":
+      return GoalWorkerGenerationError.make({ reason: "storage", cause });
+  }
+};
+
 /** Durable source identity only. This never reissues a run token or adopts a live worker. */
-export function makeGoalWorkerGenerationStore(owner: {
-  readonly sqlite: DatabaseSync;
-  readonly atomic: <T>(work: () => T) => T;
-}) {
-  const read = owner.sqlite.prepare(`SELECT goal_instance_id AS goalInstanceId,
-    source_generation AS sourceGeneration, manifest_hash AS manifestHash, worker_url AS workerUrl
-    FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`);
-  const oldDispatch = owner.sqlite.prepare(`SELECT 1 FROM workflow_worker_dispatches d
-    JOIN workflow_run_bindings b ON b.run_id = d.run_id WHERE b.goal_instance_id = ? LIMIT 1`);
-  const insert = owner.sqlite.prepare(`INSERT INTO workflow_goal_worker_generations
-    (goal_instance_id, source_generation, manifest_hash, worker_url, created_at)
-    VALUES (?, ?, ?, ?, ?)`);
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  const decode = EffectFunction.flow(
-    Schema.decodeUnknownResult(Schema.UndefinedOr(Pin)),
-    Result.getOrThrow,
-  );
+export const goalWorkerGenerationStore = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const read = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Pin,
+    execute: (goalInstanceId) => sql`SELECT goal_instance_id AS goalInstanceId,
+      source_generation AS sourceGeneration, manifest_hash AS manifestHash, worker_url AS workerUrl
+      FROM workflow_goal_worker_generations WHERE goal_instance_id = ${goalInstanceId}`,
+  });
+  // A previous dispatch proves code ran, but not which source assets it used.
+  // Never invent a generation for an old Goal or auto-reexecute its runs.
+  const refuseUnpinnedDispatch = (goalInstanceId: string) =>
+    sql`SELECT 1 FROM workflow_worker_dispatches d
+      JOIN workflow_run_bindings b ON b.run_id = d.run_id
+      WHERE b.goal_instance_id = ${goalInstanceId} LIMIT 1`.pipe(
+      Effect.filterOrFail(
+        (rows) => rows.length === 0,
+        () => rejected("unrecoverable_pin"),
+      ),
+    );
   return {
-    get: (goalInstanceId: string) => decode(read.get(goalInstanceId)),
-    hasUnpinnedDispatch: (goalInstanceId: string) => Boolean(oldDispatch.get(goalInstanceId)),
-    record(pin: GoalWorkerGenerationPin): GoalWorkerGenerationPin {
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const expected = EffectFunction.flow(Schema.decodeResult(Pin), Result.getOrThrow)(pin);
-      return owner.atomic(() => {
-        const existing = decode(read.get(expected.goalInstanceId));
-        if (isTruthy(existing)) {
-          if (
-            existing.sourceGeneration !== expected.sourceGeneration ||
-            existing.manifestHash !== expected.manifestHash ||
-            existing.workerUrl !== expected.workerUrl
-          )
-            throw new Error("Goal source generation is already pinned");
-          return existing;
-        }
-        // A previous dispatch proves code ran, but not which source assets it used.
-        // Never invent a generation for an old Goal or auto-reexecute its runs.
-        if (isTruthy(oldDispatch.get(expected.goalInstanceId)))
-          throw new Error("Existing Goal execution has no recoverable source pin");
-        insert.run(
-          expected.goalInstanceId,
-          expected.sourceGeneration,
-          expected.manifestHash,
-          expected.workerUrl,
-          DateTime.formatIso(DateTime.nowUnsafe()),
-        );
-        return expected;
-      });
-    },
+    /** The Goal's pin; a Goal that already executed without one is never treated as new. */
+    pinned: (goalInstanceId: string) =>
+      read(goalInstanceId).pipe(
+        Effect.tap(
+          Option.match({
+            onSome: () => Effect.void,
+            onNone: () => refuseUnpinnedDispatch(goalInstanceId),
+          }),
+        ),
+        Effect.mapError(stored),
+      ),
+    record: (pin: GoalWorkerGenerationPin) =>
+      read(pin.goalInstanceId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: (existing) =>
+              existing.sourceGeneration === pin.sourceGeneration &&
+              existing.manifestHash === pin.manifestHash &&
+              existing.workerUrl === pin.workerUrl
+                ? Effect.succeed(existing)
+                : Effect.fail(rejected("already_pinned")),
+            onNone: () =>
+              refuseUnpinnedDispatch(pin.goalInstanceId).pipe(
+                Effect.andThen(DateTime.now),
+                Effect.flatMap(
+                  (now) =>
+                    sql`INSERT INTO workflow_goal_worker_generations ${sql.insert({
+                      goal_instance_id: pin.goalInstanceId,
+                      source_generation: pin.sourceGeneration,
+                      manifest_hash: pin.manifestHash,
+                      worker_url: pin.workerUrl,
+                      created_at: DateTime.formatIso(now),
+                    })}`,
+                ),
+                Effect.as(pin),
+              ),
+          }),
+        ),
+        sql.withTransaction,
+        Effect.mapError(stored),
+      ),
   };
-}
+});

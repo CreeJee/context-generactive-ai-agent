@@ -69,7 +69,7 @@ it.effect(
       let reservations = 0;
       let effects = 0;
       const endpoint = makeOwnerRpc({
-        permits: () => true,
+        permits: () => Effect.succeed(true),
         ledger: {
           reserve(...args) {
             reservations++;

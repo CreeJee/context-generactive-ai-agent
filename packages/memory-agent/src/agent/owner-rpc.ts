@@ -21,6 +21,34 @@ export class OwnerRpcFailure extends Schema.TaggedError<OwnerRpcFailure>()("Owne
   cause: Schema.Defect(),
 }) {}
 
+/** A ledger call the owner refuses, or ledger storage that could not be read or written. */
+export class OwnerRpcLedgerError extends Schema.TaggedError<OwnerRpcLedgerError>()(
+  "OwnerRpcLedgerError",
+  {
+    reason: Schema.Literals([
+      "unbound_run",
+      "invalid_operation_id",
+      "reply_mismatch",
+      "unreserved",
+      "already_settled",
+      "outer_transaction",
+      "storage",
+    ]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+/** The owner could not decide whether a capability is still active. */
+export class OwnerAuthorityError extends Schema.TaggedError<OwnerAuthorityError>()(
+  "OwnerAuthorityError",
+  { cause: Schema.Defect() },
+) {}
+
+/** Whether the owner still honours a capability; read on every request, including replay. */
+export type OwnerRpcPermits = (
+  capability: OwnerRpcCapability,
+) => Effect.Effect<boolean, OwnerAuthorityError>;
+
 /** Freeze a detached JSON tree; never freeze caller-owned values. */
 function freezeJson<T>(value: T): T {
   if (Predicate.isObject(value)) {
@@ -91,8 +119,12 @@ export interface OwnerRpcLedger {
     operationId: number,
     fingerprint: string,
     sideEffect: boolean,
-  ): OwnerRpcAdmission;
-  settle(runKey: string, operationId: number, reply: OwnerRpcReply): void;
+  ): Effect.Effect<OwnerRpcAdmission, OwnerRpcLedgerError>;
+  settle(
+    runKey: string,
+    operationId: number,
+    reply: OwnerRpcReply,
+  ): Effect.Effect<void, OwnerRpcLedgerError>;
 }
 
 /** Test/reference ledger only: NOT crash-safe and NOT a production integration. */
@@ -106,42 +138,44 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
     }
   >();
   return {
-    reserve(runKey, operationId, fingerprint, sideEffect) {
-      let run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
-      if (!isTruthy(run)) {
-        run = {
-          highWater: 0,
-          records: MutableHashMap.empty(),
-          pendingEffects: MutableHashSet.empty<number>(),
-        };
-        MutableHashMap.set(runs, runKey, run);
-      }
-      const existing = Option.getOrUndefined(MutableHashMap.get(run.records, operationId));
-      if (isTruthy(existing)) return { type: "existing", record: existing };
-      if (operationId <= run.highWater) return { type: "rejected", reason: "non_monotonic" };
-      if (sideEffect && MutableHashSet.size(run.pendingEffects) > 0)
-        return { type: "rejected", reason: "uncertain_run" };
-      run.highWater = operationId;
-      MutableHashMap.set(run.records, operationId, {
-        fingerprint,
-        reply: { type: "pending", operationId },
-      });
-      if (sideEffect) MutableHashSet.add(run.pendingEffects, operationId);
-      return { type: "reserved" };
-    },
-    settle(runKey, operationId, reply) {
+    reserve: (runKey, operationId, fingerprint, sideEffect) =>
+      Effect.sync((): OwnerRpcAdmission => {
+        let run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
+        if (!isTruthy(run)) {
+          run = {
+            highWater: 0,
+            records: MutableHashMap.empty(),
+            pendingEffects: MutableHashSet.empty<number>(),
+          };
+          MutableHashMap.set(runs, runKey, run);
+        }
+        const existing = Option.getOrUndefined(MutableHashMap.get(run.records, operationId));
+        if (isTruthy(existing)) return { type: "existing", record: existing };
+        if (operationId <= run.highWater) return { type: "rejected", reason: "non_monotonic" };
+        if (sideEffect && MutableHashSet.size(run.pendingEffects) > 0)
+          return { type: "rejected", reason: "uncertain_run" };
+        run.highWater = operationId;
+        MutableHashMap.set(run.records, operationId, {
+          fingerprint,
+          reply: { type: "pending", operationId },
+        });
+        if (sideEffect) MutableHashSet.add(run.pendingEffects, operationId);
+        return { type: "reserved" };
+      }),
+    settle: Effect.fnUntraced(function* (runKey, operationId, reply) {
       const run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
       const record = Option.getOrUndefined(
         Option.flatMap(Option.fromNullishOr(run?.records), (map) =>
           MutableHashMap.get(map, operationId),
         ),
       );
-      if (!isTruthy(run) || !isTruthy(record)) throw new Error("Unreserved owner RPC operation");
+      if (!isTruthy(run) || !isTruthy(record))
+        return yield* OwnerRpcLedgerError.make({ reason: "unreserved" });
       switch (record.reply.type) {
         case "pending":
           break;
         default:
-          throw new Error("Owner RPC operation already settled");
+          return yield* OwnerRpcLedgerError.make({ reason: "already_settled" });
       }
       MutableHashMap.set(run.records, operationId, { fingerprint: record.fingerprint, reply });
       switch (reply.type) {
@@ -153,7 +187,7 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
         case "rejected":
           break;
       }
-    },
+    }),
   };
 }
 
@@ -190,8 +224,8 @@ export type OwnerRpcEffectHandlers<M extends OwnerRpcOperations, E = never, R = 
 };
 
 export type OwnerRpcEffectOptions<M extends OwnerRpcOperations, E = never, R = never> = {
-  readonly permits: (capability: OwnerRpcCapability) => boolean;
-  readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
+  readonly permits: OwnerRpcPermits;
+  readonly permitsFinalization?: OwnerRpcPermits;
   readonly ledger: OwnerRpcLedger;
   readonly handlers: OwnerRpcEffectHandlers<M, E, R>;
 };
@@ -213,10 +247,11 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     const reject = (
       reason: Extract<OwnerRpcReply, { type: "rejected" }>["reason"],
     ): OwnerRpcReply => ({ type: "rejected", operationId, reason });
-    const initiallyActive = yield* Effect.try({
-      try: () => options.permits(capability),
-      catch: (cause) => OwnerRpcFailure.make({ phase: "authority", cause }),
-    });
+    const permitted = (permits: OwnerRpcPermits) =>
+      Effect.suspend(() => permits(capability)).pipe(
+        Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "authority", cause })),
+      );
+    const initiallyActive = yield* permitted(options.permits);
     if (
       request.type !== "owner-rpc-request" ||
       !Number.isSafeInteger(operationId) ||
@@ -241,11 +276,17 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       workflowRevisionId: capability.workflowRevisionId,
     });
     const handler = options.handlers[operation];
+    const permitsFinalization = options.permitsFinalization;
     const finalization = Effect.try({
-      try: () =>
-        Boolean(handler.finalization?.(input) && options.permitsFinalization?.(capability)),
+      try: () => handler.finalization?.(input) === true,
       catch: (cause) => OwnerRpcFailure.make({ phase: "authority", cause }),
-    });
+    }).pipe(
+      Effect.flatMap((requested) =>
+        requested && permitsFinalization !== undefined
+          ? permitted(permitsFinalization)
+          : Effect.succeed(false),
+      ),
+    );
     if (!initiallyActive && !(yield* finalization)) return reject("unauthorized");
     const authorized = yield* Effect.try(() =>
       isTruthy(handler.authorize)
@@ -253,10 +294,9 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
         : true,
     ).pipe(Effect.orElseSucceed(() => false));
     if (!authorized) return reject("invalid_operation");
-    const admission = yield* Effect.try({
-      try: () => options.ledger.reserve(runKey, operationId, fingerprint, handler.sideEffect),
-      catch: (cause) => OwnerRpcFailure.make({ phase: "reserve", cause }),
-    });
+    const admission = yield* Effect.suspend(() =>
+      options.ledger.reserve(runKey, operationId, fingerprint, handler.sideEffect),
+    ).pipe(Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "reserve", cause })));
     switch (admission.type) {
       case "rejected":
         return reject(admission.reason);
@@ -283,14 +323,13 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
           : Effect.succeed<OwnerRpcReply>({ type: "uncertain", operationId }),
       ),
     );
-    yield* Effect.try({
-      try: () => options.ledger.settle(runKey, operationId, structuredClone(reply)),
-      catch: (cause) => OwnerRpcFailure.make({ phase: "settle", cause }),
-    }).pipe(Effect.uninterruptible);
-    const stillActive = yield* Effect.try({
-      try: () => options.permits(capability),
-      catch: (cause) => OwnerRpcFailure.make({ phase: "authority", cause }),
-    });
+    yield* Effect.suspend(() =>
+      options.ledger.settle(runKey, operationId, structuredClone(reply)),
+    ).pipe(
+      Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "settle", cause })),
+      Effect.uninterruptible,
+    );
+    const stillActive = yield* permitted(options.permits);
     if (!stillActive && !(yield* finalization)) return reject("unauthorized");
     return reply;
   });
@@ -298,8 +337,8 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
 
 /** Narrow legacy Promise handler/transport adapter; the execution core stays native. */
 export function makeOwnerRpc<M extends OwnerRpcOperations>(options: {
-  readonly permits: (capability: OwnerRpcCapability) => boolean;
-  readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
+  readonly permits: OwnerRpcPermits;
+  readonly permitsFinalization?: OwnerRpcPermits;
   readonly ledger: OwnerRpcLedger;
   readonly handlers: OwnerRpcHandlers<M>;
 }) {

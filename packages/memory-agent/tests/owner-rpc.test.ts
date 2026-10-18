@@ -5,7 +5,9 @@ import {
   makeInMemoryOwnerRpcLedger,
   makeOwnerRpc,
   makeOwnerRpcEffect,
+  OwnerAuthorityError,
   OwnerRpcFailure,
+  OwnerRpcLedgerError,
   type OwnerRpcCapability,
   type OwnerRpcRequest,
 } from "../src/agent/owner-rpc.ts";
@@ -37,14 +39,17 @@ function fixture(execute = (input: { value: string }) => legacyHandler(() => inp
   const rpc = makeOwnerRpc<Operations>({
     ledger,
     permits: (claim) =>
-      claim.sessionId === current.sessionId &&
-      claim.runId === current.runId &&
-      claim.goalInstanceId === current.goalInstanceId &&
-      claim.goalVersion === current.goalVersion &&
-      claim.planVersion === current.planVersion &&
-      claim.workflowRevisionId === current.workflowRevisionId &&
-      claim.generation === current.generation &&
-      claim.token === current.token,
+      Effect.sync(
+        () =>
+          claim.sessionId === current.sessionId &&
+          claim.runId === current.runId &&
+          claim.goalInstanceId === current.goalInstanceId &&
+          claim.goalVersion === current.goalVersion &&
+          claim.planVersion === current.planVersion &&
+          claim.workflowRevisionId === current.workflowRevisionId &&
+          claim.generation === current.generation &&
+          claim.token === current.token,
+      ),
     handlers: {
       tool: {
         sideEffect: true,
@@ -97,7 +102,7 @@ describe("Effect-native owner RPC", () => {
         let calls = 0;
         const inner = makeInMemoryOwnerRpcLedger();
         const rpc = makeOwnerRpcEffect<Operations>({
-          permits: () => true,
+          permits: () => Effect.succeed(true),
           ledger: {
             reserve: (...args) => {
               reservations++;
@@ -155,13 +160,14 @@ describe("Effect-native owner RPC", () => {
         let finalized = 0;
         const inner = makeInMemoryOwnerRpcLedger();
         const rpc = makeOwnerRpcEffect<Operations>({
-          permits: () => true,
+          permits: () => Effect.succeed(true),
           ledger: {
             reserve: (...args) => inner.reserve(...args),
-            settle: (...args) => {
-              settlements++;
-              inner.settle(...args);
-            },
+            settle: (...args) =>
+              Effect.suspend(() => {
+                settlements++;
+                return inner.settle(...args);
+              }),
           },
           handlers: {
             tool: {
@@ -208,19 +214,20 @@ describe("Effect-native owner RPC", () => {
         let settlements = 0;
         const defect = new Error("owner authority lookup unavailable");
         const rpc = makeOwnerRpcEffect<Operations>({
-          permits: () => {
-            if (calls > 0) throw defect;
-            return true;
-          },
+          permits: () =>
+            calls > 0
+              ? Effect.fail(OwnerAuthorityError.make({ cause: defect }))
+              : Effect.succeed(true),
           ledger: {
             reserve: (...args) => {
               keys.push(args[0]);
               return inner.reserve(...args);
             },
-            settle: (...args) => {
-              settlements++;
-              inner.settle(...args);
-            },
+            settle: (...args) =>
+              Effect.suspend(() => {
+                settlements++;
+                return inner.settle(...args);
+              }),
           },
           handlers: {
             tool: {
@@ -241,13 +248,13 @@ describe("Effect-native owner RPC", () => {
           expect(failure).toMatchObject({
             _tag: "OwnerRpcFailure",
             phase: "authority",
-            cause: defect,
+            cause: expect.objectContaining({ _tag: "OwnerAuthorityError", cause: defect }),
           });
         }
         expect(keys).toHaveLength(1);
         expect(calls).toBe(1);
         expect(settlements).toBe(1);
-        expect(inner.reserve(keys[0]!, 1, "not reused for dispatch", true)).toMatchObject({
+        expect(yield* inner.reserve(keys[0]!, 1, "not reused for dispatch", true)).toMatchObject({
           type: "existing",
           record: { reply: { type: "succeeded", operationId: 1, output: { value: "hello" } } },
         });
@@ -263,15 +270,14 @@ describe("Effect-native owner RPC", () => {
           let calls = 0;
           const defect = new Error(`ledger ${phase} unavailable`);
           const rpc = makeOwnerRpcEffect<Operations>({
-            permits: () => true,
+            permits: () => Effect.succeed(true),
             ledger: {
-              reserve: (...args) => {
-                if (phase === "reserve") throw defect;
-                return inner.reserve(...args);
-              },
-              settle: () => {
-                throw defect;
-              },
+              reserve: (...args) =>
+                phase === "reserve"
+                  ? Effect.fail(OwnerRpcLedgerError.make({ reason: "storage", cause: defect }))
+                  : inner.reserve(...args),
+              settle: () =>
+                Effect.fail(OwnerRpcLedgerError.make({ reason: "storage", cause: defect })),
             },
             handlers: {
               tool: {
@@ -289,7 +295,10 @@ describe("Effect-native owner RPC", () => {
             Effect.catchTag("OwnerRpcFailure", (error) => Effect.succeed(error)),
           );
           expect(failure).toBeInstanceOf(OwnerRpcFailure);
-          expect(failure).toMatchObject({ phase, cause: defect });
+          expect(failure).toMatchObject({
+            phase,
+            cause: expect.objectContaining({ reason: "storage", cause: defect }),
+          });
           expect(calls).toBe(phase === "reserve" ? 0 : 1);
           if (phase === "settle") {
             expect(yield* rpc(nativeRequest)).toEqual({
@@ -310,7 +319,7 @@ describe("Effect-native owner RPC", () => {
     () =>
       Effect.gen(function* () {
         const rpc = makeOwnerRpcEffect<Operations, never, OwnerValue>({
-          permits: () => true,
+          permits: () => Effect.succeed(true),
           ledger: makeInMemoryOwnerRpcLedger(),
           handlers: {
             tool: {
@@ -335,7 +344,7 @@ describe("Effect-native owner RPC", () => {
         expect(nativeRequest.input).toEqual({ value: "hello" });
         expect(capability.token).toBe("owner-secret");
         const invalid = makeOwnerRpcEffect<Operations>({
-          permits: () => true,
+          permits: () => Effect.succeed(true),
           ledger: makeInMemoryOwnerRpcLedger(),
           handlers: {
             tool: {
@@ -367,7 +376,7 @@ describe("owner RPC protocol foundation", () => {
         let active = true;
         let authorizations = 0;
         const rpc = makeOwnerRpc<Operations>({
-          permits: () => active,
+          permits: () => Effect.sync(() => active),
           ledger: {
             reserve(...args) {
               reservations++;
@@ -443,8 +452,8 @@ describe("owner RPC protocol foundation", () => {
     Effect.gen(function* () {
       let predicateCalls = 0;
       const rpc = makeOwnerRpc<Operations>({
-        permits: () => false,
-        permitsFinalization: () => false,
+        permits: () => Effect.succeed(false),
+        permitsFinalization: () => Effect.succeed(false),
         ledger: makeInMemoryOwnerRpcLedger(),
         handlers: {
           tool: {
@@ -488,8 +497,8 @@ describe("owner RPC protocol foundation", () => {
         let recorded = 0;
         const rpc = makeOwnerRpc<FinalOperations>({
           ledger: makeInMemoryOwnerRpcLedger(),
-          permits: () => active && issued,
-          permitsFinalization: () => issued,
+          permits: () => Effect.sync(() => active && issued),
+          permitsFinalization: () => Effect.sync(() => issued),
           handlers: {
             tool: {
               sideEffect: true,

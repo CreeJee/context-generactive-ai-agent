@@ -26,7 +26,7 @@ import {
 } from "effect";
 // Pure owner domain constructor used behind the contextual RPC server Layer below.
 // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
-import { makeOwnerRpcEffect } from "./owner-rpc.ts";
+import { makeOwnerRpcEffect, type OwnerRpcPermits } from "./owner-rpc.ts";
 import {
   FullLoopOwnerRpcGroup,
   FullLoopRpcError,
@@ -147,8 +147,8 @@ export interface FullLoopOwner {
   readonly admission: ExecutionAdmission["Service"];
   readonly capability: OwnerRpcCapability;
   readonly ledger: OwnerRpcLedger;
-  readonly permits: (capability: OwnerRpcCapability) => boolean;
-  readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
+  readonly permits: OwnerRpcPermits;
+  readonly permitsFinalization?: OwnerRpcPermits;
   /** Explicit owner-approved cleanup middleware names; never worker-selected grants. */
   readonly finalizationMiddleware?: readonly string[];
   readonly revoke?: () => void;
@@ -193,7 +193,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             const controller = capabilities.stream.abortController;
             const releaseWorkerAdmission = yield* owner.admission.acquire("worker");
             yield* Effect.addFinalizer(() => releaseWorkerAdmission);
-            if (!owner.permits(owner.capability)) throw new Error("Inactive owner capability");
+            if (!(yield* owner.permits(owner.capability)))
+              throw new Error("Inactive owner capability");
             if (controller.signal.aborted) return { pull: Cause.done() };
             // Pin callable references and inventory before the first await. Bind to the
             // original receivers (private fields/WeakMaps), never freeze shared owners.
@@ -447,7 +448,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       closed ||
                       finalizing ||
                       controller.signal.aborted ||
-                      !owner.permits(owner.capability)
+                      !(yield* owner.permits(owner.capability))
                     )
                       throw new Error("Inactive owner tool implementation capability");
                     grants.start({ name: tool.name, toolCallId: context?.toolCallId, args });
@@ -560,9 +561,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             };
             const ownerEndpointOptions = {
               permits: (capability: OwnerRpcCapability) =>
-                !closed && !finalizing && owner.permits(capability),
+                !closed && !finalizing ? owner.permits(capability) : Effect.succeed(false),
               permitsFinalization: (capability: OwnerRpcCapability) =>
-                !closed && finalizing && owner.permitsFinalization?.(capability) === true,
+                !closed && finalizing && owner.permitsFinalization !== undefined
+                  ? owner.permitsFinalization(capability)
+                  : Effect.succeed(false),
               ledger: owner.ledger,
               handlers: {
                 modelOpen: {
@@ -947,7 +950,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           (terminalObserved || controller.signal.aborted) &&
                           HashSet.has(cleanupHooks, input.hook) &&
                           isTruthy(owner.finalizationMiddleware?.includes(mw?.name ?? "")) &&
-                          owner.permitsFinalization?.(owner.capability) === true
+                          owner.permitsFinalization !== undefined &&
+                          (yield* owner.permitsFinalization(owner.capability))
                         )
                           finalizing = true;
                         if (!isTruthy(mw) || !middleware[input.index]?.hooks.includes(input.hook))
@@ -1223,11 +1227,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               )
               .pipe(
                 Stream.mapEffect((value) =>
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     // SAFETY: RunFullLoop is the worker-side SDK iterator and its RPC
                     // envelope has already passed schema decoding.
                     const chunk = value as StreamChunk;
-                    if (finalizing || !owner.permits(owner.capability))
+                    if (finalizing || !(yield* owner.permits(owner.capability)))
                       throw new Error("Inactive owner chunk capability");
                     if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR")
                       terminalObserved = true;
