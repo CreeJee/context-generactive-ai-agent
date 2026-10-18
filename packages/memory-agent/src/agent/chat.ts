@@ -1199,7 +1199,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /** Persisted cursor replay followed by a live tail. Only wake-up notifications are in memory. */
-    traceStream: (request: Request, sessionId: string): Effect.Effect<Response> =>
+    traceStream: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
