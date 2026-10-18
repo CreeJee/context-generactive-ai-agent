@@ -138,6 +138,8 @@ export class NativeOwnerFailed extends Schema.TaggedError<NativeOwnerFailed>()(
       "read-failed",
       "native-incompatible",
     ]),
+    /** The native exception, kept inside the process that caught it; IPC carries only `reason`. */
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
