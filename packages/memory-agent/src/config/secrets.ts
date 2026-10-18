@@ -1,4 +1,4 @@
-import { MutableHashMap, Option, Context, Data, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 
 /** Keychain service name every secret of this app is stored under. */
@@ -8,9 +8,10 @@ export const keychainService = "context-generactive-agent";
 export type SecretName = "kagi-api-key";
 
 /** The OS keychain refused or failed. Never answered by storing the secret somewhere else (R14). */
-export class SecretStoreFailed extends Data.TaggedError("SecretStoreFailed")<{
-  readonly operation: "read" | "write" | "delete";
-}> {}
+export class SecretStoreFailed extends Schema.TaggedError<SecretStoreFailed>()(
+  "SecretStoreFailed",
+  { operation: Schema.Literals(["read", "write", "delete"]) },
+) {}
 
 export interface SecretStoreApi {
   readonly get: (name: SecretName) => Effect.Effect<string | null, SecretStoreFailed>;
@@ -27,17 +28,17 @@ const keychain: SecretStoreApi = {
   get: (name) =>
     Effect.tryPromise({
       try: () => entry(name).getPassword(),
-      catch: () => new SecretStoreFailed({ operation: "read" }),
+      catch: () => SecretStoreFailed.make({ operation: "read" }),
     }).pipe(Effect.map((value) => value ?? null)),
   set: (name, value) =>
     Effect.tryPromise({
       try: () => entry(name).setPassword(value),
-      catch: () => new SecretStoreFailed({ operation: "write" }),
+      catch: () => SecretStoreFailed.make({ operation: "write" }),
     }),
   remove: (name) =>
     Effect.tryPromise({
       try: () => entry(name).deletePassword(),
-      catch: () => new SecretStoreFailed({ operation: "delete" }),
+      catch: () => SecretStoreFailed.make({ operation: "delete" }),
     }).pipe(Effect.asVoid),
 };
 

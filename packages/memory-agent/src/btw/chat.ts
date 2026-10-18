@@ -23,7 +23,7 @@ import { releaseSubscriptionRun } from "../providers/subscription-runtime.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { btwInstructions, parentConversationPrompt } from "./context.ts";
-import { BtwError, BtwRunInProgress } from "./contracts.ts";
+import { BtwError, BtwRunInProgress, BtwStorageFailed } from "./contracts.ts";
 import { BtwThreads } from "./store.ts";
 import { btwEvidenceTools, btwToolGuard } from "./tools.ts";
 
@@ -64,7 +64,8 @@ const make = Effect.gen(function* () {
 
     const params = yield* Effect.tryPromise(() => request.json()).pipe(
       Effect.flatMap((body) => Effect.tryPromise(() => chatParamsFromRequestBody(body))),
-      Effect.option,
+      Effect.asSome,
+      Effect.catchTag("UnknownError", () => Effect.succeedNone),
     );
     if (Option.isNone(params)) return json(400, { error: "invalid_chat_request" });
     const { messages, runId, parentRunId } = params.value;
@@ -82,7 +83,15 @@ const make = Effect.gen(function* () {
     if (attached.length > 0) {
       const readsImages = yield* Effect.flatMap(active.models(selection), (models) =>
         models.acceptsImages(selection.model),
-      ).pipe(Effect.orElseSucceed(() => false));
+      ).pipe(
+        // Unknown model capabilities are answered as no images, as for a model without them.
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logDebug("btw_model_capabilities_unavailable", { error: error._tag }),
+            false,
+          ),
+        ),
+      );
       if (!readsImages) return json(422, { error: "images_not_supported", model: selection.model });
     }
 
@@ -151,11 +160,14 @@ const make = Effect.gen(function* () {
     /** GET for a reopened BTW panel: the saved transcript of this thread only. */
     hydrate: Effect.fn("BtwChat.hydrate")(function* (request: Request, threadId: string) {
       yield* threads.get(threadId);
-      return yield* Effect.promise(() =>
-        reconstructChat(threads.persistence, request, {
-          authorize: (requested) => Promise.resolve(requested === threadId),
-        }),
-      );
+      return yield* Effect.tryPromise({
+        try: () =>
+          reconstructChat(threads.persistence, request, {
+            authorize: (requested) => Promise.resolve(requested === threadId),
+          }),
+        catch: () =>
+          BtwError.make({ reason: BtwStorageFailed.make({ operation: "read_transcript" }) }),
+      });
     }),
 
     create: threads.create,
