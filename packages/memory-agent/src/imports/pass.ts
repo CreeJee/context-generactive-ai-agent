@@ -1,5 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+import { failureTags } from "../runtime/failure-tags.ts";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";
@@ -60,36 +61,8 @@ export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.mapError(effect, (cause) => ImportStoreFailed.make({ cause }));
 
-const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
-const decodeReasonTag = Schema.decodeUnknownOption(
-  Schema.Struct({ reason: Schema.Struct({ _tag: Schema.String }) }),
-);
-
-/**
- * What settings says went wrong: the failures' tags, never their messages, which can hold paths or
- * the transcript's content.
- */
-const failureOf = (cause: Cause.Cause<unknown>) => {
-  const tags = cause.reasons.map((reason) => {
-    switch (reason._tag) {
-      case "Fail":
-        // A tagged reason, such as a platform error's `PermissionDenied`, is named too.
-        return Option.match(decodeTagged(reason.error), {
-          onNone: () => "Failure",
-          onSome: ({ _tag }) =>
-            Option.match(decodeReasonTag(reason.error), {
-              onNone: () => _tag,
-              onSome: (failure) => `${_tag}:${failure.reason._tag}`,
-            }),
-        });
-      case "Die":
-        return "Defect";
-      case "Interrupt":
-        return "Interrupted";
-    }
-  });
-  return [...new Set(tags)].join(",").slice(0, failureLength);
-};
+/** What settings says went wrong: the failures' tags, never the transcript's content. */
+const failureOf = (cause: Cause.Cause<unknown>) => failureTags(cause).slice(0, failureLength);
 
 /** True when `candidate` is `root` or below it. Compared by spelling: a recorded cwd may be gone. */
 function isWithin(root: string, candidate: string): boolean {

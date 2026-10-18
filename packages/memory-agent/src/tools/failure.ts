@@ -1,6 +1,6 @@
 import { nativeFailure } from "../runtime/native-effect.ts";
 import { Function as EffectFunction } from "effect";
-import { Cause, Effect, Exit, HashMap, Result, Option, Schema } from "effect";
+import { Cause, Effect, Exit, HashMap, Result, Option, Predicate, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected, TextFileIoFailed } from "../files/text.ts";
 
@@ -100,7 +100,8 @@ function guardedEffectBody<A, E, R>(path: string, program: Effect.Effect<A, E, R
       const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
       return Effect.fail(
         new Cause.UnknownError(
-          toolFailure(error instanceof Error ? error : new Error(String(error)), path),
+          // A thrown non-Error carries nothing the model may see.
+          toolFailure(Predicate.isError(error) ? error : new Error("unknown"), path),
         ),
       );
     }),
