@@ -7,7 +7,7 @@ import type { AdapterInvocation } from "../../src/testing/scripted-adapter.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { defaultTestResponder } from "../support/provider.ts";
 import { TestEnv } from "../support/test-env.ts";
-import { waitUntil } from "../support/wait-until.ts";
+import { type WaitCondition, waitUntil } from "../support/wait-until.ts";
 
 /** A Promise-returning SDK call whose rejection stays in the error channel. */
 export const sdk = <A>(operation: () => A | PromiseLike<A>) =>
@@ -16,9 +16,8 @@ export const sdk = <A>(operation: () => A | PromiseLike<A>) =>
     catch: (cause) => new Cause.UnknownError(cause),
   });
 
-export const until = Effect.fnUntraced(function* (condition: () => boolean, what: string) {
-  return yield* waitUntil(condition, what, 6_000);
-});
+export const until = <E = never>(condition: WaitCondition<E>, what: string) =>
+  waitUntil(condition, what, 6_000);
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 

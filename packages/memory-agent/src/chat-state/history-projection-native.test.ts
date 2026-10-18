@@ -4,7 +4,7 @@ import { Effect, Layer, Schema, Result, Function as EffectFunction } from "effec
 import { expect, vi } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../db/database.ts";
-import { ownedSqliteChatPersistence, sqliteChatPersistence } from "./persistence.ts";
+import { chatPersistence, ownedChatPersistence } from "./persistence.ts";
 import { HistoryPageUnavailable } from "./history-projection-native.ts";
 const encodeJson = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -23,7 +23,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const db = yield* Database;
-      const store = ownedSqliteChatPersistence(db);
+      const store = yield* ownedChatPersistence;
       const models: ModelMessage[] = Array.from({ length: 100 }, (_, ordinal): ModelMessage => ({
         id: `m-${ordinal}`,
         role: "user",
@@ -59,11 +59,9 @@ it.effect(
       } finally {
         parse.mockRestore();
       }
+      const unprojected = yield* chatPersistence;
       const before = yield* Effect.tryPromise(() =>
-        reconstructChat(
-          sqliteChatPersistence(db.sqlite),
-          new Request("http://fixture/chat?threadId=a&limit=50"),
-        ),
+        reconstructChat(unprojected, new Request("http://fixture/chat?threadId=a&limit=50")),
       );
       const after = yield* Effect.tryPromise(() =>
         reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=20")),
@@ -100,7 +98,7 @@ it.effect(
       yield* Effect.try(() =>
         db.sqlite.prepare("INSERT INTO chat_threads VALUES(?,?,?)").run("a", original, 1),
       );
-      const store = ownedSqliteChatPersistence(db);
+      const store = yield* ownedChatPersistence;
       const page = yield* Effect.tryPromise(() =>
         reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1")),
       );
@@ -132,7 +130,7 @@ it.effect(
       yield* Effect.try(() =>
         db.sqlite.prepare("INSERT INTO chat_threads VALUES(?,?,?)").run("a", original, 1),
       );
-      const store = ownedSqliteChatPersistence(db);
+      const store = yield* ownedChatPersistence;
       const initial = yield* Effect.tryPromise(() =>
         reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1")),
       );
@@ -194,7 +192,7 @@ it.effect("prepares fallback ID collisions as separate answers with stable page 
         .prepare("INSERT INTO chat_threads VALUES(?,?,?)")
         .run("b", encodeJson([{ id: "normal", role: "user", content: "Normal" }]), 1),
     );
-    const store = ownedSqliteChatPersistence(db);
+    const store = yield* ownedChatPersistence;
     const initial = yield* Effect.tryPromise(() =>
       reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1")),
     );
@@ -215,7 +213,7 @@ it.effect("prepares fallback ID collisions as separate answers with stable page 
       "user",
     ]);
     expect(previous.page.truncated).toBe(false);
-    store.prepareThread("a");
+    yield* store.prepareThread("a");
     yield* Effect.tryPromise(() => store.stores.messages.saveThread("a", models));
     const again = yield* Effect.tryPromise(() =>
       reconstructChat(
@@ -277,7 +275,7 @@ it.effect(
       yield* Effect.try(() =>
         db.sqlite.prepare("INSERT INTO chat_threads VALUES(?,?,?)").run("a", original, 1),
       );
-      const store = ownedSqliteChatPersistence(db);
+      const store = yield* ownedChatPersistence;
       yield* Effect.tryPromise(() => store.stores.messages.saveThread("a", models));
       // Preparation must also recover the unchanged original after an external invalidation.
       yield* Effect.try(() =>
@@ -285,7 +283,7 @@ it.effect(
           .prepare("UPDATE chat_threads SET messages=? WHERE thread_id=?")
           .run(original, "a"),
       );
-      store.prepareThread("a");
+      yield* store.prepareThread("a");
       const initial = yield* Effect.tryPromise(() =>
         reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1")),
       );
@@ -329,7 +327,7 @@ it.effect(
 it.effect("keeps a newly empty thread valid and does not full-load a stale transcript", () =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const store = ownedSqliteChatPersistence(db);
+    const store = yield* ownedChatPersistence;
     expect(
       yield* Effect.tryPromise(() => store.stores.messages.loadThread("new", { limit: 20 })),
     ).toEqual({ messages: [], truncated: false });
@@ -345,7 +343,7 @@ it.effect("keeps a newly empty thread valid and does not full-load a stale trans
       store.stores.messages.loadThread("a", { limit: 20 }),
     ).pipe(Effect.flip);
     expect(failed.cause).toBeInstanceOf(HistoryPageUnavailable);
-    store.prepareThread("a");
+    yield* store.prepareThread("a");
     const page = yield* Effect.tryPromise(() =>
       store.stores.messages.loadThread("a", { limit: 20 }),
     );
@@ -356,7 +354,7 @@ it.effect("keeps a newly empty thread valid and does not full-load a stale trans
 it.effect("writes only changed derived groups rather than rewriting the unchanged prefix", () =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const store = ownedSqliteChatPersistence(db);
+    const store = yield* ownedChatPersistence;
     const models: ModelMessage[] = Array.from({ length: 30 }, (_, index): ModelMessage => ({
       id: `m-${index}`,
       role: "user",
@@ -407,7 +405,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const db = yield* Database;
-      const store = ownedSqliteChatPersistence(db);
+      const store = yield* ownedChatPersistence;
       const original: ModelMessage[] = [
         { id: "first", role: "user", content: "One" },
         { id: "second", role: "user", content: "Two" },
@@ -436,7 +434,7 @@ it.effect(
           .run("a");
         db.sqlite.prepare("UPDATE chat_threads SET messages=messages WHERE thread_id=?").run("a");
       });
-      const restarted = ownedSqliteChatPersistence(db);
+      const restarted = yield* ownedChatPersistence;
       const recovered = yield* Effect.tryPromise(() =>
         restarted.stores.messages.loadThread("a", { limit: 20 }),
       );
@@ -453,8 +451,7 @@ it.effect(
 
 it.effect("handles moved UI IDs without unique-index collisions or stale tail rows", () =>
   Effect.gen(function* () {
-    const db = yield* Database;
-    const store = ownedSqliteChatPersistence(db);
+    const store = yield* ownedChatPersistence;
     const initial: ModelMessage[] = [
       { id: "first", role: "user", content: "One" },
       { id: "second", role: "user", content: "Two" },
@@ -476,7 +473,7 @@ it.effect("handles moved UI IDs without unique-index collisions or stale tail ro
 it.effect("rolls back original and page together on projection SQL failure", () =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const store = ownedSqliteChatPersistence(db);
+    const store = yield* ownedChatPersistence;
     const original: ModelMessage[] = [{ id: "u", role: "user", content: "Kept" }];
     yield* Effect.tryPromise(() => store.stores.messages.saveThread("a", original));
     yield* Effect.try(() =>

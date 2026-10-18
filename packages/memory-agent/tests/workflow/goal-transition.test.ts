@@ -97,7 +97,8 @@ const bindRun = Effect.fnUntraced(function* (
   runId: string,
 ) {
   expect(
-    workflowRunBindings(db).bind(session, runId, yield* latestRevision(db, session)).status,
+    (yield* (yield* workflowRunBindings).bind(session, runId, yield* latestRevision(db, session)))
+      .status,
   ).toBe("bound");
 });
 

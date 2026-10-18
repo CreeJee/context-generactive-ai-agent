@@ -3,12 +3,14 @@ import type { ModelMessage } from "@tanstack/ai";
 import { runPersistenceConformance } from "@tanstack/ai-persistence/testkit";
 import { it } from "@effect/vitest";
 import { Cause, Effect, Schema } from "effect";
+import type { SqlClient } from "effect/sql";
 import { afterAll, expect } from "vite-plus/test";
+import { connectionContext } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 import {
   migrateLegacyChatThreads,
   migrateMissingChatThread,
-  sqliteChatPersistence,
+  chatPersistence,
 } from "../src/chat-state/persistence.ts";
 
 const conformanceDatabases: DatabaseSync[] = [];
@@ -23,13 +25,18 @@ const database = Effect.acquireRelease(
   }),
   (sqlite) => Effect.sync(() => sqlite.close()),
 );
+/** Runs a chat-state migration over the fixture's connection. */
+const over =
+  (sqlite: DatabaseSync) =>
+  <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    Effect.flatMap(connectionContext(sqlite), (context) => Effect.provideContext(effect, context));
 const call = <A>(execute: () => Promise<A>) =>
   Effect.tryPromise({ try: execute, catch: (cause) => new Cause.UnknownError(cause) });
 function freshPersistence() {
   const sqlite = new DatabaseSync(":memory:");
   for (const migration of migrations) sqlite.exec(migration);
   conformanceDatabases.push(sqlite);
-  return sqliteChatPersistence(sqlite);
+  return Effect.runPromise(over(sqlite)(chatPersistence));
 }
 
 // The TanStack contract suite: full-replace threads, idempotent runs and interrupts, ordering,
@@ -41,7 +48,7 @@ runPersistenceConformance("sqlite chat state", freshPersistence, {
 it.live("does not persist empty user text, preserving tool-only answers and media", () =>
   Effect.gen(function* () {
     const sqlite = yield* database;
-    const persistence = sqliteChatPersistence(sqlite);
+    const persistence = yield* over(sqlite)(chatPersistence);
     const attachmentMessage = { role: "user" as const, content: "", attachments: ["attachment"] };
     const retained: ModelMessage[] = [
       { role: "user", content: "continue" },
@@ -92,13 +99,15 @@ it.live("materializes legacy session transcripts without overwriting persisted c
         1,
       );
 
-    const migrated = migrateLegacyChatThreads(sqlite, (threadId) => [
-      { role: "user", content: `rebuilt ${threadId}` },
-    ]);
+    const migrated = yield* over(sqlite)(
+      migrateLegacyChatThreads((threadId) =>
+        Effect.succeed<ModelMessage[]>([{ role: "user", content: `rebuilt ${threadId}` }]),
+      ),
+    );
     expect(migrated).toBe(1);
-    expect(migrateLegacyChatThreads(sqlite, () => [])).toBe(0);
+    expect(yield* over(sqlite)(migrateLegacyChatThreads(() => Effect.succeed([])))).toBe(0);
 
-    const persistence = sqliteChatPersistence(sqlite);
+    const persistence = yield* over(sqlite)(chatPersistence);
     expect(yield* call(() => persistence.stores.messages.loadThread("legacy"))).toEqual([
       { role: "user", content: "rebuilt legacy" },
     ]);
@@ -114,18 +123,21 @@ it.live("materializes a session imported after startup when its chat is first op
     sqlite
       .prepare("INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?)")
       .run("project", "/tmp/project", "project", "2026-01-01T00:00:00.000Z");
-    expect(migrateLegacyChatThreads(sqlite, () => [])).toBe(0);
+    expect(yield* over(sqlite)(migrateLegacyChatThreads(() => Effect.succeed([])))).toBe(0);
     sqlite
       .prepare("INSERT INTO sessions (id, project_id, created_at) VALUES (?, ?, ?)")
       .run("imported", "project", "2026-01-02T00:00:00.000Z");
 
-    const rebuilt = () => [{ role: "user" as const, content: "imported transcript" }];
-    expect(migrateMissingChatThread(sqlite, "imported", rebuilt)).toBe(true);
-    expect(migrateMissingChatThread(sqlite, "imported", () => [])).toBe(false);
-    expect(migrateMissingChatThread(sqlite, "unknown", rebuilt)).toBe(false);
-    const persistence = sqliteChatPersistence(sqlite);
+    const transcript: ModelMessage[] = [{ role: "user", content: "imported transcript" }];
+    const rebuilt = () => Effect.succeed(transcript);
+    const missing = (threadId: string, fallback: typeof rebuilt) =>
+      over(sqlite)(migrateMissingChatThread(threadId, fallback));
+    expect(yield* missing("imported", rebuilt)).toBe(true);
+    expect(yield* missing("imported", () => Effect.succeed([]))).toBe(false);
+    expect(yield* missing("unknown", rebuilt)).toBe(false);
+    const persistence = yield* over(sqlite)(chatPersistence);
     expect(yield* call(() => persistence.stores.messages.loadThread("imported"))).toEqual(
-      rebuilt(),
+      transcript,
     );
   }),
 );

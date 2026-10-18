@@ -671,15 +671,7 @@ class Owner extends Context.Service<Owner, OwnerFixture>()(
   "memory-agent/tests/full-loop/owner-authority.test/Owner",
 ) {}
 const ownerWithReviews = PermissionReviews.layer.pipe(
-  Layer.provideMerge(
-    Layer.effect(
-      Database,
-      Effect.gen(function* () {
-        const { sqlite } = yield* Owner;
-        return Database.of({ sqlite, atomic: (work) => work() });
-      }),
-    ),
-  ),
+  Layer.provideMerge(Database.over(Effect.map(Owner, ({ sqlite }) => sqlite))),
   Layer.provideMerge(Layer.effect(Owner, ownerFixture())),
   Layer.provideMerge(ownerLayer),
 );
@@ -695,7 +687,7 @@ layer(ownerWithReviews, { excludeTestServices: true })("full-loop owner RPC auth
         let permissions = 0;
         let cleanup = 0;
         let ownerTranscriptChecked = false;
-        reviews.record({
+        yield* reviews.record({
           sessionId: "s",
           toolCallId: "c",
           toolName: "owner_tool",

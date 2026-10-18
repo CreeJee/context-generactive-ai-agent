@@ -80,20 +80,22 @@ const make = (timeoutMs: number) =>
     const storage = yield* OwnerWorkflowStorage;
     const context = yield* Effect.context<never>();
     const runPromise = Effect.runPromiseWith(context);
-    const runSync = Effect.runSyncWith(context);
     const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
       Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
 
-    const executions = () => storage.workflowExecutions(RelayedApprovalExecution._tag);
     const find = (sessionId: string, approvalId: string) =>
-      executions().flatMap((execution) => {
-        const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(execution.payload);
-        return Result.isSuccess(decoded) &&
-          decoded.success.sessionId === sessionId &&
-          decoded.success.approvalId === approvalId
-          ? [{ execution, payload: decoded.success }]
-          : [];
-      })[0];
+      Effect.map(
+        storage.workflowExecutions(RelayedApprovalExecution._tag),
+        (executions) =>
+          executions.flatMap((execution) => {
+            const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(execution.payload);
+            return Result.isSuccess(decoded) &&
+              decoded.success.sessionId === sessionId &&
+              decoded.success.approvalId === approvalId
+              ? [{ execution, payload: decoded.success }]
+              : [];
+          })[0],
+      );
 
     return {
       /**
@@ -135,30 +137,25 @@ const make = (timeoutMs: number) =>
         );
       },
 
-      pending: (sessionId: string): RelayedApprovalView[] =>
-        runSync(
-          Effect.sync(() =>
-            storage
-              .pendingExecutions(RelayedApprovalExecution._tag)
-              .flatMap((execution) => {
-                const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(
-                  execution.payload,
-                );
-                return Result.isSuccess(decoded) && decoded.success.sessionId === sessionId
-                  ? [payloadView(decoded.success)]
-                  : [];
-              })
-              .sort((left, right) => left.createdAt - right.createdAt),
-          ),
+      pending: (sessionId: string) =>
+        Effect.map(storage.pendingExecutions(RelayedApprovalExecution._tag), (executions) =>
+          executions
+            .flatMap((execution) => {
+              const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(execution.payload);
+              return Result.isSuccess(decoded) && decoded.success.sessionId === sessionId
+                ? [payloadView(decoded.success)]
+                : [];
+            })
+            .toSorted((left, right) => left.createdAt - right.createdAt),
         ),
 
       /** False for a foreign, timed-out or unknown approval. Same-value duplicates are idempotent. */
       answer: (sessionId: string, approvalId: string, approved: boolean) =>
         Effect.gen(function* () {
-          const found = find(sessionId, approvalId);
+          const found = yield* find(sessionId, approvalId);
           if (found === undefined) return false;
           const { execution, payload } = found;
-          const stored = storage.deferredResult(
+          const stored = yield* storage.deferredResult(
             execution.executionId,
             RelayedApprovalDecision.name,
           );

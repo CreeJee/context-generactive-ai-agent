@@ -296,10 +296,10 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           if (item.kind === "generic") item.resolveInterrupt({ approved: true });
         });
         yield* until(
-          () => relayed.pending(sessionId).length === 1,
+          Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
           "the agent's permission request",
         );
-        const [request] = relayed.pending(sessionId);
+        const [request] = yield* relayed.pending(sessionId);
         expect(request).toMatchObject({
           requester: { kind: "external_agent", agent: "fake" },
           toolName: "Edit README.md",

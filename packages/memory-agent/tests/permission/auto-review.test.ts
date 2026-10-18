@@ -30,7 +30,7 @@ const shellRequest = Effect.fnUntraced(function* (command: string) {
     sessionId,
     tab,
     shellResult: () => nodes.session(sessionId).find((node) => node.kind === "tool_result"),
-    review: () => reviews.latest(sessionId, scopedCallId("call-shell", sessionId)),
+    review: reviews.latest(sessionId, scopedCallId("call-shell", sessionId)),
   };
 });
 
@@ -86,7 +86,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       yield* tab.answered("Shell said", "the answer");
       expect(tab.client.getInterrupts()).toHaveLength(0);
       expect(tab.text()).toContain('"scriptSha256"');
-      expect(review()).toMatchObject({
+      expect(yield* review).toMatchObject({
         decision: "allow",
         decidedBy: "classifier",
         reason: "검토 결과: allow",
@@ -128,7 +128,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       });
       yield* tab.answered("Shell said", "the answer");
       expect(tab.text()).toContain('"scriptSha256"');
-      expect(review()).toMatchObject({ decision: "approved", decidedBy: "user" });
+      expect(yield* review).toMatchObject({ decision: "approved", decidedBy: "user" });
       expect(shellResult()?.detail).toMatchObject({
         ok: true,
         permission: { decision: "approved" },
@@ -156,7 +156,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
     Effect.gen(function* () {
       const { tab, review, shellResult } = yield* shellRequest("printf broken-review");
       yield* tab.pendingInterrupt;
-      expect(review()).toMatchObject({ decision: "ask", decidedBy: "fallback" });
+      expect(yield* review).toMatchObject({ decision: "ask", decidedBy: "fallback" });
       expect(shellResult()).toBeUndefined();
     }),
   );

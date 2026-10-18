@@ -1,8 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import type { SQLOutputValue } from "node:sqlite";
-import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { Clock, Context, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 
 /**
  * - `allow` / `ask` / `block`: the classifier's (or fallback's) verdict on a call.
@@ -40,58 +37,51 @@ const ReviewRow = Schema.Struct({
   reason: Schema.String,
   created_at: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeReviewRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(ReviewRow),
-  Result.getOrThrow,
-);
-
-function toReview(row: Record<string, SQLOutputValue>): PermissionReview {
-  const decoded = decodeReviewRow(row);
+function toReview(row: typeof ReviewRow.Type): PermissionReview {
   return {
-    sessionId: decoded.session_id,
-    toolCallId: decoded.tool_call_id,
-    toolName: decoded.tool_name,
-    input: decoded.input,
-    decision: decoded.decision,
-    decidedBy: decoded.decided_by,
-    reason: decoded.reason,
-    createdAt: decoded.created_at,
+    sessionId: row.session_id,
+    toolCallId: row.tool_call_id,
+    toolName: row.tool_name,
+    input: row.input,
+    decision: row.decision,
+    decidedBy: row.decided_by,
+    reason: row.reason,
+    createdAt: row.created_at,
   };
 }
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
-
-  const { sqlite } = yield* Database;
-  const insert = sqlite.prepare(
-    "INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
-  );
-  const selectLatest = sqlite.prepare(
-    "SELECT * FROM permission_reviews WHERE session_id = ? AND tool_call_id = ? ORDER BY id DESC LIMIT 1",
-  );
+  const sql = yield* SqlClient.SqlClient;
+  const insert = SqlSchema.findOne({
+    Request: PermissionReview,
+    Result: ReviewRow,
+    execute: (review) => sql`
+      INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at)
+      VALUES (${review.sessionId}, ${review.toolCallId}, ${review.toolName}, ${review.input},
+        ${review.decision}, ${review.decidedBy}, ${review.reason}, ${review.createdAt})
+      RETURNING *`,
+  });
+  const selectLatest = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, toolCallId: Schema.String }),
+    Result: ReviewRow,
+    execute: ({ sessionId, toolCallId }) => sql`
+      SELECT * FROM permission_reviews
+      WHERE session_id = ${sessionId} AND tool_call_id = ${toolCallId}
+      ORDER BY id DESC LIMIT 1`,
+  });
 
   return {
-    record(review: NewPermissionReview): PermissionReview {
-      const row = insert.get(
-        review.sessionId,
-        review.toolCallId,
-        review.toolName,
-        review.input,
-        review.decision,
-        review.decidedBy,
-        review.reason,
-        DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-      );
-      if (!isTruthy(row)) throw new Error("Permission review insert returned no row");
-      return toReview(row);
-    },
+    record: (review: NewPermissionReview) =>
+      Effect.gen(function* () {
+        const createdAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+        return toReview(yield* insert({ ...review, createdAt }));
+      }),
 
     /** The decision in force for a call: the user's answer if any, else the verdict. */
-    latest(sessionId: string, toolCallId: string): PermissionReview | null {
-      const row = selectLatest.get(sessionId, toolCallId);
-      return isTruthy(row) ? toReview(row) : null;
-    },
+    latest: (sessionId: string, toolCallId: string) =>
+      Effect.map(selectLatest({ sessionId, toolCallId }), (row) =>
+        Option.getOrNull(Option.map(row, toReview)),
+      ),
   };
 });
 

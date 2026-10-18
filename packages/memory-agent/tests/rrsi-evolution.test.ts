@@ -123,7 +123,7 @@ const fixture = Effect.fnUntraced(function* (options: {
   ).pipe(Effect.provideService(Scope.Scope, owner));
   const service = Context.get(context, Rrsi);
   const store = Context.get(context, HarnessStore);
-  store.configure({ enabled: false, maxMinutes: 1 });
+  yield* store.configure({ enabled: false, maxMinutes: 1 });
   return {
     owner,
     service,
@@ -168,7 +168,7 @@ it.live.each(["manual", "shutdown"] as const)(
       yield* Fiber.join(stopping);
       expect(state.released).toBe(1);
       if (mode === "manual") {
-        expect(store.experiments()[0]).toMatchObject({
+        expect((yield* store.experiments)[0]).toMatchObject({
           status: "cancelled",
           reason: "manual_stop",
         });
@@ -186,28 +186,29 @@ it.live.each([
   (options) =>
     Effect.gen(function* () {
       const { service, store, state, start } = yield* fixture(options);
-      const originalGoal = store.forGoal("existing");
+      const originalGoal = yield* store.forGoal("existing");
       yield* start;
       yield* Effect.repeat(service.status, { until: (status) => !status.running });
-      const record = store.experiments()[0];
+      const [record] = yield* store.experiments;
+      if (record === undefined) return expect.unreachable("experiment record expected");
       expect(record.status).toBe("completed");
       expect(record.baselines).toHaveLength(3);
       expect(record.candidates.some((candidate) => candidate.decision === "round_winner")).toBe(
         true,
       );
       expect(state.splits).toContain("validation");
-      expect(store.forGoal("existing").id).toBe(originalGoal.id);
+      expect((yield* store.forGoal("existing")).id).toBe(originalGoal.id);
       expect(state.released).toBe(1);
       if (options.reject) {
         expect(record.reason).toBe("validation_rejected");
         expect(state.splits).not.toContain("sealed");
-        expect(store.current().id).toBe("baseline");
+        expect((yield* store.current).id).toBe("baseline");
         expect(record.adoptedVersionId).toBeUndefined();
       } else {
         expect(record.reason).toBe("profile_adopted");
         expect(state.splits).toContain("sealed");
-        expect(store.current().profile.retrievalTokenLimit).toBe(400);
-        expect(store.forGoal("new").id).toBe(record.adoptedVersionId);
+        expect((yield* store.current).profile.retrievalTokenLimit).toBe(400);
+        expect((yield* store.forGoal("new")).id).toBe(record.adoptedVersionId);
         expect(yield* Effect.flip(start)).toMatchObject({
           _tag: "RrsiFailed",
           reason: "sealed_corpus_exhausted",

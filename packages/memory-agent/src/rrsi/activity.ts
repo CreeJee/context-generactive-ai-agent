@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { ActivityFailed } from "./failure.ts";
 
 export const Activity = Schema.Struct({ busy: Schema.Int, latest: Schema.NullOr(Schema.Finite) });
@@ -19,9 +19,9 @@ export const activitySql = `SELECT
     LEFT JOIN projects p ON p.id = s.project_id
     WHERE p.hidden_at IS NULL) AS latest`;
 
-export const readActivity = Effect.fn("Rrsi.readActivity")((sqlite: DatabaseSync) =>
-  Effect.try({
-    try: () => sqlite.prepare(activitySql).get(),
-    catch: () => ActivityFailed.make(),
-  }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Activity))),
-);
+/** Activity of the database behind the current SqlClient. */
+export const readActivity = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql.unsafe(activitySql).pipe(Effect.mapError(() => ActivityFailed.make()));
+  return yield* Schema.decodeUnknownEffect(Activity)(row);
+}).pipe(Effect.withSpan("Rrsi.readActivity"));

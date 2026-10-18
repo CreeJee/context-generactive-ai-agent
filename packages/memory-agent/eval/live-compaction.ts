@@ -255,7 +255,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     turns: answers.length,
     summaryBlocks: blocks,
     manual,
-    usage: services.usage.byRootSession(services.sessionId),
+    usage: yield* services.usage.byRootSession(services.sessionId),
     evidenceCorrect: final.includes(phrase),
     computationCorrect: /\b8\b/.test(final),
     elapsedMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,

@@ -83,8 +83,8 @@ it.live("owner finalization retains worker reasoning separately from the answer"
           workerUrl,
           capability,
           ledger: makeInMemoryOwnerRpcLedger(),
-          permits: () => true,
-          permitsFinalization: () => true,
+          permits: () => Effect.succeed(true),
+          permitsFinalization: () => Effect.succeed(true),
           finalizationMiddleware: ["record-reasoning"],
           lastOperationId: 0,
         }).execute(
@@ -182,8 +182,8 @@ it.live(
             workerUrl,
             capability,
             ledger: makeInMemoryOwnerRpcLedger(),
-            permits: () => true,
-            permitsFinalization: () => true,
+            permits: () => Effect.succeed(true),
+            permitsFinalization: () => Effect.succeed(true),
             finalizationMiddleware: ["provider", "consumer", "owner-gate"],
             lastOperationId: 0,
           }).execute({ messages: [], runId: "r", threadId: "s" }, capabilities),
@@ -225,8 +225,8 @@ it.live(
             workerUrl,
             capability,
             ledger: makeInMemoryOwnerRpcLedger(),
-            permits: () => true,
-            permitsFinalization: () => true,
+            permits: () => Effect.succeed(true),
+            permitsFinalization: () => Effect.succeed(true),
             finalizationMiddleware: ["provider", "consumer", "owner-gate"],
             lastOperationId: 0,
           }).execute(
@@ -282,8 +282,8 @@ it.live(
             workerUrl,
             capability,
             ledger: makeInMemoryOwnerRpcLedger(),
-            permits: () => issued && active,
-            permitsFinalization: () => issued,
+            permits: () => Effect.sync(() => issued && active),
+            permitsFinalization: () => Effect.sync(() => issued),
             finalizationMiddleware: ["terminal-persistence", "recorder"],
             revoke: () => {
               issued = false;

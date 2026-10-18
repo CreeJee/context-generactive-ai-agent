@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Result, Schema } from "effect";
+import { Cause, Effect, Result, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
@@ -108,9 +108,9 @@ testAgent()("Workflows", (it) => {
           steps: plan.steps.map((step) => ({ ...step, dependsOn: ["missing"] })),
         }),
       );
-      expect(failure.issues).toEqual([
-        { _tag: "UnknownDependency", stepId: "store", dependsOn: "missing" },
-      ]);
+      expect(failure).toMatchObject({
+        issues: [{ _tag: "UnknownDependency", stepId: "store", dependsOn: "missing" }],
+      });
       expect((yield* workflows.get(id)).plan).toBeNull();
     }),
   );
@@ -120,7 +120,8 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const result = yield* Effect.result((yield* Workflows).setPhase(id, "execute"));
       expect(Result.isFailure(result)).toBe(true);
-      if (Result.isFailure(result)) expect(result.failure.reason).toBe("plan_not_ready");
+      if (Result.isFailure(result))
+        expect(result.failure).toMatchObject({ reason: "plan_not_ready" });
     }),
   );
 
@@ -186,7 +187,8 @@ testAgent()("Workflows", (it) => {
       expect(state.plan?.goalVersion).toBe(1);
       const execute = yield* Effect.result(workflows.setPhase(id, "execute"));
       expect(Result.isFailure(execute)).toBe(true);
-      if (Result.isFailure(execute)) expect(execute.failure.reason).toBe("plan_outdated");
+      if (Result.isFailure(execute))
+        expect(execute.failure).toMatchObject({ reason: "plan_outdated" });
     }),
   );
 
@@ -357,7 +359,8 @@ testAgent()("Workflows", (it) => {
         }),
       );
       expect(Result.isFailure(claim)).toBe(true);
-      if (Result.isFailure(claim)) expect(claim.failure.reason).toBe("verification_required");
+      if (Result.isFailure(claim))
+        expect(claim.failure).toMatchObject({ reason: "verification_required" });
       yield* workflows.updatePlan(id, plan);
       const step = yield* Effect.result(
         workflows.updateProgress(id, {
@@ -367,7 +370,8 @@ testAgent()("Workflows", (it) => {
         }),
       );
       expect(Result.isFailure(step)).toBe(true);
-      if (Result.isFailure(step)) expect(step.failure.reason).toBe("step_evidence_required");
+      if (Result.isFailure(step))
+        expect(step.failure).toMatchObject({ reason: "step_evidence_required" });
     }),
   );
 
@@ -612,14 +616,16 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const events = yield* AppEvents;
         const beforeRevision = events.revision();
         const persistedAtPublish: unknown[] = [];
-        const runSync = Effect.runSyncWith(yield* Effect.context<Workflows>());
+        const published: unknown[] = [];
         const publishSession = events.publishSession;
-        const publish = vi
-          .spyOn(events, "publishSession")
-          .mockImplementation((sessionId, topic) => {
-            persistedAtPublish.push(runSync(workflows.get(sessionId)));
-            return publishSession(sessionId, topic);
-          });
+        const publish = vi.spyOn(events, "publishSession").mockImplementation((sessionId, topic) =>
+          workflows.get(sessionId).pipe(
+            Effect.orDie,
+            Effect.tap((state) => Effect.sync(() => persistedAtPublish.push(state))),
+            Effect.andThen(publishSession(sessionId, topic)),
+            Effect.tap((event) => Effect.sync(() => published.push(event))),
+          ),
+        );
         yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
         const tool = yield* serverTool(id, name === "update_goal" ? "goal" : "execute", name);
         const input =
@@ -635,13 +641,15 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const result = yield* tool(input);
         const state = yield* workflows.get(id);
         expect(publish).toHaveBeenCalledExactlyOnceWith(id, "run-state");
-        expect(publish.mock.results[0]?.value).toEqual({
-          scope: "session",
-          projectId: project.id,
-          sessionId: id,
-          topic: "run-state",
-          revision: beforeRevision + 1,
-        });
+        expect(published).toEqual([
+          {
+            scope: "session",
+            projectId: project.id,
+            sessionId: id,
+            topic: "run-state",
+            revision: beforeRevision + 1,
+          },
+        ]);
         expect(persistedAtPublish).toEqual([state]);
         expect(result).toMatchObject({ phase: state.phase });
         expect(state.goal?.version).toBe(name === "update_goal" ? 2 : 1);
@@ -708,13 +716,13 @@ testAgent()("server workflow action policy", (it) => {
         const matches = Effect.fnUntraced(function* (
           current: WorkflowState,
           decision: ReturnType<typeof workflowActions>["phases"]["chat"],
-          attempt: Effect.Effect<unknown, { readonly reason: string }>,
+          attempt: Effect.Effect<unknown, unknown>,
         ) {
           reset(current);
           const result = yield* Effect.result(attempt);
           expect(Result.isSuccess(result)).toBe(decision.allowed);
           if (!decision.allowed && Result.isFailure(result))
-            expect(result.failure.reason).toBe(decision.reason);
+            expect(result.failure).toMatchObject({ reason: decision.reason });
           if (!decision.allowed) expect(yield* workflows.get(id)).toEqual(current);
         });
         for (const current of states) {
@@ -799,12 +807,10 @@ testAgent()("Workflows snapshot failure", (it) => {
         CREATE TRIGGER reject_workflow_revision BEFORE INSERT ON workflow_state_revisions
         BEGIN SELECT RAISE(ABORT, 'snapshot unavailable'); END;
       `);
-      const rejected = yield* Effect.exit((yield* Workflows).updateGoal(id, goal));
-      expect(Exit.isFailure(rejected)).toBe(true);
-      if (Exit.isFailure(rejected))
-        expect(() => {
-          throw Cause.squash(rejected.cause);
-        }).toThrow("snapshot unavailable");
+      expect(yield* Effect.flip((yield* Workflows).updateGoal(id, goal))).toMatchObject({
+        _tag: "WorkflowStorageError",
+        cause: { _tag: "SqlError" },
+      });
       expect(
         sqlite.prepare("SELECT * FROM workflow_goal_identities WHERE session_id = ?").all(id),
       ).toEqual([]);

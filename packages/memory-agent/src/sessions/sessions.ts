@@ -1,9 +1,6 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import type { SQLOutputValue } from "node:sqlite";
-import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Clock, Context, Crypto, Data, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import { firstMessageTitle } from "./title.ts";
 import { Projects } from "../projects/projects.ts";
 
@@ -42,29 +39,17 @@ const SessionRow = Schema.Struct({
   worktree_path: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeFirstMessage = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ text: Schema.String })),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSessionRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(SessionRow),
-  Result.getOrThrow,
-);
-
-function toSession(row: Record<string, SQLOutputValue>): Session {
-  const decoded = decodeSessionRow(row);
+function toSession(row: typeof SessionRow.Type): Session {
   return {
-    id: decoded.id,
-    projectId: decoded.project_id,
-    title: decoded.title,
-    createdAt: decoded.created_at,
-    agent: decoded.agent,
-    archivedAt: decoded.archived_at,
-    importedFrom: decoded.imported_from,
-    worktreePath: decoded.worktree_path,
-    branch: decoded.branch,
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    createdAt: row.created_at,
+    agent: row.agent,
+    archivedAt: row.archived_at,
+    importedFrom: row.imported_from,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
   };
 }
 
@@ -72,49 +57,99 @@ export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
   readonly id: string;
 }> {}
 
-const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
+const NewSession = Schema.Struct({
+  id: Schema.String,
+  projectId: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  agent: Schema.NullOr(Schema.String),
+  importedFrom: Schema.NullOr(Schema.String),
+  worktreePath: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
+});
 
-  const { sqlite } = yield* Database;
+const make = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
   const projects = yield* Projects;
-  const firstMessage = sqlite.prepare(
-    "SELECT text FROM nodes WHERE session_id = ? AND kind = 'user' ORDER BY seq LIMIT 1",
+  const isoNow = Effect.map(Clock.currentTimeMillis, (millis) =>
+    DateTime.formatIso(DateTime.makeUnsafe(millis)),
   );
+  const firstMessage = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ text: Schema.String }),
+    execute: (sessionId) => sql`
+      SELECT text FROM nodes WHERE session_id = ${sessionId} AND kind = 'user'
+      ORDER BY seq LIMIT 1`,
+  });
   // Older local conversations predate automatic title persistence.
-  const withTitle = (row: Record<string, SQLOutputValue>): Session => {
+  const withTitle = (
+    row: typeof SessionRow.Type,
+  ): Effect.Effect<Session, SqlError.SqlError | Schema.SchemaError> => {
     const session = toSession(row);
-    if (session.title !== null || session.importedFrom !== null) return session;
-    const message = firstMessage.get(session.id);
-    return isTruthy(message)
-      ? { ...session, title: firstMessageTitle(decodeFirstMessage(message).text) }
-      : session;
+    if (session.title !== null || session.importedFrom !== null) return Effect.succeed(session);
+    return Effect.map(firstMessage(session.id), (message) =>
+      Option.match(message, {
+        onNone: () => session,
+        onSome: ({ text }) => ({ ...session, title: firstMessageTitle(text) }),
+      }),
+    );
   };
+  const found =
+    (id: string) =>
+    (
+      row: Option.Option<typeof SessionRow.Type>,
+    ): Effect.Effect<Session, SessionNotFound | SqlError.SqlError | Schema.SchemaError> =>
+      Option.match(row, {
+        onNone: () => Effect.fail(new SessionNotFound({ id })),
+        onSome: withTitle,
+      });
+  const byId = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: SessionRow,
+    execute: (id) => sql`SELECT * FROM sessions WHERE id = ${id}`,
+  });
+  const insert = SqlSchema.findOne({
+    Request: NewSession,
+    Result: SessionRow,
+    execute: (row) => sql`
+      INSERT INTO sessions (id, project_id, title, created_at, agent, imported_from, worktree_path, branch)
+      VALUES (${row.id}, ${row.projectId}, ${row.title}, ${row.createdAt}, ${row.agent},
+        ${row.importedFrom}, ${row.worktreePath}, ${row.branch})
+      RETURNING *`,
+  });
+  const list = SqlSchema.findAll({
+    Request: Schema.Struct({ projectId: Schema.String, archived: Schema.Boolean }),
+    Result: SessionRow,
+    execute: ({ projectId, archived }) => sql`
+      SELECT * FROM sessions
+      WHERE project_id = ${projectId} AND archived_at IS ${sql.literal(archived ? "NOT NULL" : "NULL")}
+      ORDER BY created_at DESC, id`,
+  });
+  const archive = SqlSchema.findOneOption({
+    Request: Schema.Struct({ id: Schema.String, archivedAt: Schema.NullOr(Schema.String) }),
+    Result: SessionRow,
+    execute: ({ id, archivedAt }) =>
+      sql`UPDATE sessions SET archived_at = ${archivedAt} WHERE id = ${id} RETURNING *`,
+  });
 
   return {
-    get: (id: string) =>
-      Effect.suspend(() => {
-        const row = sqlite.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
-        return isTruthy(row)
-          ? Effect.succeed(withTitle(row))
-          : Effect.fail(new SessionNotFound({ id }));
-      }),
+    get: (id: string) => Effect.flatMap(byId(id), found(id)),
 
     /** Fails with ProjectNotFound when the project is not registered. */
     create: (projectId: string, title: string | null = null, agent: string | null = null) =>
       Effect.gen(function* () {
         yield* projects.get(projectId);
-        const row = sqlite
-          .prepare(
-            "INSERT INTO sessions (id, project_id, title, created_at, agent) VALUES (?, ?, ?, ?, ?) RETURNING *",
-          )
-          .get(
-            randomUUID(),
-            projectId,
-            title,
-            DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-            agent,
-          );
-        if (!isTruthy(row)) return yield* Effect.die(new Error("Session insert returned no row"));
+        const row = yield* insert({
+          id: yield* crypto.randomUUIDv4(),
+          projectId,
+          title,
+          createdAt: yield* isoNow,
+          agent,
+          importedFrom: null,
+          worktreePath: null,
+          branch: null,
+        });
         return toSession(row);
       }),
 
@@ -129,60 +164,36 @@ const make = Effect.gen(function* () {
       source: string,
       origin: SessionOrigin,
     ) =>
-      Effect.sync(() => {
-        const row = sqlite
-          .prepare(
-            "INSERT INTO sessions (id, project_id, title, created_at, imported_from, worktree_path, branch) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *",
-          )
-          .get(
-            randomUUID(),
-            projectId,
-            title,
-            createdAt,
-            source,
-            origin.worktreePath,
-            origin.branch,
-          );
-        if (!isTruthy(row)) throw new Error("Session insert returned no row");
+      Effect.gen(function* () {
+        const row = yield* insert({
+          id: yield* crypto.randomUUIDv4(),
+          projectId,
+          title,
+          createdAt,
+          agent: null,
+          importedFrom: source,
+          worktreePath: origin.worktreePath,
+          branch: origin.branch,
+        });
         return toSession(row);
       }),
 
     /** Fills in where a conversation ran once that is known; what is recorded already stays. */
     recordOrigin: (id: string, origin: SessionOrigin) =>
-      Effect.sync(() => {
-        sqlite
-          .prepare(
-            "UPDATE sessions SET worktree_path = coalesce(worktree_path, ?), branch = coalesce(branch, ?) WHERE id = ?",
-          )
-          .run(origin.worktreePath, origin.branch, id);
-      }),
+      Effect.asVoid(sql`
+        UPDATE sessions SET worktree_path = coalesce(worktree_path, ${origin.worktreePath}),
+          branch = coalesce(branch, ${origin.branch})
+        WHERE id = ${id}`),
 
     /** Newest first. Archived conversations are listed only when asked for, and then only they are. */
     list: (projectId: string, archived = false) =>
-      Effect.sync(() =>
-        sqlite
-          .prepare(
-            `SELECT * FROM sessions WHERE project_id = ? AND archived_at IS ${archived ? "NOT NULL" : "NULL"}
-             ORDER BY created_at DESC, id`,
-          )
-          .all(projectId)
-          .map(withTitle),
-      ),
+      Effect.flatMap(list({ projectId, archived }), (rows) => Effect.forEach(rows, withTitle)),
 
     /** Moves a conversation out of the list or back. Messages, memory and search are untouched. */
     setArchived: (id: string, archived: boolean) =>
-      Effect.suspend(() => {
-        const row = sqlite
-          .prepare("UPDATE sessions SET archived_at = ? WHERE id = ? RETURNING *")
-          .get(
-            archived
-              ? DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()))
-              : null,
-            id,
-          );
-        return isTruthy(row)
-          ? Effect.succeed(withTitle(row))
-          : Effect.fail(new SessionNotFound({ id }));
+      Effect.gen(function* () {
+        const row = yield* archive({ id, archivedAt: archived ? yield* isoNow : null });
+        return yield* found(id)(row);
       }),
   };
 });
@@ -191,5 +202,5 @@ const make = Effect.gen(function* () {
 export class Sessions extends Context.Service<Sessions, Effect.Success<typeof make>>()(
   "memory-agent/sessions/sessions",
 ) {
-  static readonly layer = Layer.effect(Sessions, make);
+  static readonly layer = Layer.effect(Sessions, make).pipe(Layer.provide(NodeCrypto.layer));
 }

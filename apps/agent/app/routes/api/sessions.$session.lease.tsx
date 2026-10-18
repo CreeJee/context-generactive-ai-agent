@@ -35,7 +35,7 @@ export function action({ request, params }: Route.ActionArgs) {
         chat.lease(params.session, body.success.holder, body.success.action),
       ).pipe(
         Effect.tap(() =>
-          Effect.map(AppEvents, (events) => events.publishSession(params.session, "run-state")),
+          Effect.flatMap(AppEvents, (events) => events.publishSession(params.session, "run-state")),
         ),
       );
     }),

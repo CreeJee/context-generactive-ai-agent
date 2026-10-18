@@ -320,8 +320,8 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       ] as const) {
         const sessionId = yield* freshSession();
         const reason = `central-${label}`;
-        expect(reviews.latest(sessionId, "blocked-id")).toBeNull();
-        const blocked = reviews.record({
+        expect(yield* reviews.latest(sessionId, "blocked-id")).toBeNull();
+        const blocked = yield* reviews.record({
           sessionId,
           toolCallId: "blocked-id",
           toolName: "blocked_tool",
@@ -330,7 +330,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           decidedBy: "classifier",
           reason,
         });
-        const allowed = reviews.record({
+        const allowed = yield* reviews.record({
           sessionId,
           toolCallId: "allowed-id",
           toolName: "allowed_tool",
@@ -391,8 +391,8 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           }),
         );
         expect(toolResult("allowed-id")).toContain(`allowed-${label}`);
-        expect(reviews.latest(sessionId, "blocked-id")).toEqual(blocked);
-        expect(reviews.latest(sessionId, "allowed-id")).toEqual(allowed);
+        expect(yield* reviews.latest(sessionId, "blocked-id")).toEqual(blocked);
+        expect(yield* reviews.latest(sessionId, "allowed-id")).toEqual(allowed);
         // Observable embedder acquisition only, not a full singleton ownership proof.
         expect(embedderOwners.count).toBe(owners);
       }
@@ -585,14 +585,11 @@ const prebuiltCopy = Effect.fnUntraced(function* (name: string) {
 const acquire = Effect.fnUntraced(function* (manifest: string, goalInstanceId: string) {
   const path = yield* Path.Path;
   const storage = yield* StorageRoot;
-  const db = yield* Database;
-  return yield* Effect.scoped(
-    makeOwnerNativeArtifacts({
-      ...db,
-      directory: path.join(storage.path, "native-artifacts"),
-      manifest,
-    }).acquire(goalInstanceId),
-  );
+  const artifacts = yield* makeOwnerNativeArtifacts({
+    directory: path.join(storage.path, "native-artifacts"),
+    manifest,
+  });
+  return yield* Effect.scoped(artifacts.acquire(goalInstanceId));
 });
 
 testAgent()("owner native artifacts", (it) => {
@@ -694,7 +691,7 @@ testAgent()("owner native artifacts", (it) => {
         .run(id, "historical-sdk-only", "0".repeat(64), "file:///tmp/old-worker.mjs", "test");
       expect(yield* rejected).toMatchObject({
         _tag: "NativeRegistrationError",
-        cause: { message: "Historical Goal has no native provenance; backfill refused" },
+        reason: "historical_goal",
       });
     }),
   );

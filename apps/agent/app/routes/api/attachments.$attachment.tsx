@@ -19,7 +19,7 @@ export function loader({ request, params }: Route.LoaderArgs) {
       const found = yield* Effect.flatMap(Attachments, (attachments) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         Effect.gen(function* () {
-          const attachment = attachments.get(params.attachment);
+          const attachment = yield* attachments.get(params.attachment);
           return isTruthy(attachment)
             ? { attachment, bytes: yield* Effect.promise(() => attachments.read(attachment)) }
             : null;

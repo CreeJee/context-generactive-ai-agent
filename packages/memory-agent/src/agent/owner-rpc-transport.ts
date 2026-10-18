@@ -24,6 +24,7 @@ import {
   type OwnerRpcOperations,
   type OwnerRpcRequest,
   type OwnerRpcReply,
+  type OwnerRpcPermits,
 } from "./owner-rpc.ts";
 
 const id = Schema.Int.check(
@@ -330,8 +331,8 @@ export const serveOwnerRpcPortEffect: {
 } & typeof serveOwnerRpcPortEffectBody = EffectFunction.dual(2, serveOwnerRpcPortEffectBody);
 
 type OwnerRpcPortOptions<M extends OwnerRpcOperations> = {
-  readonly permits: (capability: OwnerRpcCapability) => boolean;
-  readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
+  readonly permits: OwnerRpcPermits;
+  readonly permitsFinalization?: OwnerRpcPermits;
   readonly ledger: OwnerRpcLedger;
   readonly handlers: OwnerRpcHandlers<M>;
 };

@@ -2,6 +2,7 @@ import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+// A second, read-only owner database is a native SQLite file opened only for activity reads.
 import { DatabaseSync } from "node:sqlite";
 import { oauthProtocolFileSystem as fs } from "../oauth/node-runtime.ts";
 import { oauthProtocolPath } from "../oauth/node-runtime.ts";
@@ -25,7 +26,8 @@ import {
   Schema,
   Scope,
 } from "effect";
-import { Database } from "../db/database.ts";
+import { SqlClient } from "effect/sql";
+import { connectionContext } from "../db/database.ts";
 import { OpenAICompatibleSettings } from "../providers/openai-compatible.ts";
 import { GlobalConfig } from "../config/global-config.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
@@ -45,7 +47,7 @@ import { editBudget, exploration, noiseBand, selectCandidate } from "./selection
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
 import { ActivityFailed, EvaluationFailed, experimentFailure } from "./failure.ts";
-import { activitySql } from "./activity.ts";
+import { readActivity } from "./activity.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { sdkPromiseWithController } from "../runtime/sdk-promise.ts";
 
@@ -99,14 +101,6 @@ const completionText = (raw: string) =>
     Result.getOrThrow,
   )(raw).choices[0]?.message.content ?? "";
 const Critique = Schema.Struct({ approved: Schema.Boolean });
-const Activity = Schema.Struct({ busy: Schema.Finite, latest: Schema.NullOr(Schema.Finite) });
-function activity(sqlite: DatabaseSync) {
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  return EffectFunction.flow(
-    Schema.decodeUnknownResult(Activity),
-    Result.getOrThrow,
-  )(sqlite.prepare(activitySql).get());
-}
 const mean = (measurements: readonly Measurement[]): Measurement => {
   const average = (field: "score" | "coding" | "memory") =>
     measurements.reduce((sum, m) => sum + m[field], 0) / measurements.length;
@@ -126,7 +120,8 @@ const make = Effect.gen(function* () {
   const owner = yield* Scope.fork(yield* Effect.scope);
 
   const store = yield* HarnessStore;
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const dependencies = yield* Effect.context<
     OpenAICompatibleSettings | GlobalConfig | ProviderRegistry
   >();
@@ -145,6 +140,7 @@ const make = Effect.gen(function* () {
     originalFile !== null && (yield* fs.exists(originalFile).pipe(Effect.orDie))
       ? new DatabaseSync(originalFile, { readOnly: true })
       : null;
+  const originalContext = original !== null ? yield* connectionContext(original) : null;
   const repo = Option.getOrNull(
     yield* Config.String("CONTEXT_AGENT_RRSI_REPOSITORY")
       .pipe(Config.option)
@@ -155,14 +151,18 @@ const make = Effect.gen(function* () {
     lastActivity = effectClock.currentTimeMillisUnsafe();
     controller?.abort("user_activity");
   };
-  const status = () => ({
-    settings: store.settings(),
-    current: store.current(),
-    versions: store.versions(),
-    experiments: store.experiments(),
-    running: controller !== null,
-    configuredRepository: repo !== null,
-  });
+  const status = Effect.all({
+    settings: store.settings,
+    current: store.current,
+    versions: store.versions,
+    experiments: store.experiments,
+  }).pipe(
+    Effect.map((stored) => ({
+      ...stored,
+      running: controller !== null,
+      configuredRepository: repo !== null,
+    })),
+  );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const branchCandidate = Effect.fn("Rrsi.branchCandidate")(function* (
     experimentId: string,
@@ -207,7 +207,15 @@ const make = Effect.gen(function* () {
     client: ModelGateway,
     abort: AbortController,
   ) {
-    const settings = store.settings();
+    const settings = yield* store.settings;
+    // Native evaluator callbacks report progress synchronously; their saves run in this runtime.
+    // A later save always writes the latest record, so an earlier one finishing last loses nothing.
+    const saveLater = () =>
+      void runFork(
+        store
+          .saveExperiment(record)
+          .pipe(Effect.catch((error) => Effect.logWarning("rrsi_progress_not_saved", error))),
+      );
     const deadline = effectClock.currentTimeMillisUnsafe() + settings.maxMinutes * 60000;
     const progress = (
       phase: (typeof ExperimentProgress.Type)["phase"],
@@ -215,7 +223,7 @@ const make = Effect.gen(function* () {
       total: number,
     ) => {
       record.progress = { phase, completed, total };
-      store.saveExperiment(record);
+      saveLater();
     };
     const consume = (raw: string) => {
       const count = reportedTokens(raw);
@@ -223,7 +231,7 @@ const make = Effect.gen(function* () {
         throw EvaluationFailed.make({ reason: "usage_unknown" });
       }
       record.tokens += count;
-      store.saveExperiment(record);
+      saveLater();
     };
     const bounded: ModelGateway = {
       ...client,
@@ -288,13 +296,13 @@ const make = Effect.gen(function* () {
       Effect.forkChild,
     );
     yield* Effect.gen(function* () {
-      const base = store.get(record.baseVersion);
+      const base = yield* store.get(record.baseVersion);
       let profile = base.profile;
       const baselines: Measurement[] = [];
       for (let repeat = 0; repeat < 3; repeat++) {
         baselines.push(yield* evaluate(profile, "evolve", 1, "baseline", repeat * 12, 36));
         record.baselines = [...baselines];
-        store.saveExperiment(record);
+        yield* store.saveExperiment(record);
       }
       const delta = noiseBand(baselines.map((m) => m.score));
       let incumbent = mean(baselines);
@@ -358,7 +366,7 @@ const make = Effect.gen(function* () {
             commit: null,
           };
           record.candidates.push(candidate);
-          store.saveExperiment(record);
+          yield* store.saveExperiment(record);
           if (decision !== "pending") continue;
           progress("critique", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -373,7 +381,7 @@ const make = Effect.gen(function* () {
           progress("critique", 1, 1);
           if (!critique.approved) {
             candidate.decision = "critic_rejected";
-            store.saveExperiment(record);
+            yield* store.saveExperiment(record);
             continue;
           }
           Object.assign(
@@ -394,7 +402,7 @@ const make = Effect.gen(function* () {
               measurement: candidate.measurement,
               recordId: candidate.id,
             });
-          store.saveExperiment(record);
+          yield* store.saveExperiment(record);
         }
         admissible.sort((a, b) => b.measurement.score - a.measurement.score);
         const winner = admissible[0];
@@ -407,7 +415,7 @@ const make = Effect.gen(function* () {
           );
           if (isTruthy(winnerRecord)) winnerRecord.decision = "round_winner";
         }
-        store.saveExperiment(record);
+        yield* store.saveExperiment(record);
       }
       if (stringifyJson(profile) === stringifyJson(base.profile)) {
         record.reason = "no_admissible_candidate";
@@ -417,7 +425,7 @@ const make = Effect.gen(function* () {
       const validationNew = yield* evaluate(profile, "validation", 2, "validation", 12, 24);
       record.validationBase = validationBase;
       record.validationNew = validationNew;
-      store.saveExperiment(record);
+      yield* store.saveExperiment(record);
       if (
         selectCandidate(validationBase, validationNew, {
           delta,
@@ -430,14 +438,12 @@ const make = Effect.gen(function* () {
         return;
       }
       // A held-out suite cannot silently turn into a repeatedly queried training suite.
-      atomic(() => {
-        sqlite.prepare("INSERT INTO rrsi_corpus_receipts VALUES ('v1', ?)").run(record.id);
-      });
+      yield* sql`INSERT INTO rrsi_corpus_receipts VALUES ('v1', ${record.id})`;
       const sealedBase = yield* evaluate(base.profile, "sealed", 2, "sealed", 0, 24);
       const sealedNew = yield* evaluate(profile, "sealed", 2, "sealed", 12, 24);
       record.sealedBase = sealedBase;
       record.sealedNew = sealedNew;
-      store.saveExperiment(record);
+      yield* store.saveExperiment(record);
       if (
         selectCandidate(sealedBase, sealedNew, {
           delta,
@@ -454,9 +460,13 @@ const make = Effect.gen(function* () {
       const winner = record.candidates.findLast(
         (candidate) => candidate.decision === "round_winner",
       );
-      record.adoptedVersionId = store.adopt(profile, record.baseVersion, winner?.commit ?? null).id;
+      record.adoptedVersionId = (yield* store.adopt(
+        profile,
+        record.baseVersion,
+        winner?.commit ?? null,
+      )).id;
       record.reason = "profile_adopted";
-      store.saveExperiment(record);
+      yield* store.saveExperiment(record);
       if (isTruthy(repo)) {
         // Code is still review-only. An approved profile remains installed if code exploration fails.
         yield* Effect.gen(function* () {
@@ -489,7 +499,7 @@ const make = Effect.gen(function* () {
             commit: null,
           };
           record.candidates.push(candidate);
-          store.saveExperiment(record);
+          yield* store.saveExperiment(record);
           progress("critique", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
           const critique = EffectFunction.flow(
@@ -555,7 +565,13 @@ const make = Effect.gen(function* () {
               if (isTruthy(candidate)) candidate.decision = "code_evaluation_incomplete";
             }),
           ),
-          Effect.ensuring(Effect.sync(() => store.saveExperiment(record))),
+          Effect.ensuring(
+            store
+              .saveExperiment(record)
+              .pipe(
+                Effect.catch((error) => Effect.logWarning("rrsi_code_record_not_saved", error)),
+              ),
+          ),
         );
       }
     }).pipe(Effect.ensuring(Fiber.interrupt(timer)));
@@ -566,8 +582,10 @@ const make = Effect.gen(function* () {
     const effectClock = yield* Clock.Clock;
 
     if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
-    if (isTruthy(sqlite.prepare("SELECT 1 FROM rrsi_corpus_receipts WHERE version='v1'").get()))
-      return yield* RrsiFailed.make({ reason: "sealed_corpus_exhausted" });
+    const exhausted = yield* sql`SELECT 1 FROM rrsi_corpus_receipts WHERE version='v1'`.pipe(
+      Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
+    );
+    if (exhausted.length > 0) return yield* RrsiFailed.make({ reason: "sealed_corpus_exhausted" });
     const baselineImage = yield* native.image;
     // Pin immutable evaluator provenance before any requests or candidates are created.
     if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
@@ -588,16 +606,16 @@ const make = Effect.gen(function* () {
       provider: client.configuration.provider,
       model: client.configuration.model,
       endpoint: client.configuration.baseUrl,
-      baseVersion: store.current().id,
+      baseVersion: (yield* store.current.pipe(
+        Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
+      )).id,
       baselineImage,
       tokens: 0,
       reason: "",
       candidates: [],
     };
-    yield* Effect.try({
-      try: () => store.saveExperiment(record),
-      catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
-    }).pipe(
+    yield* store.saveExperiment(record).pipe(
+      Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
       Effect.onError(() => Effect.sync(client.release).pipe(Effect.ensuring(cancellation.cancel))),
     );
     controller = abort;
@@ -636,18 +654,17 @@ const make = Effect.gen(function* () {
         }),
       ),
       Effect.ensuring(
-        Effect.try({
-          try: () => {
-            record.finishedAt = effectClock.currentTimeMillisUnsafe();
-            try {
-              store.saveExperiment(record);
-            } finally {
+        Effect.suspend(() => {
+          record.finishedAt = effectClock.currentTimeMillisUnsafe();
+          return store.saveExperiment(record);
+        }).pipe(
+          Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
+          Effect.ensuring(
+            Effect.sync(() => {
               client.release();
               controller = null;
-            }
-          },
-          catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
-        }).pipe(
+            }),
+          ),
           Effect.catchTag("RrsiFailed", (error) => Effect.logError(error)),
           Effect.ensuring(cancellation.release),
         ),
@@ -665,23 +682,26 @@ const make = Effect.gen(function* () {
       .pipe(Config.withDefault("0"))
       .parse(ConfigProvider.fromEnv());
     if (worker === "1") return;
-    const local = activity(sqlite);
-    const remote = original !== null ? activity(original) : { busy: 0, latest: null };
+    const local = yield* readActivity;
+    const remote =
+      originalContext !== null
+        ? yield* Effect.provideContext(readActivity, originalContext)
+        : { busy: 0, latest: null };
     if (isTruthy(local.busy) || isTruthy(remote.busy)) {
       touch();
       return;
     }
     const latest = Math.max(lastActivity, local.latest ?? 0, remote.latest ?? 0);
     if (
-      !store.settings().enabled ||
+      !(yield* store.settings).enabled ||
       controller !== null ||
       effectClock.currentTimeMillisUnsafe() - latest < 600000
     )
       return;
     if (
-      store
-        .experiments()
-        .some((entry) => entry.startedAt > effectClock.currentTimeMillisUnsafe() - 86400000)
+      (yield* store.experiments).some(
+        (entry) => entry.startedAt > effectClock.currentTimeMillisUnsafe() - 86400000,
+      )
     )
       return;
     yield* start().pipe(Effect.provideContext(dependencies), Effect.ignore);
@@ -709,13 +729,10 @@ const make = Effect.gen(function* () {
       original?.close();
     }),
   );
-  const wrap = <A>(operation: () => A) =>
-    Effect.try({
-      try: operation,
-      catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
-    });
+  const wrap = <A, E>(operation: Effect.Effect<A, E>) =>
+    Effect.mapError(operation, () => RrsiFailed.make({ reason: "state_operation_failed" }));
   return {
-    status: Effect.sync(status),
+    status: wrap(status),
     start,
     touch,
     stop: Effect.gen(function* () {
@@ -724,17 +741,23 @@ const make = Effect.gen(function* () {
       return { stopped: true };
     }),
     configure: (settings: RrsiSettings) =>
-      wrap(() => {
-        store.configure(settings);
-        if (!settings.enabled) controller?.abort("disabled");
-        return status();
-      }),
+      wrap(
+        store.configure(settings).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (!settings.enabled) controller?.abort("disabled");
+            }),
+          ),
+          Effect.andThen(status),
+        ),
+      ),
     restore: (id: string) =>
-      wrap(() => {
-        controller?.abort("profile_restored");
-        store.restore(id);
-        return status();
-      }),
+      wrap(
+        Effect.sync(() => controller?.abort("profile_restored")).pipe(
+          Effect.andThen(store.restore(id)),
+          Effect.andThen(status),
+        ),
+      ),
   };
 });
 export class Rrsi extends Context.Service<Rrsi, Effect.Success<typeof make>>()(

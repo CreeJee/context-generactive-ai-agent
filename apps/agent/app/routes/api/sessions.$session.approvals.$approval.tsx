@@ -24,7 +24,7 @@ export function action({ request, params }: Route.ActionArgs) {
         chat.answerApproval(params.session, holder, params.approval, body.success.approved),
       ).pipe(
         Effect.tap(() =>
-          Effect.map(AppEvents, (events) =>
+          Effect.flatMap(AppEvents, (events) =>
             events.publishSession(params.session, "relayed-approvals"),
           ),
         ),

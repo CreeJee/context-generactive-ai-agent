@@ -8,6 +8,7 @@ import {
   UpdatePlan,
   UpdateWorkflowProgress,
   WorkflowProgressRefused,
+  type WorkflowStorageError,
   Workflows,
   type PlanStep,
   type WorkflowPhase,
@@ -23,7 +24,9 @@ import {
   type PlanDependencyIssue,
 } from "./plan-schedule.ts";
 
-const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRefused, R>) =>
+const exposeProgressRefusal = <A, R>(
+  effect: Effect.Effect<A, WorkflowProgressRefused | WorkflowStorageError, R>,
+) =>
   effect.pipe(
     Effect.catchTag("WorkflowProgressRefused", (failure) =>
       Effect.succeed({
@@ -49,7 +52,7 @@ const make = Effect.gen(function* () {
         run(
           Effect.gen(function* () {
             const result = yield* (yield* WorkflowExecution).block(sessionId, runId, input);
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return result;
           }),
         ),
@@ -76,7 +79,7 @@ const make = Effect.gen(function* () {
             const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
             return { phase: state.phase, goal: state.goal, plan: state.plan, goalInstanceId };
           }).pipe(
-            Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
+            Effect.tap(() => events.publishSession(sessionId, "run-state")),
             Effect.catchTag("NewGoalTransitionRefused", (failure) =>
               Effect.succeed({
                 error: "new_goal_transition_refused" as const,
@@ -94,7 +97,7 @@ const make = Effect.gen(function* () {
       }).server((input) =>
         run(
           Effect.flatMap(Workflows, (workflows) => workflows.updateGoal(sessionId, input)).pipe(
-            Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
+            Effect.tap(() => events.publishSession(sessionId, "run-state")),
             Effect.flatMap((state) =>
               Effect.flatMap(Workflows, (workflows) =>
                 Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
@@ -116,7 +119,7 @@ const make = Effect.gen(function* () {
       }).server((input) =>
         run(
           Effect.flatMap(Workflows, (workflows) => workflows.updatePlan(sessionId, input)).pipe(
-            Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
+            Effect.tap(() => events.publishSession(sessionId, "run-state")),
             Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
             Effect.catchTag("PlanDependenciesRejected", (failure) =>
               Effect.succeed({
@@ -149,7 +152,7 @@ const make = Effect.gen(function* () {
             runId,
           ),
         ).pipe(
-          Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
+          Effect.tap(() => events.publishSession(sessionId, "run-state")),
           Effect.map((state) => ({
             phase: state.phase,
             goal: state.goal,

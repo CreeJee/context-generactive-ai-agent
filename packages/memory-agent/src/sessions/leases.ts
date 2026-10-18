@@ -43,7 +43,7 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
         yield* Effect.forkScoped(
           Effect.forever(
             Effect.sleep(Math.max(1_000, Math.min(ttlMs, 5_000))).pipe(
-              Effect.andThen(Effect.sync(() => leases.sweepExpired())),
+              Effect.andThen(leases.sweepExpired),
             ),
           ),
         );
@@ -62,7 +62,7 @@ function makeLeasesBody(
   now: () => number = () => DateTime.toEpochMillis(DateTime.nowUnsafe()),
 ) {
   const leases = MutableHashMap.empty<string, Lease>();
-  const expiredListeners: Array<(sessionId: string) => void> = [];
+  const expiredListeners: Array<(sessionId: string) => Effect.Effect<void>> = [];
   const live = (sessionId: string) => {
     const lease = Option.getOrUndefined(MutableHashMap.get(leases, sessionId));
     if (!isTruthy(lease)) return null;
@@ -76,20 +76,23 @@ function makeLeasesBody(
      * Remove leases whose pages stopped renewing, including sessions nobody asks about again, and
      * tell the listeners each session is free.
      */
-    sweepExpired() {
+    sweepExpired: Effect.suspend(() => {
       const current = now();
       const expired: string[] = [];
       for (const [sessionId, lease] of leases)
         if (current - lease.renewedAt >= ttlMs) expired.push(sessionId);
-      for (const sessionId of expired) {
-        MutableHashMap.remove(leases, sessionId);
-        for (const listener of expiredListeners) listener(sessionId);
-      }
-      return expired;
-    },
+      for (const sessionId of expired) MutableHashMap.remove(leases, sessionId);
+      // Each freed session's listeners run in turn, in the order they registered.
+      return Effect.forEach(
+        expired,
+        (sessionId) =>
+          Effect.forEach(expiredListeners, (listener) => listener(sessionId), { discard: true }),
+        { discard: true },
+      ).pipe(Effect.as(expired));
+    }),
 
-    /** Called with each session whose lease the sweep found expired. */
-    onExpired(listener: (sessionId: string) => void) {
+    /** Run with each session whose lease the sweep found expired. */
+    onExpired(listener: (sessionId: string) => Effect.Effect<void>) {
       expiredListeners.push(listener);
     },
 

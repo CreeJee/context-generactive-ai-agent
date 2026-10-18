@@ -316,6 +316,11 @@ const make = (watching: boolean, home: string) =>
               Effect.sync(() => {
                 for (const project of list) events.publishProject(project.id, "sessions");
               }),
+            ).pipe(
+              // The pass is done either way; pages only miss the hint to reload their lists.
+              Effect.catch((error) =>
+                Effect.logWarning("Imported sessions were not announced", error),
+              ),
             ),
           ),
           Effect.tapError((failure) =>

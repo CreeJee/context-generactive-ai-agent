@@ -308,7 +308,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               });
               expect(reads).toBe(0);
               currentUserId = user.id;
-              reviews.record({
+              yield* reviews.record({
                 sessionId: entry.session.id,
                 toolCallId: "shared-call",
                 toolName: "probe",

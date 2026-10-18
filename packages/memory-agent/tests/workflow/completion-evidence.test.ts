@@ -78,7 +78,7 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
       .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
       .get(sessionId)!.id,
   );
-  const bind = () => workflowRunBindings(db).bind(sessionId, run, revision);
+  const bind = (yield* workflowRunBindings).bind(sessionId, run, revision);
   switch (registration) {
     case "native": {
       sqlite
@@ -117,7 +117,7 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
       break;
     }
     case "legacy":
-      expect(bind().status).toBe("bound");
+      expect((yield* bind).status).toBe("bound");
       break;
   }
   sqlite

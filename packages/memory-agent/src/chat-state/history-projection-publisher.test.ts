@@ -57,14 +57,9 @@ const writeOriginal = Effect.fnUntraced(function* (sourceJSON: string) {
 describe("Effect history projection publication", () => {
   it.effect("reports a read-only install failure rather than running a partial publisher", () =>
     Effect.gen(function* () {
-      const readOnly = Layer.effect(
-        Database,
-        Effect.gen(function* () {
-          const db = yield* Database;
-          yield* Effect.try(() => db.sqlite.exec("PRAGMA query_only=ON"));
-          return db;
-        }),
-      ).pipe(Layer.provide(ownedDatabase));
+      const readOnly = Layer.effectDiscard(
+        Effect.flatMap(Database, (db) => Effect.try(() => db.sqlite.exec("PRAGMA query_only=ON"))),
+      ).pipe(Layer.provideMerge(ownedDatabase));
       const failed = yield* Effect.void.pipe(
         provideFixture(HistoryProjectionPublisher.layer.pipe(Layer.provide(readOnly))),
         Effect.flip,

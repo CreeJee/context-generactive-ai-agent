@@ -82,12 +82,13 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     Effect.map(redactor.redactText(text), (redaction) => redaction.text);
 
   /** The review behind a gated call's result, when the permission gate decided it. */
-  const permissionOf = (sessionId: string, toolCallId: string) => {
-    const review = reviews.latest(sessionId, toolCallId);
-    return isTruthy(review)
-      ? { decision: review.decision, decidedBy: review.decidedBy, reason: review.reason }
-      : undefined;
-  };
+  // Read before a hook's check-and-append, which must not yield in between.
+  const permissionOf = (sessionId: string, toolCallId: string) =>
+    Effect.map(reviews.latest(sessionId, toolCallId), (review) =>
+      isTruthy(review)
+        ? { decision: review.decision, decidedBy: review.decidedBy, reason: review.reason }
+        : undefined,
+    );
 
   const base = {
     projectId: binding.projectId,
@@ -134,6 +135,9 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
           const hidden = yield* Effect.forEach(written, (entry) => hide(entry.text), {
             concurrency: "unbounded",
           });
+          const permissions = yield* Effect.forEach(written, ({ toolCallId }) =>
+            permissionOf(binding.sessionId, toolCallId),
+          );
           written.forEach(({ toolCallId, text }, index) => {
             const call = nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
             if (
@@ -151,7 +155,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
                 toolName: call.detail.toolName,
                 toolCallId,
                 ok: !isErrorResult(parsed),
-                permission: permissionOf(binding.sessionId, toolCallId),
+                permission: permissions[index],
               },
               links: [{ kind: "returns", nodeId: call.id }],
             });
@@ -182,6 +186,9 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
             return { call, result, ok, resultText: text };
           });
           MutableHashMap.clear(outcomes);
+          const permissions = yield* Effect.forEach(calls, ({ call }) =>
+            permissionOf(binding.sessionId, call.id),
+          );
           const [assistantText, callTexts, callRefs, resultTexts] = yield* Effect.all(
             [
               hide(ctx.accumulatedContent),
@@ -240,7 +247,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
                 toolName: call.function.name,
                 toolCallId: call.id,
                 ok,
-                permission: permissionOf(binding.sessionId, call.id),
+                permission: permissions[index],
               },
               links: [{ kind: "returns", nodeId: callNode.id }],
             });

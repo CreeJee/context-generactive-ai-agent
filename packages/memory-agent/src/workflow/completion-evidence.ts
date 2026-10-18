@@ -1,7 +1,6 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import type { DatabaseSync } from "node:sqlite";
-import { MutableHashMap, MutableHashSet, Schema } from "effect";
+import { Effect, MutableHashMap, MutableHashSet, Option, Schema } from "effect";
+import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import type { WorkflowState } from "./workflow.ts";
 
 /** Only the current Plan version is supported; historical Plan mappings are not adopted. */
@@ -59,59 +58,130 @@ const Binding = Schema.Struct({
   plan_version: Schema.NullOr(Schema.Int),
   workflow_revision_id: Schema.Int,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const optionalBinding = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.UndefinedOr(Binding)),
-  Result.getOrThrow,
-);
 const Registration = Schema.Struct({
   artifactHash: Schema.String,
   sourceHash: Schema.String,
   contractVersion: Schema.String,
 });
+const Run = Schema.Struct({ thread_id: Schema.String, status: Schema.String });
+const Revision = Schema.Struct({
+  session_id: Schema.String,
+  goal_instance_id: Schema.NullOr(Schema.String),
+  goal_version: Schema.NullOr(Schema.Int),
+  plan_version: Schema.NullOr(Schema.Int),
+});
+const Source = Schema.Struct({ source_generation: Schema.String, manifest_hash: Schema.String });
+
+type Derived =
+  | { readonly status: "accepted"; readonly snapshot: CompletionSnapshot }
+  | { readonly status: "refused" };
+const refused: Derived = { status: "refused" };
 
 /** Owner-side DB boundary; no code, credentials or artifact bytes enter the snapshot. */
-export function completionEvidence(sqlite: DatabaseSync) {
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  const optionalString = EffectFunction.flow(
-    Schema.decodeUnknownResult(Schema.UndefinedOr(Schema.String)),
-    Result.getOrThrow,
-  );
+export const completionEvidence = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const goalIdentity = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ goal_instance_id: Schema.String }),
+    execute: (sessionId) =>
+      sql`SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}`,
+  });
   const identity = (sessionId: string) =>
-    optionalString(
-      sqlite
-        .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
-        .get(sessionId)?.goal_instance_id,
+    goalIdentity(sessionId).pipe(
+      Effect.map(Option.map((row) => row.goal_instance_id)),
+      Effect.map(Option.getOrUndefined),
     );
-  const required = (sessionId: string) => {
-    const id = identity(sessionId);
+  const exists = (statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
+    Effect.map(statement, (rows) => rows.length > 0);
+  const required = Effect.fnUntraced(function* (sessionId: string) {
+    const id = yield* identity(sessionId);
     return (
       id !== undefined &&
-      Boolean(
-        sqlite
-          .prepare(
-            `SELECT 1 FROM workflow_goal_native_artifacts WHERE goal_instance_id = ?
-       UNION ALL SELECT 1 FROM workflow_goal_worker_generations WHERE goal_instance_id = ? LIMIT 1`,
-          )
-          .get(id, id),
-      )
+      (yield* exists(
+        sql`SELECT 1 FROM workflow_goal_native_artifacts WHERE goal_instance_id = ${id}
+          UNION ALL SELECT 1 FROM workflow_goal_worker_generations WHERE goal_instance_id = ${id}
+          LIMIT 1`,
+      ))
     );
-  };
-  const derive = (
+  });
+  const projectOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ project_id: Schema.String }),
+    execute: (sessionId) => sql`SELECT project_id FROM sessions WHERE id = ${sessionId}`,
+  });
+  const sourceOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Source,
+    execute: (goalId) => sql`SELECT source_generation, manifest_hash
+      FROM workflow_goal_worker_generations WHERE goal_instance_id = ${goalId}`,
+  });
+  const bindingOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Binding,
+    execute: (runId) => sql`SELECT session_id, goal_instance_id, goal_version, plan_version,
+      workflow_revision_id FROM workflow_run_bindings WHERE run_id = ${runId}`,
+  });
+  const runOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Run,
+    execute: (runId) => sql`SELECT thread_id, status FROM chat_runs WHERE run_id = ${runId}`,
+  });
+  const revisionOf = SqlSchema.findOneOption({
+    Request: Schema.Finite,
+    Result: Revision,
+    execute: (id) => sql`SELECT session_id, goal_instance_id, goal_version, plan_version
+      FROM workflow_state_revisions WHERE id = ${id}`,
+  });
+  const dispatchOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ generation: Schema.String }),
+    execute: (runId) =>
+      sql`SELECT generation FROM workflow_worker_dispatches WHERE run_id = ${runId}`,
+  });
+  const dispatchGenerationOf = (runId: string) =>
+    dispatchOf(runId).pipe(
+      Effect.map(Option.map((row) => row.generation)),
+      Effect.map(Option.getOrUndefined),
+    );
+  const durableExecutionOf = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      sessionId: Schema.String,
+      runId: Schema.String,
+      goalId: Schema.String,
+      revisionId: Schema.Finite,
+    }),
+    Result: Schema.Struct({ execution_id: Schema.String }),
+    execute: ({ sessionId, runId, goalId, revisionId }) => sql`SELECT execution_id
+      FROM owner_workflow_executions
+      WHERE workflow_name = 'GoalExecution' AND status = 'completed'
+        AND json_extract(payload_json, '$.identity.sessionId') = ${sessionId}
+        AND json_extract(payload_json, '$.identity.runId') = ${runId}
+        AND json_extract(payload_json, '$.identity.goalInstanceId') = ${goalId}
+        AND json_extract(payload_json, '$.identity.workflowRevisionId') = ${revisionId}
+        AND json_extract(result_json, '$._tag') = 'Complete'
+        AND json_extract(result_json, '$.exit._tag') = 'Success'
+        AND json_extract(result_json, '$.exit.value._tag') = 'GoalExecutionSuccess'
+        AND json_extract(result_json, '$.exit.value.runId') = ${runId}
+        AND json_extract(result_json, '$.exit.value.executionId') = execution_id`,
+  });
+  const registrationOf = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Registration,
+    execute: (goalId) => sql`SELECT artifact_hash AS artifactHash, source_hash AS sourceHash,
+      contract_version AS contractVersion FROM workflow_goal_native_artifacts
+      WHERE goal_instance_id = ${goalId}`,
+  });
+  const derive = Effect.fnUntraced(function* (
     sessionId: string,
     state: WorkflowState,
     mappings: readonly CriterionMapping[],
     recorderRunId: string,
     pendingRecorder = false,
-  ):
-    | { readonly status: "accepted"; readonly snapshot: CompletionSnapshot }
-    | { readonly status: "refused" } => {
+  ) {
     const goal = state.goal;
     const plan = state.plan;
-    const goalId = identity(sessionId);
-    const projectId = optionalString(
-      sqlite.prepare("SELECT project_id FROM sessions WHERE id = ?").get(sessionId)?.project_id,
-    );
+    const goalId = yield* identity(sessionId);
+    const projectId = Option.getOrUndefined(yield* projectOf(sessionId))?.project_id;
     if (
       !isTruthy(goal) ||
       !isTruthy(plan) ||
@@ -120,29 +190,15 @@ export function completionEvidence(sqlite: DatabaseSync) {
       plan.goalVersion !== goal.version ||
       mappings.length === 0
     )
-      return { status: "refused" };
-    const source = sqlite
-      .prepare(`SELECT source_generation, manifest_hash
-      FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`)
-      .get(goalId);
-    const sourceGeneration = optionalString(source?.source_generation);
-    const binding = (runId: string) =>
-      optionalBinding(
-        sqlite.prepare("SELECT * FROM workflow_run_bindings WHERE run_id = ?").get(runId),
-      );
-    const valid = (runId: string) => {
-      const bound = binding(runId);
-      const run = sqlite
-        .prepare("SELECT thread_id, status FROM chat_runs WHERE run_id = ?")
-        .get(runId);
-      const revision =
-        bound &&
-        sqlite
-          .prepare(`SELECT session_id, goal_instance_id,
-        goal_version, plan_version FROM workflow_state_revisions WHERE id = ?`)
-          .get(bound.workflow_revision_id);
-      return isTruthy(bound) &&
-        run?.thread_id === sessionId &&
+      return refused;
+    const source = Option.getOrUndefined(yield* sourceOf(goalId));
+    const sourceGeneration = source?.source_generation;
+    const valid = Effect.fnUntraced(function* (runId: string) {
+      const bound = Option.getOrUndefined(yield* bindingOf(runId));
+      if (bound === undefined) return null;
+      const run = Option.getOrUndefined(yield* runOf(runId));
+      const revision = Option.getOrUndefined(yield* revisionOf(bound.workflow_revision_id));
+      return run?.thread_id === sessionId &&
         (run.status === "completed" || (runId === recorderRunId && run.status === "running")) &&
         bound.session_id === sessionId &&
         bound.goal_instance_id === goalId &&
@@ -154,14 +210,10 @@ export function completionEvidence(sqlite: DatabaseSync) {
         revision.plan_version === plan.version
         ? bound
         : null;
-    };
-    const provenance = (runId: string, bound: typeof Binding.Type) => {
+    });
+    const provenance = Effect.fnUntraced(function* (runId: string, bound: typeof Binding.Type) {
       if (pendingRecorder && runId === recorderRunId) {
-        const dispatch = optionalString(
-          sqlite
-            .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
-            .get(runId)?.generation,
-        );
+        const dispatch = yield* dispatchGenerationOf(runId);
         if (sourceGeneration !== undefined && dispatch === undefined) return null;
         return {
           runId,
@@ -169,18 +221,14 @@ export function completionEvidence(sqlite: DatabaseSync) {
           dispatchGeneration: dispatch ?? null,
         };
       }
-      const unresolved = sqlite
-        .prepare(
-          `SELECT 1 FROM owner_rpc_operations WHERE run_id = ?
-           AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded')) LIMIT 1`,
+      if (
+        yield* exists(
+          sql`SELECT 1 FROM owner_rpc_operations WHERE run_id = ${runId}
+            AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded')) LIMIT 1`,
         )
-        .get(runId);
-      if (isTruthy(unresolved)) return null;
-      const dispatchGeneration = optionalString(
-        sqlite
-          .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
-          .get(runId)?.generation,
-      );
+      )
+        return null;
+      const dispatchGeneration = yield* dispatchGenerationOf(runId);
       if (sourceGeneration !== undefined && dispatchGeneration === undefined) return null;
       if (sourceGeneration === undefined)
         return {
@@ -188,44 +236,33 @@ export function completionEvidence(sqlite: DatabaseSync) {
           workflowRevisionId: bound.workflow_revision_id,
           dispatchGeneration: dispatchGeneration ?? null,
         };
-      const durableExecutionId = optionalString(
-        sqlite
-          .prepare(
-            `SELECT execution_id FROM owner_workflow_executions
-             WHERE workflow_name = 'GoalExecution' AND status = 'completed'
-               AND json_extract(payload_json, '$.identity.sessionId') = ?
-               AND json_extract(payload_json, '$.identity.runId') = ?
-               AND json_extract(payload_json, '$.identity.goalInstanceId') = ?
-               AND json_extract(payload_json, '$.identity.workflowRevisionId') = ?
-               AND json_extract(result_json, '$._tag') = 'Complete'
-               AND json_extract(result_json, '$.exit._tag') = 'Success'
-               AND json_extract(result_json, '$.exit.value._tag') = 'GoalExecutionSuccess'
-               AND json_extract(result_json, '$.exit.value.runId') = ?
-               AND json_extract(result_json, '$.exit.value.executionId') = execution_id`,
-          )
-          .get(sessionId, runId, goalId, bound.workflow_revision_id, runId)?.execution_id,
-      );
-      return durableExecutionId === undefined
+      const durable = yield* durableExecutionOf({
+        sessionId,
+        runId,
+        goalId,
+        revisionId: bound.workflow_revision_id,
+      });
+      return Option.isNone(durable)
         ? null
         : {
             runId,
             workflowRevisionId: bound.workflow_revision_id,
             dispatchGeneration: dispatchGeneration ?? null,
-            durableExecutionId,
+            durableExecutionId: durable.value.execution_id,
           };
-    };
-    const recorder = valid(recorderRunId);
-    if (!(recorder !== null)) return { status: "refused" };
-    const recorderProvenance = provenance(recorderRunId, recorder);
-    if (recorderProvenance === null) return { status: "refused" };
+    });
+    const recorder = yield* valid(recorderRunId);
+    if (recorder === null) return refused;
+    const recorderProvenance = yield* provenance(recorderRunId, recorder);
+    if (recorderProvenance === null) return refused;
     const runs = MutableHashMap.empty<string, typeof RunProvenance.Type>();
     MutableHashMap.set(runs, recorderRunId, recorderProvenance);
     const coverage = MutableHashSet.empty<number>();
     for (const mapping of mappings) {
       const step = plan.steps.find((candidate) => candidate.id === mapping.stepId);
-      const bound = valid(mapping.runId);
+      const bound = yield* valid(mapping.runId);
       if (
-        !(bound !== null) ||
+        bound === null ||
         !isTruthy(step) ||
         step.status !== "completed" ||
         step.evidence.length === 0 ||
@@ -235,36 +272,24 @@ export function completionEvidence(sqlite: DatabaseSync) {
         step.acceptanceCriteria[mapping.acceptanceIndex] !== mapping.acceptanceText ||
         mapping.evidenceNodeIds.length === 0
       )
-        return { status: "refused" };
+        return refused;
       for (const nodeId of mapping.evidenceNodeIds) {
         // A background receipt only says the work was accepted, not that it was done.
-        const node = sqlite
-          .prepare(`SELECT 1 FROM nodes WHERE id = ? AND session_id = ?
-          AND project_id = ? AND run_id = ? AND kind = 'tool_result'
-          AND json_extract(detail, '$.ok') = 1 AND length(trim(text)) > 0
+        const node = yield* exists(sql`SELECT 1 FROM nodes WHERE id = ${nodeId}
+          AND session_id = ${sessionId} AND project_id = ${projectId} AND run_id = ${mapping.runId}
+          AND kind = 'tool_result' AND json_extract(detail, '$.ok') = 1 AND length(trim(text)) > 0
           AND NOT coalesce(CASE WHEN json_valid(text) THEN json_extract(text, '$.taskId') IS NOT NULL
-            AND coalesce(json_extract(text, '$.status'), '') NOT IN ('completed', 'succeeded') END, 0)`)
-          .get(nodeId, sessionId, projectId, mapping.runId);
-        if (!isTruthy(node)) return { status: "refused" };
+            AND coalesce(json_extract(text, '$.status'), '') NOT IN ('completed', 'succeeded') END, 0)`);
+        if (!node) return refused;
       }
       MutableHashSet.add(coverage, mapping.outcomeIndex);
-      const runProvenance = provenance(mapping.runId, bound);
-      if (runProvenance === null) return { status: "refused" };
+      const runProvenance = yield* provenance(mapping.runId, bound);
+      if (runProvenance === null) return refused;
       MutableHashMap.set(runs, mapping.runId, runProvenance);
     }
-    if (MutableHashSet.size(coverage) !== goal.outcomes.length) return { status: "refused" };
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    const registration = EffectFunction.flow(
-      Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
-      Result.getOrThrow,
-    )(
-      sqlite
-        .prepare(`SELECT artifact_hash AS artifactHash, source_hash AS sourceHash,
-        contract_version AS contractVersion FROM workflow_goal_native_artifacts
-        WHERE goal_instance_id = ?`)
-        .get(goalId),
-    );
-    return {
+    if (MutableHashSet.size(coverage) !== goal.outcomes.length) return refused;
+    const registration = Option.getOrNull(yield* registrationOf(goalId));
+    const accepted: Derived = {
       status: "accepted",
       snapshot: {
         sessionId,
@@ -275,15 +300,15 @@ export function completionEvidence(sqlite: DatabaseSync) {
         recorderRunId,
         recorderRevisionId: recorder.workflow_revision_id,
         sourceGeneration: sourceGeneration ?? null,
-        manifestHash: optionalString(source?.manifest_hash) ?? null,
-        nativeRegistration: registration ?? null,
+        manifestHash: source?.manifest_hash ?? null,
+        nativeRegistration: registration,
         mappings,
         runs: [...MutableHashMap.values(runs)],
       },
     };
-  };
+    return accepted;
+  });
   const running = (runId: string) =>
-    sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId)?.status ===
-    "running";
+    runOf(runId).pipe(Effect.map(Option.exists((run) => run.status === "running")));
   return { required, derive, running };
-}
+});

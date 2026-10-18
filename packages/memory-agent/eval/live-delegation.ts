@@ -269,13 +269,14 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
   const calls = messages.flatMap((message) =>
     message.role === "assistant" ? (message.toolCalls ?? []) : [],
   );
+  const children = yield* services.children.list(services.session.id);
   const independent = observations.some(
     (observation) =>
       !observation.child &&
       observation.toolCalls.includes("read_file") &&
-      services.children
-        .list(services.session.id)
-        .some((child) => child.createdAt <= observation.at && child.updatedAt > observation.at),
+      children.some(
+        (child) => child.createdAt <= observation.at && child.updatedAt > observation.at,
+      ),
   );
   return {
     variant,
@@ -292,7 +293,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     toolCalls: calls.map((call) => call.function.name),
     correctTotals: answer.includes("10") && answer.includes("18"),
     answer,
-    usage: services.usage.byRootSession(services.session.id),
+    usage: yield* services.usage.byRootSession(services.session.id),
   };
 }, Effect.scoped);
 const results = [

@@ -1,3 +1,4 @@
+import { chatRoute } from "../support/chat-route.ts";
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "../support/http.ts";
 import { withTestPlatform } from "../support/platform.ts";
 import { nativeStream } from "../../src/runtime/native-stream.ts";
@@ -136,9 +137,7 @@ await Effect.runPromise(
             });
           const request = yield* HttpServerRequest.toWeb(incoming);
           const response = yield* Effect.provideContext(
-            incoming.method === "POST"
-              ? chat.handle(request, sessionId)
-              : chat.hydrate(request, sessionId),
+            chatRoute(chat, request, sessionId),
             services,
           );
           return HttpServerResponse.fromWeb(response);

@@ -1,3 +1,4 @@
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { ExecutionAdmission, ExecutionSaturated } from "../runtime/execution-admission.ts";
@@ -49,6 +50,7 @@ import {
   Stream,
   Semaphore,
 } from "effect";
+import type { SqlError } from "effect/sql";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { modelBoundMessages, modelImages } from "../attachments/model-images.ts";
@@ -177,7 +179,6 @@ import { localWorkflowRules } from "../workflow/sources.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { BackgroundTasks } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
-import { Database } from "../db/database.ts";
 import {
   initialReportEvidence,
   reportBinding,
@@ -571,13 +572,93 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const imageRouter = yield* ImageRouter;
   const providerToolRuntime = yield* ProviderToolRuntime;
   const sessions = yield* Sessions;
-  const { sqlite, atomic } = yield* Database;
-  const runBindings = workflowRunBindings({ sqlite, atomic });
-  const uncertain = uncertainRuns({ sqlite, atomic });
+  const runBindings = yield* workflowRunBindings;
+  const uncertain = yield* uncertainRuns;
   const readRecovery = yield* OwnerReadRecovery;
-  const workerAuthority = goalWorkerAuthority({ sqlite, atomic });
-  const workerLedger = makeSqliteOwnerRpcLedger({ sqlite, atomic });
-  const runEvents = workflowRunEvents({ sqlite, atomic });
+  const workerAuthority = yield* goalWorkerAuthority;
+  const workerLedger = yield* makeSqliteOwnerRpcLedger;
+  const runEvents = yield* workflowRunEvents;
+  const sql = yield* SqlClient.SqlClient;
+  const withSql = Effect.provideService(SqlClient.SqlClient, sql);
+  const streamDurability = (input: Parameters<typeof sqliteStreamDurability>[0]) =>
+    withSql(sqliteStreamDurability(input));
+  const persistedRunStatus = SqlSchema.findOneOption({
+    Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),
+    Result: Schema.Struct({
+      status: Schema.Literals(["running", "completed", "failed", "aborted", "interrupted"]),
+    }),
+    execute: ({ runId, sessionId }) =>
+      sql`SELECT status FROM chat_runs WHERE run_id = ${runId} AND thread_id = ${sessionId}`,
+  });
+  const unresolvedOperation = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ operation_id: Schema.Finite, status: Schema.String }),
+    execute: (runId) => sql`SELECT operation_id, status FROM owner_rpc_operations
+      WHERE run_id = ${runId} AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded'))
+      ORDER BY operation_id LIMIT 1`,
+  });
+  const acceptedNewGoals = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ run_id: Schema.String }),
+    execute: (sessionId) => sql`SELECT run_id FROM workflow_new_goal_requests
+      WHERE session_id = ${sessionId} AND status = 'accepted'`,
+  });
+  const runBinding = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({
+      session_id: Schema.String,
+      goal_instance_id: Schema.String,
+      workflow_revision_id: Schema.Finite,
+    }),
+    execute: (runId) => sql`SELECT session_id, goal_instance_id, workflow_revision_id
+      FROM workflow_run_bindings WHERE run_id = ${runId}`,
+  });
+  const unresolvedSessionBinding = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, resumeRunId: Schema.String }),
+    Result: Schema.Struct({ run_id: Schema.String }),
+    execute: ({ sessionId, resumeRunId }) => sql`
+      SELECT b.run_id FROM workflow_run_bindings b
+      LEFT JOIN chat_runs r ON r.run_id = b.run_id
+      WHERE b.session_id = ${sessionId} AND NOT ${sql.literal(acknowledgedRunSql("b"))}
+        AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
+        ${sql.literal(resolvedRunSql("b", "r"))}
+        OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
+        AND (r.run_id = ${resumeRunId} OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
+      ))) LIMIT 1`,
+  });
+  const latestRevision = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.NullOr(Schema.String) }),
+    execute: (sessionId) => sql`SELECT id, goal_instance_id FROM workflow_state_revisions
+      WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`,
+  });
+  const previousMainModel = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ provider: ProviderId, model: Schema.String }),
+    execute: (sessionId) => sql`SELECT provider, model FROM api_usage_responses
+      WHERE root_session_id = ${sessionId} AND thread_id = ${sessionId} AND purpose = 'main'
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+  });
+  const unsettledEffect = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ operation_id: Schema.Finite, status: Schema.String }),
+    execute: (runId) => sql`SELECT operation_id, status FROM owner_rpc_operations o
+      WHERE run_id = ${runId} AND ${sql.literal(toolOperationSql("o"))} AND status <> 'succeeded'
+      ORDER BY operation_id LIMIT 1`,
+  });
+  const abandonedRun = SqlSchema.findOneOption({
+    Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),
+    Result: Schema.Struct({ failed: Schema.Finite }),
+    execute: ({ runId, sessionId }) => sql`SELECT 1 AS failed FROM chat_runs
+      WHERE run_id = ${runId} AND thread_id = ${sessionId} AND status = 'failed'`,
+  });
+  const latestRevisionId = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.Finite }),
+    execute: (sessionId) => sql`
+      SELECT id FROM workflow_state_revisions WHERE session_id = ${sessionId}
+      ORDER BY id DESC LIMIT 1`,
+  });
   const nodes = yield* Nodes;
   const recorder = yield* Recorder;
   const memoryTools = yield* MemoryTools;
@@ -641,7 +722,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   );
   const ownerNativeArtifacts = Context.get(nativeArtifactContext, OwnerNativeArtifacts);
   const adoptedNativeGoals = MutableHashSet.empty<string>();
-  const workerGenerations = GoalWorkerGenerations.makeGoalWorkerGenerationStore({ sqlite, atomic });
+  const workerGenerations = yield* GoalWorkerGenerations.goalWorkerGenerationStore;
   type WorkerAssetsRegistry = Effect.Success<
     ReturnType<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>
   >;
@@ -709,11 +790,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   subagents.onCompletion(wakeNotifications);
   // An owner that vanished without releasing: like a release, nothing will send its waiting
   // messages, and read-only pages hear the session is free so one can take over.
-  leases.onExpired((sessionId) => {
-    if (!isTruthy(liveRuns.get(sessionId))) queue.holdWaiting(sessionId, "pageLeft");
-    events.publishSession(sessionId, "queue");
-    events.publishSession(sessionId, "run-state");
-  });
+  leases.onExpired((sessionId) =>
+    Effect.gen(function* () {
+      if (!isTruthy(liveRuns.get(sessionId))) yield* queue.holdWaiting(sessionId, "pageLeft");
+      yield* events.publishSession(sessionId, "queue");
+      yield* events.publishSession(sessionId, "run-state");
+    }).pipe(
+      // No caller waits on the sweep; a failed hold is reported, and the next sweep goes on.
+      Effect.catch((error) => Effect.logWarning("Queued messages were not held", error)),
+    ),
+  );
   background.onCompletion(wakeNotifications);
   const { metadata } = chatState.persistence.stores;
   const inUse = () => json(423, { error: "session_in_use" });
@@ -827,7 +913,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     sessionId: string,
     id: string,
     edit: QueueEdit,
-  ): Effect.Effect<QueuedMessage | null, QueueChangeRefused> => {
+  ): Effect.Effect<
+    QueuedMessage | null,
+    QueueChangeRefused | SqlError.SqlError | Schema.SchemaError
+  > => {
     switch (edit.action) {
       case "edit":
         return queue.edit(sessionId, id, edit.draft);
@@ -850,21 +939,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         case "completed":
           yield* workflows.settleNewGoalRequest(sessionId, runId);
           if (leases.view(sessionId, null).state === "free")
-            queue.holdWaiting(sessionId, "pageLeft");
+            yield* queue.holdWaiting(sessionId, "pageLeft");
           return;
         case "failed":
         case "aborted":
         case undefined:
           yield* workflows.settleNewGoalRequest(sessionId, runId);
-          queue.holdWaiting(sessionId, "stopped");
+          yield* queue.holdWaiting(sessionId, "stopped");
           return;
         case "interrupted":
         case "running":
           return;
       }
     } finally {
-      events.publishSession(sessionId, "queue");
-      events.publishSession(sessionId, "run-state");
+      yield* events.publishSession(sessionId, "queue");
+      yield* events.publishSession(sessionId, "run-state");
       wakeNotifications(sessionId);
     }
   });
@@ -953,43 +1042,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const settle = Effect.suspend(() => {
       if (settled) return Effect.void;
       settled = true;
-      const row = sqlite
-        .prepare("SELECT status FROM chat_runs WHERE run_id = ? AND thread_id = ?")
-        .get(runId, sessionId);
-      const decoded = Schema.decodeUnknownResult(
-        Schema.UndefinedOr(
-          Schema.Struct({
-            status: Schema.Literals(["running", "completed", "failed", "aborted", "interrupted"]),
-          }),
-        ),
-      )(row);
-      if (Result.isFailure(decoded)) return Effect.die(decoded.failure);
-      const persistedStatus = decoded.success?.status;
-      if (
-        persistedStatus === "interrupted" ||
-        (terminalOutcome === "pending" &&
-          (persistedStatus === undefined || persistedStatus === "running"))
-      )
-        return Effect.void;
-      const unresolvedResult = Schema.decodeUnknownResult(
-        Schema.UndefinedOr(
-          Schema.Struct({
-            operation_id: Schema.Finite,
-            status: Schema.String,
-          }),
-        ),
-      )(
-        sqlite
-          .prepare(
-            `SELECT operation_id, status FROM owner_rpc_operations
-             WHERE run_id = ? AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded'))
-             ORDER BY operation_id LIMIT 1`,
-          )
-          .get(runId),
-      );
-      if (Result.isFailure(unresolvedResult)) return Effect.die(unresolvedResult.failure);
-      const unresolved = unresolvedResult.success;
       return Effect.gen(function* () {
+        const persistedStatus = Option.getOrUndefined(
+          yield* persistedRunStatus({ runId, sessionId }).pipe(Effect.orDie),
+        )?.status;
+        if (
+          persistedStatus === "interrupted" ||
+          (terminalOutcome === "pending" &&
+            (persistedStatus === undefined || persistedStatus === "running"))
+        )
+          return;
+        const unresolved = Option.getOrUndefined(
+          yield* unresolvedOperation(runId).pipe(Effect.orDie),
+        );
         const completed =
           terminalOutcome === "completed" &&
           persistedStatus !== "failed" &&
@@ -1017,7 +1082,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (completed && unresolved === undefined)
           yield* execution.finish(sessionId, runId, state, [...toolResults]);
         else yield* execution.stop(sessionId, "run_failed", runId);
-        events.publishSession(sessionId, "run-state");
+        yield* events.publishSession(sessionId, "run-state");
       });
     });
     return { middleware, settle };
@@ -1190,7 +1255,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /** Persisted cursor replay followed by a live tail. Only wake-up notifications are in memory. */
-    traceStream: (request: Request, sessionId: string): Effect.Effect<Response> =>
+    traceStream: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
@@ -1286,7 +1351,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
         if (project.hiddenAt === null) rrsi.touch();
-        const reportSource = reportBinding(sqlite, sessionId, projectId);
+        const reportSource = Option.getOrNull(yield* withSql(reportBinding(sessionId, projectId)));
+        const redactReport = (text: string) =>
+          Effect.map(redactor.redactText(text), (kept) => kept.text).pipe(
+            Effect.provideContext(context),
+          );
         // A reporting conversation is always local, using the user's selected model. An external
         // agent or its full project toolset must never be used to inspect the source session.
         if (reportSource !== null && external !== null)
@@ -1297,13 +1366,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A process may exit after persistence commits a completed run but before its
         // asynchronous end callback applies a queued Goal. Recover only terminal runs;
         // running/interrupted ones remain pending and can never prove completion.
-        const pendingGoals = sqlite
-          .prepare(
-            "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted'",
-          )
-          .all(sessionId);
+        const pendingGoals = yield* acceptedNewGoals(sessionId);
         for (const pending of pendingGoals)
-          yield* workflows.settleNewGoalRequest(sessionId, String(pending.run_id));
+          yield* workflows.settleNewGoalRequest(sessionId, pending.run_id);
         // Repair stale persisted phases before choosing tools for the next turn. In particular, an
         // old Verify row with unfinished implementation must regain Execute capabilities.
         const workflow = yield* workflows.reconcile(sessionId);
@@ -1353,41 +1418,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A pre-bound run belongs to one owner session, even before the SDK creates chat_runs.
         // This check is not worker authorization: unbound requests remain on the legacy path.
         let workerCapability: GoalWorkerCapability | null = null;
-        let boundRun = yield* Schema.decodeUnknownEffect(
-          Schema.UndefinedOr(
-            Schema.Struct({
-              session_id: Schema.String,
-              goal_instance_id: Schema.String,
-              workflow_revision_id: Schema.Finite,
-            }),
-          ),
-        )(
-          sqlite
-            .prepare(
-              "SELECT session_id, goal_instance_id, workflow_revision_id FROM workflow_run_bindings WHERE run_id = ?",
-            )
-            .get(runId),
-        ).pipe(Effect.orDie);
+        let boundRun = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(boundRun) && boundRun.session_id !== sessionId)
           return json(409, { error: "run_id_conflict" });
         // Until automatic owner admission is atomic with execution, a reserved run with an
         // uncertain outcome must not be bypassed by presenting a different, unbound ID.
-        const unresolvedBinding = yield* Schema.decodeUnknownEffect(
-          Schema.UndefinedOr(Schema.Struct({ run_id: Schema.String })),
-        )(
-          sqlite
-            .prepare(`
-            SELECT b.run_id FROM workflow_run_bindings b
-            LEFT JOIN chat_runs r ON r.run_id = b.run_id
-            WHERE b.session_id = ? AND NOT ${acknowledgedRunSql("b")}
-              AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-              ${resolvedRunSql("b", "r")}
-              OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
-              AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
-            ))) LIMIT 1
-          `)
-            .get(sessionId, resumeRunId ?? ""),
-        ).pipe(Effect.orDie);
+        const unresolvedBinding = Option.getOrUndefined(
+          yield* unresolvedSessionBinding({ sessionId, resumeRunId: resumeRunId ?? "" }),
+        );
         if (isTruthy(unresolvedBinding) && unresolvedBinding.run_id !== runId)
           return json(409, { error: "run_outcome_uncertain" });
         // Run IDs are globally unique in chat_runs. Reject another session's ID before
@@ -1413,17 +1451,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A reserved but not yet started turn cannot silently inherit a changed Goal/Plan.
         // A continuation of an already-persisted run keeps its original pinned revision.
         if (isTruthy(boundRun) && !isTruthy(previousRun)) {
-          const latest = yield* Schema.decodeUnknownEffect(
-            Schema.UndefinedOr(
-              Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.NullOr(Schema.String) }),
-            ),
-          )(
-            sqlite
-              .prepare(
-                "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-              )
-              .get(sessionId),
-          ).pipe(Effect.orDie);
+          const latest = Option.getOrUndefined(yield* latestRevision(sessionId));
           if (
             !isTruthy(latest) ||
             latest.id !== boundRun.workflow_revision_id ||
@@ -1437,17 +1465,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         let goalExecutionPayload: GoalExecutionPayload | null = null;
         let workerAssets: GoalWorkerAssets.GoalExecutionAssets | undefined;
         if (!isTruthy(previousRun)) {
-          const latest = yield* Schema.decodeUnknownEffect(
-            Schema.UndefinedOr(
-              Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.NullOr(Schema.String) }),
-            ),
-          )(
-            sqlite
-              .prepare(
-                "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-              )
-              .get(sessionId),
-          ).pipe(Effect.orDie);
+          const latest = Option.getOrUndefined(yield* latestRevision(sessionId));
           if (isTruthy(latest?.goal_instance_id)) {
             if (!isTruthy(selection) || isTruthy(boundRun))
               return json(409, { error: "automatic_goal_admission_unavailable" });
@@ -1464,20 +1482,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           internalFollowup?.kind === "steered" || Option.isSome(decodeQueuedNext(forwardedProps));
         if (Option.isSome(decodeUnsupportedQueuedId(forwardedProps)))
           return json(400, { error: "invalid_chat_request" });
-        const next = queuedNext ? queue.claimNext(sessionId) : null;
+        const next = queuedNext ? yield* queue.claimNext(sessionId) : null;
         if (queuedNext && !isTruthy(next)) return json(409, { error: "queued_message_not_next" });
         claimedNext = next?.id ?? null;
         const queuedId = next?.id;
+        const nextMessage = isTruthy(next) ? [yield* delivery.toUserMessage(next)] : [];
         const messages =
           internalFollowup !== null
             ? [
                 ...(yield* agentPromise("load-messages", () =>
                   chatState.persistence.stores.messages.loadThread(sessionId),
                 )),
-                ...(isTruthy(next) ? [delivery.toUserMessage(next)] : []),
+                ...nextMessage,
               ]
             : isTruthy(next)
-              ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
+              ? [...incomingMessages.slice(0, -1), ...nextMessage]
               : incomingMessages;
         const threadId = sessionId;
 
@@ -1489,9 +1508,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const lastMessage = messages.at(-1);
         if (turn !== null && isTruthy(lastMessage) && isEmptyUserText(lastMessage))
           return json(400, { error: "empty_message" });
-        const images = (turn?.imageUrls ?? []).map((url) => {
+        const images = yield* Effect.forEach(turn?.imageUrls ?? [], (url) => {
           const id = attachmentIdOf(url);
-          return isTruthy(id) ? attachments.get(id) : null;
+          return isTruthy(id) ? attachments.get(id) : Effect.succeed(null);
         });
         if (images.includes(null)) return json(400, { error: "unknown_attachment" });
         const attached = images.filter((image) => image !== null);
@@ -1510,18 +1529,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         let userNode = turn !== null ? null : nodes.latestOfKind(sessionId, "user");
         const keptTurn = turn !== null ? (yield* redactor.redactText(turn.text)).text : null;
-        const persistUserTurn = () => {
-          if (keptTurn !== null) {
-            userNode = nodes.append({ projectId, sessionId, kind: "user", text: keptTurn });
-            attachments.link(userNode.id, attached);
-            if (title === null) events.publishProject(projectId, "sessions");
-          }
-        };
+        const persistUserTurn = Effect.gen(function* () {
+          if (keptTurn === null) return;
+          const appended = nodes.append({ projectId, sessionId, kind: "user", text: keptTurn });
+          userNode = appended;
+          yield* attachments.link(appended.id, attached);
+          if (title === null) events.publishProject(projectId, "sessions");
+        });
         const userNodeId = () => {
           if (!isTruthy(userNode)) throw new Error("User evidence accessed before admission");
           return userNode.id;
         };
-        if (workerRevision === null) persistUserTurn();
+        if (workerRevision === null) yield* persistUserTurn;
         if (!isTruthy(userNode) && !(turn !== null)) return json(409, { error: "no_user_turn" });
 
         if (external !== null) {
@@ -1540,10 +1559,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
           if (turn !== null) workTrace.resumeParentNotifications(sessionId);
-          events.publishSession(sessionId, "run-state");
+          yield* events.publishSession(sessionId, "run-state");
           if (isTruthy(queuedId)) {
-            queue.markDelivered(queuedId, "next_turn", runId);
-            events.publishSession(sessionId, "queue");
+            yield* queue.markDelivered(queuedId, "next_turn", runId);
+            yield* events.publishSession(sessionId, "queue");
           }
           const answeredBy = external;
           const adapter = new ExternalAgentAdapter(
@@ -1568,9 +1587,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                         },
                         signal,
                       );
-                      events.publishSession(sessionId, "relayed-approvals");
+                      yield* events.publishSession(sessionId, "relayed-approvals");
                       const approved = yield* nativePromise(() => decision);
-                      events.publishSession(sessionId, "relayed-approvals");
+                      yield* events.publishSession(sessionId, "relayed-approvals");
                       return approved;
                     }),
                   ),
@@ -1618,17 +1637,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ? boundRun.goal_instance_id
           : isTruthy(previousRun)
             ? null
-            : ((yield* Schema.decodeUnknownEffect(
-                Schema.UndefinedOr(
-                  Schema.Struct({ goal_instance_id: Schema.NullOr(Schema.String) }),
-                ),
-              )(
-                sqlite
-                  .prepare(
-                    "SELECT goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-                  )
-                  .get(sessionId),
-              ).pipe(Effect.orDie))?.goal_instance_id ?? null);
+            : (Option.getOrUndefined(yield* latestRevision(sessionId))?.goal_instance_id ?? null);
         if (implementationGoal !== null) {
           const loaded = yield* ownerNativeArtifacts.acquire(implementationGoal).pipe(
             Effect.provideService(Scope.Scope, scope),
@@ -1661,7 +1670,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           isTruthy(nativeGoal)
             ? runNativeFactory(nativeGoal.makeRecordingMiddleware(binding))
             : recorder.forRun(binding);
-        const harness = harnessStore.forGoal(implementationGoal);
+        const harness = yield* harnessStore.forGoal(implementationGoal);
         const runtime = yield* runtimeForAdapter(selection, implementationGoal);
         // Pin the profile-specific client before later async preparation and tool/model turns.
         const runAdapter = runtime.adapter(selection);
@@ -1682,18 +1691,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           model: selection.model,
           provider: selection.provider,
           previous: Option.getOrUndefined(
-            Schema.decodeUnknownOption(
-              Schema.Struct({
-                provider: ProviderId,
-                model: Schema.String,
-              }),
-            )(
-              sqlite
-                .prepare(
-                  "SELECT provider, model FROM api_usage_responses WHERE root_session_id = ? AND thread_id = ? AND purpose = 'main' ORDER BY created_at DESC, id DESC LIMIT 1",
-                )
-                .get(sessionId, sessionId),
-            ),
+            yield* previousMainModel(sessionId).pipe(Effect.orElseSucceed(Option.none)),
           ),
           loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
           toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
@@ -1771,7 +1769,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const abortController = cancellation.controller;
         if (notificationFollowup) {
           const current = yield* sessions.get(sessionId);
-          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const last = yield* chatState.lastRun(sessionId);
           if (
             current.archivedAt !== null ||
             workTrace.parentNotificationsHeld(sessionId) ||
@@ -1781,7 +1779,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         }
         if (internalFollowup?.kind === "workflow") {
           const current = yield* sessions.get(sessionId);
-          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const last = yield* chatState.lastRun(sessionId);
           const state = yield* workflows.get(sessionId);
           if (
             current.archivedAt !== null ||
@@ -1791,8 +1789,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               : yield* execution.canResume(sessionId, last.runId, state)) ||
             state.phase !== workflow.phase ||
             state.plan?.version !== workflow.plan?.version ||
-            queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
-            relayed.pending(sessionId).length > 0
+            (yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
+            (yield* relayed.pending(sessionId)).length > 0
           )
             return json(409, { error: "workflow_followup_deferred" });
         }
@@ -1899,14 +1897,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         const sharedTools =
           reportSource !== null
-            ? reportToolsForSession(
-                sqlite,
-                sessionId,
-                projectId,
-                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                (text: string) =>
-                  runEffect(Effect.map(redactor.redactText(text), (kept) => kept.text)),
-                () => workTrace.taskTree(reportSource.sourceSessionId),
+            ? yield* withSql(
+                reportToolsForSession(sessionId, projectId, redactReport, () =>
+                  workTrace.taskTree(reportSource.sourceSessionId),
+                ),
               )
             : workflowReadOnly
               ? profiledTools.filter((tool) => HashSet.has(workflowReadToolNames, tool.name))
@@ -1951,15 +1945,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ].join("\n");
         const reportSnapshot =
           reportSource !== null
-            ? yield* agentPromise("report-evidence-snapshot", () =>
-                initialReportEvidence(
-                  sqlite,
-                  sessionId,
-                  projectId,
-                  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                  (text) => runEffect(Effect.map(redactor.redactText(text), (kept) => kept.text)),
-                  () => workTrace.taskTree(reportSource.sourceSessionId),
-                ).catch(
+            ? yield* withSql(
+                initialReportEvidence(sessionId, projectId, redactReport, () =>
+                  workTrace.taskTree(reportSource.sourceSessionId),
+                ),
+              ).pipe(
+                Effect.orElseSucceed(
                   () =>
                     "자동 근거 수집 실패. 원본 근거를 확인한 것으로 주장하지 마세요; 읽기 도구로 재시도할 수 있습니다.",
                 ),
@@ -2177,27 +2168,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 throw new Error("Inactive Goal worker owner");
               return workerGoalId;
             });
-            const pin = yield* Effect.try(() => {
-              const pin = workerGenerations.get(goalId);
-              // Never repair a missing pin by assigning today's code to a Goal that executed.
-              if (!isTruthy(pin) && workerGenerations.hasUnpinnedDispatch(goalId))
-                throw new Error("Historical Goal dispatch has no source generation");
-              return pin;
-            });
+            // Never repair a missing pin by assigning today's code to a Goal that executed.
+            const pin = yield* workerGenerations.pinned(goalId);
             const registry = yield* assetsRegistry;
-            workerAssets = isTruthy(pin)
-              ? yield* registry.adopt({ ...pin, canonicalWorkerUrl: pin.workerUrl })
+            workerAssets = Option.isSome(pin)
+              ? yield* registry.adopt({ ...pin.value, canonicalWorkerUrl: pin.value.workerUrl })
               : yield* registry.resolve(goalId);
-            if (!isTruthy(pin)) {
+            if (Option.isNone(pin)) {
               const admittedAssets = workerAssets;
               yield* Effect.try(() => {
                 if (!workerScopeAlive) throw new Error("Inactive Goal worker owner");
-                return workerGenerations.record({
-                  goalInstanceId: admittedAssets.goalInstanceId,
-                  sourceGeneration: admittedAssets.sourceGeneration,
-                  manifestHash: admittedAssets.manifestHash,
-                  workerUrl: admittedAssets.canonicalWorkerUrl,
-                });
+              });
+              yield* workerGenerations.record({
+                goalInstanceId: admittedAssets.goalInstanceId,
+                sourceGeneration: admittedAssets.sourceGeneration,
+                manifestHash: admittedAssets.manifestHash,
+                workerUrl: admittedAssets.canonicalWorkerUrl,
               });
             }
           }).pipe(
@@ -2206,9 +2192,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 json(409, {
                   error: "goal_source_generation_unavailable",
                   detail:
-                    error.cause instanceof Error
-                      ? error.cause.message
-                      : "Goal snapshot unavailable",
+                    error._tag === "GoalWorkerGenerationError"
+                      ? error.reason
+                      : error.cause instanceof Error
+                        ? error.cause.message
+                        : "Goal snapshot unavailable",
                 }),
               onSuccess: () => null,
             }),
@@ -2231,7 +2219,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           };
           goalExecutionPayload = durablePayload;
           const durableAdmission = yield* goalExecutions
-            .admitAndStart(durablePayload, () =>
+            .admitAndStart(
+              durablePayload,
               runBindings.bind(sessionId, runId, workerRevision, resumeRunId),
             )
             .pipe(
@@ -2250,7 +2239,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             case "accepted":
               if (durableAdmission.result.type === "existing")
                 return json(409, { error: "run_outcome_uncertain" });
-              workerCapability = workerAuthority.issue(durableAdmission.result.value, generation);
+              workerCapability = yield* workerAuthority.issue(
+                durableAdmission.result.value,
+                generation,
+              );
               if (!(workerCapability !== null))
                 return json(409, { error: "run_outcome_uncertain" });
               boundRun = {
@@ -2258,7 +2250,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 goal_instance_id: durableAdmission.result.value.goalInstanceId,
                 workflow_revision_id: durableAdmission.result.value.workflowRevisionId,
               };
-              persistUserTurn();
+              yield* persistUserTurn;
               break;
           }
         }
@@ -2279,10 +2271,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (workerCapability === null) MutableHashMap.set(steerCuts, sessionId, steering);
         stopSteeringOnExit = stopSteering;
         if (turn !== null) workTrace.resumeParentNotifications(sessionId);
-        events.publishSession(sessionId, "run-state");
+        yield* events.publishSession(sessionId, "run-state");
         if (isTruthy(queuedId)) {
-          queue.markDelivered(queuedId, "next_turn", runId);
-          events.publishSession(sessionId, "queue");
+          yield* queue.markDelivered(queuedId, "next_turn", runId);
+          yield* events.publishSession(sessionId, "queue");
         }
         let workerLease: Effect.Success<ReturnType<WorkerAssetsRegistry["use"]>> | undefined;
         const releaseWorker = () => {
@@ -2318,14 +2310,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 },
                 onWorkerStopped: releaseWorker,
                 permits: (capability) =>
-                  workerScopeAlive &&
-                  workerAuthority.permits({ ...capability, requestId: "owner-rpc" }),
+                  workerScopeAlive
+                    ? workerAuthority.permits({ ...capability, requestId: "owner-rpc" })
+                    : Effect.succeed(false),
                 permitsFinalization: (capability) =>
-                  workerScopeAlive &&
-                  workerAuthority.permitsFinalization({
-                    ...capability,
-                    requestId: "owner-finalization",
-                  }),
+                  workerScopeAlive
+                    ? workerAuthority.permitsFinalization({
+                        ...capability,
+                        requestId: "owner-finalization",
+                      })
+                    : Effect.succeed(false),
                 // Audited owner cleanup only: run/transcript persistence, partial answers,
                 // recorded evidence and workflow settling, then background indexing/summaries.
                 // No permission, tool, provider, or worker-supplied name grants terminal access.
@@ -2345,7 +2339,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     providerRetries.wait(
                       { ...request, sessionId, runId },
                       signal,
-                      Effect.sync(() => events.publishSession(sessionId, "run-state")),
+                      events.publishSession(sessionId, "run-state"),
                     ),
                 },
                 lastOperationId: 0,
@@ -2413,10 +2407,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   stream,
                   (cause) => new Cause.UnknownError(cause),
                 ).pipe(
-                  Stream.map((chunk) => {
-                    runEvents.append(sessionId, runId, `chunk:${sequence++}`, "chunk", chunk);
-                    return chunk;
-                  }),
+                  Stream.tap((chunk) =>
+                    runEvents.append(sessionId, runId, `chunk:${sequence++}`, "chunk", chunk),
+                  ),
                 );
               }),
             )
@@ -2438,14 +2431,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Stream.ensuring(Effect.sync(() => releaseSubscriptionRun(runAdapter))),
           Stream.ensuring(stopSteering),
         );
+        // Bound runs publish only after central durable delivery-log acknowledgement.
+        // Unbound legacy runs retain the SDK's process-local memory namespace.
+        const durableAdapter = isTruthy(boundRun)
+          ? yield* streamDurability({ sessionId, runId })
+          : memoryStream({ runId });
         const response = toServerSentEventsResponse(Stream.toAsyncIterable(withAccountLease), {
           abortController: deliveryAbortController,
-          // Bound runs publish only after central durable delivery-log acknowledgement.
-          // Unbound legacy runs retain the SDK's process-local memory namespace.
           durability: {
-            adapter: isTruthy(boundRun)
-              ? sqliteStreamDurability({ sqlite, atomic, sessionId, runId })
-              : memoryStream({ runId }),
+            adapter: durableAdapter,
             batch: 1,
           },
         });
@@ -2457,10 +2451,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.ensuring(Effect.suspend(() => cancellationToRelease)),
         Effect.ensuring(Effect.suspend(() => stopSteeringOnExit)),
         Effect.ensuring(
-          Effect.sync(() => {
-            if (isTruthy(claimedNext)) queue.releaseNext(sessionId, claimedNext);
-            releaseSubscriptionRun(runAdapterToRelease);
-          }),
+          Effect.suspend(() =>
+            isTruthy(claimedNext) ? queue.releaseNext(sessionId, claimedNext) : Effect.void,
+          ).pipe(
+            Effect.catch((error) => Effect.logWarning("Queued next turn was not released", error)),
+            Effect.andThen(Effect.sync(() => releaseSubscriptionRun(runAdapterToRelease))),
+          ),
         ),
         Effect.catchTags({
           SessionNotFound: sessionNotFound,
@@ -2478,8 +2474,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     hydrate: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        if (!isStreamJoin(request))
-          return yield* agentPromise("hydrate-chat", () => chatState.hydrate(request, sessionId));
+        if (!isStreamJoin(request)) return yield* chatState.hydrate(request, sessionId);
 
         const url = new URL(request.url);
         const runId = url.searchParams.get("runId");
@@ -2490,9 +2485,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // The SDK's Request constructor chooses a run from Last-Event-ID before ?runId.
         // Never authenticate the query run and then let an offset select a different log.
         const offset = request.headers.get("Last-Event-ID") || url.searchParams.get("offset");
-        const binding = sqlite
-          .prepare("SELECT session_id FROM workflow_run_bindings WHERE run_id = ?")
-          .get(runId);
+        const binding = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(binding)) {
           if (binding.session_id !== sessionId) return json(404, { error: "run_not_found" });
           if (
@@ -2502,16 +2495,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             return json(400, { error: "invalid_stream_offset" });
           // The exported adapter validates its SDK namespace, immutable run/session binding,
           // and persisted chunk membership synchronously before returning an HTTP stream.
-          return yield* Effect.try(() => {
-            const adapter = sqliteStreamDurability({
-              sqlite,
-              atomic,
-              sessionId,
-              runId,
-              resumeOffset: offset,
-            });
-            return resumeServerSentEventsResponse({ adapter });
-          }).pipe(Effect.orElseSucceed(() => json(400, { error: "invalid_stream_offset" })));
+          return yield* streamDurability({ sessionId, runId, resumeOffset: offset }).pipe(
+            Effect.map((adapter) => resumeServerSentEventsResponse({ adapter })),
+            Effect.orElseSucceed(() => json(400, { error: "invalid_stream_offset" })),
+          );
         }
         const prefix = `memory:v1:${encodeURIComponent(runId)}:`;
         if (
@@ -2537,11 +2524,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const pendingExecution = (yield* execution.get(sessionId)).kind === "ready";
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
-        events.publishSession(sessionId, "run-state");
+        yield* events.publishSession(sessionId, "run-state");
         const live = liveRuns.get(sessionId);
         if (!isTruthy(live)) {
           const children =
-            subagents.list(sessionId).some((child) => child.status === "running") ||
+            (yield* subagents.list(sessionId)).some((child) => child.status === "running") ||
             background.hasSession(sessionId);
           if (!children)
             return pendingExecution
@@ -2555,7 +2542,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Effect.timeoutOption(cancelWaitMs),
             Effect.map(Option.isSome),
           );
-          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const last = yield* chatState.lastRun(sessionId);
           return json(200, {
             runId: last?.runId ?? "",
             stopped,
@@ -2590,24 +2577,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "eligible":
             return json(200, result);
           case "recovered": {
-            const latest = yield* Schema.decodeUnknownEffect(
-              Schema.UndefinedOr(Schema.Struct({ id: Schema.Finite })),
-            )(
-              sqlite
-                .prepare(
-                  "SELECT id FROM workflow_state_revisions WHERE session_id=? ORDER BY id DESC LIMIT 1",
-                )
-                .get(sessionId),
-            );
-            if (latest === undefined)
+            const latest = yield* latestRevisionId(sessionId);
+            if (Option.isNone(latest))
               return json(200, {
                 ...result,
                 admission: { status: "blocked", reason: "workflow_changed" },
               });
-            const admission = runBindings.preview(
+            const admission = yield* runBindings.preview(
               sessionId,
               `operator-preview:${randomUUID()}`,
-              latest.id,
+              latest.value.id,
             );
             switch (admission.status) {
               case "bound":
@@ -2644,7 +2623,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "blocked":
             return json(409, result);
           case "revoked":
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return json(200, result);
         }
       }).pipe(
@@ -2673,7 +2652,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "blocked":
             return json(409, result);
           case "recovered":
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return json(200, result);
         }
       }).pipe(
@@ -2705,7 +2684,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "refused":
             return json(409, { error: result.reason });
           case "acknowledged":
-            events.publishSession(sessionId, "run-state");
+            yield* events.publishSession(sessionId, "run-state");
             return json(200, result);
         }
       }).pipe(Effect.catchTags({ SessionNotFound: sessionNotFound })),
@@ -2724,7 +2703,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         const workflow = yield* workflows.get(sessionId);
         yield* workflows.finishRun(sessionId, workflow.phase);
-        queue.holdWaiting(sessionId, "stopped");
+        yield* queue.holdWaiting(sessionId, "stopped");
         return json(200, { discarded });
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -2764,7 +2743,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = liveRuns.get(sessionId);
-        const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+        const last = yield* chatState.lastRun(sessionId);
         const usage = yield* agentPromise("load-usage", () =>
           lastContextUsage(metadata, sessionId),
         );
@@ -2860,7 +2839,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             leases.release(sessionId, holder);
             // The page is gone: nothing will send its waiting messages as a next turn.
             if (!isTruthy(liveRuns.get(sessionId)) && leases.view(sessionId, null).state === "free")
-              queue.holdWaiting(sessionId, "pageLeft");
+              yield* queue.holdWaiting(sessionId, "pageLeft");
             break;
         }
         return json(200, leases.view(sessionId, holder));
@@ -2934,8 +2913,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     queued: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
-        return json(200, queue.snapshot(sessionId, last?.runId ?? null));
+        const last = yield* chatState.lastRun(sessionId);
+        return json(200, yield* queue.snapshot(sessionId, last?.runId ?? null));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
@@ -2952,10 +2931,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
           return json(400, { error: "empty_message" });
-        if (attachmentIds.some((id) => !isTruthy(attachments.get(id))))
+        const known = yield* Effect.forEach(attachmentIds, attachments.get);
+        if (known.some((attachment) => !isTruthy(attachment)))
           return json(400, { error: "unknown_attachment" });
         if (!isTruthy(liveRuns.get(sessionId))) return json(409, { error: "not_running" });
-        const message = queue.add(sessionId, text, attachmentIds, mode === "steer");
+        const message = yield* queue.add(sessionId, text, attachmentIds, mode === "steer");
         // Steering stops the answer where it is, unless it has begun a tool call; the run then
         // completes and the server sends the message as the next turn.
         yield* Effect.when(
@@ -2987,7 +2967,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * agent's own permission requests.
      */
     approvals: (sessionId: string) =>
-      Effect.map(sessions.get(sessionId), () => json(200, relayed.pending(sessionId))).pipe(
+      sessions.get(sessionId).pipe(
+        Effect.andThen(relayed.pending(sessionId)),
+        Effect.map((pending) => json(200, pending)),
         Effect.catchTag("SessionNotFound", sessionNotFound),
       ),
 
@@ -3001,7 +2983,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         return (yield* relayed.answer(sessionId, approvalId, approved))
-          ? json(200, relayed.pending(sessionId))
+          ? json(200, yield* relayed.pending(sessionId))
           : json(404, { error: "approval_not_pending" });
       }),
 
@@ -3055,14 +3037,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       if (isTruthy(liveRuns.get(sessionId))) return;
       const session = yield* sessions.get(sessionId);
       if (session.archivedAt !== null) return;
-      const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+      const last = yield* chatState.lastRun(sessionId);
       if (!isTruthy(last)) return;
       // A steered message reaches the model whether or not a page is open: after a normal finish
       // the server sends it as the next turn. If that cannot start, the user confirms it instead.
-      const unsent = Effect.sync(() => {
-        queue.holdWaiting(sessionId, "stopped");
-        events.publishSession(sessionId, "queue");
-      });
+      const unsent = queue.holdWaiting(sessionId, "stopped").pipe(
+        Effect.andThen(events.publishSession(sessionId, "queue")),
+        Effect.catch((error) => Effect.logWarning("Unsent steered message was not held", error)),
+      );
       const steered = send({ kind: "steered" }).pipe(
         Effect.onError(() => unsent),
         Effect.filterOrElse(
@@ -3089,8 +3071,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A user's queued request or pending approval takes precedence over automatic work.
         if (
           continuing &&
-          (queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
-            relayed.pending(sessionId).length > 0)
+          ((yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
+            (yield* relayed.pending(sessionId)).length > 0)
         )
           return;
         const pendingApprovals = yield* agentPromise("list-approvals", () =>
@@ -3106,15 +3088,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
             evidence: [`HTTP ${response.status}`],
           });
-          events.publishSession(sessionId, "run-state");
+          yield* events.publishSession(sessionId, "run-state");
         }
         yield* drain(response);
       });
       yield* Effect.when(
         steered,
-        Effect.sync(
-          () =>
-            last.status === "completed" && queue.snapshot(sessionId).nextDelivery.kind === "server",
+        Effect.map(
+          queue.snapshot(sessionId),
+          (snapshot) => last.status === "completed" && snapshot.nextDelivery.kind === "server",
         ),
       ).pipe(Effect.flatMap(Option.match({ onSome: () => Effect.void, onNone: () => automatic })));
     }).pipe(
@@ -3144,14 +3126,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // marked it failed. Close its durable execution and continuation the same way, so only a side
   // effect that may have happened keeps the session from continuing the Plan. The run is not
   // replayed. An execution that cannot be closed stays fenced, as before.
-  const unsettledEffect = sqlite.prepare(
-    `SELECT operation_id, status FROM owner_rpc_operations o
-     WHERE run_id = ? AND ${toolOperationSql("o")} AND status <> 'succeeded'
-     ORDER BY operation_id LIMIT 1`,
-  );
-  const abandonedRun = sqlite.prepare(
-    "SELECT 1 AS failed FROM chat_runs WHERE run_id = ? AND thread_id = ? AND status = 'failed'",
-  );
   yield* Effect.forEach(
     yield* goalExecutions.unsettled.pipe(
       Effect.catch((error) =>
@@ -3161,10 +3135,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     (payload) =>
       Effect.gen(function* () {
         const { sessionId, runId } = payload.identity;
-        if (abandonedRun.get(runId, sessionId) === undefined) return;
-        const effect = yield* Schema.decodeUnknownEffect(
-          Schema.UndefinedOr(Schema.Struct({ operation_id: Schema.Finite, status: Schema.String })),
-        )(unsettledEffect.get(runId));
+        if (Option.isNone(yield* abandonedRun({ runId, sessionId }))) return;
+        const effect = Option.getOrUndefined(yield* unsettledEffect(runId));
         yield* goalExecutions.fail(
           payload,
           effect === undefined

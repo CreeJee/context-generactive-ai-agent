@@ -1,3 +1,4 @@
+import { chatRoute } from "./chat-route.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Cause, Effect, Function as EffectFunction } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
@@ -5,7 +6,7 @@ import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/to
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import { defaultTestResponder } from "./provider.ts";
 import type { AgentServices } from "./test-env.ts";
-import { waitUntil } from "./wait-until.ts";
+import { type WaitCondition, waitUntil } from "./wait-until.ts";
 
 /**
  * Interrupt IDs come from tool-call IDs and are unique across the database, as provider call IDs
@@ -71,11 +72,7 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
           connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
             fetchClient: (input, init) => {
               const request = new Request(input, init);
-              return runPromise(
-                request.method === "POST"
-                  ? agent.handle(request, sessionId)
-                  : agent.hydrate(request, sessionId),
-              );
+              return runPromise(chatRoute(agent, request, sessionId));
             },
           }),
         });
@@ -94,7 +91,8 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
           : [],
       )
       .join("");
-  const until = (condition: () => boolean, what: string) => waitUntil(condition, what, 6_000);
+  const until = <E = never>(condition: WaitCondition<E>, what: string) =>
+    waitUntil(condition, what, 6_000);
   return {
     client,
     text,

@@ -149,13 +149,11 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
           thread.id,
         ),
       ).toBe(0);
-      expect(attachments.get(image.id)).toBeNull();
+      expect(yield* attachments.get(image.id)).toBeNull();
       expect(yield* (yield* FileSystem.FileSystem).exists(attachments.pathOf(image))).toBe(false);
-      const missing = yield* btw.remove(thread.id).pipe(
-        Effect.flip,
-        Effect.map((error) => error.reason._tag),
-      );
-      expect(missing).toBe("BtwThreadNotFound");
+      expect(yield* Effect.flip(btw.remove(thread.id))).toMatchObject({
+        reason: { _tag: "BtwThreadNotFound" },
+      });
 
       // Deleting the main conversation takes its remaining BTW threads with it.
       const deleted = yield* (yield* AgentChat).deleteSession(

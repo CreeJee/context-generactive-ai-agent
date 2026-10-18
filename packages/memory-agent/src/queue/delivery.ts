@@ -1,7 +1,6 @@
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
-import { Array as Arr, Context, Effect, Layer, Option } from "effect";
+import { Array as Arr, Context, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import { Nodes } from "../memory/nodes.ts";
@@ -24,26 +23,34 @@ const make = Effect.gen(function* () {
   const attachments = yield* Attachments;
   const redactor = yield* SecretRedactor;
 
+  /** The images a queued message still has; one deleted meanwhile is left out. */
+  const imagesOf = (message: QueuedMessage) =>
+    Effect.map(Effect.forEach(message.attachmentIds, attachments.get), (found) =>
+      found.filter((attachment) => attachment !== null),
+    );
+
   /** The queued message as the user turn the model receives. */
-  const toUserMessage = (message: QueuedMessage): ModelMessage => {
-    const images = message.attachmentIds.flatMap((id) => {
-      const attachment = attachments.get(id);
-      return isTruthy(attachment) ? [attachment] : [];
+  const toUserMessage = (message: QueuedMessage) =>
+    Effect.map(imagesOf(message), (images): ModelMessage => {
+      if (images.length === 0) return { id: message.id, role: "user", content: message.text };
+      const content: ContentPart[] = [
+        ...(message.text.length > 0 ? [{ type: "text" as const, content: message.text }] : []),
+        ...images.map((image) => ({
+          type: "image" as const,
+          source: {
+            type: "url" as const,
+            value: attachmentUrl(image.id),
+            mimeType: image.mimeType,
+          },
+        })),
+      ];
+      return { id: message.id, role: "user", content };
     });
-    if (images.length === 0) return { id: message.id, role: "user", content: message.text };
-    const content: ContentPart[] = [
-      ...(message.text.length > 0 ? [{ type: "text" as const, content: message.text }] : []),
-      ...images.map((image) => ({
-        type: "image" as const,
-        source: { type: "url" as const, value: attachmentUrl(image.id), mimeType: image.mimeType },
-      })),
-    ];
-    return { id: message.id, role: "user", content };
-  };
 
   /** Every delivered message is evidence, like any user turn, and kept without a pasted key. */
   const record = (binding: DeliveryBinding, message: QueuedMessage) =>
-    Effect.map(redactor.redactText(message.text), (kept) => {
+    Effect.gen(function* () {
+      const kept = yield* redactor.redactText(message.text);
       const node = nodes.append({
         projectId: binding.projectId,
         sessionId: binding.sessionId,
@@ -51,13 +58,7 @@ const make = Effect.gen(function* () {
         kind: "user",
         text: kept.text,
       });
-      attachments.link(
-        node.id,
-        message.attachmentIds.flatMap((id) => {
-          const attachment = attachments.get(id);
-          return isTruthy(attachment) ? [attachment] : [];
-        }),
-      );
+      yield* attachments.link(node.id, yield* imagesOf(message));
     });
 
   return {
@@ -76,9 +77,9 @@ const make = Effect.gen(function* () {
             Effect.forEach(
               delivered,
               (message) =>
-                Effect.sync(() =>
-                  queue.markDelivered(message.id, "tool_boundary", binding.runId),
-                ).pipe(Effect.andThen(record(binding, message))),
+                queue
+                  .markDelivered(message.id, "tool_boundary", binding.runId)
+                  .pipe(Effect.andThen(record(binding, message))),
               { discard: true },
             ).pipe(
               Effect.andThen(
@@ -86,18 +87,19 @@ const make = Effect.gen(function* () {
                   ctx.emitCustomEvent(queueDeliveredEvent, {
                     ids: delivered.map((message) => message.id),
                   });
-                  return { messages: [...config.messages, ...delivered.map(toUserMessage)] };
                 }),
               ),
+              Effect.andThen(Effect.forEach(delivered, toUserMessage)),
+              Effect.map((messages) => ({ messages: [...config.messages, ...messages] })),
             );
           return run(
-            Effect.sync((): ReadonlyArray<QueuedMessage> =>
-              ctx.phase === "beforeModel" && config.messages.at(-1)?.role === "tool"
-                ? queue.deliverable(binding.sessionId)
-                : [],
+            (ctx.phase === "beforeModel" && config.messages.at(-1)?.role === "tool"
+              ? queue.deliverable(binding.sessionId)
+              : Effect.succeed<ReadonlyArray<QueuedMessage>>([])
             ).pipe(
-              Effect.map(Option.liftPredicate(Arr.isReadonlyArrayNonEmpty)),
-              Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: deliver })),
+              Effect.flatMap((found) =>
+                Arr.isReadonlyArrayNonEmpty(found) ? deliver(found) : Effect.void,
+              ),
             ),
           );
         },

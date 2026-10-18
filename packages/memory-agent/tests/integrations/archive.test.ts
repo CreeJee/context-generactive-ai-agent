@@ -1,3 +1,4 @@
+import { chatRoute } from "../support/chat-route.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Cause, Effect, FiberSet, FileSystem, Option, Result, Schedule, Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -103,11 +104,7 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
               connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${session}`, {
                 headers: { [sessionHolderHeader]: "tab-a" },
                 fetchClient: (input, init) =>
-                  run(
-                    (init?.method ?? "GET") === "POST"
-                      ? agent.handle(new Request(input, init), session)
-                      : agent.hydrate(new Request(input, init), session),
-                  ),
+                  run(chatRoute(agent, new Request(input, init), session)),
               }),
             }),
         ),

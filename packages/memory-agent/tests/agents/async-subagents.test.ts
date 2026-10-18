@@ -220,7 +220,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         expect(yield* send(sessionId, "delegate and keep working")).toBe(
           "Independent parent work finished.",
         );
-        expect(children.list(sessionId)[0]?.status).toBe("running");
+        expect((yield* children.list(sessionId))[0]?.status).toBe("running");
         expect(
           provider!.adapter.invocations.some(
             (invocation) =>
@@ -233,8 +233,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ).toBe(true);
         yield* turns.release("nap");
         yield* until(
-          () =>
-            children.list(sessionId)[0]?.status === "completed" && runningRuns(db, sessionId) === 0,
+          Effect.map(
+            children.list(sessionId),
+            (listed) => listed[0]?.status === "completed" && runningRuns(db, sessionId) === 0,
+          ),
           "child finishes after parent work",
         );
       }),
@@ -249,12 +251,12 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         const trace = yield* WorkTraceStore;
         const db = yield* Database;
         const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
-        expect(children.list(sessionId)[0]?.status).toBe("running");
+        expect((yield* children.list(sessionId))[0]?.status).toBe("running");
         expect(trace.taskDetail(sessionId, receipt.taskId)?.adoptions).toEqual([]);
         expect(yield* send(sessionId, "unrelated parent work")).toContain("Hello");
         yield* turns.release("nap");
         yield* until(
-          () => children.list(sessionId)[0]?.status === "completed",
+          Effect.map(children.list(sessionId), (listed) => listed[0]?.status === "completed"),
           "child survives parent end",
         );
         const followUp = yield* followedUp(sessionId);
@@ -282,7 +284,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const db = yield* Database;
       const answer = yield* send(sessionId, "delegate twice dispatch only");
       expect(answer.match(/"status":"running"/g)).toHaveLength(2);
-      expect(children.list(sessionId).map((child) => child.status)).toEqual(["running", "running"]);
+      expect((yield* children.list(sessionId)).map((child) => child.status)).toEqual([
+        "running",
+        "running",
+      ]);
       const parent = yield* Effect.forkChild(send(sessionId, "slow parent work"), {
         startImmediately: true,
       });
@@ -290,7 +295,9 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       yield* turns.waitFor("slow parent work");
       yield* turns.release("nap", 2);
       yield* until(
-        () => children.list(sessionId).every((child) => child.status === "completed"),
+        Effect.map(children.list(sessionId), (listed) =>
+          listed.every((child) => child.status === "completed"),
+        ),
         "both children finish",
       );
       expect(runningRuns(db, sessionId)).toBe(1);
@@ -368,10 +375,13 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         }),
       ).toContain('"status":"completed"');
       const statusOf = (subagentId: string) =>
-        children.list(sessionId).find((child) => child.id === subagentId)?.status;
-      expect(statusOf(second.subagentId)).toBe("running");
+        Effect.map(
+          children.list(sessionId),
+          (listed) => listed.find((child) => child.id === subagentId)?.status,
+        );
+      expect(yield* statusOf(second.subagentId)).toBe("running");
       yield* sdk(() => children.stopTask(second.taskId));
-      expect(statusOf(second.subagentId)).toBe("cancelled");
+      expect(yield* statusOf(second.subagentId)).toBe("cancelled");
     }),
   );
 
@@ -389,7 +399,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         "child approval wait",
       );
       expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
-      expect(children.list(sessionId)[0]?.status).toBe("cancelled");
+      expect((yield* children.list(sessionId))[0]?.status).toBe("cancelled");
       expect(
         count(
           db,
@@ -466,7 +476,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       expect(resumed.taskId).toBe(first.taskId);
       expect(resumed.attemptId).not.toBe(first.attemptId);
-      expect(children.list(sessionId)[0]?.status).toBe("running");
+      expect((yield* children.list(sessionId))[0]?.status).toBe("running");
       yield* turns.release("nap");
       yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(resumed)], timeoutMs: 5000 });
     }),

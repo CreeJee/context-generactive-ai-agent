@@ -108,12 +108,15 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                         });
                       const request = yield* HttpServerRequest.toWeb(incoming);
                       const sessionId = url.searchParams.get("session")!;
-                      const response = yield* Effect.provideContext(
+                      const routed: Effect.Effect<
+                        Response,
+                        | Effect.Error<ReturnType<typeof chat.handle>>
+                        | Effect.Error<ReturnType<typeof chat.hydrate>>
+                      > =
                         incoming.method === "POST"
                           ? chat.handle(request, sessionId)
-                          : chat.hydrate(request, sessionId),
-                        services,
-                      );
+                          : chat.hydrate(request, sessionId);
+                      const response = yield* Effect.provideContext(routed, services);
                       return HttpServerResponse.fromWeb(response);
                     }).pipe(
                       Effect.catchCause(() =>

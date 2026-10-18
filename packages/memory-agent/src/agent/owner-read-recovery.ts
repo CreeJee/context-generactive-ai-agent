@@ -1,6 +1,7 @@
-import { sha256, randomUUID } from "../runtime/synchronous-crypto.ts";
-import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
+import { Clock, Context, Crypto, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient, type SqlError } from "effect/sql";
 import { decodeFullLoopValue } from "./full-loop-codec.ts";
 import { GoalExecutionPayload } from "../workflow/goal-execution-contracts.ts";
 import { workflowRunEvents } from "../workflow/run-events.ts";
@@ -148,11 +149,19 @@ const Failure = Schema.TaggedStruct("Complete", {
     ),
   }),
 });
+const Guards = Schema.Struct({ unresolved: Schema.Finite, outstanding: Schema.Finite });
 const Receipt = Schema.Struct({
   receipt_id: Schema.String,
   assessment_id: Schema.String,
   backup_reference: Schema.String,
 });
+// First rows decode leniently: a malformed record blocks recovery instead of failing it.
+const firstReceipt = (rows: ReadonlyArray<object>) =>
+  Schema.decodeUnknownOption(Schema.UndefinedOr(Receipt))(rows[0]);
+const firstRow = (rows: ReadonlyArray<object>) =>
+  Schema.decodeUnknownOption(Schema.UndefinedOr(Row))(rows[0]);
+const firstGuards = (rows: ReadonlyArray<object>) =>
+  Schema.decodeUnknownOption(Schema.UndefinedOr(Guards))(rows[0]);
 type BlockReason =
   | "run_not_found"
   | "run_not_failed"
@@ -169,85 +178,70 @@ const digest = (value: string) => sha256(value);
 const parse = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, value: string) =>
   Schema.decodeOption(Schema.fromJsonString(schema))(value);
 
-export function makeOwnerReadRecovery({ sqlite, atomic }: Database["Service"]) {
-  const read = (sessionId: string, runId: string) => {
-    const existing = Schema.decodeUnknownOption(Schema.UndefinedOr(Receipt))(
-      sqlite
-        .prepare(
-          "SELECT receipt_id, assessment_id, backup_reference FROM owner_read_recoveries WHERE run_id = ? AND session_id = ?",
-        )
-        .get(runId, sessionId),
+export const makeOwnerReadRecovery = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
+  const events = yield* workflowRunEvents;
+  const read = Effect.fnUntraced(function* (sessionId: string, runId: string) {
+    const existing = firstReceipt(
+      yield* sql`SELECT receipt_id, assessment_id, backup_reference FROM owner_read_recoveries
+        WHERE run_id = ${runId} AND session_id = ${sessionId}`,
     );
-    const row = Schema.decodeUnknownOption(Schema.UndefinedOr(Row))(
-      sqlite
-        .prepare(`
-      SELECT r.run_id, b.session_id, s.project_id, b.goal_instance_id, b.workflow_revision_id, b.goal_version,
-        b.plan_version, g.goal_instance_id AS current_goal,
-        (SELECT max(id) FROM workflow_state_revisions WHERE session_id = b.session_id) AS current_revision,
-        r.status, r.error_code, r.finished_at
-      FROM chat_runs r JOIN workflow_run_bindings b ON b.run_id = r.run_id
-      JOIN sessions s ON s.id = b.session_id
-      LEFT JOIN workflow_goal_identities g ON g.session_id = b.session_id
-      WHERE r.run_id = ? AND r.thread_id = ? AND b.session_id = ?
-    `)
-        .get(runId, sessionId, sessionId),
+    const row = firstRow(
+      yield* sql`
+        SELECT r.run_id, b.session_id, s.project_id, b.goal_instance_id, b.workflow_revision_id, b.goal_version,
+          b.plan_version, g.goal_instance_id AS current_goal,
+          (SELECT max(id) FROM workflow_state_revisions WHERE session_id = b.session_id) AS current_revision,
+          r.status, r.error_code, r.finished_at
+        FROM chat_runs r JOIN workflow_run_bindings b ON b.run_id = r.run_id
+        JOIN sessions s ON s.id = b.session_id
+        LEFT JOIN workflow_goal_identities g ON g.session_id = b.session_id
+        WHERE r.run_id = ${runId} AND r.thread_id = ${sessionId} AND b.session_id = ${sessionId}`,
     );
     const operations = Schema.decodeUnknownOption(Schema.Array(Operation))(
-      sqlite
-        .prepare(
-          "SELECT operation_id,run_key,fingerprint,side_effect,status FROM owner_rpc_operations WHERE run_id = ? ORDER BY operation_id DESC LIMIT 2",
-        )
-        .all(runId),
+      yield* sql`SELECT operation_id,run_key,fingerprint,side_effect,status FROM owner_rpc_operations
+        WHERE run_id = ${runId} ORDER BY operation_id DESC LIMIT 2`,
     );
     const executions = Schema.decodeUnknownOption(Schema.Array(Execution))(
-      sqlite
-        .prepare(`
-      SELECT execution_id,payload_json,result_json FROM owner_workflow_executions
-      WHERE workflow_name='GoalExecution' AND status='completed' AND parent_execution_id IS NULL
-        AND json_extract(payload_json, '$.identity.runId') = ?
-    `)
-        .all(runId),
+      yield* sql`
+        SELECT execution_id,payload_json,result_json FROM owner_workflow_executions
+        WHERE workflow_name='GoalExecution' AND status='completed' AND parent_execution_id IS NULL
+          AND json_extract(payload_json, '$.identity.runId') = ${runId}`,
     );
-    const guards = sqlite
-      .prepare(`SELECT
-      (SELECT count(*) FROM owner_rpc_operations WHERE run_id = ? AND status <> 'succeeded') AS unresolved,
-      (SELECT count(*) FROM chat_runs WHERE thread_id = ? AND status IN ('running','interrupted'))
-      + (SELECT count(*) FROM work_tasks WHERE origin_session_id = ?
-        AND (active_attempt_id IS NOT NULL OR status IN ('queued','running','waiting','resuming')))
-      + (SELECT count(*) FROM chat_interrupts WHERE thread_id = ? AND status='pending')
-      + (SELECT count(*) FROM queued_messages WHERE session_id = ? AND state IN ('waiting','editing','held'))
-      + (SELECT count(*) FROM work_recovery_jobs j JOIN work_tasks t ON t.id=j.task_id
-        WHERE t.origin_session_id = ? AND j.status IN ('queued','claimed'))
-      + (SELECT count(*) FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id=b.run_id
-        WHERE b.session_id = ? AND b.run_id <> ? AND (r.status IS NULL OR r.status <> 'completed')
-          AND NOT ${recoveredReadRunSql("r")})
-      + (SELECT count(*) FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id=o.run_id
-        LEFT JOIN chat_runs recovery_run ON recovery_run.run_id=b.run_id
-        WHERE b.session_id=? AND o.run_id<>? AND (o.status='pending' OR (o.side_effect=1 AND o.status<>'succeeded'))
-          AND NOT ${recoveredReadRunSql("recovery_run")}) AS outstanding
-    `)
-      .get(
-        runId,
-        sessionId,
-        sessionId,
-        sessionId,
-        sessionId,
-        sessionId,
-        sessionId,
-        runId,
-        sessionId,
-        runId,
-      );
+    const guards = Option.flatMap(
+      firstGuards(
+        yield* sql`SELECT
+          (SELECT count(*) FROM owner_rpc_operations WHERE run_id = ${runId} AND status <> 'succeeded') AS unresolved,
+          (SELECT count(*) FROM chat_runs WHERE thread_id = ${sessionId} AND status IN ('running','interrupted'))
+          + (SELECT count(*) FROM work_tasks WHERE origin_session_id = ${sessionId}
+            AND (active_attempt_id IS NOT NULL OR status IN ('queued','running','waiting','resuming')))
+          + (SELECT count(*) FROM chat_interrupts WHERE thread_id = ${sessionId} AND status='pending')
+          + (SELECT count(*) FROM queued_messages WHERE session_id = ${sessionId} AND state IN ('waiting','editing','held'))
+          + (SELECT count(*) FROM work_recovery_jobs j JOIN work_tasks t ON t.id=j.task_id
+            WHERE t.origin_session_id = ${sessionId} AND j.status IN ('queued','claimed'))
+          + (SELECT count(*) FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id=b.run_id
+            WHERE b.session_id = ${sessionId} AND b.run_id <> ${runId} AND (r.status IS NULL OR r.status <> 'completed')
+              AND NOT ${sql.literal(recoveredReadRunSql("r"))})
+          + (SELECT count(*) FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id=o.run_id
+            LEFT JOIN chat_runs recovery_run ON recovery_run.run_id=b.run_id
+            WHERE b.session_id=${sessionId} AND o.run_id<>${runId} AND (o.status='pending' OR (o.side_effect=1 AND o.status<>'succeeded'))
+              AND NOT ${sql.literal(recoveredReadRunSql("recovery_run"))}) AS outstanding`,
+      ),
+      Option.fromNullishOr,
+    );
     return { existing, row, operations, executions, guards };
-  };
-  const assess = (data: ReturnType<typeof read>) => {
+  });
+  type Read = Effect.Success<ReturnType<typeof read>>;
+  const assess = (data: Read) => {
     if (
       Option.isNone(data.row) ||
       Option.isNone(data.operations) ||
       Option.isNone(data.executions) ||
-      Option.isNone(data.existing)
+      Option.isNone(data.existing) ||
+      Option.isNone(data.guards)
     )
       return blocked("invalid_record");
+    const guards = data.guards.value;
     const row = data.row.value;
     if (data.existing.value !== undefined) return blocked("invalid_record");
     if (row === undefined) return blocked("run_not_found");
@@ -260,11 +254,7 @@ export function makeOwnerReadRecovery({ sqlite, atomic }: Database["Service"]) {
     if (row.current_goal !== row.goal_instance_id || row.current_revision === null)
       return blocked("goal_changed");
     const [operation, authorization] = data.operations.value;
-    if (
-      operation?.status !== "uncertain" ||
-      operation.side_effect !== 1 ||
-      data.guards?.unresolved !== 1
-    )
+    if (operation?.status !== "uncertain" || operation.side_effect !== 1 || guards.unresolved !== 1)
       return blocked("not_single_uncertain_read");
     const descriptor = parse(Descriptor, operation.fingerprint);
     if (Option.isNone(descriptor) || descriptor.value.operation !== "tool")
@@ -324,7 +314,7 @@ export function makeOwnerReadRecovery({ sqlite, atomic }: Database["Service"]) {
       failure.value.exit.cause[0]?.error.reason.operationId !== String(operation.operation_id)
     )
       return blocked("execution_failure_mismatch");
-    if (data.guards?.outstanding !== 0) return blocked("work_outstanding");
+    if (guards.outstanding !== 0) return blocked("work_outstanding");
     const assessmentId = digest(JSON.stringify([policy, row, operation, authorization, execution]));
     return {
       type: "eligible" as const,
@@ -360,139 +350,133 @@ export function makeOwnerReadRecovery({ sqlite, atomic }: Database["Service"]) {
       }
     }
   };
-  const persisted = (sessionId: string, runId: string) =>
-    sqlite
-      .prepare(
-        `SELECT rr.receipt_id,rr.assessment_id,rr.backup_reference FROM owner_read_recoveries rr
-     JOIN chat_runs r ON r.run_id=rr.run_id WHERE rr.session_id=? AND rr.run_id=? AND ${recoveredReadRunSql("r")}`,
-      )
-      .get(sessionId, runId);
+  const persisted = Effect.fnUntraced(function* (sessionId: string, runId: string) {
+    return firstReceipt(
+      yield* sql`SELECT rr.receipt_id,rr.assessment_id,rr.backup_reference FROM owner_read_recoveries rr
+        JOIN chat_runs r ON r.run_id=rr.run_id
+        WHERE rr.session_id=${sessionId} AND rr.run_id=${runId} AND ${sql.literal(recoveredReadRunSql("r"))}`,
+    );
+  });
+  /** A durable receipt commits when this returns, so it never joins a caller's transaction. */
+  const standalone = <A, E>(
+    effect: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E | SqlError.SqlError | ReadRecoveryStorageError> =>
+    Effect.flatMap(
+      Effect.serviceOption(sql.transactionService),
+      (outer): Effect.Effect<A, E | SqlError.SqlError | ReadRecoveryStorageError> =>
+        Option.isNone(outer)
+          ? sql.withTransaction(effect)
+          : Effect.fail(
+              ReadRecoveryStorageError.make({ phase: "write", cause: "outer_transaction" }),
+            ),
+    );
+  const storage =
+    (phase: "read" | "write") =>
+    <A, E>(effect: Effect.Effect<A, E | SqlError.SqlError>) =>
+      Effect.catchTag(effect, "SqlError", (cause) =>
+        Effect.fail(ReadRecoveryStorageError.make({ phase, cause })),
+      );
   return {
     revoke: (sessionId: string, runId: string, input: ReadRecoveryRevocation) =>
       Effect.gen(function* () {
         const validated = yield* Schema.decodeEffect(ReadRecoveryRevocation)(input);
-        return yield* Effect.try({
-          try: () => {
-            if (sqlite.isTransaction)
-              throw new Error("Read recovery requires a standalone transaction");
-            return atomic(() => {
-              const data = read(sessionId, runId);
-              if (
-                Option.isNone(data.existing) ||
-                data.existing.value?.receipt_id !== validated.receiptId
-              )
-                return blocked("confirmation_conflict");
-              workflowRunEvents({ sqlite, atomic }).append(
-                sessionId,
-                runId,
-                `operator:read-recovery:revoke:${validated.receiptId}`,
-                "chunk",
-                {
-                  type: "CUSTOM",
-                  name: "memory-agent.read-recovery-revoked",
-                  value: { receiptId: validated.receiptId, confirmation: validated.confirmation },
-                },
-              );
-              return { type: "revoked" as const, receiptId: validated.receiptId };
-            });
-          },
-          catch: (cause) => ReadRecoveryStorageError.make({ phase: "write", cause }),
-        });
+        return yield* standalone(
+          Effect.gen(function* () {
+            const data = yield* read(sessionId, runId);
+            if (
+              Option.isNone(data.existing) ||
+              data.existing.value?.receipt_id !== validated.receiptId
+            )
+              return blocked("confirmation_conflict");
+            yield* events.append(
+              sessionId,
+              runId,
+              `operator:read-recovery:revoke:${validated.receiptId}`,
+              "chunk",
+              {
+                type: "CUSTOM",
+                name: "memory-agent.read-recovery-revoked",
+                value: { receiptId: validated.receiptId, confirmation: validated.confirmation },
+              },
+            );
+            return { type: "revoked" as const, receiptId: validated.receiptId };
+          }),
+        ).pipe(storage("write"));
       }),
     assess: (sessionId: string, runId: string) =>
-      Effect.try({
-        try: () => {
-          const receipt = Schema.decodeUnknownOption(Schema.UndefinedOr(Receipt))(
-            persisted(sessionId, runId),
-          );
-          if (Option.isSome(receipt) && receipt.value !== undefined)
-            return {
-              type: "recovered" as const,
-              receiptId: receipt.value.receipt_id,
-              assessmentId: receipt.value.assessment_id,
-              disposition: "new_run_only_no_replay" as const,
-            };
-          return publicAssessment(assess(read(sessionId, runId)));
-        },
-        catch: (cause) => ReadRecoveryStorageError.make({ phase: "read", cause }),
-      }),
+      Effect.gen(function* () {
+        const receipt = yield* persisted(sessionId, runId);
+        if (Option.isSome(receipt) && receipt.value !== undefined)
+          return {
+            type: "recovered" as const,
+            receiptId: receipt.value.receipt_id,
+            assessmentId: receipt.value.assessment_id,
+            disposition: "new_run_only_no_replay" as const,
+          };
+        return publicAssessment(assess(yield* read(sessionId, runId)));
+      }).pipe(storage("read")),
     confirm: (sessionId: string, runId: string, input: ReadRecoveryConfirmation) =>
       Effect.gen(function* () {
         const validated = yield* Schema.decodeEffect(ReadRecoveryConfirmation)(input);
         const now = yield* Clock.currentTimeMillis;
-        return yield* Effect.try({
-          try: () => {
-            if (sqlite.isTransaction)
-              throw new Error("Read recovery requires a standalone transaction");
-            return atomic(() => {
-              const receipt = Schema.decodeUnknownOption(Schema.UndefinedOr(Receipt))(
-                persisted(sessionId, runId),
-              );
-              if (Option.isSome(receipt) && receipt.value !== undefined)
-                return receipt.value.assessment_id === validated.assessmentId &&
-                  receipt.value.backup_reference === validated.backup.reference
-                  ? {
-                      type: "recovered" as const,
-                      receiptId: receipt.value.receipt_id,
-                      disposition: "new_run_only_no_replay" as const,
-                    }
-                  : blocked("confirmation_conflict");
-              const result = assess(read(sessionId, runId));
-              switch (result.type) {
-                case "blocked":
-                  return result;
-                case "eligible": {
-                  if (result.assessmentId !== validated.assessmentId)
-                    return blocked("assessment_changed");
-                  const receiptId = randomUUID();
-                  sqlite
-                    .prepare(`INSERT INTO owner_read_recoveries
-                (receipt_id,run_id,session_id,goal_instance_id,workflow_revision_id,operation_id,operation_fingerprint,authorization_fingerprint,run_key,
-                 finished_at,execution_id,execution_result_json,execution_payload_json,assessment_id,policy,confirmation,backup_reference,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-                    .run(
-                      receiptId,
-                      runId,
-                      sessionId,
-                      result.row.goal_instance_id,
-                      result.row.workflow_revision_id,
-                      result.operation.operation_id,
-                      result.operation.fingerprint,
-                      result.authorization.fingerprint,
-                      result.operation.run_key,
-                      result.row.finished_at,
-                      result.execution.execution_id,
-                      result.execution.result_json,
-                      result.execution.payload_json,
-                      result.assessmentId,
-                      policy,
-                      validated.confirmation,
-                      validated.backup.reference,
-                      now,
-                    );
-                  return {
+        const receiptId = yield* crypto.randomUUIDv4();
+        return yield* standalone(
+          Effect.gen(function* () {
+            const receipt = yield* persisted(sessionId, runId);
+            if (Option.isSome(receipt) && receipt.value !== undefined)
+              return receipt.value.assessment_id === validated.assessmentId &&
+                receipt.value.backup_reference === validated.backup.reference
+                ? {
                     type: "recovered" as const,
-                    receiptId,
+                    receiptId: receipt.value.receipt_id,
                     disposition: "new_run_only_no_replay" as const,
-                  };
-                }
+                  }
+                : blocked("confirmation_conflict");
+            const result = assess(yield* read(sessionId, runId));
+            switch (result.type) {
+              case "blocked":
+                return result;
+              case "eligible": {
+                if (result.assessmentId !== validated.assessmentId)
+                  return blocked("assessment_changed");
+                yield* sql`INSERT INTO owner_read_recoveries ${sql.insert({
+                  receipt_id: receiptId,
+                  run_id: runId,
+                  session_id: sessionId,
+                  goal_instance_id: result.row.goal_instance_id,
+                  workflow_revision_id: result.row.workflow_revision_id,
+                  operation_id: result.operation.operation_id,
+                  operation_fingerprint: result.operation.fingerprint,
+                  authorization_fingerprint: result.authorization.fingerprint,
+                  run_key: result.operation.run_key,
+                  finished_at: result.row.finished_at,
+                  execution_id: result.execution.execution_id,
+                  execution_result_json: result.execution.result_json,
+                  execution_payload_json: result.execution.payload_json,
+                  assessment_id: result.assessmentId,
+                  policy,
+                  confirmation: validated.confirmation,
+                  backup_reference: validated.backup.reference,
+                  created_at: now,
+                })}`;
+                return {
+                  type: "recovered" as const,
+                  receiptId,
+                  disposition: "new_run_only_no_replay" as const,
+                };
               }
-            });
-          },
-          catch: (cause) => ReadRecoveryStorageError.make({ phase: "write", cause }),
-        });
+            }
+          }),
+        ).pipe(storage("write"));
       }),
   };
-}
+});
 
 export class OwnerReadRecovery extends Context.Service<
   OwnerReadRecovery,
-  ReturnType<typeof makeOwnerReadRecovery>
+  Effect.Success<typeof makeOwnerReadRecovery>
 >()("memory-agent/agent/owner-read-recovery/OwnerReadRecovery") {
-  static readonly layer = Layer.effect(
-    OwnerReadRecovery,
-    Effect.gen(function* () {
-      return makeOwnerReadRecovery(yield* Database);
-    }),
+  static readonly layer = Layer.effect(OwnerReadRecovery, makeOwnerReadRecovery).pipe(
+    Layer.provide(NodeCrypto.layer),
   );
 }

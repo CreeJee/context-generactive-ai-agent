@@ -1,14 +1,7 @@
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import { DateTime, Schema } from "effect";
-import type { DatabaseSync } from "node:sqlite";
+import { DateTime, Effect, Function as EffectFunction, Option, Schema } from "effect";
+import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { recoveredReadRunSql } from "../agent/owner-read-recovery.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
-
-type OwnerDatabase = {
-  readonly sqlite: DatabaseSync;
-  readonly atomic: <T>(work: () => T) => T;
-};
 
 export type RunBinding = {
   readonly runId: string;
@@ -97,119 +90,105 @@ export const resolvedRunSql: {
 );
 
 /** A central-owner-only durable claim; it cannot authorize a worker or a tool on its own. */
-export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
-  const identity = sqlite.prepare(
-    "SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?",
-  );
-  const latest = sqlite.prepare(`
-    SELECT id, goal_instance_id, goal_version, plan_version
-    FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1
-  `);
-  const otherRun = sqlite.prepare("SELECT thread_id FROM chat_runs WHERE run_id = ?");
-  const previous = sqlite.prepare(`
+export const workflowRunBindings = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const identity = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ goal_instance_id: Schema.String }),
+    execute: (sessionId) =>
+      sql`SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}`,
+  });
+  const latest = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({
+      id: Schema.Finite,
+      goal_instance_id: Schema.NullOr(Schema.String),
+      goal_version: Schema.NullOr(Schema.Finite),
+      plan_version: Schema.NullOr(Schema.Finite),
+    }),
+    execute: (sessionId) => sql`
+      SELECT id, goal_instance_id, goal_version, plan_version
+      FROM workflow_state_revisions WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`,
+  });
+  const claimed = (runId: string) => sql`
+    SELECT 1 AS found FROM workflow_run_bindings WHERE run_id = ${runId}
+    UNION ALL SELECT 1 FROM chat_runs WHERE run_id = ${runId} LIMIT 1`;
+  const previous = (sessionId: string, resumeRunId: string) => sql`
     SELECT b.run_id FROM workflow_run_bindings b
     LEFT JOIN chat_runs r ON r.run_id = b.run_id
-    WHERE b.session_id = ? AND NOT ${acknowledgedRunSql("b")}
+    WHERE b.session_id = ${sessionId} AND NOT ${sql.literal(acknowledgedRunSql("b"))}
       AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-      ${resolvedRunSql("b", "r")}
+      ${sql.literal(resolvedRunSql("b", "r"))}
       OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
-      AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
-    ))) LIMIT 1
-  `);
-  const unresolved = sqlite.prepare(`
+      AND (r.run_id = ${resumeRunId} OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
+    ))) LIMIT 1`;
+  const unresolved = (sessionId: string, goalInstanceId: string) => sql`
     SELECT operations.operation_id FROM owner_rpc_operations AS operations
     JOIN workflow_run_bindings AS binding ON binding.run_id = operations.run_id
     LEFT JOIN chat_runs r ON r.run_id = binding.run_id
-    WHERE binding.session_id = ? AND binding.goal_instance_id = ?
+    WHERE binding.session_id = ${sessionId} AND binding.goal_instance_id = ${goalInstanceId}
       AND (operations.status = 'pending'
         OR (operations.side_effect = 1 AND operations.status <> 'succeeded'))
-      AND NOT ${resolvedRunSql("binding", "r")} LIMIT 1
-  `);
-  const claimed = sqlite.prepare("SELECT run_id FROM workflow_run_bindings WHERE run_id = ?");
-  const insert = sqlite.prepare(`
-    INSERT INTO workflow_run_bindings
-      (run_id, session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
+      AND NOT ${sql.literal(resolvedRunSql("binding", "r"))} LIMIT 1`;
+
   const bind = (
     sessionId: string,
     runId: string,
     expectedRevisionId: number,
     resumeRunId?: string,
     mode: "commit" | "preview" = "commit",
-  ): Admission =>
-    atomic(() => {
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const goal = EffectFunction.flow(
-        Schema.decodeUnknownResult(
-          Schema.UndefinedOr(Schema.Struct({ goal_instance_id: Schema.String })),
-        ),
-        Result.getOrThrow,
-      )(identity.get(sessionId));
-      if (!isTruthy(goal)) return { status: "refused", reason: "legacy_unbound" };
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const state = EffectFunction.flow(
-        Schema.decodeUnknownResult(
-          Schema.UndefinedOr(
-            Schema.Struct({
-              id: Schema.Finite,
-              goal_instance_id: Schema.NullOr(Schema.String),
-              goal_version: Schema.NullOr(Schema.Finite),
-              plan_version: Schema.NullOr(Schema.Finite),
-            }),
-          ),
-        ),
-        Result.getOrThrow,
-      )(latest.get(sessionId));
-      if (
-        !isTruthy(state) ||
-        state.id !== expectedRevisionId ||
-        state.goal_instance_id !== goal.goal_instance_id ||
-        state.goal_version === null
-      )
-        return { status: "refused", reason: "workflow_changed" };
-      if (isTruthy(claimed.get(runId)) || isTruthy(otherRun.get(runId)))
-        return { status: "refused", reason: "run_id_conflict" };
-      // A crashed, aborted or failed run may have performed an external side effect.
-      // Do not silently start another one until the owner can prove or resolve it.
-      // SDK completion does not prove every owner operation settled. Inspect all
-      // bindings for this Goal, including older Goal/Plan versions, before admission.
-      // Pending reads may still settle; uncertain reads alone cannot replay an effect.
-      if (
-        isTruthy(previous.get(sessionId, resumeRunId ?? "")) ||
-        isTruthy(unresolved.get(sessionId, goal.goal_instance_id))
-      )
-        return { status: "refused", reason: "run_outcome_uncertain" };
-      switch (mode) {
-        case "commit":
-          insert.run(
+  ) =>
+    sql.withTransaction(
+      Effect.gen(function* (): Effect.fn.Return<Admission, SqlError.SqlError | Schema.SchemaError> {
+        const goal = yield* identity(sessionId);
+        if (Option.isNone(goal)) return { status: "refused", reason: "legacy_unbound" };
+        const state = Option.getOrUndefined(yield* latest(sessionId));
+        if (
+          state === undefined ||
+          state.id !== expectedRevisionId ||
+          state.goal_instance_id !== goal.value.goal_instance_id ||
+          state.goal_version === null
+        )
+          return { status: "refused", reason: "workflow_changed" };
+        if ((yield* claimed(runId)).length > 0)
+          return { status: "refused", reason: "run_id_conflict" };
+        // A crashed, aborted or failed run may have performed an external side effect.
+        // Do not silently start another one until the owner can prove or resolve it.
+        // SDK completion does not prove every owner operation settled. Inspect all
+        // bindings for this Goal, including older Goal/Plan versions, before admission.
+        // Pending reads may still settle; uncertain reads alone cannot replay an effect.
+        if (
+          (yield* previous(sessionId, resumeRunId ?? "")).length > 0 ||
+          (yield* unresolved(sessionId, goal.value.goal_instance_id)).length > 0
+        )
+          return { status: "refused", reason: "run_outcome_uncertain" };
+        switch (mode) {
+          case "commit":
+            yield* sql`
+              INSERT INTO workflow_run_bindings
+                (run_id, session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id, created_at)
+              VALUES (${runId}, ${sessionId}, ${goal.value.goal_instance_id}, ${state.goal_version},
+                ${state.plan_version}, ${state.id}, ${DateTime.formatIso(yield* DateTime.now)})`;
+            break;
+          case "preview":
+            break;
+        }
+        return {
+          status: "bound",
+          binding: {
             runId,
             sessionId,
-            goal.goal_instance_id,
-            state.goal_version,
-            state.plan_version,
-            state.id,
-            DateTime.formatIso(DateTime.nowUnsafe()),
-          );
-          break;
-        case "preview":
-          break;
-      }
-      return {
-        status: "bound",
-        binding: {
-          runId,
-          sessionId,
-          goalInstanceId: goal.goal_instance_id,
-          goalVersion: state.goal_version,
-          planVersion: state.plan_version,
-          workflowRevisionId: state.id,
-        },
-      };
-    });
+            goalInstanceId: goal.value.goal_instance_id,
+            goalVersion: state.goal_version,
+            planVersion: state.plan_version,
+            workflowRevisionId: state.id,
+          },
+        };
+      }),
+    );
   return {
     bind,
     preview: (sessionId: string, runId: string, revisionId: number) =>
       bind(sessionId, runId, revisionId, undefined, "preview"),
   };
-}
+});

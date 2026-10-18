@@ -18,7 +18,7 @@ export function action({ request, params }: Route.ActionArgs) {
       const holder = request.headers.get(sessionHolderHeader);
       return yield* Effect.flatMap(AgentChat, (chat) => chat.cancel(params.session, holder)).pipe(
         Effect.tap(() =>
-          Effect.map(AppEvents, (events) => events.publishSession(params.session, "run-state")),
+          Effect.flatMap(AppEvents, (events) => events.publishSession(params.session, "run-state")),
         ),
       );
     }),

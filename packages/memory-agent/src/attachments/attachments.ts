@@ -1,14 +1,12 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { HashMap, MutableHashMap, Option, DateTime, Clock, Semaphore, Fiber, Scope } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import type { SQLOutputValue } from "node:sqlite";
 import { Context, Crypto, Data, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Hex } from "effect/encoding";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { StorageRoot } from "../config/storage-root.ts";
-import { Database } from "../db/database.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 
 /** Largest image accepted for upload. */
@@ -46,14 +44,7 @@ const AttachmentRow = Schema.Struct({
   bytes: Schema.Finite,
   created_at: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeAttachmentRow = EffectFunction.flow(
-  Schema.decodeUnknownResult(AttachmentRow),
-  Result.getOrThrow,
-);
-
-function toAttachment(row: Record<string, SQLOutputValue>): Attachment {
-  const decoded = decodeAttachmentRow(row);
+function toAttachment(decoded: typeof AttachmentRow.Type): Attachment {
   return {
     id: decoded.id,
     mimeType: decoded.mime_type,
@@ -107,7 +98,7 @@ const extensions = HashMap.fromIterable<AttachmentMimeType, string>([
 const make = Effect.gen(function* () {
   const conversionScope = yield* Scope.Scope;
   const run = Effect.runPromiseWith(yield* Effect.context());
-  const { sqlite } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const storage = yield* StorageRoot;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -117,16 +108,28 @@ const make = Effect.gen(function* () {
     .makeDirectory(directory, { recursive: true, mode: 0o700 })
     .pipe(Effect.mapError((cause) => new AttachmentStorageFailed({ operation: "save", cause })));
 
-  const selectAttachment = sqlite.prepare("SELECT * FROM attachments WHERE id = ?");
-  const insertAttachment = sqlite.prepare(
-    "INSERT INTO attachments VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-  );
-  const insertLink = sqlite.prepare(
-    "INSERT INTO node_attachments VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-  );
-  const selectForNode = sqlite.prepare(
-    "SELECT a.* FROM node_attachments l JOIN attachments a ON a.id = l.attachment_id WHERE l.node_id = ? ORDER BY l.position",
-  );
+  const selectAttachment = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: AttachmentRow,
+    execute: (id) => sql`SELECT * FROM attachments WHERE id = ${id}`,
+  });
+  const selectForNode = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: AttachmentRow,
+    execute: (nodeId) => sql`
+      SELECT a.* FROM node_attachments l JOIN attachments a ON a.id = l.attachment_id
+      WHERE l.node_id = ${nodeId} ORDER BY l.position`,
+  });
+  // One statement decides and deletes, so a link added meanwhile keeps its blob.
+  const deleteOrphans = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: AttachmentRow,
+    execute: () => sql`
+      DELETE FROM attachments AS a
+      WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)
+        AND NOT EXISTS (SELECT 1 FROM btw_attachments b WHERE b.attachment_id = a.id)
+      RETURNING *`,
+  });
 
   const fileOf = (attachment: Attachment) =>
     path.join(
@@ -134,11 +137,10 @@ const make = Effect.gen(function* () {
       `${attachment.id}.${Option.getOrUndefined(HashMap.get(extensions, attachment.mimeType))}`,
     );
 
-  const get = (id: string): Attachment | null => {
-    if (!isAttachmentId(id)) return null;
-    const row = selectAttachment.get(id);
-    return isTruthy(row) ? toAttachment(row) : null;
-  };
+  const get = (id: string) =>
+    isAttachmentId(id)
+      ? Effect.map(selectAttachment(id), (row) => Option.getOrNull(Option.map(row, toAttachment)))
+      : Effect.succeed(null);
 
   const conversionPermits = yield* Semaphore.make(maxConcurrentImageConversions);
 
@@ -279,13 +281,11 @@ const make = Effect.gen(function* () {
       );
       if (existing === undefined || Number(existing.size) !== bytes.length)
         yield* publish("save", path, bytes);
-      insertAttachment.run(
-        attachment.id,
-        attachment.mimeType,
-        attachment.bytes,
-        attachment.createdAt,
-      );
-      const stored = get(attachment.id) ?? attachment;
+      yield* sql`
+        INSERT INTO attachments
+        VALUES (${attachment.id}, ${attachment.mimeType}, ${attachment.bytes}, ${attachment.createdAt})
+        ON CONFLICT(id) DO NOTHING`;
+      const stored = (yield* get(attachment.id)) ?? attachment;
       // Start eagerly without retaining the upload request buffer while Sharp waits in the queue.
       // An immediate chat call joins this same in-flight conversion through forModel.
       yield* conversionFor(stored);
@@ -343,23 +343,26 @@ const make = Effect.gen(function* () {
     dataUrl: (image: ModelImage) => run(dataUrlEffect(image)),
 
     /** Records the images a message carried, in order. */
-    link: (nodeId: string, attachments: readonly Attachment[]) => {
-      for (const [position, attachment] of attachments.entries())
-        insertLink.run(nodeId, position, attachment.id);
-    },
+    link: (nodeId: string, attachments: readonly Attachment[]) =>
+      attachments.length === 0
+        ? Effect.void
+        : Effect.asVoid(sql`
+            INSERT INTO node_attachments ${sql.insert(
+              attachments.map((attachment, position) => ({
+                node_id: nodeId,
+                position,
+                attachment_id: attachment.id,
+              })),
+            )}
+            ON CONFLICT DO NOTHING`),
 
-    forNode: (nodeId: string): Attachment[] => selectForNode.all(nodeId).map(toAttachment),
+    forNode: (nodeId: string) =>
+      Effect.map(selectForNode(nodeId), (rows) => rows.map(toAttachment)),
 
     /** Removes content-addressed blobs only after their last message reference is gone. */
     purgeOrphans: Effect.gen(function* () {
-      const orphaned = sqlite
-        .prepare(`SELECT a.* FROM attachments a
-        WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)
-          AND NOT EXISTS (SELECT 1 FROM btw_attachments b WHERE b.attachment_id = a.id)`)
-        .all()
-        .map(toAttachment);
+      const orphaned = (yield* deleteOrphans()).map(toAttachment);
       for (const attachment of orphaned) {
-        sqlite.prepare("DELETE FROM attachments WHERE id = ?").run(attachment.id);
         yield* Effect.forEach(
           [
             fileOf(attachment),

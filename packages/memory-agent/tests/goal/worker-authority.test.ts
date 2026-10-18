@@ -1,7 +1,7 @@
-import { DateTime, Effect, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { goalWorkerAuthority } from "../../src/agent/goal-worker-authority.ts";
-import { makeGoalWorkerGenerationStore } from "../../src/agent/goal-worker-generation-store.ts";
+import { goalWorkerGenerationStore } from "../../src/agent/goal-worker-generation-store.ts";
 import { Database } from "../../src/db/database.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
@@ -48,7 +48,7 @@ const bindLatest = Effect.fnUntraced(function* (session: string, runId: string) 
       .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
       .get(session),
   );
-  return boundRun(workflowRunBindings(db).bind(session, runId, revision.id));
+  return boundRun(yield* (yield* workflowRunBindings).bind(session, runId, revision.id));
 });
 
 const boundRun = (admission: Admission) => {
@@ -83,8 +83,8 @@ testAgent()("Goal worker authority", (it) => {
       const db = yield* Database;
       const session = yield* withGoal;
       const binding = yield* bindLatest(session, `${session}:pinned`);
-      const owner = goalWorkerAuthority(db);
-      const first = owner.issue(binding, "worker-generation-1");
+      const owner = yield* goalWorkerAuthority;
+      const first = yield* owner.issue(binding, "worker-generation-1");
       if (first === null) return expect.unreachable("expected worker capability");
       const original = { ...first };
       expect(Object.isFrozen(first)).toBe(true);
@@ -101,19 +101,25 @@ testAgent()("Goal worker authority", (it) => {
         expect(Reflect.set(first, field, value)).toBe(false);
       }
       expect(first).toEqual(original);
-      expect(owner.permits({ ...first, requestId: "tool-call-1" })).toBe(true);
-      expect(owner.permits({ ...first, requestId: "" })).toBe(false);
+      expect(yield* owner.permits({ ...first, requestId: "tool-call-1" })).toBe(true);
+      expect(yield* owner.permits({ ...first, requestId: "" })).toBe(false);
       expect(
-        owner.permits({ ...first, sessionId: "another-session", requestId: "tool-call-1" }),
+        yield* owner.permits({ ...first, sessionId: "another-session", requestId: "tool-call-1" }),
       ).toBe(false);
-      expect(owner.permits({ ...first, goalVersion: 2, requestId: "tool-call-1" })).toBe(false);
+      expect(yield* owner.permits({ ...first, goalVersion: 2, requestId: "tool-call-1" })).toBe(
+        false,
+      );
       expect(
-        owner.permits({ ...first, generation: "worker-generation-2", requestId: "tool-call-1" }),
+        yield* owner.permits({
+          ...first,
+          generation: "worker-generation-2",
+          requestId: "tool-call-1",
+        }),
       ).toBe(false);
-      expect(owner.issue(binding, "worker-generation-2")).toBeNull();
+      expect(yield* owner.issue(binding, "worker-generation-2")).toBeNull();
       recordRun(db, session, first.runId, "completed");
-      expect(owner.permits({ ...first, requestId: "late-tool" })).toBe(false);
-      expect(owner.permitsFinalization({ ...first, requestId: "record-finish" })).toBe(true);
+      expect(yield* owner.permits({ ...first, requestId: "late-tool" })).toBe(false);
+      expect(yield* owner.permitsFinalization({ ...first, requestId: "record-finish" })).toBe(true);
       for (const patch of [
         { token: "wrong" },
         { generation: "wrong" },
@@ -124,22 +130,24 @@ testAgent()("Goal worker authority", (it) => {
         { planVersion: 2 },
         { workflowRevisionId: 2 },
       ])
-        expect(owner.permitsFinalization({ ...first, ...patch, requestId: "record-finish" })).toBe(
-          false,
-        );
+        expect(
+          yield* owner.permitsFinalization({ ...first, ...patch, requestId: "record-finish" }),
+        ).toBe(false);
       db.sqlite.prepare("DELETE FROM chat_runs WHERE run_id = ?").run(first.runId);
       owner.revoke(first.runId);
-      expect(owner.permitsFinalization({ ...first, requestId: "record-finish" })).toBe(false);
-      expect(owner.permits({ ...first, requestId: "late-result" })).toBe(false);
+      expect(yield* owner.permitsFinalization({ ...first, requestId: "record-finish" })).toBe(
+        false,
+      );
+      expect(yield* owner.permits({ ...first, requestId: "late-result" })).toBe(false);
       // Revoking an uncertain attempt must not silently issue another generation.
-      expect(owner.issue(binding, "worker-generation-2")).toBeNull();
+      expect(yield* owner.issue(binding, "worker-generation-2")).toBeNull();
       // Restarting the owner loses the token but retains the dispatch marker.
-      const replacementOwner = goalWorkerAuthority(db);
-      expect(replacementOwner.permits({ ...first, requestId: "old-owner" })).toBe(false);
-      expect(replacementOwner.issue(binding, "worker-generation-2")).toBeNull();
+      const replacementOwner = yield* goalWorkerAuthority;
+      expect(yield* replacementOwner.permits({ ...first, requestId: "old-owner" })).toBe(false);
+      expect(yield* replacementOwner.issue(binding, "worker-generation-2")).toBeNull();
       expect(dispatchOf(db, first.runId)).toEqual({ generation: "worker-generation-1" });
       recordRun(db, session, first.runId, "failed");
-      expect(owner.permits({ ...first, requestId: "late-result" })).toBe(false);
+      expect(yield* owner.permits({ ...first, requestId: "late-result" })).toBe(false);
     }),
   );
 
@@ -147,11 +155,11 @@ testAgent()("Goal worker authority", (it) => {
     Effect.gen(function* () {
       const db = yield* Database;
       const id = yield* goalId(db, yield* withGoal);
-      const store = makeGoalWorkerGenerationStore(db);
-      store.record(pin(id));
-      expect(() => store.record({ ...pin(id), sourceGeneration: "replacement" })).toThrow(
-        /already pinned/,
-      );
+      const store = yield* goalWorkerGenerationStore;
+      yield* store.record(pin(id));
+      expect(
+        yield* Effect.flip(store.record({ ...pin(id), sourceGeneration: "replacement" })),
+      ).toMatchObject({ reason: "already_pinned" });
       expect(() =>
         db.sqlite
           .prepare(
@@ -164,7 +172,7 @@ testAgent()("Goal worker authority", (it) => {
           .prepare("DELETE FROM workflow_goal_worker_generations WHERE goal_instance_id = ?")
           .run(id),
       ).toThrow(/immutable/);
-      expect(store.get(id)).toEqual(pin(id));
+      expect(yield* store.pinned(id)).toEqual(Option.some(pin(id)));
     }),
   );
 
@@ -176,12 +184,22 @@ testAgent()("Goal worker authority", (it) => {
         const session = yield* withGoal;
         const runId = `${session}:old-unpinned`;
         const binding = yield* bindLatest(session, runId);
-        expect(goalWorkerAuthority(db).issue(binding, "old-run-generation")).not.toBeNull();
+        expect(
+          yield* (yield* goalWorkerAuthority).issue(binding, "old-run-generation"),
+        ).not.toBeNull();
         const id = yield* goalId(db, session);
-        const store = makeGoalWorkerGenerationStore(db);
-        expect(store.hasUnpinnedDispatch(id)).toBe(true);
-        expect(() => store.record(pin(id))).toThrow(/no recoverable source pin/);
-        expect(store.get(id)).toBeUndefined();
+        const store = yield* goalWorkerGenerationStore;
+        expect(yield* Effect.flip(store.pinned(id))).toMatchObject({ reason: "unrecoverable_pin" });
+        expect(yield* Effect.flip(store.record(pin(id)))).toMatchObject({
+          reason: "unrecoverable_pin",
+        });
+        expect(
+          db.sqlite
+            .prepare(
+              "SELECT count(*) AS n FROM workflow_goal_worker_generations WHERE goal_instance_id = ?",
+            )
+            .get(id),
+        ).toEqual({ n: 0 });
         expect(dispatchOf(db, runId)).toEqual({ generation: "old-run-generation" });
       }),
   );
@@ -197,18 +215,20 @@ testAgent()("Goal worker source generation across reopen", (it) => {
         const session = yield* withGoal;
         const db = yield* env.use(Database);
         const id = yield* goalId(db, session);
-        const store = makeGoalWorkerGenerationStore(db);
-        expect(store.record(pin(id))).toEqual(pin(id));
+        const store = yield* env.use(goalWorkerGenerationStore);
+        expect(yield* store.record(pin(id))).toEqual(pin(id));
         yield* env.use(
           Effect.flatMap(Workflows, (workflows) =>
             workflows.updateGoal(session, goal("Amended outcome, same Goal")),
           ),
         );
         expect(yield* goalId(db, session)).toBe(id);
-        expect(store.get(id)).toEqual(pin(id));
+        expect(yield* store.pinned(id)).toEqual(Option.some(pin(id)));
         yield* env.reopen;
         const restored = yield* env.use(Database);
-        expect(makeGoalWorkerGenerationStore(restored).get(id)).toEqual(pin(id));
+        expect(yield* (yield* env.use(goalWorkerGenerationStore)).pinned(id)).toEqual(
+          Option.some(pin(id)),
+        );
         expect(
           restored.sqlite
             .prepare(

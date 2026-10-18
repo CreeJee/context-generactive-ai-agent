@@ -2,8 +2,14 @@ import { it as effectTest } from "@effect/vitest";
 import { DatabaseSync } from "node:sqlite";
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
-import { migrateDatabase } from "../src/db/database.ts";
-import { readActivity } from "../src/rrsi/activity.ts";
+import { connectionContext, migrateDatabase } from "../src/db/database.ts";
+import { readActivity as readOwnerActivity } from "../src/rrsi/activity.ts";
+
+/** Activity of `db`, as the owner reads it through its SqlClient. */
+const readActivity = (db: DatabaseSync) =>
+  Effect.flatMap(connectionContext(db), (context) =>
+    Effect.provideContext(readOwnerActivity, context),
+  );
 
 effectTest.effect(
   "archived projects do not block evaluation or advance idle time; restoration includes them again",

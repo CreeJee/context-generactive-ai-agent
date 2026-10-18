@@ -240,7 +240,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       const attachments = yield* Attachments;
       const user = nodes.session(sessionId).find((node) => node.kind === "user");
       expect(user?.text).toBe("look at #1 please");
-      expect(attachments.forNode(user?.id ?? "").map((stored) => stored.id)).toEqual([
+      expect((yield* attachments.forNode(user?.id ?? "")).map((stored) => stored.id)).toEqual([
         attachment.id,
       ]);
       expect(
@@ -259,7 +259,14 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       ).toEqual([inlineImage]);
 
       // The stored transcript shows the image again after a reload.
-      const [firstUser] = sessionMessages(nodes.session(sessionId), attachments.forNode);
+      const session = nodes.session(sessionId);
+      const images = yield* Effect.forEach(session, (node) =>
+        Effect.map(attachments.forNode(node.id), (found) => ({ nodeId: node.id, found })),
+      );
+      const [firstUser] = sessionMessages(
+        session,
+        (nodeId) => images.find((entry) => entry.nodeId === nodeId)?.found ?? [],
+      );
       expect(firstUser?.parts).toEqual([{ type: "text", content: "look at #1 please" }, part]);
     }),
   );

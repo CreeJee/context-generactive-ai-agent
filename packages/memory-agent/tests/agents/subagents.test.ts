@@ -80,7 +80,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         const answer = yield* send(sessionId, 'call run_subagent {"task":"list what matters"}');
         expect(answer).toContain("child done: list what matters (earlier user messages: 0)");
         expect(answer).toContain('"status":"completed"');
-        const [child] = subagents.list(sessionId);
+        const [child] = yield* subagents.list(sessionId);
         expect(child).toMatchObject({
           name: null,
           status: "completed",
@@ -251,7 +251,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const answer = yield* Fiber.join(pending);
       expect(answer.indexOf("napped: nap A")).toBeGreaterThan(-1);
       expect(answer.indexOf("napped: nap A")).toBeLessThan(answer.indexOf("napped: nap B"));
-      expect((yield* Subagents).list(sessionId).map((child) => child.status)).toEqual([
+      expect((yield* (yield* Subagents).list(sessionId)).map((child) => child.status)).toEqual([
         "completed",
         "completed",
       ]);
@@ -267,7 +267,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         'call message_subagent {"agent":"helper","message":"second task"}',
       );
       expect(second).toContain("child done: second task (earlier user messages: 1)");
-      const children = (yield* Subagents).list(sessionId);
+      const children = yield* (yield* Subagents).list(sessionId);
       expect(children).toHaveLength(1);
       expect(children[0]).toMatchObject({ name: "helper", lastTask: "second task" });
     }),
@@ -282,8 +282,11 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const approved = yield* Effect.forkChild(
         send(sessionId, 'call run_subagent {"task":"shell: printf child-approved"}'),
       );
-      yield* until(() => relayed.pending(sessionId).length === 1, "the child's approval");
-      const [request] = relayed.pending(sessionId);
+      yield* until(
+        Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
+        "the child's approval",
+      );
+      const [request] = yield* relayed.pending(sessionId);
       expect(request).toMatchObject({
         toolName: "save_shell_skill",
         askedBy: "every_call",
@@ -296,19 +299,22 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const denied = yield* Effect.forkChild(
         send(sessionId, 'call run_subagent {"task":"shell: printf child-denied"}'),
       );
-      yield* until(() => relayed.pending(sessionId).length === 1, "the second approval");
-      yield* relayed.answer(sessionId, relayed.pending(sessionId)[0]!.id, false);
+      yield* until(
+        Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
+        "the second approval",
+      );
+      yield* relayed.answer(sessionId, (yield* relayed.pending(sessionId))[0]!.id, false);
       const deniedAnswer = yield* Fiber.join(denied);
       expect(deniedAnswer).toContain("User denied this action");
       expect(deniedAnswer).not.toContain("scriptSha256");
       const reviews = yield* PermissionReviews;
-      const children = subagents.list(sessionId);
-      expect(reviews.latest(sessionId, `subagent-${children[0]!.id}:call-shell`)?.decision).toBe(
-        "approved",
-      );
-      expect(reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`)?.decision).toBe(
-        "denied",
-      );
+      const children = yield* subagents.list(sessionId);
+      expect(
+        (yield* reviews.latest(sessionId, `subagent-${children[0]!.id}:call-shell`))?.decision,
+      ).toBe("approved");
+      expect(
+        (yield* reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`))?.decision,
+      ).toBe("denied");
       const toolEvidenceCount = (agentId: string) =>
         db.sqlite
           .prepare(
@@ -367,7 +373,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
              JOIN work_tasks t ON t.id = w.task_id
              WHERE t.agent_id = ?`,
           )
-          .get((yield* Subagents).list(sessionId)[0]!.id),
+          .get((yield* (yield* Subagents).list(sessionId))[0]!.id),
       );
       expect(artifact.kind).toBe("file");
       expect(artifact.locator).toContain('"path":"wt-artifact.txt"');
@@ -478,14 +484,17 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
         const run = yield* Effect.forkChild(
           send(sessionId, 'call run_subagent {"task":"shell: printf never-runs"}'),
         );
-        yield* until(() => relayed.pending(sessionId).length === 1, "the child's approval");
+        yield* until(
+          Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
+          "the child's approval",
+        );
         expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
         yield* Fiber.join(run);
         yield* until(
-          () => subagents.list(sessionId)[0]?.status === "cancelled",
+          Effect.map(subagents.list(sessionId), (listed) => listed[0]?.status === "cancelled"),
           "the child to stop",
         );
-        expect(relayed.pending(sessionId)).toEqual([]);
+        expect(yield* relayed.pending(sessionId)).toEqual([]);
         // Create a safe checkpoint with no uncertain tool side effects, then simulate a crash while
         // that newest child attempt is still running.
         yield* send(sessionId, 'call run_subagent {"task":"recover facts"}');
@@ -505,7 +514,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
             .run(ids.attempt_id, ids.task_id);
         });
         yield* env.reopen;
-        expect((yield* env.use(Subagents)).list(sessionId)[0]?.status).toBe("interrupted");
+        expect((yield* (yield* env.use(Subagents)).list(sessionId))[0]?.status).toBe("interrupted");
         const reopened = yield* env.use(Database);
         expect(
           yield* Schema.decodeUnknownEffect(RestartedTrace)(

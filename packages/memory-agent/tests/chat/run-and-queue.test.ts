@@ -229,10 +229,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const queue = yield* MessageQueue;
-      const first = queue.add(sessionId, "first", [], false);
-      const second = queue.add(sessionId, "second", [], false);
-      expect(queue.claimNext(sessionId)?.id).toBe(first.id);
-      expect(queue.claimNext(sessionId)).toBeNull();
+      const first = yield* queue.add(sessionId, "first", [], false);
+      const second = yield* queue.add(sessionId, "second", [], false);
+      expect((yield* queue.claimNext(sessionId))?.id).toBe(first.id);
+      expect(yield* queue.claimNext(sessionId)).toBeNull();
       for (const change of [
         queue.edit(sessionId, first.id, "draft"),
         queue.save(sessionId, first.id, "changed"),
@@ -241,13 +241,13 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       ]) {
         expect(yield* Effect.flip(change)).toMatchObject({ reason: "reserved" });
       }
-      expect(queue.get(sessionId, first.id)?.text).toBe("first");
-      queue.releaseNext(sessionId, "wrong-id");
-      expect(queue.claimNext(sessionId)).toBeNull();
-      queue.releaseNext(sessionId, first.id);
-      expect(queue.claimNext(sessionId)?.id).toBe(first.id);
-      queue.markDelivered(first.id, "next_turn", null);
-      expect(queue.claimNext(sessionId)?.id).toBe(second.id);
+      expect((yield* queue.get(sessionId, first.id))?.text).toBe("first");
+      yield* queue.releaseNext(sessionId, "wrong-id");
+      expect(yield* queue.claimNext(sessionId)).toBeNull();
+      yield* queue.releaseNext(sessionId, first.id);
+      expect((yield* queue.claimNext(sessionId))?.id).toBe(first.id);
+      yield* queue.markDelivered(first.id, "next_turn", null);
+      expect((yield* queue.claimNext(sessionId))?.id).toBe(second.id);
     }),
   );
 
@@ -257,25 +257,27 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       Effect.gen(function* () {
         const sessionId = yield* freshSession;
         const queue = yield* MessageQueue;
-        const terminal = queue.add(sessionId, "already delivered", [], false);
-        queue.markDelivered(terminal.id, "next_turn", null);
-        const failed = queue.add(sessionId, "already failed", [], false);
-        queue.markFailed(failed.id, "unavailable");
-        expect(queue.deliverable(sessionId)).toEqual([]);
-        const barrier = queue.add(sessionId, "editing", [], false);
-        const next = queue.add(sessionId, "waiting", [], false);
+        const terminal = yield* queue.add(sessionId, "already delivered", [], false);
+        yield* queue.markDelivered(terminal.id, "next_turn", null);
+        const failed = yield* queue.add(sessionId, "already failed", [], false);
+        yield* queue.markFailed(failed.id, "unavailable");
+        expect(yield* queue.deliverable(sessionId)).toEqual([]);
+        const barrier = yield* queue.add(sessionId, "editing", [], false);
+        const next = yield* queue.add(sessionId, "waiting", [], false);
         yield* queue.edit(sessionId, barrier.id, "draft");
-        expect(queue.snapshot(sessionId).nextDelivery).toEqual({
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({
           kind: "blocked",
           messageId: barrier.id,
           reason: "editing",
         });
-        expect(queue.claimNext(sessionId)).toBeNull();
-        expect(queue.deliverable(sessionId)).toEqual([]);
+        expect(yield* queue.claimNext(sessionId)).toBeNull();
+        expect(yield* queue.deliverable(sessionId)).toEqual([]);
         yield* queue.remove(sessionId, barrier.id);
-        expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
-        expect(queue.deliverable(sessionId).map((message) => message.id)).toEqual([next.id]);
-        expect(queue.claimNext(sessionId)?.id).toBe(next.id);
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({ kind: "ready" });
+        expect((yield* queue.deliverable(sessionId)).map((message) => message.id)).toEqual([
+          next.id,
+        ]);
+        expect((yield* queue.claimNext(sessionId))?.id).toBe(next.id);
       }),
   );
 
@@ -283,23 +285,26 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const queue = yield* MessageQueue;
-      const first = queue.add(sessionId, "first", [], false);
-      const delivered = queue.add(sessionId, "delivered", [], false);
-      queue.markDelivered(delivered.id, "tool_boundary", null);
-      const failed = queue.add(sessionId, "failed", [], false);
-      queue.markFailed(failed.id, "unavailable");
-      const second = queue.add(sessionId, "second", [], false);
-      const barrier = queue.add(sessionId, "held", [], false);
-      const behind = queue.add(sessionId, "behind", [], false);
-      queue.holdWaiting(sessionId, "stopped");
+      const first = yield* queue.add(sessionId, "first", [], false);
+      const delivered = yield* queue.add(sessionId, "delivered", [], false);
+      yield* queue.markDelivered(delivered.id, "tool_boundary", null);
+      const failed = yield* queue.add(sessionId, "failed", [], false);
+      yield* queue.markFailed(failed.id, "unavailable");
+      const second = yield* queue.add(sessionId, "second", [], false);
+      const barrier = yield* queue.add(sessionId, "held", [], false);
+      const behind = yield* queue.add(sessionId, "behind", [], false);
+      yield* queue.holdWaiting(sessionId, "stopped");
       yield* queue.confirm(sessionId, first.id);
       yield* queue.confirm(sessionId, second.id);
-      expect(queue.deliverable(sessionId).map((item) => item.id)).toEqual([first.id, second.id]);
-      expect(queue.claimNext(sessionId)?.id).toBe(first.id);
-      queue.releaseNext(sessionId, first.id);
+      expect((yield* queue.deliverable(sessionId)).map((item) => item.id)).toEqual([
+        first.id,
+        second.id,
+      ]);
+      expect((yield* queue.claimNext(sessionId))?.id).toBe(first.id);
+      yield* queue.releaseNext(sessionId, first.id);
       yield* queue.confirm(sessionId, barrier.id);
       yield* queue.confirm(sessionId, behind.id);
-      expect(queue.deliverable(sessionId).map((item) => item.id)).toEqual([
+      expect((yield* queue.deliverable(sessionId)).map((item) => item.id)).toEqual([
         first.id,
         second.id,
         barrier.id,
@@ -312,16 +317,19 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const queue = yield* MessageQueue;
-      const item = queue.add(sessionId, "first", [], false);
-      expect(queue.claimNext(sessionId)?.id).toBe(item.id);
-      queue.holdWaiting(sessionId, "stopped");
-      expect(queue.get(sessionId, item.id)?.state).toEqual({ kind: "waiting", steered: false });
-      expect(queue.claimNext(sessionId)).toBeNull();
-      queue.releaseNext(sessionId, item.id);
-      expect(queue.get(sessionId, item.id)?.state).toEqual({ kind: "held", draft: null });
-      expect(queue.claimNext(sessionId)).toBeNull();
+      const item = yield* queue.add(sessionId, "first", [], false);
+      expect((yield* queue.claimNext(sessionId))?.id).toBe(item.id);
+      yield* queue.holdWaiting(sessionId, "stopped");
+      expect((yield* queue.get(sessionId, item.id))?.state).toEqual({
+        kind: "waiting",
+        steered: false,
+      });
+      expect(yield* queue.claimNext(sessionId)).toBeNull();
+      yield* queue.releaseNext(sessionId, item.id);
+      expect((yield* queue.get(sessionId, item.id))?.state).toEqual({ kind: "held", draft: null });
+      expect(yield* queue.claimNext(sessionId)).toBeNull();
       yield* queue.confirm(sessionId, item.id);
-      expect(queue.claimNext(sessionId)?.id).toBe(item.id);
+      expect((yield* queue.claimNext(sessionId))?.id).toBe(item.id);
     }),
   );
 
@@ -333,8 +341,8 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         items: [],
         nextDelivery: { kind: "empty" },
       });
-      const first = queue.add(sessionId, "first", [], false);
-      const second = queue.add(sessionId, "second", [], false);
+      const first = yield* queue.add(sessionId, "first", [], false);
+      const second = yield* queue.add(sessionId, "second", [], false);
       expect(yield* queueOf(sessionId)).toMatchObject({
         items: [{ id: first.id }, { id: second.id }],
         nextDelivery: { kind: "ready" },
@@ -513,8 +521,8 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
               return null;
             case "editing": {
               // The page saw a ready head, then the user started editing it.
-              const item = queue.add(session.id, "previously ready", [], false);
-              expect(queue.snapshot(session.id).nextDelivery.kind).toBe("ready");
+              const item = yield* queue.add(session.id, "previously ready", [], false);
+              expect((yield* queue.snapshot(session.id)).nextDelivery.kind).toBe("ready");
               yield* queue.edit(session.id, item.id, "unsaved draft");
               return item.id;
             }
@@ -524,7 +532,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         const tab = yield* openTab(session.id);
         yield* sdk(() => tab.client.sendMessage("stale client placeholder", { queuedNext: true }));
         expect(tab.client.getError()?.message).toContain("409");
-        if (item !== null) expect(queue.get(session.id, item)?.state.kind).toBe("editing");
+        if (item !== null) expect((yield* queue.get(session.id, item))?.state.kind).toBe("editing");
         expect(yield* userTexts(session.id)).toEqual([]);
       }),
   );
@@ -533,14 +541,14 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const session = yield* chatSession;
       const queue = yield* MessageQueue;
-      const stale = queue.add(session.id, "original", [], false);
-      queue.add(session.id, "second", [], false);
+      const stale = yield* queue.add(session.id, "original", [], false);
+      yield* queue.add(session.id, "second", [], false);
       yield* queue.save(session.id, stale.id, "edited on server");
       const tab = yield* openTab(session.id);
       yield* sdk(() => tab.client.sendMessage({ content: [] }, { queuedNext: true }));
       yield* until(() => !tab.client.getIsLoading(), "the run to finish");
       expect(tab.client.getError()).toBeUndefined();
-      expect(queue.get(session.id, stale.id)?.state).toMatchObject({
+      expect((yield* queue.get(session.id, stale.id))?.state).toMatchObject({
         kind: "delivered",
         via: "next_turn",
       });
@@ -611,60 +619,62 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
         const env = yield* TestEnv;
         const sessionId = yield* freshSession;
         const queue = yield* current(MessageQueue);
-        const [a, b, c] = ["first", "second", "third"].map((text) =>
+        const [a, b, c] = yield* Effect.forEach(["first", "second", "third"], (text) =>
           queue.add(sessionId, text, [], false),
         );
-        const texts = () => queue.deliverable(sessionId).map((message) => message.text);
+        const texts = Effect.map(queue.deliverable(sessionId), (found) =>
+          found.map((message) => message.text),
+        );
 
-        expect(texts()).toEqual(["first", "second", "third"]);
-        expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
+        expect(yield* texts).toEqual(["first", "second", "third"]);
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({ kind: "ready" });
         yield* queue.edit(sessionId, b!.id, "second, half typed");
         // The edited message and everything after it wait; unsaved text is not the message.
-        expect(texts()).toEqual(["first"]);
-        expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
+        expect(yield* texts).toEqual(["first"]);
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({ kind: "ready" });
         // A snapshot is advisory: delivery reselects after each edit.
         yield* queue.edit(sessionId, a!.id, "first draft");
-        expect(queue.snapshot(sessionId).nextDelivery).toEqual({
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({
           kind: "blocked",
           messageId: a!.id,
           reason: "editing",
         });
-        expect(queue.deliverable(sessionId)).toEqual([]);
+        expect(yield* queue.deliverable(sessionId)).toEqual([]);
         yield* queue.save(sessionId, a!.id, "first");
-        expect(queue.get(sessionId, b!.id)).toMatchObject({
+        expect(yield* queue.get(sessionId, b!.id)).toMatchObject({
           text: "second",
           state: { kind: "editing", draft: "second, half typed" },
         });
         yield* queue.save(sessionId, b!.id, "second, edited");
-        expect(texts()).toEqual(["first", "second, edited", "third"]);
+        expect(yield* texts).toEqual(["first", "second, edited", "third"]);
 
         yield* queue.remove(sessionId, a!.id);
         yield* queue.edit(sessionId, c!.id, "third, unsaved");
         yield* env.reopen;
         const after = yield* current(MessageQueue);
         // Nothing goes out on its own after a restart; the unsaved edit is kept as a draft.
-        expect(after.deliverable(sessionId)).toEqual([]);
-        expect(after.snapshot(sessionId).nextDelivery).toEqual({
+        expect(yield* after.deliverable(sessionId)).toEqual([]);
+        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual({
           kind: "blocked",
           messageId: b!.id,
           reason: "held",
         });
-        expect(after.list(sessionId, null).map((message) => message.state)).toEqual([
+        expect((yield* after.list(sessionId, null)).map((message) => message.state)).toEqual([
           { kind: "held", draft: null },
           { kind: "held", draft: "third, unsaved" },
         ]);
         yield* after.confirm(sessionId, b!.id);
-        expect(after.deliverable(sessionId).map((message) => message.text)).toEqual([
+        expect((yield* after.deliverable(sessionId)).map((message) => message.text)).toEqual([
           "second, edited",
         ]);
-        after.markDelivered(b!.id, "next_turn", null);
-        expect(after.snapshot(sessionId).nextDelivery).toEqual({
+        yield* after.markDelivered(b!.id, "next_turn", null);
+        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual({
           kind: "blocked",
           messageId: c!.id,
           reason: "held",
         });
         yield* after.remove(sessionId, c!.id);
-        expect(after.snapshot(sessionId).nextDelivery).toEqual({ kind: "empty" });
+        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual({ kind: "empty" });
       }),
   );
 

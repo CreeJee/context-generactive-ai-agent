@@ -4,7 +4,7 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { applyCodeProposal, editableCode } from "../src/rrsi/code-candidate.ts";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, test } from "vite-plus/test";
-import { migrateDatabase } from "../src/db/database.ts";
+import { connectionContext, migrateDatabase } from "../src/db/database.ts";
 import { baselineProfile, type ExperimentRecord } from "../src/rrsi/contracts.ts";
 import { makeHarnessStore } from "../src/rrsi/store.ts";
 import { editBudget, noiseBand, selectCandidate } from "../src/rrsi/selection.ts";
@@ -14,26 +14,17 @@ const connections: DatabaseSync[] = [];
 afterEach(() => {
   for (const db of connections.splice(0)) db.close();
 });
-const setup = () => {
+/** A store over `sqlite`, as a (re)started owner constructs it. */
+const open = (sqlite: DatabaseSync) =>
+  Effect.flatMap(connectionContext(sqlite), (context) =>
+    Effect.provideContext(makeHarnessStore, context),
+  );
+const setup = Effect.gen(function* () {
   const sqlite = new DatabaseSync(":memory:");
   connections.push(sqlite);
   migrateDatabase(sqlite);
-  const owner = {
-    sqlite,
-    atomic: <A>(work: () => A) => {
-      sqlite.exec("BEGIN");
-      try {
-        const result = work();
-        sqlite.exec("COMMIT");
-        return result;
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
-    },
-  };
-  return { owner, store: makeHarnessStore(owner) };
-};
+  return { sqlite, store: yield* open(sqlite) };
+});
 const base = { score: 0.7, coding: 0.7, memory: 0.7, tokens: 1000 };
 const policy = { delta: 0.02, bestScore: 0.7, beta0: 0.1, beta1: 2 };
 
@@ -85,52 +76,67 @@ test("provider cache counts are not added to included input and absent usage sta
   ).toBe(120);
   expect(reportedTokens("{}")).toBeNull();
 });
-test("Goal pins survive profile adoption, rollback and reopening", () => {
-  const { owner, store } = setup();
-  const pinned = store.forGoal("goal-a");
-  const improved = store.adopt(
-    { ...baselineProfile, rolePrompt: "Read evidence before concluding." },
-    pinned.id,
-  );
-  expect(store.forGoal("goal-a").id).toBe(pinned.id);
-  expect(store.forGoal("goal-b").id).toBe(improved.id);
-  store.restore("baseline");
-  expect(store.forGoal("goal-c").id).toBe("baseline");
-  const reopened = makeHarnessStore(owner);
-  expect(reopened.forGoal("goal-b").id).toBe(improved.id);
-  expect(reopened.current().id).toBe("baseline");
-  expect(() => reopened.adopt(baselineProfile, improved.id)).toThrow("frontier_changed");
-  expect(() => owner.sqlite.prepare("UPDATE rrsi_versions SET payload='{}'").run()).toThrow(
-    "immutable",
-  );
-});
-test("restarting an owner records uncertain experiments as cancelled", () => {
-  const { owner, store } = setup();
-  const record: ExperimentRecord = {
-    id: "experiment",
-    status: "running",
-    startedAt: 1,
-    finishedAt: null,
-    model: "local",
-    endpoint: "http://localhost",
-    baseVersion: "baseline",
-    tokens: 123,
-    reason: "",
-    candidates: [],
-  };
-  store.saveExperiment(record);
-  store.saveExperiment({ ...record, progress: { phase: "baseline", completed: 7, total: 36 } });
-  expect(store.experiments()[0].progress).toEqual({ phase: "baseline", completed: 7, total: 36 });
-  expect(() => store.saveExperiment({ ...record, id: "duplicate" })).toThrow();
-  const reopened = makeHarnessStore(owner);
-  expect(reopened.experiments()[0]).toMatchObject({
-    status: "cancelled",
-    reason: "owner_restarted",
-    tokens: 123,
-    progress: { phase: "baseline", completed: 7, total: 36 },
-  });
-  expect(reopened.current().id).toBe("baseline");
-});
+it.effect("Goal pins survive profile adoption, rollback and reopening", () =>
+  Effect.gen(function* () {
+    const { sqlite, store } = yield* setup;
+    const pinned = yield* store.forGoal("goal-a");
+    const improved = yield* store.adopt(
+      { ...baselineProfile, rolePrompt: "Read evidence before concluding." },
+      pinned.id,
+    );
+    expect((yield* store.forGoal("goal-a")).id).toBe(pinned.id);
+    expect((yield* store.forGoal("goal-b")).id).toBe(improved.id);
+    yield* store.restore("baseline");
+    expect((yield* store.forGoal("goal-c")).id).toBe("baseline");
+    const reopened = yield* open(sqlite);
+    expect((yield* reopened.forGoal("goal-b")).id).toBe(improved.id);
+    expect((yield* reopened.current).id).toBe("baseline");
+    expect(yield* Effect.flip(reopened.adopt(baselineProfile, improved.id))).toMatchObject({
+      reason: "frontier_changed",
+    });
+    expect(() => sqlite.prepare("UPDATE rrsi_versions SET payload='{}'").run()).toThrow(
+      "immutable",
+    );
+  }),
+);
+it.effect("restarting an owner records uncertain experiments as cancelled", () =>
+  Effect.gen(function* () {
+    const { sqlite, store } = yield* setup;
+    const record: ExperimentRecord = {
+      id: "experiment",
+      status: "running",
+      startedAt: 1,
+      finishedAt: null,
+      model: "local",
+      endpoint: "http://localhost",
+      baseVersion: "baseline",
+      tokens: 123,
+      reason: "",
+      candidates: [],
+    };
+    yield* store.saveExperiment(record);
+    yield* store.saveExperiment({
+      ...record,
+      progress: { phase: "baseline", completed: 7, total: 36 },
+    });
+    expect((yield* store.experiments)[0]?.progress).toEqual({
+      phase: "baseline",
+      completed: 7,
+      total: 36,
+    });
+    expect(yield* Effect.flip(store.saveExperiment({ ...record, id: "duplicate" }))).toMatchObject({
+      reason: "storage",
+    });
+    const reopened = yield* open(sqlite);
+    expect((yield* reopened.experiments)[0]).toMatchObject({
+      status: "cancelled",
+      reason: "owner_restarted",
+      tokens: 123,
+      progress: { phase: "baseline", completed: 7, total: 36 },
+    });
+    expect((yield* reopened.current).id).toBe("baseline");
+  }),
+);
 
 it.live("code proposals reject protected paths and ambiguous anchors without partial writes", () =>
   Effect.gen(function* () {
@@ -171,11 +177,13 @@ it.live("code proposals reject protected paths and ambiguous anchors without par
   }),
 );
 
-test("legacy persisted token budgets no longer constrain experiment settings", () => {
-  const { owner, store } = setup();
-  owner.sqlite
-    .prepare("UPDATE rrsi_state SET settings=? WHERE id=1")
-    .run(JSON.stringify({ enabled: true, maxTokens: 1000, maxMinutes: 30 }));
-  expect(store.settings()).toEqual({ enabled: true, maxMinutes: 30 });
-  expect(makeHarnessStore(owner).settings()).toEqual({ enabled: true, maxMinutes: 30 });
-});
+it.effect("legacy persisted token budgets no longer constrain experiment settings", () =>
+  Effect.gen(function* () {
+    const { sqlite, store } = yield* setup;
+    sqlite
+      .prepare("UPDATE rrsi_state SET settings=? WHERE id=1")
+      .run('{"enabled":true,"maxTokens":1000,"maxMinutes":30}');
+    expect(yield* store.settings).toEqual({ enabled: true, maxMinutes: 30 });
+    expect(yield* (yield* open(sqlite)).settings).toEqual({ enabled: true, maxMinutes: 30 });
+  }),
+);

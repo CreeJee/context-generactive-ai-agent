@@ -23,6 +23,7 @@ import type { OwnerRpcCapability } from "../../src/agent/owner-rpc.ts";
 // The fixture owns a standalone owner ledger outside any agent composition root.
 // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
+import { connectionContext } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import { ExecutionAdmission } from "../../src/runtime/execution-admission.ts";
 
@@ -63,20 +64,9 @@ export const ownerFixture = Effect.fnUntraced(function* () {
     INSERT INTO workflow_state_revisions (id, session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
     VALUES (1, 's', '{}', 1, NULL, 'recorded', 'now', 'g');
     INSERT INTO workflow_run_bindings VALUES ('r', 's', 'g', 1, NULL, 1, 'now');`);
-  const ledger = makeSqliteOwnerRpcLedger({
-    sqlite,
-    atomic(work) {
-      sqlite.exec("BEGIN IMMEDIATE");
-      try {
-        const result = work();
-        sqlite.exec("COMMIT");
-        return result;
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
-    },
-  });
+  const ledger = yield* Effect.flatMap(connectionContext(sqlite), (context) =>
+    Effect.provideContext(makeSqliteOwnerRpcLedger, context),
+  );
   const capability: OwnerRpcCapability = {
     runId: "r",
     sessionId: "s",
@@ -93,9 +83,11 @@ export const ownerFixture = Effect.fnUntraced(function* () {
     capability,
     lastOperationId: 0,
     permits: (candidate) =>
-      Object.entries(capability).every(([key, value]) =>
-        Object.entries(candidate).some(
-          ([candidateKey, candidateValue]) => candidateKey === key && candidateValue === value,
+      Effect.sync(() =>
+        Object.entries(capability).every(([key, value]) =>
+          Object.entries(candidate).some(
+            ([candidateKey, candidateValue]) => candidateKey === key && candidateValue === value,
+          ),
         ),
       ),
     workerUrl: new URL(

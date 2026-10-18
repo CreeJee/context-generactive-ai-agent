@@ -19,7 +19,7 @@ import { ChatState } from "../chat-state/chat-state.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
   readonly sessionId: string;
@@ -77,7 +77,25 @@ const namespace = "background-task-result";
 
 const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
-  const { sqlite } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
+  const priorDispatch = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      idempotencyKey: Schema.String,
+      sessionId: Schema.String,
+      agentName: Schema.String,
+    }),
+    Result: Schema.Struct({
+      taskId: Schema.String,
+      attemptId: Schema.String,
+      status: Schema.String,
+    }),
+    execute: (request) => sql`
+      SELECT t.id AS taskId, a.id AS attemptId, a.status
+      FROM agent_invocations i JOIN work_tasks t ON t.id = i.task_id
+      JOIN agent_run_attempts a ON a.invocation_id = i.id
+      WHERE i.idempotency_key = ${request.idempotencyKey}
+        AND t.origin_session_id = ${request.sessionId} AND t.agent_name = ${request.agentName}`,
+  });
   const state = yield* ChatState;
   const redactor = yield* SecretRedactor;
   const context = yield* Effect.context<never>();
@@ -148,26 +166,14 @@ const make = Effect.gen(function* () {
       Effect.uninterruptible(
         Effect.gen(function* () {
           if (binding.abortSignal.aborted) return yield* Effect.interrupt;
-          const prior = yield* traceEffect(() =>
-            sqlite
-              .prepare(
-                `SELECT t.id AS taskId, a.id AS attemptId, a.status
-         FROM agent_invocations i JOIN work_tasks t ON t.id = i.task_id
-         JOIN agent_run_attempts a ON a.invocation_id = i.id
-         WHERE i.idempotency_key = ? AND t.origin_session_id = ? AND t.agent_name = ?`,
-              )
-              .get(`${binding.runId}:${toolCallId}`, binding.sessionId, `background_${kind}`),
-          );
-          if (isTruthy(prior)) {
-            const previous = yield* Schema.decodeUnknownEffect(
-              Schema.Struct({
-                taskId: Schema.String,
-                attemptId: Schema.String,
-                status: Schema.String,
-              }),
-            )(prior);
+          const prior = yield* priorDispatch({
+            idempotencyKey: `${binding.runId}:${toolCallId}`,
+            sessionId: binding.sessionId,
+            agentName: `background_${kind}`,
+          });
+          if (Option.isSome(prior)) {
             return {
-              ...previous,
+              ...prior.value,
               nextAction:
                 "This operation was already dispatched. Retrieve its result; do not resend it.",
             };
@@ -304,13 +310,11 @@ const make = Effect.gen(function* () {
       const result = Option.getOrNull(yield* waiting.pipe(Effect.timeoutOption(milliseconds)));
       const now = yield* Clock.currentTimeMillis;
       if (result !== null)
-        yield* traceEffect(() =>
-          sqlite
-            .prepare(
-              "UPDATE parent_notifications SET delivered_to_run_id = (SELECT parent_run_id FROM work_tasks WHERE id = ?), delivered_at = ? WHERE task_id = ? AND delivered_at IS NULL",
-            )
-            .run(taskId, now, taskId),
-        );
+        yield* sql`
+          UPDATE parent_notifications
+          SET delivered_to_run_id = (SELECT parent_run_id FROM work_tasks WHERE id = ${taskId}),
+            delivered_at = ${now}
+          WHERE task_id = ${taskId} AND delivered_at IS NULL`;
       return result;
     }),
     onCompletion(listener: (sessionId: string) => void) {

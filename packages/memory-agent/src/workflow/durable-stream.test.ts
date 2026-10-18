@@ -14,6 +14,7 @@ import {
   type StreamChunk,
 } from "@tanstack/ai";
 import { sqliteStreamDurability } from "./durable-stream.ts";
+import { connectionContext } from "../db/database.ts";
 import { migrations } from "../db/migrations.ts";
 
 function owner(path: string) {
@@ -31,23 +32,17 @@ function owner(path: string) {
       INSERT INTO workflow_run_bindings VALUES ('run', 'session', 'goal', 1, NULL, 1, 'now');
     `);
   }
-  return {
-    sqlite,
-    atomic: <T>(work: () => T): T => {
-      sqlite.exec("BEGIN IMMEDIATE");
-      try {
-        const result = work();
-        sqlite.exec("COMMIT");
-        return result;
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
-    },
-    sessionId: "session",
-    runId: "run",
-  };
+  return sqlite;
 }
+const binding = { sessionId: "session", runId: "run" };
+/** The adapter over `sqlite` for `input`, as the owner composition root supplies it. */
+const durability = (
+  sqlite: DatabaseSync,
+  input: Parameters<typeof sqliteStreamDurability>[0] = binding,
+) =>
+  Effect.flatMap(connectionContext(sqlite), (context) =>
+    Effect.provideContext(sqliteStreamDurability(input), context),
+  );
 // SAFETY: both lifecycle fixtures provide required runId/threadId; literal tags match SDK enum wire values.
 const chunk = (type: "RUN_STARTED" | "RUN_FINISHED", runId = "run"): StreamChunk =>
   ({ type, runId, threadId: "session", timestamp: 1 }) as StreamChunk;
@@ -58,11 +53,13 @@ describe("central SQLite SDK durability", () => {
       Effect.gen(function* () {
         const db = yield* Effect.acquireRelease(
           Effect.sync(() => owner(":memory:")),
-          (db) => Effect.sync(() => db.sqlite.close()),
+          (db) => Effect.sync(() => db.close()),
         );
-        const adapter = sqliteStreamDurability(db);
+        const adapter = yield* durability(db);
         expect(yield* sdkCall(() => adapter.snapshot())).toEqual([]);
-        expect(() => sqliteStreamDurability({ ...db, sessionId: "other" })).toThrow();
+        expect(
+          yield* Effect.flip(durability(db, { ...binding, sessionId: "other" })),
+        ).toMatchObject({ reason: "binding_denied" });
         yield* sdkCall(() =>
           expect(
             adapter.append([chunk("RUN_STARTED"), chunk("RUN_FINISHED", "other")]),
@@ -70,10 +67,10 @@ describe("central SQLite SDK durability", () => {
         );
         expect(yield* sdkCall(() => adapter.snapshot())).toEqual([]);
         const [offset] = yield* sdkCall(() => adapter.append([chunk("RUN_STARTED")]));
-        expect(() => sqliteStreamDurability({ ...db, resumeOffset: "1" })).toThrow();
-        expect(() =>
-          sqliteStreamDurability({ ...db, resumeOffset: "sdk-stream:v1:other:1" }),
-        ).toThrow();
+        for (const resumeOffset of ["1", "sdk-stream:v1:other:1"])
+          expect(yield* Effect.flip(durability(db, { ...binding, resumeOffset }))).toMatchObject({
+            reason: "invalid_offset",
+          });
         const snapshot = yield* sdkCall(() => adapter.snapshot());
         snapshot[0]!.chunk.timestamp = 999;
         expect((yield* sdkCall(() => adapter.snapshot()))[0]!.chunk.timestamp).toBe(1);
@@ -94,12 +91,13 @@ describe("central SQLite SDK durability", () => {
       Effect.gen(function* () {
         const db = yield* Effect.acquireRelease(
           Effect.sync(() => owner(":memory:")),
-          (db) => Effect.sync(() => db.sqlite.close()),
+          (db) => Effect.sync(() => db.close()),
         );
-        const reader = sqliteStreamDurability(db);
+        const reader = yield* durability(db);
         const iterator = reader.read("-1", abort.signal)[Symbol.asyncIterator]();
         const next = iterator.next();
-        yield* sdkCall(() => sqliteStreamDurability(db).append([chunk("RUN_STARTED")]));
+        const writer = yield* durability(db);
+        yield* sdkCall(() => writer.append([chunk("RUN_STARTED")]));
         expect((yield* sdkCall(() => next)).value?.chunk.type).toBe("RUN_STARTED");
         const pending = iterator.next();
         abort.abort();
@@ -121,7 +119,7 @@ describe("central SQLite SDK durability", () => {
           let db = owner(path);
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
-              if (db.sqlite.isOpen) db.sqlite.close();
+              if (db.isOpen) db.close();
             }),
           );
           let producerCalls = 0;
@@ -131,8 +129,8 @@ describe("central SQLite SDK durability", () => {
           yield* server.serve(
             Effect.gen(function* () {
               const request = yield* HttpServerRequest.HttpServerRequest;
-              const adapter = sqliteStreamDurability({
-                ...db,
+              const adapter = yield* durability(db, {
+                ...binding,
                 resumeOffset: request.headers["last-event-id"] ?? null,
               });
               const produce = () =>
@@ -159,7 +157,7 @@ describe("central SQLite SDK durability", () => {
           const ids = [...live.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
           expect(ids).toHaveLength(3); // SDK inserts a persisted RUN_ACCEPTED CUSTOM event.
           expect(ids.every((id) => id.startsWith("sdk-stream:v1:run:"))).toBe(true);
-          db.sqlite.close();
+          db.close();
           db = owner(path);
           const replayResponse = yield* http.get("/resume", {
             headers: { "Last-Event-ID": ids[1]! },
