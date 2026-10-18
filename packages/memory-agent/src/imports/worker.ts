@@ -1,128 +1,102 @@
-import { Result, Function as EffectFunction } from "effect";
 // The import pass in a worker thread. Reading transcripts, hiding secrets in them and writing them
 // as nodes is steady CPU work; on the server's main thread it held up every request meanwhile.
 // In a checkout Node runs this file as TypeScript; the executable ships it bundled
 // (`scripts/package.ts`).
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { path as platformPath } from "../runtime/synchronous-path.ts";
-const { join } = platformPath;
-import { parentPort, workerData } from "node:worker_threads";
-import { DateTime, Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect";
+import { NodePath, NodeWorkerRunner } from "@effect/platform-node";
+import { Clock, Effect, Layer, Path, Queue, Ref, Schema, Stream } from "effect";
+import { RpcServer } from "effect/rpc";
+import { workerData } from "node:worker_threads";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { Projects } from "../projects/projects.ts";
+import { runNativeEffect } from "../runtime/native-effect.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
 import { Checkouts } from "./checkouts.ts";
 import { TranscriptPass } from "./pass.ts";
 import {
-  ImportWorkerRequest,
+  ImportRpcs,
+  ImportWorkerFailed,
   ImportWorkerSetup,
-  type ImportWorkerReply,
+  type PassEvent,
 } from "./worker-protocol.ts";
 
 /** Progress is sent at most this often; the last count of a pass always goes out. */
 const progressEveryMs = 100;
 
-const port = parentPort;
-if (!(port !== null)) throw new Error("the import worker runs only as a worker thread");
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const setup = EffectFunction.flow(
-  Schema.decodeUnknownResult(ImportWorkerSetup),
-  Result.getOrThrow,
-)(workerData);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRequest = EffectFunction.flow(
-  Schema.decodeUnknownResult(ImportWorkerRequest),
-  Result.getOrThrow,
+/** The cause stays in this worker's log; only the reason crosses to the server. */
+const failed =
+  (reason: ImportWorkerFailed["reason"], message: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.tapCause((cause) => Effect.logError(message, cause)),
+      Effect.mapError(() => ImportWorkerFailed.make({ reason })),
+    );
+
+const handlers = ImportRpcs.toLayer(
+  Effect.gen(function* () {
+    const pass = yield* TranscriptPass;
+    return ImportRpcs.of({
+      Count: () => pass.counts.pipe(failed("count", "Import count failed")),
+      Run: () =>
+        Stream.callback<PassEvent, ImportWorkerFailed>((queue) =>
+          Effect.gen(function* () {
+            const sentAt = yield* Ref.make(0);
+            const { progress, counts } = yield* pass
+              .run((progress) =>
+                Queue.offer(queue, { _tag: "Progress", ...progress }).pipe(
+                  Effect.when(
+                    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+                      Ref.modify(sentAt, (last): [boolean, number] =>
+                        now - last < progressEveryMs ? [false, last] : [true, now],
+                      ),
+                    ),
+                  ),
+                  Effect.asVoid,
+                ),
+              )
+              .pipe(failed("pass", "Import pass failed"));
+            yield* Queue.offer(queue, { _tag: "Finished", ...progress, counts });
+            yield* Queue.end(queue);
+          }),
+        ),
+    });
+  }),
 );
 
 // Its own connection to the same database; WAL lets the server read while this writes.
-const runtime = ManagedRuntime.make(
-  TranscriptPass.layer(setup.home).pipe(
-    Layer.provideMerge(Sessions.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        Projects.layer,
-        GlobalConfig.layer,
-        BulkNodes.layer,
-        SecretRedactor.layer,
-        Checkouts.layer,
+const services = Layer.unwrap(
+  Effect.gen(function* () {
+    const setup = yield* Schema.decodeUnknownEffect(ImportWorkerSetup)(workerData);
+    const paths = yield* Path.Path;
+    return TranscriptPass.layer(setup.home).pipe(
+      Layer.provideMerge(Sessions.layer),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          Projects.layer,
+          GlobalConfig.layer,
+          BulkNodes.layer,
+          SecretRedactor.layer,
+          Checkouts.layer,
+        ),
       ),
-    ),
-    Layer.provideMerge(
-      Layer.merge(
-        StorageRoot.layer(setup.storageRoot),
-        Database.layer(join(setup.storageRoot, "agent.db")),
-      ),
-    ),
-  ),
-);
-
-const post = (reply: ImportWorkerReply) => port.postMessage(reply);
-
-const failed = (id: number, cause: Cause.Cause<unknown>): ImportWorkerReply => {
-  const error = Cause.squash(cause);
-  return {
-    id,
-    kind: "failed",
-    reason:
-      error instanceof Error
-        ? error.message.length > 0
-          ? error.message
-          : error.name
-        : String(error),
-  };
-};
-
-const count = (id: number) =>
-  runtime.runPromiseExit(Effect.flatMap(TranscriptPass, (pass) => pass.counts)).then((exit) =>
-    post(
-      Exit.match(exit, {
-        onSuccess: (counts): ImportWorkerReply => ({ id, kind: "counts", counts }),
-        onFailure: (cause) => failed(id, cause),
-      }),
-    ),
-  );
-
-const run = (id: number) => {
-  let sentAt = 0;
-  return runtime
-    .runPromiseExit(
-      Effect.flatMap(TranscriptPass, (pass) =>
-        pass.run((progress) => {
-          const now = DateTime.toEpochMillis(DateTime.nowUnsafe());
-          if (now - sentAt < progressEveryMs) return;
-          sentAt = now;
-          post({ id, kind: "progress", ...progress });
-        }),
-      ),
-    )
-    .then((exit) =>
-      post(
-        Exit.match(exit, {
-          onSuccess: ({ progress, counts }): ImportWorkerReply => ({
-            id,
-            kind: "finished",
-            ...progress,
-            counts,
-          }),
-          onFailure: (cause) => failed(id, cause),
-        }),
+      Layer.provideMerge(
+        Layer.merge(
+          StorageRoot.layer(setup.storageRoot),
+          Database.layer(paths.join(setup.storageRoot, "agent.db")),
+        ),
       ),
     );
-};
+  }),
+).pipe(Layer.provide(NodePath.layer));
 
-port.on("message", (message) => {
-  const request = decodeRequest(message);
-  switch (request.kind) {
-    case "count":
-      void count(request.id);
-      return;
-    case "run":
-      void run(request.id);
-      return;
-  }
-});
+const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
+const server = RpcServer.layer(ImportRpcs).pipe(
+  Layer.provide(handlers),
+  Layer.provide(services),
+  Layer.provide(protocol),
+);
+
+await runNativeEffect(Layer.launch(server));

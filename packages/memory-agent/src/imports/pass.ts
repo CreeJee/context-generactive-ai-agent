@@ -426,13 +426,13 @@ const make = (home: string) =>
        * Reads what is new in every transcript. A file that cannot be read, or a line that cannot be
        * written, fails that transcript alone: it is recorded and tried again on the next pass.
        */
-      run: (onProgress: (progress: PassProgress) => void) =>
+      run: <E, R>(onProgress: (progress: PassProgress) => Effect.Effect<void, E, R>) =>
         Effect.gen(function* () {
           const settings = yield* config.read;
           const interpret = settings.importsInterpret ?? true;
           const found = yield* transcripts();
           let progress: PassProgress = { checked: 0, total: found.length, written: 0, failed: 0 };
-          onProgress(progress);
+          yield* onProgress(progress);
           const registered = yield* projects.listAll;
           const placement = yield* checkouts.forRoots(
             yield* stored(
@@ -460,7 +460,7 @@ const make = (home: string) =>
               written: progress.written + outcome.written,
               failed: progress.failed + outcome.failed,
             };
-            onProgress(progress);
+            yield* onProgress(progress);
           }
           // What git showed this pass outlives the worktrees it was seen through.
           const seen = yield* placement.seen;

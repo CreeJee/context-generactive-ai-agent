@@ -53,6 +53,14 @@ const isUnplacedReason = Schema.is(UnplacedReason);
 const unplacedReason = (reason: string) =>
   isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
 
+/** Why a pass stopped partway. */
+const crashReasons = {
+  start: "가져오기 작업을 시작하지 못했어요",
+  count: "기록 수를 세지 못했어요",
+  pass: "기록을 읽다가 실패했어요",
+  lost: "가져오기 작업이 끊겼어요",
+} satisfies Record<Extract<ImportActivity, { status: "crashed" }>["reason"], string>;
+
 /** How often the page asks again while a pass reads, and while its nodes wait to be indexed. */
 /** The pass this server is running, or how its latest one went. */
 function ImportActivityLine({ activity }: { activity: ImportActivity }) {
@@ -87,7 +95,8 @@ function ImportActivityLine({ activity }: { activity: ImportActivity }) {
     case "crashed":
       return (
         <FieldError>
-          {timeOfDay(activity.finishedAt)}에 가져오기가 중간에 멈췄어요: {activity.reason}
+          {timeOfDay(activity.finishedAt)}에 가져오기가 중간에 멈췄어요:{" "}
+          {crashReasons[activity.reason]}
         </FieldError>
       );
   }
