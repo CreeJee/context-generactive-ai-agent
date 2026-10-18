@@ -105,7 +105,7 @@ await Effect.runPromise(
               "makeRecordingMiddleware",
             ].sort(),
           );
-          const user = services.nodes.append({
+          const user = yield* services.nodes.append({
             projectId: services.project.id,
             sessionId: services.session.id,
             kind: "user",
@@ -130,9 +130,9 @@ await Effect.runPromise(
               stream: false,
             }),
           );
-          const rows = services.nodes
-            .session(services.session.id)
-            .filter((node) => node.kind === "assistant" && node.runId === runId);
+          const rows = (yield* services.nodes.session(services.session.id)).filter(
+            (node) => node.kind === "assistant" && node.runId === runId,
+          );
           assert.equal(rows.length, 1);
           assert.equal(rows[0]!.text, `${prefix}${runId}`);
           assert.equal(counts.acquired, 1);

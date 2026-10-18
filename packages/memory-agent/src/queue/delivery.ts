@@ -51,7 +51,7 @@ const make = Effect.gen(function* () {
   const record = (binding: DeliveryBinding, message: QueuedMessage) =>
     Effect.gen(function* () {
       const kept = yield* redactor.redactText(message.text);
-      const node = nodes.append({
+      const node = yield* nodes.append({
         projectId: binding.projectId,
         sessionId: binding.sessionId,
         runId: binding.runId,

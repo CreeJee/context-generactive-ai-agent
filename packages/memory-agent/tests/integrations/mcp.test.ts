@@ -267,7 +267,9 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
           definitionId: "permission-review",
           payload: { toolName: "mcp_fake__echo" },
         });
-        expect(nodes.session(session).some((node) => node.kind === "tool_result")).toBe(false);
+        expect((yield* nodes.session(session)).some((node) => node.kind === "tool_result")).toBe(
+          false,
+        );
         client.resolveInterrupts((item) => {
           if (item.kind === "generic") item.resolveInterrupt({ approved: true });
         });
@@ -291,7 +293,8 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
         yield* finished;
         expect(text()).not.toContain("echo: never");
         expect(
-          (yield* Nodes).session(session).find((node) => node.kind === "tool_result")?.detail,
+          (yield* (yield* Nodes).session(session)).find((node) => node.kind === "tool_result")
+            ?.detail,
         ).toMatchObject({ ok: false, permission: { decision: "denied" } });
       }),
     );

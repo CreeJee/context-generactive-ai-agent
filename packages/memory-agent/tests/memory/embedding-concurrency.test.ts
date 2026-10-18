@@ -44,13 +44,13 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
       Effect.gen(function* () {
         const env = yield* TestEnv;
         const nodes = yield* Nodes;
-        const first = nodes.append({
+        const first = yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
           text: "first removal",
         });
-        const second = nodes.append({
+        const second = yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
@@ -91,7 +91,7 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
     it.effect("rejects a purged parent at commit without poisoning other agents' searches", () =>
       Effect.gen(function* () {
         const env = yield* TestEnv;
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",

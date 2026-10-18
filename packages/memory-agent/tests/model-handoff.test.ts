@@ -13,6 +13,7 @@ import {
   modelHandoffHistoryEffect,
   modelHandoffNamespace,
 } from "../src/agent/model-handoff.ts";
+import { lookupSources } from "../src/agent/compaction.ts";
 
 function fixture(stored: readonly ModelMessage[]) {
   const values = MutableHashMap.empty<string, unknown>();
@@ -40,7 +41,10 @@ function fixture(stored: readonly ModelMessage[]) {
         model,
         provider: "openai-compatible",
         loadHistory: () => Promise.resolve(history),
-        toolResultId: (toolCallId) => (toolCallId === "old-call" ? "old-result" : null),
+        toolResultIds: lookupSources({
+          toolResultId: (toolCallId) => (toolCallId === "old-call" ? "old-result" : null),
+          nodeText: () => null,
+        }).toolResultIds,
       }).pipe(Effect.flatMap((restore) => restore(messages)));
   return { restore, metadata };
 }
@@ -224,7 +228,7 @@ it.effect(
         model: "new-model",
         provider: "openai-compatible",
         loadHistory: () => Promise.resolve(past),
-        toolResultId: () => null,
+        toolResultIds: () => Effect.succeed(new Map()),
       });
       const failures = yield* Effect.all([Effect.flip(restore(past)), Effect.flip(restore(past))], {
         concurrency: "unbounded",

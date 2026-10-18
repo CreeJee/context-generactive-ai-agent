@@ -270,7 +270,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       );
       expect(invocations[3]?.systemPrompts.join("\n")).toContain("Workflow phase: verify");
       expect(
-        (yield* Nodes).session(session.id).filter((node) => node.kind === "user"),
+        (yield* (yield* Nodes).session(session.id)).filter((node) => node.kind === "user"),
       ).toHaveLength(1);
       expect(yield* session.execution).toEqual({ kind: "stopped", reason: "completed" });
     }),

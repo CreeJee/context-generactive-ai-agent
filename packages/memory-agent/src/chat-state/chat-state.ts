@@ -30,7 +30,7 @@ const make = Effect.gen(function* () {
   // This keeps provider migration independent of any provider-side conversation state.
   const fallbackThread = (threadId: string) =>
     Effect.gen(function* () {
-      const session = nodes.session(threadId);
+      const session = yield* nodes.session(threadId);
       // Read the images first: the transcript is built in one synchronous pass.
       const images = MutableHashMap.empty<string, readonly Attachment[]>();
       for (const node of session)

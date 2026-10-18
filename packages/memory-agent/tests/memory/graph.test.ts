@@ -15,15 +15,15 @@ const conversation = Effect.gen(function* () {
   const at = { projectId: project.id, sessionId: session.id };
   const runId = `${session.id}:run`;
 
-  const user = nodes.append({ ...at, kind: "user", text: "저장소는 SQLite로 하자" });
-  const assistant = nodes.append({
+  const user = yield* nodes.append({ ...at, kind: "user", text: "저장소는 SQLite로 하자" });
+  const assistant = yield* nodes.append({
     ...at,
     runId,
     kind: "assistant",
     text: "스키마 파일을 확인할게요.",
     links: [{ kind: "reply", nodeId: user.id }],
   });
-  const call = nodes.append({
+  const call = yield* nodes.append({
     ...at,
     runId,
     kind: "tool_call",
@@ -31,14 +31,14 @@ const conversation = Effect.gen(function* () {
     links: [{ kind: "calls", nodeId: assistant.id }],
     refs: ["schema.sql"],
   });
-  const result = nodes.append({
+  const result = yield* nodes.append({
     ...at,
     runId,
     kind: "tool_result",
     text: "CREATE TABLE nodes (...)",
     links: [{ kind: "returns", nodeId: call.id }],
   });
-  const correction = nodes.append({ ...at, kind: "user", text: "아니 Postgres로 바꾸자" });
+  const correction = yield* nodes.append({ ...at, kind: "user", text: "아니 Postgres로 바꾸자" });
   return { project, session, nodes, user, assistant, call, result, correction };
 });
 
@@ -60,7 +60,7 @@ const otherProjectNode = Effect.fnUntraced(function* (name: string) {
   yield* (yield* FileSystem.FileSystem).makeDirectory(root);
   const project = yield* (yield* Projects).add(root);
   const other = yield* (yield* Sessions).create(project.id);
-  return (yield* Nodes).append({
+  return yield* (yield* Nodes).append({
     projectId: project.id,
     sessionId: other.id,
     kind: "user",
@@ -74,7 +74,7 @@ testAgent()("memory graph", (it) => {
     () =>
       Effect.gen(function* () {
         const { project, nodes, assistant, call, result, user } = yield* conversation;
-        const empty = nodes.append({
+        const empty = yield* nodes.append({
           projectId: project.id,
           sessionId: assistant.sessionId,
           kind: "assistant",
@@ -89,7 +89,7 @@ testAgent()("memory graph", (it) => {
           .prepare("INSERT INTO edges VALUES (?, ?, 'calls', 'structure', 0.95, ?)")
           .run(empty.id, call.id, empty.createdAt);
         const graph = yield* Graph;
-        const walk = graph.traverse(MutableHashMap.fromIterable([[result.id, 1]]), {
+        const walk = yield* graph.traverse(MutableHashMap.fromIterable([[result.id, 1]]), {
           budget: 20,
           minUtility: 0.1,
           projectIds: [project.id],
@@ -101,14 +101,14 @@ testAgent()("memory graph", (it) => {
           kind: "calls",
           direction: "in",
         });
-        const bounded = graph.traverse(MutableHashMap.fromIterable([[empty.id, 1]]), {
+        const bounded = yield* graph.traverse(MutableHashMap.fromIterable([[empty.id, 1]]), {
           budget: 1,
           minUtility: 0.1,
           projectIds: [project.id],
           includeEmpty: false,
         });
         expect(bounded).toEqual({ visits: [], complete: false });
-        expect(graph.trace(result.id)?.chain.map((node) => node.id)).toEqual([
+        expect((yield* graph.trace(result.id))?.chain.map((node) => node.id)).toEqual([
           result.id,
           call.id,
           empty.id,
@@ -120,7 +120,7 @@ testAgent()("memory graph", (it) => {
   it.effect("expands from a seed with decaying utility and explains each path", () =>
     Effect.gen(function* () {
       const { project, user, assistant, call, result } = yield* conversation;
-      const { visits, complete } = (yield* Graph).traverse(
+      const { visits, complete } = yield* (yield* Graph).traverse(
         MutableHashMap.fromIterable([[result.id, 1]]),
         { budget: 10, minUtility: 0.5, projectIds: [project.id] },
       );
@@ -146,7 +146,7 @@ testAgent()("memory graph", (it) => {
   it.effect("reports an incomplete walk when the budget runs out", () =>
     Effect.gen(function* () {
       const { project, user } = yield* conversation;
-      const { visits, complete } = (yield* Graph).traverse(
+      const { visits, complete } = yield* (yield* Graph).traverse(
         MutableHashMap.fromIterable([[user.id, 1]]),
         { budget: 2, minUtility: 0.01, projectIds: [project.id] },
       );
@@ -168,9 +168,9 @@ testAgent()("memory graph", (it) => {
             minUtility: 0.1,
             projectIds,
           })
-          .visits.map((visit) => visit.node.id);
-      expect(walk([project.id])).not.toContain(other.id);
-      expect(walk([project.id, other.projectId])).toContain(other.id);
+          .pipe(Effect.map(({ visits }) => visits.map((visit) => visit.node.id)));
+      expect(yield* walk([project.id])).not.toContain(other.id);
+      expect(yield* walk([project.id, other.projectId])).toContain(other.id);
     }),
   );
 
@@ -179,7 +179,7 @@ testAgent()("memory graph", (it) => {
       const { user, assistant, call, result, correction } = yield* conversation;
       yield* addLlmEdge(correction.id, user.id, "corrects", 0.95);
       const graph = yield* Graph;
-      const provenance = graph.trace(result.id);
+      const provenance = yield* graph.trace(result.id);
       expect(provenance?.chain.map((node) => node.id)).toEqual([
         result.id,
         call.id,
@@ -189,7 +189,7 @@ testAgent()("memory graph", (it) => {
       expect(provenance?.challengedBy).toEqual([
         { node: expect.objectContaining({ id: correction.id }), kind: "corrects", target: user.id },
       ]);
-      expect(graph.trace("missing")).toBeNull();
+      expect(yield* graph.trace("missing")).toBeNull();
     }),
   );
 
@@ -199,22 +199,22 @@ testAgent()("memory graph", (it) => {
       Effect.gen(function* () {
         const { nodes, project, session } = yield* conversation;
         const text = `${"a".repeat(evidencePageLength - 1)}😀\r\n끝`;
-        const node = nodes.append({
+        const node = yield* nodes.append({
           projectId: project.id,
           sessionId: session.id,
           kind: "tool_result",
           text,
         });
-        const first = nodes.read(node.id);
+        const first = yield* nodes.read(node.id);
         expect(first).toMatchObject({
           offset: 0,
           nextOffset: evidencePageLength - 1,
           length: text.length,
         });
-        const second = nodes.read(node.id, first!.nextOffset!);
+        const second = yield* nodes.read(node.id, first!.nextOffset!);
         expect(second).toMatchObject({ text: "😀\r\n끝", nextOffset: null });
         expect(first!.text + second!.text).toBe(text);
-        expect(nodes.read("missing")).toBeNull();
+        expect(yield* nodes.read("missing")).toBeNull();
       }),
   );
 });

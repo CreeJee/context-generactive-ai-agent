@@ -232,11 +232,11 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       const bundles = yield* NativeBundles;
       const env = yield* memoryServices;
       const sessionId = yield* freshSession();
-      const before = env.nodes.session(sessionId).length;
+      const before = (yield* env.nodes.session(sessionId)).length;
       const owners = embedderOwners.count;
       const counts = { ...embedderOwners };
       const artifact = yield* bundles.load(bundles.a, "factory");
-      expect(env.nodes.session(sessionId)).toHaveLength(before);
+      expect(yield* env.nodes.session(sessionId)).toHaveLength(before);
       expect(embedderOwners).toEqual(counts);
       let clients = 0;
       const subscription = artifact.createSubscriptionRuntimeImplementation("openai").bind({
@@ -250,7 +250,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       });
       expect(subscription.runMiddleware().name).toContain("subscription-run");
       for (const runId of [`${sessionId}-artifact-1`, `${sessionId}-artifact-2`]) {
-        const user = env.nodes.append({
+        const user = yield* env.nodes.append({
           projectId: project.id,
           sessionId,
           kind: "user",
@@ -295,9 +295,9 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           }),
         );
         expect(
-          env.nodes
-            .session(sessionId)
-            .filter((node) => node.runId === runId && node.kind === "assistant"),
+          (yield* env.nodes.session(sessionId)).filter(
+            (node) => node.runId === runId && node.kind === "assistant",
+          ),
         ).toHaveLength(1);
       }
       expect(clients).toBe(0);
@@ -417,7 +417,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           VALUES (?, ?, 'factory', 'research', 'interrupted', 'parent', 'task', 1, 1)`,
         )
         .run(agentId, sessionId);
-      const user = env.nodes.append({
+      const user = yield* env.nodes.append({
         projectId: project.id,
         sessionId,
         kind: "user",
@@ -481,9 +481,9 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
       yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
       const memoryNodeIds = [promoted.memoryNodeId];
       const usage = () =>
-        env.knowledge
-          .usageForTask(handle.taskId)
-          .map(({ kind, parentRunId }) => ({ kind, parentRunId }));
+        Effect.map(env.knowledge.usageForTask(handle.taskId), (entries) =>
+          entries.map(({ kind, parentRunId }) => ({ kind, parentRunId })),
+        );
       const expectedUsage: { kind: string; parentRunId: string }[] = [];
       const sessions: string[] = [];
       for (const [label, artifact, prefix] of [
@@ -494,7 +494,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         const runSession = yield* freshSession();
         sessions.push(runSession);
         const runId = `${runSession}-${label}`;
-        const runUser = env.nodes.append({
+        const runUser = yield* env.nodes.append({
           projectId: project.id,
           sessionId: runSession,
           kind: "user",
@@ -525,7 +525,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           }),
         );
         yield* finish;
-        expect(usage()).toEqual(expectedUsage);
+        expect(yield* usage()).toEqual(expectedUsage);
         expect(
           yield* sdkCall(() => prepared.tools[0].execute!({ query: "isolated-memory-state" })),
         ).toMatchObject({
@@ -538,10 +538,10 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           usedMemoryCount: 1,
         });
         expectedUsage.push({ kind: "retrieved", parentRunId: runId });
-        expect(usage()).toEqual(expectedUsage);
+        expect(yield* usage()).toEqual(expectedUsage);
         yield* finish;
         expectedUsage.push({ kind: "used", parentRunId: runId });
-        expect(usage()).toEqual(expectedUsage);
+        expect(yield* usage()).toEqual(expectedUsage);
         // Narrow observable acquisition counter, not a DB/vector/OAuth singleton proof.
         expect(embedderOwners.count).toBe(owners);
       }

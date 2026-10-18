@@ -28,7 +28,12 @@ const sessionWithMessage = Effect.fnUntraced(function* (
         );
     }
   })();
-  (yield* Nodes).append({ projectId: project.id, sessionId: session.id, kind: "user", text });
+  yield* (yield* Nodes).append({
+    projectId: project.id,
+    sessionId: session.id,
+    kind: "user",
+    text,
+  });
   return session.id;
 });
 
@@ -40,26 +45,26 @@ testAgent()("session history", (it) => {
       const nodes = yield* Nodes;
       const at = { projectId: project.id, sessionId };
       const runId = `${sessionId}-r1`;
-      const user = nodes.append({ ...at, kind: "user", text: "DB 뭐로 했지?" });
-      const empty = nodes.append({ ...at, runId, kind: "assistant", text: "" });
-      nodes.append({
+      const user = yield* nodes.append({ ...at, kind: "user", text: "DB 뭐로 했지?" });
+      const empty = yield* nodes.append({ ...at, runId, kind: "assistant", text: "" });
+      yield* nodes.append({
         ...at,
         runId,
         kind: "tool_call",
         text: 'find_memory {"query":"DB"}',
         detail: { toolName: "find_memory", toolCallId: "c1" },
       });
-      nodes.append({
+      yield* nodes.append({
         ...at,
         runId,
         kind: "tool_result",
         text: '{"matches":[]}',
         detail: { toolName: "find_memory", toolCallId: "c1", ok: true },
       });
-      nodes.append({ ...at, runId, kind: "assistant", text: "SQLite로 했어요." });
-      nodes.append({ ...at, kind: "user", text: "고마워" });
+      yield* nodes.append({ ...at, runId, kind: "assistant", text: "SQLite로 했어요." });
+      yield* nodes.append({ ...at, kind: "user", text: "고마워" });
 
-      const messages = sessionMessages(nodes.session(sessionId), () => []);
+      const messages = sessionMessages(yield* nodes.session(sessionId), () => []);
       expect(messages.map((message) => [message.role, message.parts])).toEqual([
         ["user", [{ type: "text", content: "DB 뭐로 했지?" }]],
         [
@@ -97,7 +102,7 @@ testAgent()("session history", (it) => {
         const sessionId = yield* sessionWithMessage(origin, text);
         expect((yield* sessions.get(sessionId)).title).toBe(title);
         // Later messages never rename it.
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: (yield* TestEnv).project.id,
           sessionId,
           kind: "user",
@@ -114,7 +119,7 @@ testAgent()("session history", (it) => {
         const { project } = yield* TestEnv;
         const sessions = yield* Sessions;
         const sessionId = yield* sessionWithMessage("new", "첫 번째 질문");
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: project.id,
           sessionId,
           kind: "user",

@@ -122,7 +122,7 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
       for (const statements of set.sessions) {
         const session = yield* (yield* Sessions).create(project.id);
         for (const statement of statements) {
-          const node = nodes.append({
+          const node = yield* nodes.append({
             projectId: project.id,
             sessionId: session.id,
             kind: statement.kind ?? "user",

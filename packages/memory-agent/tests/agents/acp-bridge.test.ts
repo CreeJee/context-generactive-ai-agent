@@ -100,7 +100,9 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("ACP agent br
       const sessionId = yield* newSession;
       expect((yield* prompt(sessionId, "hello from zed")).stopReason).toBe("end_turn");
       expect(text()).toBe("Hello from fast-1");
-      expect((yield* Nodes).session(sessionId).map((node) => [node.kind, node.text])).toEqual([
+      expect(
+        (yield* (yield* Nodes).session(sessionId)).map((node) => [node.kind, node.text]),
+      ).toEqual([
         ["user", "hello from zed"],
         ["assistant", "Hello from fast-1"],
       ]);

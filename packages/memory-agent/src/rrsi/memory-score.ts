@@ -33,11 +33,9 @@ export const captureMemoryEvidence = Effect.fn("Rrsi.captureMemoryEvidence")(fun
   expected: MemoryCorrection,
 ): Effect.fn.Return<MemoryEvidence, EvaluationFailed, Nodes> {
   const nodes = yield* Nodes;
-  // Nodes exposes synchronous native SQLite reads; convert exceptions at this boundary.
-  const source = yield* Effect.try({
-    try: () => nodes.latestOfKind(expected.sessionId, "user"),
-    catch: () => EvaluationFailed.make({ reason: "trial_execution_failed" }),
-  });
+  const source = yield* nodes
+    .latestOfKind(expected.sessionId, "user")
+    .pipe(Effect.mapError(() => EvaluationFailed.make({ reason: "trial_execution_failed" })));
   if (source === null || !matchesCorrection(source, expected)) {
     return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
   }
@@ -56,11 +54,9 @@ export const scoreMemoryAnswer = Effect.fn("Rrsi.scoreMemoryAnswer")(function* (
     return false;
   }
   const nodes = yield* Nodes;
-  // Nodes exposes synchronous native SQLite reads; convert exceptions at this boundary.
-  const source = yield* Effect.try({
-    try: () => nodes.get(expected.id),
-    catch: () => EvaluationFailed.make({ reason: "trial_execution_failed" }),
-  });
+  const source = yield* nodes
+    .get(expected.id)
+    .pipe(Effect.mapError(() => EvaluationFailed.make({ reason: "trial_execution_failed" })));
   return source !== null && source.id === expected.id && matchesCorrection(source, expected);
 });
 

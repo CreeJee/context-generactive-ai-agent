@@ -2,11 +2,19 @@ import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
-import { MutableHashMap, MutableHashSet, Effect, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  MutableHashMap,
+  MutableHashSet,
+  Effect,
+  Option,
+  Schema,
+} from "effect";
 import { recentRawUserTurns } from "./compaction-policy.ts";
 import { consumeColdObservationEffect, pendingColdObservationEffect } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
+import type { NodeStoreFailed } from "../memory/nodes.ts";
 
 export class CompactionFailed extends Schema.TaggedError<CompactionFailed>()("CompactionFailed", {
   operation: Schema.Literals([
@@ -17,12 +25,14 @@ export class CompactionFailed extends Schema.TaggedError<CompactionFailed>()("Co
     "history",
     "read-cold",
     "consume-cold",
+    "read-memory",
   ]),
   reason: Schema.Union([
     Schema.TaggedStruct("MetadataFailed", {}),
     Schema.TaggedStruct("EvictionFailed", {}),
     Schema.TaggedStruct("RetrievalFailed", {}),
     Schema.TaggedStruct("HistoryFailed", {}),
+    Schema.TaggedStruct("MemoryFailed", {}),
   ]),
   cause: Schema.Defect(),
 }) {}
@@ -266,15 +276,72 @@ export const compactionStateEffect = Effect.fnUntraced(function* (options: {
 
 /** How the session's memory answers what compaction asks. */
 export interface CompactionSources {
-  /** The first recorded tool_result node id for one tool call, if present. */
-  readonly toolResultId: (toolCallId: string) => string | null;
-  readonly nodeText: (id: string) => string | null;
+  /** The first recorded tool_result node id of each of these tool calls that has one. */
+  readonly toolResultIds: (
+    toolCallIds: readonly string[],
+  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
+  /** The recorded text of each of these nodes that exists. */
+  readonly nodeTexts: (
+    ids: readonly string[],
+  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
   /**
    * Bounded, variable-tail leads for content this request left out. It must fail closed: compaction
    * still sends the request when retrieval is unavailable.
    */
   readonly retrievalAppendix?: (sent: readonly ModelMessage[]) => Promise<ModelMessage | null>;
 }
+
+/** Sources answered from lookups already in memory, as evaluations and fixtures have them. */
+export const lookupSources = (lookups: {
+  readonly toolResultId: (toolCallId: string) => string | null;
+  readonly nodeText: (id: string) => string | null;
+}): CompactionSources => {
+  const found = (ids: readonly string[], lookup: (id: string) => string | null) =>
+    Effect.sync(
+      () =>
+        new Map(
+          ids.flatMap((id) => {
+            const value = lookup(id);
+            return value === null ? [] : [[id, value] as const];
+          }),
+        ),
+    );
+  return {
+    toolResultIds: (ids) => found(ids, lookups.toolResultId),
+    nodeTexts: (ids) => found(ids, lookups.nodeText),
+  };
+};
+
+/** The tool calls these messages answer. */
+export const answeredToolCalls = (messages: readonly ModelMessage[]) =>
+  EffectArray.dedupe(
+    messages.flatMap((message) =>
+      message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
+    ),
+  );
+
+/**
+ * What memory recorded for these messages and summary blocks, read once so compaction can decide
+ * synchronously.
+ */
+export const memoryLookups = Effect.fnUntraced(function* (
+  sources: CompactionSources,
+  messages: readonly ModelMessage[],
+  blocks: readonly SummaryBlock[],
+) {
+  const [results, texts] = yield* Effect.all([
+    sources.toolResultIds(answeredToolCalls(messages)),
+    sources.nodeTexts(EffectArray.dedupe(blocks.map((block) => block.nextTurnNodeId))),
+  ]).pipe(
+    Effect.mapError((cause) =>
+      CompactionFailed.make({ operation: "read-memory", reason: { _tag: "MemoryFailed" }, cause }),
+    ),
+  );
+  return {
+    toolResultId: (toolCallId: string) => results.get(toolCallId) ?? null,
+    nodeText: (id: string) => texts.get(id) ?? null,
+  };
+});
 
 /** Where dropped messages went, for the model: they are in memory, not gone. */
 const droppedMarker = (count: number) =>
@@ -371,16 +438,17 @@ export const compactEffect = Effect.fnUntraced(function* (options: {
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
   let sent = messages;
   let stage: CompactionStage = "none";
+  const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.blocks);
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
-    sources.toolResultId,
+    toolResultId,
     false,
   );
   if (clearedByHand !== null) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
   // An answered run's tool payload is cleared once the run after it has answered too. This
   // transition happens once; clearAnswered leaves pointers unchanged and never touches the run
   // still in progress.
-  const cleared = clearAnswered(sent, sources.toolResultId, true);
+  const cleared = clearAnswered(sent, toolResultId, true);
   if (cleared !== null) sent = cleared;
   if (clearedByHand !== null || cleared !== null) stage = "clear-answered";
 
@@ -388,7 +456,7 @@ export const compactEffect = Effect.fnUntraced(function* (options: {
   // The previous 25% gate could not change the chosen blocks: through always started at the end
   // of fitting, so filtering fitting by through always returned every validated block.
   const turns = userTurns(messages);
-  const summaries = linedUp(messages, state.blocks, sources.nodeText);
+  const summaries = linedUp(messages, state.blocks, nodeText);
   const summarizedTurns = summaries.at(-1)?.end ?? 0;
   const firstKept = turns[summarizedTurns];
   if (summarizedTurns > 0 && firstKept !== undefined) {
@@ -721,10 +789,11 @@ function compactionBody(
           );
           const retained =
             isTruthy(question) && !messages.includes(question) ? [question, ...messages] : messages;
-          const providerMessages = lightweightToolResults(
-            isTruthy(restoredContext) ? [restoredContext, ...retained] : messages,
-            sources.toolResultId,
-          ).filter((message) => !isEmptyUserText(message));
+          const outgoing = isTruthy(restoredContext) ? [restoredContext, ...retained] : messages;
+          const { toolResultId } = yield* memoryLookups(sources, outgoing, []);
+          const providerMessages = lightweightToolResults(outgoing, toolResultId).filter(
+            (message) => !isEmptyUserText(message),
+          );
           return providerMessages.every((message, index) => message === config.messages[index]) &&
             providerMessages.length === config.messages.length
             ? undefined
@@ -790,7 +859,8 @@ const compactByHandBody = <E>(
     const before = yield* compactEffect({ messages, state: initial, sources, budget });
     const outcome = yield* summarize();
     const state = yield* compactionStateEffect({ metadata, threadId });
-    const summaries = linedUp(messages, state.blocks, sources.nodeText).filter(
+    const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
+    const summaries = linedUp(messages, state.blocks, nodeText).filter(
       (block) => block.end <= userTurns(messages).length - recentRawUserTurns,
     );
     const manual: ManualCompaction = {

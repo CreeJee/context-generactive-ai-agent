@@ -38,11 +38,10 @@ export const freshSession = Effect.gen(function* () {
 
 export const userTexts = (sessionId: string) =>
   current(
-    Effect.map(Nodes, (nodes) =>
-      nodes
-        .session(sessionId)
-        .filter((node) => node.kind === "user")
-        .map((node) => node.text),
+    Effect.flatMap(Nodes, (nodes) =>
+      Effect.map(nodes.session(sessionId), (session) =>
+        session.filter((node) => node.kind === "user").map((node) => node.text),
+      ),
     ),
   );
 

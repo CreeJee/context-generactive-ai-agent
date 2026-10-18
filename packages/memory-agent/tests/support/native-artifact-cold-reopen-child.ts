@@ -119,16 +119,14 @@ await Effect.runPromise(
             ),
           ));
         const oldNodes = () =>
-          encodeJson(
-            services.nodes
-              .session(binding.sessionId)
-              .filter((node) => node.runId === "first" || node.text === "first"),
+          Effect.map(services.nodes.session(binding.sessionId), (session) =>
+            encodeJson(session.filter((node) => node.runId === "first" || node.text === "first")),
           );
         const oldRun = () =>
           services.state.persistence.stores.runs.get("first").then((run) => encodeJson(run));
         if (previous !== undefined) {
           assert.notEqual(previous.pid, process.pid);
-          assert.equal(oldNodes(), previous.nodes);
+          assert.equal(yield* oldNodes(), previous.nodes);
           assert.equal(yield* sdkCall(() => oldRun()), previous.run);
           assert.equal(
             encodeJson(
@@ -144,7 +142,7 @@ await Effect.runPromise(
         const artifact: typeof NativeArtifact = yield* sdkCall(
           () => import(pathToFileURL(artifactPath).href),
         );
-        const user = services.nodes.append({ ...binding, kind: "user", text: phase });
+        const user = yield* services.nodes.append({ ...binding, kind: "user", text: phase });
         const recording = yield* sdkCall(() =>
           runtime.runPromise(
             artifact.makeRecordingMiddleware({ ...binding, runId: phase, userNodeId: user.id }),
@@ -164,23 +162,23 @@ await Effect.runPromise(
             stream: false,
           }),
         );
-        const rows = services.nodes
-          .session(binding.sessionId)
-          .filter((node) => node.kind === "assistant" && node.runId === phase);
+        const rows = (yield* services.nodes.session(binding.sessionId)).filter(
+          (node) => node.kind === "assistant" && node.runId === phase,
+        );
         assert.equal(rows.length, 1);
         assert.equal(rows[0]!.text, phase);
         const current = yield* sdkCall(() => services.state.persistence.stores.runs.get(phase));
         assert.equal(current?.status, "completed");
         assert.equal(current?.threadId, binding.sessionId);
         if (previous !== undefined) {
-          assert.equal(oldNodes(), previous.nodes);
+          assert.equal(yield* oldNodes(), previous.nodes);
           assert.equal(yield* sdkCall(() => oldRun()), previous.run);
         } else {
           yield* fs.writeFileString(
             path.join(base, "snapshot.json"),
             encodeJson({
               ...binding,
-              nodes: oldNodes(),
+              nodes: yield* oldNodes(),
               run: yield* sdkCall(() => oldRun()),
               thread: encodeJson(
                 yield* sdkCall(() =>

@@ -51,11 +51,8 @@ const send = Effect.fnUntraced(function* (sessionId: string, runId: string, cont
 });
 
 const sessionText = (sessionId: string) =>
-  Effect.map(Nodes, (nodes) =>
-    nodes
-      .session(sessionId)
-      .map((node) => node.text)
-      .join("\n"),
+  Effect.flatMap(Nodes, (nodes) =>
+    Effect.map(nodes.session(sessionId), (session) => session.map((node) => node.text).join("\n")),
   );
 
 // Every query here is scoped to the test's session, so a sweep run by one test is harmless to
@@ -92,7 +89,7 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       const session = yield* freshSession;
       yield* selectTestModel();
       yield* send(session, `${session}:paste`, `이 토큰으로 배포해줘 ${githubToken}`);
-      expect((yield* Nodes).latestOfKind(session, "user")?.text).toBe(
+      expect((yield* (yield* Nodes).latestOfKind(session, "user"))?.text).toBe(
         "이 토큰으로 배포해줘 [redacted:github]",
       );
     }),
@@ -177,7 +174,7 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
         const { sqlite } = yield* Database;
         const session = yield* freshSession;
         const queued = `${session}:queued`;
-        const call = (yield* Nodes).append({
+        const call = yield* (yield* Nodes).append({
           projectId: project.id,
           sessionId: session,
           kind: "tool_call",
@@ -245,7 +242,7 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
 
       // Text that skipped the way in: an older build wrote this node, and the conversation grew
       // inside its one row.
-      (yield* Nodes).append({
+      yield* (yield* Nodes).append({
         projectId: project.id,
         sessionId: session,
         kind: "tool_result",
@@ -283,13 +280,13 @@ testAgent()("SecretSweep of stored nodes", (it) => {
         const indexer = yield* Indexer;
         // Written the way it was before redaction existed: straight in. A statement, so it has a
         // vector to drop and make again.
-        const leaked = nodes.append({
+        const leaked = yield* nodes.append({
           projectId: project.id,
           sessionId: session.id,
           kind: "user",
           text: `GITHUB_TOKEN=${githubToken}\ndeploy ok`,
         });
-        const clean = nodes.append({
+        const clean = yield* nodes.append({
           projectId: project.id,
           sessionId: session.id,
           kind: "assistant",
@@ -334,7 +331,7 @@ testAgent()("SecretSweep of stored nodes", (it) => {
   it.effect("nodes stay immutable outside a sweep", () =>
     Effect.gen(function* () {
       const { project, session } = yield* TestEnv;
-      const node = (yield* Nodes).append({
+      const node = yield* (yield* Nodes).append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",

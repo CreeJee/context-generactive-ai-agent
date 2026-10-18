@@ -88,9 +88,12 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
       Effect.gen(function* () {
         yield* selectTestModel();
         const context = yield* freshProject;
-        const decision = context.say("user", "DB는 SQLite로 간다 #database");
-        context.say("assistant", "알겠습니다. SQLite로 진행할게요 #database");
-        const change = context.say("user", "아니 Postgres로 바꾸자 [corrects:SQLite] #database");
+        const decision = yield* context.say("user", "DB는 SQLite로 간다 #database");
+        yield* context.say("assistant", "알겠습니다. SQLite로 진행할게요 #database");
+        const change = yield* context.say(
+          "user",
+          "아니 Postgres로 바꾸자 [corrects:SQLite] #database",
+        );
 
         // Only the user's two statements are jobs; the first has nothing earlier to relate to.
         expect(yield* interpret).toBe(2);
@@ -126,8 +129,8 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
     Effect.gen(function* () {
       yield* selectTestModel();
       const context = yield* freshProject;
-      const decision = context.say("user", "캐시는 Redis로 하자");
-      const vague = context.say("user", "그거 그냥 빼자 [maybe-retracts:Redis]");
+      const decision = yield* context.say("user", "캐시는 Redis로 하자");
+      const vague = yield* context.say("user", "그거 그냥 빼자 [maybe-retracts:Redis]");
       yield* interpret;
 
       expect(yield* context.edges("retracts")).toEqual([]);
@@ -150,9 +153,12 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
       Effect.gen(function* () {
         yield* selectTestModel();
         const context = yield* freshProject;
-        context.say("user", "배포는 금요일에 한다");
-        const claim = context.say("assistant", "사실 배포는 월요일이 맞습니다 [corrects:배포는]");
-        const stray = context.say("user", "다른 이야기 [bad-target]");
+        yield* context.say("user", "배포는 금요일에 한다");
+        const claim = yield* context.say(
+          "assistant",
+          "사실 배포는 월요일이 맞습니다 [corrects:배포는]",
+        );
+        const stray = yield* context.say("user", "다른 이야기 [bad-target]");
         yield* interpret;
 
         expect(yield* context.edges("corrects")).toEqual([]);
@@ -169,8 +175,8 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
       yield* selectTestModel();
       const context = yield* freshProject;
       // Something earlier to relate to, so the statement is sent to the model at all.
-      context.say("user", "이상한 문장 이전의 이야기");
-      const broken = context.say("user", "이상한 문장 [broken-interpret]");
+      yield* context.say("user", "이상한 문장 이전의 이야기");
+      const broken = yield* context.say("user", "이상한 문장 [broken-interpret]");
       yield* Effect.repeat(interpret, { times: 2 });
 
       expect(yield* context.job(broken.id)).toEqual({ status: "failed", attempts: 3 });
@@ -186,7 +192,7 @@ testAgent({ testProvider: {} })("interpretation without a model", (it) => {
   it.effect("without a selected model nothing is interpreted and the jobs wait", () =>
     Effect.gen(function* () {
       const { project, session } = yield* TestEnv;
-      (yield* Nodes).append({
+      yield* (yield* Nodes).append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",
@@ -205,19 +211,19 @@ testAgent({ testProvider: {} })("interpretation without a model", (it) => {
       const { sqlite } = yield* Database;
       // Earlier tests' nodes are indexed first, so the count below is only this test's.
       yield* indexer.indexAll();
-      const meaningful = nodes.append({
+      const meaningful = yield* nodes.append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",
         text: "SQLite",
       });
-      const empty = nodes.append({
+      const empty = yield* nodes.append({
         projectId: project.id,
         sessionId: session.id,
         kind: "assistant",
         text: " \n",
       });
-      (yield* Interpretations).record({
+      yield* (yield* Interpretations).record({
         nodeId: empty.id,
         targetId: meaningful.id,
         kind: "related",

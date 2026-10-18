@@ -10,6 +10,7 @@ import {
   compactEffect,
   estimateConversation,
   estimateTokens,
+  lookupSources,
   messageText,
   type CompactionState,
   type SummaryBlock,
@@ -144,8 +145,10 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMess
     messages,
     state,
     sources: {
-      toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
-      nodeText,
+      ...lookupSources({
+        toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
+        nodeText,
+      }),
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       retrievalAppendix: () => Promise.resolve(retrieval),
     },

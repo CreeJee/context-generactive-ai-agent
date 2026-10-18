@@ -53,7 +53,7 @@ testAgent({
       const session = env.session.id;
       const mainNode = (text: string) =>
         nodes.append({ projectId: env.project.id, sessionId: session, kind: "user", text });
-      mainNode("first main message");
+      yield* mainNode("first main message");
 
       const missingParent = yield* call(() =>
         routes.create({
@@ -81,11 +81,11 @@ testAgent({
       const answer = (text: string) =>
         Effect.flatMap(ask(text), (response) => sdk(() => response.text()));
       expect(yield* answer("side question one")).toContain("BTW answer");
-      mainNode("second main message, written after the BTW opened");
+      yield* mainNode("second main message, written after the BTW opened");
       expect(yield* answer("side question two")).toContain("BTW answer");
       const latest = env.provider!.adapter.invocations.at(-2)!;
       expect(latest.systemPrompts.join("\n")).toContain("second main message");
-      expect(nodes.session(session).map((node) => node.text)).toEqual([
+      expect((yield* nodes.session(session)).map((node) => node.text)).toEqual([
         "first main message",
         "second main message, written after the BTW opened",
       ]);

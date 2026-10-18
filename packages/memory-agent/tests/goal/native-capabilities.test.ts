@@ -103,7 +103,7 @@ const ownerRun = Effect.fnUntraced(function* (
     );
   // Attribution is deferred: nothing reads the user node before the run admits it.
   expect(reads).toBe(0);
-  const user = env.nodes.append({
+  const user = yield* env.nodes.append({
     projectId: project.id,
     sessionId: session,
     kind: "user",
@@ -154,12 +154,14 @@ const ownerRun = Effect.fnUntraced(function* (
     decision: index === 0 ? "allow" : "block",
     reason: runId,
   });
-  expect(env.nodes.toolNode(session, "tool_result", "shared-call")).toMatchObject({
+  expect(yield* env.nodes.toolNode(session, "tool_result", "shared-call")).toMatchObject({
     runId,
     detail: { ok: index === 0, permission: { reason: runId } },
   });
-  for (const assistant of env.nodes.session(session).filter((node) => node.kind === "assistant")) {
-    expect(env.nodes.edgesOf(assistant.id)).toEqual(
+  for (const assistant of (yield* env.nodes.session(session)).filter(
+    (node) => node.kind === "assistant",
+  )) {
+    expect(yield* env.nodes.edgesOf(assistant.id)).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "reply", toId: user.id })]),
     );
   }
@@ -293,16 +295,21 @@ testAgent({ testProvider: {} })("native AgentChat Goal turns", (it) => {
         expect(clients.acquired).toEqual([1, 2, 3]);
         expect(clients.released).toEqual([1, 2, 3]);
         const assistants = (session: string) =>
-          nodes.session(session).filter((node) => node.kind === "assistant");
-        expect(assistants(first).map((node) => node.text)).toEqual([
+          Effect.map(nodes.session(session), (nodes) =>
+            nodes.filter((node) => node.kind === "assistant"),
+          );
+        expect((yield* assistants(first)).map((node) => node.text)).toEqual([
           "native-answer-1",
           "native-answer-3",
         ]);
-        expect(assistants(second).map((node) => node.text)).toEqual(["native-answer-2"]);
-        const all = [...assistants(first), ...assistants(second)];
+        expect((yield* assistants(second)).map((node) => node.text)).toEqual(["native-answer-2"]);
+        const all = [...(yield* assistants(first)), ...(yield* assistants(second))];
         expect(EffectArray.dedupe(all.map((node) => node.runId))).toHaveLength(3);
-        const replies = all.map(
-          (node) => nodes.edgesOf(node.id).find((edge) => edge.kind === "reply")?.toId,
+        const replies = yield* Effect.forEach(all, (node) =>
+          Effect.map(
+            nodes.edgesOf(node.id),
+            (edges) => edges.find((edge) => edge.kind === "reply")?.toId,
+          ),
         );
         expect(EffectArray.dedupe(replies)).toHaveLength(3);
         expect(provider!.adapter.invocations).toHaveLength(0);

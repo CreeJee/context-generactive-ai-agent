@@ -199,7 +199,7 @@ testAgent()("workflow run bindings", (it) => {
         // An effectful tool is known to the next run only through its recorded result.
         step(4, "tool", "run_shell", "succeeded");
         expect(yield* admits()).toBe("refused");
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: (yield* TestEnv).project.id,
           sessionId: session,
           runId: shared,

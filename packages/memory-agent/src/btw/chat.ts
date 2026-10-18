@@ -98,6 +98,9 @@ const make = Effect.gen(function* () {
     );
     // Not tied to the request: closing the panel keeps the answer running until it is saved.
     // Only an explicit delete or the service shutting down cancels it.
+    const parentConversation = parentConversationPrompt(
+      yield* nodes.session(thread.parentSessionId),
+    );
     const adapter = runtime.adapter(selection);
     const cancellation = yield* cancellations.allocate("service_shutdown");
     const abortController = cancellation.controller;
@@ -120,10 +123,7 @@ const make = Effect.gen(function* () {
         threadId,
         runId,
         parentRunId,
-        systemPrompts: [
-          btwInstructions,
-          parentConversationPrompt(nodes.session(thread.parentSessionId)),
-        ],
+        systemPrompts: [btwInstructions, parentConversation],
       },
       {
         model: { adapter, agentLoopStrategy: runtime.agentLoop },

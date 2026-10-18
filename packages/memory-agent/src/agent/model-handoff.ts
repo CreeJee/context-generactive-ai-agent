@@ -4,8 +4,9 @@ import { isTruthy } from "../truthy.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Effect, HashSet, Option, Predicate, Schema } from "effect";
-import { messageText, replayableToolHistory } from "./compaction.ts";
+import { answeredToolCalls, messageText, replayableToolHistory } from "./compaction.ts";
 import type { ProviderId } from "../providers/contracts.ts";
+import type { NodeStoreFailed } from "../memory/nodes.ts";
 
 export class ModelHandoffFailed extends Schema.TaggedError<ModelHandoffFailed>()(
   "ModelHandoffFailed",
@@ -16,6 +17,7 @@ export class ModelHandoffFailed extends Schema.TaggedError<ModelHandoffFailed>()
       Schema.TaggedStruct("ReadStateFailed", {}),
       Schema.TaggedStruct("ReadHistoryFailed", {}),
       Schema.TaggedStruct("WriteStateFailed", {}),
+      Schema.TaggedStruct("ReadMemoryFailed", {}),
     ]),
     message: Schema.String,
     cause: Schema.optionalKey(Schema.Defect()),
@@ -176,8 +178,10 @@ export interface ModelHandoffOptions {
   readonly provider: ProviderId;
   readonly previous?: { readonly provider: ProviderId; readonly model: string } | undefined;
   readonly loadHistory: () => Promise<readonly ModelMessage[]>;
-  /** The recorded tool_result node of one earlier call, if present. */
-  readonly toolResultId: (toolCallId: string) => string | null;
+  /** The recorded tool_result node of each of these earlier calls that has one. */
+  readonly toolResultIds: (
+    toolCallIds: readonly string[],
+  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
 }
 
 export function modelHandoffHistory(options: ModelHandoffOptions) {
@@ -253,14 +257,24 @@ export const modelHandoffHistoryEffect = (options: ModelHandoffOptions) =>
         switch (state._tag) {
           case "baseline":
             return null;
-          case "handoff":
+          case "handoff": {
+            const recorded = yield* options.toolResultIds(answeredToolCalls(messages)).pipe(
+              Effect.mapError((cause) =>
+                ModelHandoffFailed.make({
+                  reason: { _tag: "ReadMemoryFailed" },
+                  message: "Model handoff could not read recorded tool results",
+                  cause,
+                }),
+              ),
+            );
             return yield* Effect.try({
-              try: () => handoffHistory(messages, state, options.toolResultId),
+              try: () => handoffHistory(messages, state, (id) => recorded.get(id) ?? null),
               catch: (cause) => {
                 if (Schema.is(ModelHandoffFailed)(cause)) return cause;
                 throw cause;
               },
             });
+          }
         }
       });
   });

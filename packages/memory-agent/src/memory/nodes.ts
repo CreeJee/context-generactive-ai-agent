@@ -1,24 +1,22 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeCrypto } from "@effect/platform-node";
-import type { SQLOutputValue } from "node:sqlite";
 import {
   DateTime,
-  Clock,
   Crypto,
   Context,
   Effect,
   Layer,
+  Option,
   Schema,
   HashSet,
   Array as EffectArray,
 } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { createResultPageReader } from "./result-pages.ts";
 import { hasStatementText } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
-import { Database } from "../db/database.ts";
 import { EdgeKind, EdgeOrigin, edgeWeights, type Edge, type NodeLink } from "./edges.ts";
 
 export const NodeKind = Schema.Literals([
@@ -112,7 +110,7 @@ function textWindowBody(text: string, offset: number, length: number) {
   };
 }
 
-const NodeRow = Schema.Struct({
+export const NodeRow = Schema.Struct({
   seq: Schema.Finite,
   id: Schema.String,
   project_id: Schema.String,
@@ -123,25 +121,21 @@ const NodeRow = Schema.Struct({
   detail: Schema.fromJsonString(NodeDetail),
   created_at: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeNodeRow = EffectFunction.flow(Schema.decodeUnknownResult(NodeRow), Result.getOrThrow);
 
-export function toNode(row: Record<string, SQLOutputValue>): Node {
-  const decoded = decodeNodeRow(row);
-  return {
-    seq: decoded.seq,
-    id: decoded.id,
-    projectId: decoded.project_id,
-    sessionId: decoded.session_id,
-    runId: decoded.run_id,
-    kind: decoded.kind,
-    text: decoded.text,
-    detail: decoded.detail,
-    createdAt: decoded.created_at,
-  };
-}
+/** A node from its decoded `nodes` row. */
+export const nodeOfRow = (row: typeof NodeRow.Type): Node => ({
+  seq: row.seq,
+  id: row.id,
+  projectId: row.project_id,
+  sessionId: row.session_id,
+  runId: row.run_id,
+  kind: row.kind,
+  text: row.text,
+  detail: row.detail,
+  createdAt: row.created_at,
+});
 
-const EdgeRow = Schema.Struct({
+export const EdgeRow = Schema.Struct({
   from_id: Schema.String,
   to_id: Schema.String,
   kind: EdgeKind,
@@ -149,20 +143,23 @@ const EdgeRow = Schema.Struct({
   weight: Schema.Finite,
   created_at: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeEdgeRow = EffectFunction.flow(Schema.decodeUnknownResult(EdgeRow), Result.getOrThrow);
 
-export function toEdge(row: Record<string, SQLOutputValue>): Edge {
-  const decoded = decodeEdgeRow(row);
-  return {
-    fromId: decoded.from_id,
-    toId: decoded.to_id,
-    kind: decoded.kind,
-    origin: decoded.origin,
-    weight: decoded.weight,
-    createdAt: decoded.created_at,
-  };
-}
+/** An edge from its decoded `edges` row. */
+export const edgeOfRow = (row: typeof EdgeRow.Type): Edge => ({
+  fromId: row.from_id,
+  toId: row.to_id,
+  kind: row.kind,
+  origin: row.origin,
+  weight: row.weight,
+  createdAt: row.created_at,
+});
+
+/** The node store could not be read or written; the cause stays with the error. */
+export class NodeStoreFailed extends Schema.TaggedError<NodeStoreFailed>()("NodeStoreFailed", {
+  cause: Schema.Defect(),
+}) {}
+const stored = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.mapError(effect, (cause) => NodeStoreFailed.make({ cause }));
 
 /** Characters of original text returned per read_evidence page. */
 export const evidencePageLength = 4000;
@@ -174,166 +171,233 @@ export const evidencePageLength = 4000;
 const interpretedKinds = HashSet.fromIterable<NodeKind>(["user"]);
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
   const crypto = yield* Crypto.Crypto;
-  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  const sql = yield* SqlClient.SqlClient;
+  const resultPages = yield* createResultPageReader;
+  const supersedeEarlierReads = yield* createSupersededReads;
+  const one = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: NodeRow,
+    execute: (id) => sql`SELECT * FROM nodes WHERE id = ${id}`,
+  });
+  const latestOf = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, kind: NodeKind }),
+    Result: NodeRow,
+    execute: ({ sessionId, kind }) => sql`SELECT * FROM nodes
+      WHERE session_id = ${sessionId} AND kind = ${kind} ORDER BY seq DESC LIMIT 1`,
+  });
+  const recentOf = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: Schema.String, kind: NodeKind, limit: Schema.Finite }),
+    Result: NodeRow,
+    execute: ({ sessionId, kind, limit }) => sql`SELECT * FROM nodes
+      WHERE session_id = ${sessionId} AND kind = ${kind} ORDER BY seq DESC LIMIT ${limit}`,
+  });
+  const toolNodeOf = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      sessionId: Schema.String,
+      kind: Schema.Literals(["tool_call", "tool_result"]),
+      toolCallId: Schema.String,
+    }),
+    Result: NodeRow,
+    execute: ({ sessionId, kind, toolCallId }) => sql`SELECT * FROM nodes
+      WHERE session_id = ${sessionId} AND kind = ${kind}
+        AND json_extract(detail, '$.toolCallId') = ${toolCallId} ORDER BY seq LIMIT 1`,
+  });
+  const sessionNodes = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: NodeRow,
+    execute: (sessionId) => sql`SELECT * FROM nodes WHERE session_id = ${sessionId} ORDER BY seq`,
+  });
+  const edgesOf = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: EdgeRow,
+    execute: (id) => sql`SELECT * FROM edges WHERE from_id = ${id} OR to_id = ${id}
+      ORDER BY created_at, kind`,
+  });
+  const IdRow = Schema.Struct({ id: Schema.String });
+  const lastInSession = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: IdRow,
+    execute: (sessionId) =>
+      sql`SELECT id FROM nodes WHERE session_id = ${sessionId} ORDER BY seq DESC LIMIT 1`,
+  });
+  const latestWithRef = SqlSchema.findOneOption({
+    Request: Schema.Struct({ ref: Schema.String, projectId: Schema.String }),
+    Result: IdRow,
+    execute: ({ ref, projectId }) => sql`
+      SELECT r.node_id AS id FROM node_refs r JOIN nodes n ON n.id = r.node_id
+      WHERE r.ref = ${ref} AND n.project_id = ${projectId} ORDER BY n.seq DESC LIMIT 1`,
+  });
+  const toolResultIdOf = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, toolCallId: Schema.String }),
+    Result: IdRow,
+    execute: ({ sessionId, toolCallId }) => sql`SELECT id FROM nodes
+      WHERE session_id = ${sessionId} AND kind = 'tool_result'
+        AND json_extract(detail, '$.toolCallId') = ${toolCallId}
+      ORDER BY seq LIMIT 1`,
+  });
+  const encodeDetail = Schema.encodeEffect(Schema.fromJsonString(NodeDetail));
+  const firstResults = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: Schema.String, toolCallIds: Schema.Array(Schema.String) }),
+    Result: Schema.Struct({ tool_call_id: Schema.String, id: Schema.String }),
+    execute: ({ sessionId, toolCallIds }) => sql`
+      SELECT json_extract(detail, '$.toolCallId') AS tool_call_id, id FROM nodes
+      WHERE session_id = ${sessionId} AND kind = 'tool_result'
+        AND json_extract(detail, '$.toolCallId') IN ${sql.in(toolCallIds)}
+      ORDER BY seq DESC`,
+  });
+  const textsOf = SqlSchema.findAll({
+    Request: Schema.Array(Schema.String),
+    Result: Schema.Struct({ id: Schema.String, text: Schema.String }),
+    execute: (ids) => sql`SELECT id, text FROM nodes WHERE id IN ${sql.in(ids)}`,
+  });
+  const idOf = Option.map((row: typeof IdRow.Type) => row.id);
+  /** Rows keyed by `key`; a later row replaces an earlier one with the same key. */
+  const keyed = <A>(rows: readonly A[], key: (row: A) => string, value: (row: A) => string) =>
+    new Map(rows.map((row) => [key(row), value(row)]));
 
-  const { sqlite, atomic } = yield* Database;
-  const resultPages = createResultPageReader(sqlite);
-  const supersedeEarlierReads = createSupersededReads(sqlite);
-  const insertNode = sqlite.prepare(
-    "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
-  );
-  const insertEdge = sqlite.prepare(
-    "INSERT INTO edges VALUES (?, ?, ?, 'structure', ?, ?) ON CONFLICT DO NOTHING",
-  );
-  const lastInSession = sqlite.prepare(
-    "SELECT id FROM nodes WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
-  );
-  const insertRef = sqlite.prepare("INSERT INTO node_refs VALUES (?, ?) ON CONFLICT DO NOTHING");
-  const latestWithRef = sqlite.prepare(`
-    SELECT r.node_id AS id FROM node_refs r JOIN nodes n ON n.id = r.node_id
-    WHERE r.ref = ? AND n.project_id = ? ORDER BY n.seq DESC LIMIT 1`);
-  const insertJob = sqlite.prepare(
-    "INSERT INTO interpret_jobs (node_id, status, updated_at) VALUES (?, 'pending', ?)",
-  );
-  const selectNode = sqlite.prepare("SELECT * FROM nodes WHERE id = ?");
-  const selectToolResultId = sqlite.prepare(
-    `SELECT id FROM nodes
-     WHERE session_id = ? AND kind = 'tool_result'
-       AND json_extract(detail, '$.toolCallId') = ?
-     ORDER BY seq LIMIT 1`,
-  );
+  const link = (fromId: string, toId: string, kind: EdgeKind, createdAt: string) =>
+    sql`INSERT INTO edges VALUES (${fromId}, ${toId}, ${kind}, 'structure', ${edgeWeights[kind]},
+      ${createdAt}) ON CONFLICT DO NOTHING`;
 
-  const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    isTruthy(row)
-      ? EffectFunction.flow(
-          Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String })),
-          Result.getOrThrow,
-        )(row).id
-      : null;
+  const append = (input: NewNode) =>
+    stored(
+      Effect.gen(function* () {
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        const previous = isTruthy(input.sessionId)
+          ? idOf(yield* lastInSession(input.sessionId))
+          : Option.none();
+        const [inserted] = yield* sql`INSERT INTO nodes ${sql.insert({
+          id: yield* crypto.randomUUIDv4(),
+          project_id: input.projectId,
+          session_id: input.sessionId,
+          run_id: input.runId ?? null,
+          kind: input.kind,
+          text: input.text,
+          detail: yield* encodeDetail(input.detail ?? {}),
+          created_at: createdAt,
+        })} RETURNING *`;
+        const node = nodeOfRow(yield* Schema.decodeUnknownEffect(NodeRow)(inserted));
+        if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
+        // Only the first accepted, redacted user message names a local conversation.
+        if (
+          input.kind === "user" &&
+          isTruthy(input.sessionId) &&
+          !isTruthy(input.detail?.importedFrom)
+        ) {
+          const label = firstMessageTitle(input.text) || "이미지 대화";
+          yield* sql`
+            UPDATE sessions SET title = ${label}
+            WHERE id = ${input.sessionId} AND title IS NULL AND imported_from IS NULL
+              AND NOT EXISTS (SELECT 1 FROM nodes
+                WHERE session_id = ${input.sessionId} AND kind = 'user' AND seq < ${node.seq})`;
+        }
 
-  function link(fromId: string, toId: string, kind: EdgeKind, createdAt: string) {
-    insertEdge.run(fromId, toId, kind, edgeWeights[kind], createdAt);
-  }
-
-  function append(input: NewNode): Node {
-    return atomic(() => {
-      const createdAt = DateTime.formatIso(
-        DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-      );
-      const previous = isTruthy(input.sessionId) ? idOf(lastInSession.get(input.sessionId)) : null;
-      const row = insertNode.get(
-        runSync(crypto.randomUUIDv4()),
-        input.projectId,
-        input.sessionId,
-        input.runId ?? null,
-        input.kind,
-        input.text,
-        JSON.stringify(input.detail ?? {}),
-        createdAt,
-      );
-      if (!isTruthy(row)) throw new Error("Node insert returned no row");
-      const node = toNode(row);
-      if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
-      // Only the first accepted, redacted user message names a local conversation.
-      if (
-        input.kind === "user" &&
-        isTruthy(input.sessionId) &&
-        !isTruthy(input.detail?.importedFrom)
-      ) {
-        const label = firstMessageTitle(input.text);
-        sqlite
-          .prepare(`
-          UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL AND imported_from IS NULL
-          AND NOT EXISTS (SELECT 1 FROM nodes WHERE session_id = ? AND kind = 'user' AND seq < ?)
-        `)
-          .run(label || "이미지 대화", input.sessionId, input.sessionId, node.seq);
-      }
-
-      if (isTruthy(previous)) link(previous, node.id, "next", createdAt);
-      for (const declared of input.links ?? []) {
-        if (declared.kind === "reply") link(node.id, declared.nodeId, "reply", createdAt);
-        else link(declared.nodeId, node.id, declared.kind, createdAt);
-      }
-      for (const ref of EffectArray.dedupe(input.refs ?? [])) {
-        const earlier = idOf(latestWithRef.get(ref, input.projectId));
-        insertRef.run(node.id, ref);
-        if (isTruthy(earlier)) link(node.id, earlier, "touches", createdAt);
-      }
-      if (node.kind === "tool_result") supersedeEarlierReads(node.id);
-      if (HashSet.has(interpretedKinds, node.kind) && hasStatementText(node.text))
-        insertJob.run(node.id, createdAt);
-      return node;
-    });
-  }
+        if (Option.isSome(previous)) yield* link(previous.value, node.id, "next", createdAt);
+        for (const declared of input.links ?? []) {
+          if (declared.kind === "reply") yield* link(node.id, declared.nodeId, "reply", createdAt);
+          else yield* link(declared.nodeId, node.id, declared.kind, createdAt);
+        }
+        for (const ref of EffectArray.dedupe(input.refs ?? [])) {
+          const earlier = idOf(yield* latestWithRef({ ref, projectId: input.projectId }));
+          yield* sql`INSERT INTO node_refs VALUES (${node.id}, ${ref}) ON CONFLICT DO NOTHING`;
+          if (Option.isSome(earlier)) yield* link(node.id, earlier.value, "touches", createdAt);
+        }
+        if (node.kind === "tool_result") yield* supersedeEarlierReads(node.id);
+        if (HashSet.has(interpretedKinds, node.kind) && hasStatementText(node.text))
+          yield* sql`INSERT INTO interpret_jobs (node_id, status, updated_at)
+            VALUES (${node.id}, 'pending', ${createdAt})`;
+        return node;
+      }).pipe(sql.withTransaction),
+    );
 
   function page(node: Node, offset = 0): EvidencePage {
     if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
     return { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) };
   }
+  const found = Effect.map(Option.match({ onNone: () => null, onSome: nodeOfRow }));
 
   return {
     append,
     readToolResultPage: resultPages.read,
     invalidateResultPages: resultPages.invalidate,
 
-    get: (id: string): Node | null => {
-      const row = selectNode.get(id);
-      return isTruthy(row) ? toNode(row) : null;
-    },
+    get: (id: string) => one(id).pipe(found, stored),
 
     /** The most recent node of a kind in a session, e.g. the user turn a continued run answers. */
-    latestOfKind: (sessionId: string, kind: NodeKind): Node | null => {
-      const row = sqlite
-        .prepare("SELECT * FROM nodes WHERE session_id = ? AND kind = ? ORDER BY seq DESC LIMIT 1")
-        .get(sessionId, kind);
-      return isTruthy(row) ? toNode(row) : null;
-    },
+    latestOfKind: (sessionId: string, kind: NodeKind) =>
+      latestOf({ sessionId, kind }).pipe(found, stored),
 
     /** The latest `limit` nodes of a kind in a session, oldest first. */
-    recentOfKind: (sessionId: string, kind: NodeKind, limit: number): Node[] =>
-      sqlite
-        .prepare("SELECT * FROM nodes WHERE session_id = ? AND kind = ? ORDER BY seq DESC LIMIT ?")
-        .all(sessionId, kind, limit)
-        .map(toNode)
-        .reverse(),
+    recentOfKind: (sessionId: string, kind: NodeKind, limit: number) =>
+      stored(
+        recentOf({ sessionId, kind, limit }).pipe(
+          Effect.map((rows) => rows.map(nodeOfRow).reverse()),
+        ),
+      ),
 
     /**
      * The tool_call or tool_result node for a tool call id in a session. A run resumed after an
      * approval sees the same call again, and must attach to the node recorded the first time.
      */
-    toolNode: (sessionId: string, kind: "tool_call" | "tool_result", toolCallId: string) => {
-      const row = sqlite
-        .prepare(
-          "SELECT * FROM nodes WHERE session_id = ? AND kind = ? AND json_extract(detail, '$.toolCallId') = ? ORDER BY seq LIMIT 1",
-        )
-        .get(sessionId, kind, toolCallId);
-      return isTruthy(row) ? toNode(row) : null;
-    },
+    toolNode: (sessionId: string, kind: "tool_call" | "tool_result", toolCallId: string) =>
+      toolNodeOf({ sessionId, kind, toolCallId }).pipe(found, stored),
 
     /** The first recorded result for this call, without loading every result in the session. */
-    toolResultId: (sessionId: string, toolCallId: string): string | null =>
-      idOf(selectToolResultId.get(sessionId, toolCallId)),
+    toolResultId: (sessionId: string, toolCallId: string) =>
+      stored(
+        toolResultIdOf({ sessionId, toolCallId }).pipe(
+          Effect.map((row) => Option.getOrNull(idOf(row))),
+        ),
+      ),
 
-    session: (sessionId: string): Node[] =>
-      sqlite
-        .prepare("SELECT * FROM nodes WHERE session_id = ? ORDER BY seq")
-        .all(sessionId)
-        .map(toNode),
+    /** {@link toolResultId} for several calls at once; calls without a result are absent. */
+    toolResultIds: (sessionId: string, toolCallIds: readonly string[]) =>
+      toolCallIds.length === 0
+        ? Effect.succeed(new Map<string, string>())
+        : stored(
+            // Newest first, so the first recorded result is the one each key keeps.
+            firstResults({ sessionId, toolCallIds }).pipe(
+              Effect.map((rows) =>
+                keyed(
+                  rows,
+                  (row) => row.tool_call_id,
+                  (row) => row.id,
+                ),
+              ),
+            ),
+          ),
 
-    edgesOf: (id: string): Edge[] =>
-      sqlite
-        .prepare("SELECT * FROM edges WHERE from_id = ? OR to_id = ? ORDER BY created_at, kind")
-        .all(id, id)
-        .map(toEdge),
+    /** The text of each of these nodes that exists. */
+    texts: (ids: readonly string[]) =>
+      ids.length === 0
+        ? Effect.succeed(new Map<string, string>())
+        : stored(
+            textsOf(ids).pipe(
+              Effect.map((rows) =>
+                keyed(
+                  rows,
+                  (row) => row.id,
+                  (row) => row.text,
+                ),
+              ),
+            ),
+          ),
+
+    session: (sessionId: string) =>
+      stored(sessionNodes(sessionId).pipe(Effect.map((rows) => rows.map(nodeOfRow)))),
+
+    edgesOf: (id: string) => stored(edgesOf(id).pipe(Effect.map((rows) => rows.map(edgeOfRow)))),
 
     /** Reads original text in pages without splitting a surrogate pair. */
-    read: (id: string, offset = 0): EvidencePage | null => {
-      const row = selectNode.get(id);
-      return isTruthy(row) ? page(toNode(row), offset) : null;
-    },
+    read: (id: string, offset = 0) =>
+      stored(
+        one(id).pipe(
+          Effect.map(
+            Option.match({ onNone: () => null, onSome: (row) => page(nodeOfRow(row), offset) }),
+          ),
+        ),
+      ),
 
     /** The same page for a node the caller already loaded, without reading its row again. */
     page,

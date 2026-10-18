@@ -372,7 +372,7 @@ const make = (tuning: SearchTuning) =>
             : fuseRanks({ lists: [byVector, byText, ...morph] });
         const vectorIds = HashSet.fromIterable(byVector);
 
-        const walk = graph.traverse(seeds, {
+        const walk = yield* graph.traverse(seeds, {
           budget: limit * 4,
           minUtility: 0.2,
           projectIds: allowed,

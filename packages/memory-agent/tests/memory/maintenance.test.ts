@@ -1,6 +1,6 @@
 import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
 import { layer } from "@effect/vitest";
-import { expect, vi } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -8,7 +8,7 @@ import { EmbeddingSetup } from "../../src/memory/embedding/setup.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { Graph } from "../../src/memory/graph.ts";
 import { MemoryGraphMaintenance } from "../../src/memory/maintenance.ts";
-import { createSupersededReads } from "../../src/memory/superseded-reads.ts";
+import { supersededReadSql } from "../../src/memory/superseded-reads.ts";
 import { Nodes, type Node } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -29,20 +29,20 @@ const legacy = Effect.gen(function* () {
   const nodes = yield* Nodes;
   const { sqlite } = yield* Database;
   const at = { projectId: project.id, sessionId: session.id };
-  const user = nodes.append({ ...at, kind: "user", text: "원문 SQLite 결정" });
-  const empty = nodes.append({
+  const user = yield* nodes.append({ ...at, kind: "user", text: "원문 SQLite 결정" });
+  const empty = yield* nodes.append({
     ...at,
     kind: "assistant",
     text: " \n\t",
     links: [{ kind: "reply", nodeId: user.id }],
   });
-  const call = nodes.append({
+  const call = yield* nodes.append({
     ...at,
     kind: "tool_call",
     text: "read_file",
     links: [{ kind: "calls", nodeId: empty.id }],
   });
-  const result = nodes.append({
+  const result = yield* nodes.append({
     ...at,
     kind: "tool_result",
     text: "CREATE TABLE",
@@ -55,14 +55,14 @@ const legacy = Effect.gen(function* () {
     .prepare("INSERT INTO edges VALUES (?, ?, 'returns', 'structure', 0.95, ?)")
     .run(result.id, call.id, result.createdAt);
   const topic = { projectId: project.id, sessionId: null, kind: "topic" } as const;
-  const emptyTopic = nodes.append({ ...topic, text: "내용 없는 응답" });
-  const shared = nodes.append({ ...topic, text: "SQLite 저장소" });
-  const protectedTopic = nodes.append({
+  const emptyTopic = yield* nodes.append({ ...topic, text: "내용 없는 응답" });
+  const shared = yield* nodes.append({ ...topic, text: "SQLite 저장소" });
+  const protectedTopic = yield* nodes.append({
     ...topic,
     text: "사용자가 저장한 기억",
     detail: { authorizedByUserNodeId: user.id },
   });
-  nodes.append({ ...topic, text: "다른 독립 주제" });
+  yield* nodes.append({ ...topic, text: "다른 독립 주제" });
   const link = (source: Node, target: Node, kind = "about") => {
     sqlite
       .prepare("INSERT INTO edges VALUES (?, ?, ?, 'llm', 0.8, ?)")
@@ -95,7 +95,8 @@ const asOlderStore = run.pipe(
 const overview = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.overview);
 const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
 const vectorCount = Effect.map(VectorIndex, (vectors) => vectors.size());
-const chainLength = (id: string) => Effect.map(Graph, (graph) => graph.trace(id)?.chain.length);
+const chainLength = (id: string) =>
+  Effect.flatMap(Graph, (graph) => Effect.map(graph.trace(id), (trace) => trace?.chain.length));
 
 /** Repairs scan and rewrite the whole store, so each test owns its agent. */
 const alone = <E>(
@@ -107,16 +108,8 @@ const alone = <E>(
 alone("superseded-read repairs look up file references without scanning the project", () =>
   Effect.gen(function* () {
     const { sqlite } = yield* Database;
-    const prepare = vi.spyOn(sqlite, "prepare");
-    let statement: string;
-    try {
-      createSupersededReads(sqlite);
-      statement = prepare.mock.calls[0]![0];
-    } finally {
-      prepare.mockRestore();
-    }
-    // Check the real prepared query's access path, without a machine-dependent time threshold.
-    const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${statement}`).all(3, "read-result");
+    // Check the real query's access path, without a machine-dependent time threshold.
+    const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${supersededReadSql}`).all(3, "read-result");
     expect(plan).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ detail: expect.stringContaining("node_refs_ref (ref=?)") }),
@@ -135,7 +128,7 @@ alone("other fibers can run between repair batches", () =>
     const c = yield* legacy;
     const { project, session } = yield* TestEnv;
     for (let i = 0; i < 256; i++) {
-      c.nodes.append({
+      yield* c.nodes.append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",
@@ -206,7 +199,7 @@ alone("repairs already embedded nodes while preserving originals and useful vect
     c.sqlite.prepare("INSERT INTO node_vectors VALUES (?, 'inactive-model')").run(c.topic.seq);
     yield* asOlderStore;
     yield* run;
-    expect((yield* Graph).trace(c.result.id)?.chain.map((node) => node.id)).toEqual([
+    expect((yield* (yield* Graph).trace(c.result.id))?.chain.map((node) => node.id)).toEqual([
       c.result.id,
       c.call.id,
       c.empty.id,
@@ -342,19 +335,19 @@ alone(
       const { project, session } = yield* TestEnv;
       const c = yield* legacy;
       const another = yield* (yield* Sessions).create(project.id);
-      const cross = c.nodes.append({
+      const cross = yield* c.nodes.append({
         projectId: project.id,
         sessionId: another.id,
         kind: "user",
         text: "도구 없이 1부터 60까지 써줘",
       });
-      const same = c.nodes.append({
+      const same = yield* c.nodes.append({
         projectId: project.id,
         sessionId: session.id,
         kind: "user",
         text: "아니 SQLite 대신 Postgres로 바꾸자",
       });
-      const demoted = c.nodes.append({
+      const demoted = yield* c.nodes.append({
         projectId: project.id,
         sessionId: another.id,
         kind: "user",

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { expect, it } from "vite-plus/test";
-import { Nodes } from "../../src/memory/nodes.ts";
+import { Nodes, NodeStoreFailed } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import {
   captureMemoryEvidence,
@@ -19,13 +19,13 @@ const corrected = Effect.gen(function* () {
   const session = yield* (yield* Sessions).create(project.id);
   const nodes = yield* Nodes;
   const scope = { projectId: project.id, sessionId: session.id };
-  const previous = nodes.append({ ...scope, kind: "user", text: "obsolete-10" });
+  const previous = yield* nodes.append({ ...scope, kind: "user", text: "obsolete-10" });
   const expected = {
     ...scope,
     text: "Correction: replace my previous decision with decision-10-violet.",
     decision: "decision-10-violet",
   };
-  const correction = nodes.append({ ...scope, kind: "user", text: expected.text });
+  const correction = yield* nodes.append({ ...scope, kind: "user", text: expected.text });
   const evidence = yield* captureMemoryEvidence(expected);
   const answer = { decision: expected.decision, evidenceIds: [correction.id] };
   return { nodes, previous, correction, expected, evidence, answer };
@@ -35,7 +35,7 @@ testAgent()("RRSI memory score", (it) => {
   it.effect("captures the original correction before later turns and scores its JSON", () =>
     Effect.gen(function* () {
       const { nodes, evidence, answer, correction, previous } = yield* corrected;
-      const unrelated = nodes.append({
+      const unrelated = yield* nodes.append({
         projectId: evidence.projectId,
         sessionId: evidence.sessionId,
         kind: "user",
@@ -69,13 +69,13 @@ testAgent()("RRSI memory score", (it) => {
         { ...correction, sessionId: "another-session" },
         { ...correction, text: "obsolete-10" },
       ]) {
-        const store = Nodes.of({ ...nodes, get: () => source });
+        const store = Nodes.of({ ...nodes, get: () => Effect.succeed(source) });
         expect(
           yield* scoreMemoryAnswer(answer, evidence).pipe(Effect.provideService(Nodes, store)),
         ).toBe(false);
       }
       for (const source of [null, { ...correction, text: "obsolete-10" }]) {
-        const store = Nodes.of({ ...nodes, latestOfKind: () => source });
+        const store = Nodes.of({ ...nodes, latestOfKind: () => Effect.succeed(source) });
         const error = yield* Effect.flip(
           captureMemoryEvidence(expected).pipe(Effect.provideService(Nodes, store)),
         );
@@ -87,9 +87,8 @@ testAgent()("RRSI memory score", (it) => {
   it.effect("invalid output scores zero while native storage failures stay typed", () =>
     Effect.gen(function* () {
       const { nodes, evidence, expected, answer } = yield* corrected;
-      const unavailable = () => {
-        throw new Error("private database details");
-      };
+      const unavailable = () =>
+        Effect.fail(NodeStoreFailed.make({ cause: new Error("private database details") }));
       const store = Nodes.of({ ...nodes, get: unavailable, latestOfKind: unavailable });
       for (const text of [
         `My decision is not ${evidence.decision}. ${evidence.id}`,

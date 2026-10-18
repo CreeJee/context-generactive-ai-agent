@@ -1,17 +1,16 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Clock, Semaphore } from "effect";
+import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Interpretations } from "./interpretations.ts";
-import { Nodes, toNode, type Node } from "./nodes.ts";
+import { NodeRow, nodeOfRow, Nodes, type Node } from "./nodes.ts";
 import { meaningfulNodeFilter } from "./quality.ts";
 import { MemorySearch } from "./search.ts";
 
@@ -62,14 +61,6 @@ export class InterpretationFailed extends Data.TaggedError("InterpretationFailed
 }> {}
 
 const Job = Schema.Struct({ node_id: Schema.String, session_id: Schema.NullOr(Schema.String) });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeJob = EffectFunction.flow(Schema.decodeUnknownResult(Job), Result.getOrThrow);
-const Id = Schema.Struct({ id: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(Id), Result.getOrThrow);
-const Label = Schema.Struct({ text: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeLabel = EffectFunction.flow(Schema.decodeUnknownResult(Label), Result.getOrThrow);
 
 /** Statements per model call; they share one session, so the model sees them in order. */
 const batchSize = 8;
@@ -87,70 +78,92 @@ export const normalizeTopic = (label: string) =>
   label.replace(/\s+/gu, " ").trim().slice(0, topicLabelCharacters);
 
 const make = Effect.gen(function* () {
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
   const search = yield* MemorySearch;
   const interpretations = yield* Interpretations;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const oneRunAtATime = yield* Semaphore.make(1);
+  const meaningful = sql.literal(meaningfulNodeFilter);
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
-  sqlite.prepare("UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'").run();
+  yield* sql`UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'`.pipe(
+    Effect.orDie,
+  );
   // Earlier builds queued assistant answers too; only the user's words are interpreted now.
   // EXISTS looks up each pending job's node by id; `IN (SELECT ... WHERE kind = ...)` scanned every
   // node on each startup and blocked the event loop past the native index's startup deadline.
-  sqlite
-    .prepare(
-      "DELETE FROM interpret_jobs WHERE status = 'pending' AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = interpret_jobs.node_id AND n.kind = 'assistant')",
-    )
-    .run();
+  yield* sql`DELETE FROM interpret_jobs WHERE status = 'pending' AND EXISTS (SELECT 1 FROM nodes n
+    WHERE n.id = interpret_jobs.node_id AND n.kind = 'assistant')`.pipe(Effect.orDie);
 
   // The newest pending statement picks the session, so the conversation just held is interpreted
   // before an old backlog; inside that session statements still go oldest first. "Newest" is when
   // the statement was made: a migrated transcript has high seqs and old times, and ordering by seq
   // would let thousands of old statements push today's conversation behind them.
-  const newestPending = sqlite.prepare(`
-    SELECT j.node_id, n.session_id FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
-    WHERE j.status = 'pending' AND ${meaningfulNodeFilter} ORDER BY n.created_at DESC, n.seq DESC LIMIT 1`);
-  const pendingInSession = sqlite.prepare(`
-    SELECT n.* FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
-    WHERE j.status = 'pending' AND ${meaningfulNodeFilter} AND n.session_id = ? ORDER BY n.seq LIMIT ?`);
-  const markRunning = sqlite.prepare(
-    "UPDATE interpret_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE node_id = ?",
-  );
-  const markDone = sqlite.prepare(
-    "UPDATE interpret_jobs SET status = 'done', error = NULL, updated_at = ? WHERE node_id = ?",
-  );
-  const markFailed = sqlite.prepare(`
-    UPDATE interpret_jobs SET status = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
-    error = ?, updated_at = ? WHERE node_id = ? AND status = 'running'`);
-  const earlierInSession = sqlite.prepare(`
-    SELECT n.* FROM nodes n WHERE ${meaningfulNodeFilter} AND session_id = ? AND kind IN ('user', 'assistant') AND seq < ?
-    ORDER BY seq DESC LIMIT ?`);
-  const topicsOf = sqlite.prepare(
-    `SELECT n.text FROM nodes n WHERE ${meaningfulNodeFilter} AND project_id = ? AND kind = 'topic' ORDER BY seq DESC LIMIT 50`,
-  );
-  const topicByLabel = sqlite.prepare(
-    `SELECT n.id FROM nodes n WHERE ${meaningfulNodeFilter} AND project_id = ? AND kind = 'topic' AND lower(text) = lower(?) LIMIT 1`,
-  );
+  const newestPending = SqlSchema.findOneOption({
+    Request: Schema.Void,
+    Result: Job,
+    execute: () => sql`
+      SELECT j.node_id, n.session_id FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
+      WHERE j.status = 'pending' AND ${meaningful} ORDER BY n.created_at DESC, n.seq DESC LIMIT 1`,
+  });
+  const pendingInSession = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: NodeRow,
+    execute: (sessionId) => sql`
+      SELECT n.* FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
+      WHERE j.status = 'pending' AND ${meaningful} AND n.session_id = ${sessionId}
+      ORDER BY n.seq LIMIT ${batchSize}`,
+  });
+  const markRunning = (nodeId: string, now: string) =>
+    sql`UPDATE interpret_jobs SET status = 'running', attempts = attempts + 1, updated_at = ${now}
+      WHERE node_id = ${nodeId}`;
+  const markDone = (nodeId: string, now: string) =>
+    sql`UPDATE interpret_jobs SET status = 'done', error = NULL, updated_at = ${now}
+      WHERE node_id = ${nodeId}`;
+  const markFailed = (nodeId: string, error: string, now: string) => sql`
+    UPDATE interpret_jobs SET status = CASE WHEN attempts >= ${maxAttempts} THEN 'failed' ELSE 'pending' END,
+    error = ${error}, updated_at = ${now} WHERE node_id = ${nodeId} AND status = 'running'`;
+  const earlierInSession = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: Schema.String, seq: Schema.Finite }),
+    Result: NodeRow,
+    execute: ({ sessionId, seq }) => sql`
+      SELECT n.* FROM nodes n WHERE ${meaningful} AND session_id = ${sessionId}
+        AND kind IN ('user', 'assistant') AND seq < ${seq}
+      ORDER BY seq DESC LIMIT 6`,
+  });
+  const topicsOf = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ text: Schema.String }),
+    execute: (projectId) => sql`SELECT n.text FROM nodes n WHERE ${meaningful}
+      AND project_id = ${projectId} AND kind = 'topic' ORDER BY seq DESC LIMIT 50`,
+  });
+  const topicByLabel = SqlSchema.findOneOption({
+    Request: Schema.Struct({ projectId: Schema.String, label: Schema.String }),
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: ({ projectId, label }) => sql`SELECT n.id FROM nodes n WHERE ${meaningful}
+      AND project_id = ${projectId} AND kind = 'topic' AND lower(text) = lower(${label}) LIMIT 1`,
+  });
 
   /** The next batch: the oldest pending statements of the session with the newest pending one. */
-  const nextBatch = (): Node[] => {
-    const first = newestPending.get();
-    if (!isTruthy(first)) return [];
-    const job = decodeJob(first);
-    if (!isTruthy(job.session_id)) return [nodes.get(job.node_id)].filter((node) => node !== null);
-    return pendingInSession
-      .all(job.session_id, batchSize)
-      .map((row: Record<string, SQLOutputValue>) => toNode(row));
-  };
+  const nextBatch = Effect.gen(function* () {
+    const first = yield* newestPending();
+    if (Option.isNone(first)) return [];
+    const job = first.value;
+    if (!isTruthy(job.session_id))
+      return [yield* nodes.get(job.node_id)].filter((node) => node !== null);
+    return (yield* pendingInSession(job.session_id)).map(nodeOfRow);
+  });
 
   /** Earlier statements a statement may relate to: its session's recent ones and search matches. */
   const candidatesFor = (statement: Node) =>
     Effect.gen(function* () {
       const recent = isTruthy(statement.sessionId)
-        ? earlierInSession.all(statement.sessionId, statement.seq, 6).map(toNode)
+        ? (yield* earlierInSession({ sessionId: statement.sessionId, seq: statement.seq })).map(
+            nodeOfRow,
+          )
         : [];
       const found = yield* search
         .find({
@@ -160,10 +173,9 @@ const make = Effect.gen(function* () {
           limit: candidatesPerStatement,
         })
         .pipe(Effect.orElseSucceed(() => ({ matches: [] })));
-      const matched = found.matches.flatMap((match) => {
-        const node = nodes.get(match.id);
-        return isTruthy(node) ? [node] : [];
-      });
+      const matched = (yield* Effect.forEach(found.matches, (match) => nodes.get(match.id))).filter(
+        (node) => node !== null,
+      );
       const byId = MutableHashMap.empty<string, Node>();
       for (const node of [...recent, ...matched])
         if (
@@ -176,16 +188,15 @@ const make = Effect.gen(function* () {
       return [...MutableHashMap.values(byId)].slice(0, candidatesPerStatement);
     });
 
-  const topicNode = (projectId: string, label: string) => {
-    const existing = topicByLabel.get(projectId, label);
-    if (isTruthy(existing)) return decodeId(existing).id;
-    return nodes.append({ projectId, sessionId: null, kind: "topic", text: label }).id;
-  };
+  const topicNode = (projectId: string, label: string) =>
+    Effect.gen(function* () {
+      const existing = yield* topicByLabel({ projectId, label });
+      if (Option.isSome(existing)) return existing.value.id;
+      return (yield* nodes.append({ projectId, sessionId: null, kind: "topic", text: label })).id;
+    });
 
   const interpretBatch = (pending: readonly Node[], selection: ModelSelection) =>
     Effect.gen(function* () {
-      const effectClock = yield* Clock.Clock;
-
       const candidates = MutableHashMap.empty<string, readonly Node[]>();
       for (const statement of pending)
         MutableHashMap.set(candidates, statement.id, yield* candidatesFor(statement));
@@ -195,17 +206,16 @@ const make = Effect.gen(function* () {
           (Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? []).length > 0,
       );
       const alone = pending.filter((statement) => !batch.includes(statement));
-      if (alone.length > 0)
-        atomic(() => {
-          const now = DateTime.formatIso(
-            DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-          );
-          for (const statement of alone) markDone.run(now, statement.id);
-        });
+      if (alone.length > 0) {
+        const now = yield* nowIso;
+        yield* Effect.forEach(alone, (statement) => markDone(statement.id, now), {
+          discard: true,
+        }).pipe(sql.withTransaction);
+      }
       if (batch.length === 0) return pending.length;
       const projectId = batch[0]!.projectId;
       const input = {
-        existingTopics: topicsOf.all(projectId).map((row) => decodeLabel(row).text),
+        existingTopics: (yield* topicsOf(projectId)).map((row) => row.text),
         statements: batch.map((statement) => ({
           id: statement.id,
           role: statement.kind,
@@ -265,7 +275,7 @@ const make = Effect.gen(function* () {
       if (!isTruthy(labelled))
         return yield* new InterpretationFailed({ reason: "unreadable_answer" });
 
-      atomic(() => {
+      yield* Effect.gen(function* () {
         for (const statement of batch) {
           const result = labelled.statements.find((entry) => entry.id === statement.id);
           if (!isTruthy(result)) continue;
@@ -274,10 +284,10 @@ const make = Effect.gen(function* () {
 
           for (const label of EffectArray.dedupe(result.topics.map(normalizeTopic))) {
             if (label.length === 0) continue;
-            interpretations.record({
+            yield* interpretations.record({
               nodeId: statement.id,
               kind: "about",
-              targetId: topicNode(statement.projectId, label),
+              targetId: yield* topicNode(statement.projectId, label),
               status: "applied",
               reason: label,
               model: cheap.model,
@@ -292,7 +302,7 @@ const make = Effect.gen(function* () {
               case "retracts":
                 // Only the user's own words change a decision (R07 authority).
                 if (statement.kind !== "user") break;
-                interpretations.record({
+                yield* interpretations.record({
                   nodeId: statement.id,
                   kind: link.relation,
                   targetId: link.target,
@@ -309,7 +319,7 @@ const make = Effect.gen(function* () {
                 break;
               case "related":
                 if (link.certainty !== "clear") break;
-                interpretations.record({
+                yield* interpretations.record({
                   nodeId: statement.id,
                   kind: "related",
                   targetId: link.target,
@@ -320,21 +330,13 @@ const make = Effect.gen(function* () {
                 break;
             }
           }
-          markDone.run(
-            DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-            statement.id,
-          );
+          yield* markDone(statement.id, yield* nowIso);
         }
         // A statement the answer skipped is retried later, like any other failure.
         for (const statement of batch)
           if (!labelled.statements.some((entry) => entry.id === statement.id))
-            markFailed.run(
-              maxAttempts,
-              "missing_from_answer",
-              DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-              statement.id,
-            );
-      });
+            yield* markFailed(statement.id, "missing_from_answer", yield* nowIso);
+      }).pipe(sql.withTransaction);
       return pending.length;
     });
 
@@ -346,30 +348,29 @@ const make = Effect.gen(function* () {
      * search keeps working either way.
      */
     runPending: Effect.gen(function* () {
-      const effectClock = yield* Clock.Clock;
-
       const selection = yield* active.selected;
       if (!isTruthy(selection)) return 0;
       const auth = yield* active.auth(selection);
       if (auth.status !== "signed-in") return 0;
       let interpreted = 0;
       for (let round = 0; round < batchesPerRun; round++) {
-        const batch = nextBatch();
+        const batch = yield* nextBatch;
         if (batch.length === 0) break;
-        const now = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-        for (const statement of batch) markRunning.run(now, statement.id);
+        const now = yield* nowIso;
+        yield* Effect.forEach(batch, (statement) => markRunning(statement.id, now), {
+          discard: true,
+        }).pipe(sql.withTransaction);
         interpreted += yield* interpretBatch(batch, selection).pipe(
           Effect.catch((error) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               const reason =
                 error instanceof InterpretationFailed ? error.reason : "interpret_failed";
-              for (const statement of batch)
-                markFailed.run(
-                  maxAttempts,
-                  reason,
-                  DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
-                  statement.id,
-                );
+              const failedAt = yield* nowIso;
+              yield* Effect.forEach(
+                batch,
+                (statement) => markFailed(statement.id, reason, failedAt),
+                { discard: true },
+              ).pipe(sql.withTransaction);
               return 0;
             }),
           ),

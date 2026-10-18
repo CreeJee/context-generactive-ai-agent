@@ -1,7 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
-import type { SQLOutputValue } from "node:sqlite";
-import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { Array as EffectArray, DateTime, Context, Effect, Layer, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { meaningfulNodeFilter } from "./quality.ts";
 import { edgeWeights } from "./edges.ts";
 
@@ -30,83 +28,76 @@ const Row = Schema.Struct({
   model: Schema.String,
   created_at: Schema.String,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRow = EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow);
-const toInterpretation = (row: Record<string, SQLOutputValue>): Interpretation => {
-  const decoded = decodeRow(row);
-  return {
-    nodeId: decoded.node_id,
-    kind: decoded.kind,
-    targetId: decoded.target_id,
-    status: decoded.status,
-    reason: decoded.reason,
-    model: decoded.model,
-    createdAt: decoded.created_at,
-  };
-};
+const toInterpretation = (row: typeof Row.Type): Interpretation => ({
+  nodeId: row.node_id,
+  kind: row.kind,
+  targetId: row.target_id,
+  status: row.status,
+  reason: row.reason,
+  model: row.model,
+  createdAt: row.created_at,
+});
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCount = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
-  Result.getOrThrow,
-);
+/** Interpretations could not be read or written; the cause stays with the error. */
+export class InterpretationStoreFailed extends Schema.TaggedError<InterpretationStoreFailed>()(
+  "InterpretationStoreFailed",
+  { cause: Schema.Defect() },
+) {}
+const stored = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.mapError(effect, (cause) => InterpretationStoreFailed.make({ cause }));
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
-
-  const { sqlite } = yield* Database;
-  const insert = sqlite.prepare(
-    "INSERT INTO interpretations (node_id, kind, target_id, status, reason, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  );
-  const insertEdge = sqlite.prepare(
-    "INSERT INTO edges VALUES (?, ?, ?, 'llm', ?, ?) ON CONFLICT DO NOTHING",
-  );
-
-  const validEndpoints = sqlite.prepare(`
-    SELECT count(*) AS count FROM nodes n WHERE n.id IN (?, ?) AND ${meaningfulNodeFilter}`);
+  const sql = yield* SqlClient.SqlClient;
+  const validEndpoints = SqlSchema.findOne({
+    Request: Schema.Struct({ nodeId: Schema.String, targetId: Schema.String }),
+    Result: Schema.Struct({ count: Schema.Finite }),
+    execute: ({ nodeId, targetId }) => sql`SELECT count(*) AS count FROM nodes n
+      WHERE n.id IN (${nodeId}, ${targetId}) AND ${sql.literal(meaningfulNodeFilter)}`,
+  });
+  const targetingRows = SqlSchema.findAll({
+    Request: Schema.Struct({
+      targetIds: Schema.Array(Schema.String),
+      status: Schema.Literals(["applied", "unconfirmed"]),
+    }),
+    Result: Row,
+    execute: ({ targetIds, status }) => sql`SELECT * FROM interpretations
+      WHERE status = ${status} AND target_id IN ${sql.in(targetIds)} ORDER BY id`,
+  });
 
   return {
     /**
      * Records a conclusion. An applied one also becomes an llm edge from the statement to its target,
      * so graph walks and traces follow it; an unconfirmed one stays a question.
      */
-    record(interpretation: Omit<Interpretation, "createdAt">) {
-      if (
-        decodeCount(validEndpoints.get(interpretation.nodeId, interpretation.targetId)).count !== 2
-      )
-        return;
-      const createdAt = DateTime.formatIso(
-        DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-      );
-      insert.run(
-        interpretation.nodeId,
-        interpretation.kind,
-        interpretation.targetId,
-        interpretation.status,
-        interpretation.reason,
-        interpretation.model,
-        createdAt,
-      );
-      if (interpretation.status === "applied")
-        insertEdge.run(
-          interpretation.nodeId,
-          interpretation.targetId,
-          interpretation.kind,
-          edgeWeights[interpretation.kind],
-          createdAt,
-        );
-    },
+    record: (interpretation: Omit<Interpretation, "createdAt">) =>
+      stored(
+        Effect.gen(function* () {
+          const { count } = yield* validEndpoints(interpretation);
+          if (count !== 2) return;
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          yield* sql`INSERT INTO interpretations ${sql.insert({
+            node_id: interpretation.nodeId,
+            kind: interpretation.kind,
+            target_id: interpretation.targetId,
+            status: interpretation.status,
+            reason: interpretation.reason,
+            model: interpretation.model,
+            created_at: createdAt,
+          })}`;
+          if (interpretation.status === "applied")
+            yield* sql`INSERT INTO edges VALUES (${interpretation.nodeId}, ${interpretation.targetId},
+              ${interpretation.kind}, 'llm', ${edgeWeights[interpretation.kind]}, ${createdAt})
+              ON CONFLICT DO NOTHING`;
+        }).pipe(sql.withTransaction),
+      ),
 
     /** Conclusions whose target is one of these nodes, oldest first. */
-    targeting(targetIds: readonly string[], status: Interpretation["status"]): Interpretation[] {
-      if (targetIds.length === 0) return [];
-      return sqlite
-        .prepare(
-          `SELECT * FROM interpretations WHERE status = ? AND target_id IN (${targetIds.map(() => "?").join(", ")}) ORDER BY id`,
-        )
-        .all(status, ...targetIds)
-        .map(toInterpretation);
-    },
+    targeting: (targetIds: readonly string[], status: Interpretation["status"]) =>
+      targetIds.length === 0
+        ? Effect.succeed(EffectArray.empty<Interpretation>())
+        : stored(
+            Effect.map(targetingRows({ targetIds, status }), (rows) => rows.map(toInterpretation)),
+          ),
   };
 });
 

@@ -443,8 +443,7 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
             expect(text).toContain("RUN_FINISHED");
             expect(log.released).toHaveLength(owner);
             expect(
-              nodes
-                .session(id)
+              (yield* nodes.session(id))
                 .filter((node) => node.kind === "assistant")
                 .map((node) => node.text),
             ).toContain(answer);

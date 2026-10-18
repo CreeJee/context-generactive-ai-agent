@@ -1,9 +1,9 @@
-import { Array as EffectArray, Result, Function as EffectFunction } from "effect";
+import { Array as EffectArray, Option, Predicate } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeCrypto } from "@effect/platform-node";
 import { Clock, Context, Crypto, Data, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Nodes } from "./nodes.ts";
 
 export type MemoryDisposition = "saved" | "edited_saved" | "conversation_only" | "rejected";
@@ -87,37 +87,6 @@ const UsageRow = Schema.Struct({
   kind: Schema.Literals(["retrieved", "used"]),
   created_at: Schema.Finite,
 });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeClaimSource = EffectFunction.flow(
-  Schema.decodeUnknownResult(ClaimSourceRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeExisting = EffectFunction.flow(
-  Schema.decodeUnknownResult(ExistingRow),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCandidates = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(CandidateRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCandidateEvidence = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(CandidateEvidenceRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeCandidateIdentities = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(CandidateIdentityRow)),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeUsage = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(UsageRow)),
-  Result.getOrThrow,
-);
-
 type MemoryPromotionReason =
   | "empty_proposed_text"
   | "empty_resolved_text"
@@ -142,168 +111,260 @@ export class MemoryPromotionRejected extends Data.TaggedError("MemoryPromotionRe
   }
 }
 
+/** A knowledge store read or write failed; the cause stays for diagnosis. */
+export class KnowledgeStoreFailed extends Schema.TaggedError<KnowledgeStoreFailed>()(
+  "KnowledgeStoreFailed",
+  { cause: Schema.Defect() },
+) {}
+
+/** Storage and codec failures keep their cause; promotion refusals pass through. */
+const stored = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.catchIf(
+    effect,
+    (error: E): error is Exclude<E, MemoryPromotionRejected> =>
+      !Predicate.isTagged(error, "MemoryPromotionRejected"),
+    (cause) => Effect.fail(KnowledgeStoreFailed.make({ cause })),
+  );
+
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
   const crypto = yield* Crypto.Crypto;
-  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
-
-  const { sqlite, atomic } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
-  const claimSource = sqlite.prepare(`
-    SELECT c.project_id, c.origin_session_id FROM final_answer_claims c
-    JOIN final_answer_sources s ON s.claim_id = c.id
-    WHERE c.id = ? AND c.project_id = ? AND s.task_id = ? AND s.attempt_id = ? LIMIT 1`);
-  const evidenceSource = sqlite.prepare(`
-    SELECT e.id FROM final_answer_sources s JOIN evidence_refs e ON e.id = s.evidence_ref_id
-    WHERE s.claim_id = ? AND s.task_id = ? AND s.attempt_id = ?
-      AND s.evidence_ref_id = ? AND e.verification = 'verified'`);
-  const existing = sqlite.prepare(`
-    SELECT d.id FROM knowledge_decisions d
-    WHERE d.claim_id = ? AND d.authorized_by_user_node_id = ? AND d.text = ? AND d.status = ?`);
-  const evidenceFor = sqlite.prepare(`
-    SELECT ce.evidence_ref_id_snapshot, coalesce(ce.source_deleted_at, e.source_deleted_at) AS source_deleted_at
-    FROM memory_candidate_evidence ce LEFT JOIN evidence_refs e ON e.id = ce.evidence_ref_id
-    WHERE ce.candidate_id = ? ORDER BY ce.evidence_ref_id_snapshot`);
+  const nowMillis = Clock.currentTimeMillis;
 
-  const candidateRows = (where: string, value: string) =>
-    decodeCandidates(
-      sqlite
-        .prepare(`
-    SELECT c.id, c.decision_id, c.project_id, d.task_id, d.attempt_id, d.claim_id,
-           d.origin_session_id,
-           d.authorized_by_user_node_id_snapshot AS authorized_by_user_node_id, c.proposed_text,
-           c.resolved_text, c.disposition, c.memory_node_id, c.created_at
-    FROM memory_candidates c JOIN knowledge_decisions d ON d.id = c.decision_id
-    WHERE ${where} = ? ORDER BY c.created_at, c.id`)
-        .all(value),
-    );
-  const toView = (row: typeof CandidateRow.Type): MemoryCandidateView => ({
-    id: row.id,
-    decisionId: row.decision_id,
-    projectId: row.project_id,
-    taskId: row.task_id,
-    attemptId: row.attempt_id,
-    claimId: row.claim_id,
-    originSessionId: row.origin_session_id,
-    authorizedByUserNodeId: row.authorized_by_user_node_id,
-    proposedText: row.proposed_text,
-    resolvedText: row.resolved_text,
-    disposition: row.disposition,
-    memoryNodeId: row.memory_node_id,
-    evidence: decodeCandidateEvidence(evidenceFor.all(row.id)).map((source) => ({
-      evidenceRefId: source.evidence_ref_id_snapshot,
-      sourceDeletedAt: source.source_deleted_at,
-    })),
-    createdAt: row.created_at,
+  const claimSource = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      claimId: Schema.String,
+      projectId: Schema.String,
+      taskId: Schema.String,
+      attemptId: Schema.String,
+    }),
+    Result: ClaimSourceRow,
+    execute: ({ claimId, projectId, taskId, attemptId }) => sql`
+      SELECT c.project_id, c.origin_session_id FROM final_answer_claims c
+      JOIN final_answer_sources s ON s.claim_id = c.id
+      WHERE c.id = ${claimId} AND c.project_id = ${projectId} AND s.task_id = ${taskId}
+        AND s.attempt_id = ${attemptId} LIMIT 1`,
   });
-  const candidateByDecision = (decisionId: string): MemoryCandidateView => {
-    const row = candidateRows("d.id", decisionId)[0];
-    if (!isTruthy(row)) throw new Error("Memory candidate was not persisted");
-    return toView(row);
-  };
+  const evidenceSource = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      claimId: Schema.String,
+      taskId: Schema.String,
+      attemptId: Schema.String,
+      evidenceRefId: Schema.String,
+    }),
+    Result: ExistingRow,
+    execute: ({ claimId, taskId, attemptId, evidenceRefId }) => sql`
+      SELECT e.id FROM final_answer_sources s JOIN evidence_refs e ON e.id = s.evidence_ref_id
+      WHERE s.claim_id = ${claimId} AND s.task_id = ${taskId} AND s.attempt_id = ${attemptId}
+        AND s.evidence_ref_id = ${evidenceRefId} AND e.verification = 'verified'`,
+  });
+  const existing = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      claimId: Schema.String,
+      userNodeId: Schema.String,
+      text: Schema.String,
+      status: Schema.String,
+    }),
+    Result: ExistingRow,
+    execute: ({ claimId, userNodeId, text, status }) => sql`
+      SELECT d.id FROM knowledge_decisions d
+      WHERE d.claim_id = ${claimId} AND d.authorized_by_user_node_id = ${userNodeId}
+        AND d.text = ${text} AND d.status = ${status}`,
+  });
+  const evidenceFor = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: CandidateEvidenceRow,
+    execute: (candidateId) => sql`
+      SELECT ce.evidence_ref_id_snapshot,
+             coalesce(ce.source_deleted_at, e.source_deleted_at) AS source_deleted_at
+      FROM memory_candidate_evidence ce LEFT JOIN evidence_refs e ON e.id = ce.evidence_ref_id
+      WHERE ce.candidate_id = ${candidateId} ORDER BY ce.evidence_ref_id_snapshot`,
+  });
+  const candidateRows = (column: "d.id" | "d.task_id") =>
+    SqlSchema.findAll({
+      Request: Schema.String,
+      Result: CandidateRow,
+      execute: (value) => sql`
+        SELECT c.id, c.decision_id, c.project_id, d.task_id, d.attempt_id, d.claim_id,
+               d.origin_session_id,
+               d.authorized_by_user_node_id_snapshot AS authorized_by_user_node_id,
+               c.proposed_text, c.resolved_text, c.disposition, c.memory_node_id, c.created_at
+        FROM memory_candidates c JOIN knowledge_decisions d ON d.id = c.decision_id
+        WHERE ${sql.literal(column)} = ${value} ORDER BY c.created_at, c.id`,
+    });
+  const candidatesOfDecision = candidateRows("d.id");
+  const candidatesOfTask = candidateRows("d.task_id");
+  const retrievable = SqlSchema.findAll({
+    Request: Schema.Struct({
+      projectId: Schema.String,
+      memoryNodeIds: Schema.Array(Schema.String),
+    }),
+    Result: CandidateIdentityRow,
+    execute: ({ projectId, memoryNodeIds }) => sql`
+      SELECT id, memory_node_id FROM memory_candidates
+      WHERE project_id = ${projectId} AND memory_node_id IN ${sql.in(memoryNodeIds)}`,
+  });
+  const retrievedInRun = SqlSchema.findAll({
+    Request: Schema.Struct({
+      projectId: Schema.String,
+      memoryNodeIds: Schema.Array(Schema.String),
+      runId: Schema.String,
+    }),
+    Result: CandidateIdentityRow,
+    execute: ({ projectId, memoryNodeIds, runId }) => sql`
+      SELECT c.id, c.memory_node_id FROM memory_candidates c
+      WHERE c.project_id = ${projectId} AND c.memory_node_id IN ${sql.in(memoryNodeIds)}
+        AND EXISTS (SELECT 1 FROM memory_usage_events u
+          WHERE u.candidate_id = c.id AND u.parent_run_id = ${runId} AND u.kind = 'retrieved')`,
+  });
+  const usageRows = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: UsageRow,
+    execute: (taskId) => sql`
+      SELECT u.id, u.candidate_id, u.memory_node_id, u.origin_session_id, u.parent_run_id,
+             u.parent_message_id, u.kind, u.created_at
+      FROM memory_usage_events u JOIN memory_candidates c ON c.id = u.candidate_id
+      JOIN knowledge_decisions d ON d.id = c.decision_id WHERE d.task_id = ${taskId}
+      ORDER BY u.created_at, CASE u.kind WHEN 'retrieved' THEN 0 ELSE 1 END, u.id`,
+  });
+
+  const toView = (row: typeof CandidateRow.Type) =>
+    Effect.map(evidenceFor(row.id), (evidence): MemoryCandidateView => ({
+      id: row.id,
+      decisionId: row.decision_id,
+      projectId: row.project_id,
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      claimId: row.claim_id,
+      originSessionId: row.origin_session_id,
+      authorizedByUserNodeId: row.authorized_by_user_node_id,
+      proposedText: row.proposed_text,
+      resolvedText: row.resolved_text,
+      disposition: row.disposition,
+      memoryNodeId: row.memory_node_id,
+      evidence: evidence.map((source) => ({
+        evidenceRefId: source.evidence_ref_id_snapshot,
+        sourceDeletedAt: source.source_deleted_at,
+      })),
+      createdAt: row.created_at,
+    }));
+  // A decision written in this transaction always has its candidate.
+  const candidateByDecision = (decisionId: string) =>
+    candidatesOfDecision(decisionId).pipe(
+      Effect.map(EffectArray.head),
+      Effect.flatMap(Effect.fromOption),
+      Effect.flatMap(toView),
+    );
 
   const promote = (input: PromoteMemoryInput) =>
-    Effect.gen(function* () {
-      const effectClock = yield* Clock.Clock;
-
-      const proposedText = input.proposedText.trim();
-      if (!isTruthy(proposedText))
-        return yield* new MemoryPromotionRejected({ reason: "empty_proposed_text" });
-      const resolvedText = input.resolvedText.trim();
-      if (!isTruthy(resolvedText))
-        return yield* new MemoryPromotionRejected({ reason: "empty_resolved_text" });
-      const userNode = nodes.get(input.authorizedByUserNodeId);
-      if (
-        !isTruthy(userNode) ||
-        userNode.kind !== "user" ||
-        userNode.projectId !== input.projectId ||
-        userNode.sessionId !== input.sessionId
-      )
-        return yield* new MemoryPromotionRejected({ reason: "missing_user_authorization" });
-      const claimRow = claimSource.get(
-        input.claimId,
-        input.projectId,
-        input.taskId,
-        input.attemptId,
-      );
-      if (!isTruthy(claimRow))
-        return yield* new MemoryPromotionRejected({ reason: "claim_not_adopted" });
-      const claim = decodeClaimSource(claimRow);
-      for (const evidenceRefId of EffectArray.dedupe(input.evidenceRefIds))
+    stored(
+      Effect.gen(function* () {
+        const proposedText = input.proposedText.trim();
+        if (!isTruthy(proposedText))
+          return yield* new MemoryPromotionRejected({ reason: "empty_proposed_text" });
+        const resolvedText = input.resolvedText.trim();
+        if (!isTruthy(resolvedText))
+          return yield* new MemoryPromotionRejected({ reason: "empty_resolved_text" });
+        const userNode = yield* nodes.get(input.authorizedByUserNodeId);
         if (
-          !isTruthy(evidenceSource.get(input.claimId, input.taskId, input.attemptId, evidenceRefId))
+          !isTruthy(userNode) ||
+          userNode.kind !== "user" ||
+          userNode.projectId !== input.projectId ||
+          userNode.sessionId !== input.sessionId
         )
-          return yield* new MemoryPromotionRejected({ reason: "evidence_not_adopted" });
-      const status: MemoryDisposition =
-        input.disposition === "reject"
-          ? "rejected"
-          : input.disposition === "conversation_only"
-            ? "conversation_only"
-            : proposedText === resolvedText
-              ? "saved"
-              : "edited_saved";
-
-      return atomic(() => {
-        const found = existing.get(
-          input.claimId,
-          input.authorizedByUserNodeId,
-          resolvedText,
-          status,
+          return yield* new MemoryPromotionRejected({ reason: "missing_user_authorization" });
+        const claim = yield* claimSource(input).pipe(
+          Effect.flatMap(Effect.fromOption),
+          Effect.catchTag("NoSuchElementError", () =>
+            Effect.fail(new MemoryPromotionRejected({ reason: "claim_not_adopted" })),
+          ),
         );
-        if (isTruthy(found)) return candidateByDecision(decodeExisting(found).id);
-        const decisionId = runSync(crypto.randomUUIDv4());
-        const candidateId = runSync(crypto.randomUUIDv4());
-        const createdAt = effectClock.currentTimeMillisUnsafe();
-        const memoryNode =
-          status === "saved" || status === "edited_saved"
-            ? nodes.append({
-                projectId: input.projectId,
-                sessionId: null,
-                kind: "topic",
-                text: resolvedText,
-                detail: { memoryCandidateId: candidateId, authorizedByUserNodeId: userNode.id },
-              })
-            : null;
-        sqlite
-          .prepare(`INSERT INTO knowledge_decisions
-        (id, project_id, task_id, attempt_id, claim_id, origin_session_id,
-         authorized_by_user_node_id, authorized_by_user_node_id_snapshot, text, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(
-            decisionId,
-            input.projectId,
-            input.taskId,
-            input.attemptId,
-            input.claimId,
-            claim.origin_session_id,
-            userNode.id,
-            userNode.id,
-            resolvedText,
+        const evidenceRefIds = EffectArray.dedupe(input.evidenceRefIds);
+        for (const evidenceRefId of evidenceRefIds)
+          if (Option.isNone(yield* evidenceSource({ ...input, evidenceRefId })))
+            return yield* new MemoryPromotionRejected({ reason: "evidence_not_adopted" });
+        const status: MemoryDisposition =
+          input.disposition === "reject"
+            ? "rejected"
+            : input.disposition === "conversation_only"
+              ? "conversation_only"
+              : proposedText === resolvedText
+                ? "saved"
+                : "edited_saved";
+
+        return yield* Effect.gen(function* () {
+          const found = yield* existing({
+            claimId: input.claimId,
+            userNodeId: input.authorizedByUserNodeId,
+            text: resolvedText,
             status,
-            createdAt,
-          );
-        sqlite
-          .prepare(`INSERT INTO memory_candidates
-        (id, decision_id, project_id, proposed_text, resolved_text, disposition, memory_node_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(
-            candidateId,
-            decisionId,
-            input.projectId,
-            proposedText,
-            resolvedText,
+          });
+          if (Option.isSome(found)) return yield* candidateByDecision(found.value.id);
+          const decisionId = yield* crypto.randomUUIDv4();
+          const candidateId = yield* crypto.randomUUIDv4();
+          const createdAt = yield* nowMillis;
+          const memoryNode =
+            status === "saved" || status === "edited_saved"
+              ? yield* nodes.append({
+                  projectId: input.projectId,
+                  sessionId: null,
+                  kind: "topic",
+                  text: resolvedText,
+                  detail: { memoryCandidateId: candidateId, authorizedByUserNodeId: userNode.id },
+                })
+              : null;
+          yield* sql`INSERT INTO knowledge_decisions ${sql.insert({
+            id: decisionId,
+            project_id: input.projectId,
+            task_id: input.taskId,
+            attempt_id: input.attemptId,
+            claim_id: input.claimId,
+            origin_session_id: claim.origin_session_id,
+            authorized_by_user_node_id: userNode.id,
+            authorized_by_user_node_id_snapshot: userNode.id,
+            text: resolvedText,
             status,
-            memoryNode?.id ?? null,
-            createdAt,
-          );
-        const addEvidence = sqlite.prepare(`INSERT INTO memory_candidate_evidence
-        (candidate_id, evidence_ref_id, evidence_ref_id_snapshot, source_deleted_at)
-        VALUES (?, ?, ?, NULL)`);
-        for (const evidenceRefId of EffectArray.dedupe(input.evidenceRefIds))
-          addEvidence.run(candidateId, evidenceRefId, evidenceRefId);
-        return candidateByDecision(decisionId);
-      });
-    });
+            created_at: createdAt,
+          })}`;
+          yield* sql`INSERT INTO memory_candidates ${sql.insert({
+            id: candidateId,
+            decision_id: decisionId,
+            project_id: input.projectId,
+            proposed_text: proposedText,
+            resolved_text: resolvedText,
+            disposition: status,
+            memory_node_id: memoryNode?.id ?? null,
+            created_at: createdAt,
+          })}`;
+          for (const evidenceRefId of evidenceRefIds)
+            yield* sql`INSERT INTO memory_candidate_evidence
+              (candidate_id, evidence_ref_id, evidence_ref_id_snapshot, source_deleted_at)
+              VALUES (${candidateId}, ${evidenceRefId}, ${evidenceRefId}, NULL)`;
+          return yield* candidateByDecision(decisionId);
+        }).pipe(sql.withTransaction);
+      }),
+    );
+
+  const recordUsage = Effect.fnUntraced(function* (
+    candidates: readonly (typeof CandidateIdentityRow.Type)[],
+    input: { readonly projectId: string; readonly sessionId: string; readonly runId: string },
+    parentMessageId: string | null,
+    kind: "retrieved" | "used",
+  ) {
+    for (const candidate of candidates)
+      yield* sql`INSERT OR IGNORE INTO memory_usage_events ${sql.insert({
+        id: yield* crypto.randomUUIDv4(),
+        project_id: input.projectId,
+        candidate_id: candidate.id,
+        memory_node_id: candidate.memory_node_id,
+        origin_session_id: input.sessionId,
+        parent_run_id: input.runId,
+        parent_message_id: parentMessageId,
+        kind,
+        created_at: yield* nowMillis,
+      })}`;
+  });
 
   const recordRetrieval = (input: {
     readonly projectId: string;
@@ -311,30 +372,15 @@ const make = Effect.gen(function* () {
     readonly runId: string;
     readonly memoryNodeIds: readonly string[];
   }) =>
-    atomic(() => {
-      const placeholders = input.memoryNodeIds.map(() => "?").join(", ");
-      if (!isTruthy(placeholders)) return [];
-      const candidates = decodeCandidateIdentities(
-        sqlite
-          .prepare(`SELECT id, memory_node_id FROM memory_candidates
-      WHERE project_id = ? AND memory_node_id IN (${placeholders})`)
-          .all(input.projectId, ...input.memoryNodeIds),
-      );
-      const insert = sqlite.prepare(`INSERT OR IGNORE INTO memory_usage_events
-      (id, project_id, candidate_id, memory_node_id, origin_session_id, parent_run_id, parent_message_id, kind, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, 'retrieved', ?)`);
-      for (const candidate of candidates)
-        insert.run(
-          runSync(crypto.randomUUIDv4()),
-          input.projectId,
-          candidate.id,
-          candidate.memory_node_id,
-          input.sessionId,
-          input.runId,
-          effectClock.currentTimeMillisUnsafe(),
+    input.memoryNodeIds.length === 0
+      ? Effect.succeed([])
+      : stored(
+          Effect.gen(function* () {
+            const candidates = yield* retrievable(input);
+            yield* recordUsage(candidates, input, null, "retrieved");
+            return candidates.map((candidate) => candidate.memory_node_id);
+          }).pipe(sql.withTransaction),
         );
-      return candidates.map((candidate) => candidate.memory_node_id);
-    });
 
   const recordUsed = (input: {
     readonly projectId: string;
@@ -343,53 +389,36 @@ const make = Effect.gen(function* () {
     readonly parentMessageId: string;
     readonly memoryNodeIds: readonly string[];
   }) =>
-    atomic(() => {
-      const placeholders = input.memoryNodeIds.map(() => "?").join(", ");
-      if (!isTruthy(placeholders)) return;
-      const candidates = decodeCandidateIdentities(
-        sqlite
-          .prepare(`SELECT c.id, c.memory_node_id FROM memory_candidates c
-      WHERE c.project_id = ? AND c.memory_node_id IN (${placeholders})
-        AND EXISTS (SELECT 1 FROM memory_usage_events u
-          WHERE u.candidate_id = c.id AND u.parent_run_id = ? AND u.kind = 'retrieved')`)
-          .all(input.projectId, ...input.memoryNodeIds, input.runId),
-      );
-      const insert = sqlite.prepare(`INSERT OR IGNORE INTO memory_usage_events
-      (id, project_id, candidate_id, memory_node_id, origin_session_id, parent_run_id, parent_message_id, kind, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'used', ?)`);
-      for (const candidate of candidates)
-        insert.run(
-          runSync(crypto.randomUUIDv4()),
-          input.projectId,
-          candidate.id,
-          candidate.memory_node_id,
-          input.sessionId,
-          input.runId,
-          input.parentMessageId,
-          effectClock.currentTimeMillisUnsafe(),
+    input.memoryNodeIds.length === 0
+      ? Effect.void
+      : stored(
+          retrievedInRun(input).pipe(
+            Effect.flatMap((candidates) =>
+              recordUsage(candidates, input, input.parentMessageId, "used"),
+            ),
+            sql.withTransaction,
+          ),
         );
-    });
 
-  const candidatesForTask = (taskId: string) => candidateRows("d.task_id", taskId).map(toView);
-  const usageForTask = (taskId: string): MemoryUsageView[] =>
-    decodeUsage(
-      sqlite
-        .prepare(`SELECT u.id, u.candidate_id,
-    u.memory_node_id, u.origin_session_id, u.parent_run_id, u.parent_message_id, u.kind, u.created_at
-    FROM memory_usage_events u JOIN memory_candidates c ON c.id = u.candidate_id
-    JOIN knowledge_decisions d ON d.id = c.decision_id WHERE d.task_id = ?
-    ORDER BY u.created_at, CASE u.kind WHEN 'retrieved' THEN 0 ELSE 1 END, u.id`)
-        .all(taskId),
-    ).map((row) => ({
-      id: row.id,
-      candidateId: row.candidate_id,
-      memoryNodeId: row.memory_node_id,
-      originSessionId: row.origin_session_id,
-      parentRunId: row.parent_run_id,
-      parentMessageId: row.parent_message_id,
-      kind: row.kind,
-      createdAt: row.created_at,
-    }));
+  const candidatesForTask = (taskId: string) =>
+    stored(candidatesOfTask(taskId).pipe(Effect.flatMap((rows) => Effect.forEach(rows, toView))));
+  const usageForTask = (taskId: string) =>
+    stored(
+      usageRows(taskId).pipe(
+        Effect.map((rows) =>
+          rows.map((row): MemoryUsageView => ({
+            id: row.id,
+            candidateId: row.candidate_id,
+            memoryNodeId: row.memory_node_id,
+            originSessionId: row.origin_session_id,
+            parentRunId: row.parent_run_id,
+            parentMessageId: row.parent_message_id,
+            kind: row.kind,
+            createdAt: row.created_at,
+          })),
+        ),
+      ),
+    );
 
   return { promote, recordRetrieval, recordUsed, candidatesForTask, usageForTask };
 });

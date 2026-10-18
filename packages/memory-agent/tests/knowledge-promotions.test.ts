@@ -53,7 +53,7 @@ describe("Work Trace knowledge promotion", () => {
           const trace = yield* WorkTraceStore;
           const knowledge = yield* KnowledgePromotions;
           seed(db);
-          const user = nodes.append({
+          const user = yield* nodes.append({
             projectId: "p1",
             sessionId: "s1",
             kind: "user",
@@ -130,7 +130,7 @@ describe("Work Trace knowledge promotion", () => {
             disposition: "edited_saved",
             evidence: [{ evidenceRefId: evidence.id }],
           });
-          const memory = nodes.get(candidate.memoryNodeId!);
+          const memory = yield* nodes.get(candidate.memoryNodeId!);
           expect(memory).toMatchObject({
             projectId: "p1",
             sessionId: null,
@@ -140,24 +140,24 @@ describe("Work Trace knowledge promotion", () => {
           });
 
           expect(
-            knowledge.recordRetrieval({
+            yield* knowledge.recordRetrieval({
               projectId: "p1",
               sessionId: "s1",
               runId: "run-2",
               memoryNodeIds: [memory!.id],
             }),
           ).toEqual([memory!.id]);
-          expect(knowledge.usageForTask(handle.taskId).map((item) => item.kind)).toEqual([
+          expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
             "retrieved",
           ]);
-          knowledge.recordUsed({
+          yield* knowledge.recordUsed({
             projectId: "p1",
             sessionId: "s1",
             runId: "run-2",
             parentMessageId: "answer-2",
             memoryNodeIds: [memory!.id],
           });
-          expect(knowledge.usageForTask(handle.taskId).map((item) => item.kind)).toEqual([
+          expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
             "retrieved",
             "used",
           ]);
@@ -166,12 +166,14 @@ describe("Work Trace knowledge promotion", () => {
           db.sqlite.prepare("DELETE FROM interpret_jobs WHERE node_id = ?").run(user.id);
           db.sqlite.prepare("DELETE FROM nodes WHERE session_id = 's1'").run();
           db.sqlite.prepare("DELETE FROM sessions WHERE id = 's1'").run();
-          expect(knowledge.candidatesForTask(handle.taskId)[0]).toMatchObject({
+          expect((yield* knowledge.candidatesForTask(handle.taskId))[0]).toMatchObject({
             id: candidate.id,
             originSessionId: null,
             authorizedByUserNodeId: user.id,
           });
-          expect(nodes.get(memory!.id)?.text).toBe("Use SQLite for durable Work Trace state.");
+          expect((yield* nodes.get(memory!.id))?.text).toBe(
+            "Use SQLite for durable Work Trace state.",
+          );
         }),
       ),
   );
@@ -184,7 +186,7 @@ describe("Work Trace knowledge promotion", () => {
         const trace = yield* WorkTraceStore;
         const knowledge = yield* KnowledgePromotions;
         seed(db);
-        const user = nodes.append({
+        const user = yield* nodes.append({
           projectId: "p1",
           sessionId: "s1",
           kind: "user",

@@ -523,7 +523,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // This infrastructure stays outside the Goal registry (which retains code only).
   const workflowRuleContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const nativeOwnerContext = yield* Effect.context<
-    Nodes | PermissionReviews | SecretRedactor | PermissionClassifier
+    Nodes | PermissionReviews | SecretRedactor | PermissionClassifier | SqlClient.SqlClient
   >();
   const nativeMemoryOwner = yield* Effect.all({
     search: MemorySearch,
@@ -818,8 +818,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     profile: HarnessProfile = baselineProfile,
   ): CompactionSources => {
     const base: CompactionSources = {
-      toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
-      nodeText: (id) => nodes.get(id)?.text ?? null,
+      toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
+      nodeTexts: nodes.texts,
     };
     if (!(project !== undefined)) return base;
     return {
@@ -830,8 +830,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ) =>
         runEffect(
           Effect.gen(function* () {
-            const sessionNodes = nodes.session(sessionId);
-            const currentUser = nodes.latestOfKind(sessionId, "user");
+            const sessionNodes = yield* nodes.session(sessionId);
+            const currentUser = yield* nodes.latestOfKind(sessionId, "user");
             if (!isTruthy(currentUser)) return null;
             // A node can remain as raw text or as a tool-result pointer. Do not retrieve either again.
             const visible = MutableHashSet.fromIterable(
@@ -848,7 +848,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 .map((node) => node.id),
             );
             MutableHashSet.add(visible, currentUser.id);
-            const recentTurns = nodes.recentOfKind(sessionId, "user", 3).map((node) => node.text);
+            const recentTurns = (yield* nodes.recentOfKind(sessionId, "user", 3)).map(
+              (node) => node.text,
+            );
             const query = EffectArray.dedupe([...retrievalSeed, ...recentTurns])
               .filter((text) => text.length > 0)
               .join("\n")
@@ -1527,11 +1529,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (attached.length > 0 && !readsImages)
           return json(422, { error: "images_not_supported", model: selection?.model ?? external });
 
-        let userNode = turn !== null ? null : nodes.latestOfKind(sessionId, "user");
+        let userNode = turn !== null ? null : yield* nodes.latestOfKind(sessionId, "user");
         const keptTurn = turn !== null ? (yield* redactor.redactText(turn.text)).text : null;
         const persistUserTurn = Effect.gen(function* () {
           if (keptTurn === null) return;
-          const appended = nodes.append({ projectId, sessionId, kind: "user", text: keptTurn });
+          const appended = yield* nodes.append({
+            projectId,
+            sessionId,
+            kind: "user",
+            text: keptTurn,
+          });
           userNode = appended;
           yield* attachments.link(appended.id, attached);
           if (title === null) events.publishProject(projectId, "sessions");
@@ -1694,7 +1701,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             yield* previousMainModel(sessionId).pipe(Effect.orElseSucceed(Option.none)),
           ),
           loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
-          toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
+          toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
         });
         // Refresh model-advertised limits before choosing this run's compaction budget. A catalog
         // failure must not prevent an otherwise valid request; the runtime has a safe fallback.

@@ -7,9 +7,10 @@ import type {
   ToolPhaseCompleteInfo,
 } from "@tanstack/ai";
 import { MutableHashMap, Context, Effect, Layer, Option, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
-import { Nodes, type NodeDetail } from "./nodes.ts";
+import { Nodes, type Node, type NodeDetail } from "./nodes.ts";
 import { refsInArguments } from "./refs.ts";
 
 export interface RunBinding {
@@ -65,10 +66,15 @@ function failureText(info: AfterToolCallInfo | ErrorInfo): string {
 /** Actual recording implementation; each invocation uses current central services and run state. */
 export const makeRecordingMiddleware = Effect.fnUntraced(function* (
   binding: RunBinding,
-): Effect.fn.Return<ChatMiddleware, never, Nodes | PermissionReviews | SecretRedactor> {
+): Effect.fn.Return<
+  ChatMiddleware,
+  never,
+  Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
+> {
   const run = runNativeEffectWith(
-    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor>(),
+    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient>(),
   );
+  const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
   const reviews = yield* PermissionReviews;
   const redactor = yield* SecretRedactor;
@@ -115,8 +121,8 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
   return {
     name: "memory-agent/record",
 
-    // Every hook first hides what it will write, then checks and appends with no await in
-    // between, so two hooks never both decide a node is still missing.
+    // Every hook first hides what it will write, then checks and appends in one transaction, so
+    // two hooks never both decide a node is still missing.
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     onIteration(ctx) {
@@ -138,28 +144,30 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
           const permissions = yield* Effect.forEach(written, ({ toolCallId }) =>
             permissionOf(binding.sessionId, toolCallId),
           );
-          written.forEach(({ toolCallId, text }, index) => {
-            const call = nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
-            if (
-              !isTruthy(call) ||
-              isTruthy(nodes.toolNode(binding.sessionId, "tool_result", toolCallId))
-            )
-              return;
-            const parsed = Option.getOrUndefined(decodeJson(text));
-            nodes.append({
-              ...base,
-              runId: call.runId ?? binding.runId,
-              kind: "tool_result",
-              text: hidden[index] ?? "",
-              detail: {
-                toolName: call.detail.toolName,
-                toolCallId,
-                ok: !isErrorResult(parsed),
-                permission: permissions[index],
-              },
-              links: [{ kind: "returns", nodeId: call.id }],
-            });
-          });
+          yield* Effect.forEach(written, ({ toolCallId, text }, index) =>
+            Effect.gen(function* () {
+              const call = yield* nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
+              if (
+                !isTruthy(call) ||
+                isTruthy(yield* nodes.toolNode(binding.sessionId, "tool_result", toolCallId))
+              )
+                return;
+              const parsed = Option.getOrUndefined(decodeJson(text));
+              yield* nodes.append({
+                ...base,
+                runId: call.runId ?? binding.runId,
+                kind: "tool_result",
+                text: hidden[index] ?? "",
+                detail: {
+                  toolName: call.detail.toolName,
+                  toolCallId,
+                  ok: !isErrorResult(parsed),
+                  permission: permissions[index],
+                },
+                links: [{ kind: "returns", nodeId: call.id }],
+              });
+            }).pipe(sql.withTransaction),
+          );
         }),
       );
     },
@@ -212,46 +220,48 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
             { concurrency: "unbounded" },
           );
 
-          // A run resumed after an approval replays calls recorded by the interrupted run.
-          const recorded = MutableHashMap.fromIterable(
-            info.toolCalls.flatMap((call) => {
-              const node = nodes.toolNode(binding.sessionId, "tool_call", call.id);
-              return isTruthy(node) ? [[call.id, node] as const] : [];
-            }),
-          );
-          const needsAssistant =
-            ctx.accumulatedContent.length > 0 ||
-            MutableHashMap.size(recorded) < info.toolCalls.length;
-          const assistant = needsAssistant ? appendAssistant(assistantText) : null;
+          yield* Effect.gen(function* () {
+            // A run resumed after an approval replays calls recorded by the interrupted run.
+            const recorded = MutableHashMap.empty<string, Node>();
+            for (const call of info.toolCalls) {
+              const node = yield* nodes.toolNode(binding.sessionId, "tool_call", call.id);
+              if (isTruthy(node)) MutableHashMap.set(recorded, call.id, node);
+            }
+            const needsAssistant =
+              ctx.accumulatedContent.length > 0 ||
+              MutableHashMap.size(recorded) < info.toolCalls.length;
+            const assistant = needsAssistant ? yield* appendAssistant(assistantText) : null;
 
-          calls.forEach(({ call, result, ok }, index) => {
-            const callNode =
-              Option.getOrUndefined(MutableHashMap.get(recorded, call.id)) ??
-              nodes.append({
+            for (const [index, { call, result, ok }] of calls.entries()) {
+              const callNode =
+                Option.getOrUndefined(MutableHashMap.get(recorded, call.id)) ??
+                (yield* nodes.append({
+                  ...base,
+                  kind: "tool_call",
+                  text: callTexts[index] ?? "",
+                  detail: { toolName: call.function.name, toolCallId: call.id },
+                  links: isTruthy(assistant) ? [{ kind: "calls", nodeId: assistant.id }] : [],
+                  refs: callRefs[index] ?? [],
+                }));
+              if (!isTruthy(result)) continue; // awaiting approval or client execution
+              if (isTruthy(yield* nodes.toolNode(binding.sessionId, "tool_result", call.id)))
+                continue;
+              yield* nodes.append({
                 ...base,
-                kind: "tool_call",
-                text: callTexts[index] ?? "",
-                detail: { toolName: call.function.name, toolCallId: call.id },
-                links: isTruthy(assistant) ? [{ kind: "calls", nodeId: assistant.id }] : [],
-                refs: callRefs[index] ?? [],
+                // Keep the result in the run that made the call, so history shows them together.
+                runId: callNode.runId ?? binding.runId,
+                kind: "tool_result",
+                text: resultTexts[index] ?? "",
+                detail: {
+                  toolName: call.function.name,
+                  toolCallId: call.id,
+                  ok,
+                  permission: permissions[index],
+                },
+                links: [{ kind: "returns", nodeId: callNode.id }],
               });
-            if (!isTruthy(result)) return; // awaiting approval or client execution
-            if (isTruthy(nodes.toolNode(binding.sessionId, "tool_result", call.id))) return;
-            nodes.append({
-              ...base,
-              // Keep the result in the run that made the call, so history shows them together.
-              runId: callNode.runId ?? binding.runId,
-              kind: "tool_result",
-              text: resultTexts[index] ?? "",
-              detail: {
-                toolName: call.function.name,
-                toolCallId: call.id,
-                ok,
-                permission: permissions[index],
-              },
-              links: [{ kind: "returns", nodeId: callNode.id }],
-            });
-          });
+            }
+          }).pipe(sql.withTransaction);
         }),
       );
     },
@@ -260,7 +270,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     onFinish(_ctx, info) {
       return run(
         Effect.gen(function* () {
-          if (info.content.length > 0) appendAssistant(yield* hide(info.content));
+          if (info.content.length > 0) yield* appendAssistant(yield* hide(info.content));
         }),
       );
     },
@@ -270,7 +280,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       return run(
         Effect.gen(function* () {
           if (ctx.accumulatedContent.length > 0)
-            appendAssistant(yield* hide(ctx.accumulatedContent), {
+            yield* appendAssistant(yield* hide(ctx.accumulatedContent), {
               reason: info.reason ?? "aborted",
             });
         }),
@@ -282,7 +292,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       return run(
         Effect.gen(function* () {
           if (ctx.accumulatedContent.length > 0)
-            appendAssistant(yield* hide(ctx.accumulatedContent), {
+            yield* appendAssistant(yield* hide(ctx.accumulatedContent), {
               reason: yield* hide(failureText(info)),
             });
         }),
@@ -293,7 +303,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
 
 const make = Effect.gen(function* () {
   const run = Effect.runSyncWith(
-    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor>(),
+    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient>(),
   );
   return {
     /** Implementation-only seam; provide the current central Context for each invocation. */

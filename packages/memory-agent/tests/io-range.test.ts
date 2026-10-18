@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect";
+import { connectionContext } from "../src/db/database.ts";
 import { createResultPageReader } from "../src/memory/result-pages.ts";
 import { createTextPageReader, linePage, maxTextBytes, sha256 } from "../src/files/text.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
@@ -51,7 +52,8 @@ layer(NodeServices.layer)((it) => {
         const sqlite = yield* resultStore;
         const text = "a".repeat(3999) + "😀\0한글" + "😀abc\r\n".repeat(20000);
         sqlite.prepare("INSERT INTO nodes VALUES ('r', 'tool_result', 'p', 's', ?)").run(text);
-        const reader = createResultPageReader(sqlite);
+        const context = yield* connectionContext(sqlite);
+        const reader = yield* Effect.provideContext(createResultPageReader, context);
         expect(yield* reader.read("r", "other", "s", 0)).toBeNull();
         expect(yield* reader.read("r", "p", "other", 0)).toBeNull();
         let offset = 0;
@@ -73,7 +75,7 @@ layer(NodeServices.layer)((it) => {
           if (end < text.length && end - begin > 1 && last >= 0xd800 && last <= 0xdbff) end--;
           expect(page?.text).toBe(text.slice(begin, end));
         }
-        const seeded = createResultPageReader(sqlite);
+        const seeded = yield* Effect.provideContext(createResultPageReader, context);
         seeded.remember("r", text);
         expect(yield* seeded.read("r", "p", "s", 100003)).toEqual(
           yield* reader.read("r", "p", "s", 100003),

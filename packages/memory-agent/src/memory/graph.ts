@@ -1,10 +1,10 @@
-import { HashSet, MutableHashSet, Result, Function as EffectFunction } from "effect";
+import { HashSet, MutableHashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
-import { Database } from "../db/database.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { EdgeKind } from "./edges.ts";
 import { hasStatementText } from "./quality.ts";
-import { toEdge, toNode, type Node } from "./nodes.ts";
+import { EdgeRow, edgeOfRow, NodeRow, nodeOfRow, type Node } from "./nodes.ts";
 
 export interface Hop {
   readonly nodeId: string;
@@ -63,137 +63,152 @@ const causeOf: Partial<Record<Node["kind"], { kind: EdgeKind; direction: Hop["di
   assistant: { kind: "reply", direction: "out" },
 };
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeNeighbor = EffectFunction.flow(
-  Schema.decodeUnknownResult(
-    Schema.Struct({
-      nodeId: Schema.String,
-      kind: EdgeKind,
-      direction: Schema.Literals(["out", "in"]),
-      weight: Schema.Finite,
-    }),
-  ),
-  Result.getOrThrow,
-);
+const Neighbor = Schema.Struct({
+  nodeId: Schema.String,
+  kind: EdgeKind,
+  direction: Schema.Literals(["out", "in"]),
+  weight: Schema.Finite,
+});
+
+/** The memory graph could not be read; the cause stays with the error. */
+export class GraphReadFailed extends Schema.TaggedError<GraphReadFailed>()("GraphReadFailed", {
+  cause: Schema.Defect(),
+}) {}
 
 const make = Effect.gen(function* () {
-  const { sqlite } = yield* Database;
-  const selectNode = sqlite.prepare(
-    "SELECT n.* FROM nodes n WHERE n.id = ? AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)",
-  );
+  const sql = yield* SqlClient.SqlClient;
+  const selectNode = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: NodeRow,
+    execute: (id) => sql`SELECT n.* FROM nodes n WHERE n.id = ${id}
+      AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)`,
+  });
   // A read superseded by a later one leaves graph walks, but its own provenance still exists.
-  const selectStart = sqlite.prepare("SELECT * FROM nodes WHERE id = ?");
-  const causeOutgoing = sqlite.prepare(
-    "SELECT * FROM edges WHERE from_id = ? AND kind = ? LIMIT 1",
-  );
-  const causeIncoming = sqlite.prepare("SELECT * FROM edges WHERE to_id = ? AND kind = ? LIMIT 1");
-  const challenges = sqlite.prepare(
-    "SELECT * FROM edges WHERE to_id = ? AND kind IN ('corrects', 'retracts')",
-  );
+  const selectStart = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: NodeRow,
+    execute: (id) => sql`SELECT * FROM nodes WHERE id = ${id}`,
+  });
+  const causeEdge = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      id: Schema.String,
+      kind: EdgeKind,
+      direction: Schema.Literals(["out", "in"]),
+    }),
+    Result: EdgeRow,
+    execute: ({ id, kind, direction }) =>
+      direction === "in"
+        ? sql`SELECT * FROM edges WHERE to_id = ${id} AND kind = ${kind} LIMIT 1`
+        : sql`SELECT * FROM edges WHERE from_id = ${id} AND kind = ${kind} LIMIT 1`,
+  });
+  const challenges = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: EdgeRow,
+    execute: (id) =>
+      sql`SELECT * FROM edges WHERE to_id = ${id} AND kind IN ('corrects', 'retracts')`,
+  });
+  const adjacent = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Neighbor,
+    execute: (id) => sql`
+      SELECT to_id AS nodeId, kind, 'out' AS direction, weight FROM edges WHERE from_id = ${id}
+      UNION ALL
+      SELECT from_id AS nodeId, kind, 'in' AS direction, weight FROM edges WHERE to_id = ${id}`,
+  });
 
-  const nodeById = (id: string) => {
-    const row = selectNode.get(id);
-    return isTruthy(row) ? toNode(row) : null;
-  };
+  const nodeById = (id: string) =>
+    Effect.map(selectNode(id), Option.match({ onNone: () => null, onSome: nodeOfRow }));
 
-  const adjacent = sqlite.prepare(`
-    SELECT to_id AS nodeId, kind, 'out' AS direction, weight FROM edges WHERE from_id = ?
-    UNION ALL
-    SELECT from_id AS nodeId, kind, 'in' AS direction, weight FROM edges WHERE to_id = ?`);
+  const traverse = (seeds: Iterable<readonly [string, number]>, options: TraverseOptions) =>
+    Effect.gen(function* () {
+      const allowed = HashSet.fromIterable(options.projectIds);
+      const best = MutableHashMap.empty<string, number>();
+      const frontier: Candidate[] = [];
+      for (const [nodeId, utility] of seeds) {
+        if (utility <= (Option.getOrUndefined(MutableHashMap.get(best, nodeId)) ?? 0)) continue;
+        MutableHashMap.set(best, nodeId, utility);
+        frontier.push({ nodeId, utility, seedId: nodeId, path: [] });
+      }
 
-  function traverse(
-    seeds: Iterable<readonly [string, number]>,
-    options: TraverseOptions,
-  ): TraverseResult {
-    const allowed = HashSet.fromIterable(options.projectIds);
-    const best = MutableHashMap.empty<string, number>();
-    const frontier: Candidate[] = [];
-    for (const [nodeId, utility] of seeds) {
-      if (utility <= (Option.getOrUndefined(MutableHashMap.get(best, nodeId)) ?? 0)) continue;
-      MutableHashMap.set(best, nodeId, utility);
-      frontier.push({ nodeId, utility, seedId: nodeId, path: [] });
-    }
-
-    const visits: Visit[] = [];
-    const visited = MutableHashSet.empty<string>();
-    while (frontier.length > 0) {
-      // Frontiers stay small under the budget, so a linear scan keeps this obvious.
-      let top = 0;
-      for (let i = 1; i < frontier.length; i++)
-        if (frontier[i]!.utility > frontier[top]!.utility) top = i;
-      const candidate = frontier.splice(top, 1)[0]!;
-      if (MutableHashSet.has(visited, candidate.nodeId) || candidate.utility < options.minUtility)
-        continue;
-      if (MutableHashSet.size(visited) >= options.budget) return { visits, complete: false };
-
-      const node = nodeById(candidate.nodeId);
-      if (!(node !== null) || !HashSet.has(allowed, node.projectId)) continue;
-      MutableHashSet.add(visited, node.id);
-      if (options.includeEmpty !== false || hasStatementText(node.text))
-        visits.push({
-          node,
-          utility: candidate.utility,
-          seedId: candidate.seedId,
-          path: candidate.path,
-        });
-
-      for (const row of adjacent.all(node.id, node.id)) {
-        const next = decodeNeighbor(row);
-        const utility = candidate.utility * next.weight;
-        if (
-          MutableHashSet.has(visited, next.nodeId) ||
-          utility < options.minUtility ||
-          utility <= (Option.getOrUndefined(MutableHashMap.get(best, next.nodeId)) ?? 0)
-        )
+      const visits: Visit[] = [];
+      const visited = MutableHashSet.empty<string>();
+      while (frontier.length > 0) {
+        // Frontiers stay small under the budget, so a linear scan keeps this obvious.
+        let top = 0;
+        for (let i = 1; i < frontier.length; i++)
+          if (frontier[i]!.utility > frontier[top]!.utility) top = i;
+        const candidate = frontier.splice(top, 1)[0]!;
+        if (MutableHashSet.has(visited, candidate.nodeId) || candidate.utility < options.minUtility)
           continue;
-        MutableHashMap.set(best, next.nodeId, utility);
-        frontier.push({
-          nodeId: next.nodeId,
-          utility,
-          seedId: candidate.seedId,
-          path: [
-            ...candidate.path,
-            { nodeId: next.nodeId, kind: next.kind, direction: next.direction },
-          ],
-        });
+        if (MutableHashSet.size(visited) >= options.budget)
+          return { visits, complete: false } satisfies TraverseResult;
+
+        const node = yield* nodeById(candidate.nodeId);
+        if (!(node !== null) || !HashSet.has(allowed, node.projectId)) continue;
+        MutableHashSet.add(visited, node.id);
+        if (options.includeEmpty !== false || hasStatementText(node.text))
+          visits.push({
+            node,
+            utility: candidate.utility,
+            seedId: candidate.seedId,
+            path: candidate.path,
+          });
+
+        for (const next of yield* adjacent(node.id)) {
+          const utility = candidate.utility * next.weight;
+          if (
+            MutableHashSet.has(visited, next.nodeId) ||
+            utility < options.minUtility ||
+            utility <= (Option.getOrUndefined(MutableHashMap.get(best, next.nodeId)) ?? 0)
+          )
+            continue;
+          MutableHashMap.set(best, next.nodeId, utility);
+          frontier.push({
+            nodeId: next.nodeId,
+            utility,
+            seedId: candidate.seedId,
+            path: [
+              ...candidate.path,
+              { nodeId: next.nodeId, kind: next.kind, direction: next.direction },
+            ],
+          });
+        }
       }
-    }
-    return { visits, complete: true };
-  }
+      return { visits, complete: true } satisfies TraverseResult;
+    }).pipe(Effect.mapError((cause) => GraphReadFailed.make({ cause })));
 
-  function trace(id: string): Provenance | null {
-    const startRow = selectStart.get(id);
-    if (!isTruthy(startRow)) return null;
-    const start = toNode(startRow);
-    const chain: Node[] = [start];
-    let current = start;
-    for (;;) {
-      const rule = causeOf[current.kind];
-      if (!isTruthy(rule)) break;
-      const row = (rule.direction === "in" ? causeIncoming : causeOutgoing).get(
-        current.id,
-        rule.kind,
-      );
-      if (!isTruthy(row)) break;
-      const edge = toEdge(row);
-      const cause = nodeById(rule.direction === "in" ? edge.fromId : edge.toId);
-      if (!(cause !== null) || chain.some((node) => node.id === cause.id)) break;
-      chain.push(cause);
-      current = cause;
-    }
-
-    const challengedBy: Provenance["challengedBy"][number][] = [];
-    for (const target of chain) {
-      for (const row of challenges.all(target.id)) {
-        const edge = toEdge(row);
-        if (edge.kind !== "corrects" && edge.kind !== "retracts") continue;
-        const node = nodeById(edge.fromId);
-        if (node !== null) challengedBy.push({ node, kind: edge.kind, target: target.id });
+  const trace = (id: string) =>
+    Effect.gen(function* () {
+      const startRow = yield* selectStart(id);
+      if (Option.isNone(startRow)) return null;
+      const start = nodeOfRow(startRow.value);
+      const chain: Node[] = [start];
+      let current = start;
+      for (;;) {
+        const rule = causeOf[current.kind];
+        if (!isTruthy(rule)) break;
+        const edge = yield* causeEdge({ id: current.id, ...rule });
+        if (Option.isNone(edge)) break;
+        const cause = yield* nodeById(
+          rule.direction === "in" ? edge.value.from_id : edge.value.to_id,
+        );
+        if (!(cause !== null) || chain.some((node) => node.id === cause.id)) break;
+        chain.push(cause);
+        current = cause;
       }
-    }
 
-    return { chain, challengedBy };
-  }
+      const challengedBy: Provenance["challengedBy"][number][] = [];
+      for (const target of chain) {
+        for (const row of yield* challenges(target.id)) {
+          const edge = edgeOfRow(row);
+          if (edge.kind !== "corrects" && edge.kind !== "retracts") continue;
+          const node = yield* nodeById(edge.fromId);
+          if (node !== null) challengedBy.push({ node, kind: edge.kind, target: target.id });
+        }
+      }
+
+      return { chain, challengedBy } satisfies Provenance;
+    }).pipe(Effect.mapError((cause) => GraphReadFailed.make({ cause })));
 
   return { traverse, trace };
 });

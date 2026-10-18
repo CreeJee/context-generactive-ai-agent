@@ -46,14 +46,14 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunk r
       Effect.gen(function* () {
         const env = yield* TestEnv;
         const nodes = yield* Nodes;
-        nodes.append({
+        yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
           text: "목요일",
         });
         yield* (yield* Indexer).indexAll();
-        const pending = nodes.append({
+        const pending = yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
@@ -104,13 +104,13 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunked
         const body =
           "앞부분에는 관련 없는 작업 기록만 있습니다. ".repeat(300) +
           "최종 배포 결정은 목요일입니다.";
-        const node = nodes.append({
+        const node = yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",
           text: body,
         });
-        nodes.append({
+        yield* nodes.append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "tool_result",
@@ -185,13 +185,13 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })(
         Effect.gen(function* () {
           const { project, session, base } = yield* TestEnv;
           const nodes = yield* Nodes;
-          const long = nodes.append({
+          const long = yield* nodes.append({
             projectId: project.id,
             sessionId: session.id,
             kind: "user",
             text: "목요일 ".repeat(6000),
           });
-          const second = nodes.append({
+          const second = yield* nodes.append({
             projectId: project.id,
             sessionId: session.id,
             kind: "user",
@@ -201,7 +201,7 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })(
           yield* (yield* FileSystem.FileSystem).makeDirectory(hiddenRoot);
           const hiddenProject = yield* (yield* Projects).add(hiddenRoot);
           const hiddenSession = yield* (yield* Sessions).create(hiddenProject.id);
-          nodes.append({
+          yield* nodes.append({
             projectId: hiddenProject.id,
             sessionId: hiddenSession.id,
             kind: "user",

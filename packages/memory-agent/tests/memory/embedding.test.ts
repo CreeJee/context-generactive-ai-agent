@@ -59,7 +59,7 @@ const seeded = Effect.fnUntraced(function* (
   const session = yield* (yield* Sessions).create(project.id);
   const append = yield* Nodes;
   const size = (yield* VectorIndex).size();
-  const stored = nodes.map(({ kind, text }) =>
+  const stored = yield* Effect.forEach(nodes, ({ kind, text }) =>
     append.append({ projectId: project.id, sessionId: session.id, kind, text }),
   );
   return { session, size, stored };
@@ -446,7 +446,7 @@ describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
           const body =
             "창고의 재고와 주문 처리 상태를 확인했습니다. ".repeat(600) +
             "최종 결정: 다음 배포는 목요일 오전에 진행합니다.";
-          const target = nodes.append({
+          const target = yield* nodes.append({
             projectId: project.id,
             sessionId: session.id,
             kind: "user",
@@ -457,7 +457,12 @@ describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
             "주문 배송 현황은 수요일에 확인합니다.",
             "빌드 오류를 해결하고 테스트를 통과했습니다.",
           ])
-            nodes.append({ projectId: project.id, sessionId: session.id, kind: "user", text });
+            yield* nodes.append({
+              projectId: project.id,
+              sessionId: session.id,
+              kind: "user",
+              text,
+            });
           yield* (yield* Indexer).indexAll();
           const result = yield* (yield* MemorySearch).find({
             projectId: project.id,

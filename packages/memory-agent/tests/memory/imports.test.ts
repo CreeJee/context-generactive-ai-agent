@@ -459,7 +459,7 @@ alone("indexes what was said today before a migrated backlog", () =>
     const { project, session } = yield* TestEnv;
     yield* writeClaude;
     // The transcript is from March; this is now. Its rows land last but it must index first.
-    const today = (yield* Nodes).append({
+    const today = yield* (yield* Nodes).append({
       projectId: project.id,
       sessionId: session.id,
       kind: "user",
@@ -492,7 +492,7 @@ alone("reads Codex rollouts too, and queues migrated statements for interpretati
     expect(
       yield* count("SELECT count(*) AS count FROM interpret_jobs WHERE status = 'pending'"),
     ).toBe(1);
-    const rendered = sessionMessages((yield* Nodes).session(session.id), () => []);
+    const rendered = sessionMessages(yield* (yield* Nodes).session(session.id), () => []);
     expect(rendered).toHaveLength(1);
     expect(rendered[0]?.role).toBe("user");
     expect(rendered[0]?.parts).toEqual([{ type: "text", content: "이어서" }]);

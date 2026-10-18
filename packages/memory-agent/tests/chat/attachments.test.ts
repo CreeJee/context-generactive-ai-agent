@@ -107,7 +107,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
       const first = yield* attachments.save(tinyPng);
       const again = yield* attachments.save(tinyPng);
       const animated = yield* attachments.save(gif);
-      const node = (yield* Nodes).append({
+      const node = yield* (yield* Nodes).append({
         projectId: project.id,
         sessionId: yield* freshSession,
         kind: "user",
@@ -351,7 +351,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         sessionId,
       );
       expect(yield* sdk(() => response.text())).toContain("attachmentId");
-      const nodes = (yield* Nodes).session(sessionId);
+      const nodes = yield* (yield* Nodes).session(sessionId);
       const stored = nodes.find((node) => node.kind === "tool_result");
       const preview = (yield* Schema.decodeEffect(Schema.fromJsonString(Written))(
         stored?.text ?? "{}",
@@ -414,7 +414,7 @@ testAgent()("attachments across closing the agent", (it) => {
         Effect.gen(function* () {
           const attachments = yield* Attachments;
           const saved = yield* attachments.save(png);
-          const node = (yield* Nodes).append({
+          const node = yield* (yield* Nodes).append({
             projectId: env.project.id,
             sessionId,
             kind: "user",

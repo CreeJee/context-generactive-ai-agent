@@ -52,7 +52,7 @@ const otherAgent = Layer.effect(
 const userTurn = Effect.fnUntraced(function* (text: string) {
   const { project } = yield* TestEnv;
   const session = yield* (yield* Sessions).create(project.id);
-  const user = (yield* Nodes).append({
+  const user = yield* (yield* Nodes).append({
     projectId: project.id,
     sessionId: session.id,
     kind: "user",
@@ -95,7 +95,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           }),
         );
 
-        const stored = nodes.session(session.id);
+        const stored = yield* nodes.session(session.id);
         expect(stored.map((node) => [node.kind, node.text, node.detail])).toEqual([
           ["user", "README 읽고 테스트 돌려줘", {}],
           ["assistant", "먼저 README를 읽고 테스트를 실행할게요.", {}],
@@ -121,11 +121,10 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
 
         const [, firstAnswer, readCall, readResult, testCall, testResult, finalAnswer] = stored;
         const kindsFrom = (id: string) =>
-          nodes
-            .edgesOf(id)
-            .filter((edge) => edge.fromId === id)
-            .map((edge) => [edge.kind, edge.toId]);
-        expect(kindsFrom(firstAnswer!.id)).toEqual(
+          Effect.map(nodes.edgesOf(id), (edges) =>
+            edges.filter((edge) => edge.fromId === id).map((edge) => [edge.kind, edge.toId]),
+          );
+        expect(yield* kindsFrom(firstAnswer!.id)).toEqual(
           expect.arrayContaining([
             ["reply", user.id],
             ["calls", readCall!.id],
@@ -133,13 +132,13 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
             ["next", readCall!.id],
           ]),
         );
-        expect(kindsFrom(readCall!.id)).toEqual(
+        expect(yield* kindsFrom(readCall!.id)).toEqual(
           expect.arrayContaining([["returns", readResult!.id]]),
         );
-        expect(kindsFrom(testCall!.id)).toEqual(
+        expect(yield* kindsFrom(testCall!.id)).toEqual(
           expect.arrayContaining([["returns", testResult!.id]]),
         );
-        expect(kindsFrom(finalAnswer!.id)).toEqual([["reply", user.id]]);
+        expect(yield* kindsFrom(finalAnswer!.id)).toEqual([["reply", user.id]]);
       }),
     );
 
@@ -188,7 +187,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
             ],
           }),
         );
-        const result = (yield* Nodes).toolNode(session.id, "tool_result", "call-1");
+        const result = yield* (yield* Nodes).toolNode(session.id, "tool_result", "call-1");
         expect(result?.detail).toMatchObject({ toolName: "run_shell", ok: false });
       }),
     );
@@ -201,7 +200,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
         const recorder = yield* Recorder;
         for (const run of ["a", "b"]) {
           const runId = `${session.id}:${run}`;
-          const user = nodes.append({
+          const user = yield* nodes.append({
             projectId: project.id,
             sessionId: session.id,
             kind: "user",
@@ -232,9 +231,13 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           );
         }
 
-        const calls = nodes.session(session.id).filter((node) => node.kind === "tool_call");
+        const calls = (yield* nodes.session(session.id)).filter(
+          (node) => node.kind === "tool_call",
+        );
         expect(calls).toHaveLength(2);
-        const touches = nodes.edgesOf(calls[1]!.id).filter((edge) => edge.kind === "touches");
+        const touches = (yield* nodes.edgesOf(calls[1]!.id)).filter(
+          (edge) => edge.kind === "touches",
+        );
         expect(touches.map((edge) => [edge.fromId, edge.toId])).toEqual([
           [calls[1]!.id, calls[0]!.id],
         ]);
@@ -263,7 +266,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           }),
         ).pipe(Effect.ignore);
 
-        expect((yield* Nodes).session(session.id).at(-1)).toMatchObject({
+        expect((yield* (yield* Nodes).session(session.id)).at(-1)).toMatchObject({
           kind: "assistant",
           text: "설명을 시작하면, 먼저",
           detail: { partial: true, reason: "provider connection reset" },
@@ -289,7 +292,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           yield* Effect.forEach(
             executions,
             Effect.fnUntraced(function* (entry) {
-              const user = nodes.append({
+              const user = yield* nodes.append({
                 projectId: project.id,
                 sessionId: entry.session.id,
                 kind: "user",
@@ -341,8 +344,10 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
                 }),
               );
               expect(reads).toBeGreaterThan(0);
-              const stored = nodes.session(entry.session.id);
-              expect(nodes.toolNode(entry.session.id, "tool_result", "shared-call")).toMatchObject({
+              const stored = yield* nodes.session(entry.session.id);
+              expect(
+                yield* nodes.toolNode(entry.session.id, "tool_result", "shared-call"),
+              ).toMatchObject({
                 runId: entry.runId,
                 text: `${entry.fail ? "failed" : "success"} [redacted:github]`,
                 detail: {
@@ -354,7 +359,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               expect(stored.filter((node) => node.kind === "tool_call")).toHaveLength(1);
               expect(stored.map((node) => node.text).join("\n")).not.toContain(secret);
               for (const assistant of stored.filter((node) => node.kind === "assistant")) {
-                expect(nodes.edgesOf(assistant.id)).toEqual(
+                expect(yield* nodes.edgesOf(assistant.id)).toEqual(
                   expect.arrayContaining([
                     expect.objectContaining({ kind: "reply", fromId: assistant.id, toId: user.id }),
                   ]),
@@ -373,7 +378,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           const { project } = yield* TestEnv;
           const session = yield* (yield* Sessions).create(project.id);
           const nodes = yield* Nodes;
-          const user = nodes.append({
+          const user = yield* nodes.append({
             projectId: project.id,
             sessionId: session.id,
             kind: "user",
@@ -392,7 +397,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               middleware: [middleware],
             }),
           );
-          expect(nodes.session(session.id).map((node) => node.text)).toEqual([
+          expect((yield* nodes.session(session.id)).map((node) => node.text)).toEqual([
             "hello",
             "owner answer",
           ]);
@@ -403,7 +408,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
         const otherSession = yield* other.use(
           recordHello().pipe(Effect.provideService(TestEnv, other)),
         );
-        expect((yield* Nodes).session(otherSession)).toEqual([]);
+        expect(yield* (yield* Nodes).session(otherSession)).toEqual([]);
       }),
     );
   },

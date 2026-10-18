@@ -334,9 +334,10 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         });
         slowTurn.release();
         expect(yield* Fiber.join(reading)).toContain("done");
-        const kinds = (id: string) => nodes.session(id).map((node) => node.kind);
-        expect(kinds(session).filter((kind) => kind === "user")).toHaveLength(1);
-        expect(kinds(session).filter((kind) => kind === "assistant")).toHaveLength(1);
+        const kinds = (id: string) =>
+          Effect.map(nodes.session(id), (session) => session.map((node) => node.kind));
+        expect((yield* kinds(session)).filter((kind) => kind === "user")).toHaveLength(1);
+        expect((yield* kinds(session)).filter((kind) => kind === "assistant")).toHaveLength(1);
         expect(count(yield* Database, "chat_runs WHERE run_id = ?", runId)).toEqual({ n: 1 });
         const replay = yield* hydrate(session, `runId=${runId}&offset=-1`);
         expect(replay.status).toBe(200);
@@ -348,7 +349,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         expect(yield* sdkCall(() => wrongSessionPost.json())).toMatchObject({
           error: "run_id_conflict",
         });
-        expect(nodes.session(other)).toHaveLength(0);
+        expect(yield* nodes.session(other)).toHaveLength(0);
         expect((yield* hydrate(other, `runId=${runId}&offset=-1`)).status).toBe(404);
         // The checked ?runId must also be the run named by Last-Event-ID or X-Run-Id. Otherwise an
         // authorized local run can be used to replay another session's memory log.
@@ -422,7 +423,7 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
             .prepare("SELECT thread_id, status FROM chat_runs WHERE run_id = ?")
             .get(runId),
         ).toEqual({ thread_id: session, status: "completed" });
-        const kinds = nodes.session(session).map((node) => node.kind);
+        const kinds = (yield* nodes.session(session)).map((node) => node.kind);
         expect(kinds.filter((kind) => kind === "user")).toHaveLength(1);
         expect(kinds.filter((kind) => kind === "assistant")).toHaveLength(1);
         const events = yield* env.use(workflowRunEvents);

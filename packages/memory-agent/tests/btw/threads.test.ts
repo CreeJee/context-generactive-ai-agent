@@ -176,7 +176,7 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
       Effect.gen(function* () {
         yield* selectTestModel();
         const env = yield* TestEnv;
-        (yield* Nodes).append({
+        yield* (yield* Nodes).append({
           projectId: env.project.id,
           sessionId: env.session.id,
           kind: "user",

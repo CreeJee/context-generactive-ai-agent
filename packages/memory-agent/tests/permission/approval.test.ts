@@ -26,7 +26,7 @@ const pendingApproval = Effect.fnUntraced(function* () {
 });
 
 const kinds = (nodes: Nodes["Service"], sessionId: string) =>
-  nodes.session(sessionId).map((node) => node.kind);
+  Effect.map(nodes.session(sessionId), (session) => session.map((node) => node.kind));
 
 testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gated tools", (it) => {
   it.effect("saving a shell skill waits for approval, then resumes the durable app run", () =>
@@ -47,19 +47,19 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
         },
       });
       // Nothing has run yet: the call is recorded, its result is not.
-      expect(kinds(nodes, sessionId)).toEqual(["user", "assistant", "tool_call"]);
+      expect(yield* kinds(nodes, sessionId)).toEqual(["user", "assistant", "tool_call"]);
 
       tab.client.resolveInterrupts(true);
       yield* tab.answered("Shell said", "the answer after approval");
       expect(tab.text()).toContain("approved-output");
-      expect(kinds(nodes, sessionId)).toEqual([
+      expect(yield* kinds(nodes, sessionId)).toEqual([
         "user",
         "assistant",
         "tool_call",
         "tool_result",
         "assistant",
       ]);
-      const [, , call, result] = nodes.session(sessionId);
+      const [, , call, result] = yield* nodes.session(sessionId);
       expect(result!.runId).toBe(call!.runId);
       expect(result!.detail).toMatchObject({ toolName: "save_shell_skill", ok: true });
 
@@ -78,7 +78,9 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       yield* tab.answered("Shell said", "the answer after declining");
       expect(tab.text()).toContain('"approved":false');
       expect(tab.text()).not.toContain("approved-output");
-      const result = (yield* Nodes).session(sessionId).find((node) => node.kind === "tool_result");
+      const result = (yield* (yield* Nodes).session(sessionId)).find(
+        (node) => node.kind === "tool_result",
+      );
       expect(result?.detail).toMatchObject({ toolName: "save_shell_skill", ok: false });
     }),
   );
@@ -169,7 +171,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
         running: null,
         lastRun: { status: "failed", error: { code: "interrupt_continuation_lost" } },
       });
-      expect(kinds(yield* Nodes, sessionId)).not.toContain("tool_result");
+      expect(yield* kinds(yield* Nodes, sessionId)).not.toContain("tool_result");
     }),
   );
 });

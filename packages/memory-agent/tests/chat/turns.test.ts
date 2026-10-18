@@ -125,7 +125,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       const { project } = yield* TestEnv;
       const nodes = yield* Nodes;
       const indexer = yield* Indexer;
-      const earlier = nodes.append({
+      const earlier = yield* nodes.append({
         projectId: project.id,
         sessionId: yield* freshSession,
         kind: "user",
@@ -152,7 +152,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
           .join(""),
       ).toBe("Found: 저장소는 SQLite로 결정했다.");
 
-      const recorded = nodes.session(sessionId);
+      const recorded = yield* nodes.session(sessionId);
       expect(recorded.map((node) => node.kind)).toEqual([
         "user",
         "assistant",
@@ -238,7 +238,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
 
       const nodes = yield* Nodes;
       const attachments = yield* Attachments;
-      const user = nodes.session(sessionId).find((node) => node.kind === "user");
+      const user = (yield* nodes.session(sessionId)).find((node) => node.kind === "user");
       expect(user?.text).toBe("look at #1 please");
       expect((yield* attachments.forNode(user?.id ?? "")).map((stored) => stored.id)).toEqual([
         attachment.id,
@@ -259,7 +259,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       ).toEqual([inlineImage]);
 
       // The stored transcript shows the image again after a reload.
-      const session = nodes.session(sessionId);
+      const session = yield* nodes.session(sessionId);
       const images = yield* Effect.forEach(session, (node) =>
         Effect.map(attachments.forNode(node.id), (found) => ({ nodeId: node.id, found })),
       );

@@ -10,13 +10,14 @@ import {
   compaction,
   estimateTokens,
   lightweightToolResults,
+  lookupSources,
   type Budget,
   type CompactionSources,
 } from "./compaction.ts";
 
 const noLimit = 1_000_000;
 const unlimited: Budget = { compactAt: noLimit, leaveOutAt: noLimit };
-const noSources: CompactionSources = { toolResultId: () => null, nodeText: () => null };
+const noSources = lookupSources({ toolResultId: () => null, nodeText: () => null });
 const fresh = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
 
 /** What the model is sent on the first call of a run over `messages`. */
@@ -71,7 +72,7 @@ describe("compact", () => {
             manual: { clearedThrough: 0, summarizedTurns: 0 },
             blocks: [{ end: 1, nextTurnNodeId: "next", text: "Earlier image discussed." }],
           },
-          sources: { toolResultId: () => null, nodeText: () => "current question" },
+          sources: lookupSources({ toolResultId: () => null, nodeText: () => "current question" }),
           budget: budgetFor(noLimit),
         });
         expect(result.stage).toBe("summarize");
@@ -197,8 +198,10 @@ describe("compact", () => {
       Effect.gen(function* () {
         let appendixCalls = 0;
         const sources: CompactionSources = {
-          toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
-          nodeText: () => null,
+          ...lookupSources({
+            toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
+            nodeText: () => null,
+          }),
           retrievalAppendix: () =>
             Promise.resolve().then((): ModelMessage => {
               appendixCalls += 1;
@@ -297,8 +300,10 @@ describe("compaction middleware", () => {
         compaction(
           memoryPersistence().stores.metadata,
           {
-            toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
-            nodeText: () => null,
+            ...lookupSources({
+              toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
+              nodeText: () => null,
+            }),
             retrievalAppendix: () =>
               Promise.resolve({ role: "assistant" as const, content: "[Retrieval appendix]" }),
           },
