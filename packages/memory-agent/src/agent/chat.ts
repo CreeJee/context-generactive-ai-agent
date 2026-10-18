@@ -2528,7 +2528,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const live = liveRuns.get(sessionId);
         if (!isTruthy(live)) {
           const children =
-            subagents.list(sessionId).some((child) => child.status === "running") ||
+            (yield* subagents.list(sessionId)).some((child) => child.status === "running") ||
             background.hasSession(sessionId);
           if (!children)
             return pendingExecution

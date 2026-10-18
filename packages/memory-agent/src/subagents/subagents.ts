@@ -1,5 +1,6 @@
 import { nativeFailure, nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { HashSet } from "effect";
+import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
@@ -31,7 +32,6 @@ import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
-import { Database } from "../db/database.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
@@ -53,7 +53,7 @@ export const subagentToolNames = [
 ] as const;
 
 export class SubagentOperationFailed extends Data.TaggedError("SubagentOperationFailed")<{
-  readonly operation: "run" | "wait" | "recover";
+  readonly operation: "run" | "wait" | "recover" | "store";
   readonly cause: unknown;
 }> {}
 
@@ -240,8 +240,7 @@ const SubagentRow = Schema.Struct({
   updated_at: Schema.Finite,
 });
 type SubagentRow = typeof SubagentRow.Type;
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeRow = EffectFunction.flow(Schema.decodeUnknownResult(SubagentRow), Result.getOrThrow);
+const decodeRow = Schema.decodeUnknownEffect(SubagentRow);
 
 const toView = (row: SubagentRow): SubagentView => ({
   id: row.id,
@@ -323,7 +322,7 @@ const make = Effect.gen(function* () {
   const runEffect = runNativeEffectWith(context);
   const runEffectSync = Effect.runSyncWith(context);
   const scope = yield* Effect.scope;
-  const { sqlite } = yield* Database;
+  const sql = yield* SqlClient.SqlClient;
   const events = yield* AppEvents;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
@@ -334,26 +333,73 @@ const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
 
   // A child cut off by a restart is not rerun on its own (R18).
-  sqlite
-    .prepare("UPDATE subagents SET status = 'interrupted', updated_at = ? WHERE status = 'running'")
-    .run(yield* Clock.currentTimeMillis);
+  yield* sql`UPDATE subagents SET status = 'interrupted', updated_at = ${yield* Clock.currentTimeMillis}
+    WHERE status = 'running'`;
 
-  const insert = sqlite.prepare(
-    `INSERT INTO subagents (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?) RETURNING *`,
-  );
-  const startAgain = sqlite.prepare(
-    `UPDATE subagents SET status = 'running', instructions = ?, parent_run_id = ?, last_task = ?, error = NULL, updated_at = ?
-     WHERE id = ? RETURNING *`,
-  );
-  const finish = sqlite.prepare(
-    "UPDATE subagents SET status = ?, last_answer = ?, error = ?, updated_at = ? WHERE id = ?",
-  );
-  const byName = sqlite.prepare("SELECT * FROM subagents WHERE session_id = ? AND name = ?");
-  const byId = sqlite.prepare("SELECT * FROM subagents WHERE session_id = ? AND id = ?");
-  const bySession = sqlite.prepare(
-    "SELECT * FROM subagents WHERE session_id = ? ORDER BY created_at, rowid",
-  );
+  const stored = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.mapError(effect, (cause) => new SubagentOperationFailed({ operation: "store", cause }));
+  /** The row a write returned; a write that matched nothing has no row to decode. */
+  const returned = (statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
+    stored(Effect.flatMap(statement, (rows) => decodeRow(rows[0])));
+  const insert = (row: {
+    readonly sessionId: string;
+    readonly name: string | null;
+    readonly instructions: string | null;
+    readonly parentRunId: string;
+    readonly task: string;
+  }) => {
+    const now = effectClock.currentTimeMillisUnsafe();
+    return returned(
+      sql`INSERT INTO subagents ${sql.insert({
+        id: randomUUID(),
+        session_id: row.sessionId,
+        name: row.name,
+        instructions: row.instructions,
+        status: "running",
+        parent_run_id: row.parentRunId,
+        last_task: row.task,
+        created_at: now,
+        updated_at: now,
+      })} RETURNING *`,
+    );
+  };
+  const startAgain = (
+    instructions: string | null,
+    parentRunId: string,
+    task: string,
+    subagentId: string,
+  ) =>
+    returned(sql`UPDATE subagents SET status = 'running', instructions = ${instructions},
+      parent_run_id = ${parentRunId}, last_task = ${task}, error = NULL,
+      updated_at = ${effectClock.currentTimeMillisUnsafe()}
+      WHERE id = ${subagentId} RETURNING *`);
+  const finish = (
+    status: SubagentRow["status"],
+    answer: string,
+    error: string | null,
+    subagentId: string,
+  ) =>
+    stored(sql`UPDATE subagents SET status = ${status}, last_answer = ${answer}, error = ${error},
+      updated_at = ${effectClock.currentTimeMillisUnsafe()} WHERE id = ${subagentId}`);
+  const byName = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, name: Schema.String }),
+    Result: SubagentRow,
+    execute: ({ sessionId, name }) =>
+      sql`SELECT * FROM subagents WHERE session_id = ${sessionId} AND name = ${name}`,
+  });
+  const byIdRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, id: Schema.String }),
+    Result: SubagentRow,
+    execute: ({ sessionId, id }) =>
+      sql`SELECT * FROM subagents WHERE session_id = ${sessionId} AND id = ${id}`,
+  });
+  const byId = (sessionId: string, id: string) => stored(byIdRow({ sessionId, id }));
+  const bySession = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: SubagentRow,
+    execute: (sessionId) =>
+      sql`SELECT * FROM subagents WHERE session_id = ${sessionId} ORDER BY created_at, rowid`,
+  });
 
   const serializeNamed = yield* keyedSerialLimit();
   let completionListener: ((sessionId: string) => void) | undefined;
@@ -514,13 +560,7 @@ const make = Effect.gen(function* () {
         yield* events.publishSession(binding.sessionId, "subagents");
         const threadId = subagentThreadId(row.id);
         // Named messages may have waited behind another attempt. Publish the task now executing.
-        startAgain.get(
-          row.instructions,
-          binding.runId,
-          task,
-          effectClock.currentTimeMillisUnsafe(),
-          row.id,
-        );
+        yield* startAgain(row.instructions, binding.runId, task, row.id);
         const texts = MutableHashMap.empty<string, string>();
         let lastMessageId: string | null = null;
         let failure: string | null = null;
@@ -821,7 +861,7 @@ const make = Effect.gen(function* () {
           notifyParentImmediately,
           binding.runId,
         );
-        finish.run(status, answer, failure, effectClock.currentTimeMillisUnsafe(), row.id);
+        yield* finish(status, answer, failure, row.id);
         yield* events.publishSession(binding.sessionId, "subagents");
         return {
           status,
@@ -883,7 +923,7 @@ const make = Effect.gen(function* () {
           catch: (cause) => new SubagentOperationFailed({ operation: "run", cause }),
         }).pipe(
           Effect.catch((error) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               const detail = String(error.cause);
               trace.transitionAttempt(
                 handle,
@@ -895,7 +935,7 @@ const make = Effect.gen(function* () {
                 false,
                 binding.runId,
               );
-              finish.run("failed", "", detail, effectClock.currentTimeMillisUnsafe(), row.id);
+              yield* finish("failed", "", detail, row.id);
             }),
           ),
           // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
@@ -945,18 +985,13 @@ const make = Effect.gen(function* () {
               }
             }).pipe(
               Effect.ensuring(
-                Effect.sync(() => {
+                Effect.gen(function* () {
                   binding.abortSignal.removeEventListener("abort", stop);
                   if (!(activeFor(row.id, false, handle.id) !== undefined) && !isTruthy(pending))
-                    finish.run(
-                      "cancelled",
-                      "",
-                      null,
-                      effectClock.currentTimeMillisUnsafe(),
-                      row.id,
-                    );
-                  runEffectSync(Deferred.succeed(done, undefined));
+                    // A finalizer cannot fail; a store failure here is a defect like the outer cleanup.
+                    yield* finish("cancelled", "", null, row.id).pipe(Effect.orDie);
                 }).pipe(
+                  Effect.ensuring(Deferred.succeed(done, undefined)),
                   Effect.andThen(events.publishSession(binding.sessionId, "subagents")),
                   Effect.andThen(Effect.sync(() => completionListener?.(binding.sessionId))),
                 ),
@@ -978,25 +1013,19 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const startOneOff = (
+  const startOneOff = Effect.fnUntraced(function* (
     binding: SubagentBinding,
     parentToolCallId: string,
     task: string,
     instructions: string | null,
-  ) => {
-    const now = effectClock.currentTimeMillisUnsafe();
-    const row = decodeRow(
-      insert.get(
-        randomUUID(),
-        binding.sessionId,
-        null,
-        instructions,
-        binding.runId,
-        task,
-        now,
-        now,
-      ),
-    );
+  ) {
+    const row = yield* insert({
+      sessionId: binding.sessionId,
+      name: null,
+      instructions,
+      parentRunId: binding.runId,
+      task,
+    });
     const handle = trace.startAttempt({
       sessionId: binding.sessionId,
       parentRunId: binding.runId,
@@ -1007,31 +1036,25 @@ const make = Effect.gen(function* () {
       kind: "start",
       threadId: subagentThreadId(row.id),
     });
-    return launch(binding, row, task, handle);
-  };
+    return yield* nativePromise(() => launch(binding, row, task, handle));
+  });
 
-  const startNamed = (
+  const startNamed = Effect.fnUntraced(function* (
     binding: SubagentBinding,
     parentToolCallId: string,
     agent: string,
     message: string,
     instructions: string | undefined,
-  ): Promise<SubagentReceipt> => {
-    const existing = byName.get(binding.sessionId, agent);
-    const now = effectClock.currentTimeMillisUnsafe();
-    if (!isTruthy(existing)) {
-      const row = decodeRow(
-        insert.get(
-          randomUUID(),
-          binding.sessionId,
-          agent,
-          instructions ?? null,
-          binding.runId,
-          message,
-          now,
-          now,
-        ),
-      );
+  ) {
+    const existing = yield* stored(byName({ sessionId: binding.sessionId, name: agent }));
+    if (Option.isNone(existing)) {
+      const row = yield* insert({
+        sessionId: binding.sessionId,
+        name: agent,
+        instructions: instructions ?? null,
+        parentRunId: binding.runId,
+        task: message,
+      });
       const handle = trace.startAttempt({
         sessionId: binding.sessionId,
         parentRunId: binding.runId,
@@ -1042,18 +1065,15 @@ const make = Effect.gen(function* () {
         kind: "start",
         threadId: subagentThreadId(row.id),
       });
-      return launch(binding, row, message, handle);
+      return yield* nativePromise(() => launch(binding, row, message, handle));
     }
-    const known = decodeRow(existing);
+    const known = existing.value;
     {
-      const row = decodeRow(
-        startAgain.get(
-          instructions === undefined ? known.instructions : instructions,
-          binding.runId,
-          message,
-          effectClock.currentTimeMillisUnsafe(),
-          known.id,
-        ),
+      const row = yield* startAgain(
+        instructions === undefined ? known.instructions : instructions,
+        binding.runId,
+        message,
+        known.id,
       );
       const handle = trace.startAttempt({
         sessionId: binding.sessionId,
@@ -1065,15 +1085,15 @@ const make = Effect.gen(function* () {
         kind: "continue",
         threadId: subagentThreadId(row.id),
       });
-      return launch(binding, row, message, handle);
+      return yield* nativePromise(() => launch(binding, row, message, handle));
     }
-  };
+  });
 
-  const resumeTask = (
+  const resumeTask = Effect.fnUntraced(function* (
     binding: SubagentBinding,
     parentToolCallId: string,
     input: typeof ResumeSubagentInput.Type,
-  ): Promise<SubagentReport> => {
+  ) {
     const claim = trace.claimResume({
       sessionId: binding.sessionId,
       taskId: input.taskId,
@@ -1082,20 +1102,24 @@ const make = Effect.gen(function* () {
       parentToolCallId,
       confirmUncertain: input.confirmUncertain,
     });
-    if (claim.status === "blocked")
-      return Promise.resolve({
+    if (claim.status === "blocked") {
+      const blocked: SubagentReport = {
         status: "resume_blocked",
         taskId: input.taskId,
         reason: claim.reason,
-      });
-    const existing = byId.get(binding.sessionId, claim.agentId);
-    if (!isTruthy(existing))
-      return Promise.resolve({
+      };
+      return blocked;
+    }
+    const existing = yield* byId(binding.sessionId, claim.agentId);
+    if (Option.isNone(existing)) {
+      const missing: SubagentReport = {
         status: "resume_blocked",
         taskId: input.taskId,
         reason: "agent_not_found",
-      });
-    const known = decodeRow(existing);
+      };
+      return missing;
+    }
+    const known = existing.value;
     const context = claim.context;
     const resumeMessage = [
       "Resume the interrupted task as a new execution attempt.",
@@ -1115,18 +1139,18 @@ const make = Effect.gen(function* () {
       `Checkpoint: ${context.checkpointId}`,
     ].join("\n\n");
     {
-      const row = decodeRow(
-        startAgain.get(
-          known.instructions,
-          binding.runId,
-          context.originalRequest,
-          effectClock.currentTimeMillisUnsafe(),
-          known.id,
-        ),
+      const row = yield* startAgain(
+        known.instructions,
+        binding.runId,
+        context.originalRequest,
+        known.id,
       );
-      return launch(binding, row, resumeMessage, claim.handle);
+      const receipt: SubagentReport = yield* nativePromise(() =>
+        launch(binding, row, resumeMessage, claim.handle),
+      );
+      return receipt;
     }
-  };
+  });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const recoverForRun = (binding: SubagentBinding) =>
@@ -1139,12 +1163,12 @@ const make = Effect.gen(function* () {
             jobs.map(({ jobId, claim }) =>
               runEffect(
                 Effect.gen(function* () {
-                  const existing = byId.get(binding.sessionId, claim.agentId);
-                  if (!isTruthy(existing)) {
+                  const existing = yield* byId(binding.sessionId, claim.agentId);
+                  if (Option.isNone(existing)) {
                     trace.finishRecoveryJob(jobId, false);
                     return;
                   }
-                  const known = decodeRow(existing);
+                  const known = existing.value;
                   const context = claim.context;
                   const message = [
                     "Automatically resume the interrupted task as a new execution attempt.",
@@ -1159,14 +1183,11 @@ const make = Effect.gen(function* () {
                     `Checkpoint: ${context.checkpointId}`,
                   ].join("\n\n");
                   {
-                    const row = decodeRow(
-                      startAgain.get(
-                        known.instructions,
-                        binding.runId,
-                        context.originalRequest,
-                        effectClock.currentTimeMillisUnsafe(),
-                        known.id,
-                      ),
+                    const row = yield* startAgain(
+                      known.instructions,
+                      binding.runId,
+                      context.originalRequest,
+                      known.id,
                     );
                     yield* nativePromise(() =>
                       launch(binding, row, message, claim.handle, (outcome) =>
@@ -1206,7 +1227,10 @@ const make = Effect.gen(function* () {
         const { detail, attempt } = attemptState(sessionId, taskId, attemptId);
         if (!isTruthy(detail.task.agentId))
           return yield* new Cause.UnknownError(new Error("Subagent no longer exists"));
-        const row = decodeRow(byId.get(sessionId, detail.task.agentId));
+        const found = yield* byId(sessionId, detail.task.agentId);
+        if (Option.isNone(found))
+          return yield* new Cause.UnknownError(new Error("Subagent no longer exists"));
+        const row = found.value;
         const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
         if (!terminal(attempt.status)) return { ...base, status: "running" };
         const checkpoint = [...detail.checkpoints]
@@ -1278,9 +1302,7 @@ const make = Effect.gen(function* () {
                 ]
                   .filter((part) => part !== undefined && part !== null)
                   .join("\n");
-                return yield* nativePromise(() =>
-                  startOneOff(binding, toolCallId, input.task, instructions || null),
-                );
+                return yield* startOneOff(binding, toolCallId, input.task, instructions || null);
               }
               if (name === "resume_subagent") {
                 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -1288,15 +1310,19 @@ const make = Effect.gen(function* () {
                   Schema.decodeUnknownResult(ResumeSubagentInput),
                   Result.getOrThrow,
                 )(parsed);
-                return yield* nativePromise(() => resumeTask(binding, toolCallId, input));
+                return yield* resumeTask(binding, toolCallId, input);
               }
               // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
               const input = EffectFunction.flow(
                 Schema.decodeUnknownResult(MessageSubagentInput),
                 Result.getOrThrow,
               )(parsed);
-              return yield* nativePromise(() =>
-                startNamed(binding, toolCallId, input.agent, input.message, input.instructions),
+              return yield* startNamed(
+                binding,
+                toolCallId,
+                input.agent,
+                input.message,
+                input.instructions,
               );
             }),
           ))();
@@ -1593,19 +1619,18 @@ const make = Effect.gen(function* () {
     },
 
     /** Children of a session. Their calls waiting for the user are in `RelayedApprovals`. */
-    list(sessionId: string): SubagentView[] {
-      return bySession.all(sessionId).map((row) => toView(decodeRow(row)));
-    },
+    list: (sessionId: string) =>
+      stored(bySession(sessionId)).pipe(Effect.map((rows) => rows.map(toView))),
 
     /** A child's saved conversation. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     transcript: (sessionId: string, subagentId: string) =>
       runEffect(
         Effect.gen(function* () {
-          const row = byId.get(sessionId, subagentId);
-          if (!isTruthy(row)) return null;
+          const row = yield* byId(sessionId, subagentId);
+          if (Option.isNone(row)) return null;
           return {
-            subagent: toView(decodeRow(row)),
+            subagent: toView(row.value),
             messages: yield* nativePromise(() =>
               chatState.persistence.stores.messages.loadThread(subagentThreadId(subagentId)),
             ),
