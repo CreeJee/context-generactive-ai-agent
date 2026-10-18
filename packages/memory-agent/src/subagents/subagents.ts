@@ -1,4 +1,4 @@
-import { nativeFailure, nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { HashSet } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Result, Function as EffectFunction } from "effect";
@@ -19,7 +19,6 @@ import {
   MutableHashMap,
   Clock,
   Context,
-  Data,
   Deferred,
   Effect,
   FiberMap,
@@ -53,10 +52,28 @@ export const subagentToolNames = [
   "wait_subagents",
 ] as const;
 
-export class SubagentOperationFailed extends Data.TaggedError("SubagentOperationFailed")<{
-  readonly operation: "run" | "wait" | "recover" | "store";
-  readonly cause: unknown;
-}> {}
+export class SubagentOperationFailed extends Schema.TaggedError<SubagentOperationFailed>()(
+  "SubagentOperationFailed",
+  { operation: Schema.Literals(["run", "wait", "recover", "store"]), cause: Schema.Defect() },
+) {}
+
+const adoptionMessages = {
+  NotReviewed: "Only reports reviewed in this run can be adopted",
+  EvidenceNotReturned: "Only evidence ids returned with that report can be adopted",
+  NotificationNotDelivered: "Only status notifications delivered in this run can be adopted",
+} as const;
+
+/** Thrown to the SDK by `adopt_subagent_reports`; the model reads the fixed `message`. */
+export class SubagentAdoptionRejected extends Schema.TaggedError<SubagentAdoptionRejected>()(
+  "SubagentAdoptionRejected",
+  {
+    reason: Schema.Literals(["NotReviewed", "EvidenceNotReturned", "NotificationNotDelivered"]),
+    message: Schema.String,
+  },
+) {}
+
+const adoptionRejected = (reason: SubagentAdoptionRejected["reason"]) =>
+  SubagentAdoptionRejected.make({ reason, message: adoptionMessages[reason] });
 
 export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt for a durable interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
@@ -338,7 +355,7 @@ const make = Effect.gen(function* () {
     WHERE status = 'running'`;
 
   const stored = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.mapError(effect, (cause) => new SubagentOperationFailed({ operation: "store", cause }));
+    Effect.mapError(effect, (cause) => SubagentOperationFailed.make({ operation: "store", cause }));
   /** The row a write returned; a write that matched nothing has no row to decode. */
   const returned = (statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
     stored(Effect.flatMap(statement, (rows) => decodeRow(rows[0])));
@@ -784,10 +801,11 @@ const make = Effect.gen(function* () {
             ),
           );
         }).pipe(
-          Effect.catchCause((cause) =>
+          // A code, not the SDK's text: that can carry provider bodies. Defects and interruption
+          // end the child run.
+          Effect.catch(() =>
             Effect.sync(() => {
-              const error = nativeFailure(cause).cause;
-              failure = error instanceof Error ? error.message : String(error);
+              failure = "model_stream_failed";
             }),
           ),
         );
@@ -932,11 +950,12 @@ const make = Effect.gen(function* () {
             );
             return pending;
           },
-          catch: (cause) => new SubagentOperationFailed({ operation: "run", cause }),
+          catch: (cause) => SubagentOperationFailed.make({ operation: "run", cause }),
         }).pipe(
-          Effect.catch((error) =>
+          Effect.catch(() =>
             Effect.gen(function* () {
-              const detail = String(error.cause);
+              // A code, not the cause's text: that can hold paths or provider bodies.
+              const detail = "subagent_run_failed";
               yield* trace.transitionAttempt(
                 handle,
                 binding.sessionId,
@@ -955,10 +974,10 @@ const make = Effect.gen(function* () {
           Effect.ensuring(
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
             Effect.gen(function* () {
-              if (pending !== undefined)
-                yield* nativePromise(() => pending!.catch(() => undefined));
+              // Waits for the stream to settle; its outcome was recorded by `work`.
+              if (pending !== undefined) yield* Effect.exit(nativePromise(() => pending!));
               child.started = false;
-            }).pipe(Effect.orDie),
+            }),
           ),
         );
         const cancelled = Effect.callback<never>((resume) => {
@@ -1000,15 +1019,22 @@ const make = Effect.gen(function* () {
                 Effect.gen(function* () {
                   binding.abortSignal.removeEventListener("abort", stop);
                   if (!(activeFor(row.id, false, handle.id) !== undefined) && !isTruthy(pending))
-                    // A finalizer cannot fail; a store failure here is a defect like the outer cleanup.
-                    yield* finish("cancelled", "", null, row.id).pipe(Effect.orDie);
+                    // A finalizer cannot fail: a store failure is logged by tag, and the waiters
+                    // and the page still learn the child settled.
+                    yield* finish("cancelled", "", null, row.id).pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning("subagent_cancel_not_recorded", { error: error._tag }),
+                      ),
+                    );
                 }).pipe(
                   Effect.ensuring(Deferred.succeed(done, undefined)),
                   Effect.andThen(events.publishSession(binding.sessionId, "subagents")),
                   Effect.andThen(Effect.sync(() => completionListener?.(binding.sessionId))),
                 ),
               ),
-              Effect.orDie,
+              Effect.catch((error) =>
+                Effect.logWarning("subagent_settlement_not_recorded", { error: error._tag }),
+              ),
             ),
           ),
         );
@@ -1473,7 +1499,7 @@ const make = Effect.gen(function* () {
                 if (ready(states)) return { status: "completed" as const, attempts: states };
                 yield* Effect.tryPromise({
                   try: (signal) => trace.waitForChange(binding.sessionId, cursor, signal),
-                  catch: (cause) => new SubagentOperationFailed({ operation: "wait", cause }),
+                  catch: (cause) => SubagentOperationFailed.make({ operation: "wait", cause }),
                 });
               }
             });
@@ -1500,14 +1526,13 @@ const make = Effect.gen(function* () {
           const available = Option.getOrUndefined(
             MutableHashMap.get(reviewed, `${report.taskId}:${report.attemptId}`),
           );
-          if (!isTruthy(available))
-            throw new Error("Only reports reviewed in this run can be adopted");
+          if (!isTruthy(available)) throw adoptionRejected("NotReviewed");
           const evidence = HashSet.fromIterable(available.evidenceRefIds);
           if (report.evidenceRefIds.some((id) => !HashSet.has(evidence, id)))
-            throw new Error("Only evidence ids returned with that report can be adopted");
+            throw adoptionRejected("EvidenceNotReturned");
         }
         if (draft.reflectedNotificationIds.some((id) => !HashSet.has(deliveredNotificationIds, id)))
-          throw new Error("Only status notifications delivered in this run can be adopted");
+          throw adoptionRejected("NotificationNotDelivered");
         adoptionDraft = draft;
         return {
           status: "recorded" as const,
@@ -1524,9 +1549,11 @@ const make = Effect.gen(function* () {
             Effect.forkIn(
               Effect.tryPromise({
                 try: () => recoverForRun(binding),
-                catch: (cause) => new SubagentOperationFailed({ operation: "recover", cause }),
+                catch: (cause) => SubagentOperationFailed.make({ operation: "recover", cause }),
               }).pipe(
-                Effect.catch((error) => Effect.logWarning("Subagent recovery deferred", error)),
+                Effect.catch((error) =>
+                  Effect.logWarning("Subagent recovery deferred", { error: error._tag }),
+                ),
               ),
               scope,
             ).pipe(Effect.asVoid),
@@ -1682,7 +1709,7 @@ const make = Effect.gen(function* () {
               Deferred.succeed(settled, outcome),
             ),
           ).pipe(
-            Effect.mapError((cause) => new SubagentOperationFailed({ operation: "run", cause })),
+            Effect.mapError((cause) => SubagentOperationFailed.make({ operation: "run", cause })),
           );
           return yield* Deferred.await(settled);
         });
