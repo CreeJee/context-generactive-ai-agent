@@ -195,6 +195,10 @@ impl MemoryReadSession {
                 return out;
             }
         };
+        let Ok(inner) = index.index() else {
+            out.kind = Outcome::IndexFailed.tag().into();
+            return out;
+        };
         let bytes = 40usize
             .saturating_add(input.embedder.len())
             .saturating_add(
@@ -219,7 +223,7 @@ impl MemoryReadSession {
             || input.input_budget_bytes as usize > MAX_BYTES
             || input.output_budget_bytes as usize > MAX_BYTES
             || input.query.as_ref().is_some_and(|q| {
-                Some(q.len()) != index.inner.dim_opt()
+                Some(q.len()) != inner.dim_opt()
                     || q.iter().any(|x| !x.is_finite() || x.abs() >= 1e16)
                     || input.vector_k == 0
             })
@@ -327,23 +331,20 @@ impl MemoryReadSession {
                 check()?;
                 let mut remaining = allowed.clone();
                 let mut seen = HashSet::new();
-                while !remaining.is_empty() && index.inner.len() > 0 {
+                while !remaining.is_empty() && !inner.is_empty() {
                     let take =
                         (input.vector_k as usize - out.vector_seqs.len()).min(remaining.len());
                     let previous = seen.len();
                     if !admitted(
-                        index.inner.len(),
+                        inner.len(),
                         query.len(),
-                        index.inner.bit_width(),
+                        inner.bit_width(),
                         input.vector_k,
                         cell.remaining(),
                     ) {
                         return Err(Outcome::BudgetExceeded);
                     }
-                    let result =
-                        index
-                            .inner
-                            .try_search_with_allowlist(query, take, Some(&remaining));
+                    let result = inner.try_search_with_allowlist(query, take, Some(&remaining));
                     // Never convert cancellation/deadline into a degraded success.
                     check()?;
                     record_vector_channel(&mut out, result, |hits, out| {

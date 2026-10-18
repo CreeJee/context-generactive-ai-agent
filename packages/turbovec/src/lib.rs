@@ -1,9 +1,9 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::fs::File;
-mod sqlite_bridge;
 mod read_session;
 mod search_control;
+mod sqlite_bridge;
 pub use read_session::{MemoryReadSession, NativeReadInput, NativeReadOutput};
 pub use search_control::{ControlledSearchResult, SearchControl};
 use turbovec::IdMapIndex;
@@ -72,7 +72,21 @@ impl CacheLease {
 // Synchronous methods are called only inside the owning Node worker.
 #[napi]
 pub struct VectorIndex {
-    inner: IdMapIndex,
+    /// `None` after `close`: later calls fail instead of reaching the released index.
+    inner: Option<IdMapIndex>,
+}
+
+impl VectorIndex {
+    pub(crate) fn index(&self) -> Result<&IdMapIndex> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| js_error("Vector index is closed"))
+    }
+    fn index_mut(&mut self) -> Result<&mut IdMapIndex> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| js_error("Vector index is closed"))
+    }
 }
 
 #[napi]
@@ -80,7 +94,7 @@ impl VectorIndex {
     #[napi(constructor)]
     pub fn new(dimensions: u32, bits: u32) -> Result<Self> {
         Ok(Self {
-            inner: IdMapIndex::new(dimensions as usize, bits as usize).map_err(js_error)?,
+            inner: Some(IdMapIndex::new(dimensions as usize, bits as usize).map_err(js_error)?),
         })
     }
     #[napi]
@@ -89,7 +103,9 @@ impl VectorIndex {
             .iter()
             .map(|id| parse_id(id))
             .collect::<Result<Vec<_>>>()?;
-        self.inner.add_with_ids(&vectors, &ids).map_err(js_error)
+        self.index_mut()?
+            .add_with_ids(&vectors, &ids)
+            .map_err(js_error)
     }
     #[napi]
     /// `allowed_ids`: omitted searches the whole index; an empty list returns no results.
@@ -99,10 +115,11 @@ impl VectorIndex {
         k: u32,
         allowed_ids: Option<Vec<String>>,
     ) -> Result<SearchResult> {
-        if Some(query.len()) != self.inner.dim_opt() {
+        let index = self.index()?;
+        if Some(query.len()) != index.dim_opt() {
             return Err(js_error("Expected one query vector"));
         }
-        if self.inner.len() == 0 {
+        if index.is_empty() {
             return Ok(SearchResult {
                 ids: vec![],
                 scores: vec![],
@@ -122,8 +139,7 @@ impl VectorIndex {
             ),
             None => None,
         };
-        let result = self
-            .inner
+        let result = index
             .try_search_with_allowlist(&query, k as usize, ids.as_deref())
             .map_err(js_error)?;
         Ok(SearchResult {
@@ -142,8 +158,14 @@ impl VectorIndex {
         request_id: String,
         allowed_ids: Option<Vec<String>>,
     ) -> ControlledSearchResult {
+        let Some(index) = self.inner.as_ref() else {
+            return search_control::outcome(
+                search_control::Outcome::IndexFailed,
+                std::time::Instant::now(),
+            );
+        };
         search_control::search(
-            &self.inner,
+            index,
             query,
             k,
             token,
@@ -155,42 +177,49 @@ impl VectorIndex {
     }
     #[napi]
     pub fn remove(&mut self, id: String) -> Result<bool> {
-        Ok(self.inner.remove(parse_id(&id)?))
+        let id = parse_id(&id)?;
+        Ok(self.index_mut()?.remove(id))
     }
     #[napi]
     pub fn save(&self, path: String) -> Result<()> {
-        self.inner.write(path).map_err(js_error)
+        self.index()?.write(path).map_err(js_error)
     }
     #[napi(factory)]
     pub fn load(path: String) -> Result<Self> {
         Ok(Self {
-            inner: IdMapIndex::load(path).map_err(js_error)?,
+            inner: Some(IdMapIndex::load(path).map_err(js_error)?),
         })
     }
     #[napi]
     pub fn dimensions(&self) -> Result<u32> {
-        self.inner
+        self.index()?
             .dim_opt()
             .map(|dim| dim as u32)
             .ok_or_else(|| js_error("Index dimension is not initialized"))
     }
     #[napi]
-    pub fn bits(&self) -> u32 {
-        self.inner.bit_width() as u32
+    pub fn bits(&self) -> Result<u32> {
+        Ok(self.index()?.bit_width() as u32)
     }
     #[napi]
-    pub fn size(&self) -> u32 {
-        self.inner.len() as u32
+    pub fn size(&self) -> Result<u32> {
+        Ok(self.index()?.len() as u32)
+    }
+    /// Releases the index now rather than at garbage collection. Idempotent.
+    #[napi]
+    pub fn close(&mut self) {
+        self.inner.take();
     }
     #[napi]
     pub fn validate_ids(&self, ids: Vec<String>) -> Result<()> {
-        if ids.len() != self.inner.len() {
+        let index = self.index()?;
+        if ids.len() != index.len() {
             return Err(js_error("Vector snapshot mapping mismatch"));
         }
         let ids = canonical_unique_ids(&ids)
             .ok_or_else(|| js_error("Vector snapshot mapping mismatch"))?;
         for id in ids {
-            if !self.inner.contains(id) {
+            if !index.contains(id) {
                 return Err(js_error("Vector snapshot mapping mismatch"));
             }
         }

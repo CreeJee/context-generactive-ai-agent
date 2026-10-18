@@ -1,4 +1,14 @@
-import { Effect, FileSystem, Layer, Option, Path, Predicate, Queue, Schema } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Queue,
+  Schema,
+  ScopedRef,
+} from "effect";
 // Node IPC and synchronous native/filesystem calls are confined to this owning worker.
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -75,21 +85,24 @@ const main = Effect.gen(function* () {
   );
   const file = paths.join(setup.cacheDirectory, "index.tvim");
   const exists = yield* files(fs.exists(file));
-  const saved = exists
-    ? Option.some(yield* native(() => binding.VectorIndex.load(file)))
-    : Option.none<InstanceType<typeof binding.VectorIndex>>();
-  // Metadata belongs to the snapshot; never silently reuse a different vector layout.
-  const compatible = Option.filter(
-    saved,
-    (index) => index.dimensions() === setup.dimensions && index.bits() === setup.bits,
+  // The index is released when replaced or when the worker's Scope closes, not at GC.
+  const owned = (create: () => InstanceType<typeof binding.VectorIndex>) =>
+    Effect.acquireRelease(native(create), (index) => Effect.sync(() => index.close()));
+  const empty = owned(() => new binding.VectorIndex(setup.dimensions, setup.bits));
+  const indexRef = yield* ScopedRef.fromAcquire(
+    exists ? owned(() => binding.VectorIndex.load(file)) : empty,
   );
+  // Metadata belongs to the snapshot; never silently reuse a different vector layout.
+  const compatible =
+    exists &&
+    (yield* native(() => {
+      const saved = ScopedRef.getUnsafe(indexRef);
+      return saved.dimensions() === setup.dimensions && saved.bits() === setup.bits;
+    }));
   // Rebuild must be an explicit host recovery/publication, never a clean empty owner.
-  if (Option.isSome(saved) && Option.isNone(compatible) && setup.recover !== true)
-    return yield* fail("index-failed");
-  const needsReset = Option.isNone(compatible);
-  let index = Option.isSome(compatible)
-    ? compatible.value
-    : yield* native(() => new binding.VectorIndex(setup.dimensions, setup.bits));
+  if (exists && !compatible && setup.recover !== true) return yield* fail("index-failed");
+  const needsReset = !compatible;
+  if (exists && !compatible) yield* ScopedRef.set(indexRef, empty);
   // The worker owns this read-only connection; env teardown drops it with the index.
   const reader =
     setup.databasePath === undefined
@@ -97,16 +110,19 @@ const main = Effect.gen(function* () {
       : Option.some(
           yield* native(() => new binding.MemoryReadSession(setup.databasePath!), "read-failed"),
         );
-  const size = yield* native(() => index.size());
+  const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
   yield* post({ kind: "ready", epoch: setup.epoch, threadId, size, needsReset });
 
   const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
     if (command.epoch !== setup.epoch) return yield* fail("epoch-mismatch");
+    // The single owner loop is the only reader and writer of indexRef, so `index` stays current
+    // for this command; only reset replaces it, and ack then reads the replacement.
+    const index = yield* ScopedRef.get(indexRef);
     const ack = (): OwnerReply => ({
       kind: "ack",
       requestId: command.requestId,
       epoch: setup.epoch,
-      size: index.size(),
+      size: ScopedRef.getUnsafe(indexRef).size(),
     });
     const ids = (values: readonly string[]) =>
       decodeIds(values).pipe(Effect.mapError(() => fail("invalid-input")));
@@ -134,7 +150,7 @@ const main = Effect.gen(function* () {
         }));
       }
       case "reset":
-        index = yield* native(() => new binding.VectorIndex(setup.dimensions, setup.bits));
+        yield* ScopedRef.set(indexRef, empty);
         return yield* native(ack);
       case "save":
         yield* native(() => index.save(`${file}.tmp`));
