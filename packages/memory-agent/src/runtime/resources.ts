@@ -110,8 +110,5 @@ export function runtimeWorker(name: RuntimeWorker) {
   const root = runtimeRoot();
   return root === null
     ? runtimeRequire().resolve(`memory-agent/${name}`)
-    : path.join(
-        root,
-        `${name}.${name === "kiwi-worker" || name === "embed-worker" ? "ts" : "mjs"}`,
-      );
+    : path.join(root, `${name}.mjs`);
 }

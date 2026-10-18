@@ -373,13 +373,6 @@ const program = Effect.gen(function* () {
   yield* fs.remove(work, { recursive: true, force: true });
   yield* fs.makeDirectory(stage, { recursive: true });
   yield* fs.copy(join(app, "build", "client"), join(stage, "client"));
-  // Worker scripts; `runtimeWorker()` looks for them next to the runtime files.
-  const workerScripts = {
-    "kiwi-worker.ts": "morph",
-    "embed-worker.ts": "embedding",
-  } as const;
-  for (const [file, folder] of Object.entries(workerScripts))
-    yield* fs.copy(join(memoryAgent, "src", "memory", folder, file), join(stage, file));
   // Goal worker and native factory artifacts are produced by memory-agent's dependency build.
   // Packaging only verifies/copies these bytes; it never compiles them at startup or on first use.
   const prebuiltRuntime = join(memoryAgent, "dist", "runtime");
@@ -405,15 +398,34 @@ const program = Effect.gen(function* () {
     yield* fs.copy(source, join(stage, artifact.file));
   }
   yield* fs.copy(artifactManifestPath, join(stage, "artifact-manifest.json"));
-  // The import and redaction workers are TypeScript with their own dependencies (Effect, secretlint),
-  // so each is bundled into one file instead; a checkout runs the source.
+  // Workers are TypeScript importing sibling modules, so each is bundled into one file; a checkout
+  // runs the source. Most bundle their dependencies too (Effect, secretlint). The Kiwi and
+  // embedding workers load their model packages from the runtime `node_modules`, so only their own
+  // modules are bundled. `runtimeWorker()` looks for every worker next to the runtime files.
   const bundledWorkers = {
-    "import-worker": join(memoryAgent, "src", "imports", "worker.ts"),
-    "redact-worker": join(memoryAgent, "src", "secrets", "redact-worker.ts"),
-    "native-search-worker": join(memoryAgent, "src", "memory", "native-search", "worker.ts"),
-    "sandbox-worker": join(memoryAgent, "src", "shell", "sandbox-worker.ts"),
+    "import-worker": { source: join(memoryAgent, "src", "imports", "worker.ts"), packages: true },
+    "redact-worker": {
+      source: join(memoryAgent, "src", "secrets", "redact-worker.ts"),
+      packages: true,
+    },
+    "native-search-worker": {
+      source: join(memoryAgent, "src", "memory", "native-search", "worker.ts"),
+      packages: true,
+    },
+    "sandbox-worker": {
+      source: join(memoryAgent, "src", "shell", "sandbox-worker.ts"),
+      packages: true,
+    },
+    "kiwi-worker": {
+      source: join(memoryAgent, "src", "memory", "morph", "kiwi-worker.ts"),
+      packages: false,
+    },
+    "embed-worker": {
+      source: join(memoryAgent, "src", "memory", "embedding", "embed-worker.ts"),
+      packages: false,
+    },
   } as const;
-  for (const [name, source] of Object.entries(bundledWorkers))
+  for (const [name, { source, packages }] of Object.entries(bundledWorkers))
     yield* Effect.tryPromise(() =>
       build({
         config: false,
@@ -424,7 +436,7 @@ const program = Effect.gen(function* () {
         platform: "node",
         fixedExtension: true,
         dts: false,
-        deps: { alwaysBundle: [/.*/], onlyBundle: false },
+        deps: packages ? { alwaysBundle: [/.*/], onlyBundle: false } : { neverBundle: true },
         outputOptions: { codeSplitting: false },
         report: false,
         logLevel: "warn",

@@ -47,7 +47,7 @@ skills/
 
 앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통 및 프로젝트 skill이 기본 skill을 덮어씁니다.
 
-네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.ts`, `kiwi-worker.ts`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. 이 둘은 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 한 파일로 묶여 들어갑니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
+네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.ts`, `kiwi-worker.ts`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. worker는 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 worker마다 한 파일로 묶여 들어갑니다. 임베딩·Kiwi worker는 자기 모듈만 묶고 패키지는 runtime 폴더의 것을 씁니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
 도구 입력 스키마는 Effect Schema이며 `toToolSchema`로 TanStack이 요구하는 Standard JSON Schema로 바꿉니다.
