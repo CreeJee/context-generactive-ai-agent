@@ -12,12 +12,15 @@ import {
   Effect,
   Equal,
   Layer,
+  Match,
   Option,
   Predicate,
+  Ref,
   Schema,
   Semaphore,
   Stream,
 } from "effect";
+import { EventType, type AdapterYieldChunk } from "@tanstack/ai";
 import {
   GlobalConfig,
   type GlobalConfigApi,
@@ -903,6 +906,24 @@ function makeOpenAICompatibleSettingsBody(
                 modelOptions: { ...options.modelOptions, max_tokens: settings.outputBudget },
               };
               if (!settings.toolCalling) request.tools = [];
+              const toolDefinitions = request.tools?.length ?? 0;
+              const toolCalls = yield* Ref.make(0);
+              // One provider turn's outcome as counts only: no prompt, reply, model, endpoint or key.
+              const observe = Match.type<AdapterYieldChunk>().pipe(
+                Match.discriminators("type")({
+                  TOOL_CALL_START: () => Ref.update(toolCalls, (count) => count + 1),
+                  [EventType.RUN_FINISHED]: (finished) =>
+                    Effect.flatMap(Ref.get(toolCalls), (received) =>
+                      Effect.logInfo("Compatible model turn finished", {
+                        runId: finished.runId,
+                        finishReason: finished.finishReason ?? null,
+                        toolDefinitions,
+                        toolCalls: received,
+                      }),
+                    ),
+                }),
+                Match.orElse(() => Effect.void),
+              );
               const source = original(request)[Symbol.asyncIterator]();
               // Closing the SDK iterator is best-effort cleanup; the stream's own outcome stands.
               yield* Effect.addFinalizer(() =>
@@ -923,6 +944,7 @@ function makeOpenAICompatibleSettingsBody(
                     return yield* new CompatibleRunRequestFailed({
                       reason: { _tag: "ToolCallingDisabled" },
                     });
+                  yield* observe(chunk);
                   const output: typeof chunk =
                     chunk.type === "RUN_ERROR" &&
                     chunk.message.includes("No user query found in messages")
