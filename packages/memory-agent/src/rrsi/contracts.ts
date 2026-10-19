@@ -84,6 +84,12 @@ export const ExperimentProgress = Schema.Struct({
   completed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   total: Schema.Int.check(Schema.isGreaterThan(0)),
 });
+/** Where an experiment's memory tasks came from: built-in fixtures or a pinned usage corpus. */
+export const MemoryTaskSource = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("synthetic") }),
+  Schema.Struct({ kind: Schema.Literal("usage"), version: Schema.String }),
+]).pipe(Schema.toTaggedUnion("kind"));
+export type MemoryTaskSource = typeof MemoryTaskSource.Type;
 export const Experiment = Schema.Struct({
   id: Schema.String,
   status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
@@ -95,13 +101,8 @@ export const Experiment = Schema.Struct({
   baseVersion: Schema.String,
   adoptedVersionId: Schema.optionalKey(Schema.String),
   baselineImage: Schema.optionalKey(Schema.String),
-  /** Where memory tasks came from; absent on records made before the source was recorded. */
-  memoryTasks: Schema.optionalKey(
-    Schema.Union([
-      Schema.Struct({ kind: Schema.Literal("synthetic") }),
-      Schema.Struct({ kind: Schema.Literal("usage"), version: Schema.String }),
-    ]),
-  ),
+  /** Absent on records made before the source was recorded. */
+  memoryTaskSource: Schema.optionalKey(MemoryTaskSource),
   progress: Schema.optionalKey(ExperimentProgress),
   baselines: Schema.optionalKey(Schema.Array(Measurement)),
   validationBase: Schema.optionalKey(Measurement),

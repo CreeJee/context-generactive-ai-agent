@@ -1,6 +1,7 @@
-import { Option, Schema } from "effect";
+import { Match, Option, Schema } from "effect";
 import { isTruthy } from "../../../truthy.ts";
 import type { ExperimentRecord, HarnessVersion } from "memory-agent";
+import { MemoryTaskSource } from "memory-agent/definitions";
 import { FieldDescription } from "~/components/ui/field";
 
 type CandidateRecord = ExperimentRecord["candidates"][number];
@@ -12,22 +13,21 @@ const Profile = Schema.Struct({
 });
 const ProfileDiff = Schema.fromJsonString(Schema.Struct({ before: Profile, after: Profile }));
 
+const byKind = Match.discriminatorsExhaustive("kind");
+
 /** Rounds can hold several candidates, so each one is named by its order within the round. */
-export function candidateLabel(candidates: readonly CandidateRecord[], index: number) {
-  const candidate = candidates[index];
-  switch (candidate.kind) {
-    case "code":
-      return "코드 후보";
-    case "profile": {
-      const order = candidates
-        .slice(0, index)
-        .filter(
-          (earlier) => earlier.kind === "profile" && earlier.round === candidate.round,
-        ).length;
-      return `라운드 ${candidate.round + 1} · 후보 ${order + 1}`;
-    }
-  }
-}
+export const candidateLabel = (candidates: readonly CandidateRecord[], index: number) =>
+  Match.value(candidates[index]).pipe(
+    byKind({
+      code: () => "코드 후보",
+      profile: ({ round }) => {
+        const order = candidates
+          .slice(0, index)
+          .filter((earlier) => earlier.kind === "profile" && earlier.round === round).length;
+        return `라운드 ${round + 1} · 후보 ${order + 1}`;
+      },
+    }),
+  );
 
 function TextChange({ label, before, after }: { label: string; before: string; after: string }) {
   if (before === after) return null;
@@ -75,36 +75,35 @@ function ProfileChanges({ diff }: { diff: string }) {
 }
 
 /** Code candidates keep their branch and commit for review; profile candidates only need the change. */
-export function CandidateDetails({ candidate }: { candidate: CandidateRecord }) {
-  switch (candidate.kind) {
-    case "profile":
-      return (
+export const CandidateDetails = ({ candidate }: { candidate: CandidateRecord }) =>
+  Match.value(candidate).pipe(
+    byKind({
+      profile: ({ diff }) => (
         <details className="text-sm">
           <summary className="cursor-pointer">변경 내용 보기</summary>
           <div className="mt-2">
-            <ProfileChanges diff={candidate.diff} />
+            <ProfileChanges diff={diff} />
           </div>
         </details>
-      );
-    case "code":
-      return (
+      ),
+      code: ({ diff, branch, commit, imageId, decision }) => (
         <>
           <details className="text-sm">
             <summary className="cursor-pointer">변경 내용 보기</summary>
-            <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{candidate.diff}</pre>
+            <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{diff}</pre>
           </details>
-          {candidate.branch && <code>{candidate.branch}</code>}
-          {candidate.commit && <code>commit: {candidate.commit}</code>}
-          {candidate.imageId && <code>artifact: {candidate.imageId}</code>}
-          {candidate.decision === "code_review_pending" && (
+          {branch && <code>{branch}</code>}
+          {commit && <code>commit: {commit}</code>}
+          {imageId && <code>artifact: {imageId}</code>}
+          {decision === "code_review_pending" && (
             <FieldDescription>
               평가를 통과한 후보예요. 위 diff와 커밋을 검토한 뒤 별도 브랜치에서 반영하세요.
             </FieldDescription>
           )}
         </>
-      );
-  }
-}
+      ),
+    }),
+  );
 
 export const phaseLabels = {
   baseline: "현재 설정 평가",
@@ -190,21 +189,10 @@ export function AppliedSettings({
 
 type Measurement = NonNullable<ExperimentRecord["validationBase"]>;
 
-/** Older records did not record their memory task source, so they show none rather than a guess. */
-function MemoryTasks({ tasks }: { tasks: ExperimentRecord["memoryTasks"] }) {
-  switch (tasks?.kind) {
-    case undefined:
-      return null;
-    case "synthetic":
-      return <FieldDescription>기억 과제: 별도로 만든 과제</FieldDescription>;
-    case "usage":
-      return (
-        <FieldDescription>
-          기억 과제: 실제 사용 기록의 정정 내용 (버전 {tasks.version})
-        </FieldDescription>
-      );
-  }
-}
+const memoryTaskSourceText = MemoryTaskSource.match({
+  synthetic: () => "별도로 만든 과제",
+  usage: ({ version }) => `실제 사용 기록의 정정 내용 (버전 ${version})`,
+});
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 function Comparison({
@@ -255,7 +243,12 @@ export function ExperimentSummary({
       </p>
       {status !== "running" && <FieldDescription>{reason}</FieldDescription>}
       {status !== "running" && nextStep && <FieldDescription>다음: {nextStep}</FieldDescription>}
-      <MemoryTasks tasks={experiment.memoryTasks} />
+      {/* Older records did not record their source, so they show none rather than a guess. */}
+      {experiment.memoryTaskSource && (
+        <FieldDescription>
+          기억 과제: {memoryTaskSourceText(experiment.memoryTaskSource)}
+        </FieldDescription>
+      )}
       {isTruthy(progress) ? (
         <FieldDescription>
           {status === "running" ? "현재 단계" : "마지막 기록된 단계"}: {phaseLabels[progress.phase]}{" "}
