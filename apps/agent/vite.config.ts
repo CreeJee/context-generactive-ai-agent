@@ -110,6 +110,12 @@ export default defineConfig(({ command }) =>
         resolve: {
           tsconfigPaths: true,
         },
+        optimizeDeps: {
+          // The scan starts from route modules only, so dependencies first reached through dialogs and
+          // settings pages were found on first use; the optimizer then reloaded the page and dropped
+          // that click. Crawling every app module finds them when the dev server starts.
+          entries: ["app/**/*.tsx", "!app/**/*.test.tsx"],
+        },
         ssr: {
           // memory-agent ships TypeScript source; the dev server compiles only it. The production server
           // build carries every JS dependency, so `server/main.ts` and the executable need no node_modules.
