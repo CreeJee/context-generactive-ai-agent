@@ -1,4 +1,7 @@
 export { Rrsi } from "./rrsi/service.ts";
+export { ProjectImprovement } from "./improve/discovery.ts";
+export type { ImprovementReport, ImprovementScan } from "./improve/discovery.ts";
+export type { ImprovementItem } from "./improve/items.ts";
 export { HarnessStore } from "./rrsi/store.ts";
 export { Command as RrsiCommand } from "./rrsi/contracts.ts";
 export type { HarnessVersion, ExperimentRecord, RrsiSettings } from "./rrsi/contracts.ts";

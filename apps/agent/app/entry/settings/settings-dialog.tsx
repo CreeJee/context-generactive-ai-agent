@@ -9,7 +9,9 @@ import {
   MessagesSquareIcon,
   PlugIcon,
   WaypointsIcon,
+  WrenchIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -29,7 +31,7 @@ import { EmbeddingSettings } from "./pages/embedding";
 import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
-import { RrsiSettings } from "./pages/rrsi";
+import { ImprovementSettings } from "./pages/improvements";
 import { KanbanSettings } from "./pages/kanban";
 
 const settingsGroups = [
@@ -52,81 +54,32 @@ const settingsGroups = [
     ],
   },
   { label: "실행", pages: [{ value: "kanban", label: "칸반 실행", icon: KanbanIcon }] },
-  { label: "개선", pages: [{ value: "rrsi", label: "동작 개선 실험", icon: BotIcon }] },
+  {
+    label: "개선",
+    pages: [{ value: "improvements", label: "프로젝트 개선", icon: WrenchIcon }],
+  },
   { label: "지침", pages: [{ value: "skills", label: "Skills", icon: BookOpenIcon }] },
 ] as const;
 
 type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
 
+/** Each page's body; every page reads its own data, so each gets its own loading boundary. */
+const pageBodies: Record<SettingsPage, (project: Project | null) => ReactNode> = {
+  improvements: () => <ImprovementSettings />,
+  web: () => <KagiSettings />,
+  image: () => <ImageSettings />,
+  mcp: (project) => <McpSettings project={project} />,
+  agents: (project) => <AgentSettings project={project} />,
+  conversation: () => <ConversationSettings />,
+  recall: () => <RecallSettings />,
+  imports: () => <ImportSettings />,
+  embedding: () => <EmbeddingSettings />,
+  skills: (project) => <SkillSettings project={project} />,
+  kanban: (project) => <KanbanSettings project={project} />,
+};
+
 function SettingsPageBody({ page, project }: { page: SettingsPage; project: Project | null }) {
-  switch (page) {
-    case "rrsi":
-      return (
-        <QuerySection>
-          <RrsiSettings />
-        </QuerySection>
-      );
-    case "web":
-      return (
-        <QuerySection>
-          <KagiSettings />
-        </QuerySection>
-      );
-    case "image":
-      return (
-        <QuerySection>
-          <ImageSettings />
-        </QuerySection>
-      );
-    case "mcp":
-      return (
-        <QuerySection>
-          <McpSettings project={project} />
-        </QuerySection>
-      );
-    case "agents":
-      return (
-        <QuerySection>
-          <AgentSettings project={project} />
-        </QuerySection>
-      );
-    case "conversation":
-      return (
-        <QuerySection>
-          <ConversationSettings />
-        </QuerySection>
-      );
-    case "recall":
-      return (
-        <QuerySection>
-          <RecallSettings />
-        </QuerySection>
-      );
-    case "imports":
-      return (
-        <QuerySection>
-          <ImportSettings />
-        </QuerySection>
-      );
-    case "embedding":
-      return (
-        <QuerySection>
-          <EmbeddingSettings />
-        </QuerySection>
-      );
-    case "skills":
-      return (
-        <QuerySection>
-          <SkillSettings project={project} />
-        </QuerySection>
-      );
-    case "kanban":
-      return (
-        <QuerySection>
-          <KanbanSettings project={project} />
-        </QuerySection>
-      );
-  }
+  return <QuerySection>{pageBodies[page](project)}</QuerySection>;
 }
 
 /**

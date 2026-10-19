@@ -10,6 +10,7 @@ import { AgentChat, GoalWorkerConfiguration, type GoalWorkerOptions } from "./ag
 import { BtwChat } from "./btw/chat.ts";
 import { HarnessStore } from "./rrsi/store.ts";
 import { Rrsi } from "./rrsi/service.ts";
+import { ProjectImprovement } from "./improve/discovery.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
 import { ReportDiagnoser } from "./report/diagnosis.ts";
@@ -312,6 +313,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
+    ProjectImprovement.layer,
     Skills.layer({
       ...optionalProperty("home", options.skillsHome),
       ...optionalProperty("builtin", options.skillsBuiltin),
