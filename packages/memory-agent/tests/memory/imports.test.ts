@@ -618,7 +618,18 @@ alone("folds a project migration made for a worktree into its repository's proje
       "codex",
       { worktreePath: null, branch: null },
     );
+    // Nodes are immutable evidence, but folding moves them along with their session.
+    yield* sqlAll(
+      `INSERT INTO nodes (id, project_id, session_id, kind, text, created_at)
+        VALUES ('folded-node', ?, ?, 'user', '접힐 대화', '2026-04-02T02:00:01.000Z')`,
+      split.id,
+      moved.id,
+    );
     yield* runOnce;
+    expect(yield* sqlGet("SELECT project_id, text FROM nodes WHERE id = 'folded-node'")).toEqual({
+      project_id: project.id,
+      text: "접힐 대화",
+    });
     const folded = yield* sessions.get(moved.id);
     expect(folded.projectId).toBe(project.id);
     expect(folded.worktreePath).toBe(split.root);

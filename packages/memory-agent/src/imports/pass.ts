@@ -53,13 +53,32 @@ const Cursor = Schema.Struct({
 });
 type Cursor = typeof Cursor.Type;
 
-/** The import records could not be read or written; the cause stays with the error. */
+/**
+ * The import records could not be read or written. The reason names the step, so a log shows where
+ * a pass stopped without the SQL or a path; the cause stays with the error.
+ */
 export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
   "ImportStoreFailed",
-  { cause: Schema.Defect() },
+  {
+    reason: Schema.Union([
+      // Folders a repository makes worktrees in, read at the start and kept at the end.
+      Schema.TaggedStruct("WorktreeParents", {}),
+      // Moving a worktree project's sessions and nodes into its repository's project.
+      Schema.TaggedStruct("Fold", {}),
+      // Which session a transcript writes into.
+      Schema.TaggedStruct("Mapping", {}),
+      // How far a transcript was read.
+      Schema.TaggedStruct("Cursor", {}),
+      // A conversation's title from its opening message.
+      Schema.TaggedStruct("Title", {}),
+      // Why a transcript failed, kept for the next pass.
+      Schema.TaggedStruct("FailureRecord", {}),
+    ]),
+    cause: Schema.Defect(),
+  },
 ) {}
-const stored = <A, E>(effect: Effect.Effect<A, E>) =>
-  Effect.mapError(effect, (cause) => ImportStoreFailed.make({ cause }));
+const stored = <A, E>(step: ImportStoreFailed["reason"]["_tag"], effect: Effect.Effect<A, E>) =>
+  Effect.mapError(effect, (cause) => ImportStoreFailed.make({ reason: { _tag: step }, cause }));
 
 /** What settings says went wrong: the failures' tags, never the transcript's content. */
 const failureOf = (cause: Cause.Cause<unknown>) => failureTags(cause).slice(0, failureLength);
@@ -234,17 +253,22 @@ const make = (home: string) =>
         yield* Effect.forEach(registered, (project) =>
           Effect.gen(function* () {
             const resolved = (yield* placement.resolve(project.root, null)).path;
-            const owned = (yield* stored(ownedRows(project.id))).count;
+            const owned = (yield* stored("Fold", ownedRows(project.id))).count;
             if (resolved === project.root || owned > 0) return;
             const { project: owner } = yield* projectOf(resolved);
             if (!isTruthy(owner) || owner.id === project.id) return;
             yield* stored(
+              "Fold",
               Effect.gen(function* () {
                 // The folded project's folder was the worktree its conversations ran in.
                 yield* sql`UPDATE sessions SET worktree_path = coalesce(worktree_path, ${project.root})
                   WHERE project_id = ${project.id}`;
                 yield* sql`UPDATE sessions SET project_id = ${owner.id} WHERE project_id = ${project.id}`;
+                // Nodes are immutable evidence; a move permit lets only their project change.
+                yield* sql`INSERT INTO node_project_moves (from_project, to_project)
+                  VALUES (${project.id}, ${owner.id})`;
                 yield* sql`UPDATE nodes SET project_id = ${owner.id} WHERE project_id = ${project.id}`;
+                yield* sql`DELETE FROM node_project_moves WHERE from_project = ${project.id}`;
               }).pipe(sql.withTransaction),
             );
             yield* Effect.when(
@@ -267,6 +291,7 @@ const make = (home: string) =>
     ) =>
       Effect.gen(function* () {
         const existing = yield* stored(
+          "Mapping",
           readMapping({ source: transcript.source, externalId: transcript.externalId }),
         );
         const placed =
@@ -294,8 +319,11 @@ const make = (home: string) =>
           transcript.source,
           origin,
         );
-        yield* stored(sql`INSERT INTO imported_sessions (source, external_id, session_id)
-          VALUES (${transcript.source}, ${transcript.externalId}, ${session.id})`);
+        yield* stored(
+          "Mapping",
+          sql`INSERT INTO imported_sessions (source, external_id, session_id)
+            VALUES (${transcript.source}, ${transcript.externalId}, ${session.id})`,
+        );
         return { sessionId: session.id, skipped: null };
       });
 
@@ -312,7 +340,7 @@ const make = (home: string) =>
         );
         if (!isTruthy(stats)) return 0;
         const cursor = Option.getOrNull(
-          yield* stored(readCursor({ source: transcript.source, path: transcript.path })),
+          yield* stored("Cursor", readCursor({ source: transcript.source, path: transcript.path })),
         );
         const unchanged =
           cursor !== null && cursor.size === stats.size && cursor.mtime_ms === stats.mtimeMs;
@@ -337,6 +365,7 @@ const make = (home: string) =>
         if (!isTruthy(sessionId)) {
           // Leave the offset at 0: if the folder comes back, the whole transcript is read.
           yield* stored(
+            "Cursor",
             saveCursor(transcript, {
               cwd: start?.cwd ?? null,
               offset: 0,
@@ -374,10 +403,14 @@ const make = (home: string) =>
         if (session.title === null) {
           const opening = items.find((item) => item.kind === "message" && item.role === "user");
           if (opening?.kind === "message")
-            yield* stored(sql`UPDATE sessions SET title = ${firstLine(opening.text)}
-              WHERE id = ${sessionId} AND title IS NULL`);
+            yield* stored(
+              "Title",
+              sql`UPDATE sessions SET title = ${firstLine(opening.text)}
+                WHERE id = ${sessionId} AND title IS NULL`,
+            );
         }
         yield* stored(
+          "Cursor",
           saveCursor(transcript, {
             cwd: start?.cwd ?? null,
             offset,
@@ -430,6 +463,7 @@ const make = (home: string) =>
           const registered = yield* projects.listAll;
           const placement = yield* checkouts.forRoots(
             yield* stored(
+              "WorktreeParents",
               Effect.forEach(registered, (project) =>
                 Effect.map(knownParents(project.id), (rows) => ({
                   root: project.root,
@@ -444,7 +478,7 @@ const make = (home: string) =>
               Effect.map((written) => ({ written, failed: 0 })),
               // A defect is not the transcript's: it stops the pass, and the watcher reports it.
               Effect.catch((error) =>
-                Effect.as(stored(recordFailure(transcript, Cause.fail(error))), {
+                Effect.as(stored("FailureRecord", recordFailure(transcript, Cause.fail(error))), {
                   written: 0,
                   failed: 1,
                 }),
@@ -466,6 +500,7 @@ const make = (home: string) =>
               .flatMap((owner) => parents.map((parent) => ({ projectId: owner.id, parent }))),
           );
           yield* stored(
+            "WorktreeParents",
             Effect.forEach(
               kept,
               ({ projectId, parent }) => sql`INSERT INTO worktree_parents (project_id, parent)
