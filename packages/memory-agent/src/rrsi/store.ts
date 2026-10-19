@@ -201,7 +201,9 @@ export const makeHarnessStore = Effect.gen(function* () {
       stored(get(id).pipe(Effect.andThen(setFrontier(id)), Effect.asVoid, sql.withTransaction)),
     saveExperiment: (record: ExperimentRecord) =>
       stored(
-        encodeExperiment(record).pipe(
+        // Encode when the save runs: encodeEffect snapshots its input, and a progress save that
+        // finishes after the final one must still write the latest record.
+        Effect.suspend(() => encodeExperiment(record)).pipe(
           Effect.flatMap(
             (payload) => sql`INSERT INTO rrsi_experiments VALUES (${record.id}, ${payload})
               ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`,
