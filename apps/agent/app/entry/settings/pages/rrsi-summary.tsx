@@ -1,6 +1,110 @@
+import { Option, Schema } from "effect";
 import { isTruthy } from "../../../truthy.ts";
 import type { ExperimentRecord, HarnessVersion } from "memory-agent";
 import { FieldDescription } from "~/components/ui/field";
+
+type CandidateRecord = ExperimentRecord["candidates"][number];
+const Profile = Schema.Struct({
+  rolePrompt: Schema.String,
+  memoryToolDescription: Schema.String,
+  retrievalLeadLimit: Schema.Number,
+  retrievalTokenLimit: Schema.Number,
+});
+const ProfileDiff = Schema.fromJsonString(Schema.Struct({ before: Profile, after: Profile }));
+
+/** Rounds can hold several candidates, so each one is named by its order within the round. */
+export function candidateLabel(candidates: readonly CandidateRecord[], index: number) {
+  const candidate = candidates[index];
+  switch (candidate.kind) {
+    case "code":
+      return "코드 후보";
+    case "profile": {
+      const order = candidates
+        .slice(0, index)
+        .filter(
+          (earlier) => earlier.kind === "profile" && earlier.round === candidate.round,
+        ).length;
+      return `라운드 ${candidate.round + 1} · 후보 ${order + 1}`;
+    }
+  }
+}
+
+function TextChange({ label, before, after }: { label: string; before: string; after: string }) {
+  if (before === after) return null;
+  const change = before === "" ? "추가" : after === "" ? "삭제" : "변경";
+  return (
+    <li>
+      {label} {change}
+      {after !== "" && <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{after}</p>}
+    </li>
+  );
+}
+
+/** A profile candidate's changes as sentences; the raw JSON stays only as a fallback. */
+function ProfileChanges({ diff }: { diff: string }) {
+  const parsed = Schema.decodeUnknownOption(ProfileDiff)(diff);
+  if (Option.isNone(parsed))
+    return <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{diff}</pre>;
+  const { before, after } = parsed.value;
+  const unchanged =
+    before.retrievalLeadLimit === after.retrievalLeadLimit &&
+    before.retrievalTokenLimit === after.retrievalTokenLimit &&
+    before.rolePrompt === after.rolePrompt &&
+    before.memoryToolDescription === after.memoryToolDescription;
+  if (unchanged) return <p>바뀐 설정이 없어요.</p>;
+  return (
+    <ul className="flex list-disc flex-col gap-1 pl-5">
+      {before.retrievalLeadLimit !== after.retrievalLeadLimit && (
+        <li>
+          기억 검색 개수 {before.retrievalLeadLimit}개 → {after.retrievalLeadLimit}개
+        </li>
+      )}
+      {before.retrievalTokenLimit !== after.retrievalTokenLimit && (
+        <li>
+          기억 검색 길이 {before.retrievalTokenLimit}토큰 → {after.retrievalTokenLimit}토큰
+        </li>
+      )}
+      <TextChange label="추가 작업 지침" before={before.rolePrompt} after={after.rolePrompt} />
+      <TextChange
+        label="기억 검색 도구의 추가 안내"
+        before={before.memoryToolDescription}
+        after={after.memoryToolDescription}
+      />
+    </ul>
+  );
+}
+
+/** Code candidates keep their branch and commit for review; profile candidates only need the change. */
+export function CandidateDetails({ candidate }: { candidate: CandidateRecord }) {
+  switch (candidate.kind) {
+    case "profile":
+      return (
+        <details className="text-sm">
+          <summary className="cursor-pointer">변경 내용 보기</summary>
+          <div className="mt-2">
+            <ProfileChanges diff={candidate.diff} />
+          </div>
+        </details>
+      );
+    case "code":
+      return (
+        <>
+          <details className="text-sm">
+            <summary className="cursor-pointer">변경 내용 보기</summary>
+            <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{candidate.diff}</pre>
+          </details>
+          {candidate.branch && <code>{candidate.branch}</code>}
+          {candidate.commit && <code>commit: {candidate.commit}</code>}
+          {candidate.imageId && <code>artifact: {candidate.imageId}</code>}
+          {candidate.decision === "code_review_pending" && (
+            <FieldDescription>
+              평가를 통과한 후보예요. 위 diff와 커밋을 검토한 뒤 별도 브랜치에서 반영하세요.
+            </FieldDescription>
+          )}
+        </>
+      );
+  }
+}
 
 export const phaseLabels = {
   baseline: "현재 설정 평가",
@@ -84,19 +188,46 @@ export function AppliedSettings({
   );
 }
 
+type Measurement = NonNullable<ExperimentRecord["validationBase"]>;
+const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+
+function Comparison({
+  label,
+  base,
+  next,
+}: {
+  label: string;
+  base: Measurement;
+  next: Measurement;
+}) {
+  return (
+    <FieldDescription>
+      {label}: 현재 설정 {percent(base.score)} → 후보 {percent(next.score)} (코딩{" "}
+      {percent(base.coding)} → {percent(next.coding)}, 기억 {percent(base.memory)} →{" "}
+      {percent(next.memory)})
+    </FieldDescription>
+  );
+}
+
 export function ExperimentSummary({
   experiment,
   reason,
+  nextStep,
+  scope = "latest",
 }: {
   experiment: ExperimentRecord;
   reason: string;
+  nextStep?: string | undefined;
+  /** The latest experiment is summarized above the controls; history entries repeat it per run. */
+  scope?: "latest" | "history";
 }) {
   const { status, tokens, progress, baselines } = experiment;
   const adopted = Boolean(experiment.adoptedVersionId) || experiment.reason === "profile_adopted";
+  const finishedTitle = scope === "latest" ? "최근 평가 결과" : "평가 결과";
   return (
     <section className="flex flex-col gap-2" aria-label="평가 진행과 결과">
       <h4 className="text-sm font-medium">
-        {status === "running" ? "진행 중인 평가" : "최근 평가 결과"}
+        {status === "running" ? "진행 중인 평가" : finishedTitle}
       </h4>
       <p className="text-sm">
         {statusLabels[status]} · {tokens.toLocaleString()} 토큰 사용
@@ -107,6 +238,13 @@ export function ExperimentSummary({
           : "이 평가에서 적용된 변경은 없어요."}
       </p>
       {status !== "running" && <FieldDescription>{reason}</FieldDescription>}
+      {status !== "running" && nextStep && <FieldDescription>다음: {nextStep}</FieldDescription>}
+      <FieldDescription>
+        기억 과제:{" "}
+        {experiment.usageCorpus
+          ? `실제 사용 기록의 정정 내용 (버전 ${experiment.usageCorpus})`
+          : "별도로 만든 과제"}
+      </FieldDescription>
       {isTruthy(progress) ? (
         <FieldDescription>
           {status === "running" ? "현재 단계" : "마지막 기록된 단계"}: {phaseLabels[progress.phase]}{" "}
@@ -125,11 +263,24 @@ export function ExperimentSummary({
         </FieldDescription>
       )}
       {experiment.validationBase && experiment.validationNew && (
-        <FieldDescription>
-          별도 과제의 성공률: 현재 설정 {(experiment.validationBase.score * 100).toFixed(1)}% → 후보{" "}
-          {(experiment.validationNew.score * 100).toFixed(1)}%. 코딩과 기억 성능, 토큰 비용을 함께
-          확인해 채택을 결정해요.
-        </FieldDescription>
+        <>
+          <Comparison
+            label="검증 과제 성공률"
+            base={experiment.validationBase}
+            next={experiment.validationNew}
+          />
+          {experiment.sealedBase && experiment.sealedNew && (
+            <Comparison
+              label="최종 확인 과제 성공률"
+              base={experiment.sealedBase}
+              next={experiment.sealedNew}
+            />
+          )}
+          <FieldDescription>
+            검증 과제와 처음 보는 최종 확인 과제를 모두 통과해야 채택해요. 코딩과 기억 성능, 토큰
+            비용을 함께 확인해요.
+          </FieldDescription>
+        </>
       )}
       {status === "running" && (
         <FieldDescription>
