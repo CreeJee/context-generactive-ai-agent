@@ -1794,6 +1794,13 @@
 - 사이드바는 세션에 브랜치(없으면 worktree 폴더 이름) 배지를 달고, 작업 위치가 하나라도 있으면 "모든 작업 위치 / 저장소 본체 / 브랜치별" 필터를 보인다. worktree를 만들고 지우는 관리 화면은 두지 않는다. Orca 같은 도구의 일이고 이 앱의 역할은 기억과 대화다.
 - 이 앱에서 직접 연 대화(실행 폴더·브라우저에서 추가한 폴더가 worktree인 경우)를 저장소 프로젝트에 넣는 일은 아직 하지 않았다. 실행 중인 세션의 파일·셸 도구가 worktree와 원래 checkout 중 어디서 일할지 먼저 정해야 한다.
 
+### worktree 프로젝트를 접을 때 노드 옮기기 (2026-10-20)
+
+- 증상: 노드가 있는 worktree 프로젝트를 접으면 `UPDATE nodes SET project_id`가 `nodes_immutable` trigger에 막혀 가져오기 회차 전체가 매번 실패했다(`ImportStoreFailed` ← `nodes are immutable evidence`). 10/17의 접기 테스트가 노드 없는 프로젝트만 다뤄서 놓쳤다.
+- 결정: secret sweep처럼 이동 전용 permit을 둔다. `node_project_moves(from_project, to_project)`에 행을 쓰고, `project_id`를 바꾸고, 행을 지우는 일을 한 트랜잭션에서 한다. trigger는 그 프로젝트 쌍의 permit이 있고 `project_id` 말고는 아무것도 바뀌지 않을 때만 허용한다. sweep permit은 여전히 텍스트만 바꾼다. 둘 다 아니면 전처럼 거부한다.
+- 버린 안: 노드는 두고 접힌 프로젝트를 소유 프로젝트의 alias로 조회 때 해석하는 방식. 검색·회상·임베딩 후보(`nodes_embeddable`)·지식 등 `nodes.project_id`로 범위를 정하는 모든 조회가 alias를 알아야 해서, 하나라도 빠지면 접은 대화가 검색에서 사라진다. permit은 한 곳만 바꾸고 10/17 결정("검색 범위는 `nodes.project_id`로 정해져서 벡터는 그대로 둔다")과 그대로 맞는다.
+- `ImportStoreFailed`에 실패 단계 reason(`WorktreeParents`·`Fold`·`Mapping`·`Cursor`·`Title`·`FailureRecord`)을 단다. worker 로그는 `failure`에 `ImportStoreFailed:Fold`처럼 태그와 reason만 따로 남긴다. SQL과 경로는 reason에 넣지 않는다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)
