@@ -25,6 +25,7 @@ import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { btwInstructions, parentConversationPrompt } from "./context.ts";
 import { BtwError, BtwRunInProgress, BtwStorageFailed } from "./contracts.ts";
+import { runTrace } from "../runtime/run-trace.ts";
 import { BtwThreads } from "./store.ts";
 import { btwEvidenceTools, btwToolGuard } from "./tools.ts";
 
@@ -53,7 +54,7 @@ const make = Effect.gen(function* () {
    * calls and results are saved only to the BTW thread. No recorder, indexer, interpreter,
    * summarizer, usage ledger or promotion middleware takes part.
    */
-  const handle = Effect.fn("BtwChat.handle")(function* (request: Request, threadId: string) {
+  const handle = Effect.fnUntraced(function* (request: Request, threadId: string) {
     const thread = yield* threads.get(threadId);
     if (liveRuns.get(threadId) !== null) return json(409, { error: "run_in_progress" });
     const selection = yield* active.selected;
@@ -128,7 +129,7 @@ const make = Effect.gen(function* () {
       return json(409, { error: "run_in_progress" });
     }
     // Tool calls run on this request's context, so their spans join `BtwChat.handle`'s trace.
-    const caller = yield* Effect.context<never>();
+    const caller = yield* runTrace;
     const stream = withShownRunErrors(
       redactor,
       createChatExecution<typeof adapter>().execute(
@@ -158,7 +159,8 @@ const make = Effect.gen(function* () {
     return toServerSentEventsResponse(Stream.toAsyncIterable(claim.track(published)), {
       abortController,
     });
-  });
+    // The span is applied here, not by `Effect.fn`, so the type knows the tools' run span exists.
+  }, Effect.withSpan("BtwChat.handle"));
 
   return {
     handle,

@@ -1,4 +1,5 @@
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
+import { onRun, type RunTrace } from "../runtime/run-trace.ts";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -35,13 +36,17 @@ export interface SkillToolset {
 
 const make = Effect.gen(function* () {
   const skills = yield* Skills;
-  const run = runNativeEffectWith(yield* Effect.context());
+  const services = yield* Effect.context<never>();
 
   return {
-    /** read_skill and the skill list for a run, or nothing when the project has no skills. */
-    forProject: Effect.fn("SkillTools.forProject")(function* (project: Project) {
+    /**
+     * read_skill and the skill list for a run, or nothing when the project has no skills. `caller`
+     * is the run's context, so the tool's spans join the run's trace; tests leave it out.
+     */
+    forProject: Effect.fn("SkillTools.forProject")(function* (project: Project, caller?: RunTrace) {
       const catalog = yield* skills.catalog(project);
       if (catalog.skills.length === 0) return { skills: [], tools: [], instructions: null };
+      const run = runNativeEffectWith(onRun(services, caller));
       const readSkill = toolDefinition({
         name: "read_skill",
         description:

@@ -38,7 +38,8 @@ import {
   type SaveShellSkillInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
-import { guarded } from "./failure.ts";
+import { type RunTrace } from "../runtime/run-trace.ts";
+import { guardedWith } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
 
 /** Not gated per call: the script it runs was approved when it was saved. */
@@ -112,12 +113,15 @@ const make = Effect.gen(function* () {
      * Server side of the approval-gated tools. With `static` approval (`ask` mode) TanStack waits
      * for the user; with `gate` (`auto`/`full` modes, subagents) middleware either reviews the call
      * or full mode lets it proceed. Permission mode never lifts path, credential or `.git` rules.
+     * `caller` is the run's context, so the tools' spans join the run's trace; tests leave it out.
      */
     forProject(
       project: Fenced<Project>,
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
       binding?: BackgroundBinding,
+      caller?: RunTrace,
     ) {
+      const guarded = guardedWith(caller);
       const saveShellSkill = ({
         name,
         description,

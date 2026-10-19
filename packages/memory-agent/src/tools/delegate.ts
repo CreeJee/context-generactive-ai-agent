@@ -7,6 +7,7 @@ import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
+import { onRun, type RunTrace } from "../runtime/run-trace.ts";
 import { toToolSchema } from "./schema.ts";
 import { BackgroundTasks, backgroundOperation } from "./background.ts";
 
@@ -77,11 +78,11 @@ const make = Effect.gen(function* () {
       sessionId: string,
       signal: AbortSignal,
       runId: string = randomUUID(),
-      caller: Context.Context<never> = Context.empty(),
+      caller?: RunTrace,
     ): Effect.fn.Return<DelegateToolset, SqlError.SqlError | Schema.SchemaError> {
       const available = yield* agents.available(project);
       if (available.length === 0) return { tools: [], instructions: null };
-      const run = Effect.runPromiseWith(Context.merge(caller, services));
+      const run = Effect.runPromiseWith(onRun(services, caller));
       const delegate = toolDefinition({
         name: delegateToolName,
         description:

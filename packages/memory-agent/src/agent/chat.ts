@@ -2,6 +2,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { ExecutionAdmission, ExecutionSaturated } from "../runtime/execution-admission.ts";
+import { runTrace } from "../runtime/run-trace.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
@@ -1869,15 +1870,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           });
 
         const workflowReadOnly = HashSet.has(readOnlyWorkflowPhases, workflow.phase);
+        // Tools run on this run's context, so their spans join its trace.
+        const caller = yield* runTrace;
         // Present only while the user has Kagi turned on with a key (R19).
-        const webTools = reportSource !== null ? [] : yield* kagiTools.tools;
+        const webTools = reportSource !== null ? [] : yield* kagiTools.tools(caller);
         // A report session never connects external MCP servers or loads additional skills.
         const mcpTools =
-          workflowReadOnly || reportSource !== null ? [] : yield* mcpServers.tools(project);
+          workflowReadOnly || reportSource !== null ? [] : yield* mcpServers.tools(project, caller);
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
-            : yield* skillTools.forProject(project);
+            : yield* skillTools.forProject(project, caller);
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         const cancellation = yield* cancellations.allocate("service_shutdown");
@@ -1916,8 +1919,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           delivery.forRun({ projectId, sessionId, runId }),
           ...(!(reportSource !== null) ? [projectInstructions(project.root)] : []),
         ];
-        // Tools run on this run's context, so their spans join its trace.
-        const caller = yield* Effect.context<never>();
         // Trusted external ACP agents (R17); every delegation is gated below.
         const delegation =
           workflowReadOnly || reportSource !== null
@@ -1964,18 +1965,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             : workflowReadOnly
               ? workflow.phase === "verify"
                 ? approvedTools
-                    .forProject(project, undefined, {
-                      sessionId,
-                      runId,
-                      abortSignal: abortController.signal,
-                    })
+                    .forProject(
+                      project,
+                      undefined,
+                      { sessionId, runId, abortSignal: abortController.signal },
+                      caller,
+                    )
                     .filter((tool) => HashSet.has(verificationToolNames, tool.name))
                 : []
-              : approvedTools.forProject(project, undefined, {
-                  sessionId,
-                  runId,
-                  abortSignal: abortController.signal,
-                });
+              : approvedTools.forProject(
+                  project,
+                  undefined,
+                  { sessionId, runId, abortSignal: abortController.signal },
+                  caller,
+                );
         const memoryScope: MemoryToolScope = (yield* recallScope).crossProject
           ? "allowed-projects"
           : "project";
@@ -2000,18 +2003,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 },
               },
               memoryScope,
+              caller,
             );
         const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryRun.tools,
           // An SVG the model writes comes back with a picture of it, for the page to show.
-          ...drawingPreviews.withPreviews(project, fileTools.forProject(project)),
-          ...outsideTools.forProject(project),
+          ...drawingPreviews.withPreviews(project, fileTools.forProject(project, caller), caller),
+          ...outsideTools.forProject(project, caller),
           ...webTools,
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
           ...workflowTools.forSession(sessionId, workflow.phase, runId, caller),
-          ...background.forSession(sessionId),
+          ...background.forSession(sessionId, caller),
         ]);
         const profiledTools = allSharedTools.map((tool) =>
           tool.name === "find_memory" && isTruthy(harness.profile.memoryToolDescription)
@@ -2618,6 +2622,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ProjectNotFound: () => Effect.succeed(json(404, { error: "project_not_found" })),
           ProviderUnavailable: providerUnavailable,
         }),
+        // The run's tool calls run under this span; they outlast it while the response streams.
+        Effect.withSpan("AgentChat.handle"),
       );
     },
 

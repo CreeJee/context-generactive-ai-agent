@@ -1,4 +1,5 @@
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
+import { onRun, type RunTrace } from "../runtime/run-trace.ts";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { AnyServerTool } from "@tanstack/ai";
@@ -29,7 +30,7 @@ export interface DrawingPreview {
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
-  const run = runNativeEffectWith(yield* Effect.context());
+  const services = yield* Effect.context<never>();
   const attachments = yield* Attachments;
 
   /**
@@ -60,8 +61,14 @@ const make = Effect.gen(function* () {
     /**
      * The same tools; `write_file` and `edit_file` add a `preview` to their result when the file is
      * an SVG. The model gets the result too, and the preview only tells it a picture was made.
+     * `caller` is the run's context, so the preview's spans join the run's trace.
      */
-    withPreviews(project: Project, tools: readonly AnyServerTool[]): AnyServerTool[] {
+    withPreviews(
+      project: Project,
+      tools: readonly AnyServerTool[],
+      caller?: RunTrace,
+    ): AnyServerTool[] {
+      const run = runNativeEffectWith(onRun(services, caller));
       return tools.map((tool): AnyServerTool => {
         const execute = tool.execute;
         if (!isTruthy(execute) || !HashSet.has(writingToolNames, tool.name)) return tool;

@@ -3,6 +3,7 @@ import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { runTrace } from "../../src/runtime/run-trace.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
@@ -664,11 +665,11 @@ testAgent()("memory tools per run", (it) => {
         },
       });
       const { tools, run } = yield* Effect.gen(function* () {
-        const prepared = yield* (yield* MemoryTools).forRun({
-          ...at,
-          runId: `${at.sessionId}:traced-run`,
-          userNodeId: "user",
-        });
+        const prepared = yield* (yield* MemoryTools).forRun(
+          { ...at, runId: `${at.sessionId}:traced-run`, userNodeId: "user" },
+          undefined,
+          yield* runTrace,
+        );
         return { tools: prepared.tools, run: yield* Effect.currentSpan };
       }).pipe(Effect.withSpan("chat.run"), Effect.withTracer(tracer));
       const before = recorded.length;

@@ -1,6 +1,7 @@
 import { nativeFailure } from "../runtime/native-effect.ts";
 import { Function as EffectFunction } from "effect";
-import { Cause, Effect, Exit, HashMap, Result, Option, Predicate, Schema } from "effect";
+import { Cause, Context, Effect, Exit, HashMap, Result, Option, Predicate, Schema } from "effect";
+import { onRun, type RunTrace } from "../runtime/run-trace.ts";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected, TextFileIoFailed } from "../files/text.ts";
 
@@ -133,18 +134,31 @@ function guardedBody<A, E = never>(
   path: string,
   operation: () => Promise<A> | Effect.Effect<A, E>,
   signal?: AbortSignal,
+  caller?: RunTrace,
 ): Promise<A> {
   const work = Effect.suspend<A, E | Cause.UnknownError, never>(() => {
     const result = operation();
     return Effect.isEffect(result) ? result : Effect.tryPromise(() => result);
   });
-  return Effect.runPromiseExit(guardedEffect(path, work), { signal }).then(
+  return Effect.runPromiseExitWith(onRun(Context.empty(), caller))(guardedEffect(path, work), {
+    signal,
+  }).then(
     Exit.match({
       onSuccess: (value) => value,
       onFailure: (cause) => Promise.reject(nativeFailure(cause).cause),
     }),
   );
 }
+
+/** `guarded` on a run's context, so the tool's spans join the run's trace. */
+export const guardedWith =
+  (caller: RunTrace | undefined) =>
+  <A, E = never>(
+    path: string,
+    operation: () => Promise<A> | Effect.Effect<A, E>,
+    signal?: AbortSignal,
+  ): Promise<A> =>
+    guardedBody(path, operation, signal, caller);
 
 /** Keep model-facing path/error redaction at the SDK edge, including native callback exceptions. */
 export const guardedEffect: {

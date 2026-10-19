@@ -21,7 +21,8 @@ import {
 import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
-import { guarded } from "./failure.ts";
+import { type RunTrace } from "../runtime/run-trace.ts";
+import { guardedWith } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const fileToolNames = [
@@ -209,10 +210,12 @@ const make = Effect.gen(function* () {
   return {
     /**
      * File tools for one project (R04). Reads, searches, creation, edits and deletion inside the
-     * project run without approval; `.git`, links and credential files are refused.
+     * project run without approval; `.git`, links and credential files are refused. `caller` is
+     * the run's context, so the tools' spans join the run's trace; tests leave it out.
      */
-    forProject(project: Project) {
+    forProject(project: Project, caller?: RunTrace) {
       const { root } = project;
+      const guarded = guardedWith(caller);
 
       const listFiles = toolDefinition({
         name: "list_files",

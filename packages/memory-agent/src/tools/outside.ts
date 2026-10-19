@@ -8,7 +8,8 @@ import { resolveFencedOutsidePath, type Fenced } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import { createTextPageReader, readFileBytesEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
-import { guarded } from "./failure.ts";
+import { type RunTrace } from "../runtime/run-trace.ts";
+import { guardedWith } from "./failure.ts";
 import { listPageSize } from "./files.ts";
 import { toToolSchema } from "./schema.ts";
 
@@ -65,8 +66,10 @@ const make = Effect.gen(function* () {
      * Read-only tools for files outside the project (R04, Q8). They run without approval because
      * reading is allowed everywhere except credentials; results are ordinary tool results, not
      * version-tracked project files. Writing outside the project is a separate, approved tool.
+     * `caller` is the run's context, so the tools' spans join the run's trace; tests leave it out.
      */
-    forProject(project: Fenced<Project>) {
+    forProject(project: Fenced<Project>, caller?: RunTrace) {
+      const guarded = guardedWith(caller);
       // Snapshots are keyed per project so one project's cursors never page another's listing.
       const snapshotKey = `outside:${project.id}`;
       const resolve = (path: string, kind: "file" | "directory") =>

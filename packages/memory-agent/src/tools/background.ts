@@ -19,6 +19,7 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
+import { onRun, type RunTrace } from "../runtime/run-trace.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
@@ -104,7 +105,6 @@ const make = Effect.gen(function* () {
   const state = yield* ChatState;
   const redactor = yield* SecretRedactor;
   const context = yield* Effect.context<never>();
-  const run = Effect.runPromiseWith(context);
   const fibers = yield* FiberMap.make<string>();
   const dispatch = Semaphore.makeUnsafe(1);
   const sessions = MutableHashMap.empty<string, string>();
@@ -340,7 +340,9 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded", discard: true },
       );
     }),
-    forSession(sessionId: string): AnyServerTool[] {
+    /** `caller` is the run's context, so the tools' spans join the run's trace; tests leave it out. */
+    forSession(sessionId: string, caller?: RunTrace): AnyServerTool[] {
+      const run = Effect.runPromiseWith(onRun(context, caller));
       return [
         toolDefinition({
           name: "get_background_result",

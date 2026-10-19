@@ -14,6 +14,7 @@ import {
   type WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
+import { onRun, type RunTrace } from "../runtime/run-trace.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
@@ -48,9 +49,9 @@ const make = Effect.gen(function* () {
       sessionId: string,
       phase: WorkflowPhase,
       runId = "",
-      caller: Context.Context<never> = Context.empty(),
+      caller?: RunTrace,
     ): AnyServerTool[] {
-      const run = Effect.runPromiseWith(Context.merge(caller, runtime));
+      const run = Effect.runPromiseWith(onRun(runtime, caller));
       // A run's own Plan and progress saves are board changes made by that run.
       const author: BoardAuthor | undefined =
         runId.length > 0 ? { _tag: "Orchestrator", runId } : undefined;
