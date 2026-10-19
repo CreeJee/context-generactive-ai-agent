@@ -10,5 +10,7 @@ COPY . .
 # prepare scripts only patch editor/lint tooling, and the root and memory-agent copies race here.
 RUN pnpm install --frozen-lockfile --ignore-scripts && node packages/turbovec/build-turbovec.ts && node packages/memory-agent/scripts/build-runtime-artifacts.ts && cd tools/rrsi && pnpm exec vp pack
 RUN chmod -R a+rX /app
+# A new anonymous volume copies this directory's owner, so the worker can write its storage copy.
+RUN mkdir /work && chown node:node /work
 USER node
 ENTRYPOINT ["node", "--conditions=rrsi-evaluator", "packages/memory-agent/dist/rrsi-evaluator/rrsi-worker.mjs"]
