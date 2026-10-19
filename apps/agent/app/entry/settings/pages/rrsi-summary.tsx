@@ -189,6 +189,22 @@ export function AppliedSettings({
 }
 
 type Measurement = NonNullable<ExperimentRecord["validationBase"]>;
+
+/** Older records did not record their memory task source, so they show none rather than a guess. */
+function MemoryTasks({ tasks }: { tasks: ExperimentRecord["memoryTasks"] }) {
+  switch (tasks?.kind) {
+    case undefined:
+      return null;
+    case "synthetic":
+      return <FieldDescription>기억 과제: 별도로 만든 과제</FieldDescription>;
+    case "usage":
+      return (
+        <FieldDescription>
+          기억 과제: 실제 사용 기록의 정정 내용 (버전 {tasks.version})
+        </FieldDescription>
+      );
+  }
+}
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 function Comparison({
@@ -239,12 +255,7 @@ export function ExperimentSummary({
       </p>
       {status !== "running" && <FieldDescription>{reason}</FieldDescription>}
       {status !== "running" && nextStep && <FieldDescription>다음: {nextStep}</FieldDescription>}
-      <FieldDescription>
-        기억 과제:{" "}
-        {experiment.usageCorpus
-          ? `실제 사용 기록의 정정 내용 (버전 ${experiment.usageCorpus})`
-          : "별도로 만든 과제"}
-      </FieldDescription>
+      <MemoryTasks tasks={experiment.memoryTasks} />
       {isTruthy(progress) ? (
         <FieldDescription>
           {status === "running" ? "현재 단계" : "마지막 기록된 단계"}: {phaseLabels[progress.phase]}{" "}
