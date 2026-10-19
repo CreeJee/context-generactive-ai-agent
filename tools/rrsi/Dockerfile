@@ -7,7 +7,8 @@ COPY --from=rust /usr/local/rustup /usr/local/rustup
 ENV PATH="/usr/local/cargo/bin:${PATH}" RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo RUSTUP_TOOLCHAIN=1.99.0
 WORKDIR /app
 COPY . .
-RUN pnpm install --frozen-lockfile && node packages/turbovec/build-turbovec.ts && cd tools/rrsi && pnpm exec vp pack
+# prepare scripts only patch editor/lint tooling, and the root and memory-agent copies race here.
+RUN pnpm install --frozen-lockfile --ignore-scripts && node packages/turbovec/build-turbovec.ts && cd tools/rrsi && pnpm exec vp pack
 RUN chmod -R a+rX /app
 USER node
 ENTRYPOINT ["node", "packages/memory-agent/dist/rrsi-evaluator/rrsi-worker.mjs"]
