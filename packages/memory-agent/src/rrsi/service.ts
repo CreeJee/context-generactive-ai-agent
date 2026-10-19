@@ -37,6 +37,7 @@ import {
   Proposal,
   type ExperimentProgress,
   CodeProposal,
+  MemoryTaskSource,
   type ExperimentRecord,
   type CandidateRecord,
   type HarnessProfile,
@@ -93,15 +94,10 @@ export class RrsiExecution extends Context.Service<
   });
 }
 /** The usage corpus an experiment pinned; synthetic memory tasks need none. */
-const pinnedUsageCorpus = (tasks: ExperimentRecord["memoryTasks"]) => {
-  switch (tasks?.kind) {
-    case "usage":
-      return tasks.version;
-    case "synthetic":
-    case undefined:
-      return undefined;
-  }
-};
+const pinnedUsageCorpus = MemoryTaskSource.match({
+  synthetic: () => undefined,
+  usage: ({ version }) => version,
+});
 type MutableCandidate = { -readonly [K in keyof CandidateRecord]: CandidateRecord[K] };
 type MutableExperiment = {
   -readonly [K in keyof Omit<ExperimentRecord, "candidates">]: ExperimentRecord[K];
@@ -316,7 +312,10 @@ const make = Effect.gen(function* () {
               signal: abort.signal,
               consume,
               image: record.baselineImage,
-              usageCorpus: pinnedUsageCorpus(record.memoryTasks),
+              usageCorpus: Option.fromNullishOr(record.memoryTaskSource).pipe(
+                Option.map(pinnedUsageCorpus),
+                Option.getOrUndefined,
+              ),
               onProgress: (completed) =>
                 progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
             }),
@@ -636,9 +635,9 @@ const make = Effect.gen(function* () {
         Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
       )).id,
       baselineImage,
-      memoryTasks: Option.match(usageCorpus, {
-        onNone: () => ({ kind: "synthetic" as const }),
-        onSome: (version) => ({ kind: "usage" as const, version }),
+      memoryTaskSource: Option.match(usageCorpus, {
+        onNone: (): MemoryTaskSource => ({ kind: "synthetic" }),
+        onSome: (version): MemoryTaskSource => ({ kind: "usage", version }),
       }),
       tokens: 0,
       reason: "",
