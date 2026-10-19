@@ -189,7 +189,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
             .slice(0, synthetic.filter((task) => task.domain === "memory").length)
             .map((task): WorkerTask => ({ kind: "usage", task })),
         ];
-  const writeConfig = (storage: string, extra: { readonly embeddingDevice?: "cpu" }) =>
+  const writeConfig = (storage: string, extra: { readonly embeddingDevice?: "gpu" }) =>
     fs.writeFileString(
       path.join(storage, "config.json"),
       stringifyJson({
@@ -316,7 +316,9 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
           yield* fs.copyFile(path.join(usageRoot, "agent.db"), path.join(storage, "agent.db"));
           yield* fs.copy(path.join(usageRoot, "vectors"), path.join(storage, "vectors"));
           yield* fs.symlink("/models", path.join(storage, "models"));
-          yield* writeConfig(storage, { embeddingDevice: "cpu" });
+          // The snapshot's vectors are the GPU mode's fp32 model. Without WebGPU that mode runs the
+          // same model on the CPU; the CPU mode's quantized model would re-embed the whole snapshot.
+          yield* writeConfig(storage, { embeddingDevice: "gpu" });
           const services = yield* Layer.build(agentLayer(storage, home, {}));
           yield* Effect.gen(function* () {
             const harness = yield* HarnessStore;
