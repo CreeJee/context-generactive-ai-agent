@@ -23,8 +23,12 @@ export type ImprovementItem = typeof ImprovementItem.Type;
 export const grouping = {
   toolFailureRepeats: 3,
   correctionRepeats: 2,
-  /** Cosine similarity of two corrections about the same thing; vectors are L2-normalized. */
-  correctionSimilarity: 0.75,
+  /**
+   * Cosine similarity of two corrections about the same thing; vectors are L2-normalized. Short
+   * Korean messages sit close together: on real use, 0.75 put 103 of 125 corrections in one group,
+   * while 0.85 kept groups to one topic.
+   */
+  correctionSimilarity: 0.85,
   evidence: 20,
   excerpts: 5,
 } as const;
