@@ -1916,11 +1916,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           delivery.forRun({ projectId, sessionId, runId }),
           ...(!(reportSource !== null) ? [projectInstructions(project.root)] : []),
         ];
+        // Tools run on this run's context, so their spans join its trace.
+        const caller = yield* Effect.context<never>();
         // Trusted external ACP agents (R17); every delegation is gated below.
         const delegation =
           workflowReadOnly || reportSource !== null
             ? { tools: [], instructions: null }
-            : yield* delegateTools.forRun(project, sessionId, abortController.signal, runId);
+            : yield* delegateTools.forRun(
+                project,
+                sessionId,
+                abortController.signal,
+                runId,
+                caller,
+              );
         // The gate runs right after chat state, so a refused call is skipped before tools run. In
         // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
         // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
@@ -1975,12 +1983,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ? nativeGoal.createMemoryTools(
               {
                 ...nativeMemoryOwner,
+                // The artifact shares the host `effect` (never bundled), so the run's tracer applies.
+                caller,
               },
               projectId,
               { projectId, sessionId, runId, userNodeId },
               memoryScope,
             )
-          : memoryTools.forRun(
+          : yield* memoryTools.forRun(
               {
                 projectId,
                 sessionId,
@@ -2000,7 +2010,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
-          ...workflowTools.forSession(sessionId, workflow.phase, runId),
+          ...workflowTools.forSession(sessionId, workflow.phase, runId, caller),
           ...background.forSession(sessionId),
         ]);
         const profiledTools = allSharedTools.map((tool) =>

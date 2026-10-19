@@ -13,6 +13,7 @@ import {
   type ComparisonRequestGuard,
 } from "./tool-comparison.ts";
 import { buildConfigLayer, type BuildServerConfig } from "./build-config.ts";
+import { observabilityLayer } from "./observability.ts";
 
 // Config is evaluated when the runtime first builds its services, after CLI options are applied.
 type MemoryAgentLayer = ReturnType<typeof memoryAgentLayer>;
@@ -45,23 +46,29 @@ const agentLayer: Layer.Layer<
       : Effect.succeed(configuredStorageRoot),
   ).pipe(Effect.map(memoryAgentLayer)),
 );
+// The tracer sits below the agent services so their construction and every later run are traced.
+const runtimeLayer: Layer.Layer<
+  | Layer.Success<typeof agentLayer>
+  | Layer.Success<typeof observabilityLayer>
+  | Layer.Success<typeof NodeServices.layer>,
+  Layer.Error<typeof agentLayer> | Layer.Error<typeof observabilityLayer>
+> = agentLayer.pipe(
+  Layer.provide(
+    Layer.suspend(() =>
+      buildConfigLayer({ ...configuredBuildConfig, CONTEXT_AGENT_RELEASE: configuredRelease }),
+    ),
+  ),
+  Layer.provideMerge(observabilityLayer),
+  Layer.provideMerge(NodeServices.layer),
+);
 type AgentRuntime = ManagedRuntime.ManagedRuntime<
-  Layer.Success<typeof agentLayer> | Layer.Success<typeof NodeServices.layer>,
-  Layer.Error<typeof agentLayer>
+  Layer.Success<typeof runtimeLayer>,
+  Layer.Error<typeof runtimeLayer>
 >;
 
 function createAgentRuntime(): AgentRuntime {
   // The server entry configures storage before the first request builds this layer.
-  return ManagedRuntime.make(
-    agentLayer.pipe(
-      Layer.provide(
-        Layer.suspend(() =>
-          buildConfigLayer({ ...configuredBuildConfig, CONTEXT_AGENT_RELEASE: configuredRelease }),
-        ),
-      ),
-      Layer.provideMerge(NodeServices.layer),
-    ),
-  );
+  return ManagedRuntime.make(runtimeLayer);
 }
 
 /** The single memory-agent runtime of this server process. Server-only. */

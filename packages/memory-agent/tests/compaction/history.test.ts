@@ -73,11 +73,11 @@ testAgent()("compaction over recorded history", (it) => {
         const own = yield* nodes.append({ ...at, kind: "tool_result", text });
         const foreign = yield* nodes.append({ ...other, kind: "tool_result", text });
         const wrongKind = yield* nodes.append({ ...at, kind: "assistant", text });
-        const execute = (yield* MemoryTools).forRun({
+        const execute = (yield* (yield* MemoryTools).forRun({
           ...at,
           runId: `${at.sessionId}:r1`,
           userNodeId: wrongKind.id,
-        }).tools[3]?.execute;
+        })).tools[3]?.execute;
         if (!isTruthy(execute)) return expect.unreachable("read_tool_result unavailable");
         expect(yield* call(() => execute({ id: own.id, offset: 0 }))).toMatchObject({
           id: own.id,

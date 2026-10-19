@@ -41,10 +41,16 @@ const exposeProgressRefusal = <A, R>(
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const runtime = yield* Effect.context<Workflows | WorkflowExecution | HumanDecisions>();
-  const run = Effect.runPromiseWith(runtime);
 
   return {
-    forSession(sessionId: string, phase: WorkflowPhase, runId = ""): AnyServerTool[] {
+    /** `caller` is the run's context, so the tools' spans join the run's trace; tests leave it out. */
+    forSession(
+      sessionId: string,
+      phase: WorkflowPhase,
+      runId = "",
+      caller: Context.Context<never> = Context.empty(),
+    ): AnyServerTool[] {
+      const run = Effect.runPromiseWith(Context.merge(caller, runtime));
       // A run's own Plan and progress saves are board changes made by that run.
       const author: BoardAuthor | undefined =
         runId.length > 0 ? { _tag: "Orchestrator", runId } : undefined;

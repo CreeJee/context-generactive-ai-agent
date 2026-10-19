@@ -2253,6 +2253,17 @@
 - 홈 폴더·임시 폴더·전체 메모리는 Effect에 대응 서비스가 없어 `runtime/host-system.ts`만 `node:os`를 쓰고 나머지는 그 Effect 값을 읽는다.
 - 남기는 `node:*`와 이유: `sqlite`(Effect의 SQLite 드라이버는 별도 네이티브 패키지라 SEA 제약과 맞지 않아 자체 `SqlClient`가 `node:sqlite`를 감싼다), `sea`(실행 파일 자산), `module`(`createRequire`: SEA 본문은 네이티브 패키지를 require로만 부른다), `zlib`(설치본에는 HTTP 응답 압축만 있고 zstd 해제가 없다), 테스트의 `async_hooks`·모듈 로더 hook의 `url`(Effect 런타임 밖에서 동기로 돈다).
 
+## 개발용 관측과 프로파일링 도구 (2026-10-18)
+
+- 사용자 결정: 기본 관측 경로는 OTLP, Effect devtools는 개발용 보조 경로로 둔다. clinic.js처럼 사람이 보는 HTML 대신 에이전트도 읽을 수 있는 텍스트 요약을 만든다.
+- `@effect/opentelemetry`는 쓰지 않는다. 설치본 `effect/observability`의 `OtlpTracer`·`OtlpMetrics`를 `layerFromConfig`로 쓰고, 기존 OpenTelemetry SDK가 없으므로 Effect 문서가 권하는 내장 경로를 택한다.
+- 에이전트 런타임(`apps/agent/app/.server/agent.ts`) 최하단에 관측 Layer를 둔다. 표준 `OTEL_*` 변수가 없으면 아무것도 내보내지 않는다. 로그는 프롬프트와 공급자 응답을 담을 수 있어 OTLP로 내보내지 않는다. `CONTEXT_AGENT_DEVTOOLS_URL`이 있으면 devtools tracer가 OTLP tracer를 감싼다.
+- `tools/profile/main.ts`가 OTLP·devtools 수집기와 요약기를 맡는다. 두 수집기는 같은 span NDJSON을 쓰고, span 속성은 숫자·불리언만 남긴다. CPU는 Node의 `--cpu-prof` 결과(`.cpuprofile`)를 같은 요약기로 읽는다.
+- worker 내부 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
+- 사용자 결정: 메모리 도구는 고친다. `MemoryTools.forRun`은 Effect가 되어 호출한 실행의 context를 잡고, 도구 Effect는 그 위에 서비스를 덮어 돈다(`MemoryToolEnvironment.caller`). 그래서 도구 span이 run span과 같은 trace에 붙는다. `forProject`는 Layer를 만들 때의 context를 쓴다. BTW도 질문을 처리하는 `BtwChat.handle`의 context를 넘긴다. Goal native owner 경로도 같은 실행 안에서 따로 빌드한 `createMemoryTools`를 부를 뿐이고, 아티팩트가 `effect`를 번들하지 않아 호스트 런타임을 공유하므로 실행 context를 넘긴다.
+- 사용자 요청: delegate(`DelegateTools.forRun`)·workflow(`WorkflowTools.forSession`) 도구도 실행 context를 `caller`로 받아 run trace에 붙인다. 서비스는 Layer를 만들 때의 것을 위에 덮어 그대로 쓰고, tracer와 부모 span만 실행에서 온다.
+- 절차는 `.agents/skills/effect-profile` 스킬에 둔다.
+
 ## 저장소 전체 Effect 오류의 typed error 정리 (2026-10-18)
 
 - 사용자 요청: Effect 로직 전체에서 실패가 typed error로 드러나게 한다. 칸반 정리와 같은 기준을 칸반 밖 코드(`packages/memory-agent/src` 전체, `apps/agent/app`)에 적용했다.

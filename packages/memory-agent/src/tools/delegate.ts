@@ -66,18 +66,22 @@ const make = Effect.gen(function* () {
   const relayed = yield* RelayedApprovals;
   const background = yield* BackgroundTasks;
   const services = yield* Effect.context<never>();
-  const run = Effect.runPromiseWith(services);
 
   return {
-    /** delegate_to_agent for a run, or nothing when no external agent is trusted in the project. */
+    /**
+     * delegate_to_agent for a run, or nothing when no external agent is trusted in the project.
+     * `caller` is the run's context, so the tool's spans join the run's trace; tests leave it out.
+     */
     forRun: Effect.fn("DelegateTools.forRun")(function* (
       project: Project,
       sessionId: string,
       signal: AbortSignal,
       runId: string = randomUUID(),
+      caller: Context.Context<never> = Context.empty(),
     ): Effect.fn.Return<DelegateToolset, SqlError.SqlError | Schema.SchemaError> {
       const available = yield* agents.available(project);
       if (available.length === 0) return { tools: [], instructions: null };
+      const run = Effect.runPromiseWith(Context.merge(caller, services));
       const delegate = toolDefinition({
         name: delegateToolName,
         description:

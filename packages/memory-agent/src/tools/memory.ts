@@ -99,6 +99,11 @@ export interface MemoryToolEnvironment {
   readonly graph: Graph["Service"];
   readonly interpretations: Interpretations["Service"];
   readonly knowledge: KnowledgePromotions["Service"];
+  /**
+   * Fiber context the tool effects run on, so their spans reach the app tracer and nest under the
+   * caller's span. Callers without a fiber of their own (tests) leave it out.
+   */
+  readonly caller?: Context.Context<never>;
 }
 
 export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
@@ -127,7 +132,10 @@ function createMemoryToolsBody(
 ) {
   // Without a scope the tools read every project cross recall allows.
   const crossProject = scope !== "project";
-  const runtime = Context.make(MemorySearch, env.search).pipe(
+  const runtime = Context.merge(
+    env.caller ?? Context.empty(),
+    Context.make(MemorySearch, env.search),
+  ).pipe(
     Context.add(Nodes, env.nodes),
     Context.add(Graph, env.graph),
     Context.add(Interpretations, env.interpretations),
@@ -281,16 +289,23 @@ function createMemoryToolsBody(
 }
 
 const make = Effect.gen(function* () {
-  const env: MemoryToolEnvironment = {
+  const services: MemoryToolEnvironment = {
     search: yield* MemorySearch,
     nodes: yield* Nodes,
     graph: yield* Graph,
     interpretations: yield* Interpretations,
     knowledge: yield* KnowledgePromotions,
   };
-  const toolsFor = (projectId: string, binding?: RunBinding, scope?: MemoryToolScope) =>
+  // Carries the app tracer for callers that have no fiber of their own.
+  const layerContext = yield* Effect.context<never>();
+  const toolsFor = (
+    caller: Context.Context<never>,
+    projectId: string,
+    binding?: RunBinding,
+    scope?: MemoryToolScope,
+  ) =>
     createMemoryTools(
-      env,
+      { ...services, caller },
       projectId,
       binding !== undefined
         ? {
@@ -308,12 +323,15 @@ const make = Effect.gen(function* () {
     /** Read-only compatibility binding used by tests and non-chat callers. */
     forProject(projectId: string): ReadTools {
       // SAFETY: an omitted run binding returns the three-element read-only branch above.
-      return toolsFor(projectId).tools as ReadTools;
+      return toolsFor(layerContext, projectId).tools as ReadTools;
     },
-    /** Memory tools plus durable retrieval/use attribution for one chat run. */
-    forRun(binding: RunBinding, scope?: MemoryToolScope) {
-      return toolsFor(binding.projectId, binding, scope);
-    },
+    /**
+     * Memory tools plus durable retrieval/use attribution for one chat run. Tool calls run on the
+     * run's context, so their spans nest under the run.
+     */
+    forRun: Effect.fnUntraced(function* (binding: RunBinding, scope?: MemoryToolScope) {
+      return toolsFor(yield* Effect.context<never>(), binding.projectId, binding, scope);
+    }),
   };
 });
 
