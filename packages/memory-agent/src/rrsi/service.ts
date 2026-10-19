@@ -45,7 +45,7 @@ import {
 } from "./contracts.ts";
 import { editBudget, exploration, noiseBand, selectCandidate } from "./selection.ts";
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
-import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
+import { currentUsageCorpus, evaluateSandbox, reportedTokens } from "./sandbox.ts";
 import { EvaluationFailed, experimentFailure } from "./failure.ts";
 import { readActivity } from "./activity.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
@@ -69,6 +69,7 @@ export class RrsiExecution extends Context.Service<
   RrsiExecution,
   {
     readonly image: Effect.Effect<string, RrsiFailed>;
+    readonly usageCorpus: Effect.Effect<Option.Option<string>>;
     readonly pinModel: typeof pinModelGateway;
     readonly evaluate: typeof evaluateSandbox;
   }
@@ -86,6 +87,7 @@ export class RrsiExecution extends Context.Service<
           : Effect.fail(RrsiFailed.make({ reason: "evaluation_image_unavailable" }));
       }),
     ),
+    usageCorpus: currentUsageCorpus,
     pinModel: pinModelGateway,
     evaluate: evaluateSandbox,
   });
@@ -304,6 +306,7 @@ const make = Effect.gen(function* () {
               signal: abort.signal,
               consume,
               image: record.baselineImage,
+              usageCorpus: record.usageCorpus,
               onProgress: (completed) =>
                 progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
             }),
@@ -599,6 +602,7 @@ const make = Effect.gen(function* () {
       .randomUUIDv4()
       .pipe(Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })));
     const baselineImage = yield* native.image;
+    const usageCorpus = yield* native.usageCorpus;
     // Pin immutable evaluator provenance before any requests or candidates are created.
     if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
     const client = yield* native
@@ -622,6 +626,10 @@ const make = Effect.gen(function* () {
         Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
       )).id,
       baselineImage,
+      ...Option.match(usageCorpus, {
+        onNone: () => ({}),
+        onSome: (version) => ({ usageCorpus: version }),
+      }),
       tokens: 0,
       reason: "",
       candidates: [],

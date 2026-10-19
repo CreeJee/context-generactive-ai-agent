@@ -7,6 +7,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Option,
   Schema,
   Scope,
 } from "effect";
@@ -67,6 +68,7 @@ const fixture = Effect.fnUntraced(function* (options: {
   });
   const native = Layer.succeed(RrsiExecution, {
     image: Effect.succeed(`sha256:${"0".repeat(64)}`),
+    usageCorpus: Effect.succeed(Option.none()),
     pinModel: () =>
       Effect.succeed({
         protocol: "chat-completions",
