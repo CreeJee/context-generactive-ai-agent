@@ -2261,6 +2261,7 @@
 - `tools/profile/main.ts`가 OTLP·devtools 수집기와 요약기를 맡는다. 두 수집기는 같은 span NDJSON을 쓰고, span 속성은 숫자·불리언만 남긴다. CPU는 Node의 `--cpu-prof` 결과(`.cpuprofile`)를 같은 요약기로 읽는다.
 - worker 내부 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
 - 사용자 결정: 메모리 도구는 고친다. `MemoryTools.forRun`은 Effect가 되어 호출한 실행의 context를 잡고, 도구 Effect는 그 위에 서비스를 덮어 돈다(`MemoryToolEnvironment.caller`). 그래서 도구 span이 run span과 같은 trace에 붙는다. `forProject`는 Layer를 만들 때의 context를 쓴다. BTW도 질문을 처리하는 `BtwChat.handle`의 context를 넘긴다. Goal native owner 경로도 같은 실행 안에서 따로 빌드한 `createMemoryTools`를 부를 뿐이고, 아티팩트가 `effect`를 번들하지 않아 호스트 런타임을 공유하므로 실행 context를 넘긴다.
+- 사용자 요청: delegate(`DelegateTools.forRun`)·workflow(`WorkflowTools.forSession`) 도구도 실행 context를 `caller`로 받아 run trace에 붙인다. 서비스는 Layer를 만들 때의 것을 위에 덮어 그대로 쓰고, tracer와 부모 span만 실행에서 온다.
 - 절차는 `.agents/skills/effect-profile` 스킬에 둔다.
 
 ## 저장소 전체 Effect 오류의 typed error 정리 (2026-10-18)
