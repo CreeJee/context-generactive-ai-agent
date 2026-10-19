@@ -4,6 +4,7 @@ import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { OutsideTools } from "../src/tools/outside.ts";
 import { withTestPlatform } from "./support/platform.ts";
+import { inRun } from "./support/run-span.ts";
 
 const layout = Effect.fn("outsideTools.layout")(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -29,15 +30,17 @@ const outsideTools = Effect.fn("outsideTools")(function* (project: string, stora
     OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
   );
   const service = yield* Effect.provideContext(OutsideTools, services);
-  const [listOutside, readOutside, searchOutside] = service.forProject({
-    id: "p1",
-    root: project,
-    name: "project",
-    crossRecallExcluded: false,
-    permissionMode: "ask",
-    createdAt: "2026-09-14T00:00:00.000Z",
-    hiddenAt: null,
-  });
+  const [listOutside, readOutside, searchOutside] = yield* inRun(
+    service.forProject({
+      id: "p1",
+      root: project,
+      name: "project",
+      crossRecallExcluded: false,
+      permissionMode: "ask",
+      createdAt: "2026-09-14T00:00:00.000Z",
+      hiddenAt: null,
+    }),
+  );
   return { listOutside, readOutside, searchOutside };
 });
 

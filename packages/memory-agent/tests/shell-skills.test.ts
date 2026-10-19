@@ -7,6 +7,7 @@ import { expect, test } from "vite-plus/test";
 import { builtinOverlap } from "../src/skills/shell-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
+import { inRun } from "./support/run-span.ts";
 import { sdk } from "./agents/agent-env.ts";
 
 const portOf = (address: NetAddress.SocketAddress) => {
@@ -37,7 +38,7 @@ testAgent()("shell skills", (it) => {
   it.effect("an approved script runs with its arguments; an edited one is refused", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
-      const [save, run] = (yield* ApprovedTools).forProject(project, "gate");
+      const [save, run] = yield* inRun((yield* ApprovedTools).forProject(project, "gate"));
       yield* sdk(() =>
         save.execute!({
           name: "echo-args",
@@ -59,9 +60,8 @@ testAgent()("shell skills", (it) => {
         message: expect.stringContaining("not_approved"),
       });
 
-      const [, runFull] = (yield* ApprovedTools).forProject(
-        { ...project, permissionMode: "full" },
-        "gate",
+      const [, runFull] = yield* inRun(
+        (yield* ApprovedTools).forProject({ ...project, permissionMode: "full" }, "gate"),
       );
       expect(yield* sdk(() => runFull.execute!({ name: "echo-args" }))).toMatchObject({
         stdout: "changed",
@@ -78,7 +78,7 @@ testAgent()("shell skills", (it) => {
         const storage = yield* StorageRoot;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const [save, run] = (yield* ApprovedTools).forProject(project, "gate");
+        const [save, run] = yield* inRun((yield* ApprovedTools).forProject(project, "gate"));
         const server = yield* NodeHttpServer.make(NodeHttpServer.createServer, {
           port: 0,
           host: "127.0.0.1",

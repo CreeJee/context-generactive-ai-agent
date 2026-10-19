@@ -8,6 +8,7 @@ import { createResultPageReader } from "../src/memory/result-pages.ts";
 import { createTextPageReader, linePage, maxTextBytes, sha256 } from "../src/files/text.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
 import { FileTools } from "../src/tools/files.ts";
+import { inRun } from "./support/run-span.ts";
 import { listOutsideFilesEffect } from "../src/files/listing.ts";
 
 const resultStore = Effect.acquireRelease(
@@ -192,15 +193,17 @@ layer(NodeServices.layer)((it) => {
         const absolute = path.join(directory, "text");
         yield* fs.writeFileString(absolute, "x\n".repeat(maxTextBytes / 2));
         const files = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
-        const execute = files.forProject({
-          id: "p",
-          root: directory,
-          name: "fixture",
-          crossRecallExcluded: false,
-          permissionMode: "ask",
-          createdAt: "2026-10-10T00:00:00Z",
-          hiddenAt: null,
-        })[2].execute!;
+        const execute = (yield* inRun(
+          files.forProject({
+            id: "p",
+            root: directory,
+            name: "fixture",
+            crossRecallExcluded: false,
+            permissionMode: "ask",
+            createdAt: "2026-10-10T00:00:00Z",
+            hiddenAt: null,
+          }),
+        ))[2].execute!;
         let rejection: Cause.UnknownError | undefined;
         const reading = yield* Effect.forkChild(
           Effect.callback<void, Cause.UnknownError>((resume, signal) => {

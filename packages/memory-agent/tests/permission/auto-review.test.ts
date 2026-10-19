@@ -8,6 +8,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
 import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { chatClient, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
 
@@ -74,12 +75,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
       const approved = yield* ApprovedTools;
-      expect(approved.forProject({ ...project, permissionMode: "ask" })[0].needsApproval).toBe(
-        true,
-      );
-      expect(approved.forProject({ ...project, permissionMode: "full" })[0].needsApproval).toBe(
-        false,
-      );
+      const ask = yield* inRun(approved.forProject({ ...project, permissionMode: "ask" }));
+      const full = yield* inRun(approved.forProject({ ...project, permissionMode: "full" }));
+      expect(ask[0].needsApproval).toBe(true);
+      expect(full[0].needsApproval).toBe(false);
     }),
   );
 

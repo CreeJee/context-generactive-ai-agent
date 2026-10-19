@@ -129,9 +129,9 @@ const make = Effect.gen(function* () {
             runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
             selection: selection.value,
             tools: [
-              ...fileTools.forProject(project),
-              ...outsideTools.forProject(project),
-              ...approvedTools.forProject(project, "gate"),
+              ...(yield* fileTools.forProject(project)),
+              ...(yield* outsideTools.forProject(project)),
+              ...(yield* approvedTools.forProject(project, "gate")),
             ],
             systemPrompts: [],
             gated: gatedToolNames,
@@ -161,6 +161,8 @@ const make = Effect.gen(function* () {
             failed("unavailable"),
           ),
         ),
+        // The card run's tool calls join this span's trace.
+        Effect.withSpan("CardAgent.run"),
       ),
   });
 
@@ -210,10 +212,12 @@ const make = Effect.gen(function* () {
         ),
       );
       const tools: AnyServerTool[] = [
-        ...fileTools.forProject(project).filter((tool) => HashSet.has(readToolNames, tool.name)),
-        ...approvedTools
-          .forProject(project, "gate")
-          .filter((tool) => HashSet.has(checkToolNames, tool.name)),
+        ...(yield* fileTools.forProject(project)).filter((tool) =>
+          HashSet.has(readToolNames, tool.name),
+        ),
+        ...(yield* approvedTools.forProject(project, "gate")).filter((tool) =>
+          HashSet.has(checkToolNames, tool.name),
+        ),
         record,
       ];
       const outcome = yield* subagents.runAttempt(
@@ -239,6 +243,8 @@ const make = Effect.gen(function* () {
           rejected({ _tag: "Unavailable" }),
         ),
       ),
+      // The verifier run's tool calls join this span's trace.
+      Effect.withSpan("CardAgent.verify"),
     );
 
   const verify = (input: CardVerification) =>

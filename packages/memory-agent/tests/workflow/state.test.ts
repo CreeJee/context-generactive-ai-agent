@@ -8,6 +8,7 @@ import { evaluateWorkflowAction, workflowActions } from "../../src/workflow/acti
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
 const goal = {
@@ -64,7 +65,9 @@ const serverTool = Effect.fnUntraced(function* (
   phase: WorkflowState["phase"],
   name: string,
 ) {
-  const tool = (yield* WorkflowTools).forSession(sessionId, phase).find((t) => t.name === name);
+  const tool = (yield* inRun((yield* WorkflowTools).forSession(sessionId, phase))).find(
+    (t) => t.name === name,
+  );
   if (!isTruthy(tool?.execute)) throw new Error(`Missing server tool: ${name}`);
   const execute = tool.execute;
   return (input: Parameters<typeof execute>[0]) =>

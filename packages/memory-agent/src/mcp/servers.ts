@@ -1,4 +1,5 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { runTrace } from "../runtime/run-trace.ts";
 import { Cause, Function as EffectFunction } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
@@ -479,10 +480,12 @@ const make = Effect.gen(function* () {
 
     /**
      * Tools of every trusted, unchanged server for a run in this project. Servers that fail to
-     * start are skipped (and shown as failed in settings); the run goes on without them.
+     * start are skipped (and shown as failed in settings); the run goes on without them. Each call
+     * is a span in the run's trace.
      */
     tools: (project: Project) =>
       Effect.gen(function* () {
+        const caller = yield* runTrace;
         const usable = (yield* configured(project)).servers.filter(
           (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
         );
@@ -495,7 +498,22 @@ const make = Effect.gen(function* () {
             }),
           { concurrency: "unbounded" },
         );
-        return lists.flat();
+        // Discovered tools are shared by concurrent runs, so each run wraps its own calls.
+        return lists.flat().map((tool): AnyServerTool => {
+          const execute = tool.execute;
+          if (!isTruthy(execute)) return tool;
+          return {
+            ...tool,
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            execute: (...call: Parameters<typeof execute>) =>
+              runNativeEffect(
+                nativePromise(() => Promise.resolve(execute(...call))).pipe(
+                  Effect.withSpan("McpServers.call"),
+                  Effect.provideContext(caller),
+                ),
+              ),
+          };
+        });
       }),
   };
 });

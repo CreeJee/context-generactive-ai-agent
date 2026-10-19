@@ -106,19 +106,21 @@ const tools = await runNative(
       if (!isTruthy(execute)) throw new Error(name);
       return execute;
     };
+    const plainFiles = yield* files.forProject(plain);
+    const gitFiles = yield* files.forProject(git);
     return {
       plain: {
-        list: pick(files.forProject(plain), "list_files"),
-        search: pick(files.forProject(plain), "search_files"),
-        read: pick(files.forProject(plain), "read_file"),
+        list: pick(plainFiles, "list_files"),
+        search: pick(plainFiles, "search_files"),
+        read: pick(plainFiles, "read_file"),
       },
       git: {
-        list: pick(files.forProject(git), "list_files"),
-        search: pick(files.forProject(git), "search_files"),
+        list: pick(gitFiles, "list_files"),
+        search: pick(gitFiles, "search_files"),
       },
-      shell: pick(approved.forProject(plain, "gate"), "run_shell"),
+      shell: pick(yield* approved.forProject(plain, "gate"), "run_shell"),
     };
-  }),
+  }).pipe(Effect.withSpan("bench")),
 );
 
 type Page = { nextOffset?: number | null; snapshot?: string; nextCursor?: string | null };

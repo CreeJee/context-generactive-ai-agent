@@ -13,6 +13,7 @@ import { BackgroundTasks } from "../../src/tools/background.ts";
 import { DelegateTools } from "../../src/tools/delegate.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { current, encodeJson, freshProject, post, sdk, until } from "./agent-env.ts";
 
@@ -211,7 +212,8 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       const { project, sessionId, agents, log, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
       const signal = yield* Effect.abortSignal;
-      const delegate = (yield* (yield* DelegateTools).forRun(project, sessionId, signal)).tools[0]!;
+      const delegate = (yield* inRun((yield* DelegateTools).forRun(project, sessionId, signal)))
+        .tools[0]!;
       expect(
         yield* sdk(() => delegate.execute!({ agent: "fake", task: "slow task", yieldMs: 0 })),
       ).toMatchObject({ status: "running" });
