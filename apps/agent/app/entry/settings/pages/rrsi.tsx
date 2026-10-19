@@ -17,7 +17,13 @@ import { Switch } from "~/components/ui/switch";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { appFetch } from "../../shared/backend-restart";
 import { PageHeader, PageError } from "../shared";
-import { AppliedSettings, ExperimentSummary, statusLabels } from "./rrsi-summary";
+import {
+  AppliedSettings,
+  CandidateDetails,
+  ExperimentSummary,
+  candidateLabel,
+  statusLabels,
+} from "./rrsi-summary";
 
 interface Status {
   settings: Configuration;
@@ -80,6 +86,33 @@ const reasons = {
   code_validating: "코드 후보를 검사하고 있어요",
   pending: "평가를 기다리고 있어요",
 };
+const keepSettings = "현재 설정은 바뀌지 않았어요. 다음 평가에서 다른 후보를 시도해요.";
+const rebuildImage = "평가용 Docker 이미지를 다시 빌드한 뒤 평가를 다시 시작하세요.";
+const restartEvaluation = "평가를 다시 시작하면 처음부터 새로 평가해요.";
+/** What the user can do after an experiment ends with each reason. */
+const nextSteps = {
+  baseline_quality_failed: "선택한 모델이 기본 과제를 풀 수 있는지 확인하세요.",
+  no_admissible_candidate: keepSettings,
+  validation_rejected: keepSettings,
+  heldout_rejected: keepSettings,
+  evaluation_container_failed: rebuildImage,
+  worker_failed: rebuildImage,
+  protocol_invalid: rebuildImage,
+  evaluation_incomplete:
+    "평가 결과 일부가 빠졌어요. 다시 시작하고, 반복되면 평가 로그를 확인하세요.",
+  trial_execution_failed: "다시 시작하고, 반복되면 평가 로그를 확인하세요.",
+  gateway_request_failed: "모델 서버가 응답하는지 확인한 뒤 평가를 다시 시작하세요.",
+  usage_unknown: "모델 서버가 토큰 사용량을 함께 보내는지 확인하세요.",
+  user_activity: "진행 중인 작업이 끝난 뒤 평가를 다시 시작하세요.",
+  activity_check_failed: "앱을 재시작한 뒤 평가를 다시 시작하세요.",
+  state_operation_failed: "앱을 재시작한 뒤 평가를 다시 시작하세요.",
+  time_limit: restartEvaluation,
+  owner_restarted: restartEvaluation,
+  app_shutdown: restartEvaluation,
+};
+function nextStepOf(reason: string) {
+  return Object.entries(nextSteps).find(([key]) => key === reason)?.[1];
+}
 /** What a failed request says: this page's own wording, never a browser or transport message. */
 const requestFailure = (failure: Error) =>
   Schema.is(ExperimentRequestFailed)(failure) ? failure.message : "요청을 처리하지 못했어요";
@@ -150,7 +183,7 @@ export function RrsiSettings() {
       <FieldGroup>
         <PageHeader
           title="동작 개선 실험"
-          description="에이전트의 작업 지침과 기억 검색 설정을 별도 과제로 평가해요."
+          description="에이전트의 작업 지침과 기억 검색 설정을 코딩·기억 과제로 평가해요."
         />
         {queryError !== null ? (
           <>
@@ -169,7 +202,7 @@ export function RrsiSettings() {
       <PageHeader
         title="동작 개선 실험"
         badge={<Badge variant="secondary">{status.running ? "실험 중" : "대기"}</Badge>}
-        description="에이전트가 일을 수행하는 방법을 개선하는 실험이에요. 추가 작업 지침, 기억 검색 개수·길이, 기억 검색 도구의 안내를 바꿔 별도로 만든 코딩·기억 과제에서 비교해요."
+        description="에이전트가 일을 수행하는 방법을 개선하는 실험이에요. 추가 작업 지침, 기억 검색 개수·길이, 기억 검색 도구의 안내를 바꿔 코딩 과제와 기억 과제에서 비교해요. 기억 과제는 실제 사용 기록에서 정정한 내용으로 만들고, 그 기록이 없으면 별도로 만든 과제를 써요."
       />
       <FieldDescription>
         프로젝트 공통 설정을 평가해요. 활성 프로젝트의 실행 작업과 대기 메시지는 실험을 멈출지
@@ -181,6 +214,7 @@ export function RrsiSettings() {
         <ExperimentSummary
           experiment={status.experiments[0]}
           reason={reasonLabel(status.experiments[0].reason) ?? "평가가 종료됐어요."}
+          nextStep={nextStepOf(status.experiments[0].reason)}
         />
       )}
       <Field orientation="horizontal">
@@ -255,30 +289,19 @@ export function RrsiSettings() {
             <ExperimentSummary
               experiment={experiment}
               reason={reasonLabel(experiment.reason) ?? "평가가 종료됐어요."}
+              nextStep={nextStepOf(experiment.reason)}
+              scope="history"
             />
-            {experiment.candidates.map((candidate) => (
+            {experiment.candidates.map((candidate, index) => (
               <div key={candidate.id} className="flex flex-col gap-2 py-2">
                 <p>
-                  {candidate.kind === "code" ? "코드 후보" : `라운드 ${candidate.round + 1}`}:{" "}
+                  {candidateLabel(experiment.candidates, index)}:{" "}
                   {reasonLabel(candidate.decision) ?? candidate.decision}{" "}
                   {isTruthy(candidate.measurement)
-                    ? `· 성공률 ${(candidate.measurement.score * 100).toFixed(1)}%`
+                    ? `· 성공률 ${(candidate.measurement.score * 100).toFixed(1)}% (기억 ${(candidate.measurement.memory * 100).toFixed(1)}%)`
                     : ""}
                 </p>
-                <details className="text-sm">
-                  <summary className="cursor-pointer">변경 내용 보기</summary>
-                  <pre className="overflow-x-auto whitespace-pre-wrap text-xs">
-                    {candidate.diff}
-                  </pre>
-                </details>
-                {candidate.branch && <code>{candidate.branch}</code>}
-                {candidate.commit && <code>commit: {candidate.commit}</code>}
-                {candidate.imageId && <code>artifact: {candidate.imageId}</code>}
-                {candidate.decision === "code_review_pending" && (
-                  <FieldDescription>
-                    평가를 통과한 후보예요. 위 diff와 커밋을 검토한 뒤 별도 브랜치에서 반영하세요.
-                  </FieldDescription>
-                )}
+                <CandidateDetails candidate={candidate} />
               </div>
             ))}
           </CollapsibleContent>
