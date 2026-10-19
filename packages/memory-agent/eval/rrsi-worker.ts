@@ -358,6 +358,13 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
     });
     emit({ kind: "progress", completed: results.length, total: tasks.length });
   }
+  if (usageServices !== null) {
+    // Tearing down the real embedding and morphology workers can abort the process (an uncaught
+    // Napi::Error, exit 133) before the result is sent. The container is discarded after one run,
+    // so report and exit without that teardown.
+    emit({ kind: "result", results });
+    return yield* Effect.sync(() => process.exit(0));
+  }
   return results;
 
   function syntheticTrial(task: EvalTask) {
