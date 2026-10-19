@@ -354,6 +354,8 @@ try {
         onSuccess: (results) => emit({ kind: "result", results }),
         onFailure: (cause) => {
           const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+          // The frame carries only a category; the sandbox's stderr keeps the cause for diagnosis.
+          process.stderr.write(`${Cause.pretty(cause)}\n`);
           emit({
             kind: "failure",
             reason: Schema.is(EvaluationFailed)(error) ? error.reason : "worker_failed",
