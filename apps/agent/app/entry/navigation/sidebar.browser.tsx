@@ -353,7 +353,8 @@ describe("sidebar disclosures", () => {
       );
       const endpoint = screen.getByRole("listitem", { name: "로컬 서버 (OpenAI 호환)" });
       yield* sdkCall(() => expect.element(endpoint.getByText("사용 중")).toBeVisible());
-      yield* sdkCall(() => endpoint.getByRole("button", { name: "서버 모델 불러오기" }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 추가" }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 목록 불러오기" }).click());
       yield* sdkCall(() => endpoint.getByRole("button", { name: "served-model" }).click());
       yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
 
