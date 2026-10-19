@@ -9,14 +9,20 @@ import {
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
+import { StorageRoot } from "../config/storage-root.ts";
 import { Checkouts } from "../imports/checkouts.ts";
 import { Projects } from "../projects/projects.ts";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { improvementItems, type ImprovementItem } from "./items.ts";
+import { improvementReport } from "./report.ts";
 import { collectSignals } from "./signals.ts";
 
 export class DiscoveryFailed extends Schema.TaggedError<DiscoveryFailed>()("DiscoveryFailed", {
-  /** The known worktree folders could not be read; `cause` has the SQL or decode error. */
-  reason: Schema.Literals(["storage"]),
+  /**
+   * `storage`: the known worktree folders could not be read. `report`: a report file could not be
+   * written. `cause` has the SQL, decode or file error.
+   */
+  reason: Schema.Literals(["storage", "report"]),
   cause: Schema.Defect(),
 }) {}
 
@@ -40,6 +46,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const reports = path.join((yield* StorageRoot).path, "improvements");
 
   /**
    * Open projects grouped by the repository they belong to. A worktree project, even one whose
@@ -102,7 +109,34 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return { discover };
+  /**
+   * Discovers and writes one Markdown report per repository under the storage root, never into
+   * the repository itself. A report is named after its repository and replaced on every run.
+   */
+  const record = Effect.fn("ProjectImprovement.record")(function* () {
+    const found = yield* discover();
+    const generatedAt = DateTime.formatIso(yield* DateTime.now);
+    const failed = (cause: unknown) => DiscoveryFailed.make({ reason: "report", cause });
+    yield* fs.makeDirectory(reports, { recursive: true }).pipe(Effect.mapError(failed));
+    return yield* Effect.forEach(
+      found,
+      (repository) => {
+        const file = path.join(
+          reports,
+          `${path.basename(repository.repository)}-${sha256(repository.repository).slice(0, 8)}.md`,
+        );
+        return fs
+          .writeFileString(file, improvementReport(repository, generatedAt))
+          .pipe(
+            Effect.mapError(failed),
+            Effect.as({ repository: repository.repository, file, items: repository.items.length }),
+          );
+      },
+      { concurrency: 4 },
+    );
+  });
+
+  return { discover, record };
 });
 
 /** Finds what to improve in the repositories behind the open projects. */
