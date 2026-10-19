@@ -1,5 +1,5 @@
 import { Effect, Fiber } from "effect";
-import { runUiEffect, uiPromise, uiFailure } from "../shared/ui-effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,9 +15,11 @@ import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
+import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { RunFailureText } from "./run-failure";
 import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
 import { renumberReferences, useDraftImages } from "./draft-images";
@@ -27,6 +29,7 @@ import {
   isApiError,
   chatFetch,
   compactErrorMessage,
+  refusalOf,
   eventDecoders,
   type CompactResult,
   type ContextView,
@@ -53,7 +56,7 @@ import { useWorkTrace } from "../session/work-trace";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
 import { useImageGeneration } from "../media/use-image-generation";
 import { useRunState } from "../session/use-run-state";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { sessionQueries } from "../queries/session";
 import {
   useArchiveTraceTaskMutation,
@@ -61,6 +64,7 @@ import {
   useDeleteTraceTaskMutation,
   useResumeTraceTaskMutation,
 } from "../queries/mutations/session";
+import { WorkflowBoard } from "./board-panel";
 import {
   WorkflowArtifactPanel,
   phaseLabels,
@@ -231,8 +235,11 @@ function ChatPanel({
   sendingEnabled: boolean;
 }) {
   const queryClient = useQueryClient();
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Chat requires an active project");
+  const projectId = useProjectScope("chat");
+  // The inbox leads here with the card to open the board on. Closing only the card peek
+  // keeps the board, so the summary holding it stays mounted.
+  const [boardLocation] = useQueryStates({ board: parseAsBoolean, card: parseAsString });
+  const boardOpen = boardLocation.board === true || boardLocation.card !== null;
   const resumeTraceMutation = useResumeTraceTaskMutation(projectId, sessionId, holder);
   const archiveTraceMutation = useArchiveTraceTaskMutation(projectId, sessionId, holder);
   const deleteTraceMutation = useDeleteTraceTaskMutation(projectId, sessionId, holder);
@@ -363,9 +370,9 @@ function ChatPanel({
         setNotice(done(`${phaseLabels[state.phase]} 모드로 바꿨어요.`));
         return state;
       }).pipe(
-        Effect.catchCause((cause) =>
+        Effect.catchTag("UnknownError", (rejected) =>
           Effect.sync(() => {
-            const failure = uiFailure(cause);
+            const failure = rejected.cause;
             const message =
               isApiError(failure) &&
               (failure.code === "plan_not_ready" || failure.code === "plan_outdated")
@@ -428,7 +435,7 @@ function ChatPanel({
         setNotice(null);
         void sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("Goal 상태를 바꾸지 못했어요."));
           }),
@@ -498,7 +505,7 @@ function ChatPanel({
             );
           return result;
         }).pipe(
-          Effect.catchCause(() =>
+          Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
               setNotice(problem("재개 요청을 저장하지 못했어요."));
               return { status: "failed" as const };
@@ -522,7 +529,7 @@ function ChatPanel({
           ? { status: "blocked" as const, reason: result.blocker }
           : { status: "failed" as const };
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("작업을 보관하지 못했어요."));
             return { status: "failed" as const };
@@ -545,7 +552,7 @@ function ChatPanel({
           ? { status: "blocked" as const, reason: result.blocker }
           : { status: "failed" as const };
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("작업 원본을 삭제하지 못했어요."));
             return { status: "failed" as const };
@@ -791,16 +798,9 @@ function ChatPanel({
                 setNotice(null);
                 return yield* uiPromise(() => compactMutation.mutateAsync()).pipe(
                   Effect.map((result) => setNotice(compacted(result))),
-                  Effect.catch((failure) =>
+                  Effect.catchTag("UnknownError", (failure) =>
                     Effect.sync(() => {
-                      const error = failure.cause;
-                      setNotice(
-                        problem(
-                          compactErrorMessage(
-                            error instanceof Error ? error : new Error(String(error)),
-                          ),
-                        ),
-                      );
+                      setNotice(problem(compactErrorMessage(refusalOf(failure.cause))));
                     }),
                   ),
                 );
@@ -813,7 +813,7 @@ function ChatPanel({
                 setDraft("");
                 setNotice(null);
                 return yield* uiPromise(() => slash.run(command)).pipe(
-                  Effect.catch(() =>
+                  Effect.catchTag("UnknownError", () =>
                     Effect.sync(() => setNotice(problem("명령을 실행하지 못했어요."))),
                   ),
                 );
@@ -926,6 +926,16 @@ function ChatPanel({
           onStop={() => void controlGoal("stop")}
           onRevise={() => void revisePlan()}
           onExecute={() => void executePlan()}
+          boardOpen={boardOpen}
+          board={
+            <WorkflowBoard
+              projectId={projectId}
+              sessionId={sessionId}
+              holder={holder}
+              // Board edits need the session lease, not a signed-in model.
+              disabled={readOnly || backendRestartRequired}
+            />
+          }
         />
         <ChatApprovals
           key={approvalBatchKey}
@@ -989,11 +999,15 @@ function ChatPanel({
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
               <AlertDescription>
-                {isApiError(error) && error.code === "provider_auth_unavailable"
-                  ? "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
-                  : isApiError(error) && error.code === "provider_unavailable"
-                    ? "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
-                    : error.message}
+                {isApiError(error) && error.code === "provider_auth_unavailable" ? (
+                  "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
+                ) : isApiError(error) && error.code === "provider_unavailable" ? (
+                  "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
+                ) : isApiError(error) ? (
+                  error.message
+                ) : (
+                  <RunFailureText error={error} />
+                )}
               </AlertDescription>
             </Alert>
           )}

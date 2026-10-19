@@ -3,7 +3,7 @@ import { HashMap, MutableHashMap, Option, DateTime, Clock, Semaphore, Fiber, Sco
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Crypto, Data, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -29,14 +29,15 @@ export const Attachment = Schema.Struct({
 });
 export type Attachment = typeof Attachment.Type;
 
-export class AttachmentRejected extends Data.TaggedError("AttachmentRejected")<{
-  readonly reason: "empty" | "too_large" | "unsupported_type";
-}> {}
+export class AttachmentRejected extends Schema.TaggedError<AttachmentRejected>()(
+  "AttachmentRejected",
+  { reason: Schema.Literals(["empty", "too_large", "unsupported_type"]) },
+) {}
 
-export class AttachmentStorageFailed extends Data.TaggedError("AttachmentStorageFailed")<{
-  readonly operation: "save" | "purge" | "convert";
-  readonly cause: unknown;
-}> {}
+export class AttachmentStorageFailed extends Schema.TaggedError<AttachmentStorageFailed>()(
+  "AttachmentStorageFailed",
+  { operation: Schema.Literals(["save", "purge", "convert"]), cause: Schema.Defect() },
+) {}
 
 const AttachmentRow = Schema.Struct({
   id: Schema.String,
@@ -106,7 +107,7 @@ const make = Effect.gen(function* () {
   const directory = path.join(storage.path, "attachments");
   yield* fs
     .makeDirectory(directory, { recursive: true, mode: 0o700 })
-    .pipe(Effect.mapError((cause) => new AttachmentStorageFailed({ operation: "save", cause })));
+    .pipe(Effect.mapError((cause) => AttachmentStorageFailed.make({ operation: "save", cause })));
 
   const selectAttachment = SqlSchema.findOneOption({
     Request: Schema.String,
@@ -152,13 +153,13 @@ const make = Effect.gen(function* () {
   const io = <A>(operation: AttachmentStorageFailed["operation"], execute: () => Promise<A>) =>
     Effect.tryPromise({
       try: execute,
-      catch: (cause) => new AttachmentStorageFailed({ operation, cause }),
+      catch: (cause) => AttachmentStorageFailed.make({ operation, cause }),
     });
 
   const fileIo = <A>(
     operation: AttachmentStorageFailed["operation"],
     effect: Effect.Effect<A, import("effect/PlatformError").PlatformError>,
-  ) => effect.pipe(Effect.mapError((cause) => new AttachmentStorageFailed({ operation, cause })));
+  ) => effect.pipe(Effect.mapError((cause) => AttachmentStorageFailed.make({ operation, cause })));
 
   const publish = Effect.fn("Attachments.publish")(function* (
     operation: AttachmentStorageFailed["operation"],
@@ -184,18 +185,22 @@ const make = Effect.gen(function* () {
     const copy = path.join(directory, `${attachment.id}.model.webp`);
     const noCopy = path.join(directory, `${attachment.id}.model-original`);
     return yield* Effect.gen(function* () {
-      const existingCopy = yield* fileIo("convert", fs.stat(copy)).pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
+      // A missing or unreadable file is treated as absent, as before.
+      const existingCopy = yield* fs
+        .stat(copy)
+        .pipe(Effect.catchTag("PlatformError", () => Effect.void));
       if (existingCopy !== undefined && Number(existingCopy.size) <= maxModelImageBytes)
         return { path: copy, mimeType: "image/webp" as const };
       if (existingCopy !== undefined) yield* fileIo("convert", fs.remove(copy, { force: true }));
-      const original = yield* fileIo("convert", fs.stat(noCopy)).pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
+      const original = yield* fs
+        .stat(noCopy)
+        .pipe(Effect.catchTag("PlatformError", () => Effect.void));
       if (original !== undefined) return upload;
       const encoded = yield* Effect.gen(function* () {
-        const sharp = requireRuntime("sharp");
+        const sharp = yield* Effect.try({
+          try: () => requireRuntime("sharp"),
+          catch: (cause) => AttachmentStorageFailed.make({ operation: "convert", cause }),
+        });
         const attempts = [
           { edge: modelImageEdge, quality: 86 },
           { edge: 1600, quality: 78 },
@@ -226,7 +231,15 @@ const make = Effect.gen(function* () {
       }
       yield* publish("convert", copy, encoded);
       return { path: copy, mimeType: "image/webp" as const };
-    }).pipe(Effect.catchCause(() => Effect.succeed(upload)));
+    }).pipe(
+      // Any conversion failure sends the original; the tag is logged, never paths or Sharp's text.
+      Effect.catchTag("AttachmentStorageFailed", (error) =>
+        Effect.as(
+          Effect.logWarning("attachment_conversion_failed", { operation: error.operation }),
+          upload,
+        ),
+      ),
+    );
   });
 
   // The service owns native Sharp and filesystem work until it settles. These SDK operations
@@ -263,11 +276,12 @@ const make = Effect.gen(function* () {
    */
   const save = (bytes: Uint8Array) =>
     Effect.gen(function* () {
-      if (bytes.length === 0) return yield* new AttachmentRejected({ reason: "empty" });
+      if (bytes.length === 0) return yield* AttachmentRejected.make({ reason: "empty" });
       if (bytes.length > maxAttachmentBytes)
-        return yield* new AttachmentRejected({ reason: "too_large" });
+        return yield* AttachmentRejected.make({ reason: "too_large" });
       const mimeType = sniffImageType(bytes);
-      if (!isTruthy(mimeType)) return yield* new AttachmentRejected({ reason: "unsupported_type" });
+      if (!isTruthy(mimeType))
+        return yield* AttachmentRejected.make({ reason: "unsupported_type" });
 
       const attachment: Attachment = {
         id: Hex.encode(yield* fileIo("save", crypto.digest("SHA-256", bytes))),
@@ -276,9 +290,9 @@ const make = Effect.gen(function* () {
         createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
       };
       const path = fileOf(attachment);
-      const existing = yield* fileIo("save", fs.stat(path)).pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
+      const existing = yield* fs
+        .stat(path)
+        .pipe(Effect.catchTag("PlatformError", () => Effect.void));
       if (existing === undefined || Number(existing.size) !== bytes.length)
         yield* publish("save", path, bytes);
       yield* sql`
@@ -303,9 +317,9 @@ const make = Effect.gen(function* () {
    */
   const saveDrawing = (svg: Uint8Array) =>
     Effect.gen(function* () {
-      if (svg.length === 0) return yield* new AttachmentRejected({ reason: "empty" });
+      if (svg.length === 0) return yield* AttachmentRejected.make({ reason: "empty" });
       if (svg.length > maxDrawingBytes)
-        return yield* new AttachmentRejected({ reason: "too_large" });
+        return yield* AttachmentRejected.make({ reason: "too_large" });
       const png = yield* Effect.tryPromise({
         try: () =>
           requireRuntime("sharp")(Buffer.from(svg), { density: 144 })
@@ -317,7 +331,7 @@ const make = Effect.gen(function* () {
             })
             .png()
             .toBuffer(),
-        catch: () => new AttachmentRejected({ reason: "unsupported_type" }),
+        catch: () => AttachmentRejected.make({ reason: "unsupported_type" }),
       });
       return yield* save(png);
     });

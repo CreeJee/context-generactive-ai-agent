@@ -2,6 +2,7 @@ import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Cause, Effect, Layer, Result, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
+import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { ChunkingFailed, chunkText } from "./chunks.ts";
 import { EmbeddingRpcs, EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
 // The embedding model in a worker thread: onnxruntime-node runs a session synchronously, so on the
@@ -45,7 +46,10 @@ const load = Effect.fn("EmbeddingWorker.load")(function* (setup: EmbeddingWorker
     );
     if (Result.isSuccess(outcome)) return outcome.success;
     failures.push(`${device}: ${String(nativeFailure(Cause.fail(outcome.failure)).cause)}`);
-    if (model !== null) yield* nativePromise(() => model!.dispose()).pipe(Effect.ignore);
+    if (model !== null)
+      yield* nativePromise(() => model!.dispose()).pipe(
+        ignoreLogged("embedding_model_dispose_failed", { device }),
+      );
   }
   return yield* new Cause.UnknownError(new Error(failures.join("; ")));
 });

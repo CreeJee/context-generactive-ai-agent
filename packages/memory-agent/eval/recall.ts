@@ -51,7 +51,7 @@ const kiwi = MorphAnalyzer.kiwi.pipe(Layer.provide(sharedModels));
 const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
   dimensions: 384,
-  embed: () => Effect.fail(new EmbeddingError({ cause: "disabled" })),
+  embed: () => Effect.fail(EmbeddingError.make({ cause: "disabled" })),
   runtime: () => ({ kind: "other" }),
 });
 

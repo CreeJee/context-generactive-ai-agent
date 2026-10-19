@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { browserCrypto } from "../shared/browser-crypto";
 import { Function as EffectFunction } from "effect";
 import { useEffect, useRef, useState } from "react";
-import { api, attachmentErrorMessage, type Attachment } from "../api";
+import { api, attachmentErrorMessage, refusalOf, type Attachment } from "../api";
 
 /** Types the server accepts; anything else fails before uploading. */
 const acceptedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
@@ -77,7 +77,7 @@ export function useDraftImages() {
           settle(base.key, (image) => ({
             ...image,
             status: "failed",
-            reason: attachmentErrorMessage(error),
+            reason: attachmentErrorMessage(refusalOf(error)),
           })),
       );
     }

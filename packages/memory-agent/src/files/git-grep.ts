@@ -113,5 +113,11 @@ export const gitGrepFilesEffect = (options: {
             return null;
         }
       }),
-    ).pipe(Effect.orElseSucceed(() => null));
+    ).pipe(
+      // Without a usable git grep the caller searches the files itself.
+      Effect.catchTags({
+        PlatformError: () => Effect.succeed(null),
+        UnknownError: () => Effect.succeed(null),
+      }),
+    );
   });

@@ -46,7 +46,15 @@ const make = Effect.gen(function* () {
         attachmentId: picture.id,
         mimeType: picture.mimeType,
       });
-    }).pipe(Effect.orElseSucceed(() => Option.none<DrawingPreview>()));
+    }).pipe(
+      // The preview is extra: the tool's own result stands without it.
+      Effect.catch((error) =>
+        Effect.as(
+          Effect.logDebug("drawing_preview_unavailable", { error: error._tag }),
+          Option.none<DrawingPreview>(),
+        ),
+      ),
+    );
 
   return {
     /**

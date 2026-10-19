@@ -1,8 +1,8 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
-import { Cause, Crypto, Effect, Exit, Function as EffectFunction } from "effect";
+import { Crypto, Effect, Exit, Function as EffectFunction } from "effect";
 
-import { Option, Schema } from "effect";
+import { Schema } from "effect";
 
 export interface PasswordEntry {
   // Native Windows keyring returns null for an absent entry, despite its undefined-only typings.
@@ -28,13 +28,41 @@ const digest = Effect.fnUntraced(function* (value: string) {
   );
 });
 
-function manifest(value: string | null | undefined): Manifest | null {
-  if (value == null || !value.startsWith(manifestPrefix)) return null;
-  return Option.getOrThrowWith(
-    decodeManifest(value.slice(manifestPrefix.length)),
-    () => new Error("Invalid credential manifest."),
-  );
+/** Why a fragmented credential could not be read or written; the keychain store reports its stage. */
+export class CredentialFragmentsFailed extends Schema.TaggedError<CredentialFragmentsFailed>()(
+  "CredentialFragmentsFailed",
+  {
+    reason: Schema.Literals([
+      "invalid_manifest",
+      "incomplete_fragments",
+      "changed_while_reading",
+      "fragment_limit",
+    ]),
+  },
+) {
+  override get message() {
+    switch (this.reason) {
+      case "invalid_manifest":
+        return "Invalid credential manifest.";
+      case "incomplete_fragments":
+        return "Incomplete credential fragments.";
+      case "changed_while_reading":
+        return "Credential changed while reading.";
+      case "fragment_limit":
+        return "Credential exceeds the fragment limit.";
+    }
+  }
 }
+
+const manifest = (
+  value: string | null | undefined,
+): Effect.Effect<Manifest | null, CredentialFragmentsFailed> =>
+  value == null || !value.startsWith(manifestPrefix)
+    ? Effect.succeed(null)
+    : Effect.fromOption(
+        decodeManifest(value.slice(manifestPrefix.length)),
+        () => new CredentialFragmentsFailed({ reason: "invalid_manifest" }),
+      );
 
 /** Keep every fragment in the OS vault, and publish a new generation only after all writes succeed. */
 export const createChunkedPasswordEntry: {
@@ -59,13 +87,20 @@ function createChunkedPasswordEntryBody(
     for (const result of results)
       if (Exit.isFailure(result)) return yield* Effect.failCause(result.cause);
   });
+  /** Cleanup only: the write's own outcome stands, so a failed delete is logged by tag. */
+  const removeChunksBestEffort = (value: Manifest) =>
+    removeChunks(value).pipe(
+      Effect.catchTag("UnknownError", () =>
+        Effect.logWarning("Credential fragment cleanup failed", { error: "UnknownError" }),
+      ),
+    );
   return {
     getPassword: () =>
       runOAuthNodeEffect(
         Effect.gen(function* () {
           let encoded = (yield* nativePromise(() => root.getPassword())) ?? undefined;
           for (let attempt = 0; attempt < 2; attempt++) {
-            const current = yield* Effect.try(() => manifest(encoded));
+            const current = yield* manifest(encoded);
             if (current === null) return encoded;
             const parts = yield* Effect.forEach(
               Array.from({ length: current.count }, (_, index) => index),
@@ -83,17 +118,17 @@ function createChunkedPasswordEntryBody(
               return password;
             const latest = (yield* nativePromise(() => root.getPassword())) ?? undefined;
             if (latest === encoded)
-              return yield* new Cause.UnknownError(new Error("Incomplete credential fragments."));
+              return yield* new CredentialFragmentsFailed({ reason: "incomplete_fragments" });
             encoded = latest;
           }
-          return yield* new Cause.UnknownError(new Error("Credential changed while reading."));
+          return yield* new CredentialFragmentsFailed({ reason: "changed_while_reading" });
         }),
       ),
     setPassword: (password) =>
       runOAuthNodeEffect(
         Effect.gen(function* () {
           const previous = yield* nativePromise(() => root.getPassword()).pipe(
-            Effect.flatMap((encoded) => Effect.try(() => manifest(encoded))),
+            Effect.flatMap(manifest),
           );
           if (password.length <= passwordLimit)
             yield* nativePromise(() => root.setPassword(password));
@@ -105,9 +140,7 @@ function createChunkedPasswordEntryBody(
               digest: yield* digest(password),
             };
             if (next.count > 256)
-              return yield* new Cause.UnknownError(
-                new Error("Credential exceeds the fragment limit."),
-              );
+              return yield* new CredentialFragmentsFailed({ reason: "fragment_limit" });
             yield* Effect.gen(function* () {
               for (let index = 0; index < next.count; index++) {
                 const entry = chunk(next, index);
@@ -122,19 +155,18 @@ function createChunkedPasswordEntryBody(
               );
               yield* nativePromise(() => root.setPassword(manifestPrefix + encodedManifest));
             }).pipe(
-              Effect.catchCause((cause) =>
-                removeChunks(next).pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
-              ),
+              // A failed or interrupted write leaves no fragments of the new generation behind.
+              Effect.onError(() => removeChunksBestEffort(next)),
             );
           }
-          if (previous !== null) yield* removeChunks(previous).pipe(Effect.ignore);
+          if (previous !== null) yield* removeChunksBestEffort(previous);
         }),
       ),
     deleteCredential: () =>
       runOAuthNodeEffect(
         Effect.gen(function* () {
           const previous = yield* nativePromise(() => root.getPassword()).pipe(
-            Effect.flatMap((encoded) => Effect.try(() => manifest(encoded))),
+            Effect.flatMap(manifest),
           );
           const deleted = yield* nativePromise(() => root.deleteCredential());
           if (previous !== null) yield* removeChunks(previous);

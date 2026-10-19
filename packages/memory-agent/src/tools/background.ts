@@ -6,7 +6,6 @@ import {
   Cause,
   Clock,
   Context,
-  Data,
   Effect,
   Exit,
   FiberMap,
@@ -19,6 +18,7 @@ import { ChatState } from "../chat-state/chat-state.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
@@ -27,22 +27,26 @@ export interface BackgroundBinding {
   readonly abortSignal: AbortSignal;
 }
 
-export class BackgroundOperationFailed extends Data.TaggedError("BackgroundOperationFailed")<{
-  readonly cause: unknown;
-}> {}
+export class BackgroundOperationFailed extends Schema.TaggedError<BackgroundOperationFailed>()(
+  "BackgroundOperationFailed",
+  { cause: Schema.Defect() },
+) {}
 
-export class BackgroundResultStoreFailed extends Data.TaggedError("BackgroundResultStoreFailed")<{
-  readonly operation: "read" | "write" | "decode";
-  readonly cause: unknown;
-}> {}
+export class BackgroundResultStoreFailed extends Schema.TaggedError<BackgroundResultStoreFailed>()(
+  "BackgroundResultStoreFailed",
+  { operation: Schema.Literals(["read", "write", "decode"]), cause: Schema.Defect() },
+) {}
 
-export class BackgroundTraceFailed extends Data.TaggedError("BackgroundTraceFailed")<{
-  readonly cause: unknown;
-}> {}
+export class BackgroundTraceFailed extends Schema.TaggedError<BackgroundTraceFailed>()(
+  "BackgroundTraceFailed",
+  { cause: Schema.Defect() },
+) {}
 
-export class BackgroundTaskNotFound extends Data.TaggedError("BackgroundTaskNotFound")<{
-  readonly message: string;
-}> {}
+/** The model reads `message`; it is fixed and names no task data. */
+export class BackgroundTaskNotFound extends Schema.TaggedError<BackgroundTaskNotFound>()(
+  "BackgroundTaskNotFound",
+  { message: Schema.String },
+) {}
 
 /** Promise SDK boundary: cancellation aborts the source and awaits its settled Exit. */
 export const backgroundOperation = <A>(operation: (signal: AbortSignal) => Promise<A>) =>
@@ -51,9 +55,10 @@ export const backgroundOperation = <A>(operation: (signal: AbortSignal) => Promi
       .then(() => operation(signal))
       .then(
         (value) => Exit.succeed(value),
-        (cause) => Exit.fail(new BackgroundOperationFailed({ cause })),
+        (cause) => Exit.fail(BackgroundOperationFailed.make({ cause })),
       );
     void settled.then((exit) => resume(exit));
+    // `settled` maps both outcomes to an Exit, so it never rejects.
     return Effect.asVoid(Effect.promise(() => settled));
   });
 
@@ -107,18 +112,18 @@ const make = Effect.gen(function* () {
   const loadResult = Effect.fn("BackgroundTasks.loadResult")(function* (taskId: string) {
     const saved = yield* Effect.tryPromise({
       try: () => state.persistence.stores.metadata.get(namespace, taskId),
-      catch: (cause) => new BackgroundResultStoreFailed({ operation: "read", cause }),
+      catch: (cause) => BackgroundResultStoreFailed.make({ operation: "read", cause }),
     });
     return saved === null
       ? null
       : yield* Schema.decodeUnknownEffect(SavedResult)(saved).pipe(
-          Effect.mapError(
-            (cause) => new BackgroundResultStoreFailed({ operation: "decode", cause }),
+          Effect.mapError((cause) =>
+            BackgroundResultStoreFailed.make({ operation: "decode", cause }),
           ),
         );
   });
   const traceEffect = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.mapError(effect, (cause) => new BackgroundTraceFailed({ cause }));
+    Effect.mapError(effect, (cause) => BackgroundTraceFailed.make({ cause }));
 
   const owned = Effect.fn("BackgroundTasks.owned")(function* (sessionId: string, taskId: string) {
     const detail = yield* traceEffect(trace.taskDetail(sessionId, taskId));
@@ -128,7 +133,7 @@ const make = Effect.gen(function* () {
       detail.task.deletedAt !== null ||
       detail.task.deleteRequestedAt !== null
     )
-      return yield* new BackgroundTaskNotFound({
+      return yield* BackgroundTaskNotFound.make({
         message: "Background task not found in this session",
       });
     return detail;
@@ -200,7 +205,7 @@ const make = Effect.gen(function* () {
                   status,
                   result: hidden.text,
                 }),
-              catch: (cause) => new BackgroundResultStoreFailed({ operation: "write", cause }),
+              catch: (cause) => BackgroundResultStoreFailed.make({ operation: "write", cause }),
             });
           });
           const finalize = Effect.fn("BackgroundTasks.finalize")(function* (
@@ -217,7 +222,11 @@ const make = Effect.gen(function* () {
                       status: "cancelled",
                       result: "Operation stopped. Inspect its effects before retrying.",
                     }
-                  : { status: "failed", result: Cause.pretty(exit.cause) };
+                  : // Tags only: the cause can hold command output, paths or provider text.
+                    {
+                      status: "failed",
+                      result: `Operation failed (${failureTags(exit.cause)}). Inspect its effects before retrying.`,
+                    };
                 break;
             }
             // Persist once. A storage failure is not a second operation failure to save again.
@@ -257,9 +266,10 @@ const make = Effect.gen(function* () {
           }).pipe(
             Effect.onExit((exit) =>
               finalize(exit).pipe(
-                Effect.catchCause(() =>
+                Effect.catch((error) =>
                   Effect.logError("Background terminal recording failed", {
                     taskId: handle.taskId,
+                    error: error._tag,
                   }),
                 ),
               ),
@@ -299,7 +309,7 @@ const make = Effect.gen(function* () {
           if (result !== null) return result;
           yield* Effect.tryPromise({
             try: (signal) => trace.waitForChange(sessionId, cursor, signal),
-            catch: (cause) => new BackgroundOperationFailed({ cause }),
+            catch: (cause) => BackgroundOperationFailed.make({ cause }),
           });
         }
       });

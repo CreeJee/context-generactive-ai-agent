@@ -45,7 +45,7 @@ export function ImageSettings() {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => enabledMutation.mutateAsync(enabled)).pipe(
-          Effect.catch((_failure) =>
+          Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
               setError("이미지 설정을 바꾸지 못했어요.");
             }),
@@ -60,7 +60,7 @@ export function ImageSettings() {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => consentMutation.mutateAsync(mode)).pipe(
-          Effect.catch((_failure) =>
+          Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
               setError("공급자 간 이미지 실행 동의를 바꾸지 못했어요.");
             }),

@@ -1,24 +1,24 @@
 import { Schema } from "effect";
+import { ReportBundle } from "./bundle-contract.ts";
 
-/** What the user chose to show the model: their own description and the evidence they included. */
+/** The user's own description and the evidence bundle they reviewed. */
 export const ReportDiagnosisInput = Schema.Struct({
   sourceSessionId: Schema.NullOr(Schema.String.check(Schema.isMaxLength(256))),
   symptom: Schema.String.check(Schema.isMaxLength(4_000)),
   expected: Schema.String.check(Schema.isMaxLength(2_000)),
   actual: Schema.String.check(Schema.isMaxLength(2_000)),
-  evidence: Schema.Array(
-    Schema.Struct({
-      id: Schema.String.check(Schema.isMaxLength(256)),
-      label: Schema.String.check(Schema.isMaxLength(200)),
-      source: Schema.String.check(Schema.isMaxLength(500)),
-      text: Schema.String.check(Schema.isMaxLength(6_000)),
-    }),
-  ).check(Schema.isMaxLength(20)),
+  /** `null` when there was no session to collect from; the description alone is diagnosed. */
+  bundle: Schema.NullOr(ReportBundle),
 });
 export type ReportDiagnosisInput = typeof ReportDiagnosisInput.Type;
 
-/** An observation cites at least one included evidence item; anything else is a hypothesis. */
+/**
+ * The model's reading of the bundle: a short summary for the report's opening, observations that
+ * cite the bundle's places (`run-3/call-2`), and hypotheses. An observation without a citation of
+ * a place in the bundle is a hypothesis.
+ */
 export const ReportDiagnosis = Schema.Struct({
+  summary: Schema.String,
   observations: Schema.Array(
     Schema.Struct({ text: Schema.String, evidenceIds: Schema.Array(Schema.String) }),
   ),

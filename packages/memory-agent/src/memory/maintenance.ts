@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "./embedding/indexer.ts";
@@ -6,9 +6,10 @@ import { VectorIndex } from "./embedding/vector-index.ts";
 import { meaningfulNodeFilter, memoryGraphRepairVersion, nonBlankTextSql } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
 
-export class MemoryGraphRepairFailed extends Data.TaggedError("MemoryGraphRepairFailed")<{
-  readonly cause: unknown;
-}> {}
+export class MemoryGraphRepairFailed extends Schema.TaggedError<MemoryGraphRepairFailed>()(
+  "MemoryGraphRepairFailed",
+  { cause: Schema.Defect() },
+) {}
 
 const batchSize = 64;
 const Progress = Schema.Struct({
@@ -35,7 +36,7 @@ const make = Effect.gen(function* () {
   const meaningful = sql.literal(meaningfulNodeFilter);
   const nonBlankTarget = sql.literal(nonBlankTextSql("target.text"));
   const repaired = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.mapError(effect, (cause) => new MemoryGraphRepairFailed({ cause }));
+    Effect.mapError(effect, (cause) => MemoryGraphRepairFailed.make({ cause }));
 
   const saved = SqlSchema.findOneOption({
     Request: Schema.Void,
@@ -214,6 +215,22 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  const failed = (error: string) =>
+    Effect.gen(function* () {
+      yield* setStatus(
+        "failed",
+        "그래프 정리를 완료하지 못했어요. 다음 시작 시 다시 시도해요.",
+      ).pipe(
+        Effect.catch((statusError) =>
+          Effect.logWarning("Memory graph maintenance status not saved", {
+            error: statusError._tag,
+          }),
+        ),
+      );
+      events.publishGlobal("embedding");
+      yield* Effect.logWarning("Memory graph maintenance failed", { error });
+    });
+
   const run = Effect.gen(function* () {
     yield* restoreCrossSession;
     yield* repaired(sql`INSERT INTO memory_graph_maintenance (version, through_seq, status)
@@ -227,20 +244,10 @@ const make = Effect.gen(function* () {
     yield* repaired(setStatus("completed"));
     events.publishGlobal("embedding");
   }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.gen(function* () {
-        yield* setStatus(
-          "failed",
-          "그래프 정리를 완료하지 못했어요. 다음 시작 시 다시 시도해요.",
-        ).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Memory graph maintenance status not saved", error),
-          ),
-        );
-        events.publishGlobal("embedding");
-        yield* Effect.logWarning("Memory graph maintenance failed", cause);
-      }),
-    ),
+    // The next start retries a failed or broken run. Logs carry the tag only: causes hold SQL.
+    // A defect stays in the run's exit after the status is saved.
+    Effect.catch((error) => failed(error._tag)),
+    Effect.tapDefect(() => failed("Defect")),
     permit.withPermits(1),
   );
 

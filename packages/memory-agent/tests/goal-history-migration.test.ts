@@ -50,7 +50,10 @@ it.live(
       let db = yield* scopedDatabase(() => oldDatabase(file));
       const before = snapshot(db);
       migrateDatabase(db);
-      expect(snapshot(db)).toEqual(before);
+      // Later steps only add the nullable board author; every preserved value stays as it was.
+      expect(
+        snapshot(db).map((rows) => rows.map(({ author_json: _author, ...row }) => row)),
+      ).toEqual(before);
       expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(
@@ -106,7 +109,11 @@ it.live(
         "PRAGMA foreign_keys = OFF; DROP TRIGGER workflow_run_bindings_no_update; UPDATE workflow_run_bindings SET goal_instance_id = 'missing'; PRAGMA foreign_keys = ON",
       );
       const before = snapshot(db);
-      expect(() => migrateDatabase(db)).toThrow("invalid foreign key references");
+      expect(() => migrateDatabase(db)).toThrow(
+        expect.objectContaining({
+          reason: expect.objectContaining({ _tag: "InvalidForeignKeys" }),
+        }),
+      );
       expect(snapshot(db)).toEqual(before);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: goalHistoryMigration.version - 1,

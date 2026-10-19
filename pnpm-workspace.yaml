@@ -79,6 +79,9 @@ catalog:
   react-router: ^8.4.0
   tailwindcss: ^4.3.3
   zod: ^4.6.7
+  "@dnd-kit/core": 6.3.1
+  "@dnd-kit/sortable": 10.0.0
+  "@dnd-kit/utilities": 3.2.2
 # Effect comes from pkg.pr.new URLs, and @effect/platform-node pulls them in as subdependencies.
 # pnpm has no per-package allowlist, so this stays off until Effect resolves from the registry.
 blockExoticSubdeps: false
@@ -125,5 +128,6 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   "@effect/platform-node-shared@4.0.3": patches/@effect__platform-node-shared@4.0.3.patch
   "@effect/platform-node@4.0.3": patches/@effect__platform-node@4.0.3.patch
+  "@tanstack/ai@0.61.0": patches/@tanstack__ai@0.61.0.patch
   effect@4.0.3: patches/effect@4.0.3.patch
   react-simplikit@0.3.3: patches/react-simplikit@0.3.3.patch

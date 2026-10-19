@@ -36,13 +36,19 @@ const transcriptFiles = Effect.fn("transcriptFiles")(function* (
   const found: string[] = [];
   const walk = (directory: string): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const entries = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));
+      // An unreadable directory or entry is skipped, and a link is not followed.
+      const entries = yield* fs
+        .readDirectory(directory)
+        .pipe(Effect.catchTag("PlatformError", () => Effect.succeed([])));
       for (const name of entries.sort((a, b) => a.localeCompare(b))) {
         const path = join(directory, name);
-        const link = yield* fs.readLink(path).pipe(Effect.option);
+        const link = yield* fs.readLink(path).pipe(
+          Effect.asSome,
+          Effect.catchTag("PlatformError", () => Effect.succeedNone),
+        );
         const stats = Option.isSome(link)
           ? undefined
-          : yield* fs.stat(path).pipe(Effect.orElseSucceed(() => undefined));
+          : yield* fs.stat(path).pipe(Effect.catchTag("PlatformError", () => Effect.void));
         if (stats?.type === "Directory") yield* walk(path);
         else if (suffixes.some((suffix) => name.endsWith(suffix))) found.push(path);
       }

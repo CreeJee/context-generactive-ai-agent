@@ -37,7 +37,7 @@ export class BtwRunInProgress extends Schema.TaggedError<BtwRunInProgress>()("Bt
 }) {}
 
 export class BtwStorageFailed extends Schema.TaggedError<BtwStorageFailed>()("BtwStorageFailed", {
-  operation: Schema.Literals(["purge_attachments"]),
+  operation: Schema.Literals(["purge_attachments", "create_thread", "read_transcript"]),
 }) {}
 
 export class BtwError extends Schema.TaggedError<BtwError>()("BtwError", {

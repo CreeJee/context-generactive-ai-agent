@@ -34,6 +34,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
+import { ToolFailed } from "../../src/tools/failure.ts";
 import { parallelReads } from "../../src/tools/parallel-reads.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -407,7 +408,10 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
             ),
           ),
         );
-        expect(String(inactive.cause)).toContain("Inactive owner tool implementation capability");
+        expect(inactive.cause).toMatchObject({
+          _tag: "FullLoopOwnerRefused",
+          reason: { _tag: "Inactive", stage: "tool" },
+        });
         expect(Reflect.set(run.stream, "abortController", callerController())).toBe(true);
         yield* collect<GatedAdapter>(second.owner, run);
         expect(calls.slice(5)).toEqual([
@@ -549,6 +553,47 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
   );
 
   it.effect(
+    "a failed owner read reaches the worker's model as its code, tag and detail",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* ownerFixture();
+        const failure = ToolFailed.make({
+          code: "not_found",
+          tag: "TextFileRejected",
+          detail: "docs/a.md. Nothing exists at that path.",
+        });
+        const read = toolDefinition({ name: "read_file", description: "read" }).server(() =>
+          Promise.reject(failure),
+        );
+        const chunks = yield* collect(
+          f.owner,
+          capabilities(
+            {
+              adapter: new ScriptedTextAdapter([
+                { toolCalls: [{ id: "missing", name: "read_file", arguments: "{}" }] },
+                { text: "done" },
+              ]),
+              agentLoopStrategy: maxIterations(3),
+            },
+            { tools: [read] },
+          ),
+        );
+        expect(chunks).toContainEqual(
+          expect.objectContaining({
+            type: "TOOL_CALL_RESULT",
+            toolCallId: "missing",
+            content: yield* toJson({
+              error: "not_found",
+              cause: "TextFileRejected",
+              detail: "docs/a.md. Nothing exists at that path.",
+            }),
+          }),
+        );
+      }),
+    20000,
+  );
+
+  it.effect(
     "parallel reads use only owner observations and evaluate every permission before prefetch",
     () =>
       Effect.gen(function* () {
@@ -626,9 +671,10 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
                             ),
                           ),
                         ).pipe(Effect.orDie);
-                        expect(String(ungranted.cause)).toContain(
-                          "owner tool implementation grant",
-                        );
+                        expect(ungranted.cause).toMatchObject({
+                          _tag: "OwnerToolGrantRefused",
+                          reason: "repeated_implementation_grant",
+                        });
                         expect(started).toEqual([]);
                         guardedBeforeModel = true;
                       }),

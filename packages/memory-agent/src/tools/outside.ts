@@ -4,7 +4,7 @@ import { toolDefinition } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFilesEffect, createSnapshots } from "../files/listing.ts";
-import { resolveOutsidePath } from "../files/paths.ts";
+import { resolveFencedOutsidePath, type Fenced } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import { createTextPageReader, readFileBytesEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
@@ -66,13 +66,19 @@ const make = Effect.gen(function* () {
      * reading is allowed everywhere except credentials; results are ordinary tool results, not
      * version-tracked project files. Writing outside the project is a separate, approved tool.
      */
-    forProject(project: Project) {
+    forProject(project: Fenced<Project>) {
       // Snapshots are keyed per project so one project's cursors never page another's listing.
       const snapshotKey = `outside:${project.id}`;
       const resolve = (path: string, kind: "file" | "directory") =>
-        resolveOutsidePath(project.root, storage.path, path, kind);
+        resolveFencedOutsidePath(project.toolFence, project.root, storage.path, path, kind);
       const readBytes = Effect.fnUntraced(function* (path: string) {
-        const resolved = yield* resolveOutsidePath(project.root, storage.path, path, "file");
+        const resolved = yield* resolveFencedOutsidePath(
+          project.toolFence,
+          project.root,
+          storage.path,
+          path,
+          "file",
+        );
         return (yield* readFileBytesEffect({ absolute: resolved.absolute, path })).bytes;
       });
 
@@ -172,7 +178,13 @@ const make = Effect.gen(function* () {
               let view =
                 position !== undefined ? snapshots.get(position.snapshot, snapshotKey) : undefined;
               if (!(position !== undefined)) {
-                const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
+                const directory = resolveFencedOutsidePath(
+                  project.toolFence,
+                  project.root,
+                  storage.path,
+                  path,
+                  "directory",
+                );
                 view = yield* directory.pipe(
                   Effect.flatMap(({ absolute }) =>
                     listOutsideFilesEffect(absolute, glob).pipe(

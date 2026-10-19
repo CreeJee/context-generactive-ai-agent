@@ -13,6 +13,15 @@ export function useMcpTrustMutation(projectId: string) {
   });
 }
 
+export function useProtectedBranchesMutation(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (branches: readonly string[]) => api.setProtectedBranches(projectId, branches),
+    onSuccess: (settings) =>
+      client.setQueryData(projectQueries.kanban(projectId).queryKey, settings),
+  });
+}
+
 type AgentChange =
   | {
       readonly kind: "trust";

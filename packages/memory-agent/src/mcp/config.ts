@@ -5,7 +5,8 @@ import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
-import { Data, Effect, FileSystem, Result, Schema } from "effect";
+import { Effect, FileSystem, Result, Schema } from "effect";
+import type { ConfigFileFailureCode, ShownFailure } from "../runtime/shown-failure.ts";
 
 /** Where MCP servers are configured: user-wide in the storage root, or in a project. */
 export const McpScope = Schema.Literals(["global", "project"]);
@@ -96,7 +97,8 @@ export interface McpFileRead {
   readonly path: string;
   readonly servers: readonly ConfiguredServer[];
   /** Why the file could not be used. A missing file is not an error. */
-  readonly error: string | null;
+  /** Not redacted: the owner hides secrets in `detail` before showing it. */
+  readonly error: ShownFailure<ConfigFileFailureCode> | null;
 }
 
 export const fingerprintOf = (config: McpServerConfig) =>
@@ -108,16 +110,20 @@ export const fingerprintOf = (config: McpServerConfig) =>
 
 const readMcpFileBody = Effect.fn("mcp.readConfig")(function* (path: string, scope: McpScope) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))))
+  // A file whose presence cannot be checked is treated as absent, like a missing one.
+  if (!(yield* fs.exists(path).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(false)))))
     return { path, servers: [], error: null } satisfies McpFileRead;
   const text = yield* fs.readFileString(path).pipe(Effect.result);
   if (Result.isFailure(text))
-    return { path, servers: [], error: "unreadable" } satisfies McpFileRead;
+    return { path, servers: [], error: { code: "unreadable", detail: null } } satisfies McpFileRead;
   return Result.match(decodeMcpFile(text.success), {
     onFailure: (error) => ({
       path,
       servers: [],
-      error: String(error).split("\n").slice(0, 4).join("\n"),
+      error: {
+        code: "invalid_config" as const,
+        detail: String(error).split("\n").slice(0, 4).join("\n"),
+      },
     }),
     onSuccess: (file) => {
       const entries = Object.entries(file.mcpServers);
@@ -127,7 +133,7 @@ const readMcpFileBody = Effect.fn("mcp.readConfig")(function* (path: string, sco
         // The valid servers stay usable; the others are named so the user can rename them.
         error:
           invalid.length > 0
-            ? `server names must be 1-32 letters, digits, _ or -: ${invalid.join(", ")}`
+            ? { code: "invalid_names" as const, detail: invalid.join(", ") }
             : null,
         servers: entries
           .filter(([name]) => isServerName(name))
@@ -141,23 +147,32 @@ export const readMcpFile: {
   (scope: McpScope): (path: string) => ReturnType<typeof readMcpFileBody>;
 } & typeof readMcpFileBody = EffectFunction.dual(2, readMcpFileBody);
 
-export class MissingVariable extends Data.TaggedError("MissingVariable")<{
-  readonly variable: string;
-  readonly message: string;
-}> {
-  constructor(variable: string) {
-    super({ variable, message: `missing_env: ${variable}` });
+/** A `${NAME}` the configuration uses is not set; the message names the variable, not a value. */
+export class MissingVariable extends Schema.TaggedError<MissingVariable>()("MissingVariable", {
+  variable: Schema.String,
+}) {
+  override get message() {
+    return `missing_env: ${this.variable}`;
   }
 }
 
+const variablePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
 /** Replaces `${NAME}` with the app's environment, so secrets can stay out of the file. */
+export const expandVariablesResult = (
+  value: string,
+  env: NodeJS.ProcessEnv,
+): Result.Result<string, MissingVariable> => {
+  for (const [, name] of value.matchAll(variablePattern))
+    if (name !== undefined && env[name] === undefined)
+      return Result.fail(new MissingVariable({ variable: name }));
+  return Result.succeed(value.replace(variablePattern, (_, name: string) => env[name] ?? ""));
+};
+
+/** `expandVariablesResult` for synchronous SDK transport builders, which throw the typed error. */
 export const expandVariables: {
   (env: NodeJS.ProcessEnv): (value: string) => ReturnType<typeof expandVariablesBody>;
 } & typeof expandVariablesBody = EffectFunction.dual(2, expandVariablesBody);
 function expandVariablesBody(value: string, env: NodeJS.ProcessEnv): string {
-  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
-    const found = env[name];
-    if (found === undefined) throw new MissingVariable(name);
-    return found;
-  });
+  return Result.getOrThrow(expandVariablesResult(value, env));
 }

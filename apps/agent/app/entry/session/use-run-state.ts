@@ -3,7 +3,7 @@ import { Cause, Effect, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
 import { isApiError, type WorkflowAction, type WorkflowPhase } from "../api";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { noticeOf, type PageView } from "./run-notice";
 import { useRunStateQuery } from "../queries/session";
 import { useCancelRunMutation, useWorkflowMutation } from "../queries/mutations/session";
@@ -17,8 +17,7 @@ export const useRunState: {
   ): (sessionId: string) => ReturnType<typeof useRunStateBody>;
 } & typeof useRunStateBody = EffectFunction.dual(4, useRunStateBody);
 function useRunStateBody(sessionId: string, holder: string, generating: boolean, page: PageView) {
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Run state requires an active project");
+  const projectId = useProjectScope("run_state");
   const cancelMutation = useCancelRunMutation(projectId, sessionId, holder);
   const workflowMutation = useWorkflowMutation(projectId, sessionId, holder);
   const query = useRunStateQuery(projectId, sessionId, holder);
@@ -45,7 +44,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
           setCancelPending(!result.stopped);
           return "requested" as const;
         }),
-        Effect.catch((failure) =>
+        Effect.catchTag("UnknownError", (failure) =>
           Effect.sync(() => {
             if (isApiError(failure.cause) && failure.cause.code === "no_running_run") {
               setCancelPending(false);

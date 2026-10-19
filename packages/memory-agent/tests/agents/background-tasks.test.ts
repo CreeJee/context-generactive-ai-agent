@@ -109,11 +109,13 @@ testAgent()("background task lifecycle", (it) => {
         `${sessionId}:call`,
         "shell",
         "failing task",
-        Effect.fail(new BackgroundOperationFailed({ cause: new Error("execution failed") })),
+        Effect.fail(BackgroundOperationFailed.make({ cause: new Error("execution failed") })),
       );
       const result = yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
       expect(result).toMatchObject({ status: "failed" });
-      expect(result?.result).toContain("execution failed");
+      // The model reads the failure's tag, never the cause's text.
+      expect(result?.result).toContain("BackgroundOperationFailed");
+      expect(result?.result).not.toContain("execution failed");
       expect(
         (yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId))?.task.status,
       ).toBe("failed");

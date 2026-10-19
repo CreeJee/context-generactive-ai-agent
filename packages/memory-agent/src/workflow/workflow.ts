@@ -1,27 +1,33 @@
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import {
-  DateTime,
-  Clock,
-  Context,
-  Crypto,
-  Data,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Schema,
-} from "effect";
+import { DateTime, Clock, Context, Crypto, Effect, Layer, Option, Predicate, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { evaluateWorkflowAction, type WorkflowActionReason } from "./actions.ts";
+import { evaluateWorkflowAction, WorkflowActionReason } from "./actions.ts";
 import {
   completionEvidence,
   CompletionRequest,
   CompletionSnapshot,
   CriterionMapping,
 } from "./completion-evidence.ts";
-import { validatePlanDependencies } from "./plan-schedule.ts";
+import {
+  BoardAuthor,
+  CardStatus,
+  cardContract,
+  cardContractFields,
+  cardHoldFields,
+  StepProgressStatus,
+} from "./card.ts";
+import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
+import {
+  planBoardEdit,
+  planCardHold,
+  planCardTransition,
+  UserChange,
+  type BoardEdit,
+  type CardTransition,
+  type UserChangeRequest,
+} from "./board-edit.ts";
 import { acknowledgedRunSql, resolvedRunSql } from "./run-bindings.ts";
 
 export const WorkflowPhase = Schema.Literals([
@@ -107,14 +113,55 @@ const planStepFields = {
   ruleRefs: Schema.Array(Schema.String),
 } as const;
 
+const recordedEvidence = Schema.Array(Schema.String).pipe(
+  Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+);
+
 export const PlanStep = Schema.Struct({
   ...planStepFields,
-  status: Schema.Literals(["pending", "in_progress", "completed", "blocked"]),
-  evidence: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
-  ),
+  ...cardContractFields,
+  ...cardHoldFields,
+  status: CardStatus,
+  evidence: recordedEvidence,
 });
 export type PlanStep = typeof PlanStep.Type;
+
+// Plans saved before cards hold pending/completed; they are read, never rewritten in place.
+const PersistedPlanStep = Schema.Struct({
+  ...planStepFields,
+  ...cardContractFields,
+  ...cardHoldFields,
+  status: Schema.Union([CardStatus, StepProgressStatus]),
+  evidence: recordedEvidence,
+});
+
+/** Reads saved step statuses as cards: pending is ready, or backlog until its dependencies are done. */
+const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
+  steps: readonly S[],
+): Array<Omit<S, "status"> & { readonly status: CardStatus }> => {
+  const done = new Set(
+    steps
+      .filter((step) => step.status === "done" || step.status === "completed")
+      .map((step) => step.id),
+  );
+  const notStarted = notStartedStatus(steps, (id) => done.has(id));
+  return steps.map((step) => {
+    switch (step.status) {
+      case "pending":
+        return { ...step, status: notStarted(step) };
+      case "completed":
+        return { ...step, status: "done" as const };
+      case "backlog":
+      case "ready":
+      case "in_progress":
+      case "verify":
+      case "human_decision":
+      case "done":
+      case "blocked":
+        return { ...step, status: step.status };
+    }
+  });
+};
 
 const planFields = {
   version: Schema.Int,
@@ -152,6 +199,7 @@ const LedgerEvent = Schema.Struct({
     "workflow_stopped",
     "verification_recorded",
     "verification_invalidated",
+    "board_updated",
   ]),
   detail: Schema.String,
 });
@@ -184,17 +232,21 @@ export const StartNewGoal = Schema.Struct({
 });
 export type StartNewGoal = typeof StartNewGoal.Type;
 
-export class NewGoalTransitionRefused extends Data.TaggedError("NewGoalTransitionRefused")<{
-  readonly reason:
-    | "disabled"
-    | "phase_not_authorized"
-    | "goal_missing"
-    | "workflow_changed"
-    | "run_outcome_uncertain"
-    | "transition_pending"
-    | "owner_effect_uncertain"
-    | "execution_outstanding";
-}> {}
+export class NewGoalTransitionRefused extends Schema.TaggedError<NewGoalTransitionRefused>()(
+  "NewGoalTransitionRefused",
+  {
+    reason: Schema.Literals([
+      "disabled",
+      "phase_not_authorized",
+      "goal_missing",
+      "workflow_changed",
+      "run_outcome_uncertain",
+      "transition_pending",
+      "owner_effect_uncertain",
+      "execution_outstanding",
+    ]),
+  },
+) {}
 
 export const UpdatePlan = Schema.Struct({
   summary: Schema.String,
@@ -207,7 +259,7 @@ export type UpdatePlan = typeof UpdatePlan.Type;
 
 const StepProgress = Schema.Struct({
   id: Schema.String,
-  status: Schema.Literals(["pending", "in_progress", "completed", "blocked"]),
+  status: StepProgressStatus,
   evidence: Schema.Array(Schema.String).pipe(
     Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
   ),
@@ -253,6 +305,7 @@ const PersistedGoalArtifact = Schema.Struct({
 });
 const PersistedPlanArtifact = Schema.Struct({
   ...planFields,
+  steps: Schema.Array(PersistedPlanStep),
   status: Schema.Literals(["draft", "ready", "approved", "executing", "completed", "blocked"]),
 });
 const PersistedWorkflowState = Schema.Struct({
@@ -261,7 +314,7 @@ const PersistedWorkflowState = Schema.Struct({
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
 });
-const decodeState = (json: string) =>
+export const decodeWorkflowState = (json: string) =>
   Schema.decodeEffect(Schema.fromJsonString(PersistedWorkflowState))(json).pipe(
     Effect.map((state): WorkflowState => ({
       ...state,
@@ -280,11 +333,14 @@ const decodeState = (json: string) =>
           ? null
           : {
               ...state.plan,
+              steps: cardStatuses(state.plan.steps),
               status: state.plan.status === "approved" ? "executing" : state.plan.status,
             },
     })),
   );
 const encodeState = Schema.encodeEffect(Schema.fromJsonString(WorkflowState));
+const encodeAuthor = Schema.encodeEffect(Schema.fromJsonString(BoardAuthor));
+const encodeChange = Schema.encodeEffect(Schema.fromJsonString(UserChange));
 
 /** The workflow store could not be read or written; the cause stays with the error. */
 export class WorkflowStorageError extends Schema.TaggedError<WorkflowStorageError>()(
@@ -302,26 +358,33 @@ const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(StartNewGoal));
 const decodeRequest = Schema.decodeEffect(Schema.fromJsonString(StartNewGoal));
 const sameSnapshot = Schema.toEquivalence(CompletionSnapshot);
 
-export class WorkflowTransitionRefused extends Data.TaggedError("WorkflowTransitionRefused")<{
-  readonly reason: WorkflowActionReason;
-}> {}
+export class WorkflowTransitionRefused extends Schema.TaggedError<WorkflowTransitionRefused>()(
+  "WorkflowTransitionRefused",
+  { reason: WorkflowActionReason },
+) {}
 
-export class WorkflowProgressRefused extends Data.TaggedError("WorkflowProgressRefused")<{
-  readonly reason:
-    | WorkflowActionReason
-    | "plan_missing"
-    | "unknown_step"
-    | "step_evidence_required"
-    | "verification_required"
-    | "steps_incomplete"
-    | "phase_not_executable"
-    | "completion_evidence_required"
-    | "completion_evidence_invalid"
-    | "completion_snapshot_conflict";
-}> {}
+export class WorkflowProgressRefused extends Schema.TaggedError<WorkflowProgressRefused>()(
+  "WorkflowProgressRefused",
+  {
+    reason: Schema.Union([
+      WorkflowActionReason,
+      Schema.Literals([
+        "plan_missing",
+        "unknown_step",
+        "step_evidence_required",
+        "verification_required",
+        "steps_incomplete",
+        "phase_not_executable",
+        "completion_evidence_required",
+        "completion_evidence_invalid",
+        "completion_snapshot_conflict",
+      ]),
+    ]),
+  },
+) {}
 
 const implementationComplete = (plan: PlanArtifact) =>
-  plan.steps.every((step) => step.status === "completed" && step.evidence.length > 0);
+  plan.steps.every((step) => step.status === "done" && step.evidence.length > 0);
 
 /** Source-state authorization is distinct from the run/owner-effect quiescence checks. */
 function newGoalTransitionSource(
@@ -460,35 +523,49 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeed(emptyState()),
-            onSome: (row) => decodeState(row.state_json),
+            onSome: (row) => decodeWorkflowState(row.state_json),
           }),
         ),
       );
-    const save = Effect.fnUntraced(function* (sessionId: string, state: WorkflowState) {
+    /** Board changes name their author; phase, Goal and lifecycle saves record none. */
+    const save = Effect.fnUntraced(function* (
+      sessionId: string,
+      state: WorkflowState,
+      author?: BoardAuthor,
+    ) {
       const now = nowIso();
       const json = yield* encodeState(state);
+      const authorJson = author === undefined ? null : yield* encodeAuthor(author);
       yield* sql`INSERT INTO session_workflows (session_id, state_json, updated_at)
         VALUES (${sessionId}, ${json}, ${now})
         ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`;
       yield* sql`INSERT INTO workflow_state_revisions
-        (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
+        (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id,
+         author_json)
         VALUES (${sessionId}, ${json}, ${state.goal?.version ?? null}, ${state.plan?.version ?? null},
           'recorded', ${now},
-          (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}))`;
+          (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
+          ${authorJson})`;
       return state;
     });
     const change = <E>(
       sessionId: string,
       update: (current: WorkflowState) => Effect.Effect<WorkflowState, E>,
+      author?: BoardAuthor,
     ) =>
       locked(
         sessionId,
         Effect.gen(function* () {
           const current = yield* get(sessionId);
           const next = yield* update(current);
-          return next === current ? current : yield* save(sessionId, next);
+          return next === current ? current : yield* save(sessionId, next, author);
         }),
       );
+    /** Whether the session's current Goal runs as an active kanban board. */
+    const kanbanBoard = (sessionId: string) =>
+      exists(sql`SELECT 1 AS active FROM kanban_goals k JOIN workflow_goal_identities g
+        ON g.goal_instance_id = k.goal_instance_id
+        WHERE g.session_id = ${sessionId} AND k.status = 'active'`);
     const event = (
       state: WorkflowState,
       kind: (typeof LedgerEvent.Type)["kind"],
@@ -501,7 +578,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     });
 
     const refuseNewGoal = (reason: NewGoalTransitionRefused["reason"]) =>
-      Effect.fail(new NewGoalTransitionRefused({ reason }));
+      Effect.fail(NewGoalTransitionRefused.make({ reason }));
     // Used both at tool admission and again at the completed-run owner boundary.
     // Only admission may exclude its own (still running) run; application excludes none.
     const checkNewGoal = Effect.fnUntraced(function* (
@@ -619,7 +696,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const decision = evaluateWorkflowAction(current, { kind: "phase", phase });
             if (!decision.allowed)
-              return yield* new WorkflowTransitionRefused({ reason: decision.reason });
+              return yield* WorkflowTransitionRefused.make({ reason: decision.reason });
             const now = nowIso();
             const goal =
               phase === "execute" && current.goal?.status === "draft"
@@ -647,10 +724,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const decision = evaluateWorkflowAction(current, { kind: "control", action });
             if (!decision.allowed)
-              return yield* new WorkflowProgressRefused({ reason: decision.reason });
+              return yield* WorkflowProgressRefused.make({ reason: decision.reason });
             // An allowed control always has a goal; keep narrowing local to the mutation.
             if (current.goal === null)
-              return yield* new WorkflowProgressRefused({ reason: "goal_missing" });
+              return yield* WorkflowProgressRefused.make({ reason: "goal_missing" });
             const currentGoal = current.goal;
             const now = nowIso();
             const goalStatus =
@@ -699,9 +776,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 current.plan !== null &&
                 current.plan.status === "executing" &&
                 current.plan.verification.status !== "failed" &&
-                current.plan.steps.every(
-                  (step) => step.status === "completed" && step.evidence.length > 0,
-                );
+                implementationComplete(current.plan);
               if (!readyToVerify) return current;
               const next = { ...current, phase: "verify" as const };
               return {
@@ -750,7 +825,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                       ],
               };
             }
-            const verified = current.plan.steps.every((step) => step.status === "completed");
+            const verified = current.plan.steps.every((step) => step.status === "done");
             if (!verified) return current;
             const request = current.goal?.completionRequest;
             let snapshot = current.goal?.completion;
@@ -909,8 +984,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
               ),
             };
+            // A kanban board keeps executing: its orchestrator classifies each card against the new
+            // Goal instead (docs/kanban-orchestration.md "식별자와 Goal 변경").
             const phase =
-              current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
+              (current.phase === "execute" || current.phase === "verify") &&
+              !(yield* kanbanBoard(sessionId))
+                ? "plan"
+                : current.phase;
             const revised = {
               ...current,
               phase,
@@ -932,67 +1012,86 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           }),
         ),
 
-      updatePlan: (sessionId: string, input: UpdatePlan) =>
+      updatePlan: (sessionId: string, input: UpdatePlan, author?: BoardAuthor) =>
         validatePlanDependencies(input.steps).pipe(
           Effect.andThen(() =>
-            change(sessionId, (current) =>
-              Effect.sync(() => {
-                const plan: PlanArtifact = {
-                  ...input,
-                  steps: input.steps.map((step) => ({
-                    ...step,
-                    status: "pending" as const,
+            change(
+              sessionId,
+              (current) =>
+                Effect.sync(() => {
+                  const previous = new Map(
+                    current.plan?.steps.map((step) => [step.id, step]) ?? [],
+                  );
+                  const plan: PlanArtifact = {
+                    ...input,
+                    steps: cardStatuses(
+                      input.steps.map((step) => {
+                        const replanned = { ...step, status: "pending" as const, evidence: [] };
+                        const prior = previous.get(step.id);
+                        if (prior === undefined) return replanned;
+                        const held = prior.hold === undefined ? {} : { hold: prior.hold };
+                        return { ...cardContract(prior), ...held, ...replanned };
+                      }),
+                    ),
                     evidence: [],
-                  })),
-                  evidence: [],
-                  verification: verificationDefault(),
-                  version: (current.plan?.version ?? 0) + 1,
-                  goalVersion: current.goal?.version ?? 0,
-                  updatedAt: nowIso(),
-                };
-                const kind = current.plan === null ? "plan_updated" : "plan_replanned";
-                const phase =
-                  current.phase === "execute" || current.phase === "verify"
-                    ? "plan"
-                    : current.phase;
-                const planned = {
-                  ...current,
-                  phase,
-                  plan,
-                  ledger: [
-                    ...current.ledger,
-                    event(current, kind, `plan v${plan.version} (${plan.status})`),
-                  ],
-                };
-                return phase === current.phase
-                  ? planned
-                  : {
-                      ...planned,
-                      ledger: [
-                        ...planned.ledger,
-                        event(planned, "phase_changed", `${current.phase} -> plan (plan revised)`),
-                      ],
-                    };
-              }),
+                    verification: verificationDefault(),
+                    version: (current.plan?.version ?? 0) + 1,
+                    goalVersion: current.goal?.version ?? 0,
+                    updatedAt: nowIso(),
+                  };
+                  const kind = current.plan === null ? "plan_updated" : "plan_replanned";
+                  const phase =
+                    current.phase === "execute" || current.phase === "verify"
+                      ? "plan"
+                      : current.phase;
+                  const planned = {
+                    ...current,
+                    phase,
+                    plan,
+                    ledger: [
+                      ...current.ledger,
+                      event(current, kind, `plan v${plan.version} (${plan.status})`),
+                    ],
+                  };
+                  return phase === current.phase
+                    ? planned
+                    : {
+                        ...planned,
+                        ledger: [
+                          ...planned.ledger,
+                          event(
+                            planned,
+                            "phase_changed",
+                            `${current.phase} -> plan (plan revised)`,
+                          ),
+                        ],
+                      };
+                }),
+              author,
             ),
           ),
         ),
 
-      updateProgress: (sessionId: string, input: UpdateWorkflowProgress, recorderRunId = "") =>
+      updateProgress: (
+        sessionId: string,
+        input: UpdateWorkflowProgress,
+        recorderRunId = "",
+        author?: BoardAuthor,
+      ) =>
         locked(
           sessionId,
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             if (input.goalStatus !== undefined && current.goal === null)
-              return yield* new WorkflowProgressRefused({ reason: "goal_missing" });
+              return yield* WorkflowProgressRefused.make({ reason: "goal_missing" });
             if ((input.planStatus !== undefined || input.steps.length > 0) && current.plan === null)
-              return yield* new WorkflowProgressRefused({ reason: "plan_missing" });
+              return yield* WorkflowProgressRefused.make({ reason: "plan_missing" });
             if (
               input.steps.some(
                 (update) => !isTruthy(current.plan?.steps.some((step) => step.id === update.id)),
               )
             )
-              return yield* new WorkflowProgressRefused({ reason: "unknown_step" });
+              return yield* WorkflowProgressRefused.make({ reason: "unknown_step" });
             if (
               current.phase === "plan" &&
               (input.planStatus !== undefined ||
@@ -1000,9 +1099,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 input.planEvidence.length > 0 ||
                 input.verification !== undefined)
             )
-              return yield* new WorkflowProgressRefused({ reason: "phase_not_executable" });
+              return yield* WorkflowProgressRefused.make({ reason: "phase_not_executable" });
 
-            const steps =
+            // Progress names a step in the model's vocabulary; an untouched card keeps its column.
+            const steps = cardStatuses(
               current.plan?.steps.map((step) => {
                 const update = input.steps.find((candidate) => candidate.id === step.id);
                 if (!isTruthy(update)) return step;
@@ -1011,9 +1111,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   status: update.status,
                   evidence: [...step.evidence, ...update.evidence],
                 };
-              }) ?? [];
-            if (steps.some((step) => step.status === "completed" && step.evidence.length === 0))
-              return yield* new WorkflowProgressRefused({ reason: "step_evidence_required" });
+              }) ?? [],
+            );
+            if (steps.some((step) => step.status === "done" && step.evidence.length === 0))
+              return yield* WorkflowProgressRefused.make({ reason: "step_evidence_required" });
 
             const verification = isTruthy(input.verification)
               ? {
@@ -1027,18 +1128,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               input.goalStatus === "completed" &&
               (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
             )
-              return yield* new WorkflowProgressRefused({ reason: "verification_required" });
+              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
             const planVerification = verification ?? current.plan?.verification;
             if (
               input.planStatus === "completed" &&
               (planVerification?.status !== "passed" || planVerification.evidence.length === 0)
             )
-              return yield* new WorkflowProgressRefused({ reason: "verification_required" });
-            if (
-              input.planStatus === "completed" &&
-              steps.some((step) => step.status !== "completed")
-            )
-              return yield* new WorkflowProgressRefused({ reason: "steps_incomplete" });
+              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
+            if (input.planStatus === "completed" && steps.some((step) => step.status !== "done"))
+              return yield* WorkflowProgressRefused.make({ reason: "steps_incomplete" });
 
             let snapshot = current.goal?.completion;
             let completionRequest = current.goal?.completionRequest;
@@ -1056,15 +1154,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 stageCompletion,
               );
               if (derived.status === "refused")
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_invalid",
                 });
               if (isTruthy(snapshot) && !sameSnapshot(snapshot, derived.snapshot))
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_snapshot_conflict",
                 });
               if (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
-                return yield* new WorkflowProgressRefused({ reason: "verification_required" });
+                return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
               if (stageCompletion) {
                 completionRequest = {
                   recorderRunId,
@@ -1080,7 +1178,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               !stageCompletion
             ) {
               if (!isTruthy(snapshot))
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_required",
                 });
               const checked = yield* completion.derive(
@@ -1093,7 +1191,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 recorderRunId,
               );
               if (checked.status === "refused" || !sameSnapshot(checked.snapshot, snapshot))
-                return yield* new WorkflowProgressRefused({
+                return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_invalid",
                 });
             }
@@ -1151,10 +1249,97 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                         ? "verification_invalidated"
                         : "verification_recorded";
             const next: WorkflowState = { ...current, goal, plan };
-            return yield* save(sessionId, {
-              ...next,
-              ledger: [...next.ledger, event(current, kind, input.detail)],
-            });
+            return yield* save(
+              sessionId,
+              { ...next, ledger: [...next.ledger, event(current, kind, input.detail)] },
+              author,
+            );
+          }),
+        ),
+
+      /**
+       * Saves a board change with its author. A user's change to an executing card is stored as a
+       * pending request for the orchestrator and leaves the card as it is.
+       */
+      editBoard: (sessionId: string, edit: BoardEdit, author: BoardAuthor) =>
+        locked(
+          sessionId,
+          Effect.gen(function* () {
+            const current = yield* get(sessionId);
+            const cardId = `card-${(yield* crypto.randomUUIDv4()).slice(0, 8)}`;
+            const planned = yield* planBoardEdit(current.plan, edit, author, cardId);
+            const now = nowIso();
+            switch (planned._tag) {
+              case "Apply": {
+                const next: WorkflowState = {
+                  ...current,
+                  plan: { ...planned.plan, updatedAt: now },
+                  ledger: [...current.ledger, event(current, "board_updated", planned.detail)],
+                };
+                return { _tag: "Applied" as const, state: yield* save(sessionId, next, author) };
+              }
+              case "Request": {
+                const changeJson = yield* encodeChange(planned.change);
+                const inserted = yield* sql<{
+                  readonly id: number;
+                }>`INSERT INTO board_change_requests
+                  (session_id, goal_instance_id, card_id, plan_version, change_json, status, created_at)
+                  VALUES (${sessionId},
+                    (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
+                    ${planned.cardId}, ${edit.planVersion}, ${changeJson}, 'pending', ${now})
+                  RETURNING id`;
+                const request: UserChangeRequest = {
+                  id: Number(inserted[0]?.id),
+                  cardId: planned.cardId,
+                  planVersion: edit.planVersion,
+                  change: planned.change,
+                  status: "pending",
+                  reason: null,
+                  createdAt: now,
+                };
+                return { _tag: "Requested" as const, request };
+              }
+            }
+          }),
+        ),
+
+      /** Puts a card not started yet on hold, or releases it; recorded with its author. */
+      holdCard: (
+        sessionId: string,
+        change: { readonly cardId: string; readonly hold: boolean },
+        author: BoardAuthor,
+      ) =>
+        locked(
+          sessionId,
+          Effect.gen(function* () {
+            const current = yield* get(sessionId);
+            const now = nowIso();
+            const planned = yield* planCardHold(current.plan, change, author, now);
+            const next: WorkflowState = {
+              ...current,
+              plan: { ...planned.plan, updatedAt: now },
+              ledger: [...current.ledger, event(current, "board_updated", planned.detail)],
+            };
+            return yield* save(sessionId, next, author);
+          }),
+        ),
+
+      /**
+       * Moves a card's status with its author. Refused when the card is no longer in `from`, so
+       * two authors racing for the same card cannot both win.
+       */
+      transitionCard: (sessionId: string, transition: CardTransition, author: BoardAuthor) =>
+        locked(
+          sessionId,
+          Effect.gen(function* () {
+            const current = yield* get(sessionId);
+            const planned = yield* planCardTransition(current.plan, transition);
+            const next: WorkflowState = {
+              ...current,
+              plan: { ...planned.plan, updatedAt: nowIso() },
+              ledger: [...current.ledger, event(current, "board_updated", planned.detail)],
+            };
+            return yield* save(sessionId, next, author);
           }),
         ),
     };

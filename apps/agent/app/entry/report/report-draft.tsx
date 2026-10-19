@@ -1,4 +1,5 @@
-import { isTruthy } from "../../truthy.ts";
+import { runHasFailure, runPlace, type ReportBundle } from "memory-agent/definitions";
+import { bundleGaps } from "./report-bundle";
 import { diagnosisFailureText, type DiagnosisText } from "./report-diagnosis";
 export interface ReportFields {
   symptom: string;
@@ -6,56 +7,102 @@ export interface ReportFields {
   actual: string;
 }
 
+/** The evidence a draft describes: none was asked for (no session), it failed, or the bundle. */
+export type DraftEvidence =
+  | { readonly status: "none" }
+  | { readonly status: "failed" }
+  | { readonly status: "collected"; readonly bundle: ReportBundle };
+
+const recentFailures = 5;
+
+/** A few lines on the bundle for the draft itself; the bundle travels whole as an attachment. */
+function evidenceLines(evidence: DraftEvidence): string[] {
+  switch (evidence.status) {
+    case "none":
+      return ["첨부된 증거 없음. 위 설명만으로 제보합니다."];
+    case "failed":
+      return ["증거 묶음을 수집하지 못했습니다. 위 설명만으로 제보합니다."];
+    case "collected": {
+      const { bundle } = evidence;
+      const { environment } = bundle;
+      const failing = bundle.timeline.items.filter(runHasFailure).slice(-recentFailures);
+      return [
+        `전체 내용: 첨부 context-agent-evidence.json (세션 #${bundle.session.ref}, run ${bundle.timeline.items.length}/${bundle.session.runCount}개)`,
+        `환경: ${environment.release} · ${environment.platform} · ${environment.runtime} · 모델 ${environment.provider ?? "?"}/${environment.model ?? "?"}`,
+        ...failing.map((run) => {
+          const calls = run.events.flatMap((event) =>
+            event._tag === "ToolCall" && event.result?.ok === false
+              ? [`${runPlace(run)}/call-${event.seq} ${event.name ?? "?"}`]
+              : [],
+          );
+          return `- ${runPlace(run)} ${run.status}${run.error === null ? "" : ` (오류 ${run.error.code ?? "코드 없음"})`}${calls.length > 0 ? `; 실패한 도구 ${calls.join(", ")}` : ""}`;
+        }),
+        ...bundle.defects.items
+          .slice(0, recentFailures)
+          .map((defect) => `- 결함 ${defect.tag} @ ${defect.location} ×${defect.count}`),
+        ...bundleGaps(bundle).map((gap) => `- ${gap}`),
+      ];
+    }
+  }
+}
+
 export function reportText({
   fields,
   createdAt,
-  evidence = [],
-  unavailable = [],
-  origin,
+  evidence = { status: "none" },
   diagnosis = { status: "none" },
 }: {
   readonly fields: ReportFields;
   readonly createdAt: string;
-  readonly evidence?: readonly { label: string; source: string; text: string }[];
-  readonly unavailable?: readonly string[];
-  readonly origin?: { projectId: string; sessionId: string };
+  readonly evidence?: DraftEvidence;
   readonly diagnosis?: DiagnosisText;
 }): string {
   return [
     "# Context Agent 문제 제보",
     `작성 시각: ${createdAt}`,
-    ...(origin !== undefined
-      ? [`증거 출처: 프로젝트 ${origin.projectId} / 원본 세션 ${origin.sessionId}`]
-      : []),
     "",
     "## 사용자 설명 (AI 진단 아님)",
     `증상: ${fields.symptom.trim() || "(작성하지 않음)"}`,
     `기대한 동작: ${fields.expected.trim() || "(작성하지 않음)"}`,
     `실제 동작: ${fields.actual.trim() || "(작성하지 않음)"}`,
     "",
-    "## 관측된 증거 (선택한 항목만)",
-    isTruthy(evidence.length)
-      ? evidence.map((item) => `[${item.label} | ${item.source}]\n${item.text}`).join("\n\n")
-      : "첨부된 증거 없음. 아래 설명만으로 제보할 수 있습니다.",
-    ...(isTruthy(unavailable.length) ? ["", "## 수집하지 못한 정보", ...unavailable] : []),
-    "",
     ...diagnosisLines(diagnosis),
+    "",
+    "## 증거 묶음 요약",
+    ...evidenceLines(evidence),
   ].join("\n");
+}
+
+/**
+ * Text for copying or saving: the draft followed by the whole bundle, so a pasted report carries
+ * the same evidence the webhook attaches.
+ */
+export function shareableText(text: string, evidence: DraftEvidence): string {
+  switch (evidence.status) {
+    case "none":
+    case "failed":
+      return text;
+    case "collected":
+      return `${text}\n\n## 증거 묶음 (context-agent-evidence.json)\n${JSON.stringify(evidence.bundle, null, 2)}\n`;
+  }
 }
 
 /** Model output stays apart from the user's text and evidence, with guesses labelled as such. */
 function diagnosisLines(diagnosis: DiagnosisText): string[] {
   switch (diagnosis.status) {
     case "none":
-      return ["AI 진단: 수행하지 않음 (위 증거는 AI의 추정이 아닙니다.)"];
+      return ["AI 진단: 수행하지 않음"];
     case "failed":
       return [
-        `AI 진단: 실패 (${diagnosisFailureText[diagnosis.reason]}). 위 내용은 사용자 설명과 선택한 증거뿐입니다.`,
+        `AI 진단: 실패 (${diagnosisFailureText[diagnosis.reason]}). 이 제보는 사용자 설명과 증거 묶음뿐입니다.`,
       ];
     case "included": {
-      const { observations, hypotheses } = diagnosis.diagnosis;
+      const { summary, observations, hypotheses } = diagnosis.diagnosis;
       return [
-        "## AI 진단: 관측 (선택한 증거에서 확인, 사용자가 검토함)",
+        "## AI 진단 요약 (사용자가 검토함)",
+        summary.trim() || "- 없음",
+        "",
+        "## AI 진단: 관측 (증거 묶음에서 확인)",
         ...(observations.length > 0
           ? observations.map((item) => `- ${item.text} (근거: ${item.evidenceIds.join(", ")})`)
           : ["- 없음"]),

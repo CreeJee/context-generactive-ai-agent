@@ -61,14 +61,19 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
       }),
     ),
     Effect.onExit(() => close),
-    Effect.ignore,
+    // The worker closing its input ends the gateway; a bad frame ends it too, and every waiter
+    // gets GatewayClosed from `close`.
+    Effect.catchTags({
+      GatewayClosed: () => Effect.void,
+      SchemaError: () => Effect.logWarning("rrsi_gateway_frame_invalid"),
+    }),
     Effect.forkScoped({ uninterruptible: false, startImmediately: true }),
   );
   const request = Effect.fn("Rrsi.workerRequest")(function* (
     kind: GatewayRequest["kind"],
     body: string,
   ) {
-    const id = yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie);
+    const id = yield* oauthProtocolCrypto.randomUUIDv4();
     const reply = yield* Deferred.make<string, GatewayClosed>();
     return yield* Effect.gen(function* () {
       yield* Ref.update(pending, (requests) => HashMap.set(requests, id, reply));

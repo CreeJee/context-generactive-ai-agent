@@ -54,6 +54,14 @@ export type CrossProviderMediaConsentSettings = typeof CrossProviderMediaConsent
  */
 export const SummaryStartPercent = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 50 }));
 
+/** The most kanban cards the user may let run at once. */
+export const kanbanConcurrencyLimit = 32;
+
+/** Kanban cards run at once across every Goal. Machines differ, so the user picks it. */
+export const KanbanConcurrency = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: kanbanConcurrencyLimit }),
+);
+
 /** User-wide settings. Secrets never go here; they belong in the OS keychain. */
 export const Settings = Schema.Struct({
   /** The single endpoint of releases before compatible accounts; read via `compatibleAccountsOf`. */
@@ -84,10 +92,14 @@ export const Settings = Schema.Struct({
   gpuCheck: Schema.optional(GpuCheck),
   /** `defaultSummaryStartPercent` when unset. */
   summaryStartPercent: Schema.optional(SummaryStartPercent),
+  /** Half the CPU cores (1 to 4) when unset; read via `KanbanSettings`. */
+  kanbanConcurrency: Schema.optional(KanbanConcurrency),
   /** Also search other projects' memory (those not excluded). Off when unset. */
   crossProjectRecall: Schema.optional(Schema.Boolean),
   /** Send matching memory to an external agent in a direct conversation. Off when unset. */
   externalAgentMemory: Schema.optional(Schema.Boolean),
+  /** Send defects to the developer's Discord webhook when one is set. On when unset. */
+  defectReports: Schema.optional(Schema.Boolean),
 });
 export type Settings = typeof Settings.Type;
 

@@ -18,7 +18,6 @@ import {
   DateTime,
   Clock,
   Context,
-  Data,
   Effect,
   FiberMap,
   FileSystem,
@@ -31,7 +30,14 @@ import {
   Schema,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { expandVariables } from "../mcp/config.ts";
+import { isPlatformError } from "effect/PlatformError";
+import { MissingVariable, expandVariablesResult } from "../mcp/config.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import type {
+  ConfigFileFailureCode,
+  ExternalAgentFailureCode,
+  ShownFailure,
+} from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import {
   AgentScope,
@@ -44,10 +50,20 @@ import {
 /** After this many failed connection attempts in a row, reconnecting waits for the user (R17). */
 export const maxConsecutiveFailures = 2;
 
-export class ExternalAgentOperationFailed extends Data.TaggedError("ExternalAgentOperationFailed")<{
-  readonly operation: "reconnect";
-  readonly cause: unknown;
-}> {}
+export class ExternalAgentOperationFailed extends Schema.TaggedError<ExternalAgentOperationFailed>()(
+  "ExternalAgentOperationFailed",
+  { operation: Schema.Literal("reconnect"), cause: Schema.Defect() },
+) {}
+
+/** The agent process started but did not answer `initialize` in time. */
+export class ExternalAgentInitializeTimedOut extends Schema.TaggedError<ExternalAgentInitializeTimedOut>()(
+  "ExternalAgentInitializeTimedOut",
+  {},
+) {
+  override get message() {
+    return "initialize timed out";
+  }
+}
 const connectTimeoutMs = 30_000;
 const retryDelayMs = 100;
 
@@ -57,9 +73,17 @@ export type AgentLinkState =
   | { readonly status: "connecting"; readonly failures: number }
   | { readonly status: "connected"; readonly agent: string | null; readonly loadSession: boolean }
   /** The last attempt failed; the next use (or the automatic reconnect) tries again. */
-  | { readonly status: "retrying"; readonly failures: number; readonly error: string }
+  | {
+      readonly status: "retrying";
+      readonly failures: number;
+      readonly failure: ShownFailure<ExternalAgentFailureCode>;
+    }
   /** Gave up after consecutive failures; only a manual reconnect tries again. */
-  | { readonly status: "stopped"; readonly failures: number; readonly error: string };
+  | {
+      readonly status: "stopped";
+      readonly failures: number;
+      readonly failure: ShownFailure<ExternalAgentFailureCode>;
+    };
 
 export type AgentTrustState =
   | { readonly status: "untrusted" }
@@ -69,14 +93,19 @@ export type AgentTrustState =
 export interface ExternalAgentView {
   readonly scope: AgentScope;
   readonly name: string;
-  readonly target: string;
+  /** `command args…` as configured, with secrets hidden; `null` when they could not be checked. */
+  readonly target: string | null;
   readonly envNames: readonly string[];
   readonly shadowed: boolean;
   readonly state: AgentTrustState;
 }
 
 export interface ExternalAgentsOverview {
-  readonly files: ReadonlyArray<{ scope: AgentScope; path: string; error: string | null }>;
+  readonly files: ReadonlyArray<{
+    scope: AgentScope;
+    path: string;
+    error: ShownFailure<ConfigFileFailureCode> | null;
+  }>;
   readonly agents: readonly ExternalAgentView[];
 }
 
@@ -103,11 +132,11 @@ export type ExternalPromptOutcome =
   /** The agent answered the prompt with an error; the connection is still up. */
   | {
       readonly status: "failed";
-      readonly error: string;
+      readonly failure: ShownFailure<ExternalAgentFailureCode>;
       readonly answer: string;
       readonly toolCalls: readonly ReportedToolCall[];
     }
-  | { readonly status: "unavailable"; readonly reason: string };
+  | { readonly status: "unavailable"; readonly failure: ShownFailure<ExternalAgentFailureCode> };
 
 export interface PromptHooks {
   readonly signal: AbortSignal;
@@ -150,17 +179,38 @@ const TrustRow = Schema.Struct({
 const DataMessage = Schema.Struct({ message: Schema.String });
 const decodeDataMessage = Schema.decodeUnknownOption(DataMessage);
 
-/** The message to show; an agent's JSON-RPC error often puts the real reason in `data.message`. */
-const failureText = (error: Error) => {
-  const detail =
-    error instanceof acp.RequestError
-      ? Option.match(decodeDataMessage(error.data), {
-          onNone: () => "",
-          onSome: (data) => `: ${data.message}`,
-        })
-      : "";
-  return `${error.message}${detail}`.slice(0, 500);
-};
+/** The agent's own text; its JSON-RPC error often puts the real reason in `data.message`. */
+const failureText = (error: acp.RequestError) =>
+  Option.match(decodeDataMessage(error.data), {
+    onNone: () => error.message,
+    onSome: (data) => `${error.message}: ${data.message}`,
+  });
+
+/** What a rejected request or attempt said. */
+const rejectionText = (error: Error) =>
+  error instanceof acp.RequestError ? failureText(error) : error.message;
+
+/** Promise rejections can be any value; what the agent did not throw as an error has no class. */
+const rejectionError = (rejection: Cause.UnknownError) =>
+  rejection.cause instanceof Error ? rejection.cause : new Error(String(rejection.cause));
+
+const isMissingVariable = Schema.is(MissingVariable);
+const isInitializeTimedOut = Schema.is(ExternalAgentInitializeTimedOut);
+
+/**
+ * Why a connection attempt failed, from what it rejected with. `detail` is not redacted yet: the
+ * owner hides secrets before anyone sees it.
+ */
+const connectFailure = (error: Error): ShownFailure<ExternalAgentFailureCode> =>
+  isMissingVariable(error)
+    ? { code: "missing_env", detail: error.variable }
+    : isInitializeTimedOut(error)
+      ? { code: "initialize_timed_out", detail: null }
+      : isPlatformError(error)
+        ? { code: "spawn_failed", detail: error.message }
+        : error instanceof acp.RequestError
+          ? { code: "agent_error", detail: failureText(error) }
+          : { code: "connection_failed", detail: rejectionText(error) };
 
 /** The option that allows exactly this once, or rejects; a standing "always" is never chosen. */
 function permissionAnswer(
@@ -198,8 +248,12 @@ export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation
       for (const directory of directories) {
         for (const extension of extensions) {
           const candidate = path.resolve(cwd, directory, `${name}${extension}`);
-          const info = yield* fs.stat(candidate).pipe(Effect.option);
-          if (Option.isSome(info) && info.value.type === "File") return candidate;
+          // A candidate that cannot be inspected is not a launcher.
+          const isFile = yield* fs.stat(candidate).pipe(
+            Effect.map((info) => info.type === "File"),
+            Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+          );
+          if (isFile) return candidate;
         }
       }
       return undefined;
@@ -208,7 +262,8 @@ export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation
     if (executable !== undefined && !/\.(com|exe)$/i.test(executable)) {
       const firstLine = yield* fs.readFileString(executable).pipe(
         Effect.map((text) => text.split(/\r?\n/, 1)[0] ?? ""),
-        Effect.orElseSucceed(() => ""),
+        // An unreadable launcher has no shebang to follow.
+        Effect.catchTag("PlatformError", () => Effect.succeed("")),
       );
       if (firstLine.startsWith("#!")) {
         const [interpreterPath, ...flags] = firstLine.slice(2).trim().split(/\s+/);
@@ -253,6 +308,7 @@ const make = Effect.gen(function* () {
 
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
+  const redactor = yield* SecretRedactor;
   const links = MutableHashMap.empty<string, Link>();
   const retries = yield* FiberMap.make<string, void, never>();
   const context = yield* Effect.context<never>();
@@ -297,14 +353,18 @@ const make = Effect.gen(function* () {
       retire(link);
       MutableHashMap.remove(links, key);
     }
-    return {
-      files: [global, local].map((file, index) => ({
-        scope: index === 0 ? ("global" as const) : ("project" as const),
-        path: file.path,
-        error: file.error,
-      })),
-      agents,
-    };
+    const files = yield* Effect.forEach([global, local], (file, index) =>
+      // A decode error can quote the file, environment values included.
+      Effect.map(
+        file.error === null ? Effect.succeed(null) : redactor.hideDetail(file.error),
+        (error) => ({
+          scope: index === 0 ? ("global" as const) : ("project" as const),
+          path: file.path,
+          error,
+        }),
+      ),
+    );
+    return { files, agents };
   });
 
   const shutdown = (link: Link) => {
@@ -324,20 +384,21 @@ const make = Effect.gen(function* () {
   const startProcess = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> =>
     runNativeEffect(
       Effect.gen(function* () {
+        const expand = (value: string) =>
+          Effect.fromResult(expandVariablesResult(value, process.env));
         const env = {
           // The agent logs in its own official way; the app's ChatGPT and Kagi secrets are not passed.
           ...getDefaultEnvironment(),
           ...Object.fromEntries(
-            Object.entries(agent.command.env).map(([name, value]) => [
-              name,
-              expandVariables(value, process.env),
-            ]),
+            yield* Effect.forEach(Object.entries(agent.command.env), ([name, value]) =>
+              Effect.map(expand(value), (expanded) => [name, expanded] as const),
+            ),
           ),
         };
         const owner = yield* Scope.fork(serviceScope, "parallel");
         const { command, args, shell } = yield* agentCommandInvocation({
-          command: expandVariables(agent.command.command, process.env),
-          args: agent.command.args.map((arg) => expandVariables(arg, process.env)),
+          command: yield* expand(agent.command.command),
+          args: yield* Effect.forEach(agent.command.args, expand),
           cwd: project.root,
           env,
         }).pipe(
@@ -405,7 +466,7 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.timeoutOrElse({
               duration: connectTimeoutMs,
-              orElse: () => Effect.fail(new Cause.UnknownError(new Error("initialize timed out"))),
+              orElse: () => Effect.fail(new ExternalAgentInitializeTimedOut()),
             }),
           );
           const live: Live = {
@@ -418,7 +479,8 @@ const make = Effect.gen(function* () {
           };
           yield* child.exitCode.pipe(
             Effect.onExit(() => Effect.sync(() => onLost(project, agent, link, live))),
-            Effect.ignore,
+            // Any end of the process is the lost connection handled above.
+            Effect.catchTag("PlatformError", () => Effect.void),
             Effect.forkIn(owner),
           );
           void connection.closed.finally(() => onLost(project, agent, link, live));
@@ -454,12 +516,20 @@ const make = Effect.gen(function* () {
       (error) => {
         link.attempt = null;
         link.failures += 1;
-        const text = failureText(error instanceof Error ? error : new Error(String(error)));
-        link.state =
-          link.failures >= maxConsecutiveFailures
-            ? { status: "stopped", failures: link.failures, error: text }
-            : { status: "retrying", failures: link.failures, error: text };
-        throw error;
+        const failures = link.failures;
+        return runNativeEffect(
+          redactor.hideDetail(
+            connectFailure(error instanceof Error ? error : new Error(String(error))),
+          ),
+        ).then((failure) => {
+          // A newer attempt owns the state now.
+          if (link.attempt === null)
+            link.state =
+              failures >= maxConsecutiveFailures
+                ? { status: "stopped", failures, failure }
+                : { status: "retrying", failures, failure };
+          throw error;
+        });
       },
     );
     link.attempt = pending;
@@ -516,27 +586,31 @@ const make = Effect.gen(function* () {
     project: Project,
   ): Effect.fn.Return<ExternalAgentsOverview, SqlError.SqlError | Schema.SchemaError> {
     const { files, agents } = yield* configured(project);
-    return {
-      files,
-      agents: agents.map((entry) => ({
-        scope: entry.agent.scope,
-        name: entry.agent.name,
-        target: [entry.agent.command.command, ...entry.agent.command.args].join(" "),
-        envNames: Object.keys(entry.agent.command.env),
-        shadowed: entry.shadowed,
-        state:
-          entry.trusted === null
-            ? { status: "untrusted" }
-            : entry.trusted !== entry.agent.fingerprint
-              ? { status: "changed" }
-              : {
-                  status: "trusted",
-                  link: Option.getOrUndefined(
-                    MutableHashMap.get(links, linkKey(project, entry.agent)),
-                  )?.state ?? { status: "idle" },
-                },
-      })),
-    };
+    const views = yield* Effect.forEach(agents, (entry) =>
+      Effect.map(
+        // A command line can carry a key (`--api-key=…`); the page gets it hidden.
+        redactor.shownDetail([entry.agent.command.command, ...entry.agent.command.args].join(" ")),
+        (target): ExternalAgentView => ({
+          scope: entry.agent.scope,
+          name: entry.agent.name,
+          target,
+          envNames: Object.keys(entry.agent.command.env),
+          shadowed: entry.shadowed,
+          state:
+            entry.trusted === null
+              ? { status: "untrusted" }
+              : entry.trusted !== entry.agent.fingerprint
+                ? { status: "changed" }
+                : {
+                    status: "trusted",
+                    link: Option.getOrUndefined(
+                      MutableHashMap.get(links, linkKey(project, entry.agent)),
+                    )?.state ?? { status: "idle" },
+                  },
+        }),
+      ),
+    );
+    return { files, agents: views };
   });
 
   yield* Effect.addFinalizer(() =>
@@ -614,26 +688,33 @@ const make = Effect.gen(function* () {
       runNativeEffect(
         Effect.gen(function* () {
           const agent = yield* usable(project, name);
-          if (!isTruthy(agent)) return { status: "unavailable" as const, reason: "not_trusted" };
+          if (!isTruthy(agent))
+            return {
+              status: "unavailable" as const,
+              failure: { code: "not_trusted" as const, detail: null },
+            };
           const link = linkFor(project, agent);
           if (
             link.failures >= maxConsecutiveFailures &&
             !isTruthy(link.live) &&
             !isTruthy(link.attempt)
           )
-            return { status: "unavailable" as const, reason: "stopped_after_failures" };
+            return {
+              status: "unavailable" as const,
+              failure: { code: "stopped_after_failures" as const, detail: null },
+            };
           const connected = yield* Effect.result(
             nativePromise(() =>
               link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
             ),
           );
-          if (Result.isFailure(connected)) {
-            const error = connected.failure.cause;
+          if (Result.isFailure(connected))
             return {
               status: "unavailable" as const,
-              reason: failureText(error instanceof Error ? error : new Error(String(error))),
+              failure: yield* redactor.hideDetail(
+                connectFailure(rejectionError(connected.failure)),
+              ),
             };
-          }
           const live = connected.success;
 
           let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
@@ -647,11 +728,13 @@ const make = Effect.gen(function* () {
               ),
             );
             if (Result.isFailure(created)) {
-              const error = created.failure.cause;
-              const message = error instanceof Error ? error.message : String(error);
+              const error = rejectionError(created.failure);
               return {
                 status: "unavailable" as const,
-                reason: `session_failed: ${message.slice(0, 200)}`,
+                failure: yield* redactor.hideDetail({
+                  code: "session_failed" as const,
+                  detail: rejectionText(error),
+                }),
               };
             }
             sessionId = created.success.sessionId;
@@ -728,10 +811,13 @@ const make = Effect.gen(function* () {
                 answer,
                 toolCalls: [...MutableHashMap.values(toolCalls)],
               };
-            const error = outcome.failure.cause;
+            const error = rejectionError(outcome.failure);
             return {
               status: "failed" as const,
-              error: failureText(error instanceof Error ? error : new Error(String(error))),
+              failure: yield* redactor.hideDetail({
+                code: "agent_error" as const,
+                detail: rejectionText(error),
+              }),
               answer,
               toolCalls: [...MutableHashMap.values(toolCalls)],
             };

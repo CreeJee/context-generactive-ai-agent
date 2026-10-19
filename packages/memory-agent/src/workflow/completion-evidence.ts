@@ -264,7 +264,7 @@ export const completionEvidence = Effect.gen(function* () {
       if (
         bound === null ||
         !isTruthy(step) ||
-        step.status !== "completed" ||
+        step.status !== "done" ||
         step.evidence.length === 0 ||
         mapping.outcomeIndex < 0 ||
         mapping.acceptanceIndex < 0 ||

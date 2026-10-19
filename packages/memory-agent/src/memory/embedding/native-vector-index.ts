@@ -25,7 +25,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const embedder = yield* Embedder;
   const failure = (operation: VectorIndexError["operation"]) => (cause: unknown) =>
-    new VectorIndexError({ operation, cause });
+    VectorIndexError.make({ operation, cause });
   const io = <A>(operation: VectorIndexError["operation"], work: () => A) =>
     Effect.try({ try: work, catch: failure(operation) });
   /** Decodes a `SELECT … AS seq` result at this SQLite boundary. */
@@ -55,7 +55,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     databasePath,
   }));
   if (opened.databasePath.length === 0)
-    return yield* new VectorIndexError({
+    return yield* VectorIndexError.make({
       operation: "open",
       cause: NativeOwnerFailed.make({ reason: "native-incompatible" }),
     });
@@ -239,7 +239,8 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       "add",
     );
   });
-  const publicationError = (cause: unknown) => new VectorIndexError({ operation: "search", cause });
+  const publicationError = (cause: unknown) =>
+    VectorIndexError.make({ operation: "search", cause });
   const api: VectorIndexApi = {
     size: () => owner.size(),
     flushRemovals: publication.withMutation(flush, publicationError),

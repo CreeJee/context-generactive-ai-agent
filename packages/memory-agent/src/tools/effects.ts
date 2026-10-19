@@ -51,6 +51,17 @@ export const builtinToolEffects = {
   update_goal: "effectful",
   update_plan: "effectful",
   update_workflow_progress: "effectful",
+  // Kanban board reads only SELECT; every board tool saves a change with the run as its author.
+  read_kanban_board: "read",
+  split_card: "effectful",
+  merge_cards: "effectful",
+  cancel_card: "effectful",
+  move_card: "effectful",
+  settle_change_request: "effectful",
+  apply_goal_change: "effectful",
+  requeue_card: "effectful",
+  // A card verifier's verdict decides whether the card is integrated.
+  record_card_verdict: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
 export const readOnlyToolNames = HashSet.fromIterable(

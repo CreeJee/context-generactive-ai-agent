@@ -78,7 +78,7 @@ const progressOf = (
 ): typeof Progress.Type => ({
   toolResults,
   completedSteps:
-    state.plan?.steps.filter((step) => step.status === "completed").map((step) => step.id) ?? [],
+    state.plan?.steps.filter((step) => step.status === "done").map((step) => step.id) ?? [],
   evidence: EffectArray.dedupe([
     ...(state.goal?.evidence ?? []),
     ...(state.plan?.evidence ?? []),

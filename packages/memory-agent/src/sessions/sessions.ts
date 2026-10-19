@@ -1,5 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Clock, Context, Crypto, Data, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import { firstMessageTitle } from "./title.ts";
 import { Projects } from "../projects/projects.ts";
@@ -53,9 +53,9 @@ function toSession(row: typeof SessionRow.Type): Session {
   };
 }
 
-export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
-  readonly id: string;
-}> {}
+export class SessionNotFound extends Schema.TaggedError<SessionNotFound>()("SessionNotFound", {
+  id: Schema.String,
+}) {}
 
 const NewSession = Schema.Struct({
   id: Schema.String,
@@ -101,7 +101,7 @@ const make = Effect.gen(function* () {
       row: Option.Option<typeof SessionRow.Type>,
     ): Effect.Effect<Session, SessionNotFound | SqlError.SqlError | Schema.SchemaError> =>
       Option.match(row, {
-        onNone: () => Effect.fail(new SessionNotFound({ id })),
+        onNone: () => Effect.fail(SessionNotFound.make({ id })),
         onSome: withTitle,
       });
   const byId = SqlSchema.findOneOption({

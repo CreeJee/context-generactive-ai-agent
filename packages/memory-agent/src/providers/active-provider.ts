@@ -32,11 +32,14 @@ const make = Effect.gen(function* () {
 
   const authFor = (provider: ProviderId) =>
     Effect.flatMap(registry.get(provider), ({ auth }) => auth.status).pipe(
-      Effect.orElseSucceed(() => ({
-        provider,
-        status: "error" as const,
-        message: "Provider authentication is unavailable.",
-      })),
+      // An unreachable provider is reported as its auth state; chat callers branch on the status.
+      Effect.catchTag(["ProviderUnavailable", "ProviderOperationFailed"], () =>
+        Effect.succeed({
+          provider,
+          status: "error" as const,
+          message: "Provider authentication is unavailable.",
+        }),
+      ),
     );
 
   return {

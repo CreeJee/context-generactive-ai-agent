@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
+import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import { toToolSchema } from "./schema.ts";
 import { BackgroundTasks, backgroundOperation } from "./background.ts";
@@ -29,8 +30,9 @@ const ExternalResult = Schema.Struct({
   agent: Schema.String,
   status: Schema.Literals(["completed", "cancelled", "failed", "disconnected", "unavailable"]),
   answer: Schema.optionalKey(Schema.String),
-  error: Schema.optionalKey(Schema.String),
-  reason: Schema.optionalKey(Schema.String),
+  failure: Schema.optionalKey(
+    Schema.Struct({ code: ExternalAgentFailureCode, detail: Schema.NullOr(Schema.String) }),
+  ),
   stopReason: Schema.optionalKey(Schema.String),
   note: Schema.String,
   toolCalls: Schema.optionalKey(

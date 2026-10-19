@@ -16,7 +16,7 @@ import {
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
-import { type KagiStatus } from "../../api";
+import { type KagiStatus, refusalOf } from "../../api";
 import { useKagiQuery } from "../../queries/global";
 import { useKagiMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError } from "../shared";
@@ -48,14 +48,8 @@ export function KagiSettings() {
               if (command.action === "register") setKey("");
             }),
           ),
-          Effect.catch((failure) =>
-            Effect.sync(() => {
-              setError(
-                errorMessage(
-                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
-                ),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),

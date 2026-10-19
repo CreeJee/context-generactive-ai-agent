@@ -1,4 +1,4 @@
-import { nativeFailure, nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import {
   Cause,
   Function,
@@ -6,8 +6,10 @@ import {
   MutableHashSet,
   HashMap,
   MutableHashMap,
+  Context,
   Effect,
   Fiber,
+  Layer,
 } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
@@ -32,6 +34,15 @@ import {
 } from "../tools/definitions.ts";
 import { AppRequestFailed, type AppApi, type ProjectSummary } from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import {
+  RunFailureCode,
+  runFailureCodeOf,
+  runFailureText,
+  type ShownFailure,
+} from "../runtime/shown-failure.ts";
+import { Schedule } from "effect";
+import { superviseLoopStep } from "../runtime/loop-health.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
 const leaseRenewMs = 20_000;
@@ -46,7 +57,7 @@ interface PromptTurn {
   readonly client: AgentContext;
   readonly args: MutableHashMap.MutableHashMap<string, string>;
   cancelled: boolean;
-  failure: string | null;
+  failure: ShownFailure<RunFailureCode> | null;
 }
 
 interface BridgeSession {
@@ -73,15 +84,89 @@ const failureMessages = HashMap.fromIterable([
   ["session_not_found", "그런 대화가 없어요."],
 ]);
 
-const explain = (error: Error) =>
+/** Why the bridge refused an editor's request itself, before or after asking the app. */
+class EditorRequestRefused extends Schema.TaggedError<EditorRequestRefused>()(
+  "EditorRequestRefused",
+  {
+    reason: Schema.Union([
+      Schema.TaggedStruct("FolderNotFound", { cwd: Schema.String }),
+      /** Registering a project widens what the file tools may touch, so only the page does it. */
+      Schema.TaggedStruct("ProjectNotRegistered", { root: Schema.String }),
+      Schema.TaggedStruct("SessionNotOpen", {}),
+      Schema.TaggedStruct("TurnInProgress", {}),
+      /** The app's run ended with an error; `detail` is the run's own error text, redacted. */
+      Schema.TaggedStruct("RunFailed", {
+        code: RunFailureCode,
+        detail: Schema.NullOr(Schema.String),
+      }),
+    ]),
+  },
+) {}
+
+const refusalMessage = (reason: EditorRequestRefused["reason"]) => {
+  switch (reason._tag) {
+    case "FolderNotFound":
+      return `폴더를 찾을 수 없어요: ${reason.cwd}`;
+    case "ProjectNotRegistered":
+      return `등록된 프로젝트가 아니에요. 앱에서 ${reason.root}를 먼저 추가하세요.`;
+    case "SessionNotOpen":
+      return "그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.";
+    case "TurnInProgress":
+      return "이미 답하는 중이에요.";
+    case "RunFailed":
+      return runFailureText[reason.code];
+  }
+};
+
+/** A failed run as the editor receives it: the code's wording, and `{ code, detail }` as data. */
+const runFailedError = (failure: ShownFailure<RunFailureCode>) =>
+  acp.RequestError.internalError(
+    { code: failure.code, detail: failure.detail },
+    runFailureText[failure.code],
+  );
+
+/** The JSON-RPC error the editor receives. */
+const explain = (
+  redactor: SecretRedactor["Service"],
+  error: Error,
+): Effect.Effect<acp.RequestError> =>
   error instanceof acp.RequestError
-    ? error
+    ? Effect.succeed(error)
     : Schema.is(AppRequestFailed)(error)
-      ? requestError(
-          Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
-            `앱 요청이 실패했어요: ${error.code}`,
+      ? Effect.succeed(
+          requestError(
+            Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
+              `앱 요청이 실패했어요: ${error.code}`,
+          ),
         )
-      : requestError(error.message);
+      : Schema.is(EditorRequestRefused)(error)
+        ? Effect.succeed(
+            error.reason._tag === "RunFailed"
+              ? runFailedError(error.reason)
+              : requestError(refusalMessage(error.reason)),
+          )
+        : // Anything else can quote a URL or a credential; its text goes out redacted.
+          Effect.map(redactor.shownDetail(error.message), (detail) =>
+            runFailedError({ code: "run_failed", detail }),
+          );
+
+/** Unwraps a rejected app call and fails with the editor's error for it. */
+const toEditorError = (redactor: SecretRedactor["Service"]) => (failure: Error) => {
+  // Promise callbacks reject with values of any kind.
+  const error = Cause.isUnknownError(failure) ? failure.cause : failure;
+  return Effect.flatMap(
+    explain(redactor, error instanceof Error ? error : new Error(String(error))),
+    Effect.fail,
+  );
+};
+
+const decodeErrorCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
+
+/** The chat client's own error: its `RUN_ERROR` code, if it kept one, and message. */
+const chatFailure = (error: Error): ShownFailure<RunFailureCode> => ({
+  code: runFailureCodeOf(Option.getOrUndefined(decodeErrorCode(error))?.code),
+  detail: error.message,
+});
 
 const decodeReview = Schema.decodeUnknownOption(
   Schema.Struct({ payload: PermissionReviewPayload }),
@@ -135,6 +220,11 @@ export function startAcpAgent(options: {
   readonly api: AppApi;
 }): acp.AgentConnection {
   const { api } = options;
+  // The bridge runs in its own process, outside the app's services.
+  const redactor = Effect.runSync(
+    Effect.scoped(Effect.map(Layer.build(SecretRedactor.layer), Context.get(SecretRedactor))),
+  );
+  const editorError = toEditorError(redactor);
   const sessions = MutableHashMap.empty<string, BridgeSession>();
 
   const notify = (turn: PromptTurn, sessionId: string, update: SessionUpdate) =>
@@ -208,7 +298,8 @@ export function startAcpAgent(options: {
         });
         return;
       case "RUN_ERROR":
-        turn.failure = chunk.message;
+        // The app hid secrets in the message before sending it.
+        turn.failure = { code: runFailureCodeOf(chunk.code), detail: chunk.message };
         return;
       default:
         return;
@@ -221,23 +312,27 @@ export function startAcpAgent(options: {
     project: ProjectSummary,
     messages: UIMessage[],
   ) {
-    const holder = `acp-${yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie)}`;
+    const holder = `acp-${yield* oauthProtocolCrypto.randomUUIDv4()}`;
     const lease = yield* nativePromise(() => api.lease(sessionId, holder, "claim"));
     if (lease.state !== "mine")
-      return yield* new Cause.UnknownError(
-        AppRequestFailed.make({
-          status: 423,
-          code: "session_in_use",
-          message: "session_in_use (423)",
-          reason: { _tag: "RequestRejected" },
-        }),
-      );
-    const renew = yield* Effect.forever(
-      Effect.sleep(leaseRenewMs).pipe(
-        Effect.andThen(nativePromise(() => api.lease(sessionId, holder, "claim"))),
-        Effect.ignore,
-      ),
-    ).pipe(Effect.forkDetach);
+      return yield* AppRequestFailed.make({
+        status: 423,
+        code: "session_in_use",
+        message: "session_in_use (423)",
+        reason: { _tag: "RequestRejected" },
+      });
+    // A failed renewal is retried with backoff. When the retries run out, or on a defect, renewal
+    // stops: the app drops the lease and shows the session read-only (decided 2026-10-18).
+    const renew = yield* nativePromise(() => api.lease(sessionId, holder, "claim")).pipe(
+      superviseLoopStep({ message: "acp_lease_renewal_stopped", setHealth: () => Effect.void }),
+      Effect.repeat({
+        schedule: Schedule.spaced(leaseRenewMs),
+        while: (step) => step._tag === "Continued",
+      }),
+      Effect.delay(leaseRenewMs),
+      Effect.asVoid,
+      Effect.forkDetach,
+    );
     const session: BridgeSession = {
       id: sessionId,
       holder,
@@ -265,7 +360,7 @@ export function startAcpAgent(options: {
       .realPath(cwd)
       .pipe(
         Effect.mapError(
-          () => new Cause.UnknownError(requestError(`폴더를 찾을 수 없어요: ${cwd}`)),
+          () => new EditorRequestRefused({ reason: { _tag: "FolderNotFound", cwd } }),
         ),
       );
     const project = (yield* nativePromise(() => api.projects())).find(
@@ -273,9 +368,7 @@ export function startAcpAgent(options: {
     );
     // Registering a project widens what the file tools may touch, so only the app's page does it.
     if (!isTruthy(project))
-      return yield* new Cause.UnknownError(
-        requestError(`등록된 프로젝트가 아니에요. 앱에서 ${root}를 먼저 추가하세요.`),
-      );
+      return yield* new EditorRequestRefused({ reason: { _tag: "ProjectNotRegistered", root } });
     return project;
   });
 
@@ -315,36 +408,39 @@ export function startAcpAgent(options: {
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = MutableHashSet.empty<string>();
     const timer = Effect.runFork(
-      Effect.forever(
-        Effect.sleep(relayPollMs).pipe(
-          Effect.andThen(
-            Effect.gen(function* () {
-              const approvals = yield* nativePromise(() => api.approvals(session.id));
-              yield* Effect.forEach(
-                approvals,
-                (approval) => {
-                  if (MutableHashSet.has(asked, approval.id)) return Effect.void;
-                  MutableHashSet.add(asked, approval.id);
-                  return askEditor(turn, session.id, {
-                    toolCallId: approval.id,
-                    toolName: approval.toolName,
-                    argumentsJson: approval.argumentsJson,
-                    requester: requesterLabel(approval.requester),
-                  }).pipe(
-                    Effect.flatMap((approved) =>
-                      nativePromise(() =>
-                        api.answerApproval(session.id, session.holder, approval.id, approved),
-                      ),
-                    ),
-                    Effect.ignore,
-                  );
-                },
-                { concurrency: "unbounded", discard: true },
-              );
-            }),
-          ),
-          Effect.ignore,
-        ),
+      Effect.gen(function* () {
+        const approvals = yield* nativePromise(() => api.approvals(session.id));
+        yield* Effect.forEach(
+          approvals,
+          (approval) => {
+            if (MutableHashSet.has(asked, approval.id)) return Effect.void;
+            MutableHashSet.add(asked, approval.id);
+            return askEditor(turn, session.id, {
+              toolCallId: approval.id,
+              toolName: approval.toolName,
+              argumentsJson: approval.argumentsJson,
+              requester: requesterLabel(approval.requester),
+            }).pipe(
+              Effect.flatMap((approved) =>
+                nativePromise(() =>
+                  api.answerApproval(session.id, session.holder, approval.id, approved),
+                ),
+              ),
+              // An unanswered approval stays pending in the app, where the page can answer it.
+              Effect.catchTag("UnknownError", () => Effect.void),
+            );
+          },
+          { concurrency: "unbounded", discard: true },
+        );
+      }).pipe(
+        // A failed poll is retried with backoff. When the retries run out, or on a defect, relaying
+        // stops for this turn; the waiting approvals stay answerable in the app (decided 2026-10-18).
+        superviseLoopStep({ message: "acp_approval_relay_stopped", setHealth: () => Effect.void }),
+        Effect.repeat({
+          schedule: Schedule.spaced(relayPollMs),
+          while: (step) => step._tag === "Continued",
+        }),
+        Effect.delay(relayPollMs),
       ),
     );
     return () => {
@@ -374,29 +470,18 @@ export function startAcpAgent(options: {
         Effect.gen(function* () {
           const auth = yield* nativePromise(() => api.auth());
           if (auth.status !== "signed-in")
-            return yield* new Cause.UnknownError(
-              AppRequestFailed.make({
-                status: 401,
-                code: "login_required",
-                message: "login_required (401)",
-                reason: { _tag: "RequestRejected" },
-              }),
-            );
+            return yield* AppRequestFailed.make({
+              status: 401,
+              code: "login_required",
+              message: "login_required (401)",
+              reason: { _tag: "RequestRejected" },
+            });
           const project = yield* projectFor(ctx.params.cwd);
           // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
           const created = yield* nativePromise(() => api.createSession(project.id, "ACP"));
           yield* open(created.id, project, []);
           return { sessionId: created.id };
-        }).pipe(
-          Effect.catchCause((cause) => {
-            const error = nativeFailure(cause).cause;
-            return Effect.fail(
-              new Cause.UnknownError(
-                explain(error instanceof Error ? error : new Error(String(error))),
-              ),
-            );
-          }),
-        ),
+        }).pipe(Effect.catch(editorError)),
       ),
     )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -446,16 +531,7 @@ export function startAcpAgent(options: {
                   break;
               }
           return {};
-        }).pipe(
-          Effect.catchCause((cause) => {
-            const error = nativeFailure(cause).cause;
-            return Effect.fail(
-              new Cause.UnknownError(
-                explain(error instanceof Error ? error : new Error(String(error))),
-              ),
-            );
-          }),
-        ),
+        }).pipe(Effect.catch(editorError)),
       ),
     )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -464,11 +540,9 @@ export function startAcpAgent(options: {
         Effect.gen(function* () {
           const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
           if (!isTruthy(session))
-            return yield* new Cause.UnknownError(
-              requestError("그런 세션이 없어요. 새로 시작하거나 다시 불러오세요."),
-            );
+            return yield* new EditorRequestRefused({ reason: { _tag: "SessionNotOpen" } });
           if (isTruthy(session.turn))
-            return yield* new Cause.UnknownError(requestError("이미 답하는 중이에요."));
+            return yield* new EditorRequestRefused({ reason: { _tag: "TurnInProgress" } });
           const turn: PromptTurn = {
             client: ctx.client,
             args: MutableHashMap.empty(),
@@ -533,8 +607,12 @@ export function startAcpAgent(options: {
               yield* waitIdle(session.chat);
             }
             if (turn.cancelled) return { stopReason: "cancelled" as const satisfies StopReason };
-            const failure = turn.failure ?? session.chat.getError()?.message ?? null;
-            if (isTruthy(failure)) return yield* new Cause.UnknownError(requestError(failure));
+            const error = session.chat.getError();
+            const failure = turn.failure ?? (isTruthy(error) ? chatFailure(error) : null);
+            if (isTruthy(failure))
+              return yield* new EditorRequestRefused({
+                reason: { _tag: "RunFailed", ...failure },
+              });
             return { stopReason: "end_turn" as const satisfies StopReason };
           }).pipe(
             Effect.ensuring(
@@ -544,7 +622,7 @@ export function startAcpAgent(options: {
               }),
             ),
           );
-        }),
+        }).pipe(Effect.catch(editorError)),
       ),
     )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -555,7 +633,12 @@ export function startAcpAgent(options: {
           if (!isTruthy(session?.turn)) return;
           session.turn.cancelled = true;
           // The app's cancel stops the run for good; closing the stream alone would not (R10).
-          yield* nativePromise(() => api.cancel(session.id, session.holder)).pipe(Effect.ignore);
+          yield* nativePromise(() => api.cancel(session.id, session.holder)).pipe(
+            // The turn is already marked cancelled; a failed app cancel is only logged.
+            Effect.catchTag("UnknownError", () =>
+              Effect.logWarning("ACP cancel request failed", { error: "UnknownError" }),
+            ),
+          );
         }),
       ),
     );

@@ -25,6 +25,26 @@ type Call = {
   started: boolean;
 };
 
+/** A worker named a tool call, argument stream or grant the owner did not observe or issue. */
+export class OwnerToolGrantRefused extends Schema.TaggedError<OwnerToolGrantRefused>()(
+  "OwnerToolGrantRefused",
+  {
+    reason: Schema.Literals([
+      "duplicate_call",
+      "invalid_argument_stream",
+      "invalid_end",
+      "unobserved_invocation",
+      "invalid_grant_observation",
+      "repeated_implementation_grant",
+      "invalid_grant",
+    ]),
+  },
+) {}
+// The ledger is synchronous: owner handlers and SDK observation callbacks call it in place.
+const refuse = (reason: OwnerToolGrantRefused["reason"]): never => {
+  throw OwnerToolGrantRefused.make({ reason });
+};
+
 /** Run-local owner observations only. Nothing supplied by a worker creates a call. */
 export function makeOwnerToolGrants() {
   const calls = MutableHashMap.empty<string, Call>();
@@ -32,8 +52,7 @@ export function makeOwnerToolGrants() {
     observe(chunk: OwnerToolObservation) {
       switch (chunk.type) {
         case "TOOL_CALL_START":
-          if (MutableHashMap.has(calls, chunk.toolCallId))
-            throw new Error("Duplicate owner tool call ID");
+          if (MutableHashMap.has(calls, chunk.toolCallId)) refuse("duplicate_call");
           MutableHashMap.set(calls, chunk.toolCallId, {
             name: chunk.toolCallName,
             raw: "",
@@ -44,14 +63,13 @@ export function makeOwnerToolGrants() {
           break;
         case "TOOL_CALL_ARGS": {
           const call = Option.getOrUndefined(MutableHashMap.get(calls, chunk.toolCallId));
-          if (!isTruthy(call) || call.complete)
-            throw new Error("Invalid owner tool argument stream");
+          if (!isTruthy(call) || call.complete) return refuse("invalid_argument_stream");
           call.raw += chunk.delta;
           break;
         }
         case "TOOL_CALL_END": {
           const call = Option.getOrUndefined(MutableHashMap.get(calls, chunk.toolCallId));
-          if (!isTruthy(call) || call.complete) throw new Error("Invalid owner tool end");
+          if (!isTruthy(call) || call.complete) return refuse("invalid_end");
           call.complete = true;
           break;
         }
@@ -81,7 +99,7 @@ export function makeOwnerToolGrants() {
         call.name !== invocation.name ||
         !Option.contains(decodeObservedArgs(call.raw || "{}"), invocation.args)
       )
-        throw new Error("Unobserved owner tool invocation");
+        return refuse("unobserved_invocation");
       return structuredClone(invocation);
     },
     approve(input: Invocation, args: Invocation["args"]) {
@@ -98,7 +116,7 @@ export function makeOwnerToolGrants() {
         call.name !== invocation.name ||
         !Option.contains(decodeObservedArgs(call.raw || "{}"), invocation.args)
       )
-        throw new Error("Invalid or duplicate owner tool grant observation");
+        return refuse("invalid_grant_observation");
       // Keep the immutable adapter observation in call.raw/name. Only an owner
       // middleware/schema transform supplies the separately bound execution args.
       call.grant = structuredClone({ ...invocation, args });
@@ -128,7 +146,7 @@ export function makeOwnerToolGrants() {
       )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (!isTruthy(call?.grant) || call.started || !Equal.equals(call.grant, invocation))
-        throw new Error("Invalid or repeated owner tool implementation grant");
+        return refuse("repeated_implementation_grant");
       call.started = true;
       return structuredClone(call.grant);
     },
@@ -142,7 +160,7 @@ export function makeOwnerToolGrants() {
       )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (!isTruthy(call?.grant) || call.used || !Equal.equals(call.grant, invocation))
-        throw new Error("Invalid owner tool grant");
+        return refuse("invalid_grant");
       call.used = true;
       return structuredClone(call.grant);
     },

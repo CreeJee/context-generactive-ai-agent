@@ -119,7 +119,13 @@ const make = Effect.gen(function* () {
   return {
     /** Both tools while Kagi is enabled with a key; none otherwise, so the model never sees them. */
     tools: Effect.map(
-      Effect.orElseSucceed(kagi.status, () => ({ keyRegistered: false, enabled: false })),
+      // An unreadable Kagi setting hides the tools, as a disabled one does.
+      Effect.catch(kagi.status, (error) =>
+        Effect.as(Effect.logWarning("kagi_status_unavailable", { error: error._tag }), {
+          keyRegistered: false,
+          enabled: false,
+        }),
+      ),
       (status): AnyServerTool[] => (status.enabled ? [search, extract] : []),
     ),
   };

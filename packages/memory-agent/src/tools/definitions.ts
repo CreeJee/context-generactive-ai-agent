@@ -24,6 +24,13 @@ export {
   ReportDiagnosisInput,
 } from "../report/diagnosis-contract.ts";
 export {
+  ReportBundle,
+  type BundleEvent,
+  type BundleRun,
+  type BundleText,
+} from "../report/bundle-contract.ts";
+export { runHasFailure, runPlace } from "../report/bundle-digest.ts";
+export {
   ReportDeliveryFailure,
   ReportDeliveryResult,
   ReportDeliveryStatus,
@@ -34,7 +41,18 @@ export type {
   UncertainToolState,
 } from "../workflow/uncertain-runs.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
+export {
+  ConfigFileFailureCode,
+  ExternalAgentFailureCode,
+  McpFailureCode,
+  RunFailureCode,
+  externalAgentFailureText,
+  runFailureCodeOf,
+  runFailureText,
+  type ShownFailure,
+} from "../runtime/shown-failure.ts";
 export type { SubagentStatus, SubagentView } from "../subagents/subagent-state.ts";
+export { loopRetrySchedule, type LoopHealth } from "../runtime/loop-health.ts";
 export type { ProviderRetryView } from "../workflow/provider-retry.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "../approvals/relayed-state.ts";
 export {

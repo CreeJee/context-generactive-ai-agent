@@ -9,11 +9,11 @@ import {
   HashSet,
   Option,
   Context,
-  Data,
   Effect,
   Layer,
+  Schema,
 } from "effect";
-import type { ProviderVendor } from "./contracts.ts";
+import { ProviderVendor } from "./contracts.ts";
 import {
   anthropicModelToolCapabilities,
   openAIModelToolCapabilities,
@@ -62,30 +62,36 @@ export type ProviderToolSandbox =
   | "isolated_desktop_required"
   | "workspace_required"
   | "principal_storage_required";
-export type OpenAIProviderToolKind =
-  | "web_search"
-  | "web_search_preview"
-  | "file_search"
-  | "image_generation"
-  | "code_interpreter"
-  | "mcp"
-  | "computer_use"
-  | "local_shell"
-  | "shell"
-  | "apply_patch"
-  | "custom";
-export type AnthropicProviderToolKind =
-  | "web_search"
-  | "web_fetch"
-  | "code_execution"
-  | "computer_use"
-  | "bash"
-  | "text_editor"
-  | "memory";
+export const OpenAIProviderToolKind = Schema.Literals([
+  "web_search",
+  "web_search_preview",
+  "file_search",
+  "image_generation",
+  "code_interpreter",
+  "mcp",
+  "computer_use",
+  "local_shell",
+  "shell",
+  "apply_patch",
+  "custom",
+]);
+export type OpenAIProviderToolKind = typeof OpenAIProviderToolKind.Type;
+export const AnthropicProviderToolKind = Schema.Literals([
+  "web_search",
+  "web_fetch",
+  "code_execution",
+  "computer_use",
+  "bash",
+  "text_editor",
+  "memory",
+]);
+export type AnthropicProviderToolKind = typeof AnthropicProviderToolKind.Type;
 export type ProviderToolKind = OpenAIProviderToolKind | AnthropicProviderToolKind;
-export type ProviderToolId =
-  | `openai:${OpenAIProviderToolKind}`
-  | `anthropic:${AnthropicProviderToolKind}`;
+export const ProviderToolId = Schema.Union([
+  Schema.TemplateLiteral(["openai:", OpenAIProviderToolKind]),
+  Schema.TemplateLiteral(["anthropic:", AnthropicProviderToolKind]),
+]);
+export type ProviderToolId = typeof ProviderToolId.Type;
 
 export interface ProviderToolFactoryExtension<TFactory extends (...args: never[]) => object> {
   readonly factory: TFactory;
@@ -387,16 +393,26 @@ export const providerToolDescriptors = Object.freeze([
   }),
 ] as const);
 
-export class UnknownProviderTool extends Data.TaggedError("UnknownProviderTool")<{
-  readonly id: string;
-}> {}
-export class UnknownProviderToolModel extends Data.TaggedError("UnknownProviderToolModel")<{
-  readonly provider: ProviderToolVendor;
-  readonly model: string;
-}> {}
-export class ProviderToolMetadataFailure extends Data.TaggedError("ProviderToolMetadataFailure")<{
-  readonly reason: string;
-}> {}
+export class UnknownProviderTool extends Schema.TaggedError<UnknownProviderTool>()(
+  "UnknownProviderTool",
+  { id: Schema.String },
+) {}
+export class UnknownProviderToolModel extends Schema.TaggedError<UnknownProviderToolModel>()(
+  "UnknownProviderToolModel",
+  { provider: ProviderVendor, model: Schema.String },
+) {}
+/** The descriptor or model tables contradict themselves; a programming error in the tables. */
+export class ProviderToolMetadataFailure extends Schema.TaggedError<ProviderToolMetadataFailure>()(
+  "ProviderToolMetadataFailure",
+  {
+    reason: Schema.Union([
+      /** A descriptor id is not `<provider>:<kind>`. */
+      Schema.TaggedStruct("InvalidId", { id: Schema.String }),
+      Schema.TaggedStruct("DuplicateTool", { id: Schema.String }),
+      Schema.TaggedStruct("DuplicateModel", { provider: ProviderVendor, model: Schema.String }),
+    ]),
+  },
+) {}
 export interface ProviderToolModelMetadata {
   readonly provider: ProviderToolVendor;
   readonly model: string;
@@ -485,11 +501,11 @@ function makeProviderToolCapabilityRegistryBody(
     for (const entry of descriptors) {
       if (entry.id !== `${entry.provider}:${entry.kind}`)
         return yield* new ProviderToolMetadataFailure({
-          reason: `invalid provider-qualified id: ${entry.id}`,
+          reason: { _tag: "InvalidId", id: entry.id },
         });
       if (MutableHashMap.has(byId, entry.id))
         return yield* new ProviderToolMetadataFailure({
-          reason: `duplicate provider tool id: ${entry.id}`,
+          reason: { _tag: "DuplicateTool", id: entry.id },
         });
       MutableHashMap.set(byId, entry.id, entry);
     }
@@ -498,7 +514,7 @@ function makeProviderToolCapabilityRegistryBody(
       const key = `${model.provider}:${model.model}`;
       if (MutableHashMap.has(byModel, key))
         return yield* new ProviderToolMetadataFailure({
-          reason: `duplicate provider model metadata: ${key}`,
+          reason: { _tag: "DuplicateModel", provider: model.provider, model: model.model },
         });
       MutableHashMap.set(byModel, key, HashSet.fromIterable(model.tools));
     }

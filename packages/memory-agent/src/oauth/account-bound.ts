@@ -78,14 +78,14 @@ function createAccountBoundSubscriptionClientsBody(
     const id = selectedId();
     if (id !== null) return clientFor(id);
     if (legacyAllowed()) return clientFor(null);
-    throw new OAuthHarnessError("not_connected");
+    throw OAuthHarnessError.fromCode("not_connected");
   };
   return {
     catalogKey: () => selectedId() ?? (legacyAllowed() ? "__legacy__" : "__none__"),
     // A run calls this once at adapter creation. Later global selection changes cannot move it.
     forRun: () => {
       const id = selectedId();
-      if (id === null && !legacyAllowed()) throw new OAuthHarnessError("not_connected");
+      if (id === null && !legacyAllowed()) throw OAuthHarnessError.fromCode("not_connected");
       const releaseRun = profiles.acquireRun(provider, id ?? "__legacy__");
       try {
         return { ...clientFor(id), releaseRun };
@@ -107,11 +107,7 @@ function createAccountBoundSubscriptionClientsBody(
           Effect.gen(function* () {
             const id = yield* (yield* Crypto.Crypto).randomUUIDv4();
             const attempt = yield* nativePromise(() => clientFor(id).startLogin()).pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() => MutableHashMap.remove(cache, id)).pipe(
-                  Effect.andThen(Effect.failCause(cause)),
-                ),
-              ),
+              Effect.onError(() => Effect.sync(() => MutableHashMap.remove(cache, id))),
             );
             let cancelled = false;
             // The login SDK owns this completion and its explicit cancel callback across requests.
@@ -119,8 +115,9 @@ function createAccountBoundSubscriptionClientsBody(
               nativePromise(() => attempt.completed).pipe(
                 Effect.flatMap((connection) =>
                   Effect.gen(function* () {
-                    if (cancelled) return yield* new OAuthHarnessError("cancelled");
-                    if (!connection.connected) return yield* new OAuthHarnessError("not_connected");
+                    if (cancelled) return yield* OAuthHarnessError.fromCode("cancelled");
+                    if (!connection.connected)
+                      return yield* OAuthHarnessError.fromCode("not_connected");
                     yield* profiles.publish(
                       provider,
                       id,
@@ -131,15 +128,19 @@ function createAccountBoundSubscriptionClientsBody(
                     return connection;
                   }),
                 ),
-                Effect.catchCause((cause) =>
+                Effect.onError(() =>
                   Effect.gen(function* () {
                     // A published account survives a selection failure or late cancellation.
                     if (!(yield* profiles.list(provider)).some((profile) => profile.id === id)) {
                       yield* nativePromise(() => accounts.remove(provider, id));
                       MutableHashMap.remove(cache, id);
                     }
-                    return yield* Effect.failCause(cause);
-                  }),
+                  }).pipe(
+                    // Cleanup only: the login's own failure stands, so this one is logged by tag.
+                    Effect.catch((failure) =>
+                      Effect.logWarning("OAuth login cleanup failed", { error: failure._tag }),
+                    ),
+                  ),
                 ),
               ),
             );
@@ -168,7 +169,7 @@ function createAccountBoundSubscriptionClientsBody(
                   Effect.tap(() => Effect.sync(() => MutableHashMap.remove(cache, "__legacy__"))),
                 ),
               );
-            } else return yield* new OAuthHarnessError("not_connected");
+            } else return yield* OAuthHarnessError.fromCode("not_connected");
             const next = selectedId();
             return next !== null
               ? yield* nativePromise(() => clientFor(next).status())

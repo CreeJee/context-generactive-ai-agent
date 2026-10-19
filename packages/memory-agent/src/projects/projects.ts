@@ -3,7 +3,6 @@ import {
   Clock,
   Context,
   Crypto,
-  Data,
   Effect,
   FileSystem,
   Layer,
@@ -59,14 +58,22 @@ function toProject(decoded: typeof ProjectRow.Type): Project {
   };
 }
 
-export class ProjectRootRejected extends Data.TaggedError("ProjectRootRejected")<{
-  readonly root: string;
-  readonly reason: "not_found" | "not_directory" | "overlaps_storage" | "already_registered";
-}> {}
+export class ProjectRootRejected extends Schema.TaggedError<ProjectRootRejected>()(
+  "ProjectRootRejected",
+  {
+    root: Schema.String,
+    reason: Schema.Literals([
+      "not_found",
+      "not_directory",
+      "overlaps_storage",
+      "already_registered",
+    ]),
+  },
+) {}
 
-export class ProjectNotFound extends Data.TaggedError("ProjectNotFound")<{
-  readonly id: string;
-}> {}
+export class ProjectNotFound extends Schema.TaggedError<ProjectNotFound>()("ProjectNotFound", {
+  id: Schema.String,
+}) {}
 
 export class ProjectHostFailed extends Schema.TaggedError<ProjectHostFailed>()(
   "ProjectHostFailed",
@@ -128,7 +135,7 @@ const make = Effect.gen(function* () {
       query(request).pipe(
         Effect.flatMap(
           Option.match({
-            onNone: () => Effect.fail(new ProjectNotFound({ id })),
+            onNone: () => Effect.fail(ProjectNotFound.make({ id })),
             onSome: (row) => Effect.succeed(toProject(row)),
           }),
         ),
@@ -219,7 +226,7 @@ const make = Effect.gen(function* () {
               switch (error.reason._tag) {
                 case "NotFound":
                   return Effect.fail(
-                    new ProjectRootRejected({ root: absolute, reason: "not_found" }),
+                    ProjectRootRejected.make({ root: absolute, reason: "not_found" }),
                   );
                 default:
                   return Effect.fail(
@@ -240,7 +247,7 @@ const make = Effect.gen(function* () {
             ),
           );
         if (info.type !== "Directory")
-          return yield* new ProjectRootRejected({ root, reason: "not_directory" });
+          return yield* ProjectRootRejected.make({ root, reason: "not_directory" });
         const contains = (parent: string) => (candidate: string) => {
           const relative = path.relative(parent, candidate);
           return (
@@ -251,7 +258,7 @@ const make = Effect.gen(function* () {
           );
         };
         if (contains(root)(storageRoot) || contains(storageRoot)(root))
-          return yield* new ProjectRootRejected({ root, reason: "overlaps_storage" });
+          return yield* ProjectRootRejected.make({ root, reason: "overlaps_storage" });
 
         const project: Project = {
           id: yield* crypto
@@ -270,7 +277,7 @@ const make = Effect.gen(function* () {
         };
         const row = yield* insert(project);
         if (Option.isNone(row))
-          return yield* new ProjectRootRejected({ root, reason: "already_registered" });
+          return yield* ProjectRootRejected.make({ root, reason: "already_registered" });
         return toProject(row.value);
       }),
 

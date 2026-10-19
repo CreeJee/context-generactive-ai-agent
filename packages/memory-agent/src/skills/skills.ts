@@ -184,7 +184,15 @@ const make = (options: SkillsOptions) =>
             ),
           },
         };
-      }).pipe(Effect.orElseSucceed(() => problem("unreadable")));
+      }).pipe(
+        // A skill that cannot be read is listed as a problem, not dropped silently.
+        Effect.catchTags({
+          PlatformError: () => Effect.succeed(problem("unreadable")),
+          PathRejected: () => Effect.succeed(problem("unreadable")),
+          TextFileIoFailed: () => Effect.succeed(problem("unreadable")),
+          TextFileRejected: () => Effect.succeed(problem("unreadable")),
+        }),
+      );
     });
 
     const scan = Effect.fn("Skills.scan")(function* (scope: SkillScope, root: string) {
@@ -197,7 +205,7 @@ const make = (options: SkillsOptions) =>
         const directory = join(root, folder);
         const plain = yield* fs.lstat(directory).pipe(
           Effect.map((entry) => entry.type === "Directory"),
-          Effect.orElseSucceed(() => false),
+          Effect.catchTag("PlatformError", () => Effect.succeed(false)),
         );
         if (!plain) continue;
         const read = yield* readSkill(scope, directory, folder);

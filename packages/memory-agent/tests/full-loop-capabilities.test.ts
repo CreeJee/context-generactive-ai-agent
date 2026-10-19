@@ -130,8 +130,12 @@ test("tagged codec retains Maps, Sets, undefined and errors without tag collisio
     ...original,
     error: expect.objectContaining({ name: "Error", message: "provider failed" }),
   });
-  expect(() => decodeFullLoopValue(["bad-tag"])).toThrow("Invalid worker value tag");
-  expect(() => encodeFullLoopValue(Infinity)).toThrow("Non-finite");
+  expect(() => decodeFullLoopValue(["bad-tag"])).toThrow(
+    expect.objectContaining({ _tag: "FullLoopCodecFailed", reason: "invalid_tag" }),
+  );
+  expect(() => encodeFullLoopValue(Infinity)).toThrow(
+    expect.objectContaining({ _tag: "FullLoopCodecFailed", reason: "non_finite" }),
+  );
 });
 
 it.live(
@@ -344,6 +348,11 @@ test("preflight rejects unsupported continuation before dispatching any owner ca
         stream: { abortController: new AbortController() },
       },
     ),
-  ).toThrow("continuation");
+  ).toThrow(
+    expect.objectContaining({
+      _tag: "FullLoopAdmissionRejected",
+      reason: { _tag: "ContinuationWithoutPersistence" },
+    }),
+  );
   expect(adapter.invocations).toHaveLength(0);
 });

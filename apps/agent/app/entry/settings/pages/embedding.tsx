@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { isTruthy } from "../../../truthy.ts";
 import { RefreshCwIcon } from "lucide-react";
@@ -24,7 +24,7 @@ import {
 } from "~/components/ui/select";
 import { Spinner } from "~/components/ui/spinner";
 import { dayAndTime } from "~/lib/dates";
-import { type EmbeddingChoice, type EmbeddingOverview, type GpuState } from "../../api";
+import { type EmbeddingChoice, type EmbeddingOverview, type GpuState, refusalOf } from "../../api";
 import { useEmbeddingQuery } from "../../queries/global";
 import { useEmbeddingMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError } from "../shared";
@@ -81,6 +81,26 @@ function runningNote(running: EmbeddingOverview["running"]) {
   }
 }
 
+/** Why WebGPU could not be used, by the code the check stores; any other value reads generically. */
+const GpuUnavailableReason = Schema.Literals([
+  "no WebGPU device",
+  "worker_load_failed",
+  "worker_run_failed",
+  "worker_lost_failed",
+  "embedding_failed",
+]);
+const gpuUnavailableReasons = {
+  "no WebGPU device": "WebGPU 장치를 찾지 못했어요.",
+  worker_load_failed: "임베딩 worker가 모델을 불러오지 못했어요.",
+  worker_run_failed: "임베딩 worker가 시험 임베딩을 하지 못했어요.",
+  worker_lost_failed: "임베딩 worker가 응답 없이 끝났어요.",
+  embedding_failed: "시험 임베딩을 하지 못했어요.",
+} satisfies Record<typeof GpuUnavailableReason.Type, string>;
+const gpuUnavailableText = (reason: string) =>
+  Schema.is(GpuUnavailableReason)(reason)
+    ? gpuUnavailableReasons[reason]
+    : "확인 중 문제가 생겼어요.";
+
 function gpuText(gpu: GpuState) {
   switch (gpu.status) {
     case "unchecked":
@@ -90,7 +110,7 @@ function gpuText(gpu: GpuState) {
     case "available":
       return `쓸 수 있어요(${dayAndTime(gpu.checkedAt)} 확인).`;
     case "unavailable":
-      return `쓸 수 없어요(${dayAndTime(gpu.checkedAt)} 확인): ${gpu.reason}`;
+      return `쓸 수 없어요(${dayAndTime(gpu.checkedAt)} 확인): ${gpuUnavailableText(gpu.reason)}`;
   }
 }
 
@@ -110,14 +130,8 @@ export function EmbeddingSettings() {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
-          Effect.catch((failure) =>
-            Effect.sync(() => {
-              setError(
-                errorMessage(
-                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
-                ),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),

@@ -100,11 +100,15 @@ describe("Database", () => {
   it("readers require the actual current DB contract and reject stale, newer or damaged schemas before execution", () => {
     const sqlite = new DatabaseSync(":memory:");
     try {
-      expect(() => assertDatabaseSchema(sqlite)).toThrow(/owning app/);
+      expect(() => assertDatabaseSchema(sqlite)).toThrow(
+        expect.objectContaining({ reason: expect.objectContaining({ _tag: "MigrationPending" }) }),
+      );
       migrateDatabase(sqlite);
       expect(assertDatabaseSchema(sqlite)).toBe(migrations.length);
       sqlite.exec(`PRAGMA user_version=${migrations.length + 1}`);
-      expect(() => assertDatabaseSchema(sqlite)).toThrow(/update the app/);
+      expect(() => assertDatabaseSchema(sqlite)).toThrow(
+        expect.objectContaining({ reason: expect.objectContaining({ _tag: "NewerThanBuild" }) }),
+      );
       sqlite.exec(
         `PRAGMA user_version=${migrations.length}; ALTER TABLE owner_read_recoveries RENAME TO missing_receipts`,
       );

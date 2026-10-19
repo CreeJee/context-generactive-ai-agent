@@ -2,7 +2,7 @@ import { Array as EffectArray, Option, Predicate } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeCrypto } from "@effect/platform-node";
-import { Clock, Context, Crypto, Data, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Nodes } from "./nodes.ts";
 
@@ -87,13 +87,16 @@ const UsageRow = Schema.Struct({
   kind: Schema.Literals(["retrieved", "used"]),
   created_at: Schema.Finite,
 });
-type MemoryPromotionReason =
-  | "empty_proposed_text"
-  | "empty_resolved_text"
-  | "missing_user_authorization"
-  | "claim_not_adopted"
-  | "evidence_not_adopted";
+const MemoryPromotionReason = Schema.Literals([
+  "empty_proposed_text",
+  "empty_resolved_text",
+  "missing_user_authorization",
+  "claim_not_adopted",
+  "evidence_not_adopted",
+]);
+type MemoryPromotionReason = typeof MemoryPromotionReason.Type;
 
+/** The model reads `message`; it is fixed per reason and never carries the request's text. */
 const promotionMessages: Readonly<Record<MemoryPromotionReason, string>> = {
   empty_proposed_text: "proposedText must not be empty",
   empty_resolved_text: "resolvedText must not be empty",
@@ -102,14 +105,13 @@ const promotionMessages: Readonly<Record<MemoryPromotionReason, string>> = {
   evidence_not_adopted: "Memory promotion evidence must be verified and adopted by the claim",
 };
 
-export class MemoryPromotionRejected extends Data.TaggedError("MemoryPromotionRejected")<{
-  readonly reason: MemoryPromotionReason;
-  readonly message: string;
-}> {
-  constructor(input: { readonly reason: MemoryPromotionReason }) {
-    super({ reason: input.reason, message: promotionMessages[input.reason] });
-  }
-}
+export class MemoryPromotionRejected extends Schema.TaggedError<MemoryPromotionRejected>()(
+  "MemoryPromotionRejected",
+  { reason: MemoryPromotionReason, message: Schema.String },
+) {}
+
+const promotionRejected = (reason: MemoryPromotionReason) =>
+  MemoryPromotionRejected.make({ reason, message: promotionMessages[reason] });
 
 /** A knowledge store read or write failed; the cause stays for diagnosis. */
 export class KnowledgeStoreFailed extends Schema.TaggedError<KnowledgeStoreFailed>()(
@@ -261,11 +263,9 @@ const make = Effect.gen(function* () {
     stored(
       Effect.gen(function* () {
         const proposedText = input.proposedText.trim();
-        if (!isTruthy(proposedText))
-          return yield* new MemoryPromotionRejected({ reason: "empty_proposed_text" });
+        if (!isTruthy(proposedText)) return yield* promotionRejected("empty_proposed_text");
         const resolvedText = input.resolvedText.trim();
-        if (!isTruthy(resolvedText))
-          return yield* new MemoryPromotionRejected({ reason: "empty_resolved_text" });
+        if (!isTruthy(resolvedText)) return yield* promotionRejected("empty_resolved_text");
         const userNode = yield* nodes.get(input.authorizedByUserNodeId);
         if (
           !isTruthy(userNode) ||
@@ -273,17 +273,17 @@ const make = Effect.gen(function* () {
           userNode.projectId !== input.projectId ||
           userNode.sessionId !== input.sessionId
         )
-          return yield* new MemoryPromotionRejected({ reason: "missing_user_authorization" });
+          return yield* promotionRejected("missing_user_authorization");
         const claim = yield* claimSource(input).pipe(
           Effect.flatMap(Effect.fromOption),
           Effect.catchTag("NoSuchElementError", () =>
-            Effect.fail(new MemoryPromotionRejected({ reason: "claim_not_adopted" })),
+            Effect.fail(promotionRejected("claim_not_adopted")),
           ),
         );
         const evidenceRefIds = EffectArray.dedupe(input.evidenceRefIds);
         for (const evidenceRefId of evidenceRefIds)
           if (Option.isNone(yield* evidenceSource({ ...input, evidenceRefId })))
-            return yield* new MemoryPromotionRejected({ reason: "evidence_not_adopted" });
+            return yield* promotionRejected("evidence_not_adopted");
         const status: MemoryDisposition =
           input.disposition === "reject"
             ? "rejected"

@@ -36,6 +36,7 @@ import { api, chatFetch, isApiError, type BtwThread } from "../api";
 import { appQueryKeys } from "../queries/keys";
 import { sessionQueries } from "../queries/session";
 import { Markdown } from "./markdown";
+import { RunFailureText } from "./run-failure";
 
 const separateCopy =
   "메인 대화와 이 프로젝트의 기억을 읽고 근거를 찾아 답해요. 여기서 나눈 질문·답변·조회 결과는 메인 대화나 검색 기억에 들어가지 않고, 닫아도 다시 열 수 있게 이 BTW에만 남아요.";
@@ -60,7 +61,7 @@ const threadLabel = (thread: BtwThread) =>
   thread.title ?? `새 BTW · ${dayAndTime(thread.createdAt)}`;
 
 function btwErrorMessage(error: Error) {
-  if (!isApiError(error)) return error.message;
+  if (!isApiError(error)) return <RunFailureText error={error} />;
   switch (error.code) {
     case "login_required":
       return "선택한 공급자에 로그인해야 해요.";
@@ -223,7 +224,7 @@ function DeleteBtwDialog({
           <DialogDescription>{deleteCopy}</DialogDescription>
         </DialogHeader>
         {remove.error && (
-          <p className="text-sm text-destructive">{btwErrorMessage(remove.error)}</p>
+          <div className="text-sm text-destructive">{btwErrorMessage(remove.error)}</div>
         )}
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="ghost" />}>취소</DialogClose>
@@ -337,7 +338,7 @@ export function BtwPanel({ projectId, sessionId }: { projectId: string; sessionI
                 {create.isPending ? <Spinner /> : <PlusIcon />} 새 BTW 열기
               </Button>
               {create.error && (
-                <p className="text-sm text-destructive">{btwErrorMessage(create.error)}</p>
+                <div className="text-sm text-destructive">{btwErrorMessage(create.error)}</div>
               )}
               {threads.isPending && open && <Spinner />}
               {threads.data?.map((thread) => (

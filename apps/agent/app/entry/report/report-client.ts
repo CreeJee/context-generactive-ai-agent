@@ -1,19 +1,22 @@
-import { Data, Effect, Function as EffectFunction, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
+  ReportBundle,
   ReportDeliveryResult,
   ReportDeliveryStatus,
   ReportDiagnosis,
   ReportDiagnosisInput,
 } from "memory-agent/definitions";
 import { appFetch } from "../shared/backend-restart";
-import { ReportEvidence } from "./report-contracts";
 
-export class ReportRequestFailed extends Data.TaggedError("ReportRequestFailed")<{
-  readonly operation: "session" | "evidence" | "detail" | "diagnosis" | "delivery";
-  readonly phase: "transport" | "status" | "response";
-  /** Only the status code is kept from a rejected response; its body is never read. */
-  readonly httpStatus?: number;
-}> {}
+export class ReportRequestFailed extends Schema.TaggedError<ReportRequestFailed>()(
+  "ReportRequestFailed",
+  {
+    operation: Schema.Literals(["session", "evidence", "diagnosis", "delivery"]),
+    phase: Schema.Literals(["transport", "status", "response"]),
+    /** Only the status code is kept from a rejected response; its body is never read. */
+    httpStatus: Schema.optional(Schema.Int),
+  },
+) {}
 
 export function makeReportClient(fetcher: typeof fetch) {
   const request = <S extends Schema.Constraint>(input: {
@@ -26,17 +29,17 @@ export function makeReportClient(fetcher: typeof fetch) {
       const signal = yield* Effect.abortSignal;
       const response = yield* Effect.tryPromise({
         try: () => fetcher(input.url, { ...input.init, signal }),
-        catch: () => new ReportRequestFailed({ operation: input.operation, phase: "transport" }),
+        catch: () => ReportRequestFailed.make({ operation: input.operation, phase: "transport" }),
       });
       if (!response.ok)
-        return yield* new ReportRequestFailed({
+        return yield* ReportRequestFailed.make({
           operation: input.operation,
           phase: "status",
           httpStatus: response.status,
         });
       const body: unknown = yield* Effect.tryPromise({
         try: () => response.json(),
-        catch: () => new ReportRequestFailed({ operation: input.operation, phase: "response" }),
+        catch: () => ReportRequestFailed.make({ operation: input.operation, phase: "response" }),
       });
       return yield* Schema.decodeUnknownEffect(input.schema)(body);
     }).pipe(Effect.scoped);
@@ -59,24 +62,8 @@ export function makeReportClient(fetcher: typeof fetch) {
 
   const readReportEvidence = (input: { readonly project: string; readonly session: string }) =>
     request({
-      schema: ReportEvidence,
+      schema: ReportBundle,
       operation: "evidence",
-      url: `/api/reports/evidence?${new URLSearchParams(input)}`,
-      init: { cache: "no-store" },
-    });
-
-  const readReportDetail = (input: {
-    readonly project: string;
-    readonly session: string;
-    readonly item: string;
-  }) =>
-    request({
-      schema: Schema.Struct({
-        id: Schema.Literal(input.item),
-        text: Schema.String,
-        truncated: Schema.Boolean,
-      }),
-      operation: "detail",
       url: `/api/reports/evidence?${new URLSearchParams(input)}`,
       init: { cache: "no-store" },
     });
@@ -95,11 +82,15 @@ export function makeReportClient(fetcher: typeof fetch) {
   });
 
   const DeliveryCommand = Schema.fromJsonString(
-    Schema.Struct({
-      action: Schema.Literal("send"),
-      text: Schema.String,
-      resend: Schema.Boolean,
-    }),
+    Schema.Union([
+      Schema.Struct({
+        action: Schema.Literal("send"),
+        text: Schema.String,
+        evidence: Schema.NullOr(ReportBundle),
+        resend: Schema.Boolean,
+      }),
+      Schema.Struct({ action: Schema.Literal("defect_reports"), enabled: Schema.Boolean }),
+    ]),
   );
   const deliver = <S extends Schema.Constraint>(schema: S, command: typeof DeliveryCommand.Type) =>
     Effect.flatMap(Schema.encodeEffect(DeliveryCommand)(command), (body) =>
@@ -116,16 +107,20 @@ export function makeReportClient(fetcher: typeof fetch) {
     url: "/api/reports/delivery",
     init: { cache: "no-store" },
   });
-  const sendReportBody = (text: string, resend: boolean) =>
-    deliver(ReportDeliveryResult, { action: "send", text, resend });
-  const sendReport: {
-    (resend: boolean): (text: string) => ReturnType<typeof sendReportBody>;
-  } & typeof sendReportBody = EffectFunction.dual(2, sendReportBody);
+  /** Sends the reviewed draft, with the evidence bundle the user previewed as its attachment. */
+  const sendReport = (
+    report: { readonly text: string; readonly evidence: ReportBundle | null },
+    resend: boolean,
+  ) => deliver(ReportDeliveryResult, { action: "send", ...report, resend });
+
+  /** Turns sending defects to the developer webhook on or off; answers the new status. */
+  const setDefectReports = (enabled: boolean) =>
+    deliver(ReportDeliveryStatus, { action: "defect_reports", enabled });
 
   return {
+    setDefectReports,
     openReportSession,
     readReportEvidence,
-    readReportDetail,
     requestDiagnosis,
     readDeliveryStatus,
     sendReport,
@@ -134,8 +129,8 @@ export function makeReportClient(fetcher: typeof fetch) {
 export const {
   openReportSession,
   readReportEvidence,
-  readReportDetail,
   requestDiagnosis,
   readDeliveryStatus,
   sendReport,
+  setDefectReports,
 } = makeReportClient(appFetch);

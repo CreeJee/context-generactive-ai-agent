@@ -241,7 +241,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         expect(response.status).toBe(409);
         expect(yield* sdkCall(() => response.json())).toEqual({
           error: "unsupported_worker_capabilities",
-          detail: "Unsupported worker middleware member: unsupportedMember",
+          detail: "UnsupportedMiddlewareMember",
         });
         expect(yield* count("workflow_run_bindings WHERE session_id = ?", session)).toEqual({
           n: 0,

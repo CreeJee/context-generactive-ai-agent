@@ -5,7 +5,7 @@ import type { PlanStep } from "./workflow.ts";
 const step = (
   id: string,
   dependsOn: readonly string[] = [],
-  status: PlanStep["status"] = "pending",
+  status: PlanStep["status"] = "ready",
 ): PlanStep => ({
   id,
   title: id,
@@ -39,10 +39,10 @@ describe("planDependencyIssues", () => {
 });
 
 describe("planSchedule", () => {
-  it("makes pending steps ready only once every dependency is completed", () => {
+  it("makes not-started steps ready only once every dependency is done", () => {
     expect(
       planSchedule([
-        step("a", [], "completed"),
+        step("a", [], "done"),
         step("b", ["a"]),
         step("c", ["a", "b"]),
         step("d", [], "in_progress"),
@@ -87,6 +87,6 @@ describe("planSchedule", () => {
         ],
       },
     );
-    expect(planSchedule([step("a", [], "completed")])).toEqual({ kind: "finished" });
+    expect(planSchedule([step("a", [], "done")])).toEqual({ kind: "finished" });
   });
 });

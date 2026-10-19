@@ -17,6 +17,8 @@ import {
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
+import { HumanDecisions } from "../kanban/human-decision.ts";
+import { stepProgressStatus, type BoardAuthor } from "./card.ts";
 import {
   planDependencyIssues,
   planSchedule,
@@ -38,11 +40,14 @@ const exposeProgressRefusal = <A, R>(
 
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
-  const runtime = yield* Effect.context<Workflows | WorkflowExecution>();
+  const runtime = yield* Effect.context<Workflows | WorkflowExecution | HumanDecisions>();
   const run = Effect.runPromiseWith(runtime);
 
   return {
     forSession(sessionId: string, phase: WorkflowPhase, runId = ""): AnyServerTool[] {
+      // A run's own Plan and progress saves are board changes made by that run.
+      const author: BoardAuthor | undefined =
+        runId.length > 0 ? { _tag: "Orchestrator", runId } : undefined;
       const recordBlocker = toolDefinition({
         name: "record_workflow_blocker",
         description:
@@ -76,6 +81,8 @@ const make = Effect.gen(function* () {
               };
             }
             const state = yield* workflows.startNewGoal(sessionId, input);
+            // The replaced Goal's waits for people end with it.
+            yield* (yield* HumanDecisions).closeSuperseded(sessionId);
             const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
             return { phase: state.phase, goal: state.goal, plan: state.plan, goalInstanceId };
           }).pipe(
@@ -118,7 +125,9 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(UpdatePlan),
       }).server((input) =>
         run(
-          Effect.flatMap(Workflows, (workflows) => workflows.updatePlan(sessionId, input)).pipe(
+          Effect.flatMap(Workflows, (workflows) =>
+            workflows.updatePlan(sessionId, input, author),
+          ).pipe(
             Effect.tap(() => events.publishSession(sessionId, "run-state")),
             Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
             Effect.catchTag("PlanDependenciesRejected", (failure) =>
@@ -150,6 +159,7 @@ const make = Effect.gen(function* () {
               planEvidence: input.planEvidence ?? [],
             },
             runId,
+            author,
           ),
         ).pipe(
           Effect.tap(() => events.publishSession(sessionId, "run-state")),
@@ -187,6 +197,9 @@ export class WorkflowTools extends Context.Service<WorkflowTools, Effect.Success
 ) {
   static readonly layer = Layer.effect(WorkflowTools, make);
 }
+
+const progressStatusOf = (step: PlanStep | undefined) =>
+  step === undefined ? "unknown" : stepProgressStatus(step.status);
 
 const compactList = (items: readonly string[], limit = 6) =>
   items.length === 0
@@ -311,7 +324,7 @@ ${
   isTruthy(state.plan)
     ? `Approved Plan v${state.plan.version}: ${state.plan.summary}
 Current steps:
-${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}${step.status === "completed" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.map((id) => `${id} [${state.plan?.steps.find((candidate) => candidate.id === id)?.status ?? "unknown"}]`).join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}${scheduleText(state.plan.steps)}`
+${state.plan.steps.map((step) => `- ${step.id} [${stepProgressStatus(step.status)}]: ${step.title}${step.status === "done" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.map((id) => `${id} [${progressStatusOf(state.plan?.steps.find((candidate) => candidate.id === id))}]`).join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}${scheduleText(state.plan.steps)}`
     : "Approved Plan: missing."
 }`;
       case "verify":

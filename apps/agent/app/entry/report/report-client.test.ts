@@ -5,8 +5,8 @@ import { beforeEach, expect, vi } from "vite-plus/test";
 import { makeReportClient, ReportRequestFailed } from "./report-client";
 
 const transport = vi.fn<typeof fetch>();
-const { readReportDetail, readReportEvidence } = makeReportClient(transport);
-const selection = { project: "p1", session: "s1", item: "c1" };
+const { readReportEvidence } = makeReportClient(transport);
+const selection = { project: "p1", session: "s1" };
 beforeEach(() => {
   transport.mockReset();
 });
@@ -22,20 +22,10 @@ it.effect("keeps a rejected response typed without reading private server detail
   }),
 );
 
-it.effect("rejects malformed evidence and details for a different item", () =>
+it.effect("rejects a malformed evidence bundle", () =>
   Effect.gen(function* () {
     transport.mockResolvedValueOnce(Response.json({ session: {} }));
     expect((yield* Effect.flip(readReportEvidence(selection)))._tag).toBe("SchemaError");
-    transport.mockResolvedValueOnce(
-      Response.json({ id: "different", text: "private", truncated: false }),
-    );
-    expect((yield* Effect.flip(readReportDetail(selection)))._tag).toBe("SchemaError");
-    transport.mockResolvedValueOnce(Response.json({ id: "c1", text: "reviewed", truncated: true }));
-    expect(yield* readReportDetail(selection)).toEqual({
-      id: "c1",
-      text: "reviewed",
-      truncated: true,
-    });
   }),
 );
 
@@ -52,12 +42,12 @@ it.effect("aborts the scoped transport when its owning request is interrupted", 
             return yield* Effect.die("missing request signal");
           yield* Deferred.succeed(started, signal);
           yield* Deferred.await(blocked);
-          return Response.json({ id: "c1", text: "late", truncated: false });
+          return Response.json({});
         }),
         { signal: init?.signal ?? undefined },
       ),
     );
-    const task = yield* Effect.forkChild(readReportDetail(selection));
+    const task = yield* Effect.forkChild(readReportEvidence(selection));
     const signal = yield* Deferred.await(started);
     yield* Fiber.interrupt(task);
     assertTrue(signal.aborted);

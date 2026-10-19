@@ -207,7 +207,12 @@ if (folderArgument === "acp") {
     }),
   );
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  build.entry.module.configureAgentBackend({ storageRoot, runtimeRoot: runtime, buildConfig });
+  build.entry.module.configureAgentBackend({
+    storageRoot,
+    runtimeRoot: runtime,
+    buildConfig,
+    release: readReleaseInfo().version,
+  });
   await runNativeEffect(
     Scope.addFinalizer(backendScope, Effect.promise(build.entry.module.disposeAgent)),
   );

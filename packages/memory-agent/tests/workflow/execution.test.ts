@@ -122,7 +122,7 @@ const citeProof = Effect.fnUntraced(function* (sessionId: string, toolCall: Scri
       sessionId,
     ),
   );
-  const step = state.plan?.steps.find((candidate) => candidate.status === "completed");
+  const step = state.plan?.steps.find((candidate) => candidate.status === "done");
   if (state.goal === null || step === undefined)
     return yield* new Cause.UnknownError(undefined, "Missing completed step");
   const outcomes = state.goal.outcomes;

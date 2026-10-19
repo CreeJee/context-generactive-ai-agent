@@ -30,6 +30,24 @@ export const sessionQueries = {
       queryKey: appQueryKeys.session.trace(projectId, sessionId),
       queryFn: () => api.workTrace(sessionId),
     }),
+  board: (projectId: string, sessionId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.session.board(projectId, sessionId),
+      queryFn: () => api.board(sessionId),
+      staleTime: 0,
+    }),
+  decisions: (projectId: string, sessionId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.session.decisions(projectId, sessionId),
+      queryFn: () => api.decisions(sessionId),
+      staleTime: 0,
+    }),
+  kanban: (projectId: string, sessionId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.session.kanban(projectId, sessionId),
+      queryFn: () => api.kanban(sessionId),
+      staleTime: 0,
+    }),
   btw: (projectId: string, sessionId: string) =>
     queryOptions({
       queryKey: appQueryKeys.session.btw(projectId, sessionId),
@@ -66,6 +84,21 @@ const useApprovalsQueryBody = (projectId: string, sessionId: string) =>
 export const useApprovalsQuery: {
   (sessionId: string): (projectId: string) => ReturnType<typeof useApprovalsQueryBody>;
 } & typeof useApprovalsQueryBody = EffectFunction.dual(2, useApprovalsQueryBody);
+const useBoardQueryBody = (projectId: string, sessionId: string) =>
+  useQuery(sessionQueries.board(projectId, sessionId));
+export const useBoardQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useBoardQueryBody>;
+} & typeof useBoardQueryBody = EffectFunction.dual(2, useBoardQueryBody);
+const useDecisionsQueryBody = (projectId: string, sessionId: string) =>
+  useQuery(sessionQueries.decisions(projectId, sessionId));
+export const useDecisionsQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useDecisionsQueryBody>;
+} & typeof useDecisionsQueryBody = EffectFunction.dual(2, useDecisionsQueryBody);
+const useKanbanQueryBody = (projectId: string, sessionId: string) =>
+  useQuery(sessionQueries.kanban(projectId, sessionId));
+export const useKanbanQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useKanbanQueryBody>;
+} & typeof useKanbanQueryBody = EffectFunction.dual(2, useKanbanQueryBody);
 const useObservedRunStateQueryBody = (
   projectId: string,
   sessionId: string,

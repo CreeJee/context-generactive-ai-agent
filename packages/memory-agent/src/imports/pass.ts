@@ -1,5 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+import { failureTags } from "../runtime/logged-failures.ts";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";
@@ -60,17 +61,8 @@ export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.mapError(effect, (cause) => ImportStoreFailed.make({ cause }));
 
-/** What settings says went wrong: the error's message, never the transcript's content. */
-const failureOf = (cause: Cause.Cause<unknown>) => {
-  const error = Cause.squash(cause);
-  const reason =
-    error instanceof Error
-      ? error.message.length > 0
-        ? error.message
-        : error.name
-      : String(error);
-  return reason.slice(0, failureLength);
-};
+/** What settings says went wrong: the failures' tags, never the transcript's content. */
+const failureOf = (cause: Cause.Cause<unknown>) => failureTags(cause).slice(0, failureLength);
 
 /** True when `candidate` is `root` or below it. Compared by spelling: a recorded cwd may be gone. */
 function isWithin(root: string, candidate: string): boolean {
@@ -315,7 +307,8 @@ const make = (home: string) =>
             size: Number(info.size),
             mtimeMs: Option.getOrUndefined(info.mtime)?.getTime() ?? 0,
           })),
-          Effect.orElseSucceed(() => null),
+          // A transcript removed since the walk has nothing new.
+          Effect.catchTag("PlatformError", () => Effect.succeed(null)),
         );
         if (!isTruthy(stats)) return 0;
         const cursor = Option.getOrNull(
@@ -424,7 +417,8 @@ const make = (home: string) =>
 
       /**
        * Reads what is new in every transcript. A file that cannot be read, or a line that cannot be
-       * written, fails that transcript alone: it is recorded and tried again on the next pass.
+       * written, fails that transcript alone: it is recorded and tried again on the next pass. A
+       * defect stops the pass.
        */
       run: <E, R>(onProgress: (progress: PassProgress) => Effect.Effect<void, E, R>) =>
         Effect.gen(function* () {
@@ -448,10 +442,12 @@ const make = (home: string) =>
           for (const transcript of found) {
             const outcome = yield* migrate(transcript, interpret, placement).pipe(
               Effect.map((written) => ({ written, failed: 0 })),
-              Effect.catchCauseIf(
-                (cause) => !Cause.hasInterruptsOnly(cause),
-                (cause) =>
-                  Effect.as(stored(recordFailure(transcript, cause)), { written: 0, failed: 1 }),
+              // A defect is not the transcript's: it stops the pass, and the watcher reports it.
+              Effect.catch((error) =>
+                Effect.as(stored(recordFailure(transcript, Cause.fail(error))), {
+                  written: 0,
+                  failed: 1,
+                }),
               ),
             );
             progress = {

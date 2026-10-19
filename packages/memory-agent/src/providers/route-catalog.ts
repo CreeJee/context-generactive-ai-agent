@@ -8,12 +8,12 @@ import {
   Option,
   Config,
   Context,
-  Data,
   Effect,
   Layer,
   Ref,
+  Schema,
 } from "effect";
-import type { AuthConnectionState, ProviderId, ProviderModel } from "./contracts.ts";
+import { ProviderId, type AuthConnectionState, type ProviderModel } from "./contracts.ts";
 import type { ImageRouteContract } from "./image-contracts.ts";
 import { imageRouteContracts } from "./image-contracts.ts";
 import { ProviderRegistry } from "./registry.ts";
@@ -100,22 +100,34 @@ export interface RouteCatalogSnapshot {
   readonly execution: readonly ExecutionRoute[];
 }
 
-export class RouteCatalogRefreshFailed extends Data.TaggedError("RouteCatalogRefreshFailed")<{
-  readonly provider?: ProviderId;
-  readonly operation: "provider" | "auth" | "models" | "tools";
-  readonly cause: unknown;
-}> {}
+export class RouteCatalogRefreshFailed extends Schema.TaggedError<RouteCatalogRefreshFailed>()(
+  "RouteCatalogRefreshFailed",
+  {
+    provider: Schema.optionalKey(ProviderId),
+    operation: Schema.Literals(["provider", "auth", "models", "tools", "config"]),
+    reason: Schema.Union([
+      /** The provider, its catalog or the environment failed; `cause` has its error. */
+      Schema.TaggedStruct("Failed", {}),
+      /** A provider's catalog listed a model under another provider. */
+      Schema.TaggedStruct("ProviderMismatch", {}),
+    ]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
-export class UnknownCatalogRoute extends Data.TaggedError("UnknownCatalogRoute")<{
-  readonly routeType: "chat" | "media" | "execution";
-  readonly id: string;
-}> {}
+export class UnknownCatalogRoute extends Schema.TaggedError<UnknownCatalogRoute>()(
+  "UnknownCatalogRoute",
+  { routeType: Schema.Literals(["chat", "media", "execution"]), id: Schema.String },
+) {}
 
-export class IncompatibleCatalogRoutes extends Data.TaggedError("IncompatibleCatalogRoutes")<{
-  readonly chatRouteId: string;
-  readonly mediaRouteId: string;
-  readonly reason: string;
-}> {}
+export class IncompatibleCatalogRoutes extends Schema.TaggedError<IncompatibleCatalogRoutes>()(
+  "IncompatibleCatalogRoutes",
+  {
+    chatRouteId: Schema.String,
+    mediaRouteId: Schema.String,
+    reason: Schema.Literals(["media_generation_unsupported"]),
+  },
+) {}
 
 export interface RouteCatalogApi {
   readonly snapshot: Effect.Effect<RouteCatalogSnapshot>;
@@ -181,16 +193,26 @@ const sourceFromServices = Effect.gen(function* () {
       const authByProvider = MutableHashMap.empty<ProviderId, RouteAuthEvidence>();
 
       for (const provider of [...providers.providers].toSorted()) {
-        const configuration = yield* providers
-          .get(provider)
-          .pipe(
-            Effect.mapError(
-              (cause) => new RouteCatalogRefreshFailed({ provider, operation: "provider", cause }),
-            ),
-          );
+        const configuration = yield* providers.get(provider).pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteCatalogRefreshFailed({
+                provider,
+                operation: "provider",
+                reason: { _tag: "Failed" },
+                cause,
+              }),
+          ),
+        );
         const status = yield* configuration.auth.status.pipe(
           Effect.mapError(
-            (cause) => new RouteCatalogRefreshFailed({ provider, operation: "auth", cause }),
+            (cause) =>
+              new RouteCatalogRefreshFailed({
+                provider,
+                operation: "auth",
+                reason: { _tag: "Failed" },
+                cause,
+              }),
           ),
         );
         const connection = providerConnection(provider);
@@ -202,7 +224,13 @@ const sourceFromServices = Effect.gen(function* () {
         MutableHashMap.set(authByProvider, provider, authentication);
         const models = yield* configuration.models.list.pipe(
           Effect.mapError(
-            (cause) => new RouteCatalogRefreshFailed({ provider, operation: "models", cause }),
+            (cause) =>
+              new RouteCatalogRefreshFailed({
+                provider,
+                operation: "models",
+                reason: { _tag: "Failed" },
+                cause,
+              }),
           ),
         );
         for (const model of models) {
@@ -210,7 +238,7 @@ const sourceFromServices = Effect.gen(function* () {
             return yield* new RouteCatalogRefreshFailed({
               provider,
               operation: "models",
-              cause: new Error(`model provider mismatch: ${model.provider}:${model.id}`),
+              reason: { _tag: "ProviderMismatch" },
             });
           const chatRoute: ChatRoute = Object.freeze({
             type: "chat",
@@ -246,7 +274,12 @@ const sourceFromServices = Effect.gen(function* () {
                   Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
                   Effect.mapError(
                     (cause) =>
-                      new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
+                      new RouteCatalogRefreshFailed({
+                        provider,
+                        operation: "tools",
+                        reason: { _tag: "Failed" },
+                        cause,
+                      }),
                   ),
                 );
             }
@@ -278,7 +311,16 @@ const sourceFromServices = Effect.gen(function* () {
       const openAIKey = yield* Config.String("OPENAI_API_KEY")
         .pipe(Config.option)
         .parse(ConfigProvider.fromEnv())
-        .pipe(Effect.orDie);
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteCatalogRefreshFailed({
+                operation: "config",
+                reason: { _tag: "Failed" },
+                cause,
+              }),
+          ),
+        );
       const openAIAuth =
         Option.getOrUndefined(MutableHashMap.get(authByProvider, "openai")) ??
         authEvidence("openai", { provider: "openai", status: "signed-out" }, "subscription_oauth");
@@ -370,7 +412,7 @@ function makeRouteCatalogBody(
             return yield* new IncompatibleCatalogRoutes({
               chatRouteId,
               mediaRouteId,
-              reason: "media route does not support image generation",
+              reason: "media_generation_unsupported",
             });
           return Object.freeze({
             initiatorChatRouteId: chatRoute.id,

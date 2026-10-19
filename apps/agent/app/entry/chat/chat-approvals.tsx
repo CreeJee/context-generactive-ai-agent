@@ -64,7 +64,7 @@ export function ChatApprovals({
     runUiEffect(
       uiPromise(() => trackDiscard(api.discardInterrupts(sessionId, holder))).pipe(
         Effect.tap(() => Effect.sync(onResync)),
-        Effect.catch((failure) =>
+        Effect.catchTag("UnknownError", (failure) =>
           Effect.sync(() =>
             onProblem(
               isApiError(failure.cause) && failure.cause.code === "run_in_progress"

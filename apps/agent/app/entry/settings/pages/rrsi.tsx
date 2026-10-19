@@ -64,6 +64,8 @@ const reasons = {
   local_model_unavailable: "로컬 모델 연결을 확인하세요",
   sealed_corpus_exhausted: "최종 평가 과제를 새 버전으로 교체해야 해요",
   experiment_running: "이미 실험 중이에요",
+  state_operation_failed: "실험 상태를 저장하거나 읽지 못했어요",
+  configuration_failed: "실행 환경이나 원본 저장소 설정을 읽지 못했어요",
   validation_rejected: "검증 과제를 통과하지 못했어요",
   heldout_rejected: "최종 평가를 통과하지 못했어요",
   edit_budget: "변경 범위를 초과했어요",
@@ -78,6 +80,9 @@ const reasons = {
   code_validating: "코드 후보를 검사하고 있어요",
   pending: "평가를 기다리고 있어요",
 };
+/** What a failed request says: this page's own wording, never a browser or transport message. */
+const requestFailure = (failure: Error) =>
+  Schema.is(ExperimentRequestFailed)(failure) ? failure.message : "요청을 처리하지 못했어요";
 function reasonLabel(reason: string) {
   return Object.entries(reasons).find(([key]) => key === reason)?.[1];
 }
@@ -138,7 +143,7 @@ export function RrsiSettings() {
       setError(null);
       void cache.invalidateQueries({ queryKey });
     },
-    onError: (failure) => setError(failure.message),
+    onError: (failure) => setError(requestFailure(failure)),
   });
   if (!isTruthy(status))
     return (
@@ -149,7 +154,7 @@ export function RrsiSettings() {
         />
         {queryError !== null ? (
           <>
-            <PageError error={queryError.message} />
+            <PageError error={requestFailure(queryError)} />
             <Button variant="outline" disabled={isFetching} onClick={() => void refetch()}>
               다시 시도
             </Button>
@@ -279,7 +284,7 @@ export function RrsiSettings() {
           </CollapsibleContent>
         </Collapsible>
       ))}
-      <PageError error={error ?? queryError?.message ?? null} />
+      <PageError error={error ?? (queryError !== null ? requestFailure(queryError) : null)} />
     </FieldGroup>
   );
 }

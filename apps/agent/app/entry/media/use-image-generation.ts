@@ -1,5 +1,5 @@
-import { Effect, Cause } from "effect";
-import { runUiEffect, uiPromise, uiFailure } from "../shared/ui-effect";
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { useMutation } from "@tanstack/react-query";
 import { useBooleanState } from "react-simplikit";
 import { api, isApiError } from "../api";
@@ -17,9 +17,9 @@ export function useImageGeneration(onProblem: (message: string) => void) {
     mutationFn: (prompt: string) =>
       runUiEffect(
         uiPromise(() => api.generateImage(prompt, true)).pipe(
-          Effect.catchCause((cause) =>
+          Effect.catchTag("UnknownError", (rejected) =>
             Effect.gen(function* () {
-              const failure = uiFailure(cause);
+              const failure = rejected.cause;
               const approval = isApiError(failure) ? failure.approval : undefined;
               const choice =
                 isApiError(failure) &&
@@ -28,7 +28,7 @@ export function useImageGeneration(onProblem: (message: string) => void) {
                 approval !== undefined
                   ? yield* uiPromise(() => chooseCrossProviderApproval(approval))
                   : null;
-              if (choice === null) return yield* new Cause.UnknownError(failure);
+              if (choice === null) return yield* rejected;
               switch (choice.kind) {
                 case "cancel":
                   return null;
@@ -53,7 +53,7 @@ export function useImageGeneration(onProblem: (message: string) => void) {
         return yield* Effect.gen(function* () {
           return (yield* uiPromise(() => generation.mutateAsync(prompt))) !== null;
         }).pipe(
-          Effect.catchCause(() =>
+          Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
               onProblem("이미지를 생성하지 못했어요. 설정과 계정 권한을 확인해 주세요.");
               return false;

@@ -1,4 +1,11 @@
 import { NodeWorker } from "@effect/platform-node";
+import { ignoreLogged } from "../runtime/logged-failures.ts";
+import {
+  healthyLoop,
+  sameLoopHealth,
+  superviseLoopStep,
+  type LoopHealth,
+} from "../runtime/loop-health.ts";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 // NodeWorker spawns the thread this constructor makes.
@@ -8,6 +15,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  FiberHandle,
   Layer,
   Option,
   Ref,
@@ -96,6 +104,8 @@ export interface ImportOverview {
   readonly unindexed: number;
   /** Null until this server has started a pass. */
   readonly activity: ImportActivity | null;
+  /** How the watcher that runs a pass every few minutes stands; null when this server has none. */
+  readonly watch: LoopHealth | null;
 }
 
 const progressOf = (reply: PassProgress): PassProgress => ({
@@ -311,6 +321,19 @@ const make = (watching: boolean, home: string) =>
     // starts a pass is answered at once, and the pass outlives it.
     const layerScope = yield* Effect.scope;
 
+    const crashed = (startedAt: string, reason: ImportWorkerFailed["reason"]) =>
+      Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        Effect.sync(() => {
+          activity = {
+            status: "crashed",
+            startedAt,
+            finishedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+            reason,
+          };
+          events.publishGlobal("imports");
+        }),
+      );
+
     /** The running pass, or a new one. Two passes would import a line twice before either marks it. */
     const begin = Effect.suspend(() => {
       if (running !== null) return Effect.succeed(running);
@@ -348,19 +371,9 @@ const make = (watching: boolean, home: string) =>
               ),
             ),
           ),
-          Effect.tapError((failure) =>
-            Effect.sync(() => {
-              activity = {
-                status: "crashed",
-                startedAt,
-                finishedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                ),
-                reason: failure.reason,
-              };
-              events.publishGlobal("imports");
-            }),
-          ),
+          Effect.tapError((failure) => crashed(startedAt, failure.reason)),
+          // A defect in the worker's pass stops it; the watcher reports it.
+          Effect.tapDefect(() => crashed(startedAt, "pass")),
           Effect.map((progress) => progress.written),
           Effect.onExit((exit) =>
             Effect.andThen(
@@ -385,7 +398,8 @@ const make = (watching: boolean, home: string) =>
      * nodes are the newest by time, and that is the order pending nodes come out in.
      */
     const backfill = Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
-      Effect.ignoreCause,
+      // Pending nodes stay pending; the next pass or start indexes them.
+      ignoreLogged("import_backfill_failed"),
       oneDrainAtATime.withPermits(1),
     );
 
@@ -394,23 +408,39 @@ const make = (watching: boolean, home: string) =>
       Effect.forkIn(
         Deferred.await(done).pipe(
           Effect.flatMap((written) => (written > 0 ? backfill : Effect.void)),
-          Effect.ignoreCause,
+          // The pass already recorded its outcome; settings shows it.
+          ignoreLogged("import_pass_failed"),
         ),
         layerScope,
       ),
     ).pipe(Effect.asVoid);
 
-    if (watching)
-      yield* Effect.forkScoped(
-        Effect.repeat(
-          Effect.gen(function* () {
-            const settings = yield* config.read;
-            if (settings.importsEnabled !== true) return;
-            if ((yield* runOnce) > 0) yield* backfill;
-          }).pipe(Effect.ignoreCause),
-          Schedule.spaced(pollEvery),
-        ),
-      );
+    let watchHealth: LoopHealth = healthyLoop;
+    const setWatchHealth = (next: LoopHealth) =>
+      Effect.sync(() => {
+        if (sameLoopHealth(watchHealth, next)) return;
+        watchHealth = next;
+        events.publishGlobal("imports");
+      });
+    /**
+     * Runs a pass every few minutes while migration is on. A failed round is retried with backoff;
+     * when the retries run out, or a defect happens, the watcher stops and settings shows why
+     * until the user restarts it (decided 2026-10-18).
+     */
+    const watchLoop = Effect.gen(function* () {
+      const settings = yield* config.read;
+      if (settings.importsEnabled !== true) return;
+      if ((yield* runOnce) > 0) yield* backfill;
+    }).pipe(
+      superviseLoopStep({ message: "import_watch_failed", setHealth: setWatchHealth }),
+      Effect.repeat({
+        schedule: Schedule.spaced(pollEvery),
+        while: (step) => step._tag === "Continued",
+      }),
+    );
+    const watcher = yield* FiberHandle.make();
+    const startWatch = FiberHandle.run(watcher, watchLoop, { onlyIfMissing: true });
+    if (watching) yield* startWatch;
 
     const overview = Effect.gen(function* () {
       // As it was when asked; counting below may take long enough for a short pass to end.
@@ -420,7 +450,15 @@ const make = (watching: boolean, home: string) =>
       const counts =
         current?.status === "running" && isTruthy(latestCounts)
           ? latestCounts
-          : yield* countTranscripts.pipe(Effect.orElseSucceed(() => latestCounts ?? []));
+          : yield* countTranscripts.pipe(
+              // The worker could not count: the last counts, or none, until it can.
+              Effect.catchTag("ImportWorkerFailed", (error) =>
+                Effect.as(
+                  Effect.logDebug("import_count_failed", { reason: error.reason }),
+                  latestCounts ?? [],
+                ),
+              ),
+            );
       return {
         enabled: settings.importsEnabled ?? false,
         interpret: settings.importsInterpret ?? true,
@@ -438,6 +476,7 @@ const make = (watching: boolean, home: string) =>
         failures: yield* failedTranscripts(),
         unindexed: yield* indexer.pending,
         activity: current,
+        watch: watching ? watchHealth : null,
       } satisfies ImportOverview;
     });
 
@@ -445,12 +484,19 @@ const make = (watching: boolean, home: string) =>
       runOnce,
       start: startPass,
       overview,
+      /** The watch loop's health without counting transcripts; `null` when not watching. */
+      watchHealth: Effect.sync(() => (watching ? watchHealth : null)),
       /** Turns migration on or off and, when turning it on, starts reading what is there now. */
       setEnabled: (enabled: boolean) =>
         Effect.andThen(
           config.update({ importsEnabled: enabled }),
           enabled ? startPass : Effect.void,
         ),
+      /** Starts the watcher again after it stopped on exhausted retries or a defect. */
+      restartWatch: Effect.andThen(setWatchHealth(healthyLoop), startWatch).pipe(
+        Effect.when(Effect.succeed(watching)),
+        Effect.asVoid,
+      ),
       setInterpret: (interpret: boolean) =>
         Effect.asVoid(config.update({ importsInterpret: interpret })),
     };
