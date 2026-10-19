@@ -13,6 +13,7 @@ import {
   WorkflowState,
 } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
@@ -349,9 +350,9 @@ testAgent()("criterion-linked Goal completion", (it) => {
   it.effect("WorkflowTools binds the recorder separately from untrusted input", () =>
     Effect.gen(function* () {
       const fx = yield* fixture("native");
-      const tool = (yield* WorkflowTools)
-        .forSession(fx.sessionId, "execute", fx.run)
-        .find((item) => item.name === "update_workflow_progress");
+      const tool = (yield* inRun(
+        (yield* WorkflowTools).forSession(fx.sessionId, "execute", fx.run),
+      )).find((item) => item.name === "update_workflow_progress");
       if (!isTruthy(tool?.execute)) return yield* Effect.die("Missing progress tool");
       const execute = tool.execute;
       const result = yield* Effect.tryPromise({

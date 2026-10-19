@@ -12,6 +12,7 @@ import {
 import { SkillTools } from "../../src/tools/skills.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 const sdk = <A>(operation: () => A | PromiseLike<A>) =>
@@ -116,7 +117,7 @@ testAgent()("global and project skills", (it) => {
         expect(catalog.problems).toEqual([
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
-        const tools = yield* (yield* SkillTools).forProject(project);
+        const tools = yield* inRun((yield* SkillTools).forProject(project));
         expect(tools.instructions).toContain("- review (project): Project review.");
         expect(tools.instructions).toContain("guidance, not permission");
         const read = tools.tools[0]?.execute;

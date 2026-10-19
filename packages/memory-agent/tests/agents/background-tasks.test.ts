@@ -9,6 +9,7 @@ import {
 } from "../../src/tools/background.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { freshSession, sdk } from "./agent-env.ts";
 import { sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
 
@@ -38,7 +39,8 @@ const readResult = Effect.fnUntraced(function* (
   input: { readonly taskId: string; readonly offset?: number },
 ) {
   const tasks = yield* BackgroundTasks;
-  return yield* sdk(() => tasks.forSession(sessionId)[0]!.execute!(input));
+  const [get] = yield* inRun(tasks.forSession(sessionId));
+  return yield* sdk(() => get!.execute!(input));
 });
 
 /** The rejection of a tool call that must fail; a call that succeeds fails the test as a defect. */
@@ -274,9 +276,9 @@ testAgent()("read-only background results", (it) => {
       yield* tasks.waitResult(session.id, receipt.taskId, 2000);
       expect((yield* trace.taskDetail(session.id, receipt.taskId))?.task.status).toBe("completed");
       const changes = yield* sqlGet("SELECT total_changes() AS n");
-      const get = tasks
-        .forSession(session.id)
-        .find((tool) => tool.name === "get_background_result")!;
+      const get = (yield* inRun(tasks.forSession(session.id))).find(
+        (tool) => tool.name === "get_background_result",
+      )!;
       yield* Effect.acquireRelease(sqlExec("PRAGMA query_only = ON"), () =>
         Effect.orDie(sqlExec("PRAGMA query_only = OFF")),
       );
@@ -302,7 +304,7 @@ testAgent()("background shell across restart", (it) => {
         const { project, session } = env;
         const background = yield* BackgroundTasks;
         const run = yield* runOf(session.id);
-        const [save, shell] = (yield* ApprovedTools).forProject(project, "gate", run);
+        const [save, shell] = yield* inRun((yield* ApprovedTools).forProject(project, "gate", run));
         const script = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
         yield* sdk(() =>
           save.execute!({ name: "wait-release", description: "Wait for release", script }),

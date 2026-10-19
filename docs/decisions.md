@@ -1794,6 +1794,13 @@
 - 사이드바는 세션에 브랜치(없으면 worktree 폴더 이름) 배지를 달고, 작업 위치가 하나라도 있으면 "모든 작업 위치 / 저장소 본체 / 브랜치별" 필터를 보인다. worktree를 만들고 지우는 관리 화면은 두지 않는다. Orca 같은 도구의 일이고 이 앱의 역할은 기억과 대화다.
 - 이 앱에서 직접 연 대화(실행 폴더·브라우저에서 추가한 폴더가 worktree인 경우)를 저장소 프로젝트에 넣는 일은 아직 하지 않았다. 실행 중인 세션의 파일·셸 도구가 worktree와 원래 checkout 중 어디서 일할지 먼저 정해야 한다.
 
+### worktree 프로젝트를 접을 때 노드 옮기기 (2026-10-20)
+
+- 증상: 노드가 있는 worktree 프로젝트를 접으면 `UPDATE nodes SET project_id`가 `nodes_immutable` trigger에 막혀 가져오기 회차 전체가 매번 실패했다(`ImportStoreFailed` ← `nodes are immutable evidence`). 10/17의 접기 테스트가 노드 없는 프로젝트만 다뤄서 놓쳤다.
+- 결정: secret sweep처럼 이동 전용 permit을 둔다. `node_project_moves(from_project, to_project)`에 행을 쓰고, `project_id`를 바꾸고, 행을 지우는 일을 한 트랜잭션에서 한다. trigger는 그 프로젝트 쌍의 permit이 있고 `project_id` 말고는 아무것도 바뀌지 않을 때만 허용한다. sweep permit은 여전히 텍스트만 바꾼다. 둘 다 아니면 전처럼 거부한다.
+- 버린 안: 노드는 두고 접힌 프로젝트를 소유 프로젝트의 alias로 조회 때 해석하는 방식. 검색·회상·임베딩 후보(`nodes_embeddable`)·지식 등 `nodes.project_id`로 범위를 정하는 모든 조회가 alias를 알아야 해서, 하나라도 빠지면 접은 대화가 검색에서 사라진다. permit은 한 곳만 바꾸고 10/17 결정("검색 범위는 `nodes.project_id`로 정해져서 벡터는 그대로 둔다")과 그대로 맞는다.
+- `ImportStoreFailed`에 실패 단계 reason(`WorktreeParents`·`Fold`·`Mapping`·`Cursor`·`Title`·`FailureRecord`)을 단다. worker 로그는 `failure`에 `ImportStoreFailed:Fold`처럼 태그와 reason만 따로 남긴다. SQL과 경로는 reason에 넣지 않는다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)
@@ -2262,6 +2269,8 @@
 - worker 내부 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
 - 사용자 결정: 메모리 도구는 고친다. `MemoryTools.forRun`은 Effect가 되어 호출한 실행의 context를 잡고, 도구 Effect는 그 위에 서비스를 덮어 돈다(`MemoryToolEnvironment.caller`). 그래서 도구 span이 run span과 같은 trace에 붙는다. `forProject`는 Layer를 만들 때의 context를 쓴다. BTW도 질문을 처리하는 `BtwChat.handle`의 context를 넘긴다. Goal native owner 경로도 같은 실행 안에서 따로 빌드한 `createMemoryTools`를 부를 뿐이고, 아티팩트가 `effect`를 번들하지 않아 호스트 런타임을 공유하므로 실행 context를 넘긴다.
 - 사용자 요청: delegate(`DelegateTools.forRun`)·workflow(`WorkflowTools.forSession`) 도구도 실행 context를 `caller`로 받아 run trace에 붙인다. 서비스는 Layer를 만들 때의 것을 위에 덮어 그대로 쓰고, tracer와 부모 span만 실행에서 온다.
+- 사용자 결정 (2026-10-19): 실행 context는 인자로 넘기지 않고 요구 타입으로 주입한다. run 도구 팩토리(파일·outside·approved·MCP·스킬·Kagi·delegate·workflow·백그라운드·그림 미리보기·메모리 `forRun`)는 `Effect<도구, E, Tracer.ParentSpan>`을 돌려주고, 안에서 `runTrace`(`Context.Context<Tracer.ParentSpan>`)를 읽는다. span 밖에서 도구를 만들면 컴파일되지 않는다. `Effect.fn`으로 감싼 팩토리는 자기 span이 시작되기 전에 읽어, 도구가 팩토리 span이 아니라 run span 아래에 붙게 한다.
+- 이 타입으로 `AgentChat.handle`에 span이 없어 채팅 도구가 붙을 run span이 없었던 것을 찾았다. `AgentChat.handle`·`CardAgent.run`·`CardAgent.verify`에 span을 달았다. `Effect.fn`의 타입은 `ParentSpan` 요구를 지우지 않으므로 `BtwChat.handle`은 `fnUntraced`에 `Effect.withSpan`을 붙인다.
 - 절차는 `.agents/skills/effect-profile` 스킬에 둔다.
 
 ## 저장소 전체 Effect 오류의 typed error 정리 (2026-10-18)
@@ -2317,3 +2326,8 @@
 
 - 사용자 결정: 리터럴 태그를 가진 서로소 유니온의 분기는 `switch` 대신 Effect의 `match`로 쓴다. Schema 유니온은 `Schema.toTaggedUnion("<tag>")`로 정의해 `.match`로, 일반 값은 `Match.discriminatorsExhaustive("<tag>")`(`_tag`이면 `Match.valueTags`)로 분기한다. 모든 경우를 처리해야 타입 검사를 통과한다.
 - 새 코드에는 `switch`를 쓰지 않는다. 기존 `switch`는 그 코드를 고칠 때 함께 바꾼다. `"key" in obj` 판별 금지는 그대로다.
+
+## compatible 메인 채팅 tool 노출과 모델 턴 진단 로그 (2026-10-20)
+
+- 메인 채팅과 btw가 compatible 모델에 tool을 줄지는 선택된 endpoint 계정에 등록된 그 모델의 `toolCalling`으로만 정한다(`compatibleToolCalling`). 계정 도입 전 단일 `openaiCompatible` 설정은 `compatibleAccountsOf`가 읽어 같은 판단에 들어간다. 메인 채팅이 레거시 `openaiCompatible.toolCalling`만 읽어, 계정으로 저장된 설정(레거시 키를 지움)에서는 tool이 항상 빠지고 모델이 "확인하겠습니다"만 내고 멈췄다.
+- compatible 어댑터는 provider 턴이 끝날 때(`RUN_FINISHED`) `Compatible model turn finished` 로그에 SDK run ID, `finishReason`, 보낸 tool 정의 수, 받은 tool call 수만 남긴다. 프롬프트·응답 본문·모델 ID·endpoint·키는 남기지 않는다. 진단용 임시 로그가 아니라 유지한다.

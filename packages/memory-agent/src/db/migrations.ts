@@ -1702,6 +1702,31 @@ export const migrations: readonly string[] = [
     protected_branches_json TEXT NOT NULL CHECK (json_valid(protected_branches_json))
   );
   `,
+  `
+  -- Folding a worktree project into its repository's project moves its nodes too. Nodes stay
+  -- immutable evidence; a move writes a permit for that pair of projects, changes project_id and
+  -- removes the permit in one transaction. The permit lets only project_id change, and a secret
+  -- sweep permit still lets only the text change. Anything else is refused as before.
+  CREATE TABLE node_project_moves (
+    from_project TEXT PRIMARY KEY,
+    to_project TEXT NOT NULL
+  );
+  DROP TRIGGER nodes_immutable;
+  CREATE TRIGGER nodes_immutable BEFORE UPDATE ON nodes
+  WHEN NOT (
+    new.seq = old.seq AND new.id = old.id
+    AND new.session_id IS old.session_id AND new.run_id IS old.run_id
+    AND new.kind = old.kind AND new.detail = old.detail AND new.created_at = old.created_at
+    AND (
+      (EXISTS (SELECT 1 FROM secret_sweep_permits WHERE node_seq = old.seq)
+        AND new.project_id = old.project_id)
+      OR (EXISTS (SELECT 1 FROM node_project_moves
+            WHERE from_project = old.project_id AND to_project = new.project_id)
+        AND new.text = old.text)
+    )
+  )
+  BEGIN SELECT RAISE(ABORT, 'nodes are immutable evidence'); END;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

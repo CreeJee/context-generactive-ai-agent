@@ -11,6 +11,7 @@ import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { Projects } from "../projects/projects.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -27,12 +28,15 @@ import {
 /** Progress is sent at most this often; the last count of a pass always goes out. */
 const progressEveryMs = 100;
 
-/** The cause stays in this worker's log; only the reason crosses to the server. */
+/**
+ * The cause stays in this worker's log; only the reason crosses to the server. `failure` names the
+ * failures' tags and reasons, such as the import store step, so the line says where it stopped.
+ */
 const failed =
   (reason: ImportWorkerFailed["reason"], message: string) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
-      Effect.tapCause((cause) => Effect.logError(message, cause)),
+      Effect.tapCause((cause) => Effect.logError(message, { failure: failureTags(cause) }, cause)),
       Effect.mapError(() => ImportWorkerFailed.make({ reason })),
     );
 

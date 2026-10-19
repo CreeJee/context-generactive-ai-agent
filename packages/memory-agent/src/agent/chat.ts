@@ -2,6 +2,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { ExecutionAdmission, ExecutionSaturated } from "../runtime/execution-admission.ts";
+import { runTrace } from "../runtime/run-trace.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
@@ -72,6 +73,7 @@ import {
   imageProviderWorkflowPrompt,
 } from "../providers/image-feature.ts";
 import { ImageRouter } from "../providers/image-router.ts";
+import { compatibleToolCalling } from "../providers/openai-compatible-config.ts";
 import {
   providerConnection,
   ProviderId,
@@ -1916,19 +1918,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           delivery.forRun({ projectId, sessionId, runId }),
           ...(!(reportSource !== null) ? [projectInstructions(project.root)] : []),
         ];
-        // Tools run on this run's context, so their spans join its trace.
-        const caller = yield* Effect.context<never>();
         // Trusted external ACP agents (R17); every delegation is gated below.
         const delegation =
           workflowReadOnly || reportSource !== null
             ? { tools: [], instructions: null }
-            : yield* delegateTools.forRun(
-                project,
-                sessionId,
-                abortController.signal,
-                runId,
-                caller,
-              );
+            : yield* delegateTools.forRun(project, sessionId, abortController.signal, runId);
         // The gate runs right after chat state, so a refused call is skipped before tools run. In
         // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
         // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
@@ -1963,15 +1957,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? []
             : workflowReadOnly
               ? workflow.phase === "verify"
-                ? approvedTools
-                    .forProject(project, undefined, {
-                      sessionId,
-                      runId,
-                      abortSignal: abortController.signal,
-                    })
-                    .filter((tool) => HashSet.has(verificationToolNames, tool.name))
+                ? (yield* approvedTools.forProject(project, undefined, {
+                    sessionId,
+                    runId,
+                    abortSignal: abortController.signal,
+                  })).filter((tool) => HashSet.has(verificationToolNames, tool.name))
                 : []
-              : approvedTools.forProject(project, undefined, {
+              : yield* approvedTools.forProject(project, undefined, {
                   sessionId,
                   runId,
                   abortSignal: abortController.signal,
@@ -1984,7 +1976,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               {
                 ...nativeMemoryOwner,
                 // The artifact shares the host `effect` (never bundled), so the run's tracer applies.
-                caller,
+                caller: yield* runTrace,
               },
               projectId,
               { projectId, sessionId, runId, userNodeId },
@@ -2004,14 +1996,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryRun.tools,
           // An SVG the model writes comes back with a picture of it, for the page to show.
-          ...drawingPreviews.withPreviews(project, fileTools.forProject(project)),
-          ...outsideTools.forProject(project),
+          ...(yield* drawingPreviews.withPreviews(project, yield* fileTools.forProject(project))),
+          ...(yield* outsideTools.forProject(project)),
           ...webTools,
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
-          ...workflowTools.forSession(sessionId, workflow.phase, runId, caller),
-          ...background.forSession(sessionId),
+          ...(yield* workflowTools.forSession(sessionId, workflow.phase, runId)),
+          ...(yield* background.forSession(sessionId)),
         ]);
         const profiledTools = allSharedTools.map((tool) =>
           tool.name === "find_memory" && isTruthy(harness.profile.memoryToolDescription)
@@ -2133,7 +2125,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
             ...(workflowReadOnly || reportSource !== null
               ? []
-              : redactor.withHiddenResults(approvedTools.forProject(project, "gate"))),
+              : redactor.withHiddenResults(yield* approvedTools.forProject(project, "gate"))),
           ],
           systemPrompts: promptLayout(
             standingPrompts.map((prompt) =>
@@ -2260,7 +2252,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Tool factories; those satisfy chat's server-tool contract but retain provider-specific types.
         const tools: AnyServerTool[] =
           selection.provider === "openai-compatible" &&
-          !isTruthy((yield* config.read).openaiCompatible?.toolCalling)
+          !compatibleToolCalling(yield* config.read, selection.model)
             ? []
             : [
                 ...reads.tools,
@@ -2618,6 +2610,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ProjectNotFound: () => Effect.succeed(json(404, { error: "project_not_found" })),
           ProviderUnavailable: providerUnavailable,
         }),
+        // The run's tool calls run under this span; they outlast it while the response streams.
+        Effect.withSpan("AgentChat.handle"),
       );
     },
 

@@ -38,6 +38,7 @@ import { ToolFailed } from "../../src/tools/failure.ts";
 import { parallelReads } from "../../src/tools/parallel-reads.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import {
   callerController,
   capabilities,
@@ -892,9 +893,9 @@ testAgent()("full-loop owner tool read/write semantics", (it) => {
     (name) =>
       Effect.gen(function* () {
         const session = yield* freshSession;
-        const tool = (yield* BackgroundTasks)
-          .forSession(session.id)
-          .find((tool) => tool.name === name)!;
+        const tool = (yield* inRun((yield* BackgroundTasks).forSession(session.id))).find(
+          (tool) => tool.name === name,
+        )!;
         const { result, toolStatuses, followUp } = yield* callOnce([tool], {
           id: "missing",
           name,

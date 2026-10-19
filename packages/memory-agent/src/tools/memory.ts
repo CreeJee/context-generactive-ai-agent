@@ -15,6 +15,7 @@ import { Interpretations } from "../memory/interpretations.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { MemorySearch } from "../memory/search.ts";
+import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const memoryToolNames = [
@@ -299,13 +300,13 @@ const make = Effect.gen(function* () {
   // Carries the app tracer for callers that have no fiber of their own.
   const layerContext = yield* Effect.context<never>();
   const toolsFor = (
-    caller: Context.Context<never>,
+    context: Context.Context<never>,
     projectId: string,
     binding?: RunBinding,
     scope?: MemoryToolScope,
   ) =>
     createMemoryTools(
-      { ...services, caller },
+      { ...services, caller: context },
       projectId,
       binding !== undefined
         ? {
@@ -330,7 +331,8 @@ const make = Effect.gen(function* () {
      * run's context, so their spans nest under the run.
      */
     forRun: Effect.fnUntraced(function* (binding: RunBinding, scope?: MemoryToolScope) {
-      return toolsFor(yield* Effect.context<never>(), binding.projectId, binding, scope);
+      const caller = yield* runTrace;
+      return toolsFor(onRun(layerContext, caller), binding.projectId, binding, scope);
     }),
   };
 });

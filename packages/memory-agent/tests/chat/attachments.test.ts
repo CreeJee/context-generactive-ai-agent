@@ -17,6 +17,7 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { requireRuntime } from "../../src/runtime/resources.ts";
 import { FileTools } from "../../src/tools/files.ts";
 import { tinyPng } from "../support/images.ts";
+import { inRun } from "../support/run-span.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { current, freshSession, sdk } from "./tab.ts";
@@ -76,10 +77,10 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /** The project's file tools wrapped with drawing previews, called as the model would. */
 const fileTool = Effect.fnUntraced(function* (name: string, args: Record<string, JsonValue>) {
   const { project } = yield* TestEnv;
-  const files = (yield* FileTools).forProject(project);
-  const tool = (yield* DrawingPreviews)
-    .withPreviews(project, files)
-    .find((candidate) => candidate.name === name);
+  const files = yield* inRun((yield* FileTools).forProject(project));
+  const tool = (yield* inRun((yield* DrawingPreviews).withPreviews(project, files))).find(
+    (candidate) => candidate.name === name,
+  );
   return yield* sdk(() =>
     tool?.execute?.(args, { toolCallId: name, emitCustomEvent: () => undefined }),
   );

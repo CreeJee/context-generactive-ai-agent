@@ -44,7 +44,9 @@ const rejects = Effect.fnUntraced(function* <A>(operation: () => PromiseLike<A>,
   expect(error.cause).toMatchObject({ message: expect.stringContaining(reason) });
 });
 
-const tools = Effect.flatMap(KagiTools, (kagiTools) => kagiTools.tools);
+const tools = Effect.flatMap(KagiTools, (kagiTools) => kagiTools.tools).pipe(
+  Effect.withSpan("test"),
+);
 
 const toolNamed = Effect.fnUntraced(function* (name: "kagi_search" | "kagi_extract") {
   const execute = (yield* tools).find((candidate) => candidate.name === name)?.execute;

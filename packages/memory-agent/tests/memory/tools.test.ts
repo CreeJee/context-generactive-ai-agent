@@ -14,6 +14,7 @@ import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { sqlRun } from "../support/sql.ts";
 
 const environment = Effect.gen(function* () {
@@ -634,14 +635,16 @@ testAgent()("memory tools per run", (it) => {
       const env = yield* environment;
       let reads = 0;
       const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = yield* (yield* MemoryTools).forRun({
-        ...at,
-        runId: `${at.sessionId}:deferred-run`,
-        get userNodeId() {
-          reads++;
-          return user.id;
-        },
-      });
+      const prepared = yield* inRun(
+        (yield* MemoryTools).forRun({
+          ...at,
+          runId: `${at.sessionId}:deferred-run`,
+          get userNodeId() {
+            reads++;
+            return user.id;
+          },
+        }),
+      );
       expect(reads).toBe(0);
       if (prepared.tools.length !== 6) return expect.unreachable("Expected run tools");
       const promote = prepared.tools[4];
