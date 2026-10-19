@@ -41,7 +41,10 @@
     "./embed-worker": "./src/memory/embedding/embed-worker.ts",
     "./import-worker": "./src/imports/worker.ts",
     "./redact-worker": "./src/secrets/redact-worker.ts",
-    "./native-search-worker": "./src/memory/native-search/worker.ts",
+    "./native-search-worker": {
+      "rrsi-evaluator": "./dist/rrsi-evaluator/native-search-worker.mjs",
+      "default": "./src/memory/native-search/worker.ts"
+    },
     "./sandbox-worker": "./src/shell/sandbox-worker.ts"
   },
   "publishConfig": {

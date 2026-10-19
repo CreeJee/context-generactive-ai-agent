@@ -8,7 +8,7 @@ ENV PATH="/usr/local/cargo/bin:${PATH}" RUSTUP_HOME=/usr/local/rustup CARGO_HOME
 WORKDIR /app
 COPY . .
 # prepare scripts only patch editor/lint tooling, and the root and memory-agent copies race here.
-RUN pnpm install --frozen-lockfile --ignore-scripts && node packages/turbovec/build-turbovec.ts && cd tools/rrsi && pnpm exec vp pack
+RUN pnpm install --frozen-lockfile --ignore-scripts && node packages/turbovec/build-turbovec.ts && node packages/memory-agent/scripts/build-runtime-artifacts.ts && cd tools/rrsi && pnpm exec vp pack
 RUN chmod -R a+rX /app
 USER node
-ENTRYPOINT ["node", "packages/memory-agent/dist/rrsi-evaluator/rrsi-worker.mjs"]
+ENTRYPOINT ["node", "--conditions=rrsi-evaluator", "packages/memory-agent/dist/rrsi-evaluator/rrsi-worker.mjs"]
