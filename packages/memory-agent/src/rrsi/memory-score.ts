@@ -60,6 +60,23 @@ export const scoreMemoryAnswer = Effect.fn("Rrsi.scoreMemoryAnswer")(function* (
   return source !== null && source.id === expected.id && matchesCorrection(source, expected);
 });
 
+/**
+ * A usage task passes when the answer cites exactly the user's own correction. The decision text
+ * is not compared: a real correction has no canonical phrasing, and the citation proves recall.
+ */
+export const evaluateUsageAnswer = Effect.fn("Rrsi.evaluateUsageAnswer")(
+  function* (text: string, correctionNodeId: string) {
+    const answer = yield* decodeMemoryAnswer(text);
+    if (answer.evidenceIds.length !== 1 || answer.evidenceIds[0] !== correctionNodeId) return false;
+    const source = yield* (yield* Nodes)
+      .get(correctionNodeId)
+      .pipe(Effect.mapError(() => EvaluationFailed.make({ reason: "trial_execution_failed" })));
+    return source !== null && source.kind === "user";
+  },
+  // Only invalid model output scores zero. Storage failures and interruption propagate.
+  Effect.catchTag("SchemaError", () => Effect.succeed(false)),
+);
+
 export const evaluateMemoryAnswer = Effect.fn("Rrsi.evaluateMemoryAnswer")(
   function* (text: string, expected: MemoryEvidence) {
     const answer = yield* decodeMemoryAnswer(text);

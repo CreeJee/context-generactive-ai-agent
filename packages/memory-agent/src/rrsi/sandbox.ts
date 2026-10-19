@@ -2,10 +2,25 @@ import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+import {
+  oauthProtocolCrypto,
+  oauthProtocolFileSystem,
+  oauthProtocolPath,
+} from "../oauth/node-runtime.ts";
 import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Cause, Effect, Array as EffectArray, Fiber, Option, Queue, Schema, Stream } from "effect";
+import {
+  Cause,
+  Config,
+  ConfigProvider,
+  Effect,
+  Array as EffectArray,
+  Fiber,
+  Option,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
 import type { ModelGateway } from "./model-gateway.ts";
 import type { HarnessProfile, Measurement } from "./contracts.ts";
 import { EvaluationFailed, WorkerFailureReason } from "./failure.ts";
@@ -34,6 +49,38 @@ const Frame = Schema.Union([
     total: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 ]);
+/**
+ * Read-only mounts for the usage corpus: its storage snapshot and the original storage's models.
+ * Empty when no corpus was built, so memory tasks stay synthetic.
+ */
+const usageMounts = Effect.gen(function* () {
+  const variable = (name: string) =>
+    Config.option(Config.String(name))
+      .parse(ConfigProvider.fromEnv())
+      .pipe(Effect.orElseSucceed(() => Option.none<string>()));
+  const repository = yield* variable("CONTEXT_AGENT_RRSI_REPOSITORY");
+  const original = yield* variable("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE");
+  if (Option.isNone(repository) || Option.isNone(original)) return [];
+  const usage = oauthProtocolPath.join(repository.value, ".rrsi-local", "usage");
+  const version = yield* oauthProtocolFileSystem
+    .readFileString(oauthProtocolPath.join(usage, "current"))
+    .pipe(
+      Effect.map((text) => text.trim()),
+      Effect.option,
+    );
+  if (Option.isNone(version) || version.value === "") return [];
+  return [
+    "-v",
+    `${oauthProtocolPath.join(usage, version.value)}:/usage:ro`,
+    "-v",
+    `${oauthProtocolPath.join(original.value, "models")}:/models:ro`,
+    // Anonymous volume for the writable storage copy; --rm removes it with the container.
+    "-v",
+    "/work",
+    "-e",
+    "CONTEXT_AGENT_RRSI_USAGE=/usage",
+  ];
+});
 interface EvaluationState {
   result: Measurement | null;
   failure: EvaluationFailed | null;
@@ -74,6 +121,7 @@ function evaluateSandboxBody(
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const input = yield* Queue.make<Uint8Array, Cause.Done>();
       const encoder = new TextEncoder();
+      const usage = yield* usageMounts;
       const child = yield* spawner.spawn(
         ChildProcess.make(
           "docker",
@@ -93,13 +141,15 @@ function evaluateSandboxBody(
             "--pids-limit",
             "128",
             "--memory",
-            "2g",
+            // The real embedder, morphology model and a full storage copy need more than fixtures.
+            usage.length > 0 ? "4g" : "2g",
             "--cpus",
             "2",
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=512m,mode=1777",
             "-e",
             "CONTEXT_AGENT_RRSI_WORKER=1",
+            ...usage,
             image,
           ],
           {
