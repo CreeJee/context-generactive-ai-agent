@@ -29,6 +29,7 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const fixture = Effect.fnUntraced(function* (options: {
   readonly reject?: boolean;
   readonly zeroMemory?: boolean;
+  readonly proposal?: "rejected" | "empty";
   readonly hold?: (
     signal: AbortSignal,
   ) => Promise<{ score: number; coding: number; memory: number; tokens: number }>;
@@ -54,6 +55,7 @@ const fixture = Effect.fnUntraced(function* (options: {
       { component: "memory", hypothesis: "Keep the same quality with less retrieved context." },
     ],
   });
+  const emptyResponse = yield* encodeJson({ choices: [{ message: { content: "" } }], usage });
   const approved = yield* encodeJson({ approved: true });
   const proposalResponse = yield* encodeJson({
     choices: [{ message: { content: proposal } }],
@@ -77,13 +79,18 @@ const fixture = Effect.fnUntraced(function* (options: {
         release: () => {
           state.released++;
         },
-        complete: (body, signal) =>
-          runEffect(
-            Effect.succeed(
-              body.includes("Propose one reusable") ? proposalResponse : approvalResponse,
-            ),
-            { signal },
-          ),
+        complete: (body, signal) => {
+          if (!body.includes("Propose one reusable"))
+            return runEffect(Effect.succeed(approvalResponse), { signal });
+          switch (options.proposal) {
+            case "rejected":
+              return Promise.reject(new Error("provider rejected"));
+            case "empty":
+              return runEffect(Effect.succeed(emptyResponse), { signal });
+            default:
+              return runEffect(Effect.succeed(proposalResponse), { signal });
+          }
+        },
       }),
     evaluate: ({ profile, split, signal, consume, onProgress: progress }) => {
       if (options.hold !== undefined) return options.hold(signal);
@@ -174,6 +181,21 @@ it.live.each(["manual", "shutdown"] as const)(
         });
         expect((yield* service.status).running).toBe(false);
       }
+    }),
+);
+
+it.live.each(["rejected", "empty"] as const)(
+  "a %s proposal finishes the experiment as failed",
+  (proposal) =>
+    Effect.gen(function* () {
+      const { service, store, state, start } = yield* fixture({ proposal });
+      yield* start;
+      yield* Effect.repeat(service.status, { until: (status) => !status.running });
+      expect((yield* store.experiments)[0]).toMatchObject({
+        status: "failed",
+        finishedAt: expect.any(Number),
+      });
+      expect(state.released).toBe(1);
     }),
 );
 
