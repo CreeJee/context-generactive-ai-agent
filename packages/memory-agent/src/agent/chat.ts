@@ -1870,17 +1870,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           });
 
         const workflowReadOnly = HashSet.has(readOnlyWorkflowPhases, workflow.phase);
-        // Tools run on this run's context, so their spans join its trace.
-        const caller = yield* runTrace;
         // Present only while the user has Kagi turned on with a key (R19).
-        const webTools = reportSource !== null ? [] : yield* kagiTools.tools(caller);
+        const webTools = reportSource !== null ? [] : yield* kagiTools.tools;
         // A report session never connects external MCP servers or loads additional skills.
         const mcpTools =
-          workflowReadOnly || reportSource !== null ? [] : yield* mcpServers.tools(project, caller);
+          workflowReadOnly || reportSource !== null ? [] : yield* mcpServers.tools(project);
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
-            : yield* skillTools.forProject(project, caller);
+            : yield* skillTools.forProject(project);
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         const cancellation = yield* cancellations.allocate("service_shutdown");
@@ -1923,13 +1921,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const delegation =
           workflowReadOnly || reportSource !== null
             ? { tools: [], instructions: null }
-            : yield* delegateTools.forRun(
-                project,
-                sessionId,
-                abortController.signal,
-                runId,
-                caller,
-              );
+            : yield* delegateTools.forRun(project, sessionId, abortController.signal, runId);
         // The gate runs right after chat state, so a refused call is skipped before tools run. In
         // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
         // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
@@ -1964,21 +1956,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? []
             : workflowReadOnly
               ? workflow.phase === "verify"
-                ? approvedTools
-                    .forProject(
-                      project,
-                      undefined,
-                      { sessionId, runId, abortSignal: abortController.signal },
-                      caller,
-                    )
-                    .filter((tool) => HashSet.has(verificationToolNames, tool.name))
+                ? (yield* approvedTools.forProject(project, undefined, {
+                    sessionId,
+                    runId,
+                    abortSignal: abortController.signal,
+                  })).filter((tool) => HashSet.has(verificationToolNames, tool.name))
                 : []
-              : approvedTools.forProject(
-                  project,
-                  undefined,
-                  { sessionId, runId, abortSignal: abortController.signal },
-                  caller,
-                );
+              : yield* approvedTools.forProject(project, undefined, {
+                  sessionId,
+                  runId,
+                  abortSignal: abortController.signal,
+                });
         const memoryScope: MemoryToolScope = (yield* recallScope).crossProject
           ? "allowed-projects"
           : "project";
@@ -1987,7 +1975,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               {
                 ...nativeMemoryOwner,
                 // The artifact shares the host `effect` (never bundled), so the run's tracer applies.
-                caller,
+                caller: yield* runTrace,
               },
               projectId,
               { projectId, sessionId, runId, userNodeId },
@@ -2003,19 +1991,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 },
               },
               memoryScope,
-              caller,
             );
         const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryRun.tools,
           // An SVG the model writes comes back with a picture of it, for the page to show.
-          ...drawingPreviews.withPreviews(project, fileTools.forProject(project, caller), caller),
-          ...outsideTools.forProject(project, caller),
+          ...(yield* drawingPreviews.withPreviews(project, yield* fileTools.forProject(project))),
+          ...(yield* outsideTools.forProject(project)),
           ...webTools,
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
-          ...workflowTools.forSession(sessionId, workflow.phase, runId, caller),
-          ...background.forSession(sessionId, caller),
+          ...(yield* workflowTools.forSession(sessionId, workflow.phase, runId)),
+          ...(yield* background.forSession(sessionId)),
         ]);
         const profiledTools = allSharedTools.map((tool) =>
           tool.name === "find_memory" && isTruthy(harness.profile.memoryToolDescription)
@@ -2137,7 +2124,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
             ...(workflowReadOnly || reportSource !== null
               ? []
-              : redactor.withHiddenResults(approvedTools.forProject(project, "gate"))),
+              : redactor.withHiddenResults(yield* approvedTools.forProject(project, "gate"))),
           ],
           systemPrompts: promptLayout(
             standingPrompts.map((prompt) =>

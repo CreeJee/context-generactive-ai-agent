@@ -72,6 +72,7 @@ node tools/profile/main.ts summarize <스크래치>/spans.ndjson <스크래치>/
 ## 알려진 공백
 
 - worker(임베딩·Kiwi·가져오기·redaction·native 검색) 내부의 span은 내보내지 않는다. worker 런타임에는 tracer가 없다. worker 쪽 CPU는 `--cpu-prof`로 본다.
-- 메모리·delegate·workflow 도구는 채팅 실행(Goal native owner 포함)과 BTW 질문(`BtwChat.handle`)의 context로 돌아 그 span과 같은 trace에 붙는다. 파일·셸·MCP·스킬·백그라운드 같은 다른 도구 콜백은 Layer를 만들 때의 context로 돌아, tracer는 있지만 run과 별개의 trace가 된다.
+- run 도구(메모리·파일·셸·MCP·스킬·Kagi·delegate·workflow·백그라운드)는 채팅 실행(`AgentChat.handle`, Goal native owner 포함), BTW 질문(`BtwChat.handle`), 칸반 카드 실행(`CardAgent.run`·`CardAgent.verify`)의 span 아래 같은 trace에 붙는다. 응답을 스트리밍하는 동안 도구가 계속 돌므로, 도구 span은 부모 span이 끝난 뒤에 시작할 수 있다.
+- 백그라운드 작업 자체(셸·외부 에이전트)는 run보다 오래 살 수 있어 Layer의 context로 돌고, run과 별개의 trace가 된다.
 - span이 없는 구간은 보이지 않는다. 필요하면 해당 함수를 `Effect.fn("이름")`으로 바꾸거나 `Effect.withSpan`을 단다. hot path에는 `Effect.fnUntraced`를 유지한다.
 - span 속성에 프롬프트·모델 ID·endpoint·자격증명을 넣지 않는다. 로컬 수집기가 문자열을 버리더라도 외부 OTLP로는 그대로 나간다.

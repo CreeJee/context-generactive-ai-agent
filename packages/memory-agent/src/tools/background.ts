@@ -19,7 +19,7 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
-import { onRun, type RunTrace } from "../runtime/run-trace.ts";
+import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
@@ -340,51 +340,52 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded", discard: true },
       );
     }),
-    /** `caller` is the run's context, so the tools' spans join the run's trace; tests leave it out. */
-    forSession(sessionId: string, caller?: RunTrace): AnyServerTool[] {
-      const run = Effect.runPromiseWith(onRun(context, caller));
-      return [
-        toolDefinition({
-          name: "get_background_result",
-          description:
-            "Retrieve one background shell or ACP task's saved, redacted result by taskId. Result is JSON text, paged in 4000-character chunks with nextOffset; read all required pages before relying on it. Returns running if unfinished; interrupted after restart means do not retry blindly. A notification alone is not a result.",
-          inputSchema: toToolSchema(ResultInput),
-        }).server(({ taskId, offset = 0 }) =>
-          run(
-            Effect.gen(function* () {
-              const detail = yield* owned(sessionId, taskId);
-              const result = yield* readResult(sessionId, taskId);
-              if (result !== null) {
-                const end = Math.min(offset + 4000, result.result.length);
-                return {
-                  taskId,
-                  status: result.status,
-                  result: result.result.slice(offset, end),
-                  offset,
-                  nextOffset: end < result.result.length ? end : null,
-                  length: result.result.length,
-                };
-              }
-              return { taskId, status: detail.attempts.at(-1)?.status ?? "interrupted" };
-            }),
+    /** The tools run on the run's context, so their spans join the run's trace. */
+    forSession: (sessionId: string) =>
+      Effect.map(runTrace, (caller): AnyServerTool[] => {
+        const run = Effect.runPromiseWith(onRun(context, caller));
+        return [
+          toolDefinition({
+            name: "get_background_result",
+            description:
+              "Retrieve one background shell or ACP task's saved, redacted result by taskId. Result is JSON text, paged in 4000-character chunks with nextOffset; read all required pages before relying on it. Returns running if unfinished; interrupted after restart means do not retry blindly. A notification alone is not a result.",
+            inputSchema: toToolSchema(ResultInput),
+          }).server(({ taskId, offset = 0 }) =>
+            run(
+              Effect.gen(function* () {
+                const detail = yield* owned(sessionId, taskId);
+                const result = yield* readResult(sessionId, taskId);
+                if (result !== null) {
+                  const end = Math.min(offset + 4000, result.result.length);
+                  return {
+                    taskId,
+                    status: result.status,
+                    result: result.result.slice(offset, end),
+                    offset,
+                    nextOffset: end < result.result.length ? end : null,
+                    length: result.result.length,
+                  };
+                }
+                return { taskId, status: detail.attempts.at(-1)?.status ?? "interrupted" };
+              }),
+            ),
           ),
-        ),
-        toolDefinition({
-          name: "cancel_background_task",
-          description:
-            "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
-          inputSchema: toToolSchema(ResultInput),
-        }).server(({ taskId }) =>
-          run(
-            Effect.gen(function* () {
-              yield* owned(sessionId, taskId);
-              yield* FiberMap.remove(fibers, taskId);
-              return { taskId, status: "stopped" as const };
-            }),
+          toolDefinition({
+            name: "cancel_background_task",
+            description:
+              "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
+            inputSchema: toToolSchema(ResultInput),
+          }).server(({ taskId }) =>
+            run(
+              Effect.gen(function* () {
+                yield* owned(sessionId, taskId);
+                yield* FiberMap.remove(fibers, taskId);
+                return { taskId, status: "stopped" as const };
+              }),
+            ),
           ),
-        ),
-      ];
-    },
+        ];
+      }),
   };
 });
 

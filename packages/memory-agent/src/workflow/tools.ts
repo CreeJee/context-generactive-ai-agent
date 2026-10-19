@@ -14,7 +14,7 @@ import {
   type WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
-import { onRun, type RunTrace } from "../runtime/run-trace.ts";
+import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
@@ -44,157 +44,153 @@ const make = Effect.gen(function* () {
   const runtime = yield* Effect.context<Workflows | WorkflowExecution | HumanDecisions>();
 
   return {
-    /** `caller` is the run's context, so the tools' spans join the run's trace; tests leave it out. */
-    forSession(
-      sessionId: string,
-      phase: WorkflowPhase,
-      runId = "",
-      caller?: RunTrace,
-    ): AnyServerTool[] {
-      const run = Effect.runPromiseWith(onRun(runtime, caller));
-      // A run's own Plan and progress saves are board changes made by that run.
-      const author: BoardAuthor | undefined =
-        runId.length > 0 ? { _tag: "Orchestrator", runId } : undefined;
-      const recordBlocker = toolDefinition({
-        name: "record_workflow_blocker",
-        description:
-          "Stop automatic Plan execution only for a confirmed user decision, permission wait, external dependency or repeated failed approach. Record the concrete missing requirement and actual evidence. Unfinished investigation, review, preparation or verification that you can perform is remaining work, not a blocker. Continue all independent work before recording a blocker.",
-        inputSchema: toToolSchema(WorkflowBlocker),
-      }).server((input) =>
-        run(
-          Effect.gen(function* () {
-            const result = yield* (yield* WorkflowExecution).block(sessionId, runId, input);
-            yield* events.publishSession(sessionId, "run-state");
-            return result;
-          }),
-        ),
-      );
-      const startNewGoal = toolDefinition({
-        name: "start_new_goal",
-        description:
-          "Request a separate independent-success Goal from Goal, Plan or a verified completed workflow. Requires the exact current Goal instance ID from the workflow prompt (null only for legacy/unbound); the owner rechecks it. A live calling run cannot apply the transition immediately. Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never bypass an active/failed run or uncertain side effect.",
-        inputSchema: toToolSchema(StartNewGoal),
-      }).server((input) =>
-        run(
-          Effect.gen(function* () {
-            const workflows = yield* Workflows;
-            if (runId.length > 0) {
-              const request = yield* workflows.requestNewGoal(sessionId, runId, input);
-              return {
-                ...request,
-                applied: false as const,
-                message:
-                  "Request accepted; the new Goal is not saved. It will be applied only after this run completes and owner safety checks pass.",
-              };
-            }
-            const state = yield* workflows.startNewGoal(sessionId, input);
-            // The replaced Goal's waits for people end with it.
-            yield* (yield* HumanDecisions).closeSuperseded(sessionId);
-            const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
-            return { phase: state.phase, goal: state.goal, plan: state.plan, goalInstanceId };
-          }).pipe(
-            Effect.tap(() => events.publishSession(sessionId, "run-state")),
-            Effect.catchTag("NewGoalTransitionRefused", (failure) =>
-              Effect.succeed({
-                error: "new_goal_transition_refused" as const,
-                reason: failure.reason,
-              }),
-            ),
+    /** The tools run on the run's context, so their spans join the run's trace. */
+    forSession: (sessionId: string, phase: WorkflowPhase, runId = "") =>
+      Effect.map(runTrace, (caller): AnyServerTool[] => {
+        const run = Effect.runPromiseWith(onRun(runtime, caller));
+        // A run's own Plan and progress saves are board changes made by that run.
+        const author: BoardAuthor | undefined =
+          runId.length > 0 ? { _tag: "Orchestrator", runId } : undefined;
+        const recordBlocker = toolDefinition({
+          name: "record_workflow_blocker",
+          description:
+            "Stop automatic Plan execution only for a confirmed user decision, permission wait, external dependency or repeated failed approach. Record the concrete missing requirement and actual evidence. Unfinished investigation, review, preparation or verification that you can perform is remaining work, not a blocker. Continue all independent work before recording a blocker.",
+          inputSchema: toToolSchema(WorkflowBlocker),
+        }).server((input) =>
+          run(
+            Effect.gen(function* () {
+              const result = yield* (yield* WorkflowExecution).block(sessionId, runId, input);
+              yield* events.publishSession(sessionId, "run-state");
+              return result;
+            }),
           ),
-        ),
-      );
-      const updateGoal = toolDefinition({
-        name: "update_goal",
-        description:
-          "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal during Execute or Verify returns the workflow to Plan; synchronize the Plan with the new Goal before execution is confirmed. Do not call update_workflow_progress in parallel with update_goal.",
-        inputSchema: toToolSchema(UpdateGoal),
-      }).server((input) =>
-        run(
-          Effect.flatMap(Workflows, (workflows) => workflows.updateGoal(sessionId, input)).pipe(
-            Effect.tap(() => events.publishSession(sessionId, "run-state")),
-            Effect.flatMap((state) =>
-              Effect.flatMap(Workflows, (workflows) =>
-                Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
-                  phase: state.phase,
-                  goal: state.goal,
-                  goalInstanceId,
-                })),
+        );
+        const startNewGoal = toolDefinition({
+          name: "start_new_goal",
+          description:
+            "Request a separate independent-success Goal from Goal, Plan or a verified completed workflow. Requires the exact current Goal instance ID from the workflow prompt (null only for legacy/unbound); the owner rechecks it. A live calling run cannot apply the transition immediately. Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never bypass an active/failed run or uncertain side effect.",
+          inputSchema: toToolSchema(StartNewGoal),
+        }).server((input) =>
+          run(
+            Effect.gen(function* () {
+              const workflows = yield* Workflows;
+              if (runId.length > 0) {
+                const request = yield* workflows.requestNewGoal(sessionId, runId, input);
+                return {
+                  ...request,
+                  applied: false as const,
+                  message:
+                    "Request accepted; the new Goal is not saved. It will be applied only after this run completes and owner safety checks pass.",
+                };
+              }
+              const state = yield* workflows.startNewGoal(sessionId, input);
+              // The replaced Goal's waits for people end with it.
+              yield* (yield* HumanDecisions).closeSuperseded(sessionId);
+              const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+              return { phase: state.phase, goal: state.goal, plan: state.plan, goalInstanceId };
+            }).pipe(
+              Effect.tap(() => events.publishSession(sessionId, "run-state")),
+              Effect.catchTag("NewGoalTransitionRefused", (failure) =>
+                Effect.succeed({
+                  error: "new_goal_transition_refused" as const,
+                  reason: failure.reason,
+                }),
               ),
             ),
           ),
-        ),
-      );
-
-      const updatePlan = toolDefinition({
-        name: "update_plan",
-        description:
-          "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable unique ids, dependencies, acceptance criteria and applicable workflow rule ids. dependsOn may name only other step ids in the same Plan and must not form a cycle; otherwise nothing is saved and the refusal lists each issue to fix. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
-        inputSchema: toToolSchema(UpdatePlan),
-      }).server((input) =>
-        run(
-          Effect.flatMap(Workflows, (workflows) =>
-            workflows.updatePlan(sessionId, input, author),
-          ).pipe(
-            Effect.tap(() => events.publishSession(sessionId, "run-state")),
-            Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
-            Effect.catchTag("PlanDependenciesRejected", (failure) =>
-              Effect.succeed({
-                error: "plan_dependencies_rejected" as const,
-                issues: failure.issues.map(dependencyIssueText),
-              }),
+        );
+        const updateGoal = toolDefinition({
+          name: "update_goal",
+          description:
+            "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal during Execute or Verify returns the workflow to Plan; synchronize the Plan with the new Goal before execution is confirmed. Do not call update_workflow_progress in parallel with update_goal.",
+          inputSchema: toToolSchema(UpdateGoal),
+        }).server((input) =>
+          run(
+            Effect.flatMap(Workflows, (workflows) => workflows.updateGoal(sessionId, input)).pipe(
+              Effect.tap(() => events.publishSession(sessionId, "run-state")),
+              Effect.flatMap((state) =>
+                Effect.flatMap(Workflows, (workflows) =>
+                  Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
+                    phase: state.phase,
+                    goal: state.goal,
+                    goalInstanceId,
+                  })),
+                ),
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      const updateProgress = toolDefinition({
-        name: "update_workflow_progress",
-        description:
-          "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed. Provenance-bound Goals also require criterionMappings covering every current outcome: freeze outcomeIndex/outcomeText and stepId/acceptanceIndex/acceptanceText from the current Plan, with actual runId and successful verification tool-result evidenceNodeIds. Only current Goal/Plan versions are supported; registration is execution authorization, not passed proof. The owner derives provenance and recorder identity, never accept those from input.",
-        inputSchema: toToolSchema(UpdateWorkflowProgress),
-      }).server((input) =>
-        Effect.flatMap(Workflows, (workflows) =>
-          workflows.updateProgress(
-            sessionId,
-            {
-              ...input,
-              steps: (input.steps ?? []).map((step) => ({
-                ...step,
-                evidence: step.evidence ?? [],
-              })),
-              goalEvidence: input.goalEvidence ?? [],
-              planEvidence: input.planEvidence ?? [],
-            },
-            runId,
-            author,
+        const updatePlan = toolDefinition({
+          name: "update_plan",
+          description:
+            "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable unique ids, dependencies, acceptance criteria and applicable workflow rule ids. dependsOn may name only other step ids in the same Plan and must not form a cycle; otherwise nothing is saved and the refusal lists each issue to fix. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
+          inputSchema: toToolSchema(UpdatePlan),
+        }).server((input) =>
+          run(
+            Effect.flatMap(Workflows, (workflows) =>
+              workflows.updatePlan(sessionId, input, author),
+            ).pipe(
+              Effect.tap(() => events.publishSession(sessionId, "run-state")),
+              Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+              Effect.catchTag("PlanDependenciesRejected", (failure) =>
+                Effect.succeed({
+                  error: "plan_dependencies_rejected" as const,
+                  issues: failure.issues.map(dependencyIssueText),
+                }),
+              ),
+            ),
           ),
-        ).pipe(
-          Effect.tap(() => events.publishSession(sessionId, "run-state")),
-          Effect.map((state) => ({
-            phase: state.phase,
-            goal: state.goal,
-            plan: state.plan,
-          })),
-          exposeProgressRefusal,
-          run,
-        ),
-      );
+        );
 
-      switch (phase) {
-        case "goal":
-          return [updateGoal, updateProgress, startNewGoal];
-        case "plan":
-          return [updateGoal, updatePlan, startNewGoal];
-        case "execute":
-          return [updateGoal, updatePlan, updateProgress, recordBlocker];
-        case "verify":
-          return [updateGoal, updateProgress, recordBlocker, startNewGoal];
-        case "completed":
-          return [startNewGoal];
-        case "chat":
-          return [];
-      }
-    },
+        const updateProgress = toolDefinition({
+          name: "update_workflow_progress",
+          description:
+            "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed. Provenance-bound Goals also require criterionMappings covering every current outcome: freeze outcomeIndex/outcomeText and stepId/acceptanceIndex/acceptanceText from the current Plan, with actual runId and successful verification tool-result evidenceNodeIds. Only current Goal/Plan versions are supported; registration is execution authorization, not passed proof. The owner derives provenance and recorder identity, never accept those from input.",
+          inputSchema: toToolSchema(UpdateWorkflowProgress),
+        }).server((input) =>
+          Effect.flatMap(Workflows, (workflows) =>
+            workflows.updateProgress(
+              sessionId,
+              {
+                ...input,
+                steps: (input.steps ?? []).map((step) => ({
+                  ...step,
+                  evidence: step.evidence ?? [],
+                })),
+                goalEvidence: input.goalEvidence ?? [],
+                planEvidence: input.planEvidence ?? [],
+              },
+              runId,
+              author,
+            ),
+          ).pipe(
+            Effect.tap(() => events.publishSession(sessionId, "run-state")),
+            Effect.map((state) => ({
+              phase: state.phase,
+              goal: state.goal,
+              plan: state.plan,
+            })),
+            exposeProgressRefusal,
+            run,
+          ),
+        );
+
+        switch (phase) {
+          case "goal":
+            return [updateGoal, updateProgress, startNewGoal];
+          case "plan":
+            return [updateGoal, updatePlan, startNewGoal];
+          case "execute":
+            return [updateGoal, updatePlan, updateProgress, recordBlocker];
+          case "verify":
+            return [updateGoal, updateProgress, recordBlocker, startNewGoal];
+          case "completed":
+            return [startNewGoal];
+          case "chat":
+            return [];
+        }
+      }),
   };
 });
 

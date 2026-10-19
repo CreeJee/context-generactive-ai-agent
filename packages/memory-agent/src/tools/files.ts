@@ -21,7 +21,7 @@ import {
 import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
-import { type RunTrace } from "../runtime/run-trace.ts";
+import { runTrace } from "../runtime/run-trace.ts";
 import { guardedWith } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
 
@@ -210,301 +210,308 @@ const make = Effect.gen(function* () {
   return {
     /**
      * File tools for one project (R04). Reads, searches, creation, edits and deletion inside the
-     * project run without approval; `.git`, links and credential files are refused. `caller` is
-     * the run's context, so the tools' spans join the run's trace; tests leave it out.
+     * project run without approval; `.git`, links and credential files are refused. They run on
+     * the run's context, so their spans join the run's trace.
      */
-    forProject(project: Project, caller?: RunTrace) {
-      const { root } = project;
-      const guarded = guardedWith(caller);
+    forProject: (project: Project) =>
+      Effect.map(runTrace, (caller) => {
+        const { root } = project;
+        const guarded = guardedWith(caller);
 
-      const listFiles = toolDefinition({
-        name: "list_files",
-        description:
-          "List files in the project, recursively, honouring .gitignore in Git projects. Page with snapshot + nextOffset; a snapshot is a fixed view taken on the first page.",
-        inputSchema: toToolSchema(listFilesInput),
-      }).server(({ directory, glob, snapshot, offset }, context) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(
-          directory ?? ".",
-          () =>
-            Effect.gen(function* () {
-              const view = !isTruthy(snapshot)
-                ? yield* snapshotFor(root, directory, glob)
-                : snapshots.get(snapshot, root);
-              if (!isTruthy(view))
-                return yield* new Cause.UnknownError(
-                  new Error("snapshot_expired: start again without snapshot and offset."),
-                );
-              const start = Math.max(0, offset ?? 0);
-              const paths = view.paths.slice(start, start + listPageSize);
-              const next = start + paths.length;
-              return {
-                snapshot: view.id,
-                directory: view.directory,
-                glob: view.glob ?? null,
-                source: view.source,
-                total: view.paths.length,
-                excludedCredentialFiles: view.excluded,
-                truncated: view.truncated,
-                paths,
-                nextOffset: next < view.paths.length ? next : null,
-              };
-            }),
-          context?.abortSignal,
-        ),
-      );
+        const listFiles = toolDefinition({
+          name: "list_files",
+          description:
+            "List files in the project, recursively, honouring .gitignore in Git projects. Page with snapshot + nextOffset; a snapshot is a fixed view taken on the first page.",
+          inputSchema: toToolSchema(listFilesInput),
+        }).server(({ directory, glob, snapshot, offset }, context) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          guarded(
+            directory ?? ".",
+            () =>
+              Effect.gen(function* () {
+                const view = !isTruthy(snapshot)
+                  ? yield* snapshotFor(root, directory, glob)
+                  : snapshots.get(snapshot, root);
+                if (!isTruthy(view))
+                  return yield* new Cause.UnknownError(
+                    new Error("snapshot_expired: start again without snapshot and offset."),
+                  );
+                const start = Math.max(0, offset ?? 0);
+                const paths = view.paths.slice(start, start + listPageSize);
+                const next = start + paths.length;
+                return {
+                  snapshot: view.id,
+                  directory: view.directory,
+                  glob: view.glob ?? null,
+                  source: view.source,
+                  total: view.paths.length,
+                  excludedCredentialFiles: view.excluded,
+                  truncated: view.truncated,
+                  paths,
+                  nextOffset: next < view.paths.length ? next : null,
+                };
+              }),
+            context?.abortSignal,
+          ),
+        );
 
-      const searchFiles = toolDefinition({
-        name: "search_files",
-        description:
-          "Find literal text across project files and return matching lines with line numbers. Narrow with directory and glob. Page with nextCursor; skipped files are listed, so an empty result only covers the files actually searched.",
-        inputSchema: toToolSchema(searchFilesInput),
-      }).server(({ query, directory, glob, caseSensitive = true, cursor }, context) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(
-          directory ?? ".",
-          () =>
-            Effect.gen(function* () {
-              const position = isTruthy(cursor) ? decodeSearchCursor(cursor) : undefined;
-              if (
-                isTruthy(cursor) &&
-                (position?.query !== query || position.caseSensitive !== caseSensitive)
-              )
-                return yield* new Cause.UnknownError(
-                  new Error(
-                    "invalid_cursor: pass the same query and caseSensitive as the first page.",
-                  ),
-                );
-              // On the first page, ask Git for candidate files while the listing is being taken.
-              const started =
-                position !== undefined
-                  ? undefined
-                  : yield* Effect.forkChild(
-                      gitGrepFilesEffect({
-                        root,
-                        directory: (yield* resolveProjectPath(root, directory ?? ".", "directory"))
-                          .relative,
-                        query,
-                        caseSensitive,
-                      }),
-                    );
-              const view =
-                position !== undefined
-                  ? snapshots.get(position.snapshot, root)
-                  : yield* snapshotFor(root, directory, glob);
-              if (!isTruthy(view))
-                return yield* new Cause.UnknownError(
-                  new Error("snapshot_expired: start the search again without cursor."),
-                );
+        const searchFiles = toolDefinition({
+          name: "search_files",
+          description:
+            "Find literal text across project files and return matching lines with line numbers. Narrow with directory and glob. Page with nextCursor; skipped files are listed, so an empty result only covers the files actually searched.",
+          inputSchema: toToolSchema(searchFilesInput),
+        }).server(({ query, directory, glob, caseSensitive = true, cursor }, context) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          guarded(
+            directory ?? ".",
+            () =>
+              Effect.gen(function* () {
+                const position = isTruthy(cursor) ? decodeSearchCursor(cursor) : undefined;
+                if (
+                  isTruthy(cursor) &&
+                  (position?.query !== query || position.caseSensitive !== caseSensitive)
+                )
+                  return yield* new Cause.UnknownError(
+                    new Error(
+                      "invalid_cursor: pass the same query and caseSensitive as the first page.",
+                    ),
+                  );
+                // On the first page, ask Git for candidate files while the listing is being taken.
+                const started =
+                  position !== undefined
+                    ? undefined
+                    : yield* Effect.forkChild(
+                        gitGrepFilesEffect({
+                          root,
+                          directory: (yield* resolveProjectPath(
+                            root,
+                            directory ?? ".",
+                            "directory",
+                          )).relative,
+                          query,
+                          caseSensitive,
+                        }),
+                      );
+                const view =
+                  position !== undefined
+                    ? snapshots.get(position.snapshot, root)
+                    : yield* snapshotFor(root, directory, glob);
+                if (!isTruthy(view))
+                  return yield* new Cause.UnknownError(
+                    new Error("snapshot_expired: start the search again without cursor."),
+                  );
 
-              // Each directory is checked once per page (no links, still inside the project); the file
-              // itself is checked on the opened handle, so thousands of files do not mean thousands of
-              // synchronous path walks.
-              const directories = MutableHashMap.empty<string, Result.Result<void, PathRejected>>();
-              const candidates = yield* candidatesFor(view, query, caseSensitive, started);
-              const page = yield* searchTextFilesEffect({
-                paths: view.paths,
-                readBytes: Effect.fnUntraced(function* (path: string) {
-                  const directory = posix.dirname(path);
-                  let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
-                  if (!isTruthy(checked)) {
-                    checked = yield* resolveProjectPath(root, directory, "directory").pipe(
-                      Effect.as(Result.succeed(undefined)),
-                      Effect.catchTag("PathRejected", (error) =>
-                        Effect.succeed(Result.fail(error)),
-                      ),
-                    );
-                    MutableHashMap.set(directories, directory, checked);
-                  }
-                  yield* Result.match(checked, {
-                    onSuccess: Effect.succeed,
-                    onFailure: (rejection) =>
-                      Effect.fail(PathRejected.make({ path, reason: rejection.reason })),
-                  });
-                  return (yield* readFileBytesEffect({
-                    absolute: join(root, path),
-                    path,
-                    checkLeaf: true,
-                  })).bytes;
-                }),
-                readPage: Effect.fnUntraced(function* (path: string, startLine: number) {
-                  const resolved = yield* resolveProjectPath(root, path, "file");
-                  return yield* readPage({
+                // Each directory is checked once per page (no links, still inside the project); the file
+                // itself is checked on the opened handle, so thousands of files do not mean thousands of
+                // synchronous path walks.
+                const directories = MutableHashMap.empty<
+                  string,
+                  Result.Result<void, PathRejected>
+                >();
+                const candidates = yield* candidatesFor(view, query, caseSensitive, started);
+                const page = yield* searchTextFilesEffect({
+                  paths: view.paths,
+                  readBytes: Effect.fnUntraced(function* (path: string) {
+                    const directory = posix.dirname(path);
+                    let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
+                    if (!isTruthy(checked)) {
+                      checked = yield* resolveProjectPath(root, directory, "directory").pipe(
+                        Effect.as(Result.succeed(undefined)),
+                        Effect.catchTag("PathRejected", (error) =>
+                          Effect.succeed(Result.fail(error)),
+                        ),
+                      );
+                      MutableHashMap.set(directories, directory, checked);
+                    }
+                    yield* Result.match(checked, {
+                      onSuccess: Effect.succeed,
+                      onFailure: (rejection) =>
+                        Effect.fail(PathRejected.make({ path, reason: rejection.reason })),
+                    });
+                    return (yield* readFileBytesEffect({
+                      absolute: join(root, path),
+                      path,
+                      checkLeaf: true,
+                    })).bytes;
+                  }),
+                  readPage: Effect.fnUntraced(function* (path: string, startLine: number) {
+                    const resolved = yield* resolveProjectPath(root, path, "file");
+                    return yield* readPage({
+                      absolute: resolved.absolute,
+                      path,
+                      startLine,
+                      maxLines: 2000,
+                      checkLeaf: true,
+                    });
+                  }),
+                  query,
+                  caseSensitive,
+                  start: position ?? { file: 0, line: 0 },
+                  candidates,
+                });
+                return {
+                  filesInView: view.paths.length,
+                  matches: page.matches,
+                  skipped: page.skipped,
+                  nextCursor: isTruthy(page.next)
+                    ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
+                    : null,
+                  complete: page.next === null && page.skipped.length === 0,
+                };
+              }),
+            context?.abortSignal,
+          ),
+        );
+
+        const readFile = toolDefinition({
+          name: "read_file",
+          description:
+            "Read a project text file by line range. Returns the exact content (line endings kept) and the file's sha256, which write_file, edit_file and delete_file use to avoid overwriting newer changes.",
+          inputSchema: toToolSchema(readFileInput),
+        }).server(({ path, startLine, maxLines }, context) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          guarded(
+            path,
+            () =>
+              Effect.gen(function* () {
+                const resolved = yield* resolveProjectPath(root, path, "file");
+                const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
+                return {
+                  path,
+                  ...(yield* readPage({
                     absolute: resolved.absolute,
                     path,
-                    startLine,
-                    maxLines: 2000,
+                    startLine: startLine ?? 1,
+                    maxLines: lines,
                     checkLeaf: true,
-                  });
-                }),
-                query,
-                caseSensitive,
-                start: position ?? { file: 0, line: 0 },
-                candidates,
-              });
-              return {
-                filesInView: view.paths.length,
-                matches: page.matches,
-                skipped: page.skipped,
-                nextCursor: isTruthy(page.next)
-                  ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
-                  : null,
-                complete: page.next === null && page.skipped.length === 0,
-              };
-            }),
-          context?.abortSignal,
-        ),
-      );
+                  })),
+                };
+              }),
+            context?.abortSignal,
+          ),
+        );
 
-      const readFile = toolDefinition({
-        name: "read_file",
-        description:
-          "Read a project text file by line range. Returns the exact content (line endings kept) and the file's sha256, which write_file, edit_file and delete_file use to avoid overwriting newer changes.",
-        inputSchema: toToolSchema(readFileInput),
-      }).server(({ path, startLine, maxLines }, context) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(
-          path,
-          () =>
+        const writeFile = toolDefinition({
+          name: "write_file",
+          description:
+            "Create a project file, or replace a whole existing file when expectedSha256 from read_file is given. Missing parent directories are created. Prefer edit_file for small changes.",
+          inputSchema: toToolSchema(writeFileInput),
+        }).server(({ path, content, expectedSha256 }) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          guarded(path, () =>
             Effect.gen(function* () {
-              const resolved = yield* resolveProjectPath(root, path, "file");
-              const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
-              return {
-                path,
-                ...(yield* readPage({
+              const resolved = yield* resolveProjectPath(root, path, "new-or-file");
+              if (expectedSha256 === undefined) {
+                const created = yield* createTextFileEffect({
                   absolute: resolved.absolute,
+                  path: path,
+                  text: content,
+                });
+                return { path, created: true, ...created };
+              }
+              if (!(resolved.stats !== undefined))
+                return yield* PathRejected.make({ path, reason: "not_found" });
+              let text = content;
+              if (mentionsHidden(content)) {
+                const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
+                if (file.sha256 !== expectedSha256)
+                  return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+                text = (yield* keepingHidden({
                   path,
-                  startLine: startLine ?? 1,
-                  maxLines: lines,
-                  checkLeaf: true,
-                })),
-              };
-            }),
-          context?.abortSignal,
-        ),
-      );
-
-      const writeFile = toolDefinition({
-        name: "write_file",
-        description:
-          "Create a project file, or replace a whole existing file when expectedSha256 from read_file is given. Missing parent directories are created. Prefer edit_file for small changes.",
-        inputSchema: toToolSchema(writeFileInput),
-      }).server(({ path, content, expectedSha256 }) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, () =>
-          Effect.gen(function* () {
-            const resolved = yield* resolveProjectPath(root, path, "new-or-file");
-            if (expectedSha256 === undefined) {
-              const created = yield* createTextFileEffect({
+                  current: file.text,
+                  find: null,
+                  replacement: content,
+                  replaceAll: false,
+                })).text;
+              }
+              const replaced = yield* replaceTextFileEffect({
                 absolute: resolved.absolute,
                 path: path,
-                text: content,
+                expectedSha256: expectedSha256,
+                text,
               });
-              return { path, created: true, ...created };
-            }
-            if (!(resolved.stats !== undefined))
-              return yield* PathRejected.make({ path, reason: "not_found" });
-            let text = content;
-            if (mentionsHidden(content)) {
-              const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
-              if (file.sha256 !== expectedSha256)
-                return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
-              text = (yield* keepingHidden({
-                path,
-                current: file.text,
-                find: null,
-                replacement: content,
-                replaceAll: false,
-              })).text;
-            }
-            const replaced = yield* replaceTextFileEffect({
-              absolute: resolved.absolute,
-              path: path,
-              expectedSha256: expectedSha256,
-              text,
-            });
-            return { path, created: false, ...replaced };
-          }),
-        ),
-      );
+              return { path, created: false, ...replaced };
+            }),
+          ),
+        );
 
-      const editFile = toolDefinition({
-        name: "edit_file",
-        description:
-          "Replace exact text in a project file. oldText must match once (or pass replaceAll). CRLF files accept oldText written with plain newlines.",
-        inputSchema: toToolSchema(editFileInput),
-      }).server(({ path, oldText, newText, replaceAll = false, expectedSha256 }) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, () =>
-          Effect.gen(function* () {
-            const resolved = yield* resolveProjectPath(root, path, "file");
-            const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
-            if (expectedSha256 !== undefined && expectedSha256 !== file.sha256)
-              return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
-            const crlf = file.text.includes("\r\n") && !oldText.includes("\r\n");
-            const find = crlf ? oldText.replaceAll("\n", "\r\n") : oldText;
-            const replacement = crlf ? newText.replaceAll("\n", "\r\n") : newText;
-            if (mentionsHidden(oldText)) {
-              const edited = yield* keepingHidden({
-                path,
-                current: file.text,
-                find,
-                replacement,
-                replaceAll,
-              });
+        const editFile = toolDefinition({
+          name: "edit_file",
+          description:
+            "Replace exact text in a project file. oldText must match once (or pass replaceAll). CRLF files accept oldText written with plain newlines.",
+          inputSchema: toToolSchema(editFileInput),
+        }).server(({ path, oldText, newText, replaceAll = false, expectedSha256 }) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          guarded(path, () =>
+            Effect.gen(function* () {
+              const resolved = yield* resolveProjectPath(root, path, "file");
+              const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
+              if (expectedSha256 !== undefined && expectedSha256 !== file.sha256)
+                return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+              const crlf = file.text.includes("\r\n") && !oldText.includes("\r\n");
+              const find = crlf ? oldText.replaceAll("\n", "\r\n") : oldText;
+              const replacement = crlf ? newText.replaceAll("\n", "\r\n") : newText;
+              if (mentionsHidden(oldText)) {
+                const edited = yield* keepingHidden({
+                  path,
+                  current: file.text,
+                  find,
+                  replacement,
+                  replaceAll,
+                });
+                const written = yield* replaceTextFileEffect({
+                  absolute: resolved.absolute,
+                  path: path,
+                  expectedSha256: file.sha256,
+                  text: edited.text,
+                });
+                return { path, replacements: edited.replacements, ...written };
+              }
+              const occurrences = file.text.split(find).length - 1;
+              if (occurrences === 0)
+                return yield* new Cause.UnknownError(
+                  new Error(`no_match: ${path}. oldText does not occur; read the file again.`),
+                );
+              if (occurrences > 1 && !replaceAll)
+                return yield* new Cause.UnknownError(
+                  new Error(
+                    `ambiguous_match: ${path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
+                  ),
+                );
+              const text = file.text.replaceAll(find, () => replacement);
               const written = yield* replaceTextFileEffect({
                 absolute: resolved.absolute,
                 path: path,
                 expectedSha256: file.sha256,
-                text: edited.text,
+                text: text,
               });
-              return { path, replacements: edited.replacements, ...written };
-            }
-            const occurrences = file.text.split(find).length - 1;
-            if (occurrences === 0)
-              return yield* new Cause.UnknownError(
-                new Error(`no_match: ${path}. oldText does not occur; read the file again.`),
-              );
-            if (occurrences > 1 && !replaceAll)
-              return yield* new Cause.UnknownError(
-                new Error(
-                  `ambiguous_match: ${path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
-                ),
-              );
-            const text = file.text.replaceAll(find, () => replacement);
-            const written = yield* replaceTextFileEffect({
-              absolute: resolved.absolute,
-              path: path,
-              expectedSha256: file.sha256,
-              text: text,
-            });
-            return { path, replacements: occurrences, ...written };
-          }),
-        ),
-      );
+              return { path, replacements: occurrences, ...written };
+            }),
+          ),
+        );
 
-      const deleteFile = toolDefinition({
-        name: "delete_file",
-        description:
-          "Delete one project file whose content still matches expectedSha256 from read_file. Directories are not deleted.",
-        inputSchema: toToolSchema(deleteFileInput),
-      }).server(({ path, expectedSha256 }) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, () =>
-          Effect.gen(function* () {
-            const resolved = yield* resolveProjectPath(root, path, "file");
-            const removed = yield* deleteTextFileEffect({
-              absolute: resolved.absolute,
-              path: path,
-              expectedSha256: expectedSha256,
-            });
-            return { path, deleted: true, ...removed };
-          }),
-        ),
-      );
+        const deleteFile = toolDefinition({
+          name: "delete_file",
+          description:
+            "Delete one project file whose content still matches expectedSha256 from read_file. Directories are not deleted.",
+          inputSchema: toToolSchema(deleteFileInput),
+        }).server(({ path, expectedSha256 }) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          guarded(path, () =>
+            Effect.gen(function* () {
+              const resolved = yield* resolveProjectPath(root, path, "file");
+              const removed = yield* deleteTextFileEffect({
+                absolute: resolved.absolute,
+                path: path,
+                expectedSha256: expectedSha256,
+              });
+              return { path, deleted: true, ...removed };
+            }),
+          ),
+        );
 
-      return [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] as const;
-    },
+        return [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] as const;
+      }),
   };
 });
 

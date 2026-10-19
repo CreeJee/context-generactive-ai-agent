@@ -15,7 +15,7 @@ import { Interpretations } from "../memory/interpretations.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { MemorySearch } from "../memory/search.ts";
-import { onRun, type RunTrace } from "../runtime/run-trace.ts";
+import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const memoryToolNames = [
@@ -300,13 +300,13 @@ const make = Effect.gen(function* () {
   // Carries the app tracer for callers that have no fiber of their own.
   const layerContext = yield* Effect.context<never>();
   const toolsFor = (
-    caller: RunTrace | undefined,
+    context: Context.Context<never>,
     projectId: string,
     binding?: RunBinding,
     scope?: MemoryToolScope,
   ) =>
     createMemoryTools(
-      { ...services, caller: onRun(layerContext, caller) },
+      { ...services, caller: context },
       projectId,
       binding !== undefined
         ? {
@@ -324,18 +324,15 @@ const make = Effect.gen(function* () {
     /** Read-only compatibility binding used by tests and non-chat callers. */
     forProject(projectId: string): ReadTools {
       // SAFETY: an omitted run binding returns the three-element read-only branch above.
-      return toolsFor(undefined, projectId).tools as ReadTools;
+      return toolsFor(layerContext, projectId).tools as ReadTools;
     },
     /**
-     * Memory tools plus durable retrieval/use attribution for one chat run. With the run's
-     * `caller`, tool calls nest under the run's span; tests leave it out.
+     * Memory tools plus durable retrieval/use attribution for one chat run. Tool calls run on the
+     * run's context, so their spans nest under the run.
      */
-    forRun: Effect.fnUntraced(function* (
-      binding: RunBinding,
-      scope?: MemoryToolScope,
-      caller?: RunTrace,
-    ) {
-      return toolsFor(caller, binding.projectId, binding, scope);
+    forRun: Effect.fnUntraced(function* (binding: RunBinding, scope?: MemoryToolScope) {
+      const caller = yield* runTrace;
+      return toolsFor(onRun(layerContext, caller), binding.projectId, binding, scope);
     }),
   };
 });

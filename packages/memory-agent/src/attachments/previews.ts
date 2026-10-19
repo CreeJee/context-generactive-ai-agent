@@ -1,5 +1,5 @@
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, type RunTrace } from "../runtime/run-trace.ts";
+import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { AnyServerTool } from "@tanstack/ai";
@@ -61,36 +61,33 @@ const make = Effect.gen(function* () {
     /**
      * The same tools; `write_file` and `edit_file` add a `preview` to their result when the file is
      * an SVG. The model gets the result too, and the preview only tells it a picture was made.
-     * `caller` is the run's context, so the preview's spans join the run's trace.
+     * The preview runs on the run's context, so its spans join the run's trace.
      */
-    withPreviews(
-      project: Project,
-      tools: readonly AnyServerTool[],
-      caller?: RunTrace,
-    ): AnyServerTool[] {
-      const run = runNativeEffectWith(onRun(services, caller));
-      return tools.map((tool): AnyServerTool => {
-        const execute = tool.execute;
-        if (!isTruthy(execute) || !HashSet.has(writingToolNames, tool.name)) return tool;
-        return {
-          ...tool,
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          execute: (...call: Parameters<typeof execute>) =>
-            run(
-              Effect.gen(function* () {
-                const result = yield* nativePromise(() => Promise.resolve(execute(...call)));
-                const written = Option.getOrUndefined(decodeWritten(result));
-                if (!(written !== undefined) || !isDrawing(written.path)) return result;
-                const preview = yield* previewOf(project, written.path);
-                return Option.match(preview, {
-                  onNone: () => result,
-                  onSome: (picture) => ({ ...result, preview: picture }),
-                });
-              }),
-            ),
-        };
-      });
-    },
+    withPreviews: (project: Project, tools: readonly AnyServerTool[]) =>
+      Effect.map(runTrace, (caller): AnyServerTool[] => {
+        const run = runNativeEffectWith(onRun(services, caller));
+        return tools.map((tool): AnyServerTool => {
+          const execute = tool.execute;
+          if (!isTruthy(execute) || !HashSet.has(writingToolNames, tool.name)) return tool;
+          return {
+            ...tool,
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            execute: (...call: Parameters<typeof execute>) =>
+              run(
+                Effect.gen(function* () {
+                  const result = yield* nativePromise(() => Promise.resolve(execute(...call)));
+                  const written = Option.getOrUndefined(decodeWritten(result));
+                  if (!(written !== undefined) || !isDrawing(written.path)) return result;
+                  const preview = yield* previewOf(project, written.path);
+                  return Option.match(preview, {
+                    onNone: () => result,
+                    onSome: (picture) => ({ ...result, preview: picture }),
+                  });
+                }),
+              ),
+          };
+        });
+      }),
   };
 });
 

@@ -6,6 +6,7 @@ import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { chatClient, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
+import { inRun } from "../support/run-span.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
@@ -104,9 +105,12 @@ testAgent()("MCP servers of a project", (it) => {
       });
       yield* servers.setTrusted(project, "project", "fake", true);
       const before = (yield* lines(listLog)).length;
-      const [left, right] = yield* Effect.all([servers.tools(project), servers.tools(project)], {
-        concurrency: "unbounded",
-      });
+      const [left, right] = yield* Effect.all(
+        [inRun(servers.tools(project)), inRun(servers.tools(project))],
+        {
+          concurrency: "unbounded",
+        },
+      );
       expect(left.map((tool) => tool.name)).toEqual(right.map((tool) => tool.name));
       expect(yield* lines(listLog)).toHaveLength(before + 1);
     }),
@@ -123,7 +127,7 @@ testAgent()("MCP servers of a project", (it) => {
       yield* writeJson(fake.config, { mcpServers: {} });
       expect((yield* servers.overview(project)).servers).toEqual([]);
       yield* until(() => !processAlive(pid), "the removed MCP server to stop");
-      expect(yield* servers.tools(project)).toEqual([]);
+      expect(yield* inRun(servers.tools(project))).toEqual([]);
     }),
   );
 
@@ -136,7 +140,7 @@ testAgent()("MCP servers of a project", (it) => {
         mcpServers: { fake: fake.entry({ FAKE_MCP_TOKEN: "${FAKE_TOKEN_SOURCE}" }) },
       });
       yield* servers.setTrusted(project, "project", "fake", true);
-      const where = (yield* servers.tools(project)).find(
+      const where = (yield* inRun(servers.tools(project))).find(
         (tool) => tool.name === mcpToolName("fake", "where"),
       );
       const result = yield* sdk(() => Promise.resolve(where?.execute?.({})));
@@ -191,7 +195,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
       ]);
       // Values of the environment and headers never leave the server.
       expect(yield* encodeJson(listed)).not.toContain("NOT_SHOWN");
-      expect(yield* servers.tools(project)).toEqual([]);
+      expect(yield* inRun(servers.tools(project))).toEqual([]);
       expect(yield* fake.starts).toBe(0);
       // `fake` needs NOT_SHOWN, which the environment does not have: trusting reports why it failed.
       const failed = yield* servers.setTrusted(project, "global", "fake", true);
@@ -202,7 +206,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
       const trusted = yield* servers.setTrusted(project, "project", "docs", true);
       expect(trusted.servers[2]?.state).toEqual({ status: "connected", tools: ["echo", "where"] });
       expect(yield* fake.starts).toBe(1);
-      const tools = yield* servers.tools(project);
+      const tools = yield* inRun(servers.tools(project));
       expect(tools.map((tool) => tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
       expect(yield* fake.starts).toBe(1);
       // A changed configuration is not the one the user trusted.
@@ -210,7 +214,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         mcpServers: { docs: { ...fake.entry(), args: [fake.script, "--changed"] } },
       });
       expect((yield* servers.overview(project)).servers[2]?.state).toEqual({ status: "changed" });
-      expect(yield* servers.tools(project)).toEqual([]);
+      expect(yield* inRun(servers.tools(project))).toEqual([]);
       const untrusted = yield* servers.setTrusted(project, "project", "docs", false);
       expect(untrusted.servers[2]?.state).toEqual({ status: "untrusted" });
     }),

@@ -3,7 +3,6 @@ import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
-import { runTrace } from "../../src/runtime/run-trace.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
@@ -15,6 +14,7 @@ import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { sqlRun } from "../support/sql.ts";
 
 const environment = Effect.gen(function* () {
@@ -635,14 +635,16 @@ testAgent()("memory tools per run", (it) => {
       const env = yield* environment;
       let reads = 0;
       const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = yield* (yield* MemoryTools).forRun({
-        ...at,
-        runId: `${at.sessionId}:deferred-run`,
-        get userNodeId() {
-          reads++;
-          return user.id;
-        },
-      });
+      const prepared = yield* inRun(
+        (yield* MemoryTools).forRun({
+          ...at,
+          runId: `${at.sessionId}:deferred-run`,
+          get userNodeId() {
+            reads++;
+            return user.id;
+          },
+        }),
+      );
       expect(reads).toBe(0);
       if (prepared.tools.length !== 6) return expect.unreachable("Expected run tools");
       const promote = prepared.tools[4];
@@ -665,11 +667,11 @@ testAgent()("memory tools per run", (it) => {
         },
       });
       const { tools, run } = yield* Effect.gen(function* () {
-        const prepared = yield* (yield* MemoryTools).forRun(
-          { ...at, runId: `${at.sessionId}:traced-run`, userNodeId: "user" },
-          undefined,
-          yield* runTrace,
-        );
+        const prepared = yield* (yield* MemoryTools).forRun({
+          ...at,
+          runId: `${at.sessionId}:traced-run`,
+          userNodeId: "user",
+        });
         return { tools: prepared.tools, run: yield* Effect.currentSpan };
       }).pipe(Effect.withSpan("chat.run"), Effect.withTracer(tracer));
       const before = recorded.length;

@@ -15,6 +15,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 import { FileTools } from "../src/tools/files.ts";
+import { inRun } from "./support/run-span.ts";
 
 const isText = Schema.is(Schema.String);
 const gitFixture = Effect.fn("fileToolsTest.gitFixture")(function* (root: string, args: string[]) {
@@ -53,15 +54,17 @@ const project = Effect.fn("fileToolsTest.project")(function* (
 });
 const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string) {
   const service = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
-  const [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] = service.forProject({
-    id: "p1",
-    root,
-    name: "project",
-    crossRecallExcluded: false,
-    permissionMode: "ask",
-    createdAt: "2026-09-14T00:00:00.000Z",
-    hiddenAt: null,
-  });
+  const [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] = yield* inRun(
+    service.forProject({
+      id: "p1",
+      root,
+      name: "project",
+      crossRecallExcluded: false,
+      permissionMode: "ask",
+      createdAt: "2026-09-14T00:00:00.000Z",
+      hiddenAt: null,
+    }),
+  );
   return { listFiles, searchFiles, readFile, writeFile, editFile, deleteFile };
 });
 const run = Effect.fn("fileToolsTest.run")(function* <I, O>(

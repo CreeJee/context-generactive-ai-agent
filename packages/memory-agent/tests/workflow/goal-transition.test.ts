@@ -7,6 +7,7 @@ import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
@@ -230,9 +231,9 @@ const transitionCases: ReadonlyArray<{
 ];
 
 const goalTool = Effect.fnUntraced(function* (session: string) {
-  const tool = (yield* WorkflowTools)
-    .forSession(session, "goal")
-    .find((t) => t.name === "start_new_goal");
+  const tool = (yield* inRun((yield* WorkflowTools).forSession(session, "goal"))).find(
+    (t) => t.name === "start_new_goal",
+  );
   if (!isTruthy(tool?.execute)) throw new Error("owner action missing");
   const execute = tool.execute;
   return (input: Parameters<typeof execute>[0]) =>
@@ -303,10 +304,12 @@ testAgent()("explicit new Goal transition", (it) => {
       const { workflows, session, old } = yield* withHistory();
       const tools = yield* WorkflowTools;
       const exposed = (phase: WorkflowState["phase"]) =>
-        tools.forSession(session, phase).some((tool) => tool.name === "start_new_goal");
-      for (const phase of ["chat", "execute"] as const) expect(exposed(phase)).toBe(false);
+        Effect.map(inRun(tools.forSession(session, phase)), (list) =>
+          list.some((tool) => tool.name === "start_new_goal"),
+        );
+      for (const phase of ["chat", "execute"] as const) expect(yield* exposed(phase)).toBe(false);
       for (const phase of ["goal", "plan", "verify", "completed"] as const)
-        expect(exposed(phase)).toBe(true);
+        expect(yield* exposed(phase)).toBe(true);
       const execute = yield* goalTool(session);
       yield* workflows.setPhase(session, "execute");
       expect(yield* execute(transition(old))).toMatchObject({

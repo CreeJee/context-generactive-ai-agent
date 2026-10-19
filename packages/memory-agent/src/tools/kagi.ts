@@ -1,6 +1,6 @@
 import { Cause } from "effect";
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, type RunTrace } from "../runtime/run-trace.ts";
+import { onRun, runTrace } from "../runtime/run-trace.ts";
 
 type NativeRunner = ReturnType<typeof runNativeEffectWith<never>>;
 import { toolDefinition, type AnyServerTool, type ToolExecutionContext } from "@tanstack/ai";
@@ -128,10 +128,10 @@ const make = Effect.gen(function* () {
   return {
     /**
      * Both tools while Kagi is enabled with a key; none otherwise, so the model never sees them.
-     * With the run's `caller`, their spans join the run's trace; tests leave it out.
+     * They run on the run's context, so their spans join the run's trace.
      */
-    tools: (caller?: RunTrace) =>
-      Effect.map(
+    tools: Effect.map(
+      Effect.all([
         // An unreadable Kagi setting hides the tools, as a disabled one does.
         Effect.catch(kagi.status, (error) =>
           Effect.as(Effect.logWarning("kagi_status_unavailable", { error: error._tag }), {
@@ -139,11 +139,13 @@ const make = Effect.gen(function* () {
             enabled: false,
           }),
         ),
-        (status): AnyServerTool[] => {
-          const run = runNativeEffectWith(onRun(services, caller));
-          return status.enabled ? [search(run), extract(run)] : [];
-        },
-      ),
+        runTrace,
+      ]),
+      ([status, caller]): AnyServerTool[] => {
+        const run = runNativeEffectWith(onRun(services, caller));
+        return status.enabled ? [search(run), extract(run)] : [];
+      },
+    ),
   };
 });
 

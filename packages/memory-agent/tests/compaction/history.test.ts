@@ -22,6 +22,7 @@ import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { inRun } from "../support/run-span.ts";
 import { call, conversation, drain, firstSent, noLimit, sourcesOf } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -73,11 +74,13 @@ testAgent()("compaction over recorded history", (it) => {
         const own = yield* nodes.append({ ...at, kind: "tool_result", text });
         const foreign = yield* nodes.append({ ...other, kind: "tool_result", text });
         const wrongKind = yield* nodes.append({ ...at, kind: "assistant", text });
-        const execute = (yield* (yield* MemoryTools).forRun({
-          ...at,
-          runId: `${at.sessionId}:r1`,
-          userNodeId: wrongKind.id,
-        })).tools[3]?.execute;
+        const execute = (yield* inRun(
+          (yield* MemoryTools).forRun({
+            ...at,
+            runId: `${at.sessionId}:r1`,
+            userNodeId: wrongKind.id,
+          }),
+        )).tools[3]?.execute;
         if (!isTruthy(execute)) return expect.unreachable("read_tool_result unavailable");
         expect(yield* call(() => execute({ id: own.id, offset: 0 }))).toMatchObject({
           id: own.id,
