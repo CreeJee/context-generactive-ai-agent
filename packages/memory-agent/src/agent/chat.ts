@@ -73,6 +73,7 @@ import {
   imageProviderWorkflowPrompt,
 } from "../providers/image-feature.ts";
 import { ImageRouter } from "../providers/image-router.ts";
+import { compatibleToolCalling } from "../providers/openai-compatible-config.ts";
 import {
   providerConnection,
   ProviderId,
@@ -2251,7 +2252,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Tool factories; those satisfy chat's server-tool contract but retain provider-specific types.
         const tools: AnyServerTool[] =
           selection.provider === "openai-compatible" &&
-          !isTruthy((yield* config.read).openaiCompatible?.toolCalling)
+          !compatibleToolCalling(yield* config.read, selection.model)
             ? []
             : [
                 ...reads.tools,

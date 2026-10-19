@@ -116,6 +116,15 @@ export function compatibleAccountsOf(settings: {
 export const selectedCompatibleAccount = (accounts: CompatibleAccounts) =>
   accounts.accounts.find((account) => account.id === accounts.selected) ?? null;
 
+/** Whether the selected endpoint registered this model with tool calling on. */
+export const compatibleToolCalling = (
+  settings: Parameters<typeof compatibleAccountsOf>[0],
+  modelId: string,
+) =>
+  selectedCompatibleAccount(compatibleAccountsOf(settings))?.models.find(
+    (model) => model.id === modelId,
+  )?.toolCalling === true;
+
 /** An endpoint's model joined with its connection, or null when it is not registered there. */
 export const compatibleEndpointModel = (
   account: CompatibleAccount,

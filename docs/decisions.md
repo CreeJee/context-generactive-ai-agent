@@ -2303,3 +2303,8 @@
 - 진단은 페이지를 열 때 자동으로 돌리지 않고 버튼 한 번으로 실행한다(모델 비용, 사용자가 증상을 쓴 뒤 실행). 진단 입력은 서버가 묶음에서 만든다. 환경 3,000자, 타임라인 개요 8,000자(최신 우선), 실패 run 최대 10개×3,000자이며, 응답에 `summary`를 더한다.
 - 전송은 Discord webhook 메시지 본문에 초안을, 첨부 `context-agent-evidence.json`에 묶음을 담는다(상한 4,000,000바이트, 비부스트 서버 10MiB 이내). 중복 판정 해시는 초안과 묶음을 함께 본다. 복사·파일 저장도 같은 묶음을 쓴다. `DefectReporter.recent`는 webhook이 없어도 최근 결함을 기억해 묶음에 넣는다.
 - 설정 화면의 MCP 서버·외부 에이전트 명령줄과 URL은 서버에서 `shownDetail`로 가려 응답한다(`target: string | null`). 설정 파일 자체는 바꾸지 않는다.
+
+## compatible 메인 채팅 tool 노출과 모델 턴 진단 로그 (2026-10-20)
+
+- 메인 채팅과 btw가 compatible 모델에 tool을 줄지는 선택된 endpoint 계정에 등록된 그 모델의 `toolCalling`으로만 정한다(`compatibleToolCalling`). 계정 도입 전 단일 `openaiCompatible` 설정은 `compatibleAccountsOf`가 읽어 같은 판단에 들어간다. 메인 채팅이 레거시 `openaiCompatible.toolCalling`만 읽어, 계정으로 저장된 설정(레거시 키를 지움)에서는 tool이 항상 빠지고 모델이 "확인하겠습니다"만 내고 멈췄다.
+- compatible 어댑터는 provider 턴이 끝날 때(`RUN_FINISHED`) `Compatible model turn finished` 로그에 SDK run ID, `finishReason`, 보낸 tool 정의 수, 받은 tool call 수만 남긴다. 프롬프트·응답 본문·모델 ID·endpoint·키는 남기지 않는다. 진단용 임시 로그가 아니라 유지한다.
