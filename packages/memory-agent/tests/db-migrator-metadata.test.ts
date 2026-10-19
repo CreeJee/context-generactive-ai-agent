@@ -35,7 +35,9 @@ it.effect("rejects missing metadata without repairing it or changing the release
     const db = yield* open;
     migrateDatabase(db);
     db.exec("DELETE FROM effect_sql_migrations WHERE migration_id = 1");
-    expect(() => migrateDatabase(db)).toThrow("metadata disagrees with user_version");
+    expect(() => migrateDatabase(db)).toThrow(
+      expect.objectContaining({ reason: expect.objectContaining({ _tag: "MetadataMismatch" }) }),
+    );
     expect(
       db.prepare("SELECT migration_id FROM effect_sql_migrations WHERE migration_id = 1").get(),
     ).toBeUndefined();

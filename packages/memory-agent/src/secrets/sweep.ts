@@ -1,4 +1,5 @@
 import { isTruthy } from "../truthy.ts";
+import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { DateTime, Semaphore } from "effect";
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
@@ -406,13 +407,15 @@ const make = (running: boolean) =>
         }),
       );
       if (changedNodes > 0)
+        // The hidden text is already stored; nodes left unindexed are indexed by the next pass.
         yield* Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
-          Effect.catchCause(() => Effect.void),
+          ignoreLogged("secret_sweep_reindex_failed"),
         );
       return changedNodes;
     }).pipe(onePassAtATime.withPermits(1));
 
-    if (running) yield* Effect.forkScoped(Effect.catchCause(run, () => Effect.void));
+    // Progress is stored per target; the next start resumes a sweep that failed.
+    if (running) yield* Effect.forkScoped(run.pipe(ignoreLogged("secret_sweep_failed")));
 
     return {
       run,

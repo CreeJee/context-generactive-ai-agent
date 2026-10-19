@@ -1,3 +1,4 @@
+import { refusalOf } from "../../api";
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
@@ -26,14 +27,8 @@ export function RecallSettings() {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync(patch)).pipe(
-          Effect.catch((failure) =>
-            Effect.sync(() => {
-              setError(
-                errorMessage(
-                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
-                ),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),

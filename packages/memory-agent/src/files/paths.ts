@@ -28,6 +28,7 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = Platform
  * - `credential`: looks like secret material (R04/R05: no approval ever unlocks it)
  * - `git_internal`: inside `.git` (R04: direct changes are excluded)
  * - `inside_project`: an outside tool was pointed at the project; use the project tools
+ * - `outside_tool_root`: a fenced run (a kanban card) reached a root it must not touch
  * - `symlink` / `hard_link`: a link could redirect the operation past these checks
  * - `not_found` / `not_file` / `not_directory`: the filesystem does not match the request
  */
@@ -38,6 +39,7 @@ export class PathRejected extends Schema.TaggedError<PathRejected>()("PathReject
     "credential",
     "git_internal",
     "inside_project",
+    "outside_tool_root",
     "symlink",
     "hard_link",
     "not_found",
@@ -352,3 +354,35 @@ function resolveOutsidePathBody(
     return { absolute: canonical, stats };
   });
 }
+
+/**
+ * Roots a run's outside tools must not reach besides the project and storage roots. A kanban card's
+ * tools run with the card worktree as their project root and fence off the user's checkout and
+ * every other card worktree. It only adds refusals; the outside rules above still apply first.
+ */
+export interface ToolFence {
+  readonly deniedRoots: ReadonlyArray<string>;
+}
+
+/** A tool target that carries its fence, if it has one. */
+export type Fenced<P> = P & { readonly toolFence?: ToolFence | undefined };
+
+/**
+ * {@link resolveOutsidePath}, then refuses a target that is a denied root, below one, or above one
+ * (listing a parent would show the denied tree).
+ */
+export const resolveFencedOutsidePath = Effect.fn("Paths.resolveFencedOutsidePath")(function* (
+  fence: ToolFence | undefined,
+  projectRoot: string,
+  storageRoot: string,
+  path: string,
+  kind: "file" | "directory" | "new-or-file",
+): Effect.fn.Return<OutsidePath, PathRejected | PlatformError.PlatformError> {
+  const resolved = yield* resolveOutsidePathBody(projectRoot, storageRoot, path, kind);
+  for (const denied of fence?.deniedRoots ?? []) {
+    const root = yield* canonicalPathEffect(denied);
+    if (pathsOverlap(root, resolved.absolute) || (yield* isSameOrBelow(denied, resolved.absolute)))
+      return yield* reject(path, "outside_tool_root");
+  }
+  return resolved;
+});

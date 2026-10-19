@@ -197,7 +197,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
       const failed = yield* servers.setTrusted(project, "global", "fake", true);
       expect(failed.servers[0]?.state).toEqual({
         status: "failed",
-        error: expect.stringContaining("missing_env: NOT_SHOWN"),
+        failure: { code: "missing_env", detail: "NOT_SHOWN" },
       });
       const trusted = yield* servers.setTrusted(project, "project", "docs", true);
       expect(trusted.servers[2]?.state).toEqual({ status: "connected", tools: ["echo", "where"] });
@@ -218,7 +218,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
 });
 
 testAgent()("MCP configuration errors", (it) => {
-  it.effect("invalid files and names are reported, not guessed", () =>
+  it.effect("invalid files and names are reported by code", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -229,7 +229,29 @@ testAgent()("MCP configuration errors", (it) => {
       });
       const listed = yield* (yield* McpServers).overview(project);
       expect(listed.servers).toEqual([]);
-      expect(listed.files.map((file) => file.error !== null)).toEqual([true, true]);
+      expect(listed.files.map((file) => file.error)).toEqual([
+        { code: "invalid_config", detail: expect.any(String) },
+        { code: "invalid_names", detail: "bad name!" },
+      ]);
+    }),
+  );
+
+  it.effect("a server that fails to start keeps its own text, secrets hidden", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const { project, storage } = yield* TestEnv;
+      // The spawn error quotes the command, a credential in it.
+      yield* writeJson(path.join(storage, "mcp.json"), {
+        mcpServers: { broken: { command: "/nonexistent/API_KEY=zq81Hd72kdP0xQ" } },
+      });
+      const failed = yield* (yield* McpServers).setTrusted(project, "global", "broken", true);
+      expect(failed.servers[0]?.state).toEqual({
+        status: "failed",
+        failure: { code: "start_failed", detail: expect.stringContaining("API_KEY=") },
+      });
+      // The settings page shows the configured command too, with the same value hidden.
+      expect(failed.servers[0]?.target).toContain("API_KEY=");
+      expect(yield* encodeJson(failed)).not.toContain("zq81Hd72kdP0xQ");
     }),
   );
 });

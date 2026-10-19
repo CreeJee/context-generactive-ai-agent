@@ -5,6 +5,7 @@ import {
   GlobeIcon,
   HistoryIcon,
   ImageIcon,
+  KanbanIcon,
   MessagesSquareIcon,
   PlugIcon,
   WaypointsIcon,
@@ -29,6 +30,7 @@ import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
 import { RrsiSettings } from "./pages/rrsi";
+import { KanbanSettings } from "./pages/kanban";
 
 const settingsGroups = [
   {
@@ -49,6 +51,7 @@ const settingsGroups = [
       { value: "embedding", label: "임베딩", icon: CpuIcon },
     ],
   },
+  { label: "실행", pages: [{ value: "kanban", label: "칸반 실행", icon: KanbanIcon }] },
   { label: "개선", pages: [{ value: "rrsi", label: "동작 개선 실험", icon: BotIcon }] },
   { label: "지침", pages: [{ value: "skills", label: "Skills", icon: BookOpenIcon }] },
 ] as const;
@@ -115,6 +118,12 @@ function SettingsPageBody({ page, project }: { page: SettingsPage; project: Proj
       return (
         <QuerySection>
           <SkillSettings project={project} />
+        </QuerySection>
+      );
+    case "kanban":
+      return (
+        <QuerySection>
+          <KanbanSettings project={project} />
         </QuerySection>
       );
   }

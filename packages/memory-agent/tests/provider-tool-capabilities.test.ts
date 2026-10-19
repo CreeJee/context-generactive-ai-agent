@@ -172,7 +172,7 @@ describe("ProviderToolCapabilityRegistry", () => {
       );
       expect(error).toMatchObject({
         _tag: "ProviderToolMetadataFailure",
-        reason: `duplicate provider tool id: ${first.id}`,
+        reason: { _tag: "DuplicateTool", id: first.id },
       });
     }),
   );

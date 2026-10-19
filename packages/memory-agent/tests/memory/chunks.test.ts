@@ -35,7 +35,7 @@ const chunked = Layer.succeed(Embedder, {
           Effect.succeed(Array.from(part).length + (special ? 2 : 0)),
         ),
       { concurrency: 1 },
-    ).pipe(Effect.mapError((cause) => new EmbeddingError({ cause }))),
+    ).pipe(Effect.mapError((cause) => EmbeddingError.make({ cause }))),
   embed: (texts) => Effect.succeed(texts.map(vector)),
 });
 

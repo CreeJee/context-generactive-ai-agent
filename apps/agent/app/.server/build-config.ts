@@ -13,5 +13,6 @@ export const BuildServerConfig = Schema.Struct({
 export type BuildServerConfig = typeof BuildServerConfig.Type;
 
 /** Adds the build-time settings behind the current provider: the runtime environment still wins. */
-export const buildConfigLayer = (config: BuildServerConfig) =>
-  ConfigProvider.layerAdd(ConfigProvider.fromUnknown(config));
+export const buildConfigLayer = (
+  config: BuildServerConfig & { readonly CONTEXT_AGENT_RELEASE?: string },
+) => ConfigProvider.layerAdd(ConfigProvider.fromUnknown(config));

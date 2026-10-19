@@ -1,12 +1,18 @@
 import { Effect, Fiber, type Schema } from "effect";
 import type {
+  ReportBundle,
   ReportDeliveryFailure,
   ReportDeliveryResult,
   ReportDeliveryStatus,
 } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
 import { koreanLocalTime } from "../shared/local-time";
-import { readDeliveryStatus, sendReport, type ReportRequestFailed } from "./report-client";
+import {
+  readDeliveryStatus,
+  sendReport,
+  setDefectReports,
+  type ReportRequestFailed,
+} from "./report-client";
 
 export type DeliveryOutcome =
   | { readonly status: "idle" }
@@ -50,7 +56,7 @@ export function deliveryFailure(
 export const deliveryFailureText = {
   not_configured: "이 서버에 개발자 웹훅이 설정되지 않았어요",
   invalid_webhook_url: "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아니에요",
-  too_large: "제보문이 너무 커요. 증거를 줄이세요",
+  too_large: "제보문이나 증거 묶음이 너무 커요. 문안을 줄이거나 복사·저장으로 게시하세요",
   in_progress: "같은 제보문을 보내는 중이에요",
   rate_limited: "Discord가 잠시 요청을 막았어요. 잠시 후 다시 시도하세요",
   webhook_rejected:
@@ -78,8 +84,17 @@ export function deliveryOutcomeText(outcome: DeliveryOutcome): string | null {
   }
 }
 
-/** Explicit, reviewed send to the developer's webhook; copy/download stay available throughout. */
-export function ReportDelivery({ text }: { text: string }) {
+/**
+ * Explicit, reviewed send to the developer's webhook: the draft as the message, the evidence bundle
+ * as its attachment. Copy/download stay available throughout.
+ */
+export function ReportDelivery({
+  text,
+  evidence,
+}: {
+  text: string;
+  evidence: ReportBundle | null;
+}) {
   const [config, setConfig] = useState<ReportDeliveryStatus | "unavailable" | null>(null);
   const [outcome, setOutcome] = useState<DeliveryOutcome>({ status: "idle" });
   const task = useRef<Fiber.Fiber<void> | null>(null);
@@ -101,7 +116,7 @@ export function ReportDelivery({ text }: { text: string }) {
   const send = (resend: boolean) => {
     setOutcome({ status: "sending" });
     run(
-      sendReport(text, resend).pipe(
+      sendReport({ text, evidence }, resend).pipe(
         Effect.match({
           onSuccess: setOutcome,
           onFailure: (error) => setOutcome({ status: "failed", reason: deliveryFailure(error) }),
@@ -109,6 +124,13 @@ export function ReportDelivery({ text }: { text: string }) {
       ),
     );
   };
+
+  const toggleDefectReports = (enabled: boolean) =>
+    run(
+      setDefectReports(enabled).pipe(
+        Effect.match({ onSuccess: setConfig, onFailure: () => setConfig("unavailable") }),
+      ),
+    );
 
   const message = deliveryOutcomeText(outcome);
   return (
@@ -123,8 +145,18 @@ export function ReportDelivery({ text }: { text: string }) {
       {config !== null && config !== "unavailable" && config.configured && (
         <div className="space-y-2">
           <p className="text-muted-foreground">
-            개발자 웹훅 …{config.webhookIdSuffix}. 위 최종 문안이 그대로 전송됩니다.
+            개발자 웹훅 …{config.webhookIdSuffix}. 위 최종 문안이 메시지로,
+            {evidence === null ? " 증거 묶음 없이" : " 증거 묶음 전체가 JSON 첨부 파일로"}{" "}
+            전송됩니다.
           </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={config.defectReports}
+              onChange={(event) => toggleDefectReports(event.currentTarget.checked)}
+            />
+            앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (대화·프롬프트·자격증명은 보내지 않음)
+          </label>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"

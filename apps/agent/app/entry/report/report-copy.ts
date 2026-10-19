@@ -1,11 +1,13 @@
-import { Data, Effect, Function as EffectFunction } from "effect";
+import { Effect, Function as EffectFunction, Schema } from "effect";
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const copyReportText: {
   (write: (text: string) => Promise<void>): (text: string) => ReturnType<typeof copyReportTextBody>;
 } & typeof copyReportTextBody = EffectFunction.dual(2, copyReportTextBody);
-class ClipboardWriteFailed extends Data.TaggedError("ClipboardWriteFailed")<{
-  readonly cause: unknown;
-}> {}
+/** The clipboard refused the text; the page only says the copy did not happen. */
+class ClipboardWriteFailed extends Schema.TaggedError<ClipboardWriteFailed>()(
+  "ClipboardWriteFailed",
+  {},
+) {}
 function copyReportTextBody(
   text: string,
   write: (text: string) => Promise<void>,
@@ -13,7 +15,10 @@ function copyReportTextBody(
   return Effect.runPromise(
     Effect.tryPromise({
       try: () => write(text),
-      catch: (cause) => new ClipboardWriteFailed({ cause }),
-    }).pipe(Effect.match({ onSuccess: () => true, onFailure: () => false })),
+      catch: () => ClipboardWriteFailed.make({}),
+    }).pipe(
+      Effect.as(true),
+      Effect.catchTag("ClipboardWriteFailed", () => Effect.succeed(false)),
+    ),
   );
 }

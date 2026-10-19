@@ -19,6 +19,11 @@ const githubToken = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
 
 const decodeCount = Schema.decodeUnknownEffect(Schema.Struct({ count: Schema.Finite }));
 const decodeValue = Schema.decodeUnknownEffect(Schema.Struct({ value: Schema.String }));
+const decodeResultChunk = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ type: Schema.String, content: Schema.optional(Schema.String) }),
+  ),
+);
 const decodeRefs = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ ref: Schema.String })));
 
 /** One string column of the single row a query returns. */
@@ -80,6 +85,28 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       const stored = yield* sessionText(session);
       expect(stored).not.toContain(githubToken);
       expect(stored).toContain("[redacted:github]");
+    }),
+  );
+
+  it.effect("a failed tool gives the model its code, tag and redacted text", () =>
+    Effect.gen(function* () {
+      const session = yield* freshSession;
+      yield* selectTestModel();
+      const stream = yield* send(
+        session,
+        `${session}:missing`,
+        `call read_file {"path":"missing/${githubToken}.txt"}`,
+      );
+      const results = yield* Effect.forEach(
+        stream.split("\n").flatMap((line) => (line.startsWith("data: ") ? [line.slice(6)] : [])),
+        (line) => decodeResultChunk(line),
+      );
+      const content = results.find((chunk) => chunk.type === "TOOL_CALL_RESULT")?.content;
+      expect(yield* parseJson(content ?? "")).toEqual({
+        error: "not_found",
+        cause: expect.any(String),
+        detail: "missing/[redacted:github].txt. Nothing exists at that path.",
+      });
     }),
   );
 

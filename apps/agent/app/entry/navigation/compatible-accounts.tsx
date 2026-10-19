@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { cn } from "cn";
 import { CheckIcon, PencilIcon, PlugIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useState } from "react";
@@ -22,7 +23,7 @@ import {
 
 /** Safe text for a failed endpoint request; upstream bodies are never shown. */
 export const compatibleErrorMessage = (failure: Error) => {
-  if (!(failure instanceof CompatibleRequestFailed)) return "호환 공급자 요청에 실패했어요.";
+  if (!Schema.is(CompatibleRequestFailed)(failure)) return "호환 공급자 요청에 실패했어요.";
   switch (failure.reason._tag) {
     case "PartialWrite":
     case "TransportFailed":

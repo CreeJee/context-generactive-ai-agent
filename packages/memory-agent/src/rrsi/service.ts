@@ -46,13 +46,22 @@ import {
 import { editBudget, exploration, noiseBand, selectCandidate } from "./selection.ts";
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
-import { ActivityFailed, EvaluationFailed, experimentFailure } from "./failure.ts";
+import { EvaluationFailed, experimentFailure } from "./failure.ts";
 import { readActivity } from "./activity.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { sdkPromiseWithController } from "../runtime/sdk-promise.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
-  reason: Schema.String,
+  reason: Schema.Literals([
+    "evaluation_image_unavailable",
+    "experiment_running",
+    "state_operation_failed",
+    "sealed_corpus_exhausted",
+    "model_unavailable",
+    "evaluation_incomplete",
+    /** The host environment or the original store named by it could not be read. */
+    "configuration_failed",
+  ]),
 }) {}
 
 /** Native evaluator and model boundaries, independent of the experiment's lifecycle. */
@@ -129,16 +138,18 @@ const make = Effect.gen(function* () {
   let task: Fiber.Fiber<void> | null = null;
   let lastActivity = yield* Clock.currentTimeMillis;
   let disposed = false;
+  const configurationFailed = () => RrsiFailed.make({ reason: "configuration_failed" });
   const originalStorage = yield* Config.String("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE")
     .pipe(Config.withDefault(""))
     .parse(ConfigProvider.fromEnv())
-    .pipe(Effect.orDie);
+    .pipe(Effect.mapError(configurationFailed));
   const originalFile = isTruthy(originalStorage)
     ? oauthProtocolPath.join(originalStorage, "agent.db")
     : null;
   // The original store is read-only evidence; its connection closes after the poller stops.
   const originalContext =
-    originalFile !== null && (yield* fs.exists(originalFile).pipe(Effect.orDie))
+    originalFile !== null &&
+    (yield* fs.exists(originalFile).pipe(Effect.mapError(configurationFailed)))
       ? yield* Effect.acquireRelease(
           Effect.sync(() => new DatabaseSync(originalFile, { readOnly: true })),
           (original) => Effect.sync(() => original.close()),
@@ -148,7 +159,7 @@ const make = Effect.gen(function* () {
     yield* Config.String("CONTEXT_AGENT_RRSI_REPOSITORY")
       .pipe(Config.option)
       .parse(ConfigProvider.fromEnv())
-      .pipe(Effect.orDie),
+      .pipe(Effect.mapError(configurationFailed)),
   );
   const touch = () => {
     lastActivity = effectClock.currentTimeMillisUnsafe();
@@ -264,8 +275,12 @@ const make = Effect.gen(function* () {
           abort.signal,
         ),
       );
-      consume(raw);
-      return completionText(raw);
+      const protocolInvalid = () => EvaluationFailed.make({ reason: "protocol_invalid" });
+      const count = yield* Effect.try({ try: () => reportedTokens(raw), catch: protocolInvalid });
+      if (count === null) return yield* EvaluationFailed.make({ reason: "usage_unknown" });
+      record.tokens += count;
+      saveLater();
+      return yield* Effect.try({ try: () => completionText(raw), catch: protocolInvalid });
     });
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     const evaluate = Effect.fn("Rrsi.evaluate")(function* (
@@ -324,11 +339,7 @@ const make = Effect.gen(function* () {
         }[] = [];
         for (let index = 0; index < 2; index++) {
           progress("proposal", 0, 1);
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          const proposal = EffectFunction.flow(
-            Schema.decodeResult(Schema.fromJsonString(Proposal)),
-            Result.getOrThrow,
-          )(
+          const proposal = yield* Schema.decodeEffect(Schema.fromJsonString(Proposal))(
             yield* request(
               [
                 "Propose one reusable agent harness improvement. Return JSON {profile:{rolePrompt,memoryToolDescription,retrievalLeadLimit,retrievalTokenLimit},edits:[{component,hypothesis}]}.",
@@ -362,7 +373,7 @@ const make = Effect.gen(function* () {
           const candidate: MutableCandidate = {
             kind: "profile",
             imageId: null,
-            id: yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
+            id: yield* oauthProtocolCrypto.randomUUIDv4(),
             round,
             profile: proposal.profile,
             edits: proposal.edits,
@@ -376,11 +387,7 @@ const make = Effect.gen(function* () {
           yield* store.saveExperiment(record);
           if (decision !== "pending") continue;
           progress("critique", 0, 1);
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          const critique = EffectFunction.flow(
-            Schema.decodeResult(Schema.fromJsonString(Critique)),
-            Result.getOrThrow,
-          )(
+          const critique = yield* Schema.decodeEffect(Schema.fromJsonString(Critique))(
             yield* request(
               `Review candidate diff for task-specific logic, contradictory tool behavior, disabled verification or overridden permissions. Return only {"approved":true|false}. Diff: ${candidate.diff}`,
             ),
@@ -478,11 +485,7 @@ const make = Effect.gen(function* () {
         // Code is still review-only. An approved profile remains installed if code exploration fails.
         yield* Effect.gen(function* () {
           progress("code_proposal", 0, 1);
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          const proposal = EffectFunction.flow(
-            Schema.decodeResult(Schema.fromJsonString(CodeProposal)),
-            Result.getOrThrow,
-          )(
+          const proposal = yield* Schema.decodeEffect(Schema.fromJsonString(CodeProposal))(
             yield* request(
               [
                 "Propose one reusable code improvement. Return JSON {edits:[{component,hypothesis}],files:[{path,before,after}]}. Use exact unique replacement anchors; touch at most three allowed files. Do not modify permissions, authentication, evaluator, tests, runtime version management or user instructions.",
@@ -495,7 +498,7 @@ const make = Effect.gen(function* () {
           const candidate: MutableCandidate = {
             kind: "code",
             imageId: null,
-            id: yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
+            id: yield* oauthProtocolCrypto.randomUUIDv4(),
             round: 2,
             profile,
             edits: proposal.edits,
@@ -508,11 +511,7 @@ const make = Effect.gen(function* () {
           record.candidates.push(candidate);
           yield* store.saveExperiment(record);
           progress("critique", 0, 1);
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          const critique = EffectFunction.flow(
-            Schema.decodeResult(Schema.fromJsonString(Critique)),
-            Result.getOrThrow,
-          )(
+          const critique = yield* Schema.decodeEffect(Schema.fromJsonString(Critique))(
             yield* request(
               `Review the code replacements for benchmark leakage, altered verification, credentials, changed permissions or inert machinery. Return {"approved":true|false}. ${candidate.diff}`,
             ),
@@ -566,7 +565,9 @@ const make = Effect.gen(function* () {
           candidate.decision =
             selection.kind === "accepted" ? "code_review_pending" : selection.reason;
         }).pipe(
-          Effect.catchCause(() =>
+          // Any expected failure of code exploration, an unreadable model answer included, leaves
+          // the adopted profile in place. Defects and interruption end the experiment.
+          Effect.catch(() =>
             Effect.sync(() => {
               const candidate = record.candidates.findLast((entry) => entry.kind === "code");
               if (isTruthy(candidate)) candidate.decision = "code_evaluation_incomplete";
@@ -593,6 +594,10 @@ const make = Effect.gen(function* () {
       Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
     );
     if (exhausted.length > 0) return yield* RrsiFailed.make({ reason: "sealed_corpus_exhausted" });
+    // Named before the model is pinned, so a failure here has nothing to release.
+    const experimentId = yield* oauthProtocolCrypto
+      .randomUUIDv4()
+      .pipe(Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })));
     const baselineImage = yield* native.image;
     // Pin immutable evaluator provenance before any requests or candidates are created.
     if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
@@ -606,7 +611,7 @@ const make = Effect.gen(function* () {
     const cancellation = yield* cancellations.allocate("app_shutdown");
     const abort = cancellation.controller;
     const record: MutableExperiment = {
-      id: yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
+      id: experimentId,
       status: "running",
       startedAt: yield* Clock.currentTimeMillis,
       finishedAt: null,
@@ -711,15 +716,27 @@ const make = Effect.gen(function* () {
       )
     )
       return;
-    yield* start().pipe(Effect.provideContext(dependencies), Effect.ignore);
+    // An automatic start that is refused (already running, no image or model, corpus spent) waits
+    // for the next idle window.
+    yield* start().pipe(
+      Effect.provideContext(dependencies),
+      Effect.catchTag("RrsiFailed", (failure) =>
+        Effect.logDebug("rrsi_auto_start_refused", { reason: failure.reason }),
+      ),
+    );
   });
   // Poll fibers belong to this service; a long experiment must not delay activity checks.
+  // A check that fails or breaks stops the running experiment; the next tick checks again. The
+  // failure is logged by tag only, and a defect stays in this tick's exit.
+  const activityCheckFailed = Effect.sync(() => {
+    controller?.abort("activity_check_failed");
+  });
   const poll = tick().pipe(
-    Effect.catchCause(() => Effect.fail(ActivityFailed.make({}))),
-    Effect.catchTag("ActivityFailed", () =>
-      Effect.sync(() => {
-        controller?.abort("activity_check_failed");
-      }),
+    Effect.tapDefect(() => activityCheckFailed),
+    Effect.catch((error) =>
+      Effect.logWarning("rrsi_activity_check_failed", { error: error._tag }).pipe(
+        Effect.andThen(activityCheckFailed),
+      ),
     ),
   );
   yield* poll.pipe(

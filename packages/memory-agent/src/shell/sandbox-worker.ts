@@ -3,6 +3,7 @@
 // concurrent runs from sharing an allowlist. The host spawns the wrapped command itself and keeps
 // this worker alive, serving the proxy, until the command has exited. In a checkout Node runs this
 // file as TypeScript; the executable ships it bundled (`scripts/package.ts`).
+import { ignoreLogged } from "../runtime/logged-failures.ts";
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { workerData } from "node:worker_threads";
 import { Effect, Layer, Schema } from "effect";
@@ -16,20 +17,22 @@ import {
   SandboxUnavailable,
 } from "./sandbox-protocol.ts";
 
-const setupFailed = <E>(cause: E) =>
-  SandboxUnavailable.make({
-    reason: "setup_failed",
-    detail: cause instanceof Error ? cause.message : String(cause),
-  });
+/**
+ * The setup step that failed, as a fixed detail: the runtime's own message can hold paths, and it
+ * reaches the shell tool's result.
+ */
+const setupFailed =
+  (step: "invalid_setup" | "runtime_unavailable" | "initialize_failed" | "wrap_failed") => () =>
+    SandboxUnavailable.make({ reason: "setup_failed", detail: step });
 
 /** Sets the sandbox up for this worker's one command; the worker's Scope resets it. */
 const prepare = Effect.gen(function* () {
   const { sandbox } = yield* Schema.decodeUnknownEffect(Schema.Struct({ sandbox: SandboxSetup }))(
     workerData,
-  ).pipe(Effect.mapError(setupFailed));
+  ).pipe(Effect.mapError(setupFailed("invalid_setup")));
   const { SandboxManager } = yield* Effect.try({
     try: () => requireRuntime("@anthropic-ai/sandbox-runtime"),
-    catch: setupFailed,
+    catch: setupFailed("runtime_unavailable"),
   });
   yield* Effect.sync(() => SandboxManager.isSupportedPlatform()).pipe(
     Effect.filterOrFail(
@@ -63,14 +66,15 @@ const prepare = Effect.gen(function* () {
             denyWrite: [...denyWrite],
           },
         }),
-      catch: setupFailed,
+      catch: setupFailed("initialize_failed"),
     }),
-    () => Effect.ignore(Effect.tryPromise(() => SandboxManager.reset())),
+    () =>
+      Effect.tryPromise(() => SandboxManager.reset()).pipe(ignoreLogged("sandbox_reset_failed")),
   );
   const wrapped = yield* Effect.tryPromise({
     try: (signal) =>
       SandboxManager.wrapWithSandbox(command, "/bin/sh", undefined, signal, { commandId }),
-    catch: setupFailed,
+    catch: setupFailed("wrap_failed"),
   });
   return {
     wrapped,

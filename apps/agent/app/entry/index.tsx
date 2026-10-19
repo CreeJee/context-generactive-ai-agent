@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { runUiEffect, uiPromise, uiFailure } from "./shared/ui-effect";
+import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
 import {
@@ -44,6 +44,7 @@ import {
 import {
   archiveErrorMessage,
   projectErrorMessage,
+  refusalOf,
   type ModelSelection,
   type ProviderId,
 } from "./api";
@@ -53,6 +54,7 @@ import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
+import { DecisionInbox } from "./navigation/decision-inbox";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
@@ -65,6 +67,8 @@ import { providerLabels } from "./navigation/providers";
 const locationParsers = {
   project: parseAsString,
   session: parseAsString,
+  /** A board card the inbox opened; the session's board opens on it. */
+  card: parseAsString,
 };
 
 function Placeholder({
@@ -176,7 +180,7 @@ export function App() {
   }, [projectId, sessions, sessionsQuery.data, setLocation]);
 
   const selectProject = (id: string) =>
-    void setLocation({ project: id, session: null }, { history: "push" });
+    void setLocation({ project: id, session: null, card: null }, { history: "push" });
   useEffect(() => setArchiveError(null), [projectId]);
 
   const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
@@ -201,13 +205,8 @@ export function App() {
           const remaining = sessions.filter((item) => item.id !== id);
           if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const error = uiFailure(cause);
-              setArchiveError(
-                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -227,13 +226,8 @@ export function App() {
           const remaining = sessions.filter((item) => item.id !== id);
           if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const error = uiFailure(cause);
-              setArchiveError(
-                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -251,13 +245,8 @@ export function App() {
           if (result.status !== "completed") return refreshPendingLifecycle(result.status);
           setArchiveError(null);
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const error = uiFailure(cause);
-              setArchiveError(
-                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),
@@ -271,11 +260,8 @@ export function App() {
         void setLocation({ project: project.id, session: null }, { history: "push" });
         return null;
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            const error = uiFailure(cause);
-            return projectErrorMessage(error instanceof Error ? error : new Error(String(error)));
-          }),
+        Effect.catchTag("UnknownError", (failure) =>
+          Effect.sync(() => projectErrorMessage(refusalOf(failure.cause))),
         ),
       ),
     );
@@ -306,7 +292,7 @@ export function App() {
         setProvider(target.provider);
         if (selected !== null) setSelection(selected);
       }).pipe(
-        Effect.catchCause(() =>
+        Effect.catchTag("UnknownError", () =>
           Effect.sync(() =>
             setSwitchError("계정을 바꾸지 못했어요. 연결 상태를 확인한 뒤 다시 시도하세요."),
           ),
@@ -486,6 +472,15 @@ export function App() {
               />
             </div>
             <Separator />
+            {projectId && (
+              <DecisionInbox
+                projectId={projectId}
+                holder={pageHolder()}
+                onOpenCard={(session, card) =>
+                  void setLocation({ session, card }, { history: "push" })
+                }
+              />
+            )}
             {projectId && (
               <SessionSection
                 sessions={sessions}

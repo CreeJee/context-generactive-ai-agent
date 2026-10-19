@@ -124,9 +124,7 @@ function prepareCodeCandidateBody(
         run("git", ["rev-parse", "HEAD"], { cwd: directory, signal }),
       );
       const tag = `context-agent-rrsi:code-${Buffer.from(
-        yield* oauthProtocolCrypto
-          .digest("SHA-256", new TextEncoder().encode(commit))
-          .pipe(Effect.orDie),
+        yield* oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(commit)),
       )
         .toString("hex")
         .slice(0, 16)}`;

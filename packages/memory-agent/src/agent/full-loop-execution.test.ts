@@ -23,7 +23,12 @@ describe("full-loop preflight", () => {
           stream: { abortController: new AbortController() },
         },
       ),
-    ).toThrow("Unsupported owner tool grant capability");
+    ).toThrow(
+      expect.objectContaining({
+        _tag: "FullLoopAdmissionRejected",
+        reason: { _tag: "UnsupportedTool" },
+      }),
+    );
     expect(modelCall).not.toHaveBeenCalled();
   });
 });

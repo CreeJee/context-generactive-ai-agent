@@ -151,7 +151,13 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
-        const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+        const id = yield* crypto
+          .randomUUIDv4()
+          .pipe(
+            Effect.mapError(() =>
+              BtwError.make({ reason: BtwStorageFailed.make({ operation: "create_thread" }) }),
+            ),
+          );
         const createdAt = yield* Clock.currentTimeMillis;
         yield* sql`
           INSERT INTO btw_threads (id, parent_session_id, created_at, updated_at)

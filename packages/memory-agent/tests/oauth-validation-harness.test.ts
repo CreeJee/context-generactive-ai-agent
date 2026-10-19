@@ -362,7 +362,7 @@ const login = Effect.fn("loginOAuthFixture")(function* (harness: OAuthValidation
 });
 
 test("identifies the provider, operation and HTTP status without exposing response data", () => {
-  const error = new OAuthHarnessError("provider_rejected", 429, {
+  const error = OAuthHarnessError.fromCode("provider_rejected", 429, {
     provider: "openai",
     operation: "model_stream",
   });
@@ -425,11 +425,10 @@ it.live("reports credential write failure without blaming the provider or exposi
           runSdk(
             Effect.fail(
               new Cause.UnknownError(
-                new OAuthHarnessError("credential_store_unavailable", null, {
+                OAuthHarnessError.fromCode("credential_store_unavailable", null, {
                   provider: "openai",
                   operation: "credential_store",
                   credentialStage: "write",
-                  reason: "private-native-error",
                 }),
               ),
             ),
@@ -447,7 +446,6 @@ it.live("reports credential write failure without blaming the provider or exposi
       expect(browser.status).toBe(502);
       const text = yield* browser.text;
       expect(text).toContain("credential store is unavailable");
-      expect(text).not.toContain("private-native-error");
       expect(text).not.toContain("access-secret");
       yield* sdkCall(() => completion);
     }),

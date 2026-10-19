@@ -1,10 +1,11 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
-import { Cause, Context, Effect, Layer, MutableHashMap, Option } from "effect";
+import { Context, Effect, Layer, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Crypto } from "effect";
 import {
   createProfileCredentialStore,
+  OAuthProfileRejected,
   OAuthProfiles,
   type ProfileCredentialStore,
 } from "./accounts.ts";
@@ -12,6 +13,7 @@ import { providerProtocols, type OAuthProvider } from "./protocol.ts";
 import {
   createKeychainProfileCredentialStore,
   createSubscriptionOAuthClient,
+  OAuthHarnessError,
   type LoginAttempt,
 } from "./validation-harness.ts";
 
@@ -90,9 +92,9 @@ function createOAuthAccountLoginManagerBody(
     runOAuthNodeEffect(
       Effect.gen(function* () {
         if (label.trim().length === 0 || label.length > 80)
-          return yield* new Cause.UnknownError(new Error("invalid_oauth_profile"));
+          return yield* OAuthProfileRejected.make({ reason: "invalid_oauth_profile" });
         if (activeAttempt(provider) !== undefined)
-          return yield* new Cause.UnknownError(new Error("oauth_login_in_progress"));
+          return yield* OAuthHarnessError.fromCode("login_in_progress");
         const attempt: Attempt = {
           id: yield* (yield* Crypto.Crypto).randomUUIDv4(),
           label: label.trim(),
@@ -113,18 +115,26 @@ function createOAuthAccountLoginManagerBody(
               Effect.flatMap((connection) =>
                 Effect.gen(function* () {
                   if (!connection.connected || attempt.cancelled)
-                    return yield* new Cause.UnknownError(new Error("login_failed"));
+                    return yield* OAuthHarnessError.fromCode(
+                      attempt.cancelled ? "cancelled" : "not_connected",
+                    );
                   yield* store.publish(provider, attempt.id, attempt.label, accounts);
                   if (!(yield* store.list(provider)).some((profile) => profile.selected))
                     yield* store.select(provider, attempt.id, accounts);
                   recordResult(provider, { status: "completed" });
                 }),
               ),
-              Effect.catchCause(() =>
+              // Any failed completion is the attempt's outcome; the page shows it as login_failed.
+              Effect.catch(() =>
                 Effect.gen(function* () {
                   if (!(yield* store.list(provider)).some((profile) => profile.id === attempt.id)) {
+                    // Best-effort removal of the unpublished slot; the login already failed.
                     yield* nativePromise(() => accounts.remove(provider, attempt.id)).pipe(
-                      Effect.ignore,
+                      Effect.catchTag("UnknownError", () =>
+                        Effect.logWarning("OAuth login slot cleanup failed", {
+                          error: "UnknownError",
+                        }),
+                      ),
                     );
                     recordResult(provider, { status: "error", error: "login_failed" });
                   } else recordResult(provider, { status: "completed" });
@@ -144,7 +154,8 @@ function createOAuthAccountLoginManagerBody(
           );
           return yield* profiles(provider);
         }).pipe(
-          Effect.catchCause(() =>
+          // A login that cannot start leaves the provider's accounts as they were.
+          Effect.catch(() =>
             Effect.sync(() =>
               MutableHashMap.set(entries, provider, {
                 status: "settled",

@@ -1,4 +1,4 @@
-import { MutableHashMap, Option, Context, Data, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import {
   RouteCatalog,
@@ -41,16 +41,21 @@ export interface ImageRouteFact {
   readonly evidence: readonly string[];
 }
 
-export interface ImageRouteScore {
-  readonly routeId: MediaRoute["id"];
-  readonly eligible: boolean;
-  readonly score: number;
-  readonly quality: number;
-  readonly speed: number;
-  readonly affordability: number;
-  readonly estimatedCostUsd?: number;
-  readonly reasons: readonly string[];
-}
+/** A fact's invalid cost is kept as reported (it makes the route ineligible), so cost-derived numbers may be NaN. */
+export const ImageRouteScore = Schema.Struct({
+  routeId: Schema.TemplateLiteral(["media:", Schema.String]),
+  eligible: Schema.Boolean,
+  // @effect-diagnostics-next-line schemaNumber:off
+  score: Schema.Number,
+  quality: Schema.Finite,
+  speed: Schema.Finite,
+  // @effect-diagnostics-next-line schemaNumber:off
+  affordability: Schema.Number,
+  // @effect-diagnostics-next-line schemaNumber:off
+  estimatedCostUsd: Schema.optionalKey(Schema.Number),
+  reasons: Schema.Array(Schema.String),
+});
+export type ImageRouteScore = typeof ImageRouteScore.Type;
 
 export interface ImageRouteDecision {
   readonly type: "selected";
@@ -80,24 +85,43 @@ export interface ImageRerouteConfirmation {
   readonly alternatives: readonly ImageRouteDecision[];
 }
 
-export class ImageRouteFactsFailed extends Data.TaggedError("ImageRouteFactsFailed")<{
-  readonly routeId?: string;
-  readonly cause: unknown;
-}> {}
+export class ImageRouteFactsFailed extends Schema.TaggedError<ImageRouteFactsFailed>()(
+  "ImageRouteFactsFailed",
+  { routeId: Schema.optionalKey(Schema.String), cause: Schema.Defect() },
+) {}
 
-export class ImageRoutingInvalidRequest extends Data.TaggedError("ImageRoutingInvalidRequest")<{
-  readonly reason: string;
-}> {}
+export class ImageRoutingInvalidRequest extends Schema.TaggedError<ImageRoutingInvalidRequest>()(
+  "ImageRoutingInvalidRequest",
+  {
+    reason: Schema.Literals([
+      "invalid_source_image_count",
+      "invalid_cost_ceiling",
+      /** A route fact's quality or speed is outside 0..1. */
+      "invalid_route_fact_score",
+      "unknown_initiator_route",
+    ]),
+    routeId: Schema.optionalKey(Schema.String),
+  },
+) {}
 
-export class ImageRouteUnavailable extends Data.TaggedError("ImageRouteUnavailable")<{
-  readonly reasons: readonly string[];
-  readonly ranking: readonly ImageRouteScore[];
-}> {}
+export class ImageRouteUnavailable extends Schema.TaggedError<ImageRouteUnavailable>()(
+  "ImageRouteUnavailable",
+  { ranking: Schema.Array(ImageRouteScore) },
+) {}
 
-export class FixedImageRouteRejected extends Data.TaggedError("FixedImageRouteRejected")<{
-  readonly routeId?: string;
-  readonly reasons: readonly string[];
-}> {}
+export class FixedImageRouteRejected extends Schema.TaggedError<FixedImageRouteRejected>()(
+  "FixedImageRouteRejected",
+  {
+    routeId: Schema.optionalKey(Schema.String),
+    reason: Schema.Union([
+      /** Fixed mode was asked for without naming a route. */
+      Schema.TaggedStruct("RouteIdMissing", {}),
+      Schema.TaggedStruct("RouteAbsent", {}),
+      /** The route is in the catalog but its score is not eligible; `reasons` are the score's. */
+      Schema.TaggedStruct("Ineligible", { reasons: Schema.Array(Schema.String) }),
+    ]),
+  },
+) {}
 
 export interface ImageRouteFactsApi {
   readonly forRoutes: (
@@ -161,21 +185,18 @@ const finiteUnit = (value: number) => Number.isFinite(value) && value >= 0 && va
 
 function validateInput(input: RankImageRoutesInput): ImageRoutingInvalidRequest | undefined {
   if (!Number.isInteger(input.intent.sourceImageCount) || input.intent.sourceImageCount < 0)
-    return new ImageRoutingInvalidRequest({
-      reason: "sourceImageCount must be a non-negative integer",
-    });
+    return new ImageRoutingInvalidRequest({ reason: "invalid_source_image_count" });
   if (
     input.policy.maximumEstimatedCostUsd !== undefined &&
     (!Number.isFinite(input.policy.maximumEstimatedCostUsd) ||
       input.policy.maximumEstimatedCostUsd < 0)
   )
-    return new ImageRoutingInvalidRequest({
-      reason: "maximumEstimatedCostUsd must be a finite non-negative number",
-    });
+    return new ImageRoutingInvalidRequest({ reason: "invalid_cost_ceiling" });
   for (const fact of input.facts)
     if (!finiteUnit(fact.quality) || !finiteUnit(fact.speed))
       return new ImageRoutingInvalidRequest({
-        reason: `route fact scores must be within 0..1: ${fact.routeId}`,
+        reason: "invalid_route_fact_score",
+        routeId: fact.routeId,
       });
   return undefined;
 }
@@ -324,7 +345,8 @@ function makeImageRouterBody(
         Effect.mapError(
           () =>
             new ImageRoutingInvalidRequest({
-              reason: `unknown initiator chat route: ${request.initiatorChatRouteId}`,
+              reason: "unknown_initiator_route",
+              routeId: request.initiatorChatRouteId,
             }),
         ),
       );
@@ -344,7 +366,10 @@ function makeImageRouterBody(
                     MutableHashMap.set(consentByRoute, route.id, decision.mode);
                     return !decision.crossProvider || decision.mode !== "disabled";
                   }),
-                  Effect.orElseSucceed(() => false),
+                  // An unreadable consent leaves the cross-provider route out of the candidates.
+                  Effect.catchTag("CrossProviderMediaConsentStoreFailed", () =>
+                    Effect.succeed(false),
+                  ),
                 ),
             );
       const facts = yield* factsService.forRoutes(routes);
@@ -374,20 +399,20 @@ function makeImageRouterBody(
           : result.ranking.find((score) => score.eligible);
       if (request.policy.mode === "fixed") {
         if (request.policy.fixedRouteId === undefined)
-          return yield* new FixedImageRouteRejected({
-            reasons: ["fixed mode requires fixedRouteId"],
-          });
-        if (selectedScore === undefined || !selectedScore.eligible)
+          return yield* new FixedImageRouteRejected({ reason: { _tag: "RouteIdMissing" } });
+        if (selectedScore === undefined)
           return yield* new FixedImageRouteRejected({
             routeId: request.policy.fixedRouteId,
-            reasons: selectedScore?.reasons ?? ["fixed route is absent from the catalog"],
+            reason: { _tag: "RouteAbsent" },
+          });
+        if (!selectedScore.eligible)
+          return yield* new FixedImageRouteRejected({
+            routeId: request.policy.fixedRouteId,
+            reason: { _tag: "Ineligible", reasons: selectedScore.reasons },
           });
       }
       if (selectedScore === undefined)
-        return yield* new ImageRouteUnavailable({
-          reasons: ["no eligible image route"],
-          ranking: result.ranking,
-        });
+        return yield* new ImageRouteUnavailable({ ranking: result.ranking });
       const route = Option.getOrUndefined(
         MutableHashMap.get(result.routeById, selectedScore.routeId),
       )!;

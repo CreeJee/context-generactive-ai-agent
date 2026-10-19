@@ -1,7 +1,7 @@
 import { runNativeEffectWith } from "../src/runtime/native-effect.ts";
 import { nativeStream } from "../src/runtime/native-stream.ts";
 import { it as effectTest } from "@effect/vitest";
-import { Stream, DateTime, Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { Stream, DateTime, Deferred, Effect, Exit, Fiber } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
@@ -133,7 +133,8 @@ const gatedCatalog = Effect.fn("subscriptionProviderTest.gatedCatalog")(function
             return completion.promise;
           },
           release: completion.release,
-          reject: () => completion.reject(new OAuthHarnessError("transport_unavailable", null)),
+          reject: () =>
+            completion.reject(OAuthHarnessError.fromCode("transport_unavailable", null)),
         };
         gates.push(gate);
         return gate.promise;
@@ -437,12 +438,11 @@ describe("subscription provider product services", () => {
       });
       expect((yield* provider.auth.connect).status).toBe("pending");
       rejectLogin(
-        new OAuthHarnessError("provider_rejected", 403, {
+        OAuthHarnessError.fromCode("provider_rejected", 403, {
           provider: "openai",
           operation: "token_exchange",
           providerCode: "access_denied",
           proxyRoute: "attempted",
-          reason: "secret-from-provider",
         }),
       );
       yield* Effect.yieldNow;
@@ -456,9 +456,6 @@ describe("subscription provider product services", () => {
         providerCode: "access_denied",
         proxyRoute: "attempted",
       });
-      expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(state),
-      ).not.toContain("secret-from-provider");
     }),
   );
 
@@ -472,7 +469,7 @@ describe("subscription provider product services", () => {
         client: {
           status: () =>
             Promise.resolve().then(() => {
-              throw new OAuthHarnessError("credential_store_unavailable", null, {
+              throw OAuthHarnessError.fromCode("credential_store_unavailable", null, {
                 provider: "openai",
                 operation: "credential_store",
                 credentialStage: "read",
@@ -496,7 +493,7 @@ describe("subscription provider product services", () => {
       });
       expect((yield* provider.auth.connect).status).toBe("pending");
       login.reject(
-        new OAuthHarnessError("credential_store_unavailable", null, {
+        OAuthHarnessError.fromCode("credential_store_unavailable", null, {
           provider: "openai",
           operation: "credential_store",
           credentialStage: "write",

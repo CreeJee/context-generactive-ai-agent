@@ -62,7 +62,8 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   const now = options.now ?? Date.now;
   const fetcher = options.fetch ?? fetch;
   let credential = yield* nativePromise(() => options.store.read(provider));
-  if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
+  if (!isTruthy(credential))
+    return yield* OAuthHarnessError.fromCode("not_connected", null, context);
   // The app's own expiry margin: the same credential would be refreshed before a model request.
   const refreshed = credential.expiresAt <= now() + 30_000;
   if (refreshed) {
@@ -75,7 +76,8 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
     });
     yield* nativePromise(() => client.refreshForValidation());
     credential = yield* nativePromise(() => options.store.read(provider));
-    if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
+    if (!isTruthy(credential))
+      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
   }
   const headers = new Headers(protocol.modelHeaders);
   headers.set("Accept", "application/json");
@@ -91,13 +93,15 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
         redirect: "error",
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
       }),
-    catch: () => new OAuthHarnessError("transport_unavailable", null, context),
+    catch: () => OAuthHarnessError.fromCode("transport_unavailable", null, context),
   });
   if (!response.ok)
-    return yield* new OAuthHarnessError("provider_rejected", response.status, context);
+    return yield* OAuthHarnessError.fromCode("provider_rejected", response.status, context);
   const body = yield* nativePromise(() => response.json()).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(UsageObject)),
-    Effect.mapError(() => new OAuthHarnessError("provider_rejected", response.status, context)),
+    Effect.mapError(() =>
+      OAuthHarnessError.fromCode("provider_rejected", response.status, context),
+    ),
   );
   return { refreshed, status: response.status, body };
 });

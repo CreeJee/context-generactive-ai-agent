@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Result } from "effect";
 import { Schema } from "effect";
 import { AppChangedEvent, AppReadyEvent } from "./contracts";
 
@@ -16,29 +16,32 @@ export interface ConnectAppEventsOptions {
   readonly onChanged: (event: AppChangedEvent) => void;
   readonly onReady: (event: AppReadyEvent) => void;
   readonly onStatus?: (status: EventConnectionState) => void;
-  readonly onDecodeError?: (error: Error) => void;
+  readonly onDecodeError?: (error: AppEventDecodeFailed) => void;
 }
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const changedDecode = EffectFunction.flow(
-  Schema.decodeUnknownResult(AppChangedEvent),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const readyDecode = EffectFunction.flow(
-  Schema.decodeUnknownResult(AppReadyEvent),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const textDecode = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.String),
-  Result.getOrThrow,
-);
+/** An app event whose payload is not the event the server promised; the payload is not kept. */
+export class AppEventDecodeFailed extends Schema.TaggedError<AppEventDecodeFailed>()(
+  "AppEventDecodeFailed",
+  {
+    event: Schema.Literals(["changed", "ready"]),
+    reason: Schema.Literals(["not_message", "invalid_payload"]),
+  },
+) {}
 
-const payloadOf = (event: Event) => {
-  if (!(event instanceof MessageEvent)) throw new Error("SSE payload is not a MessageEvent");
-  return JSON.parse(textDecode(event.data));
-};
+const decodeChangedPayload = Schema.decodeUnknownResult(Schema.fromJsonString(AppChangedEvent));
+const decodeReadyPayload = Schema.decodeUnknownResult(Schema.fromJsonString(AppReadyEvent));
+
+// Synchronous codecs at the native EventSource boundary; a failure goes to the caller's callback.
+const failed = (event: AppEventDecodeFailed["event"], reason: AppEventDecodeFailed["reason"]) =>
+  AppEventDecodeFailed.make({ event, reason });
+const changedOf = (event: Event) =>
+  event instanceof MessageEvent
+    ? Result.mapError(decodeChangedPayload(event.data), () => failed("changed", "invalid_payload"))
+    : Result.fail(failed("changed", "not_message"));
+const readyOf = (event: Event) =>
+  event instanceof MessageEvent
+    ? Result.mapError(decodeReadyPayload(event.data), () => failed("ready", "invalid_payload"))
+    : Result.fail(failed("ready", "not_message"));
 
 export function connectAppEvents(options: ConnectAppEventsOptions) {
   const createSource = options.createSource ?? ((url: string) => new EventSource(url));
@@ -50,20 +53,16 @@ export function connectAppEvents(options: ConnectAppEventsOptions) {
     source.close();
     options.signal?.removeEventListener("abort", close);
   };
-  const decodeChanged = (event: Event) => {
-    try {
-      options.onChanged(changedDecode(payloadOf(event)));
-    } catch (error) {
-      options.onDecodeError?.(error instanceof Error ? error : new Error("Invalid changed event"));
-    }
-  };
-  const decodeReady = (event: Event) => {
-    try {
-      options.onReady(readyDecode(payloadOf(event)));
-    } catch (error) {
-      options.onDecodeError?.(error instanceof Error ? error : new Error("Invalid ready event"));
-    }
-  };
+  const decodeChanged = (event: Event) =>
+    Result.match(changedOf(event), {
+      onSuccess: options.onChanged,
+      onFailure: (failure) => options.onDecodeError?.(failure),
+    });
+  const decodeReady = (event: Event) =>
+    Result.match(readyOf(event), {
+      onSuccess: options.onReady,
+      onFailure: (failure) => options.onDecodeError?.(failure),
+    });
   source.addEventListener("open", () => options.onStatus?.("live"));
   source.addEventListener("error", () => options.onStatus?.("reconnecting"));
   source.addEventListener("ready", decodeReady);

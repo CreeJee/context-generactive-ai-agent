@@ -1,3 +1,4 @@
+import { refusalOf } from "../../api";
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
@@ -32,14 +33,8 @@ export function ConversationSettings() {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync({ summaryStartPercent })).pipe(
-          Effect.catch((failure) =>
-            Effect.sync(() => {
-              setError(
-                errorMessage(
-                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
-                ),
-              );
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
           ),
         );
       }),

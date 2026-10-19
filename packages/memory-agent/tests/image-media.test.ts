@@ -188,7 +188,7 @@ describe("ImageMediaWorkflow", () => {
         );
         expect(Result.isFailure(revoked) && revoked.failure).toMatchObject({
           _tag: "ImageMediaUnavailable",
-          reason: "cross-provider consent disabled",
+          reason: "consent_disabled",
         });
         expect(executions).toBe(1);
       }),

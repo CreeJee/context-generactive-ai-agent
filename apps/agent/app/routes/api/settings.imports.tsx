@@ -5,7 +5,7 @@ import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.imports";
 
 const ImportAction = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("run") }),
+  Schema.Struct({ action: Schema.Literals(["run", "restart_watch"]) }),
   Schema.Struct({ action: Schema.Literals(["enable", "disable"]) }),
   Schema.Struct({ action: Schema.Literal("interpret"), interpret: Schema.Boolean }),
 ]);
@@ -29,6 +29,7 @@ export function loader() {
  * - `enable` / `disable`: keep following the transcripts. Enabling starts reading what is there now.
  * - `run`: start reading once, without changing the setting.
  * Both answer before the pass ends; `activity` in the overview reports how far it got.
+ * - `restart_watch`: start the watcher again after it stopped; `watch` in the overview shows it.
  * - `interpret` { interpret }: whether migrated statements are interpreted like statements said here.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -48,6 +49,9 @@ export function action({ request }: Route.ActionArgs) {
           case "run":
             // Answered at once; the page follows the pass through `activity`.
             yield* importer.start;
+            break;
+          case "restart_watch":
+            yield* importer.restartWatch;
             break;
           case "enable":
           case "disable":

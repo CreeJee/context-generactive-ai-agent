@@ -49,7 +49,7 @@ export function UncertainRuns({
         ),
       ).pipe(
         Effect.tap(() => Effect.sync(onContinued)),
-        Effect.catch((failure) =>
+        Effect.catchTag("UnknownError", (failure) =>
           Effect.sync(() => {
             if (isApiError(failure.cause) && failure.cause.code === "uncertain_runs_changed")
               onContinued();

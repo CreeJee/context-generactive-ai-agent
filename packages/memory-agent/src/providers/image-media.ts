@@ -7,9 +7,9 @@ import {
   HashSet,
   Option,
   Context,
-  Data,
   Effect,
   Layer,
+  Predicate,
   Schema,
 } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
@@ -26,7 +26,8 @@ import {
   type ImageRouteDecision,
   type ImageRouterApi,
 } from "./image-router.ts";
-import { RouteCatalog, type ChatRoute, type RouteCatalogApi } from "./route-catalog.ts";
+import { ProviderId } from "./contracts.ts";
+import { RouteCatalog, type RouteCatalogApi } from "./route-catalog.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const stringifyJson = EffectFunction.flow(
@@ -53,10 +54,15 @@ export interface DirectImageExecutionResult {
   readonly usage?: Readonly<Record<string, number>>;
 }
 
-export class DirectImageExecutionFailed extends Data.TaggedError("DirectImageExecutionFailed")<{
-  readonly reason: "not_configured" | "provider_rejected" | "invalid_output" | "network";
-  readonly cause?: unknown;
-}> {}
+export class DirectImageExecutionFailed extends Schema.TaggedError<DirectImageExecutionFailed>()(
+  "DirectImageExecutionFailed",
+  {
+    reason: Schema.Literals(["not_configured", "provider_rejected", "invalid_output", "network"]),
+    /** The provider's HTTP status when it rejected the request. */
+    status: Schema.optionalKey(Schema.Int),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 export interface DirectImageExecutorApi {
   readonly generate: (
@@ -83,7 +89,11 @@ export class DirectImageExecutor extends Context.Service<
             const key = Option.getOrUndefined(
               yield* Config.option(Config.String("OPENAI_API_KEY"))
                 .parse(ConfigProvider.fromEnv())
-                .pipe(Effect.orDie),
+                .pipe(
+                  Effect.mapError(
+                    (cause) => new DirectImageExecutionFailed({ reason: "not_configured", cause }),
+                  ),
+                ),
             );
             if (key === undefined)
               return yield* new DirectImageExecutionFailed({ reason: "not_configured" });
@@ -118,7 +128,7 @@ export class DirectImageExecutor extends Context.Service<
             if (response.status < 200 || response.status >= 300)
               return yield* new DirectImageExecutionFailed({
                 reason: "provider_rejected",
-                cause: { status: response.status },
+                status: response.status,
               });
             const raw = yield* response.json.pipe(
               Effect.mapError(
@@ -145,15 +155,16 @@ export class DirectImageExecutor extends Context.Service<
   ).pipe(Layer.provide(FetchHttpClient.layer));
 }
 
-export interface CrossProviderMediaRunApproval {
-  readonly runId: string;
-  readonly initiatorChatRouteId: ChatRoute["id"];
-  readonly executorMediaRouteId: string;
-  readonly capability: "media.image.generate";
-}
+const RunApproval = Schema.Struct({
+  runId: Schema.String,
+  initiatorChatRouteId: Schema.TemplateLiteral(["chat:", ProviderId, ":", Schema.String]),
+  executorMediaRouteId: Schema.String,
+  capability: Schema.Literal("media.image.generate"),
+});
+export type CrossProviderMediaRunApproval = typeof RunApproval.Type;
 
 export interface ImageMediaRequest {
-  readonly initiatorChatRouteId: ChatRoute["id"];
+  readonly initiatorChatRouteId: CrossProviderMediaRunApproval["initiatorChatRouteId"];
   readonly prompt: string;
   readonly approved: boolean;
   readonly runId?: string;
@@ -175,17 +186,42 @@ export interface ImageMediaAsset {
   readonly providerRequestId?: string;
 }
 
-export class ImageMediaApprovalRequired extends Data.TaggedError("ImageMediaApprovalRequired")<{
-  readonly reason?: "paid_execution" | "cross_provider";
-  readonly approval?: CrossProviderMediaRunApproval;
-}> {}
-export class ImageMediaUnavailable extends Data.TaggedError("ImageMediaUnavailable")<{
-  readonly reason: string;
-}> {}
-export class ImageMediaExecutionFailed extends Data.TaggedError("ImageMediaExecutionFailed")<{
-  readonly cause: DirectImageExecutionFailed;
-  readonly reroute: ImageRerouteConfirmation;
-}> {}
+export class ImageMediaApprovalRequired extends Schema.TaggedError<ImageMediaApprovalRequired>()(
+  "ImageMediaApprovalRequired",
+  {
+    reason: Schema.optionalKey(Schema.Literals(["paid_execution", "cross_provider"])),
+    approval: Schema.optionalKey(RunApproval),
+  },
+) {}
+export class ImageMediaUnavailable extends Schema.TaggedError<ImageMediaUnavailable>()(
+  "ImageMediaUnavailable",
+  {
+    reason: Schema.Literals([
+      "prompt_empty",
+      "catalog_refresh_failed",
+      "settings_unavailable",
+      "no_direct_route",
+      /** The image context gate refused the selected route. */
+      "context_denied",
+      "consent_service_unavailable",
+      "consent_read_failed",
+      "consent_disabled",
+      /** Naming the run for a cross-provider approval failed. */
+      "run_id_failed",
+      "reroute_unavailable",
+      "attachment_persistence_failed",
+    ]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+const ImageRerouteConfirmationValue = Schema.declare(
+  (input): input is ImageRerouteConfirmation =>
+    Predicate.hasProperty(input, "type") && input.type === "confirmation_required",
+);
+export class ImageMediaExecutionFailed extends Schema.TaggedError<ImageMediaExecutionFailed>()(
+  "ImageMediaExecutionFailed",
+  { cause: DirectImageExecutionFailed, reroute: ImageRerouteConfirmationValue },
+) {}
 
 export interface ImageMediaWorkflowApi {
   readonly generate: (
@@ -229,16 +265,16 @@ function makeImageMediaWorkflowBody(
           return yield* new ImageMediaApprovalRequired({ reason: "paid_execution" });
         const prompt = request.prompt.trim();
         if (prompt.length === 0)
-          return yield* new ImageMediaUnavailable({ reason: "prompt is empty" });
+          return yield* new ImageMediaUnavailable({ reason: "prompt_empty" });
         if (isTruthy(catalog))
           yield* catalog.refresh.pipe(
             Effect.mapError(
-              () => new ImageMediaUnavailable({ reason: "route catalog refresh failed" }),
+              (cause) => new ImageMediaUnavailable({ reason: "catalog_refresh_failed", cause }),
             ),
           );
         const status = yield* feature.status.pipe(
           Effect.mapError(
-            () => new ImageMediaUnavailable({ reason: "image settings unavailable" }),
+            (cause) => new ImageMediaUnavailable({ reason: "settings_unavailable", cause }),
           ),
         );
         const policy =
@@ -261,7 +297,9 @@ function makeImageMediaWorkflowBody(
             policy,
           })
           .pipe(
-            Effect.mapError(() => new ImageMediaUnavailable({ reason: "no direct image route" })),
+            Effect.mapError(
+              (cause) => new ImageMediaUnavailable({ reason: "no_direct_route", cause }),
+            ),
           );
         const gate = decideImageContext({
           status,
@@ -269,13 +307,11 @@ function makeImageMediaWorkflowBody(
           route: decision,
         });
         if (!gate.directWorkflowAllowed)
-          return yield* new ImageMediaUnavailable({ reason: gate.reasons.join("; ") });
+          return yield* new ImageMediaUnavailable({ reason: "context_denied" });
         const revalidateCrossProviderConsent = Effect.gen(function* () {
           if (!decision.crossProvider) return;
           if (crossProviderConsent === undefined)
-            return yield* new ImageMediaUnavailable({
-              reason: "cross-provider consent service unavailable",
-            });
+            return yield* new ImageMediaUnavailable({ reason: "consent_service_unavailable" });
           const consent = yield* crossProviderConsent
             .decide({
               initiatorProvider: decision.initiatorProvider,
@@ -284,14 +320,21 @@ function makeImageMediaWorkflowBody(
             })
             .pipe(
               Effect.mapError(
-                () => new ImageMediaUnavailable({ reason: "cross-provider consent read failed" }),
+                (cause) => new ImageMediaUnavailable({ reason: "consent_read_failed", cause }),
               ),
             );
           if (consent.mode === "disabled")
-            return yield* new ImageMediaUnavailable({ reason: "cross-provider consent disabled" });
+            return yield* new ImageMediaUnavailable({ reason: "consent_disabled" });
           if (consent.mode === "always") return;
           const runId =
-            request.runId ?? (yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie));
+            request.runId ??
+            (yield* oauthProtocolCrypto
+              .randomUUIDv4()
+              .pipe(
+                Effect.mapError(
+                  (cause) => new ImageMediaUnavailable({ reason: "run_id_failed", cause }),
+                ),
+              ));
           const expected: CrossProviderMediaRunApproval = {
             runId,
             initiatorChatRouteId: decision.initiatorChatRouteId,
@@ -321,7 +364,7 @@ function makeImageMediaWorkflowBody(
             })
             .pipe(
               Effect.mapError(
-                () => new ImageMediaUnavailable({ reason: "reroute alternatives unavailable" }),
+                (cause) => new ImageMediaUnavailable({ reason: "reroute_unavailable", cause }),
               ),
             );
 
@@ -354,7 +397,8 @@ function makeImageMediaWorkflowBody(
           .save(output.bytes)
           .pipe(
             Effect.mapError(
-              () => new ImageMediaUnavailable({ reason: "attachment persistence failed" }),
+              (cause) =>
+                new ImageMediaUnavailable({ reason: "attachment_persistence_failed", cause }),
             ),
           );
         return {

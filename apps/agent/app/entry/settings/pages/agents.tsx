@@ -6,6 +6,7 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemGroup } from "~/components/ui/item";
+import { externalAgentFailureText } from "memory-agent/definitions";
 import { type ExternalAgentView, type Project } from "../../api";
 import { useSuspenseAgentsQuery } from "../../queries/project";
 import { useExternalAgentMutation } from "../../queries/mutations/project";
@@ -19,6 +20,7 @@ import {
   ConfigEntry,
   TrustButton,
   shadowedBadge,
+  type ConfigProblem,
 } from "../shared";
 
 function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
@@ -45,7 +47,7 @@ function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
 }
 
 /** Why a trusted agent is not connected, when it tried and failed. */
-function agentProblem(agent: ExternalAgentView) {
+function agentProblem(agent: ExternalAgentView): ConfigProblem | null {
   switch (agent.state.status) {
     case "untrusted":
     case "changed":
@@ -57,9 +59,15 @@ function agentProblem(agent: ExternalAgentView) {
         case "connected":
           return null;
         case "retrying":
-          return agent.state.link.error;
+          return {
+            text: externalAgentFailureText[agent.state.link.failure.code],
+            detail: agent.state.link.failure.detail,
+          };
         case "stopped":
-          return `${agent.state.link.error} 두 번 연달아 실패해서 멈췄어요. 다시 연결을 눌러 주세요.`;
+          return {
+            text: `${externalAgentFailureText[agent.state.link.failure.code]} 두 번 연달아 실패해서 멈췄어요. 다시 연결을 눌러 주세요.`,
+            detail: agent.state.link.failure.detail,
+          };
       }
   }
 }
@@ -92,7 +100,7 @@ function AgentSettingsContent({ project }: { project: Project }) {
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync(change)).pipe(
-          Effect.catch((_failure) =>
+          Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
               setError("바꾸지 못했어요.");
             }),

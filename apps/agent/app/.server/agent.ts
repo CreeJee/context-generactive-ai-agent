@@ -19,6 +19,7 @@ import { observabilityLayer } from "./observability.ts";
 type MemoryAgentLayer = ReturnType<typeof memoryAgentLayer>;
 let configuredStorageRoot: string | undefined;
 let configuredBuildConfig: BuildServerConfig = {};
+let configuredRelease = "0.0.0-dev";
 
 /** Called by the bundled server entry before the first request builds any agent service. */
 export function configureAgentBackend(options: {
@@ -26,9 +27,12 @@ export function configureAgentBackend(options: {
   readonly runtimeRoot: string | null;
   /** Settings embedded in the executable; the runtime environment overrides each of them. */
   readonly buildConfig: BuildServerConfig;
+  /** The release version this executable was built as; defect reports name it. */
+  readonly release: string;
 }): void {
   configuredStorageRoot = options.storageRoot;
   configuredBuildConfig = options.buildConfig;
+  configuredRelease = options.release;
   configureRuntimeRoot(options.runtimeRoot);
 }
 const agentLayer: Layer.Layer<
@@ -49,7 +53,11 @@ const runtimeLayer: Layer.Layer<
   | Layer.Success<typeof NodeServices.layer>,
   Layer.Error<typeof agentLayer> | Layer.Error<typeof observabilityLayer>
 > = agentLayer.pipe(
-  Layer.provide(Layer.suspend(() => buildConfigLayer(configuredBuildConfig))),
+  Layer.provide(
+    Layer.suspend(() =>
+      buildConfigLayer({ ...configuredBuildConfig, CONTEXT_AGENT_RELEASE: configuredRelease }),
+    ),
+  ),
   Layer.provideMerge(observabilityLayer),
   Layer.provideMerge(NodeServices.layer),
 );

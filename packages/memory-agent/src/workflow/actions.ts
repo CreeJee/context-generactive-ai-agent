@@ -3,15 +3,17 @@ import { isTruthy } from "../truthy.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
 
-export type WorkflowActionReason =
-  | "session_in_use"
-  | "run_in_progress"
-  | "goal_missing"
-  | "goal_not_active"
-  | "goal_not_paused"
-  | "goal_terminal"
-  | "plan_not_ready"
-  | "plan_outdated";
+export const WorkflowActionReason = Schema.Literals([
+  "session_in_use",
+  "run_in_progress",
+  "goal_missing",
+  "goal_not_active",
+  "goal_not_paused",
+  "goal_terminal",
+  "plan_not_ready",
+  "plan_outdated",
+]);
+export type WorkflowActionReason = typeof WorkflowActionReason.Type;
 
 export type WorkflowActionDecision =
   | { readonly allowed: true; readonly intent?: "start" | "continue" }

@@ -79,7 +79,7 @@ testAgent({ testProvider: { responder } })("Goal worker admission", (it) => {
         expect(response.status).toBe(409);
         expect(yield* responseJson(response)).toMatchObject({
           error: "unsupported_worker_capabilities",
-          detail: expect.stringMatching(/^Unsupported owner tool grant capability: /),
+          detail: "UnsupportedTool",
         });
         expect(preflight).toHaveBeenCalledTimes(1);
         expect(yield* sessionEvidence(id)).toEqual(noEvidence);

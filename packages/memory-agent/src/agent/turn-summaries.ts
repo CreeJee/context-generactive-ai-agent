@@ -2,7 +2,7 @@ import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { chat, type ChatMiddleware } from "@tanstack/ai";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { sdkPromise } from "../runtime/sdk-promise.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -15,6 +15,7 @@ import {
   summaryBlockTurns,
 } from "./compaction-policy.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
+import { fallbackLogged, logDefect } from "../runtime/logged-failures.ts";
 import {
   compactEffect,
   compactionState,
@@ -195,7 +196,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       return "done" as const;
     }).pipe(
       // What was summarized before the failure is kept; the rest is tried again next time.
-      Effect.orElseSucceed(() => "failed" as const),
+      fallbackLogged("Turn summaries stopped", () => "failed" as const),
       oneAtATime.withPermits(1),
     );
 
@@ -215,7 +216,9 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         // Retried after the next run; a failure here never reaches the conversation.
         void run(
           Effect.forkIn(
-            Effect.catchCause(catchUp(sessionId, false), () => Effect.void),
+            Effect.catchDefect(catchUp(sessionId, false), (defect) =>
+              logDefect("Turn summaries stopped")(Cause.die(defect)),
+            ),
             scope,
           ),
         );

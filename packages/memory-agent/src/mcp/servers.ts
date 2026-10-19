@@ -1,4 +1,4 @@
-import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Cause, Function as EffectFunction } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
@@ -14,7 +14,6 @@ import {
   DateTime,
   Clock,
   Context,
-  Data,
   Effect,
   FileSystem,
   Layer,
@@ -22,8 +21,15 @@ import {
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import type { Project } from "../projects/projects.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import type {
+  ConfigFileFailureCode,
+  McpFailureCode,
+  ShownFailure,
+} from "../runtime/shown-failure.ts";
 import {
   McpScope,
+  MissingVariable,
   expandVariables,
   globalMcpFile,
   projectMcpFile,
@@ -40,14 +46,17 @@ export type McpServerState =
   /** Trusted, not started yet (it starts with the next run). */
   | { readonly status: "trusted" }
   | { readonly status: "connected"; readonly tools: readonly string[] }
-  | { readonly status: "failed"; readonly error: string };
+  | { readonly status: "failed"; readonly failure: ShownFailure<McpFailureCode> };
 
 export interface McpServerView {
   readonly scope: McpScope;
   readonly name: string;
   readonly transport: McpServerConfig["_tag"];
-  /** `command args…` or the URL, as configured (variables not expanded). */
-  readonly target: string;
+  /**
+   * `command args…` or the URL, as configured (variables not expanded), with secrets hidden;
+   * `null` when they could not be checked.
+   */
+  readonly target: string | null;
   readonly envNames: readonly string[];
   readonly headerNames: readonly string[];
   /** A project server with the same name replaces this global one. */
@@ -56,7 +65,11 @@ export interface McpServerView {
 }
 
 export interface McpOverview {
-  readonly files: ReadonlyArray<{ scope: McpScope; path: string; error: string | null }>;
+  readonly files: ReadonlyArray<{
+    scope: McpScope;
+    path: string;
+    error: ShownFailure<ConfigFileFailureCode> | null;
+  }>;
   readonly servers: readonly McpServerView[];
 }
 
@@ -66,10 +79,19 @@ export interface McpOverview {
  */
 export const mcpToolPrefix = "mcp_";
 
-export class McpOperationFailed extends Data.TaggedError("McpOperationFailed")<{
-  readonly operation: "trust" | "tools";
-  readonly cause: unknown;
-}> {}
+export class McpOperationFailed extends Schema.TaggedError<McpOperationFailed>()(
+  "McpOperationFailed",
+  { operation: Schema.Literals(["trust", "tools"]), cause: Schema.Defect() },
+) {}
+
+/** A server did not finish a step in time; its message is the server state settings show. */
+export class McpStepTimedOut extends Schema.TaggedError<McpStepTimedOut>()("McpStepTimedOut", {
+  step: Schema.Literals(["connect", "tools/list"]),
+}) {
+  override get message() {
+    return `${this.step} timed out`;
+  }
+}
 
 /** OpenAI function names allow at most 64 characters of [A-Za-z0-9_-]. */
 export const mcpToolName: {
@@ -120,16 +142,19 @@ interface Connection {
   discovering: Promise<AnyServerTool[]> | null;
 }
 
+/** The server's or the SDK's own text, with the cause it wraps. */
 const describeFailure = (error: Error) => {
   const cause = error.cause instanceof Error ? `: ${error.cause.message}` : "";
-  return `${error.message}${cause}`.slice(0, 300);
+  return `${error.message}${cause}`;
 };
 
-const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) =>
+const isMissingVariable = Schema.is(MissingVariable);
+
+const withTimeout = <A>(promise: Promise<A>, ms: number, step: McpStepTimedOut["step"]) =>
   nativePromise(() => promise).pipe(
     Effect.timeoutOrElse({
       duration: ms,
-      orElse: () => Effect.fail(new Cause.UnknownError(new Error(`${what} timed out`))),
+      orElse: () => Effect.fail(new McpStepTimedOut({ step })),
     }),
   );
 
@@ -145,7 +170,34 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
+  const redactor = yield* SecretRedactor;
   const connections = MutableHashMap.empty<string, Connection>();
+
+  /** Why discovery failed, with the server's own text as the hidden detail. */
+  const failureOf = (
+    failure: McpStepTimedOut | Cause.UnknownError | Schema.SchemaError,
+  ): Effect.Effect<ShownFailure<McpFailureCode>> => {
+    switch (failure._tag) {
+      case "McpStepTimedOut":
+        switch (failure.step) {
+          case "connect":
+            return Effect.succeed({ code: "connect_timed_out", detail: null });
+          case "tools/list":
+            return Effect.succeed({ code: "tools_list_timed_out", detail: null });
+        }
+      case "UnknownError": {
+        const error = failure.cause;
+        return isMissingVariable(error)
+          ? Effect.succeed({ code: "missing_env", detail: error.variable })
+          : redactor.hideDetail({
+              code: "start_failed",
+              detail: describeFailure(error instanceof Error ? error : new Error(String(error))),
+            });
+      }
+      case "SchemaError":
+        return Effect.succeed({ code: "start_failed", detail: null });
+    }
+  };
 
   const selectTrust = SqlSchema.findAll({
     Request: Schema.String,
@@ -188,14 +240,18 @@ const make = Effect.gen(function* () {
       )
         close(key);
     }
-    return {
-      files: [global, local].map((file, index) => ({
-        scope: index === 0 ? ("global" as const) : ("project" as const),
-        path: file.path,
-        error: file.error,
-      })),
-      servers,
-    };
+    const files = yield* Effect.forEach([global, local], (file, index) =>
+      // A decode error can quote the file, header and environment values included.
+      Effect.map(
+        file.error === null ? Effect.succeed(null) : redactor.hideDetail(file.error),
+        (error) => ({
+          scope: index === 0 ? ("global" as const) : ("project" as const),
+          path: file.path,
+          error,
+        }),
+      ),
+    );
+    return { files, servers };
   });
 
   const close = (key: string) => {
@@ -311,19 +367,16 @@ const make = Effect.gen(function* () {
           ];
         });
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            const error = nativeFailure(cause).cause;
-            // Stop whatever did start; the next run starts it again.
-            void connection.client.then((client) => client.close()).catch(() => undefined);
+        // A server that fails to start or list is remembered as failed and offers no tools.
+        Effect.catch((failure) => {
+          // Stop whatever did start; the next run starts it again.
+          void connection.client.then((client) => client.close()).catch(() => undefined);
+          return Effect.map(failureOf(failure), (shown): AnyServerTool[] => {
             if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
-              connection.state = {
-                status: "failed",
-                error: describeFailure(error instanceof Error ? error : new Error(String(error))),
-              };
+              connection.state = { status: "failed", failure: shown };
             return [];
-          }),
-        ),
+          });
+        }),
       ),
     );
     connection.discovering = pending;
@@ -349,23 +402,29 @@ const make = Effect.gen(function* () {
 
   const overview = Effect.fn("mcp.overview")(function* (project: Project) {
     const { files, servers } = yield* configured(project);
-    return {
-      files,
-      servers: servers.map((entry) => ({
-        scope: entry.server.scope,
-        name: entry.server.name,
-        transport: entry.server.config._tag,
-        target:
+    const views = yield* Effect.forEach(servers, (entry) =>
+      Effect.map(
+        // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
+        redactor.shownDetail(
           entry.server.config._tag === "stdio"
             ? [entry.server.config.command, ...entry.server.config.args].join(" ")
             : entry.server.config.url,
-        envNames: entry.server.config._tag === "stdio" ? Object.keys(entry.server.config.env) : [],
-        headerNames:
-          entry.server.config._tag === "http" ? Object.keys(entry.server.config.headers) : [],
-        shadowed: entry.shadowed,
-        state: stateOf(project, entry),
-      })),
-    } satisfies McpOverview;
+        ),
+        (target): McpServerView => ({
+          scope: entry.server.scope,
+          name: entry.server.name,
+          transport: entry.server.config._tag,
+          target,
+          envNames:
+            entry.server.config._tag === "stdio" ? Object.keys(entry.server.config.env) : [],
+          headerNames:
+            entry.server.config._tag === "http" ? Object.keys(entry.server.config.headers) : [],
+          shadowed: entry.shadowed,
+          state: stateOf(project, entry),
+        }),
+      ),
+    );
+    return { files, servers: views } satisfies McpOverview;
   });
 
   yield* Effect.addFinalizer(() =>
@@ -374,7 +433,8 @@ const make = Effect.gen(function* () {
       (connection) =>
         nativePromise(() => connection.client).pipe(
           Effect.flatMap((client) => nativePromise(() => client.close())),
-          Effect.ignore,
+          // Shutdown is best-effort: a client that never started or fails to close is dropped.
+          Effect.catchTag("UnknownError", () => Effect.void),
         ),
       { concurrency: "unbounded", discard: true },
     ),

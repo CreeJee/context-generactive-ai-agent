@@ -33,7 +33,9 @@ test("digest preserves canonical key ordering and distinguishes the entire reque
   expect(ownerRpcFingerprintDigest(first)).not.toBe(
     ownerRpcFingerprintDigest(ownerRpcFingerprint("tool", { a: true, b: ["changed", 0] })),
   );
-  expect(() => ownerRpcFingerprint("tool", { number: Number.NaN })).toThrow("Non-finite");
+  expect(() => ownerRpcFingerprint("tool", { number: Number.NaN })).toThrow(
+    expect.objectContaining({ _tag: "OwnerRpcFingerprintFailed", reason: "non_finite" }),
+  );
 });
 
 test("legacy conversion hashes the original bytes and retains small read recovery inputs", () => {
@@ -62,7 +64,9 @@ test("large historical snapshots compact without retaining their request tree", 
     inputKind: "omitted",
     input: null,
   });
-  expect(() => compactLegacyOwnerRpcFingerprint("invalid".repeat(5000))).toThrow("Unsupported");
+  expect(() => compactLegacyOwnerRpcFingerprint("invalid".repeat(5000))).toThrow(
+    expect.objectContaining({ _tag: "OwnerRpcFingerprintFailed", reason: "unsupported_legacy" }),
+  );
 });
 
 test("maximum report recovery requests and envelope overhead remain replayable on repeated conversion", () => {

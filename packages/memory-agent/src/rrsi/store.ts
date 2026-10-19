@@ -167,8 +167,7 @@ export const makeHarnessStore = Effect.gen(function* () {
             // Native host/SDK configuration boundary reads or forwards the host environment.
             const worker = yield* Config.String("CONTEXT_AGENT_RRSI_WORKER")
               .pipe(Config.withDefault(""))
-              .parse(ConfigProvider.fromEnv())
-              .pipe(Effect.orDie);
+              .parse(ConfigProvider.fromEnv());
             return worker === "1" ? yield* current : yield* get("baseline");
           }
           const saved = yield* readPin(goalId);

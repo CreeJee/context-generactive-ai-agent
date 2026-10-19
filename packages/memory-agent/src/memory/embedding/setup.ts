@@ -81,7 +81,10 @@ const make = Effect.gen(function* () {
       Effect.forkIn(
         checkGpu(storage.path).pipe(
           Effect.flatMap((result) => config.update({ gpuCheck: result })),
-          Effect.catchCause(() => Effect.void),
+          // Unchecked stays unchecked; the next start or a changed setting checks again.
+          Effect.catch((error) =>
+            Effect.logWarning("embedding_gpu_check_failed", { error: error._tag }),
+          ),
           Effect.ensuring(
             Effect.sync(() => {
               checking = false;

@@ -44,7 +44,7 @@ const text = [
 
 const program = Effect.gen(function* () {
   const delivery = yield* ReportDelivery;
-  const result = yield* delivery.send(text, false);
+  const result = yield* delivery.send({ text, evidence: null }, false);
   switch (result.status) {
     case "delivered":
       return yield* Console.log(`delivered: HTTP 2xx (wait=true), message id ${result.messageId}`);

@@ -84,7 +84,7 @@ const fileExists = Effect.fn("Host.fileExists")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.stat(path).pipe(
     Effect.map((info) => info.type === "File"),
-    Effect.orElseSucceed(() => false),
+    Effect.catchTag("PlatformError", () => Effect.succeed(false)),
   );
 });
 

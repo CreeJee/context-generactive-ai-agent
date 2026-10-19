@@ -14,6 +14,7 @@ interface Reply {
 
 const token = "tok_abcdefghijklmnopqrstuvwxyz0123";
 const message = (id: string): Reply => ({ status: 200, body: `{"id":"${id}"}` });
+const report = (text: string) => ({ text, evidence: null });
 
 /** Builds the service with `DISCORD_WEBHOOK_URL` set (or not) in server configuration. */
 const deliveryWith = (config: Record<string, string>) =>
@@ -65,11 +66,11 @@ describe("report delivery to a Discord webhook", () => {
     Effect.gen(function* () {
       const missing = yield* deliveryWith({});
       expect(yield* missing.status).toEqual({ configured: false, webhookIdSuffix: null });
-      expect(yield* Effect.flip(missing.send("a", false))).toMatchObject({
+      expect(yield* Effect.flip(missing.send(report("a"), false))).toMatchObject({
         reason: "not_configured",
       });
       const invalid = yield* deliveryWith({ [webhookConfigKey]: "https://example.com/hook" });
-      expect(yield* Effect.flip(invalid.send("a", false))).toMatchObject({
+      expect(yield* Effect.flip(invalid.send(report("a"), false))).toMatchObject({
         reason: "invalid_webhook_url",
       });
       const configured = yield* deliveryWith({
@@ -79,23 +80,33 @@ describe("report delivery to a Discord webhook", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("posts the reviewed text without mentions, then recognises the same text", () =>
+  it.live("posts the draft and the evidence bundle without mentions, then recognises them", () =>
     Effect.gen(function* () {
-      const { delivery, received } = yield* fakeDiscord([message("m1"), message("m2")]);
-      const sent = yield* delivery.send("# 제보\n@everyone 승인 반복", false);
+      const { delivery, received } = yield* fakeDiscord([
+        message("m1"),
+        message("m2"),
+        message("m3"),
+      ]);
+      const reviewed = { text: "# 제보\n@everyone 승인 반복", evidence: '{"version":1}' };
+      const sent = yield* delivery.send(reviewed, false);
       expect(sent).toMatchObject({ status: "delivered", messageId: "m1" });
       const [request] = yield* Ref.get(received);
       expect(request?.url).toContain("wait=true");
       expect(request?.body).toContain('"allowed_mentions":{"parse":[]}');
       expect(request?.body).toContain('filename="context-agent-report.txt"');
+      expect(request?.body).toContain('filename="context-agent-evidence.json"');
+      expect(request?.body).toContain('{"version":1}');
 
-      expect(yield* delivery.send("# 제보\n@everyone 승인 반복", false)).toMatchObject({
-        status: "duplicate",
-      });
+      expect(yield* delivery.send(reviewed, false)).toMatchObject({ status: "duplicate" });
       expect(yield* Ref.get(received)).toHaveLength(1);
-      expect(yield* delivery.send("# 제보\n@everyone 승인 반복", true)).toMatchObject({
+      // The same draft with other evidence is a different report.
+      expect(yield* delivery.send({ ...reviewed, evidence: null }, false)).toMatchObject({
         status: "delivered",
         messageId: "m2",
+      });
+      expect(yield* delivery.send(reviewed, true)).toMatchObject({
+        status: "delivered",
+        messageId: "m3",
       });
     }),
   );
@@ -107,10 +118,10 @@ describe("report delivery to a Discord webhook", () => {
         message("m1"),
         { status: 404, body: '{"message":"Unknown Webhook"}' },
       ]);
-      expect(yield* delivery.send("a", false)).toMatchObject({ status: "delivered" });
+      expect(yield* delivery.send(report("a"), false)).toMatchObject({ status: "delivered" });
       expect(yield* Ref.get(received)).toHaveLength(2);
 
-      const failure = yield* Effect.flip(delivery.send("b", false));
+      const failure = yield* Effect.flip(delivery.send(report("b"), false));
       expect(failure).toMatchObject({ reason: "webhook_rejected", httpStatus: 404 });
     }),
   );
@@ -122,14 +133,16 @@ describe("report delivery to a Discord webhook", () => {
       ]);
       const gate = yield* Deferred.make<void>();
       yield* Ref.set(release, gate);
-      const first = yield* Effect.forkChild(Effect.flip(delivery.send("c", false)));
+      const first = yield* Effect.forkChild(Effect.flip(delivery.send(report("c"), false)));
       yield* Deferred.await(arrived);
-      expect(yield* Effect.flip(delivery.send("c", false))).toMatchObject({
+      expect(yield* Effect.flip(delivery.send(report("c"), false))).toMatchObject({
         reason: "in_progress",
       });
       yield* Deferred.succeed(gate, undefined);
       expect(yield* Fiber.join(first)).toMatchObject({ reason: "uncertain" });
-      expect(yield* delivery.send("c", false)).toMatchObject({ status: "uncertain_duplicate" });
+      expect(yield* delivery.send(report("c"), false)).toMatchObject({
+        status: "uncertain_duplicate",
+      });
     }),
   );
 });

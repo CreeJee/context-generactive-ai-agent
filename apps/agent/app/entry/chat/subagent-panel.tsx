@@ -1,4 +1,3 @@
-import { isTruthy } from "../../truthy.ts";
 import { BotIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import {
@@ -13,7 +12,7 @@ import { Spinner } from "~/components/ui/spinner";
 import { type RelayedApprovalView } from "../api";
 import { ApprovalCard } from "./approval";
 import { requesterLabel, useDelegatedWork } from "../session/delegated-work";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { useRelayedApprovalMutation } from "../queries/mutations/session";
 import type { PendingApproval } from "./pending-approval";
 
@@ -46,8 +45,7 @@ export function SubagentPanel({
   readOnly: boolean;
 }) {
   const { state } = useDelegatedWork(sessionId, generating);
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Relayed approval requires an active project");
+  const projectId = useProjectScope("relayed_approval");
   const answerMutation = useRelayedApprovalMutation(projectId, sessionId, holder);
   const running = state.subagents.filter((child) => child.status === "running");
   if (running.length === 0 && state.approvals.length === 0) return null;

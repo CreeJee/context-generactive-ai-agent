@@ -1,8 +1,14 @@
 import { isTruthy } from "../../truthy.ts";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { Attachments } from "memory-agent";
 import { agent } from "~/.server/agent";
 import type { Route } from "./+types/attachments.$attachment";
+
+/** A stored image's file could not be read; the file system's text stays on the server. */
+class AttachmentUnreadable extends Schema.TaggedError<AttachmentUnreadable>()(
+  "AttachmentUnreadable",
+  {},
+) {}
 
 /**
  * GET /api/attachments/:attachment — a stored image. Other sites cannot embed it: images are
@@ -21,7 +27,13 @@ export function loader({ request, params }: Route.LoaderArgs) {
         Effect.gen(function* () {
           const attachment = yield* attachments.get(params.attachment);
           return isTruthy(attachment)
-            ? { attachment, bytes: yield* Effect.promise(() => attachments.read(attachment)) }
+            ? {
+                attachment,
+                bytes: yield* Effect.tryPromise({
+                  try: () => attachments.read(attachment),
+                  catch: () => AttachmentUnreadable.make({}),
+                }),
+              }
             : null;
         }),
       );
@@ -37,6 +49,10 @@ export function loader({ request, params }: Route.LoaderArgs) {
           "Cross-Origin-Resource-Policy": "same-origin",
         },
       });
-    }),
+    }).pipe(
+      Effect.catchTag("AttachmentUnreadable", () =>
+        Effect.succeed(Response.json({ error: "attachment_unreadable" }, { status: 500 })),
+      ),
+    ),
   );
 }

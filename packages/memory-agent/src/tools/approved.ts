@@ -11,7 +11,9 @@ import { temporaryDirectory } from "../runtime/host-system.ts";
 import {
   canonicalPathEffect,
   PathRejected,
+  resolveFencedOutsidePath,
   resolveOutsidePath,
+  type Fenced,
   resolveProjectPath,
 } from "../files/paths.ts";
 import {
@@ -112,7 +114,7 @@ const make = Effect.gen(function* () {
      * or full mode lets it proceed. Permission mode never lifts path, credential or `.git` rules.
      */
     forProject(
-      project: Project,
+      project: Fenced<Project>,
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
       binding?: BackgroundBinding,
     ) {
@@ -220,7 +222,8 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const target = yield* resolveOutsidePath(
+            const target = yield* resolveFencedOutsidePath(
+              project.toolFence,
               project.root,
               storage.path,
               path,
@@ -250,7 +253,13 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const target = yield* resolveOutsidePath(project.root, storage.path, path, "file");
+            const target = yield* resolveFencedOutsidePath(
+              project.toolFence,
+              project.root,
+              storage.path,
+              path,
+              "file",
+            );
             const removed = yield* deleteTextFileEffect({
               absolute: target.absolute,
               path,

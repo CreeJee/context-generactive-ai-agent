@@ -1,6 +1,7 @@
 import { NodeCrypto, NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
 import { requireRuntime, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import {
   Context,
   Crypto,
@@ -99,7 +100,8 @@ export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
       send: (command) =>
         client.Execute(command).pipe(Effect.catchTag("RpcClientError", () => lost)),
       exited: Deferred.await(exited),
-      terminate: Effect.promise(() => worker.terminate()).pipe(
+      terminate: Effect.tryPromise(() => worker.terminate()).pipe(
+        ignoreLogged("native_owner_terminate_failed"),
         Effect.andThen(Deferred.await(exited)),
       ),
     } satisfies OwnerTransport;

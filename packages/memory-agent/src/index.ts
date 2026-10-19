@@ -53,8 +53,17 @@ export {
   createOAuthAccountLoginManager,
   type AccountLoginState,
 } from "./oauth/account-login.ts";
+export { OAuthHarnessError } from "./oauth/validation-harness.ts";
+export { logDefect, logFailure } from "./runtime/logged-failures.ts";
 export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
-export { ReportDelivery, ReportDeliveryError, maxReportBytes } from "./report/discord-webhook.ts";
+export {
+  ReportDelivery,
+  ReportDeliveryError,
+  maxEvidenceBytes,
+  maxReportBytes,
+} from "./report/discord-webhook.ts";
+export { bundleLimits, collectReportBundle } from "./report/bundle.ts";
+export { ReportBundle } from "./report/bundle-contract.ts";
 export {
   ReportDeliveryFailure,
   ReportDeliveryResult,
@@ -337,7 +346,7 @@ export {
   createSubscriptionRuntime,
   subscriptionAgentLoop,
 } from "./providers/subscription-runtime.ts";
-export { Database, DatabaseOpenError } from "./db/database.ts";
+export { Database, DatabaseOpenError, DatabaseSchemaRejected } from "./db/database.ts";
 export {
   Attachment,
   AttachmentMimeType,
@@ -365,7 +374,7 @@ export {
   ProjectRootRejected,
   Projects,
 } from "./projects/projects.ts";
-export { Session, Sessions } from "./sessions/sessions.ts";
+export { Session, SessionNotFound, Sessions } from "./sessions/sessions.ts";
 export { BtwChat } from "./btw/chat.ts";
 export { BtwThread, btwToolNames } from "./btw/contracts.ts";
 export {
@@ -380,10 +389,12 @@ export {
 export {
   GoalArtifact,
   PlanArtifact,
+  PlanStep,
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
   WorkflowProgressRefused,
+  WorkflowStorageError,
   WorkflowTransitionRefused,
   Workflows,
   type UpdateGoal,
@@ -391,6 +402,66 @@ export {
   type UpdateWorkflowProgress,
   type Verification,
 } from "./workflow/workflow.ts";
+export { BoardAuthor, CardHold, CardRisk, CardStatus } from "./workflow/card.ts";
+export {
+  BoardEdit,
+  BoardEditRefused,
+  CardDraft,
+  CardPatch,
+  UserChange,
+  cardTransitions,
+  BoardIntent,
+  type BoardEditResult,
+  type CardTransition,
+  type UserChangeRequest,
+} from "./workflow/board-edit.ts";
+export { Boards, type BoardCard, type BoardRevision, type BoardView } from "./workflow/board.ts";
+export {
+  DecisionAnswer,
+  DecisionCloseReason,
+  DecisionKind,
+  HumanDecisionRefused,
+  HumanDecisions,
+  answeredCardStatus,
+  decisionChoices,
+  goalDecisionCardId,
+  type DecisionAnswerInput,
+  type DecisionCloseScope,
+  type DecisionInboxItem,
+  type DecisionRequestInput,
+  type DecisionState,
+  type HumanDecisionRequest,
+} from "./kanban/human-decision.ts";
+export { KanbanOrchestrator, KanbanStartRefused } from "./kanban/orchestrator.ts";
+export { KanbanStorageFailed } from "./kanban/card-attempts.ts";
+export { CardWorktreeFailed } from "./kanban/worktree.ts";
+export { PersistedQueueItemsFailed } from "./kanban/persisted-queue-store.ts";
+export {
+  AgentFailureCode,
+  CardFailure,
+  CardHoldReason,
+  VerdictFailure,
+  WorktreeFailureReason,
+} from "./kanban/failures.ts";
+export {
+  KanbanActionRefused,
+  KanbanBoardActions,
+  type KanbanBoardView,
+  type KanbanCardView,
+  type KanbanGoalOption,
+  type KanbanScheduleView,
+} from "./kanban/board-actions.ts";
+export {
+  GoalMergeState,
+  GoalPriority,
+  GoalScheduleRefused,
+  GoalScheduleStorageFailed,
+  GoalSchedules,
+  ProtectedBranches,
+} from "./kanban/goal-schedules.ts";
+export { KanbanSettings, KanbanSettingsRefused } from "./config/kanban-settings.ts";
+export { KanbanConcurrency } from "./config/global-config.ts";
+export { PlanDependenciesRejected, type PlanDependencyIssue } from "./workflow/plan-schedule.ts";
 export {
   RuleSource,
   WorkflowRule,
@@ -595,6 +666,16 @@ export {
   type PromptHooks,
   type ReportedToolCall,
 } from "./external-agents/agents.ts";
+export {
+  ConfigFileFailureCode,
+  ExternalAgentFailureCode,
+  McpFailureCode,
+  RunFailureCode,
+  externalAgentFailureText,
+  runFailureCodeOf,
+  runFailureText,
+  type ShownFailure,
+} from "./runtime/shown-failure.ts";
 export {
   Subagents,
   childInstructions,

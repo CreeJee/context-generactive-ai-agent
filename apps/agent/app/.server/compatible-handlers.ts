@@ -73,6 +73,8 @@ const respond = (
             return Effect.succeed(reply({ error: "account_not_found" }, 404));
           case "keychain":
             return Effect.succeed(reply({ error: "keychain_failed" }, 500));
+          case "account_id":
+            return Effect.succeed(reply({ error: "settings_unavailable" }, 500));
           case "partial":
             return Effect.succeed(reply({ error: "settings_partially_saved" }, 409));
           case "test":

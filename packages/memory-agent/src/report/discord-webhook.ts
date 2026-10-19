@@ -33,6 +33,19 @@ const webhookPath = /^\/api(?:\/v\d+)?\/webhooks\/(\d{17,20})\/([\w-]{20,100})\/
 const contentLimit = 2_000;
 /** Far below Discord's default 20 MiB per-file limit; a reviewed report is never this large. */
 export const maxReportBytes = 1_000_000;
+/**
+ * The evidence bundle goes as a second file. Discord takes 10 MiB per message on a server without
+ * boosts (since 2024); report and bundle together stay well under it.
+ */
+export const maxEvidenceBytes = 4_000_000;
+const reportFile = "context-agent-report.txt";
+const evidenceFile = "context-agent-evidence.json";
+
+/** What a report send posts: the reviewed draft, and the evidence bundle as JSON when there is one. */
+export interface ReportSend {
+  readonly text: string;
+  readonly evidence: string | null;
+}
 /** Wait for a 429 only when Discord asks for a short pause; otherwise hand the choice to the user. */
 const maxRetryAfterSeconds = 5;
 const maxRateLimitRetries = 2;
@@ -90,25 +103,45 @@ function parseWebhookUrlBody(input: string, allowLoopback: boolean): WebhookUrl 
   };
 }
 
-/** Discord renders the first part inline; the full reviewed text always travels as the file. */
-const messageBody = (text: string) => {
+/**
+ * Discord renders the first part of the draft inline; the full draft always travels as a file, and
+ * the evidence bundle as a second one.
+ */
+const messageBody = ({ text, evidence }: ReportSend) => {
   const preview =
     text.length <= contentLimit
       ? text
       : `${text.slice(0, contentLimit - 40)}\n…(전체 내용은 첨부 파일)`;
+  const files = [
+    { filename: reportFile, body: new Blob([text], { type: "text/plain;charset=utf-8" }) },
+    ...(evidence === null
+      ? []
+      : [
+          {
+            filename: evidenceFile,
+            body: new Blob([evidence], { type: "application/json;charset=utf-8" }),
+          },
+        ]),
+  ];
   const form = new FormData();
   form.append(
     "payload_json",
     JSON.stringify({
       content: preview,
       allowed_mentions: { parse: [] },
-      attachments: [{ id: 0, filename: "context-agent-report.txt" }],
+      attachments: files.map((file, id) => ({ id, filename: file.filename })),
     }),
   );
+  files.forEach((file, id) => form.append(`files[${id}]`, file.body, file.filename));
+  return form;
+};
+
+/** A short notice the server sends on its own: inline only, with no mentions and no file. */
+const noticeBody = (text: string) => {
+  const form = new FormData();
   form.append(
-    "files[0]",
-    new Blob([text], { type: "text/plain;charset=utf-8" }),
-    "context-agent-report.txt",
+    "payload_json",
+    JSON.stringify({ content: text.slice(0, contentLimit), allowed_mentions: { parse: [] } }),
   );
   return form;
 };
@@ -174,13 +207,13 @@ const make = (options: ReportDeliveryOptions) =>
       }
     });
 
-    const post = (target: WebhookUrl, text: string) =>
+    const post = (target: WebhookUrl, body: FormData) =>
       Effect.gen(function* () {
         const response = yield* client
           .execute(
             HttpClientRequest.post(Redacted.value(target.url)).pipe(
               HttpClientRequest.setUrlParam("wait", "true"),
-              HttpClientRequest.bodyFormData(messageBody(text)),
+              HttpClientRequest.bodyFormData(body),
             ),
           )
           .pipe(
@@ -205,10 +238,15 @@ const make = (options: ReportDeliveryOptions) =>
           return body.id;
         }
         if (httpStatus === 429) {
+          const headerRetryAfter = () => Number(response.headers["retry-after"] ?? Number.NaN);
           const retryAfter = yield* response.json.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(RateLimitBody)),
             Effect.map((body) => body.retry_after),
-            Effect.orElseSucceed(() => Number(response.headers["retry-after"] ?? Number.NaN)),
+            // An unreadable body falls back to the header Discord also sends.
+            Effect.catchTags({
+              HttpClientError: () => Effect.succeed(headerRetryAfter()),
+              SchemaError: () => Effect.succeed(headerRetryAfter()),
+            }),
           );
           return yield* Number.isFinite(retryAfter)
             ? ReportDeliveryError.make({
@@ -226,8 +264,8 @@ const make = (options: ReportDeliveryOptions) =>
         return yield* ReportDeliveryError.make({ reason: "payload_rejected", httpStatus });
       }).pipe(Effect.scoped);
 
-    const postWithShortWaits = (target: WebhookUrl, text: string, retries: number) =>
-      post(target, text).pipe(
+    const postWithShortWaits = (target: WebhookUrl, report: ReportSend, retries: number) =>
+      post(target, messageBody(report)).pipe(
         Effect.catchIf(
           (error): error is ReportDeliveryError =>
             error.reason === "rate_limited" &&
@@ -236,19 +274,24 @@ const make = (options: ReportDeliveryOptions) =>
             error.retryAfterSeconds <= maxRetryAfterSeconds,
           (error): Effect.Effect<string, ReportDeliveryError> =>
             Effect.sleep(Duration.seconds(error.retryAfterSeconds ?? 0)).pipe(
-              Effect.andThen(postWithShortWaits(target, text, retries + 1)),
+              Effect.andThen(postWithShortWaits(target, report, retries + 1)),
             ),
         ),
       );
 
     const send = Effect.fn("ReportDelivery.send")(function* (
-      text: string,
+      report: ReportSend,
       resend: boolean,
     ): Effect.fn.Return<ReportDeliveryResult, ReportDeliveryError> {
-      if (new TextEncoder().encode(text).byteLength > maxReportBytes)
+      const bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+      if (
+        bytes(report.text) > maxReportBytes ||
+        (report.evidence !== null && bytes(report.evidence) > maxEvidenceBytes)
+      )
         return yield* ReportDeliveryError.make({ reason: "too_large" });
       const target = yield* webhook;
-      const hash = yield* reportHash(text);
+      // The same draft with other evidence is another report.
+      const hash = yield* reportHash(`${report.text}\u0000${report.evidence ?? ""}`);
       // Claim the text atomically so two tabs or double clicks cannot post it twice.
       const claimed = yield* Ref.modify(
         attempts,
@@ -268,7 +311,7 @@ const make = (options: ReportDeliveryOptions) =>
           case "uncertain":
             return { status: "uncertain_duplicate", attemptedAt: claimed.at };
         }
-      const messageId = yield* postWithShortWaits(target, text, 0).pipe(
+      const messageId = yield* postWithShortWaits(target, report, 0).pipe(
         Effect.tapError((error) =>
           Effect.flatMap(now, (at) =>
             setAttempt(hash, error.reason === "uncertain" ? { status: "uncertain", at } : null),
@@ -283,7 +326,16 @@ const make = (options: ReportDeliveryOptions) =>
       return { status: "delivered", messageId, deliveredAt };
     });
 
-    return { status, send };
+    /**
+     * Posts a notice the server composed itself, such as a defect report. It is not remembered: a
+     * caller that must not repeat itself limits how often it sends.
+     */
+    const sendNotice = Effect.fn("ReportDelivery.sendNotice")(function* (text: string) {
+      const target = yield* webhook;
+      yield* post(target, noticeBody(text));
+    });
+
+    return { status, send, sendNotice };
   });
 
 /**

@@ -30,5 +30,7 @@ export const ReportDeliveryStatus = Schema.Struct({
   configured: Schema.Boolean,
   /** Last digits of the public webhook ID, to tell webhooks apart. Never the token. */
   webhookIdSuffix: Schema.NullOr(Schema.String),
+  /** Whether defects go to the webhook too, when it is set (`defectReports` in the settings). */
+  defectReports: Schema.Boolean,
 });
 export type ReportDeliveryStatus = typeof ReportDeliveryStatus.Type;

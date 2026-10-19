@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { GlobalConfig } from "../config/global-config.ts";
 import { SecretStore, type SecretStoreFailed } from "../config/secrets.ts";
@@ -23,21 +23,23 @@ export interface KagiStatus {
   readonly enabled: boolean;
 }
 
-export class KagiKeyMissing extends Data.TaggedError("KagiKeyMissing")<{}> {}
+export class KagiKeyMissing extends Schema.TaggedError<KagiKeyMissing>()("KagiKeyMissing", {}) {}
 
 /**
  * Why a Kagi request did not produce a result. No request is retried: the model gets the reason
  * and decides whether to call again (R19).
  */
-export type KagiFailureReason =
-  | "not_enabled"
-  | "invalid_request"
-  | "unauthorized"
-  | "forbidden"
-  | "rate_limited"
-  | "server_error"
-  | "unavailable"
-  | "invalid_response";
+export const KagiFailureReason = Schema.Literals([
+  "not_enabled",
+  "invalid_request",
+  "unauthorized",
+  "forbidden",
+  "rate_limited",
+  "server_error",
+  "unavailable",
+  "invalid_response",
+]);
+export type KagiFailureReason = typeof KagiFailureReason.Type;
 
 const failureMessages: Record<KagiFailureReason, string> = {
   not_enabled: "Kagi is turned off or has no API key. The user has to enable it in settings.",
@@ -50,10 +52,10 @@ const failureMessages: Record<KagiFailureReason, string> = {
   invalid_response: "Kagi answered with a body that does not match its API schema.",
 };
 
-export class KagiFailed extends Data.TaggedError("KagiFailed")<{
-  readonly reason: KagiFailureReason;
-  readonly status: number | null;
-}> {
+export class KagiFailed extends Schema.TaggedError<KagiFailed>()("KagiFailed", {
+  reason: KagiFailureReason,
+  status: Schema.NullOr(Schema.Int),
+}) {
   override get message() {
     return `kagi_${this.reason}: ${failureMessages[this.reason]}`;
   }
@@ -157,7 +159,10 @@ const make = (options: KagiOptions) =>
     ) =>
       Effect.gen(function* () {
         const settings = yield* config.read;
-        const key = yield* Effect.orElseSucceed(secrets.get("kagi-api-key"), () => null);
+        // An unreadable keychain counts as no key: the call fails as not_enabled.
+        const key = yield* secrets
+          .get("kagi-api-key")
+          .pipe(Effect.catchTag("SecretStoreFailed", () => Effect.succeed(null)));
         if (!isTruthy(settings.kagiEnabled) || key === null)
           return yield* new KagiFailed({ reason: "not_enabled", status: null });
         const fetch = yield* FetchHttpClient.Fetch;

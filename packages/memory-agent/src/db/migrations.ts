@@ -1541,6 +1541,167 @@ export const migrations: readonly string[] = [
     DELETE FROM node_vector_chunks WHERE node_seq = old.node_seq AND embedder = old.embedder;
   END;
   `,
+  `
+  -- PersistedQueue items (kanban card runs) on the owner connection. A claimed row names the owner
+  -- process that holds it; failed rows are the dead-letter record until requeued or cleaned up.
+  CREATE TABLE persisted_queue_items (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_name TEXT NOT NULL,
+    id TEXT NOT NULL,
+    element_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'completed', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    visible_at INTEGER NOT NULL,
+    acquired_by TEXT,
+    last_failure TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (queue_name, id)
+  );
+  CREATE INDEX persisted_queue_items_pending
+    ON persisted_queue_items (queue_name, visible_at, sequence) WHERE state = 'pending';
+  CREATE INDEX persisted_queue_items_settled
+    ON persisted_queue_items (state, updated_at) WHERE state != 'pending';
+  `,
+  `
+  -- Kanban board changes name their author (User or Orchestrator with its run) on the revision.
+  -- Older revisions and phase or lifecycle saves keep NULL: no author is guessed.
+  ALTER TABLE workflow_state_revisions ADD COLUMN author_json TEXT
+    CHECK (author_json IS NULL OR json_valid(author_json));
+
+  -- A user's change to a card that is executing waits here instead of overwriting the card.
+  -- The orchestrator later applies, reassigns or rejects it; until then it stays pending.
+  CREATE TABLE board_change_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    goal_instance_id TEXT,
+    card_id TEXT NOT NULL,
+    plan_version INTEGER NOT NULL,
+    change_json TEXT NOT NULL CHECK (json_valid(change_json)),
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'applied', 'reassigned', 'rejected')),
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+  );
+  CREATE INDEX board_change_requests_session ON board_change_requests(session_id, status, id);
+  `,
+  `
+  -- Why a kanban human_decision wait ended without an answer. The workflow interrupt is the close;
+  -- this row names its cause, and at startup a row whose wait is still pending finishes the close.
+  CREATE TABLE human_decision_closures (
+    execution_id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL
+      CHECK (reason IN ('orchestrator_cancelled', 'goal_replaced', 'card_stopped')),
+    closed_at TEXT NOT NULL
+  );
+  `,
+  `
+  -- A Goal instance run as a kanban board. Its orchestrator loop runs while it is active. The Goal
+  -- version is the one the board was last classified against; a newer Goal holds new assignments.
+  CREATE TABLE kanban_goals (
+    goal_instance_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    project_root TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('worktree', 'sequential')),
+    goal_version INTEGER NOT NULL,
+    hold_json TEXT CHECK (hold_json IS NULL OR json_valid(hold_json)),
+    status TEXT NOT NULL CHECK (status IN ('active', 'stopped')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  -- One card attempt is one DurableQueue item keyed goal:card:attempt. Versions are fixed when the
+  -- card is assigned; the outcome is written by the queue handler and taken up by the orchestrator.
+  CREATE TABLE kanban_card_attempts (
+    goal_instance_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
+    session_id TEXT NOT NULL,
+    goal_version INTEGER NOT NULL,
+    plan_version INTEGER NOT NULL,
+    outcome_json TEXT CHECK (outcome_json IS NULL OR json_valid(outcome_json)),
+    handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0, 1)),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (goal_instance_id, card_id, attempt_no)
+  );
+  CREATE INDEX kanban_card_attempts_open ON kanban_card_attempts(goal_instance_id, handled);
+
+  -- Agent runs each delivery of a card started. A later delivery continues only when every earlier
+  -- run ended with known effects; a person clears a fenced run by acknowledging it.
+  CREATE TABLE kanban_card_runs (
+    run_id TEXT PRIMARY KEY,
+    goal_instance_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL,
+    trace_attempt_id TEXT,
+    acknowledged_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX kanban_card_runs_card ON kanban_card_runs(goal_instance_id, card_id);
+
+  -- Repeated failures of a card climb retry, backoff, replan and human decision. The reason is
+  -- what the board shows for a card that waits. A new generation starts a fresh agent
+  -- conversation in the same worktree; a resolution card re-applies another card after a conflict.
+  -- Notes are changes applied to the card that its next attempt is told about.
+  CREATE TABLE kanban_cards (
+    goal_instance_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    failure_streak INTEGER NOT NULL DEFAULT 0 CHECK (failure_streak >= 0),
+    replans INTEGER NOT NULL DEFAULT 0 CHECK (replans >= 0),
+    generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0),
+    not_before INTEGER,
+    reason TEXT,
+    resolution_of TEXT,
+    notes_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(notes_json)),
+    PRIMARY KEY (goal_instance_id, card_id)
+  );
+  `,
+  `
+  -- Answered human_decision requests whose follow-up the orchestrator loop already did, such as
+  -- clearing an uncertain run's fence or resetting a requeued card's failures. Each is done once.
+  CREATE TABLE kanban_decision_followups (
+    request_id TEXT PRIMARY KEY,
+    goal_instance_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX kanban_decision_followups_goal ON kanban_decision_followups(goal_instance_id);
+  `,
+  `
+  -- How the project scheduler treats a kanban Goal: the user's priority, the branch the Goal merges
+  -- into (checked out when the board started; NULL on a detached HEAD), a pending upstream change to
+  -- take in, and where its merge stands. The verified head is the Goal branch commit that last
+  -- passed the Goal-level check, so a wait does not verify the same commit twice.
+  CREATE TABLE kanban_goal_schedules (
+    goal_instance_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('high', 'normal', 'low')),
+    target_branch TEXT,
+    upstream_pending INTEGER NOT NULL DEFAULT 0 CHECK (upstream_pending IN (0, 1)),
+    merge_json TEXT CHECK (merge_json IS NULL OR json_valid(merge_json)),
+    verified_head TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX kanban_goal_schedules_project ON kanban_goal_schedules(project_id);
+
+  -- A Goal that waits for another Goal's merge before it takes card slots.
+  CREATE TABLE kanban_goal_dependencies (
+    goal_instance_id TEXT NOT NULL,
+    depends_on TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (goal_instance_id, depends_on)
+  );
+
+  -- Branches a project's Goals never merge into on their own. No row means main and staging.
+  CREATE TABLE kanban_project_settings (
+    project_id TEXT PRIMARY KEY,
+    protected_branches_json TEXT NOT NULL CHECK (json_valid(protected_branches_json))
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

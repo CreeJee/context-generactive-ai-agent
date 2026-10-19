@@ -4,7 +4,7 @@ import { Cause, Effect, Exit } from "effect";
 export const uiPromise = <A>(operation: () => PromiseLike<A>) =>
   Effect.tryPromise({ try: operation, catch: (cause) => new Cause.UnknownError(cause) });
 
-export const uiFailure = <E>(cause: Cause.Cause<E>) => {
+const uiFailure = <E>(cause: Cause.Cause<E>) => {
   const failure = Cause.squash(cause);
   return failure instanceof Cause.UnknownError ? failure.cause : failure;
 };

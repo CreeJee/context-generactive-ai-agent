@@ -105,7 +105,9 @@ export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* 
     });
     return loaded.problems.length === 0 ? loaded : problem("invalid");
   });
-  return yield* read.pipe(Effect.orElseSucceed(() => problem("unreadable")));
+  return yield* read.pipe(
+    Effect.catchTag("PlatformError", () => Effect.succeed(problem("unreadable"))),
+  );
 });
 
 /**

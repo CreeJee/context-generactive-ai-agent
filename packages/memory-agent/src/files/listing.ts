@@ -112,7 +112,13 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
       const code = yield* child.exitCode;
       return Number(code) === 0 ? stdout.split("\0").filter(Boolean) : null;
     }),
-  ).pipe(Effect.orElseSucceed(() => null));
+  ).pipe(
+    // Without a usable git listing the caller walks the directory itself.
+    Effect.catchTags({
+      PlatformError: () => Effect.succeed(null),
+      UnknownError: () => Effect.succeed(null),
+    }),
+  );
 });
 
 /**
@@ -211,7 +217,8 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
         kept,
         (path) =>
           fs.lstat(join(root, path)).pipe(
-            Effect.orElseSucceed(() => undefined),
+            // A path git lists but that is gone or unreadable now is left out.
+            Effect.catchTag("PlatformError", () => Effect.void),
             Effect.map((entry) => (entry?.type === "File" ? path : null)),
           ),
         { concurrency: statConcurrency },

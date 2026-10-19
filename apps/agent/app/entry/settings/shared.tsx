@@ -14,10 +14,12 @@ import {
   ItemMedia,
   ItemTitle,
 } from "~/components/ui/item";
-import { isApiError, type Project } from "../api";
+import type { ConfigFileFailureCode, ShownFailure } from "memory-agent/definitions";
+import type { ApiError, Project } from "../api";
+import { FailureDetails } from "../shared/failure-details";
 
-export function errorMessage(error: Error) {
-  if (!isApiError(error)) return "설정을 바꾸지 못했어요.";
+export function errorMessage(error: ApiError | null) {
+  if (error === null) return "설정을 바꾸지 못했어요.";
   switch (error.code) {
     case "keychain_failed":
       return "OS 키체인에 접근하지 못했어요. 키를 다른 곳에 대신 저장하지 않아요.";
@@ -135,7 +137,19 @@ interface SourceFile {
   readonly label: string;
   readonly path: string;
   readonly shown: string;
-  readonly error?: string | null;
+  readonly error?: ShownFailure<ConfigFileFailureCode> | null;
+}
+
+const configFileFailureText = {
+  unreadable: "파일을 읽지 못했어요.",
+  invalid_config: "설정 형식이 맞지 않아 이 파일을 쓰지 않아요.",
+  invalid_names: "이름은 영문자·숫자·_·-로 1~32자여야 해요. 맞지 않는 항목은 빼고 써요.",
+} as const satisfies Record<ConfigFileFailureCode, string>;
+
+/** Why a configured server or agent is not working: the code's wording, the source's text folded. */
+export interface ConfigProblem {
+  readonly text: string;
+  readonly detail: string | null;
 }
 
 /** Where a page's list comes from, one short line per file; the full path is copied on demand. */
@@ -151,7 +165,12 @@ export function SourceFiles({ files, note }: { files: readonly SourceFile[]; not
             </code>
             <CopyPathButton path={file.path} />
           </div>
-          {file.error && <p className="whitespace-pre-wrap text-destructive">{file.error}</p>}
+          {file.error && (
+            <>
+              <p className="text-destructive">{configFileFailureText[file.error.code]}</p>
+              <FailureDetails detail={file.error.detail} />
+            </>
+          )}
         </div>
       ))}
       {note && <p>{note}</p>}
@@ -180,10 +199,11 @@ export function ConfigEntry({
   name: string;
   scope: keyof typeof scopeLabels;
   state: ReactNode;
-  target: string;
+  /** `null` when the server could not check it for secrets. */
+  target: string | null;
   secretKind: string;
   secretNames: readonly string[];
-  problem: string | null;
+  problem: ConfigProblem | null;
   children?: ReactNode;
   actions?: ReactNode;
 }) {
@@ -197,14 +217,19 @@ export function ConfigEntry({
           {state}
         </ItemTitle>
         <ItemDescription className="break-all">
-          <code>{target}</code>
+          {target === null ? "비밀정보 확인에 실패해 명령줄을 숨겼어요." : <code>{target}</code>}
         </ItemDescription>
         {secretNames.length > 0 && (
           <ItemDescription>
             {secretKind}: {secretNames.join(", ")} (값은 보여주지 않아요)
           </ItemDescription>
         )}
-        {problem && <ItemDescription variant="destructive">{problem}</ItemDescription>}
+        {problem && (
+          <>
+            <ItemDescription variant="destructive">{problem.text}</ItemDescription>
+            <FailureDetails detail={problem.detail} />
+          </>
+        )}
         {children}
       </ItemContent>
       {actions && <ItemActions>{actions}</ItemActions>}

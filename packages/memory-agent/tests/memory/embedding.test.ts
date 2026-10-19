@@ -305,7 +305,7 @@ testAgent({ embedder: lateEmbedder })("late embedding", (it) => {
               );
               yield* sqlRun("INSERT INTO node_vectors VALUES(?,?)", recorded!.seq, lateIdentity);
             }).pipe(sqlTransaction, Effect.provideService(SqlClient.SqlClient, sql));
-          }).pipe(Effect.mapError((cause) => new EmbeddingError({ cause }))),
+          }).pipe(Effect.mapError((cause) => EmbeddingError.make({ cause }))),
         );
         const indexer = yield* Indexer;
         expect(yield* indexer.indexBatch(16)).toBe(1);

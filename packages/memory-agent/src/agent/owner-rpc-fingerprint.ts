@@ -19,6 +19,16 @@ type Evidence =
 // Covers the bounded 32-report recovery request as well as ordinary read evidence.
 const evidenceLimit = 16384;
 
+/** A request value that has no canonical JSON form, or a legacy fingerprint no longer readable. */
+export class OwnerRpcFingerprintFailed extends Schema.TaggedError<OwnerRpcFingerprintFailed>()(
+  "OwnerRpcFingerprintFailed",
+  { reason: Schema.Literals(["non_finite", "non_json", "unsupported_legacy"]) },
+) {}
+// Fingerprints are computed synchronously inside the ledger's SQLite and RPC boundaries.
+const fail = (reason: OwnerRpcFingerprintFailed["reason"]): never => {
+  throw OwnerRpcFingerprintFailed.make({ reason });
+};
+
 /** The existing canonical byte contract, including key ordering and finite numbers. */
 export function ownerRpcCanonicalJson(value: OwnerRpcJson): string {
   if (value === null) return "null";
@@ -29,7 +39,7 @@ export function ownerRpcCanonicalJson(value: OwnerRpcJson): string {
     case "string":
       return JSON.stringify(value);
     case "number":
-      if (!Number.isFinite(value)) throw new Error("Non-finite RPC number");
+      if (!Number.isFinite(value)) return fail("non_finite");
       return JSON.stringify(value);
     case "object":
       if (Array.isArray(value)) return `[${value.map(ownerRpcCanonicalJson).join(",")}]`;
@@ -38,7 +48,7 @@ export function ownerRpcCanonicalJson(value: OwnerRpcJson): string {
         .map(([key, entry]) => `${JSON.stringify(key)}:${ownerRpcCanonicalJson(entry)}`)
         .join(",")}}`;
     default:
-      throw new Error("Non-JSON RPC value");
+      return fail("non_json");
   }
 }
 
@@ -108,7 +118,7 @@ export function compactLegacyOwnerRpcFingerprint(fingerprint: string): string {
   // avoiding a second 100+ MiB JSON tree when converting historical context snapshots.
   const suffix = /,"operation":("(?:[^"\\]|\\.)*")\}$/u.exec(fingerprint.slice(-evidenceLimit));
   if (!fingerprint.startsWith('{"input":') || suffix?.[1] === undefined)
-    throw new Error("Unsupported legacy owner RPC fingerprint");
+    return fail("unsupported_legacy");
   const operation = Result.getOrThrow(
     Schema.decodeResult(Schema.fromJsonString(Schema.String))(suffix[1]),
   );

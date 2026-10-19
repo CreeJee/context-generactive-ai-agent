@@ -277,7 +277,7 @@ describe("account-bound subscription provider", () => {
                     Deferred.doneUnsafe(
                       completion,
                       intent === "reject"
-                        ? Effect.fail(new OAuthHarnessError("provider_rejected"))
+                        ? Effect.fail(OAuthHarnessError.fromCode("provider_rejected"))
                         : Effect.succeed({
                             provider: "openai",
                             connected: true,
@@ -303,6 +303,55 @@ describe("account-bound subscription provider", () => {
         expect((yield* sdkCall(() => bound.client.status())).connected).toBe(false);
         expect(() => bound.forRun()).toThrow("not_connected");
       }),
+  );
+
+  effectTest.live("a failed slot cleanup keeps the login's own failure", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope;
+      const profiles = yield* seededProfiles(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO oauth_legacy_removed(provider, removed_at) VALUES ('openai', 0)`;
+        }),
+      );
+      const disconnected = () =>
+        Promise.resolve().then(() => ({
+          provider: "openai" as const,
+          connected: false,
+          expiresAt: null,
+        }));
+      const bound = createAccountBoundSubscriptionClients({
+        profiles,
+        provider: "openai",
+        createClient: () => ({
+          status: disconnected,
+          modelCatalog: () => Promise.resolve().then(() => []),
+          stream: () => nativeStream(Stream.empty),
+          refreshForValidation: disconnected,
+          disconnect: disconnected,
+          startLogin: () =>
+            Promise.resolve().then(() => ({
+              provider: "openai" as const,
+              authorizationUrl: "https://example.com/login",
+              completed: sdkCompletion(
+                Effect.fail(OAuthHarnessError.fromCode("provider_rejected")),
+                scope,
+              ),
+              cancel: () => {},
+            })),
+        }),
+        accounts: {
+          read: () => Promise.resolve().then(() => null),
+          write: () => Promise.resolve().then(() => {}),
+          remove: () => Promise.reject(new Error("keychain_locked")),
+        },
+      });
+      const attempt = yield* sdkCall(() => bound.client.startLogin());
+      yield* rejects(
+        sdkCall(() => attempt.completed),
+        "provider_rejected",
+      );
+    }),
   );
 
   effectTest.live.each(["openai", "anthropic"] as const)(

@@ -4,8 +4,11 @@ import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
+import { fallbackLogged } from "../runtime/logged-failures.ts";
+import type { ShownFailure } from "../runtime/shown-failure.ts";
+import { ToolFailed, toolFailedOf } from "../tools/failure.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
 /**
@@ -36,9 +39,10 @@ export interface Redaction {
   readonly hidden: number;
 }
 
-export class SecretRedactionFailed extends Data.TaggedError("SecretRedactionFailed")<{
-  readonly cause: unknown;
-}> {}
+export class SecretRedactionFailed extends Schema.TaggedError<SecretRedactionFailed>()(
+  "SecretRedactionFailed",
+  { cause: Schema.Defect() },
+) {}
 
 const credentialName =
   "(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|SESSION_?KEY|AUTH)";
@@ -156,6 +160,9 @@ function replaceFindings(text: string, findings: readonly Finding[]): RedactedVi
   return { text: out + text.slice(at), hidden };
 }
 
+/** Longest failure detail shown; an agent's or provider's error can carry a whole response. */
+const maxShownDetail = 1_000;
+
 const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Finite);
 const isBoolean = Schema.is(Schema.Boolean);
@@ -173,7 +180,7 @@ const make = Effect.sync(() => {
     Effect.gen(function* (): Effect.fn.Return<RedactedView, SecretRedactionFailed> {
       if (text.length === 0) return { text, hidden: [] };
       const detected = yield* formatFindings(text).pipe(
-        Effect.mapError((failure) => new SecretRedactionFailed({ cause: failure.cause })),
+        Effect.mapError((failure) => SecretRedactionFailed.make({ cause: failure.cause })),
       );
       return replaceFindings(text, mergeFindings([...detected, ...assignmentFindings(text)]));
     });
@@ -206,11 +213,33 @@ const make = Effect.sync(() => {
       onSome: (json) => Effect.map(redactJson(json), (redacted): A | Json => redacted),
     });
 
+  /**
+   * An outside program's own failure text as a person or the model may read it: secrets hidden,
+   * then cut short. When hiding fails, the text is not shown at all.
+   */
+  const shownDetail = (text: string) =>
+    redactText(text).pipe(
+      Effect.map(({ text: hidden }): string | null =>
+        hidden.length > maxShownDetail ? `${hidden.slice(0, maxShownDetail)}…` : hidden,
+      ),
+      fallbackLogged("Failure detail withheld", () => null),
+    );
+
+  /** The failure with its detail as {@link shownDetail} shows it. */
+  const hideDetail = <Code extends string>(
+    failure: ShownFailure<Code>,
+  ): Effect.Effect<ShownFailure<Code>> =>
+    failure.detail === null
+      ? Effect.succeed(failure)
+      : Effect.map(shownDetail(failure.detail), (detail) => ({ code: failure.code, detail }));
+
   return {
     redactText,
     redactView,
     redactJson,
     redactResult,
+    shownDetail,
+    hideDetail,
 
     /**
      * The same tools, with secrets hidden in what they return and in the errors they throw, before
@@ -230,13 +259,15 @@ const make = Effect.sync(() => {
                 Effect.catchCause((cause) => {
                   const error = nativeFailure(cause).cause;
                   if (!(error instanceof Error)) return Effect.fail(new Cause.UnknownError(error));
-                  return redactText(error.message).pipe(
+                  // The model reads the failure's code, tag and redacted text (ToolFailed).
+                  const failed = toolFailedOf(error);
+                  return redactText(failed.detail).pipe(
                     Effect.flatMap(({ text }) =>
                       Effect.fail(
                         new Cause.UnknownError(
-                          text === error.message
-                            ? error
-                            : new Error(text, { cause: "secret hidden from the message" }),
+                          text === failed.detail
+                            ? failed
+                            : ToolFailed.make({ code: failed.code, tag: failed.tag, detail: text }),
                         ),
                       ),
                     ),

@@ -1,4 +1,4 @@
-import { nativeFailure, nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { ProviderOperationFailed } from "./contracts.ts";
 import { Result, Function as EffectFunction } from "effect";
@@ -9,11 +9,11 @@ import {
   Cause,
   Config,
   Context,
-  Data,
   Effect,
   Equal,
   Layer,
   Option,
+  Predicate,
   Schema,
   Semaphore,
   Stream,
@@ -55,13 +55,64 @@ const stringifyJson = EffectFunction.flow(
   Result.getOrThrow,
 );
 
-export class OpenAICompatibleFailed extends Data.TaggedError("OpenAICompatibleFailed")<{
-  readonly operation: "validation" | "missing" | "keychain" | "partial" | "test" | "models";
-}> {}
-export class CompatibleCompletionRejected extends Data.TaggedError("CompatibleCompletionRejected")<{
-  readonly status: number;
-  readonly reason: "memory_capacity_exceeded" | "request_rejected";
-}> {}
+export class OpenAICompatibleFailed extends Schema.TaggedError<OpenAICompatibleFailed>()(
+  "OpenAICompatibleFailed",
+  {
+    operation: Schema.Literals([
+      "validation",
+      "missing",
+      "keychain",
+      "partial",
+      "test",
+      "models",
+      /** Naming a new account failed. */
+      "account_id",
+    ]),
+  },
+) {}
+export class CompatibleCompletionRejected extends Schema.TaggedError<CompatibleCompletionRejected>()(
+  "CompatibleCompletionRejected",
+  {
+    status: Schema.Int,
+    reason: Schema.Literals(["memory_capacity_exceeded", "request_rejected"]),
+  },
+) {}
+/**
+ * Why this app refused or failed a request the compatible SDK sent through its fetch or stream.
+ * It is thrown back to the SDK, so its message is fixed text without URLs, headers or payloads.
+ */
+export class CompatibleRunRequestFailed extends Schema.TaggedError<CompatibleRunRequestFailed>()(
+  "CompatibleRunRequestFailed",
+  {
+    reason: Schema.Union([
+      /** The run was released before the request went out. */
+      Schema.TaggedStruct("Cancelled", {}),
+      Schema.TaggedStruct("KeychainUnavailable", {}),
+      Schema.TaggedStruct("ContextLimitExceeded", {}),
+      Schema.TaggedStruct("ToolCallingDisabled", {}),
+      /** fetch failed; `codes` are the Node/undici transport codes along its cause chain. */
+      Schema.TaggedStruct("Transport", { codes: Schema.Array(Schema.String) }),
+    ]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message() {
+    switch (this.reason._tag) {
+      case "Cancelled":
+        return "Compatible run cancelled";
+      case "KeychainUnavailable":
+        return "Compatible keychain unavailable";
+      case "ContextLimitExceeded":
+        return "Compatible context limit exceeded";
+      case "ToolCallingDisabled":
+        return "Compatible tool calling is disabled";
+      case "Transport":
+        return `Compatible API request failed: ${
+          this.reason.codes.length > 0 ? this.reason.codes.join(" <- ") : "transport failure"
+        }`;
+    }
+  }
+}
 const decodeMemoryCapacity = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -122,38 +173,31 @@ const requestRoles = Schema.decodeUnknownOption(
   Schema.Array(Schema.Struct({ role: Schema.String, content: Schema.optional(Schema.Unknown) })),
 );
 const credentialPrefix = "context-generactive-agent/openai-compatible/v1:";
-const StoredCredential = Schema.Struct({ baseUrl: Schema.String, key: Schema.String });
+const decodeStoredCredential = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ baseUrl: Schema.String, key: Schema.String })),
+);
 const credentialFor = (stored: string | null, baseUrl: string): string | null => {
   if (!isTruthy(stored)) return null;
   // Legacy credentials predate endpoint binding. An endpoint change without an explicit
   // replacement or clear is rejected below; newly written credentials are always bound.
   if (!stored.startsWith(credentialPrefix)) return stored;
-  try {
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    const value = EffectFunction.flow(
-      Schema.decodeUnknownResult(StoredCredential),
-      Result.getOrThrow,
-    )(JSON.parse(stored.slice(credentialPrefix.length)));
-    return value.baseUrl === baseUrl ? value.key : null;
-  } catch {
-    return null;
-  }
+  // An unreadable bound credential counts as no credential for any endpoint.
+  return Option.match(decodeStoredCredential(stored.slice(credentialPrefix.length)), {
+    onNone: () => null,
+    onSome: (value) => (value.baseUrl === baseUrl ? value.key : null),
+  });
 };
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeConnection = EffectFunction.flow(
-  Schema.decodeResult(CompatibleConnectionInput),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeModel = EffectFunction.flow(
-  Schema.decodeResult(CompatibleModelInput),
-  Result.getOrThrow,
-);
-export function validateCompatibleConnection(
+const invalidSettings = () => new OpenAICompatibleFailed({ operation: "validation" });
+export const validateCompatibleConnection = Effect.fnUntraced(function* (
   input: CompatibleConnectionInput,
-): CompatibleConnectionInput {
-  const value = decodeConnection(input);
-  const url = new URL(value.baseUrl.trim());
+): Effect.fn.Return<CompatibleConnectionInput, OpenAICompatibleFailed> {
+  const value = yield* Schema.decodeEffect(CompatibleConnectionInput)(input).pipe(
+    Effect.mapError(invalidSettings),
+  );
+  const url = yield* Effect.try({
+    try: () => new URL(value.baseUrl.trim()),
+    catch: invalidSettings,
+  });
   if (
     !["http:", "https:"].includes(url.protocol) ||
     url.username.length > 0 ||
@@ -161,11 +205,15 @@ export function validateCompatibleConnection(
     url.search.length > 0 ||
     url.hash.length > 0
   )
-    throw new OpenAICompatibleFailed({ operation: "validation" });
+    return yield* invalidSettings();
   return { ...value, baseUrl: url.href.replace(/\/+$/, "") };
-}
-export function validateCompatibleModel(input: CompatibleModelInput): CompatibleModelInput {
-  const value = decodeModel(input);
+});
+export const validateCompatibleModel = Effect.fnUntraced(function* (
+  input: CompatibleModelInput,
+): Effect.fn.Return<CompatibleModelInput, OpenAICompatibleFailed> {
+  const value = yield* Schema.decodeEffect(CompatibleModelInput)(input).pipe(
+    Effect.mapError(invalidSettings),
+  );
   if (
     value.contextWindow < 1024 ||
     value.contextWindow > 10_000_000 ||
@@ -173,15 +221,16 @@ export function validateCompatibleModel(input: CompatibleModelInput): Compatible
     value.outputBudget >= value.contextWindow ||
     !isTruthy(value.id.trim())
   )
-    throw new OpenAICompatibleFailed({ operation: "validation" });
+    return yield* invalidSettings();
   return { ...value, id: value.id.trim() };
-}
-export function validateCompatibleLabel(label: string): string {
+});
+export const validateCompatibleLabel = Effect.fnUntraced(function* (
+  label: string,
+): Effect.fn.Return<string, OpenAICompatibleFailed> {
   const value = label.trim();
-  if (value === "" || value.length > 80)
-    throw new OpenAICompatibleFailed({ operation: "validation" });
+  if (value === "" || value.length > 80) return yield* invalidSettings();
   return value;
-}
+});
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function makeOpenAICompatibleSettings(options: {
   readonly config: GlobalConfigApi;
@@ -210,8 +259,6 @@ function makeOpenAICompatibleSettingsBody(
   // Keyring calls cannot be cancelled once started. Never retry an uncertain write automatically.
   const attempt = <A>(operation: OpenAICompatibleFailed["operation"], run: () => Promise<A>) =>
     Effect.tryPromise({ try: run, catch: () => new OpenAICompatibleFailed({ operation }) });
-  const validated = <A>(run: () => A) =>
-    Effect.try({ try: run, catch: () => new OpenAICompatibleFailed({ operation: "validation" }) });
   const accountsOf = Effect.map(config.read, compatibleAccountsOf);
   /** The selected endpoint, which compatible runs, catalogs and model selection use. */
   const read = Effect.map(accountsOf, selectedCompatibleAccount);
@@ -308,11 +355,13 @@ function makeOpenAICompatibleSettingsBody(
   const create = (input: { readonly label?: string | undefined } & CompatibleConnectionInput) =>
     updates.withPermit(
       Effect.gen(function* () {
-        const { baseUrl, apiKey } = yield* validated(() => validateCompatibleConnection(input));
+        const { baseUrl, apiKey } = yield* validateCompatibleConnection(input);
         const label = isTruthy(input.label)
-          ? yield* validated(() => validateCompatibleLabel(input.label ?? ""))
+          ? yield* validateCompatibleLabel(input.label ?? "")
           : compatibleHostLabel(baseUrl);
-        const id = yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie);
+        const id = yield* oauthProtocolCrypto
+          .randomUUIDv4()
+          .pipe(Effect.mapError(() => new OpenAICompatibleFailed({ operation: "account_id" })));
         const account: CompatibleAccount = {
           id,
           label,
@@ -335,14 +384,14 @@ function makeOpenAICompatibleSettingsBody(
   const rename = (id: string, label: string) =>
     change(id, ({ all, account }) =>
       Effect.gen(function* () {
-        const value = yield* validated(() => validateCompatibleLabel(label));
+        const value = yield* validateCompatibleLabel(label);
         yield* writeAccounts(replaceAccount(all, { ...account, label: value }));
       }),
     );
   const connect = (id: string, input: CompatibleConnectionInput) =>
     change(id, ({ all, account }) =>
       Effect.gen(function* () {
-        const { baseUrl, apiKey } = yield* validated(() => validateCompatibleConnection(input));
+        const { baseUrl, apiKey } = yield* validateCompatibleConnection(input);
         const existing = yield* storedKey(account);
         const moved = account.baseUrl !== baseUrl;
         // Never carry an old endpoint's credential to a different server implicitly.
@@ -368,7 +417,7 @@ function makeOpenAICompatibleSettingsBody(
   const saveModel = (id: string, input: CompatibleModelInput) =>
     change(id, ({ prior, all, account }) =>
       Effect.gen(function* () {
-        const value = yield* validated(() => validateCompatibleModel(input));
+        const value = yield* validateCompatibleModel(input);
         const existing = account.models.find((model) => model.id === value.id);
         const saved: CompatibleModel = { ...value, reasoning: existing?.reasoning };
         const isFirst = account.models.length === 0;
@@ -448,7 +497,7 @@ function makeOpenAICompatibleSettingsBody(
       Effect.scoped,
       Effect.timeout(15_000),
       Effect.mapError((failure) =>
-        failure instanceof OpenAICompatibleFailed && failure.operation === "missing"
+        failure._tag === "OpenAICompatibleFailed" && failure.operation === "missing"
           ? failure
           : new OpenAICompatibleFailed({ operation }),
       ),
@@ -639,7 +688,11 @@ function makeOpenAICompatibleSettingsBody(
       provider,
       list: Effect.gen(function* () {
         const selected = yield* read;
-        if (isTruthy(selected)) yield* discover(selected.id).pipe(Effect.option);
+        // Discovery only refreshes published reasoning; the registered models list without it.
+        if (isTruthy(selected))
+          yield* discover(selected.id).pipe(
+            Effect.catchTag(["OpenAICompatibleFailed", "GlobalConfigFailed"], () => Effect.void),
+          );
         const account = yield* read;
         if (!isTruthy(account)) return [];
         return account.models.flatMap((entry, index) => {
@@ -706,7 +759,12 @@ function makeOpenAICompatibleSettingsBody(
         selection.provider !== provider ||
         !model(settings, false).supportedReasoningEfforts.includes(selection.reasoningEffort)
       )
-        throw new Error("Compatible model unavailable");
+        // The SDK builds adapters synchronously; this typed failure is its thrown error.
+        throw new ModelUnavailable({
+          provider,
+          model: selection.model,
+          reasoningEffort: selection.reasoningEffort,
+        });
       // One adapter is one run. Release from the central stream's finally aborts any
       // outstanding SDK request; no separate long-lived compatible client is retained.
       const runAbort = new AbortController();
@@ -732,9 +790,11 @@ function makeOpenAICompatibleSettingsBody(
             Effect.gen(function* () {
               const credential = yield* nativePromise(() => pinnedKey);
               if (runAbort.signal.aborted)
-                return yield* new Cause.UnknownError(new Error("Compatible run cancelled"));
+                return yield* new CompatibleRunRequestFailed({ reason: { _tag: "Cancelled" } });
               if (credential.failed)
-                return yield* new Cause.UnknownError(new Error("Compatible keychain unavailable"));
+                return yield* new CompatibleRunRequestFailed({
+                  reason: { _tag: "KeychainUnavailable" },
+                });
               const key = credential.value;
               const headers = new Headers(init?.headers);
               headers.delete("authorization");
@@ -782,9 +842,9 @@ function makeOpenAICompatibleSettingsBody(
               for (const character of body)
                 estimatedInput += character.charCodeAt(0) < 128 ? 0.25 : 1;
               if (Math.ceil(estimatedInput) + settings.outputBudget > settings.contextWindow)
-                return yield* new Cause.UnknownError(
-                  new Error("Compatible context limit exceeded"),
-                );
+                return yield* new CompatibleRunRequestFailed({
+                  reason: { _tag: "ContextLimitExceeded" },
+                });
               return yield* Effect.gen(function* () {
                 const signal = isTruthy(init?.signal)
                   ? AbortSignal.any([init.signal, runAbort.signal])
@@ -799,29 +859,33 @@ function makeOpenAICompatibleSettingsBody(
                   }),
                 );
               }).pipe(
-                Effect.catchCause((failure) =>
+                Effect.catchTag("UnknownError", ({ cause }) =>
                   Effect.gen(function* () {
-                    const cause = nativeFailure(failure).cause;
                     // Do not log URLs, headers or payloads. Surface transport codes even
                     // when the provider SDK reduces this exception to "Connection error".
                     const codes: string[] = [];
                     let current: unknown = cause;
                     const seen: unknown[] = [];
-                    while (current instanceof Error && !seen.includes(current) && seen.length < 8) {
+                    while (
+                      Predicate.isError(current) &&
+                      !seen.includes(current) &&
+                      seen.length < 8
+                    ) {
                       seen.push(current);
-                      if ("code" in current && isTransportErrorCode(current.code))
+                      if (
+                        Predicate.hasProperty(current, "code") &&
+                        isTransportErrorCode(current.code)
+                      )
                         codes.push(current.code);
                       current = current.cause;
                     }
-                    const diagnostic = isTruthy(codes.length)
-                      ? codes.join(" <- ")
-                      : "transport failure";
-                    const error = new Error(`Compatible API request failed: ${diagnostic}`, {
+                    const error = new CompatibleRunRequestFailed({
+                      reason: { _tag: "Transport", codes },
                       cause,
                     });
                     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
                     yield* Effect.logError(error.message);
-                    return yield* new Cause.UnknownError(error);
+                    return yield* error;
                   }),
                 ),
               );
@@ -840,10 +904,15 @@ function makeOpenAICompatibleSettingsBody(
               };
               if (!settings.toolCalling) request.tools = [];
               const source = original(request)[Symbol.asyncIterator]();
+              // Closing the SDK iterator is best-effort cleanup; the stream's own outcome stands.
               yield* Effect.addFinalizer(() =>
                 nativePromise(
                   () => source.return?.().then(() => undefined) ?? Promise.resolve(),
-                ).pipe(Effect.orDie),
+                ).pipe(
+                  Effect.catchTag("UnknownError", () =>
+                    Effect.logWarning("Compatible stream close failed", { error: "UnknownError" }),
+                  ),
+                ),
               );
               return {
                 pull: Effect.gen(function* () {
@@ -851,9 +920,9 @@ function makeOpenAICompatibleSettingsBody(
                   if (next.done === true) return yield* Cause.done();
                   const chunk = next.value;
                   if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
-                    return yield* new Cause.UnknownError(
-                      new Error("Compatible tool calling is disabled"),
-                    );
+                    return yield* new CompatibleRunRequestFailed({
+                      reason: { _tag: "ToolCallingDisabled" },
+                    });
                   const output: typeof chunk =
                     chunk.type === "RUN_ERROR" &&
                     chunk.message.includes("No user query found in messages")
@@ -861,20 +930,19 @@ function makeOpenAICompatibleSettingsBody(
                       : chunk;
                   return [output] as const;
                 }).pipe(
-                  Effect.catchIf(
-                    (error) => error instanceof Cause.UnknownError,
-                    (error) => {
-                      const cause = error.cause;
-                      return Effect.fail(
-                        cause instanceof Error &&
-                          cause.message.includes("No user query found in messages")
-                          ? new Cause.UnknownError(
-                              new Error(`${cause.message}\n${promptDiagnostic}`, { cause }),
-                            )
-                          : error,
-                      );
-                    },
-                  ),
+                  // The SDK's template error is matched by its text (decisions.md 2026-10-04) to
+                  // append the request's role counts; nothing else is read from SDK messages.
+                  Effect.catchTag("UnknownError", (error) => {
+                    const cause = error.cause;
+                    return Effect.fail(
+                      cause instanceof Error &&
+                        cause.message.includes("No user query found in messages")
+                        ? new Cause.UnknownError(
+                            new Error(`${cause.message}\n${promptDiagnostic}`, { cause }),
+                          )
+                        : error,
+                    );
+                  }),
                 ),
               };
             }).pipe(Effect.map(({ pull }) => pull)),

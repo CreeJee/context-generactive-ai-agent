@@ -100,10 +100,11 @@ const endpointOf = (settings: Settings) => {
     ? undefined
     : (compatibleEndpointModel(account, model.id) ?? undefined);
 };
-const validateCompatibleConfiguration = ({ baseUrl, model, ...limits }: SingleEndpointUpdate) => {
-  validateCompatibleConnection({ baseUrl });
-  validateCompatibleModel({ id: model, ...limits });
-};
+const validateCompatibleConfiguration = ({ baseUrl, model, ...limits }: SingleEndpointUpdate) =>
+  Effect.all([
+    validateCompatibleConnection({ baseUrl }),
+    validateCompatibleModel({ id: model, ...limits }),
+  ]);
 
 /** Native fetch fixture: interruption comes from the Effect running model discovery. */
 const stalledFetch =
@@ -798,7 +799,10 @@ describe("OpenAI compatible settings", () => {
         { outputBudget: 8192 },
         { outputBudget: -1 },
       ])
-        expect(() => validateCompatibleConfiguration({ ...configuration, ...patch })).toThrow();
+        expect(
+          (yield* Effect.flip(validateCompatibleConfiguration({ ...configuration, ...patch })))
+            .operation,
+        ).toBe("validation");
     }),
   );
   effectTest.live("restores a manual model without discovery and isolates discovery errors", () =>

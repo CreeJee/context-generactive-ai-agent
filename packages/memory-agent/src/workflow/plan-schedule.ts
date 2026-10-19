@@ -1,4 +1,5 @@
 import { Array as EffectArray, Effect, Schema } from "effect";
+import { stepProgressStatus, type StepProgressStatus } from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
 /** A dependency defect the model can fix by revising the Plan's step ids or dependsOn. */
@@ -15,7 +16,7 @@ export class PlanDependenciesRejected extends Schema.TaggedError<PlanDependencie
   { issues: Schema.NonEmptyArray(PlanDependencyIssue) },
 ) {}
 
-type DependencyStep = Pick<PlanStep, "id" | "dependsOn">;
+type DependencyStep = Pick<PlanStep, "id" | "dependsOn"> & Partial<Pick<PlanStep, "hold">>;
 
 /** Edges to other existing steps; unknown and self references carry no ordering. */
 const knownDependencies = (steps: readonly DependencyStep[]) => {
@@ -68,9 +69,19 @@ export const validatePlanDependencies = Effect.fnUntraced(function* (
     return yield* PlanDependenciesRejected.make({ issues });
 });
 
+/** Status of a card not started yet: ready once every known dependency is done, unless held. */
+export const notStartedStatus = (
+  steps: readonly DependencyStep[],
+  isDone: (id: string) => boolean,
+): ((step: DependencyStep) => "ready" | "backlog") => {
+  const edges = knownDependencies(steps);
+  return (step) => (step.hold === undefined && edges(step).every(isDone) ? "ready" : "backlog");
+};
+
 export interface UnmetDependency {
   readonly id: string;
-  readonly status: PlanStep["status"];
+  /** In the model-facing progress vocabulary, which plan texts keep. */
+  readonly status: StepProgressStatus;
 }
 
 export interface WaitingStep {
@@ -93,7 +104,8 @@ export type PlanSchedule =
     };
 
 /**
- * Ready steps are pending with every dependency completed. A Plan saved before validation may
+ * Ready steps have not started and every dependency is done; backlog and ready cards are both
+ * not started, so Goal execution schedules them alike. A Plan saved before validation may
  * still name unknown or self dependencies; those are ignored, while a saved cycle never becomes
  * ready and therefore surfaces as a stall the model can repair with update_plan.
  */
@@ -106,18 +118,21 @@ export function planSchedule(steps: readonly PlanStep[]): PlanSchedule {
   const waiting: WaitingStep[] = [];
   for (const step of steps)
     switch (step.status) {
-      case "completed":
+      case "done":
         break;
       case "in_progress":
+      case "verify":
         inProgress.push(step.id);
         break;
       case "blocked":
+      case "human_decision":
         blocked.push(step.id);
         break;
-      case "pending": {
+      case "backlog":
+      case "ready": {
         const unmet = edges(step).flatMap((id): UnmetDependency[] => {
-          const dependency = status.get(id) ?? "completed";
-          return dependency === "completed" ? [] : [{ id, status: dependency }];
+          const dependency = status.get(id) ?? "done";
+          return dependency === "done" ? [] : [{ id, status: stepProgressStatus(dependency) }];
         });
         if (EffectArray.isReadonlyArrayNonEmpty(unmet)) waiting.push({ stepId: step.id, unmet });
         else ready.push(step.id);

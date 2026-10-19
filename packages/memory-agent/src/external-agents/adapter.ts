@@ -1,7 +1,6 @@
-import { nativePromise, nativeFailure } from "../runtime/native-effect.ts";
+import { nativePromise } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
-import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime } from "effect";
-import { isTruthy } from "../truthy.ts";
+import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime, Schema } from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   EventType,
@@ -16,6 +15,7 @@ import {
 } from "@tanstack/ai/adapters";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { messageText } from "../messages/text.ts";
+import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { ExternalPromptOutcome } from "./agents.ts";
 
 /** Sends one user turn to the external agent; updates arrive through `onUpdate`. */
@@ -30,18 +30,31 @@ type Item =
   | { readonly kind: "done"; readonly outcome: ExternalPromptOutcome }
   | { readonly kind: "error"; readonly error: Error };
 
-/** Why a turn did not produce an answer, as the page shows it. */
-function failureOf(outcome: ExternalPromptOutcome): string | null {
+/**
+ * A turn that ended without an answer. The SDK sends `code` and `message` as the run's
+ * `RUN_ERROR`: the page words the code and shows the message, the agent's own text with secrets
+ * already hidden, only under its details.
+ */
+export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTurnFailed>()(
+  "ExternalAgentTurnFailed",
+  { code: ExternalAgentFailureCode, detail: Schema.NullOr(Schema.String) },
+) {
+  override get message() {
+    return this.detail ?? this.code;
+  }
+}
+
+/** Why a turn did not produce an answer, or null when it did. */
+function failureOf(outcome: ExternalPromptOutcome): ExternalAgentTurnFailed | null {
   switch (outcome.status) {
     case "completed":
     case "cancelled":
       return null;
     case "unavailable":
-      return `외부 에이전트를 쓸 수 없어요: ${outcome.reason}`;
     case "failed":
-      return `외부 에이전트가 오류로 끝냈어요: ${outcome.error}`;
+      return new ExternalAgentTurnFailed(outcome.failure);
     case "disconnected":
-      return "외부 에이전트 연결이 끊겼어요. 보낸 요청은 다시 보내지 않았어요.";
+      return new ExternalAgentTurnFailed({ code: "disconnected", detail: null });
   }
 }
 
@@ -136,13 +149,13 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
                 });
                 push({ kind: "done", outcome });
               }).pipe(
-                Effect.catchCause((cause) =>
+                // The preamble or the turn rejected; the SDK receives the rejection as thrown.
+                Effect.catchTag("UnknownError", ({ cause }) =>
                   Effect.sync(() => {
-                    const error = nativeFailure(cause).cause;
                     if (signal?.aborted !== true)
                       push({
                         kind: "error",
-                        error: error instanceof Error ? error : new Error(String(error)),
+                        error: cause instanceof Error ? cause : new Error(String(cause)),
                       });
                   }),
                 ),
@@ -181,7 +194,8 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
             case "done": {
               if (signal?.aborted === true) return;
               const failure = failureOf(item.outcome);
-              if (isTruthy(failure)) throw new Error(failure);
+              // Synchronous SDK iterator: a failed turn is thrown as its typed error.
+              if (failure !== null) throw failure;
               if (MutableHashMap.size(toolTitles) > 0) {
                 const list = [...MutableHashMap.values(toolTitles)]
                   .map((call) => `- ${call.title} (${call.status})`)

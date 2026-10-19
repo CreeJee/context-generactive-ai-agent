@@ -144,13 +144,13 @@ layer(NodeServices.layer)((it) => {
             yield* fs.readFile(yield* path.fromFileUrl(first.workerUrl)),
           );
           const lease = yield* registry.use(first);
-          expect(String((yield* Effect.flip(registry.dispose())).cause)).toContain("still active");
+          expect((yield* Effect.flip(registry.dispose())).reason).toEqual({ _tag: "LeasesActive" });
           lease.release();
           lease.release();
           expect(yield* registry.resolve("goal-a")).toBe(first);
-          expect(String((yield* Effect.flip(registry.use({ ...first }))).cause)).toContain(
-            "Unregistered",
-          );
+          expect((yield* Effect.flip(registry.use({ ...first }))).reason).toEqual({
+            _tag: "Unregistered",
+          });
         } finally {
           yield* registry.dispose({ remove: true });
         }
@@ -173,9 +173,10 @@ layer(NodeServices.layer)((it) => {
       try {
         const pinned = yield* registry.resolve("pinned");
         yield* fs.writeFileString(path.join(build, "full-loop-worker.mjs"), "// corrupt\n");
-        expect(String((yield* Effect.flip(registry.resolve("new-goal"))).cause)).toContain(
-          "SHA256 mismatch",
-        );
+        expect((yield* Effect.flip(registry.resolve("new-goal"))).reason).toEqual({
+          _tag: "Integrity",
+          check: "worker_hash",
+        });
         expect(yield* registry.resolve("pinned")).toBe(pinned);
         expect(yield* registry.verify(pinned)).toEqual(pinned);
       } finally {

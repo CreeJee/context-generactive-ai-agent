@@ -3,8 +3,9 @@ import { Effect, Fiber, Schedule } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
+import { loopRetrySchedule } from "memory-agent/definitions";
 import { api, type LeaseView, type SessionRunState } from "../api";
-import { useSessionEventScope } from "../events/context";
+import { useProjectScope } from "../events/context";
 import { useObservedRunStateQuery } from "../queries/session";
 
 import { orderedLeaseActions } from "./lease-actions";
@@ -85,8 +86,7 @@ const runRevision = (state: SessionRunState) =>
  * read-only page takes the session over as soon as it is free.
  */
 export function useSessionLease(sessionId: string) {
-  const { projectId } = useSessionEventScope();
-  if (!isTruthy(projectId)) throw new Error("Session lease requires an active project");
+  const projectId = useProjectScope("session_lease");
   const [holder, setHolder] = useState(pageHolder);
   const [identified, setIdentified] = useState(false);
   const [lease, setLease] = useState<PageLease>({ state: "checking" });
@@ -156,10 +156,15 @@ export function useSessionLease(sessionId: string) {
       leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
     const task = Effect.runFork(
       uiPromise(tick).pipe(
-        Effect.ignore,
-        Effect.forkChild,
+        // A missed renewal is retried with backoff (decided 2026-10-18).
+        Effect.retry(loopRetrySchedule),
         Effect.repeat(Schedule.spaced(renewMs)),
         Effect.delay(renewMs),
+        // The retries ran out: the page stops renewing and treats the session as free, so the
+        // observed run state asks the server who holds it and claims it again when it can.
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() => current && setLease({ state: "free" })),
+        ),
       ),
     );
     return () => {

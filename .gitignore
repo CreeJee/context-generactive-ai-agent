@@ -38,3 +38,6 @@ dist-ssr
 
 # Isolated RRSI runtime and candidate worktrees
 .rrsi-local/
+
+# CodeGraph local index
+.codegraph/

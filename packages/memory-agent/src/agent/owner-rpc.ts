@@ -259,10 +259,14 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       !Object.hasOwn(options.handlers, operation)
     )
       return reject("invalid_operation");
+    // Input without a canonical JSON form is the worker's invalid operation, not an owner failure.
     const prepared = yield* Effect.try(() => ({
       fingerprint: ownerRpcFingerprint(operation, request.input),
       input: freezeJson(parseJson(canonical(request.input))),
-    })).pipe(Effect.option);
+    })).pipe(
+      Effect.asSome,
+      Effect.catchTag("UnknownError", () => Effect.succeedNone),
+    );
     if (Option.isNone(prepared)) return reject("invalid_operation");
     const { fingerprint, input } = prepared.value;
     // Deliberately excludes generation/token: rotating authority cannot reset a run's
@@ -292,7 +296,7 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       isTruthy(handler.authorize)
         ? handler.authorize(structuredClone(input), capability) === true
         : true,
-    ).pipe(Effect.orElseSucceed(() => false));
+    ).pipe(Effect.catchTag("UnknownError", () => Effect.succeed(false)));
     if (!authorized) return reject("invalid_operation");
     const admission = yield* Effect.suspend(() =>
       options.ledger.reserve(runKey, operationId, fingerprint, handler.sideEffect),

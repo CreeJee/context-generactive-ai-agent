@@ -1,5 +1,6 @@
 import { NodeCrypto, NodePath } from "@effect/platform-node";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
+import { NativeOwnerFailed } from "../native-search/worker-protocol.ts";
 // Composition root: the sole backend acquires resources in this Layer's Scope.
 // eslint-disable-next-line anti-slop-effect/no-service-constructor-imports
 import { makeNativeVectorIndex } from "./native-vector-index.ts";
@@ -45,21 +46,20 @@ export interface VectorIndexApi {
   ) => Effect.Effect<A, E | E2 | VectorIndexError, R | R2>;
 }
 
-export class VectorIndexError extends Data.TaggedError("VectorIndexError")<{
-  readonly operation: "open" | "add" | "remove" | "search" | "save";
-  readonly cause: unknown;
-}> {
+export class VectorIndexError extends Schema.TaggedError<VectorIndexError>()("VectorIndexError", {
+  operation: Schema.Literals(["open", "add", "remove", "search", "save"]),
+  cause: Schema.Defect(),
+}) {
+  /**
+   * Startup prints this when the index cannot open. It names the operation, and the writer lease
+   * held by another process, by tag; the native exception text stays in `cause`.
+   */
   override get message() {
-    const cause = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }))(this.cause);
-    if (
-      this.operation === "open" &&
-      Option.exists(cause, ({ message }) => message.includes("locked"))
-    )
-      return "The vector index is held by another process using the same storage root (is another app server running?). Stop it, then start this one again.";
-    return Option.match(cause, {
-      onNone: () => `Vector index ${this.operation} failed.`,
-      onSome: ({ message }) => `Vector index ${this.operation} failed: ${message}`,
-    });
+    return this.operation === "open" &&
+      Schema.is(NativeOwnerFailed)(this.cause) &&
+      this.cause.reason === "lease-unavailable"
+      ? "The vector index is held by another process using the same storage root (is another app server running?). Stop it, then start this one again."
+      : `Vector index ${this.operation} failed.`;
   }
 }
 

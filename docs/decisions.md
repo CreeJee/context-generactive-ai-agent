@@ -805,6 +805,141 @@
 - 기본값: 동시 실행 수는 CPU 코어 수의 절반(최소 1, 최대 4), 카드당 최대 시도 수는 3이다. provider 장애 재시도는 시도 수와 따로 센다.
 - 여러 Goal을 끝까지 자동으로 돌리려면 Goal 사이 조정이 필요하므로, 프로젝트 스케줄러(LLM 아닌 결정적 서비스)를 첫 범위에 넣는다. round-robin offer, Goal 간 `dependsOn`, 대상 브랜치별 merge queue, upstream 변경 신호, 파일 겹침 알림, 통합 `human_decision` inbox를 맡는다.
 - 설계: [kanban-orchestration.md](kanban-orchestration.md).
+- 슬라이스 A 세부 결정 (2026-10-18):
+  - 카드 상태는 새 저장부터 `CardStatus`로 쓴다. 이전에 저장된 `pending`·`completed`는 읽을 때만 해석하고(의존이 끝났으면 `ready`, 아니면 `backlog`), 저장된 행을 다시 쓰지 않는다.
+  - 모델 도구 계약(`update_workflow_progress`의 `pending`·`in_progress`·`completed`·`blocked`)과 실행 프롬프트의 단계 표기는 바꾸지 않는다. 카드 상태는 그 어휘로 매핑한다(`backlog`·`ready`→pending, `verify`→in_progress, `human_decision`→blocked, `done`→completed). Goal 실행 스케줄은 `backlog`와 `ready`를 모두 시작 전으로 보고 의존 충족으로 시작 여부를 정한다.
+  - 카드 계약의 Evidence 필드 이름은 `requiredEvidence`다. 이미 있는 `evidence`(실제로 기록된 근거)와 구분한다. Risk는 `low`·`medium`·`high`다. `update_plan`으로 같은 step id를 다시 계획하면 계약 필드를 유지한다.
+  - 작성자: 사용자 보드 API는 `User`, Goal 실행 run의 `update_plan`·`update_workflow_progress`는 `Orchestrator(runId)`로 남긴다. phase·Goal·lifecycle 저장과 이전 revision은 작성자를 추측하지 않고 NULL로 둔다.
+  - 사용자 보드 변경은 본 Plan의 `planVersion`을 함께 보낸다. 그사이 Plan이 바뀌었으면 `plan_version_conflict`로 거절한다. 적용된 변경은 `plan.version`을 올린다.
+  - 카드 취소는 Plan에서 카드를 뺀다. 다른 카드가 그 카드에 의존하면 `PlanDependenciesRejected`로 거절한다. `done` 카드의 수정·취소는 `card_finished`로 거절한다. 순서 변경은 실행 중 카드에도 바로 적용한다.
+  - 사용자가 `in_progress` 카드를 수정·취소하면 `board_change_requests`에 `pending`으로만 저장한다. 수정 요청도 저장 전에 의존 규칙을 검사한다. 오케스트레이터 작성자의 변경은 바로 적용한다.
+  - 사용자가 추가한 카드의 상태는 의존 충족 여부로 `backlog`·`ready` 중 하나가 된다. 이 슬라이스에서 사용자는 카드 상태를 직접 바꾸지 않는다.
+
+### 칸반 카드 실행기와 큐 저장소 구현 경계 (2026-10-18)
+
+- Goal 브랜치는 사용자 HEAD에서 ref만 만든다(`git branch`). 카드 worktree는 `CardWorktrees.lease`(acquireRelease)로 attempt 동안 잡고, lease 중에는 정리하지 않는다.
+- 정리 규칙: `Done`은 worktree와 카드 브랜치를 지운다(깨끗한 worktree만). 취소(`Cancelled`)는 남은 변경을 카드 브랜치에 스냅샷 커밋한 뒤 worktree만 지우고 브랜치는 남긴다. `Blocked`·`HumanDecision`은 그대로 둔다.
+- squash 통합은 Goal별로 직렬화하고, 사용자 작업 트리 없이 `commit-tree` + `update-ref <new> <old>`(CAS)로 Goal 브랜치를 옮긴다. 커밋 메시지에 `Ctx-Card: <goal>/<card>` trailer를 남겨 같은 카드의 재통합을 `AlreadyIntegrated`로 판정한다. Goal이 앞서 있으면 `GoalAdvanced`로 멈추고, 호출자가 `syncWithGoal`(merge) 후 다시 verify한다. merge 충돌은 abort하고 파일 목록과 함께 실패한다.
+- 내부 카드 브랜치 커밋은 `--no-verify`로 hook을 건너뛴다. 저장소 hook은 Goal이 사용자 브랜치에 들어갈 때 적용된다. 사용자 git identity와 설정은 그대로 쓴다.
+- ref를 바꾸는 git 호출은 uninterruptible로 끝까지 실행해 결과를 항상 관찰한다. 실패한 git 호출은 자동으로 다시 하지 않는다.
+- git이 없거나, git 저장소가 아니거나, 커밋이 없으면 `SequentialRequired`로 알리고 카드를 순차로 실행한다.
+- 카드 도구 루트: `cardToolProject`가 project root를 카드 worktree(저장소 안 프로젝트 하위 경로 포함)로 바꾸고, outside 도구에 fence(사용자 작업 트리, 프로젝트 root, worktree base)를 붙인다. fence는 대상이 그 아래이거나 위(상위 폴더 listing)여도 `outside_tool_root`로 거부한다. credential·storage root 규칙은 바꾸지 않는다.
+- PersistedQueue store는 owner 연결 위 `effect/sql` 어댑터로 `persisted_queue_items`에 저장하고, 시각은 Effect `Clock` 밀리초다. owner 프로세스만 store를 만든다. 시작할 때 이전 owner가 잡은 행을 풀어 재전달한다(시도 수는 유지). 실패 기록(`last_failure`)에는 오류 태그만 남기고 provider 본문은 남기지 않는다. requeue는 failed 행만 attempts 0으로 되돌리고 id(멱등 키)는 유지한다. `PersistedQueue.layerCleanup`은 같은 store로 `memoryAgentLayer`에서 돈다.
+- 동시 실행 수 사용자 값은 1~32이고, 비우면 기본값(CPU 코어 절반, 1~4)을 쓴다.
+
+### 칸반 human_decision 대기와 통합 inbox (2026-10-18)
+
+- 카드 상태 이동은 `Workflows.transitionCard(sessionId, { cardId, from, to }, author)` 하나로 한다. 허용 전이 표(`cardTransitions`)를 두고, `done`은 끝 상태다. 카드가 `from`에서 이미 바뀌었으면 `card_status_changed`로 거절해 두 작성자가 같은 카드를 동시에 옮기지 못한다. `backlog`·`ready`로 옮기면 의존 충족 여부로 둘 중 하나가 되고, 이동 뒤 시작 전 카드 전체를 다시 계산한다. 상태 이동은 진행이므로 `plan.version`을 올리지 않는다(사용자 보드 편집의 버전 충돌을 만들지 않는다).
+- `HumanDecisions.request`가 카드를 `human_decision`으로 옮기고 대기를 시작한다. 카드가 먼저 움직이므로 오케스트레이터가 아직 실행하는 카드에 대기가 생기지 않는다. 요청 ID는 `(sessionId, goalInstanceId, cardId, key)`에서 나온 workflow execution ID다. 같은 key의 재요청은 상태와 관계없이 기존 요청을 돌려주고 카드를 다시 옮기지 않는다.
+- 요청 종류와 선택지, 응답 후 카드 상태: `UncertainSideEffect`(continue·retry→ready, stop→blocked), `IntegrationConflict`(resolved→verify, rework→ready, stop→blocked), `ImpactUnclear`(continue→ready, replace·stop→blocked), `RetryExhausted`(requeue→ready, stop→blocked), `ProtectedBranchMerge`(create_pr→ready, manual_merge→done; 슬라이스 F에서 Goal 단위 판단으로 바뀌어 카드를 옮기지 않음). 오케스트레이터는 보드를 다시 읽고 `forCard`/`get`으로 답을 읽어 다음 일을 정한다. 요청에는 자유 텍스트를 두지 않고 도구 이름·파일·버전·브랜치 같은 메타데이터만 둔다.
+- 답에 따른 카드 이동은 workflow 안의 Activity로 `User` 작성자가 한다. 답이 저장된 뒤 재시작해도 Activity가 이어서 실행된다. 그사이 카드가 `human_decision`을 떠났거나 Goal이 바뀌었으면 답은 남기고 카드는 옮기지 않는다.
+- 다른 두 답이 동시에 오면 저장된 답이 이긴다. 진 쪽은 저장된 값을 다시 읽어 `answer_conflict`로 거절한다.
+- 닫기는 사유(`orchestrator_cancelled`·`goal_replaced`·`card_stopped`)를 `human_decision_closures`에 먼저 쓰고 workflow를 interrupt한다. 시작할 때 사유 행이 있는데 아직 대기 중인 workflow는 interrupt를 마저 하고, Goal pointer가 바뀐 세션의 대기는 `goal_replaced`로 닫는다. Goal 교체를 직접 알리는 hook은 두지 않았다. 응답 시 pointer가 다르면 그 요청을 닫고 `goal_superseded`로 거절하며, 보드·inbox 조회는 현재 Goal의 요청만 보여 준다. pointer를 바꾸는 쪽(C·F)은 `closeSuperseded(sessionId)`를 부를 수 있다.
+- 사용자가 보드에서 `human_decision` 카드를 취소하면 그 카드의 대기를 `card_stopped`로 닫는다. 닫힌 요청에 대한 답은 `request_closed`로 거절한다. 닫기는 답이 아니다.
+- 통합 inbox는 사이드바의 "판단 대기"다. 프로젝트의 모든 세션에서 현재 Goal의 미응답 요청을 오래된 순으로 보여 주고, 거기서 바로 답하거나 `card` 쿼리로 그 대화의 보드를 열어 카드를 표시한다. 응답은 대상 세션의 lease를 확인한다(다른 창이 쓰는 세션이면 423). 요청·응답·닫기는 `run-state` 세션 이벤트를 보내 보드와 inbox를 다시 읽게 한다.
+
+### 칸반 오케스트레이터 루프와 카드 큐 (2026-10-18)
+
+- 셸 샌드박스 안의 git은 주 저장소의 `.git/worktrees/*/index.lock`과 ref를 쓰지 못한다(`Operation not permitted`, 실측). 그래서 worktree 생성, 카드 커밋, squash·sync는 owner가 한다. 카드 에이전트에게는 커밋하지 말라고 지시하고, owner가 attempt가 끝난 뒤 `commitWork`로 카드 브랜치에 커밋한다.
+- 동시 실행 수는 큐 worker 수가 아니라 `take` 앞의 Semaphore로 제한한다. worker는 상한(32)만큼 띄우고, 설정이 바뀌면 `CardQueueGate.reconfigure`가 permit 수를 바로 바꾼다. 실행 중인 카드는 끊지 않는다. 동시 실행 수를 저장하는 경로는 저장 뒤 `reconfigure`를 불러야 한다.
+- DurableQueue는 handler 실패를 item 완료로 처리하므로, 전달 한도 3은 owner가 실행 도중 죽어 같은 item이 다시 전달되는 경우에만 쓰인다. 카드 실패(에이전트 실패, 검증 실패, 통합 실패)는 오케스트레이터의 실패 사다리로 다룬다: 첫 실패는 바로 다시, 두 번째는 backoff 뒤 다시, 세 번째는 replan 요청과 함께 `blocked`, replan 뒤 다시 세 번 실패하면 `human_decision`.
+- 한도를 다 쓴 item은 dead-letter가 되고, 루프가 카드를 `blocked`(사유 `DeadLettered`)로 옮긴다. 보드의 "다시 대기열에"는 같은 item을 attempts 0으로 되살리고 attempt 기록을 다시 연다. 새 attempt 번호를 만들지 않으므로 이어가기다. requeue와 루프의 한 번 보기는 같은 Semaphore로 순서를 지킨다.
+- attempt 결과는 handler가 `kanban_card_attempts`에 먼저 기록하고(첫 기록만 유효), 오케스트레이터는 workflow를 기다리지 않고 기록을 읽어 처리한다. 재시작한 owner는 저장된 보드와 기록에서 이어가고, 아무것도 replay하지 않는다.
+- 카드 run은 `kanban_card_runs`에 남고, fence는 결과가 불확실한 run이 있으면 에이전트를 부르지 않고 `Fenced`로 끝낸다. 사람이 판단한 뒤 이어가게 하려면 `acknowledged_at`을 채운다(슬라이스 D의 몫).
+- 통합: verify 통과 → squash. Goal 브랜치가 앞서 있으면 sync 후 같은 카드를 다시 verify한다(최대 3회). sync 충돌이면 그 카드를 해결 카드로 대체한다. 해결 카드는 원래 카드 브랜치를 읽기 전용으로 참고해 현재 Goal 브랜치에 같은 변경을 다시 적용한다. 해결 카드가 다시 충돌하면 `human_decision`이다.
+- `dependsOn`은 필수 순서, `boundaries` 겹침은 힌트다. 실행 중이거나 verify 중인 카드와 경계가 겹치는 카드는 그 카드가 끝날 때까지 배정을 미룬다. `human_decision`·`blocked` 카드는 슬롯을 쓰지 않는다.
+- 사용자 변경 요청: `Apply`는 카드를 바꾸고 실행 중이면 멈춘 뒤 같은 대화에서 변경 메모와 함께 이어가게 한다. `Reassign`은 같고 새 대화(generation+1)에서 시작한다. 취소 요청은 `Apply`만 받는다. `Reject`는 이유와 함께 `rejected`로 남긴다.
+- Goal 버전이 올라가면 루프가 hold를 걸어 새 배정과, 이전 Goal로 끝난 카드의 결과 처리를 멈춘다. 모델이 `apply_goal_change`로 카드마다 판정을 적용하면 hold를 풀고 Goal 버전을 따라간다.
+- 칸반 보드인 Goal은 `updateGoal`이 Plan 단계로 돌아가지 않는다(execute·verify 유지). 칸반이 아닌 Goal의 동작은 그대로다.
+- 칸반 세션의 채팅 모델은 카드를 직접 실행하지 않는다. 자동 이어가기(workflow follow-up)를 하지 않고, 루프가 replan·변경 요청·Goal 변경·전체 완료를 알릴 때만 kanban follow-up으로 깨운다. 같은 상황은 한 번만 알린다. 보드 도구는 부모 run에만 주고 카드 에이전트에게는 주지 않는다.
+- 카드 에이전트와 검증자는 카드·세대별 이름을 가진 세션 서브에이전트로 돈다(`Subagents.runAttempt`). 부모 run 없이 시작하고, 시작 전에 chat run id를 등록한 뒤에만 도구를 부를 수 있다. 검증자는 읽기 도구와 `run_skill`만 받고 `record_card_verdict`로 판정을 남긴다.
+
+### 칸반 오케스트레이터와 human_decision 연결 (2026-10-18)
+
+- 오케스트레이터는 카드를 `transitionCard`로 `human_decision`에 직접 옮기지 않는다. 모든 경로가 `HumanDecisions.request`를 부르고, request가 카드를 옮긴다. 경로와 요청 종류: 재계획 뒤 반복 실패는 `RetryExhausted`(시도 수 = 마지막 attempt 번호), 해결 카드의 재충돌은 `IntegrationConflict`(충돌 파일), 결과가 불확실한 run fence는 `UncertainSideEffect`, `apply_goal_change`의 `NeedsDecision`은 `ImpactUnclear`(Goal 버전 쌍)다. 실행 중 카드는 request로 옮긴 뒤 attempt를 멈춘다.
+- `UncertainSideEffect`에 fence를 건 `runId`를 넣는다. 사람의 답이 그 run의 fence를 푸는 근거다. run 기록에서 도구 이름을 알 수 없으면 `toolNames`는 빈 배열이고, 화면은 일반 문구를 보여 준다.
+- 요청 key는 occasion마다 정한다: `retry_exhausted:<attemptNo>`, `uncertain_side_effect:<runId>:<attemptNo>`, `integration_conflict:<attemptNo>:<이 카드의 답한 충돌 요청 수>`, `impact_unclear:<from>:<to>`. 같은 결과를 다시 처리해도(예: 처리 표시 전 crash) 같은 요청을 돌려받아 두 번 묻지 않는다. 답한 뒤 다시 생긴 상황은 새 attempt나 답 수 때문에 새 key가 된다. 루프가 본 상태에서 카드가 이미 다른 곳으로 옮겨졌으면 묻지 않는다.
+- 답에 따른 카드 이동은 D가 한다. 루프는 매 look에서 보드를 읽은 뒤, 배정 전에 아직 따르지 않은 답을 한 번씩 따른다(`kanban_decision_followups`). 답은 카드를 옮기기 전에 저장되므로, 루프가 ready로 본 카드의 답은 이미 읽힌다. 따르는 일: `requeue`는 실패 streak·backoff·사유를 지운다. `continue`·`retry`는 해당 run을 acknowledge하고 다음 attempt에 메모를 남긴다(`retry`는 사람이 반영 안 됨을 확인한 경우라 자동 재실행이 아니다). 충돌 `resolved`는 사유만 지우고 verify 카드를 다시 검증·통합하며, `rework`는 메모를 남긴다. `ImpactUnclear`의 `replace`는 카드를 replan 요청으로 표시해 모델이 대체하게 한다. `stop`은 카드를 `blocked`에 둔다.
+- 답하는 API는 답 뒤에 그 Goal의 루프를 poke한다. 다른 경로는 다음 poll에서 이어진다.
+- 닫기: 모델의 `Stop`·`Replace` 판정, 카드 취소(직접 취소, 변경 요청 취소), split·merge로 빠지는 카드는 `card_stopped`로 닫는다. 모델이 `human_decision` 카드를 다른 상태로 옮기면 사람 대신 정한 것이므로 `orchestrator_cancelled`로 닫는다. 새 Goal이 적용되면(`settleNewGoalRequest`가 `applied`) 채팅 쪽에서, 그리고 루프가 pointer 변경을 발견해 멈출 때 `closeSuperseded(sessionId)`를 부른다. 닫기는 답이 아니므로 카드를 옮기지 않는다.
+- 동시 실행 수: `KanbanSettings`가 저장한 값을 구독자에게 알리고, `CardQueueGate`가 layer를 만들 때 구독해 바로 permit 수를 바꾼다. 설정을 저장하는 어떤 경로도 따로 `reconfigure`를 부를 필요가 없다. 설정 화면·API는 슬라이스 F에서 추가했다(아래 프로젝트 스케줄러 항목).
+
+### 칸반 프로젝트 스케줄러 (2026-10-18)
+
+- 공정성: 동시 실행 슬롯은 같은 기기의 모든 활성 Goal이 함께 쓴다. Goal 우선순위(high·normal·low)는 가중치 4·2·1이다. 슬롯은 가중치에 비례한 몫으로 나누고, 몫이 같으면 가장 오래전에 슬롯을 받은 Goal부터 돌아가며(round-robin) 준다. 아직 수요를 알리지 않은 활성 Goal은 상한만큼 원한다고 본다. 그래서 먼저 깨어난 Goal이 슬롯을 독차지하지 않는다. 쓰지 않는 몫은 원하는 다른 Goal이 쓴다.
+- Goal 간 `dependsOn`: 같은 프로젝트의 Goal만 지정할 수 있다. 자기 자신, 다른 프로젝트, 순환은 `GoalScheduleRefused`(reason `self_dependency`·`other_project`·`dependency_cycle`)로 거절한다. 선행 Goal의 merge 상태가 `Merged` 또는 `ManualMerge`가 되면 풀린다. 기다리는 Goal은 새 카드를 시작하지 않고 슬롯을 쓰지 않으며, 선행 Goal이 풀리면 스케줄러가 루프를 깨운다. 의존은 보드에서 켜고 끈다.
+- Goal 대상 브랜치: kanban을 시작할 때 사용자 checkout의 현재 브랜치를 대상으로 저장한다(`kanban_goal_schedules`). 브랜치가 없으면(detached) `Stopped(no_target)`로 자동 merge하지 않는다.
+- Merge queue(`GoalMerges`): 카드가 모두 done이면 오케스트레이터가 `offer`한다. 대상 브랜치마다 하나씩 직렬로 처리한다.
+  - 대상이 Goal 브랜치보다 앞서 있으면 `merge-tree`로 대상을 Goal 브랜치에 먼저 합치고(`commit-tree` + `update-ref` CAS), 다시 검증한다.
+  - 검증은 Goal head마다 한 번이다. Goal 단위 검증자(`GoalVerifier`, 에이전트 `goal-verify`)가 분리된 `.goal` worktree에서 돈다. 통과한 head는 `verified_head`에 남겨 같은 head를 다시 검증하지 않는다. 실패는 `goal_unverified` attention이다.
+  - 대상 전진: 사용자 checkout이 대상 브랜치에 있으면 그 안에서 `merge --ff-only`, 아니면 `update-ref` CAS다. 사용자 checkout에 추적 파일의 미커밋 변경이 있으면 `WaitingWorktree`로 기다리고 덮어쓰지 않는다. 추적되지 않는 파일은 막지 않는다.
+  - 대상과 충돌하면 `MergeConflict`(충돌 파일, 선택지 resolved·stop)를 묻는다. key는 `merge_conflict:<goalHead>:<targetHead>`다.
+  - 보호 브랜치(프로젝트 설정, 기본 `main`·`staging`)는 `ProtectedBranchMerge`를 묻는다. key는 `protected_branch:<goalHead>`다. `create_pr`는 `gh`가 PATH에 있을 때만 선택지로 주고, 고르지 않으면 push하지 않는다. `manual_merge`는 사용자가 직접 merge한 것으로 보고 의존을 푼다.
+  - PR 생성은 push 뒤 `gh pr create`다. 시작 전에 `PullRequestPending`을 기록한다. owner가 다시 시작할 때 이 상태가 남아 있으면 `PullRequestUncertain`으로 바꾸고 다시 실행하지 않는다.
+- Goal 단위 판단: 카드가 아니라 Goal에 대한 판단은 cardId `@goal`로 기록하고 카드를 옮기지 않는다. 그래서 슬라이스 D의 `ProtectedBranchMerge` 응답 매핑(create_pr→ready, manual_merge→done)은 카드 이동 없음으로 바꿨다.
+- Upstream 반영: Goal이 merge되면 같은 대상 브랜치의 진행 중인 다른 Goal에 `upstream_pending`을 표시한다. 그 Goal의 루프가 대상을 Goal 브랜치에 합치고, 바뀐 파일과 `boundaries`가 겹치는 done 카드만 다시 검증한다. `boundaries`가 없는 done 카드는 영향받은 것으로 본다. 다시 검증에 실패하면 `upstream_regressed` attention이다. 합치기가 충돌하면 지금 묻지 않고 그 Goal의 merge 때 `MergeConflict`로 다룬다.
+- 파일 겹침: 카드를 배정하기 전에 `boundaries`를 다른 Goal의 카드와 비교한다. 다른 Goal에서 실행·검증 중인 카드와 겹치면 그 카드가 먼저다. 이 카드는 미루고, 두 보드에 알림을 남긴다. 아직 merge되지 않은 다른 Goal의 done 카드와 겹치면 순서를 정할 수 없으므로 `FileOverlap`(선택지 wait·proceed, 둘 다 카드를 ready로)을 묻는다. key는 `file_overlap:<otherGoal>`다.
+- 모든 카드가 끝났을 때의 채팅 알림은 "merge queue에 넘겼다"는 내용으로 바꿨다. 모델이 직접 merge하지 않는다.
+- `closeSuperseded`: 채팅 도구의 직접 `startNewGoal` 경로에서도 부른다. 새 Goal 요청 승인 경로, 루프가 pointer 변경을 발견하는 경로와 함께, Goal pointer가 새 instance로 바뀌는 모든 경로에서 이전 Goal의 대기 판단을 닫는다.
+- 설정: `GET/POST /api/settings/kanban`(동시 실행 수 1~32, null이면 기기 기본값), `GET/POST /api/projects/:project/kanban`(보호 브랜치 목록, 빈 목록이면 모든 브랜치에 자동 merge). 우선순위·의존은 세션 칸반 API의 `SetPriority`·`SetDependencies` 액션이다. 설정 화면은 "실행 › 칸반 실행", 보드는 Goal 스케줄 패널에서 바꾼다.
+- 칸반이 아닌 Goal은 스케줄러·merge queue에 등록하지 않으므로 동작이 그대로다.
+
+### 칸반 전체 흐름 검증에서 정한 것 (2026-10-18)
+
+- verify 판정은 판정을 시작할 때의 카드에 대한 것이다. 판정이 끝났을 때 카드가 verify를 떠났거나(Amend·변경 요청 Apply) Goal 변경 hold가 걸렸으면 통합하지 않는다. 카드는 다시 실행되거나 hold가 풀린 뒤 다시 검증된다.
+- 카드 메모(사람의 답, Amend·변경 요청)는 attempt workflow를 시작한 뒤에 ladder에서 지운다. 지울 때는 payload로 보낸 만큼만 지워 그사이 더해진 메모를 남긴다. 재시작 recover는 시작하지 못한 attempt를 저장된 메모와 함께 제출하고 메모를 지우지 않는다. 메모가 두 번 전달될 수는 있어도 잃지 않는다.
+- 상세 검증 범위와 알려진 한계: [kanban-orchestration.md](kanban-orchestration.md) "전체 흐름 검증", "알려진 한계".
+
+### 드래그는 의도, 상태는 서버 (2026-10-18)
+
+- 화면의 카드 이동과 백엔드의 상태 전이는 다른 개념이다. 보드는 드롭을 사용자 의도 하나로 바꿔 보내고, 카드 상태는 owner만 정한다. 의도: `Reorder(cardId, at)`·`Requeue`·`Hold`·`Release`·`ChangeRequest(cardId, patch)`·`Cancel`(`BoardIntent`, `POST /api/sessions/:session/kanban`). 처리(`KanbanBoardActions.applyIntent`)는 기존 `editBoard`·`transitionCard`·`requeue`·`moveCard` 경로를 재사용한다. 의도가 카드 상태에 맞지 않으면 리터럴 reason으로 거절한다(`card_not_blocked`·`card_not_running`·`card_not_waiting`·`card_held`·`card_not_held`·`reorder_across_columns` 등, 409).
+- 드롭 → 의도 매핑은 UI가 한다. 같은 열 = Reorder(카드 순위 = Plan 순서 = Goal 안 배정 순서, Goal 사이 round-robin은 그대로). 준비→백로그 = Hold, 보류 카드→준비 = Release, 막힘→준비 = Requeue(dead-letter면 같은 큐 item을 다시 열고, 아니면 실패 기록을 지우고 ready로). 진행 중 카드를 다른 열에 놓으면 이동하지 않고 수정 요청 작성을 묻는다. 진행 중·검증·판단 필요·완료·막힘 열로 놓는 것, 판단 필요·검증·완료 카드를 끄는 것은 매핑이 없어 드래그 중 비활성과 이유를 보인다. 판단 필요 카드는 판단 응답으로 처리한다.
+- Reorder·ChangeRequest·Cancel은 어느 보드에서나, Requeue·Hold·Release는 카드를 배정하는 칸반 루프가 있을 때만 받는다(`not_kanban`).
+- 낙관적 표시는 "요청 중" 표시일 뿐이다. 카드를 예상 위치에 요청 중 배지와 함께 두고, 응답 뒤 서버 보드로 다시 그린다. 거절되면 원위치와 알림.
+- 보류: 카드 속성 `PlanStep.hold { by: BoardAuthor, at }`. 보류 카드는 의존이 끝나도 backlog에 남고(`notStartedStatus`), 루프는 ready 카드만 배정하므로 큐에 들어가지 않는다. Release하면 의존을 다시 따른다. 시작하지 않은 카드(backlog·ready)만 보류한다. 상태 이동처럼 Plan 버전은 그대로 두고, board revision에 작성자와 함께 남는다. 같은 id로 replan하면 계약 필드처럼 유지되고, Plan과 함께 저장되므로 재시작 뒤에도 유지된다. 상태 값이나 ladder 속성 대신 Plan 속성으로 둔 이유: backlog/ready를 정하는 곳(`notStartedStatus`)과 루프의 배정 기준(ready)이 이미 Plan이라 한 곳에서 판단되고, 보드·모델 텍스트·이력에 같은 값이 보인다.
+- 사용자 전이 표(`userCardTransitions`)는 두지 않는다. 내부 전이는 `cardTransitions`가 계속 강제한다.
+
+### 칸반 보드 화면 (2026-10-18)
+
+- 채팅 안에는 요약(완료 진행률·열별 카드 수·판단/변경 요청 대기)만 두고, 보드는 전체 폭 Sheet로 연다(`?board=1`, btw 패널과 같은 query 상태 방식). 카드 상세·편집·판단 응답은 오른쪽 peek Sheet(`?card=…`, inbox 링크와 같은 키)에서 하고 Esc로 닫는다.
+- Linear 이슈 보드와 비슷하게 동작한다: 7개 열을 한 화면에(좁은 화면은 열 단위 가로 스냅), 열 헤더(상태 아이콘·이름·수) 고정과 열별 세로 스크롤, 열 접기(브라우저별 저장), 간결한 카드(식별자·제목·상태 아이콘·위험·보류·대기·의존 수·작성자 아바타), 드래그 오버레이와 열 하이라이트, 놓을 수 없는 열은 흐리게 하고 이유 표시, 오케스트레이터 이동은 애니메이션 없이 반영.
+- 드래그는 dnd-kit(core 6.3.1·sortable 10.0.0·utilities 3.2.2). 마우스(5px)·터치(250ms 누름)·키보드(카드 손잡이에서 Space/Enter로 집고 화살표로 옮김)를 지원하고 스크린 리더 안내를 한국어로 낸다. 카드 자체의 Enter/Space는 peek를 열고, j/k/h/l·화살표는 카드 사이 포커스를 옮긴다. Base UI Dialog popup이 화살표 키 전파를 막으므로 키보드 드래그 중 화살표는 보드가 document로 넘긴다. 드래그 중 Esc는 카드만 되돌리고 보드는 닫지 않는다.
+
+### 칸반을 SqlClient 전환 뒤의 main 위로 옮김 (2026-10-18)
+
+- 사용자 결정: 슬라이스 커밋을 하나씩 rebase하지 않고 칸반 변경 전체를 main(SQL·worker·node:* 전환 완료) 위로 한 번에 옮긴다. 칸반 동작·결정은 바꾸지 않는다.
+- 칸반 저장소(보드 조회 `Boards`, `human_decision` 닫힘 기록·inbox, Workflow의 작성자 기록·보드 변경 요청·보류·전이)는 공유 `SqlClient`로 쓴다. 한 세션의 보드 쓰기는 `Workflows`의 세션별 직렬화와 `withTransaction` 하나로 커밋되고, 변경 요청 id는 `RETURNING id`로 받는다.
+- 저장소 실패는 오류 채널에 남긴다. `Boards.view`와 `Workflows`의 칸반 경로는 `WorkflowStorageError`, `HumanDecisions`의 저장소 실패는 `KanbanStorageFailed("decision")`다. 카드 큐 handler는 `WorkflowStorageError`를 `KanbanStorageFailed("card")`로 바꿔 큐 오류 스키마에 맞춘다. 답을 카드에 반영하는 durable activity와 `HumanDecisionExecution`은 `WorkflowStorageError`를 오류 스키마로 가진다(전에는 동기 throw로 defect였다).
+- 기기 코어 수와 기본 worktree 위치의 홈 폴더는 `runtime/host-system.ts`의 Effect 값(`availableCores`, `homeDirectory`)으로 읽는다.
+
+### 칸반 typed error와 오류 코드 (2026-10-18)
+
+- 칸반 Effect의 예상 실패는 오류 채널에 남긴다. 저장소 오류(`KanbanStorageFailed`, `GoalScheduleStorageFailed`)는 리터럴 reason `Storage`(SQL·행 디코드, cause 보존)·`Encode`(owner가 만든 값의 인코딩)·`Missing`(방금 저장하거나 읽은 기록이 없음)을 가진다. 예전 `orDie`·`Effect.die`가 이 reason으로 바뀌었다. 판단 답의 카드 이동이 실패하면 `Effect.ignore`로 삼키지 않고 `WorkflowStorageError`로 돌려준다(답은 저장돼 있고 카드는 `human_decision`에 남는다). 보호 브랜치 이름이 틀리면 `GoalScheduleRefused("invalid_branch")`, 동시 실행 수가 범위 밖이면 `KanbanSettingsRefused("concurrency_out_of_range")`다.
+- `die`로 남기는 기준: 오류 채널이 없는 곳만 남긴다. 큐 item 정산(`persisted-queue-store.ts`의 `settle`)은 store 계약상 실패할 수 없는 Scope finalizer라 로그를 남긴 뒤 `orDie`한다. 행은 이 owner가 잡은 채로 남고 다음 시작 때 풀린다.
+- 백그라운드 단계(보드 한 번 보기, 카드 통합, merge queue 단계)는 typed 실패만 끝내고 다음 보기에서 다시 한다(`stopLogged`). 결함과 interruption은 덮지 않는다. 결함은 로그를 남기고 그 fiber의 exit에 남으므로, 결함이 난 보드 루프는 멈추고 owner 재시작이나 `Start`로 다시 돈다. 로그에는 오류 태그만 남기고 cause(경로·명령 출력·SQL)는 남기지 않는다.
+- 카드 보류 사유(`kanban_cards.reason`)와 실패는 닫힌 태그 유니온이다(`kanban/failures.ts`): `CardHoldReason`(RetryBackoff·ReplanRequested·RepeatedFailure·MergeConflict·UncertainEffect·DeadLettered·GoalChanged·UpstreamRegressed), `CardFailure`(Agent{code}·Worktree{reason}·Verification{verdict}·GoalBranchKeptMoving·Defect), `VerdictFailure`(Rejected{note}·NoVerdict·NotFinished·ModelSelectionRequired·Unavailable). 알 수 없는 원인은 `Defect` 하나로 모은다. 모델이 쓴 문장(검증 의견, Goal 변경 판단)은 `note`에만 두고 분기에 쓰지 않는다. 보드는 태그로 문구를 고르고 note는 "검증 의견"으로 따로 보인다. `reason.startsWith(...)` 분기는 태그 비교로 바꿨다. 칸반은 GitHub 릴리즈 전이라 컬럼 의미만 바꾸고 마이그레이션은 두지 않는다. `GoalMergeState.VerifyFailed`도 `verdict: VerdictFailure`를 가진다.
+- 칸반 route(`/api/sessions/:session/{kanban,board,decisions}`, `/api/projects/:project/{kanban,decisions}`, `/api/settings/kanban`)는 `.server/kanban-failures.ts`의 표 하나로 태그·reason을 HTTP 상태와 코드로 바꾼다. 표에 없는 오류 타입이 오류 채널에 있으면 타입 오류다. 응답에는 코드만 싣고 cause는 싣지 않는다.
+
+| 오류(태그·reason)                                                    | 상태        | 코드                                      |
+| -------------------------------------------------------------------- | ----------- | ----------------------------------------- |
+| `SessionNotFound`, `ProjectNotFound`                                 | 404         | `session_not_found`, `project_not_found`  |
+| `KanbanActionRefused`, `BoardEditRefused`, `KanbanStartRefused`      | 409         | 각 reason                                 |
+| `GoalScheduleRefused` (`invalid_branch`)                             | 400         | `invalid_kanban_settings`                 |
+| `GoalScheduleRefused` (그 밖)                                        | 409         | 각 reason                                 |
+| `HumanDecisionRefused`                                               | 404·400·409 | 각 reason (전과 같음)                     |
+| `PlanDependenciesRejected`                                           | 422         | `plan_dependencies_rejected`              |
+| `PersistedQueueItemsFailed` (`NotFound`·`NotDeadLettered`)           | 409         | `queue_item_changed`                      |
+| `CardWorktreeFailed` (`InUse`)                                       | 409         | `worktree_in_use`                         |
+| `KanbanSettingsRefused`, 요청 본문 읽기 실패                         | 400         | `invalid_kanban_settings`, `invalid_json` |
+| `CardWorktreeFailed` (그 밖)                                         | 500         | `worktree_failed`                         |
+| `KanbanStorageFailed`, `PersistedQueueItemsFailed` (`StorageFailed`) | 500         | `kanban_storage_failed`                   |
+| `WorkflowStorageError`                                               | 500         | `workflow_storage_failed`                 |
+| `GoalScheduleStorageFailed`                                          | 500         | `schedule_storage_failed`                 |
+| `GlobalConfigFailed`                                                 | 500         | `settings_failed`                         |
+| `SqlError`·`SchemaError`(세션·프로젝트 조회)                         | 500         | `storage_failed`                          |
+| `PlatformError`(카드 id 생성)                                        | 500         | `platform_failed`                         |
+
+- 보드·판단·설정 화면은 응답 코드(`ApiError.code`)로 문구를 고르고, 오류를 문자열로 바꿔 보이지 않는다.
 
 ## 기억·검색·평가
 
@@ -2127,3 +2262,34 @@
 - worker 내부 span은 이번 범위에서 내보내지 않는다. worker CPU는 `--cpu-prof`가 thread별 파일로 남긴다.
 - 사용자 결정: 메모리 도구는 고친다. `MemoryTools.forRun`은 Effect가 되어 호출한 실행의 context를 잡고, 도구 Effect는 그 위에 서비스를 덮어 돈다(`MemoryToolEnvironment.caller`). 그래서 도구 span이 run span과 같은 trace에 붙는다. `forProject`는 Layer를 만들 때의 context를 쓴다. BTW도 질문을 처리하는 `BtwChat.handle`의 context를 넘긴다. Goal native owner 경로도 같은 실행 안에서 따로 빌드한 `createMemoryTools`를 부를 뿐이고, 아티팩트가 `effect`를 번들하지 않아 호스트 런타임을 공유하므로 실행 context를 넘긴다.
 - 절차는 `.agents/skills/effect-profile` 스킬에 둔다.
+
+## 저장소 전체 Effect 오류의 typed error 정리 (2026-10-18)
+
+- 사용자 요청: Effect 로직 전체에서 실패가 typed error로 드러나게 한다. 칸반 정리와 같은 기준을 칸반 밖 코드(`packages/memory-agent/src` 전체, `apps/agent/app`)에 적용했다.
+- 예상 실패는 `Data.TaggedError` 대신 `Schema.TaggedError`와 리터럴 reason으로 정의한다. `orDie`·`Effect.die`는 실제로 도달할 수 없는 불변식과, 오류 채널이 `never`인 상위 인터페이스(`effect/workflow`의 `WorkflowEngine`) 경계에만 남긴다.
+- 실패를 기록하고 끝내는 공용 헬퍼는 `runtime/logged-failures.ts` 한 모듈에 둔다(`stopLogged`·`fallbackLogged`·`logFailure`·`ignoreLogged`·`failureTags`). 로그에는 오류 태그와 reason 태그만 남기고, 원문 메시지·경로·명령 출력·공급자 본문은 남기지 않는다. 결함은 `Defect`로 표시하고, interruption은 그대로 통과시킨다.
+- 정리 작업의 실패가 원래 실패를 덮어쓰지 않게 한다. finalizer 안의 best-effort 정리(worker 종료, 임시 파일·snapshot 삭제, SDK iterator close, MCP shutdown)는 실패해도 결함으로 만들지 않고 태그만 로그한다.
+- 결함과 interruption을 typed 실패로 바꾸던 `catchCause`는 `catchTag`·`catchReason`으로 좁힌다. 결함은 결함으로 전파한다. 예외로 `catchCause`를 남기는 곳은 다음과 같다. 사용자가 대기·승인을 중단한 제품 취소 기록, 권한 분류의 fail-closed 처리, 경로·비밀이 모델로 새지 않게 막는 SDK 도구 경계의 redaction, 담당 모듈이 원문 없이 결함을 고정 코드로 정규화하는 경계(worker 실패의 `RUN_ERROR`, owner RPC ledger의 `uncertain` 정산).
+- route는 오류 태그·reason을 HTTP 상태와 안전한 코드로 바꾸는 표(`.server/kanban-failures.ts`, `.server/account-failures.ts`)를 거친다. 표에 없는 오류가 오류 채널에 있으면 컴파일되지 않는다. route에서 난 결함은 `answerDefect`로 500 `internal_error`를 응답하고 원문은 싣지 않는다.
+- 브라우저는 `refusalOf`로 `ApiError`만 골라 코드별 문구를 보이고, 그 밖의 실패에는 고정 문구를 보인다. 저장된 가져오기 실패·GPU 확인·RRSI·sandbox 설정 실패 사유는 알려진 코드에만 문구를 붙이고, 모르는 값(옛 원문 포함)은 일반 문구로 보인다.
+- 사용자 결정을 기다리는 동작은 이번 정리에서 바꾸지 않았다. 결함 뒤에도 계속 도는 루프(가져오기 감시, transcript pass, lease 갱신, 승인 중계), 외부 에이전트·MCP·ACP·채팅 스트림의 원문 오류 표시, 모델이 받는 읽기 도구 오류 원문, 채팅 스트림 종료 시 큐 정리 실패의 `orDie`가 여기에 해당한다.
+
+## 원문 오류 표시와 백그라운드 루프 실패 정책 (2026-10-18)
+
+- 사용자 결정: 외부 에이전트·MCP·ACP·채팅·BTW 스트림의 오류는 `{ code, detail }`로 다룬다. 화면에는 코드 문구를 보이고, 원문은 기본으로 접힌 "자세히"에서 보인다. `detail`은 `SecretRedactor.shownDetail`을 거친다(1000자로 자르고, 가리기에 실패하면 `null`). 코드 문구 표는 `externalAgentFailureText`·`runFailureText`에 둔다. 모르는 코드와 옛 기록은 `run_failed` 일반 문구로 보인다. ACP editor 오류는 message에 코드 문구를, data에 `{ code, detail }`을 담는다.
+- 사용자 결정: 모델이 받는 도구 실패는 `{ error, cause, detail }`이다(`detail`은 redaction된 원문). 모델이 경로 등을 고쳐 재시도할 수 있게 원문을 유지한다. `@tanstack/ai@0.61.0`은 도구 throw를 `{ error: message }`로 고정하므로, catch에서 심볼 속성의 구조화 결과를 쓰게 하는 pnpm patch(`patches/@tanstack__ai@0.61.0.patch`)를 둔다. `@tanstack/ai`를 올리면 이 패치를 다시 만든다. `delegate_to_agent` 결과의 `error`/`reason` 문자열은 `failure: { code, detail }`로 바뀐다.
+- 사용자 결정: 백그라운드 루프는 실패 종류로 나눈다. 예상 실패(공급자·git·네트워크·DB 등)는 10초부터 지수 backoff로 최대 5회 재시도하고 간격 상한은 5분이다. 소진하면 그 루프만 멈춘다. 결함은 재시도 없이 멈춘다. 상태는 `LoopHealth`(Healthy·Retrying n/5·Exhausted·Defected)로 서버 메모리가 소유하고, 화면에 다시 시작 버튼을 둔다. 앱을 재기동하면 정상 상태로 시작한다.
+  - 칸반: 카드 통합·merge 단계가 소진되거나 결함이 나면 그 보드 루프 전체가 멈춘다. 다시 시작하면 다음 look이 그 단계를 다시 실행한다. 카드 단위 실패 사다리(retry_backoff → blocked → dead-letter)는 그대로다.
+  - 가져오기: 감시 상태는 `overview.watch`, 다시 시작은 `restart_watch`다. transcript pass는 typed 실패만 항목 실패로 기록하고, 결함이 나면 pass를 멈춘다.
+  - ACP lease 갱신·승인 중계는 소진·결함 시 그 루프만 멈추고 태그만 로그한다(별도 프로세스라 Discord 보고는 하지 않는다). 갱신이 멈추면 90초 뒤 lease가 만료되어 앱이 읽기 전용이 되고, 중계가 멈추면 승인은 앱 화면에서 답한다. 브라우저 lease 갱신도 같은 schedule로 재시도하고, 소진하면 기존 관찰·claim 경로로 돌아간다.
+- 사용자 결정: 결함은 Discord webhook으로 보고한다(Sentry 대용). `DISCORD_WEBHOOK_URL`을 재사용하고, GlobalConfig `defectReports`(기본 켜짐, webhook이 없으면 무시)와 `/report` 체크박스로 끈다. 메시지는 `[결함] 태그 @ 위치(span) ×n`에 버전·플랫폼·sessionId/goalInstanceId의 SHA-256 앞 12자·redaction된 요약 300자·스택 5줄을 붙인다. fingerprint(태그@위치)당 10분에 1회, 전체 분당 5회로 제한하고, dropping Queue(64)와 동시 2개로 보낸다. 전송 실패는 `defect_report_failed` 태그만 로그한다. 결함 기록은 `logDefect` 한 경로로 모은다(루프·`answerDefect`·finalizer).
+- 채팅 응답 스트림이 끝날 때의 큐 정리(`settleQueue`)가 실패하면 그 세션의 대기 메시지를 모두 보류(`holdWaiting(stopped)`)해 사용자 확인 없이 다음 턴으로 보내지 않는다. 보류도 실패하면 결함으로 보고한다. 스트림은 정상 종료한다.
+
+## 제보의 자동 증거 묶음과 진단 초안 (2026-10-19)
+
+- 사용자 결정: 제보를 받는 개발자는 사용자의 로컬 DB·세션에 접근할 수 없으므로, 제보 하나로 원인을 찾을 수 있게 근거를 자동으로 묶어 보낸다. 증거를 하나씩 고르던 선택 UI와 항목별 편집, 항목 상세 조회(8,000자) 엔드포인트는 없앤다. 사용자는 진단·초안(편집 가능)과 보낼 묶음 전체(읽기 전용, 접힌 섹션)를 확인하고, 직접 눌러야만 보낸다.
+- 묶음은 환경(버전·플랫폼·공급자/모델 종류·칸반·MCP·외부 에이전트 상태), 연동·루프 상태, 최근 결함, 세션 타임라인(run·대화 발췌·도구 호출·승인·Work Trace·칸반 카드의 failure_streak·replans·reason)이다. 상한은 run 30개, run당 이벤트 60개, 원문 1,500자(실패 결과·run 오류는 6,000자), 결함 20개, run 없는 항목 20개다. 잘림은 묶음에 표시한다. 모든 원문은 SecretRedactor를 거친다.
+- 로컬 ID는 SHA-256 앞 12자로만 남기고, 관계는 순번(`run-N`, `run-N/call-M`)으로 표현한다.
+- 진단은 페이지를 열 때 자동으로 돌리지 않고 버튼 한 번으로 실행한다(모델 비용, 사용자가 증상을 쓴 뒤 실행). 진단 입력은 서버가 묶음에서 만든다. 환경 3,000자, 타임라인 개요 8,000자(최신 우선), 실패 run 최대 10개×3,000자이며, 응답에 `summary`를 더한다.
+- 전송은 Discord webhook 메시지 본문에 초안을, 첨부 `context-agent-evidence.json`에 묶음을 담는다(상한 4,000,000바이트, 비부스트 서버 10MiB 이내). 중복 판정 해시는 초안과 묶음을 함께 본다. 복사·파일 저장도 같은 묶음을 쓴다. `DefectReporter.recent`는 webhook이 없어도 최근 결함을 기억해 묶음에 넣는다.
+- 설정 화면의 MCP 서버·외부 에이전트 명령줄과 URL은 서버에서 `shownDetail`로 가려 응답한다(`target: string | null`). 설정 파일 자체는 바꾸지 않는다.

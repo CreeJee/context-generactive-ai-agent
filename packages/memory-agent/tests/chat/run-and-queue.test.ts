@@ -1,5 +1,5 @@
 import { Effect, Option, Schedule, Schema } from "effect";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { MessageQueue } from "../../src/queue/queue.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
@@ -581,6 +581,37 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         Schema.Struct({ messages: Schema.Array(Schema.Struct({ id: Schema.String })) }),
       )(yield* json(hydrated));
       expect(history.messages.some((message) => message.id === stale.id)).toBe(true);
+    }),
+  );
+
+  it.effect("a failed queue settlement holds what was waiting until the user confirms it", () =>
+    Effect.gen(function* () {
+      const session = yield* chatSession;
+      const agent = yield* agentChat;
+      const chatState = yield* ChatState;
+      // The page holds the session, so a settled finish would leave the message waiting for it.
+      yield* agent.lease(session.id, "tab", "claim");
+      const tab = yield* openTab(session.id, "tab");
+      yield* sendInBackground(tab, "please be slow");
+      yield* until(() => session.invocations().length === 1, "the answer to start");
+      yield* enqueue(session.id, "and the tests", "queue", "tab");
+      const runId = (yield* statusOf(session.id)).running!.runId;
+      const original = chatState.run;
+      const lookup = vi
+        .spyOn(chatState, "run")
+        .mockImplementation((sessionId, id) =>
+          id === runId ? Promise.reject(new Error("store unavailable")) : original(sessionId, id),
+        );
+      yield* Effect.addFinalizer(() => Effect.sync(() => lookup.mockRestore()));
+      yield* session.release;
+      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
+      expect(tab.client.getError()).toBeUndefined();
+      yield* queueOf(session.id).pipe(
+        Effect.repeat({
+          until: (snapshot) => snapshot.items[0]?.state.kind === "held",
+          schedule: Schedule.spaced(20),
+        }),
+      );
     }),
   );
 

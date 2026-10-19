@@ -61,6 +61,14 @@ export function useConversationSettingsMutation() {
   });
 }
 
+export function useKanbanSettingsMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.setKanbanConcurrency,
+    onSuccess: (settings) => client.setQueryData(globalQueries.kanban().queryKey, settings),
+  });
+}
+
 export function useRecallSettingsMutation() {
   const client = useQueryClient();
   return useMutation({
