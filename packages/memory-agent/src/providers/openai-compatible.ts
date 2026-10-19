@@ -640,7 +640,9 @@ function makeOpenAICompatibleSettingsBody(
     const context = yield* Effect.context<never>();
     const complete = (body: string) =>
       Effect.gen(function* () {
-        const payload = yield* Schema.decodeEffect(
+        // The worker's SDK asks to stream; servers such as vLLM reject its stream_options once the
+        // gateway answers in one response.
+        const { stream_options: _streamOptions, ...payload } = yield* Schema.decodeEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
         )(body);
         const signal = yield* Effect.abortSignal;
