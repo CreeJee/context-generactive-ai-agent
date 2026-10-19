@@ -5,6 +5,7 @@ import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Embedder } from "../src/memory/embedding/embedder.ts";
 import { improvementItems } from "../src/improve/items.ts";
+import { improvementReport } from "../src/improve/report.ts";
 import { collectSignals, failureSignature } from "../src/improve/signals.ts";
 import { sqlRun } from "./support/sql.ts";
 
@@ -50,6 +51,31 @@ const failed = (id: string, text: string, createdAt: string) =>
   node(id, "tool_result", text, createdAt, JSON.stringify({ toolName: "Bash", ok: false }));
 
 describe("project improvement discovery", () => {
+  it("quotes what the user wrote so it cannot add headings to the report", () => {
+    const report = improvementReport(
+      {
+        repository: "/repo",
+        projectIds: ["p1"],
+        items: [
+          {
+            id: "i1",
+            repository: "/repo",
+            source: "correction",
+            title: "제목\n## 끼어든 제목",
+            count: 2,
+            evidence: ["u1"],
+            excerpts: ["## 끼어든 제목\n본문"],
+            latestAt: null,
+          },
+        ],
+      },
+      "2026-10-20T00:00:00.000Z",
+    );
+    expect(report.split("\n").filter((line) => line.startsWith("## "))).toEqual([
+      "## 1. 제목 ## 끼어든 제목",
+    ]);
+  });
+
   it("groups failures by cause, not by the path or number they mention", () => {
     expect(failureSignature("Exit code 1\nError: cannot open /a/b/c.ts at line 12")).toBe(
       failureSignature("Error: cannot open /x/y.ts at line 3"),
