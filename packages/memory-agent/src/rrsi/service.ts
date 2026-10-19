@@ -92,6 +92,16 @@ export class RrsiExecution extends Context.Service<
     evaluate: evaluateSandbox,
   });
 }
+/** The usage corpus an experiment pinned; synthetic memory tasks need none. */
+const pinnedUsageCorpus = (tasks: ExperimentRecord["memoryTasks"]) => {
+  switch (tasks?.kind) {
+    case "usage":
+      return tasks.version;
+    case "synthetic":
+    case undefined:
+      return undefined;
+  }
+};
 type MutableCandidate = { -readonly [K in keyof CandidateRecord]: CandidateRecord[K] };
 type MutableExperiment = {
   -readonly [K in keyof Omit<ExperimentRecord, "candidates">]: ExperimentRecord[K];
@@ -306,7 +316,7 @@ const make = Effect.gen(function* () {
               signal: abort.signal,
               consume,
               image: record.baselineImage,
-              usageCorpus: record.usageCorpus,
+              usageCorpus: pinnedUsageCorpus(record.memoryTasks),
               onProgress: (completed) =>
                 progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
             }),
@@ -626,9 +636,9 @@ const make = Effect.gen(function* () {
         Effect.mapError(() => RrsiFailed.make({ reason: "state_operation_failed" })),
       )).id,
       baselineImage,
-      ...Option.match(usageCorpus, {
-        onNone: () => ({}),
-        onSome: (version) => ({ usageCorpus: version }),
+      memoryTasks: Option.match(usageCorpus, {
+        onNone: () => ({ kind: "synthetic" as const }),
+        onSome: (version) => ({ kind: "usage" as const, version }),
       }),
       tokens: 0,
       reason: "",

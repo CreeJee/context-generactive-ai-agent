@@ -195,7 +195,7 @@ test("a held-out rejection shows the result that rejected it and readable candid
     model: "fixture",
     endpoint: "fixture",
     baseVersion: "baseline",
-    usageCorpus: "a2a89b757e51",
+    memoryTasks: { kind: "usage", version: "a2a89b757e51" },
     tokens: 1,
     reason: "heldout_rejected",
     validationBase: measured(0.583, 0.167),
