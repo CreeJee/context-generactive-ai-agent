@@ -95,6 +95,8 @@ export const Experiment = Schema.Struct({
   baseVersion: Schema.String,
   adoptedVersionId: Schema.optionalKey(Schema.String),
   baselineImage: Schema.optionalKey(Schema.String),
+  /** Usage corpus version the memory tasks came from; absent means synthetic memory tasks. */
+  usageCorpus: Schema.optionalKey(Schema.String),
   progress: Schema.optionalKey(ExperimentProgress),
   baselines: Schema.optionalKey(Schema.Array(Measurement)),
   validationBase: Schema.optionalKey(Measurement),

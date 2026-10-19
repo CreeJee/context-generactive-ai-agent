@@ -49,29 +49,39 @@ const Frame = Schema.Union([
     total: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 ]);
+const variable = (name: string) =>
+  Config.option(Config.String(name))
+    .parse(ConfigProvider.fromEnv())
+    .pipe(Effect.orElseSucceed(() => Option.none<string>()));
+const usageDirectory = variable("CONTEXT_AGENT_RRSI_REPOSITORY").pipe(
+  Effect.map(
+    Option.map((repository) => oauthProtocolPath.join(repository, ".rrsi-local", "usage")),
+  ),
+);
 /**
- * Read-only mounts for the usage corpus: its storage snapshot and the original storage's models.
- * Empty when no corpus was built, so memory tasks stay synthetic.
+ * The usage corpus version memory tasks are drawn from, or none when no corpus was built and
+ * memory tasks stay synthetic. An experiment pins it once so every evaluation uses one corpus.
  */
-const usageMounts = Effect.gen(function* () {
-  const variable = (name: string) =>
-    Config.option(Config.String(name))
-      .parse(ConfigProvider.fromEnv())
-      .pipe(Effect.orElseSucceed(() => Option.none<string>()));
-  const repository = yield* variable("CONTEXT_AGENT_RRSI_REPOSITORY");
-  const original = yield* variable("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE");
-  if (Option.isNone(repository) || Option.isNone(original)) return [];
-  const usage = oauthProtocolPath.join(repository.value, ".rrsi-local", "usage");
-  const version = yield* oauthProtocolFileSystem
-    .readFileString(oauthProtocolPath.join(usage, "current"))
+export const currentUsageCorpus = Effect.gen(function* () {
+  const usage = yield* usageDirectory;
+  if (Option.isNone(usage) || Option.isNone(yield* variable("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE")))
+    return Option.none<string>();
+  return yield* oauthProtocolFileSystem
+    .readFileString(oauthProtocolPath.join(usage.value, "current"))
     .pipe(
       Effect.map((text) => text.trim()),
       Effect.option,
+      Effect.map(Option.filter((version) => version !== "")),
     );
-  if (Option.isNone(version) || version.value === "") return [];
+});
+/** Read-only mounts for a pinned usage corpus: its storage snapshot and the original models. */
+const usageMounts = Effect.fn("Rrsi.usageMounts")(function* (version: string | undefined) {
+  const usage = yield* usageDirectory;
+  const original = yield* variable("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE");
+  if (version === undefined || Option.isNone(usage) || Option.isNone(original)) return [];
   return [
     "-v",
-    `${oauthProtocolPath.join(usage, version.value)}:/usage:ro`,
+    `${oauthProtocolPath.join(usage.value, version)}:/usage:ro`,
     "-v",
     `${oauthProtocolPath.join(original.value, "models")}:/models:ro`,
     // Anonymous volume for the writable storage copy; --rm removes it with the container.
@@ -95,6 +105,8 @@ export function evaluateSandbox(options: {
   readonly consume: (raw: string) => void;
   readonly image?: string | undefined;
   readonly onProgress?: ((completed: number, total: number) => void) | undefined;
+  /** The pinned usage corpus version; absent keeps memory tasks synthetic. */
+  readonly usageCorpus?: string | undefined;
 }) {
   return evaluateSandboxBody(
     options.client,
@@ -104,6 +116,7 @@ export function evaluateSandbox(options: {
     options.consume,
     options.image,
     options.onProgress,
+    options.usageCorpus,
   );
 }
 function evaluateSandboxBody(
@@ -114,6 +127,7 @@ function evaluateSandboxBody(
   consume: (raw: string) => void,
   image = "context-agent-rrsi:local",
   onProgress?: (completed: number, total: number) => void,
+  usageCorpus?: string,
 ): Promise<Measurement> {
   return runOAuthNodeEffect(
     Effect.gen(function* () {
@@ -121,7 +135,7 @@ function evaluateSandboxBody(
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const input = yield* Queue.make<Uint8Array, Cause.Done>();
       const encoder = new TextEncoder();
-      const usage = yield* usageMounts;
+      const usage = yield* usageMounts(usageCorpus);
       const child = yield* spawner.spawn(
         ChildProcess.make(
           "docker",
