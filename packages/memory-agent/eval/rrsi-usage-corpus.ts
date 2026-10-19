@@ -69,9 +69,14 @@ const program = Effect.gen(function* () {
         yield* sql`VACUUM INTO ${path.join(staging, "agent.db")}`.pipe(
           Effect.mapError(() => CorpusBuildFailed.make({ reason: "snapshot" })),
         );
-        const rows = yield* sql`SELECT u.id, u.project_id, u.session_id, u.text, t.text AS corrected
-          FROM edges e JOIN nodes u ON u.id = e.from_id JOIN nodes t ON t.id = e.to_id
-          WHERE e.kind = 'corrects' AND u.kind = 'user' ORDER BY u.seq`.pipe(
+        // The answer is the correcting message, so a message that corrects several nodes
+        // yields one task, paired with the latest node it corrects.
+        const rows = yield* sql`SELECT id, project_id, session_id, text, corrected FROM (
+            SELECT u.id, u.project_id, u.session_id, u.text, u.seq, t.text AS corrected,
+              row_number() OVER (PARTITION BY u.id ORDER BY t.seq DESC) AS latest
+            FROM edges e JOIN nodes u ON u.id = e.from_id JOIN nodes t ON t.id = e.to_id
+            WHERE e.kind = 'corrects' AND u.kind = 'user')
+          WHERE latest = 1 ORDER BY seq`.pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Correction))),
           Effect.mapError(() => CorpusBuildFailed.make({ reason: "query" })),
         );
