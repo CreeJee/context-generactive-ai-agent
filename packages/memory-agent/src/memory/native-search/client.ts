@@ -6,6 +6,7 @@ import {
   Context,
   Crypto,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -52,6 +53,30 @@ type State =
 
 /** At most this many requests wait for or hold the owner. */
 const capacity = 32;
+
+/** How long the host waits for a reply before it gives up on a hung worker. */
+const replyTimeout = Duration.seconds(2);
+
+/**
+ * A budgeted search answers `budget-exceeded` itself once its budget runs out, but an engine call
+ * already admitted runs to its end. The host waits that long past the budget, so the typed native
+ * outcome reaches the caller instead of a `request-timeout`.
+ */
+const replyDeadline = (command: OwnerCommand) => {
+  switch (command.kind) {
+    case "memory-search":
+      return Duration.sum(Duration.millis(command.input.remainingMs), replyTimeout);
+    case "vector-search-controlled":
+      return Duration.sum(Duration.millis(command.budgetMs), replyTimeout);
+    case "add":
+    case "remove":
+    case "reset":
+    case "save":
+    case "validate":
+    case "vector-search":
+      return replyTimeout;
+  }
+};
 
 /** A started native owner worker, as the host drives it. Tests wrap it to gate transport. */
 export interface OwnerTransport {
@@ -394,7 +419,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                 }),
               ),
               Effect.timeoutOrElse({
-                duration: "2 seconds",
+                duration: replyDeadline(input),
                 orElse: () => Effect.fail(NativeOwnerFailed.make({ reason: "request-timeout" })),
               }),
               // A queued job its caller left is never dispatched; an active one keeps its slot.
