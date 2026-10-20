@@ -1356,6 +1356,13 @@ describe("OpenAI compatible settings", () => {
             yield* f.api.update({ ...settings, toolCalling: false });
             yield* consume();
             expect(requests.at(-1)?.body.tools).toBeUndefined();
+            // No output limit: the server's own limit applies and no input room is reserved.
+            yield* f.api.update({ ...settings, toolCalling: false, outputBudget: null });
+            yield* consume();
+            expect(requests.at(-1)?.body.max_tokens).toBeUndefined();
+            expect((yield* f.api.runtime).contextWindow(configuration.model)).toBe(
+              configuration.contextWindow,
+            );
             const adapter = (yield* f.api.runtime).adapter(selection);
             yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
             const before = requests.length;
