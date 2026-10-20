@@ -29,6 +29,7 @@ export function action({ request }: { request: Request }) {
         DiscoveryFailed: (failure) => Effect.succeed(scanFailed(failure.reason)),
         SignalsFailed: () => Effect.succeed(scanFailed("storage")),
         EmbeddingError: () => Effect.succeed(scanFailed("embedding")),
+        InterpretationUnavailable: () => Effect.succeed(scanFailed("model_unavailable")),
       }),
     ),
   );

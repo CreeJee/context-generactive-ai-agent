@@ -2,6 +2,7 @@ import { chat } from "@tanstack/ai";
 import { Context, Crypto, Effect, Layer, Schema } from "effect";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import { abortControllerFor } from "../runtime/abort-controller.ts";
 import { bundlePlaces, diagnosisDigest } from "./bundle-digest.ts";
 import {
   ReportDiagnosis,
@@ -153,10 +154,3 @@ export class ReportDiagnoser extends Context.Service<
     }),
   );
 }
-
-/** TanStack AI takes an AbortController; follow the interruption signal Effect passes in. */
-const abortControllerFor = (signal: AbortSignal) => {
-  const controller = new AbortController();
-  signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  return controller;
-};

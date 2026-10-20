@@ -1,9 +1,10 @@
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Match, Option, Schema } from "effect";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
-import type { ImprovementItem, ImprovementReport, ImprovementScan } from "memory-agent";
+import type { ImprovementReport, ImprovementScan } from "memory-agent";
+import { reportedTitle, sourceLabels } from "memory-agent/definitions";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
@@ -18,27 +19,20 @@ class ImprovementRequestFailed extends Schema.TaggedError<ImprovementRequestFail
 
 const queryKey = ["settings", "improvements"];
 
-const failures = {
+/** Why a scan failed, as the server names it. */
+const FailureBody = Schema.Struct({
+  reason: Schema.Literals(["storage", "report", "embedding", "model_unavailable"]),
+});
+const failures: Record<typeof FailureBody.Type.reason, string> = {
   storage: "프로젝트 사용 기록을 읽지 못했어요.",
   report: "개선 문서를 쓰거나 읽지 못했어요.",
   embedding: "임베딩 모델로 비슷한 정정을 묶지 못했어요. 임베딩 설정을 확인하세요.",
-};
-const failureOf = (reason: string) =>
-  Object.entries(failures).find(([key]) => key === reason)?.[1] ?? "요청을 처리하지 못했어요.";
-
-const sourceLabels: Record<ImprovementItem["source"], string> = {
-  correction: "반복된 정정",
-  tool_failure: "반복된 도구 실패",
-  card_failure: "칸반 카드 실패",
+  model_unavailable:
+    "개선 항목을 해석할 모델이 없어요. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도하세요.",
 };
 
 type ReportedItem = ImprovementReport["items"][number];
 const byStatus = Match.discriminatorsExhaustive("status");
-/** The model's title for an item it read; the grouping label when it could not. */
-const itemTitle = (item: ReportedItem) =>
-  Match.value(item.interpretation).pipe(
-    byStatus({ interpreted: ({ title }) => title, failed: () => item.title }),
-  );
 const itemRule = (item: ReportedItem) =>
   Match.value(item.interpretation).pipe(
     byStatus({
@@ -64,8 +58,13 @@ function request(method: "GET" | "POST"): Promise<{ scan: ImprovementScan | null
             message:
               "실행 중인 서버가 프로젝트 개선을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
           });
-        const page: { reason?: string } = yield* uiPromise(() => response.json());
-        return yield* ImprovementRequestFailed.make({ message: failureOf(page.reason ?? "") });
+        const body: unknown = yield* uiPromise(() => response.json());
+        return yield* ImprovementRequestFailed.make({
+          message: Option.match(Schema.decodeUnknownOption(FailureBody)(body), {
+            onNone: () => "요청을 처리하지 못했어요.",
+            onSome: ({ reason }) => failures[reason],
+          }),
+        });
       }
       return yield* uiPromise<{ scan: ImprovementScan | null }>(() => response.json());
     }),
@@ -92,7 +91,7 @@ function Report({ report }: { report: ImprovementReport }) {
             <li key={item.id} className="flex flex-col gap-0.5">
               <div className="flex items-baseline gap-2">
                 <Badge variant="outline">{sourceLabels[item.source]}</Badge>
-                <span className="min-w-0 flex-1 truncate">{itemTitle(item)}</span>
+                <span className="min-w-0 flex-1 truncate">{reportedTitle(item)}</span>
                 <span className="shrink-0 text-muted-foreground">{item.count}회</span>
               </div>
               <span className="pl-1 text-muted-foreground">{itemRule(item)}</span>

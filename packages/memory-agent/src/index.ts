@@ -1,6 +1,5 @@
 export { ProjectImprovement } from "./improve/discovery.ts";
-export type { ImprovementReport, ImprovementScan } from "./improve/discovery.ts";
-export type { ImprovementItem } from "./improve/items.ts";
+export type { ImprovementItem, ImprovementReport, ImprovementScan } from "./improve/contracts.ts";
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
 export {
   OpenAICompatibleSettings,

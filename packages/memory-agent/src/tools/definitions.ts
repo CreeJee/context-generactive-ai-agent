@@ -238,3 +238,4 @@ export const permissionReviewInterrupt = defineInterrupt({
   payloadSchema: toToolSchema(PermissionReviewPayload),
   responseSchema: toToolSchema(PermissionReviewResponse),
 });
+export { reportedTitle, sourceLabels } from "../improve/contracts.ts";

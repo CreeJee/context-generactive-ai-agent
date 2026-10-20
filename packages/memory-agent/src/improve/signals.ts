@@ -34,6 +34,8 @@ export const Signal = Schema.Union([
     failureStreak: Schema.Int,
     replans: Schema.Int,
     reason: Schema.NullOr(Schema.String),
+    /** When the card's latest attempt last changed. */
+    createdAt: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("kind"));
 export type Signal = typeof Signal.Type;
@@ -65,7 +67,8 @@ export const failureSignature = (text: string) => {
   return denied !== null
     ? `permission denied: ${denied[1]}`
     : first
-        .replace(/(["'`]).*?\1/gu, "<text>")
+        // A quote opens only away from a word, so the apostrophe in "can't" is not one.
+        .replace(/(?<![\p{L}\p{N}])(["'`]).*?\1(?![\p{L}\p{N}])/gu, "<text>")
         .replace(/(?:~|\.{0,2})?(?:\/[\w.@+-]+)+/gu, "<path>")
         .replace(/\d+/gu, "<n>")
         .slice(0, 120);
@@ -92,9 +95,10 @@ const CardRow = Schema.Struct({
   failure_streak: Schema.Int,
   replans: Schema.Int,
   reason: Schema.NullOr(Schema.String),
+  latest_at: Schema.String,
 });
 
-/** The signals recorded in `projectIds` since `since` (ISO time); cards have no time and all count. */
+/** The signals recorded in `projectIds` since `since` (ISO time); a card by its latest attempt. */
 export const collectSignals = Effect.fn("Improve.collectSignals")(function* (
   projectIds: EffectArray.NonEmptyReadonlyArray<string>,
   since: string,
@@ -132,12 +136,19 @@ export const collectSignals = Effect.fn("Improve.collectSignals")(function* (
             AND text LIKE ${`${claudeCodeDeclined}%`})
           AND project_id IN ${sql.in(projectIds)} AND created_at >= ${since}
         ORDER BY seq`),
+      // Attempt times are epoch milliseconds.
       rows(CardRow)(sql`SELECT g.project_id, c.goal_instance_id, c.card_id, c.failure_streak,
-          c.replans, c.reason
-        FROM kanban_cards c JOIN kanban_goals g ON g.goal_instance_id = c.goal_instance_id
-        WHERE (c.failure_streak > 0 OR c.replans > 0) AND g.project_id IN ${sql.in(projectIds)}`),
+          c.replans, c.reason,
+          strftime('%Y-%m-%dT%H:%M:%fZ', MAX(a.updated_at) / 1000.0, 'unixepoch') AS latest_at
+        FROM kanban_cards c
+        JOIN kanban_goals g ON g.goal_instance_id = c.goal_instance_id
+        JOIN kanban_card_attempts a
+          ON a.goal_instance_id = c.goal_instance_id AND a.card_id = c.card_id
+        WHERE (c.failure_streak > 0 OR c.replans > 0) AND g.project_id IN ${sql.in(projectIds)}
+        GROUP BY c.goal_instance_id, c.card_id
+        HAVING MAX(a.updated_at) >= ${Date.parse(since)}`),
     ],
-    { concurrency: "unbounded" },
+    { concurrency: 3 },
   );
   return [
     ...corrections.map((row): Signal => ({
@@ -165,6 +176,7 @@ export const collectSignals = Effect.fn("Improve.collectSignals")(function* (
       failureStreak: row.failure_streak,
       replans: row.replans,
       reason: row.reason,
+      createdAt: row.latest_at,
     })),
   ];
 });

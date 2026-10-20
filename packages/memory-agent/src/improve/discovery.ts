@@ -15,8 +15,14 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Checkouts } from "../imports/checkouts.ts";
 import { Projects } from "../projects/projects.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import { ImprovementInterpreter, ItemInterpretation } from "./interpret.ts";
-import { grouping, ImprovementItem, improvementItems } from "./items.ts";
+import {
+  type ImprovementItem,
+  type ImprovementReport,
+  ImprovementScan,
+  type ReportedItem,
+} from "./contracts.ts";
+import { ImprovementInterpreter } from "./interpret.ts";
+import { grouping, improvementItems } from "./items.ts";
 import { improvementReport } from "./report.ts";
 import { collectSignals } from "./signals.ts";
 
@@ -38,29 +44,6 @@ export interface RepositoryImprovements {
   readonly items: readonly ImprovementItem[];
 }
 
-/** An item the model judged worth fixing, or could not judge. */
-export const ReportedItem = Schema.Struct({
-  ...ImprovementItem.fields,
-  interpretation: ItemInterpretation,
-});
-export type ReportedItem = typeof ReportedItem.Type;
-
-/** One repository's recorded report: the Markdown document and the items in it. */
-export const ImprovementReport = Schema.Struct({
-  repository: Schema.String,
-  /** Where the document was written, under the storage root. */
-  file: Schema.String,
-  markdown: Schema.String,
-  items: Schema.Array(ReportedItem),
-});
-export type ImprovementReport = typeof ImprovementReport.Type;
-
-export const ImprovementScan = Schema.Struct({
-  generatedAt: Schema.String,
-  reports: Schema.Array(ImprovementReport),
-});
-export type ImprovementScan = typeof ImprovementScan.Type;
-
 /** Older signals are likely fixed already or about code that has since changed. */
 const lookbackDays = 90;
 
@@ -75,46 +58,53 @@ const make = Effect.gen(function* () {
   const reports = path.join((yield* StorageRoot).path, "improvements");
   const interpreter = yield* ImprovementInterpreter;
 
+  const storage = (cause: unknown) => DiscoveryFailed.make({ reason: "storage", cause });
+
+  /** The nearest folder at or above `folder` that holds `.git`: the repository's top. */
+  const repositoryTop = (folder: string): Effect.Effect<Option.Option<string>> =>
+    fs.exists(path.join(folder, ".git")).pipe(
+      Effect.orElseSucceed(() => false),
+      Effect.flatMap((found) =>
+        found
+          ? Effect.succeed(Option.some(folder))
+          : path.dirname(folder) === folder
+            ? Effect.succeed(Option.none())
+            : repositoryTop(path.dirname(folder)),
+      ),
+    );
+
   /**
    * Open projects grouped by the repository they belong to. A worktree project, even one whose
-   * folder is gone, counts for its repository; a project outside any existing repository is left
-   * out, since there is nowhere to propose a change.
+   * folder is gone, and a project opened on a subfolder count for their repository; a project
+   * outside any existing repository is left out, since there is nowhere to propose a change.
    */
   const repositories = Effect.gen(function* () {
     const parents = yield* sql`SELECT project_id, parent FROM worktree_parents`.pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ParentRow))),
-      Effect.mapError((cause) => DiscoveryFailed.make({ reason: "storage", cause })),
+      Effect.mapError(storage),
     );
     const parentsOf = EffectArray.groupBy(parents, (row) => row.project_id);
     const placement = yield* checkouts.forRoots(
-      (yield* projects.listAll).map((project) => ({
+      (yield* projects.listAll.pipe(Effect.mapError(storage))).map((project) => ({
         root: project.root,
         worktreeParents: (parentsOf[project.id] ?? []).map((row) => row.parent),
       })),
     );
     const placed = yield* Effect.forEach(
-      yield* projects.list,
+      yield* projects.list.pipe(Effect.mapError(storage)),
       (project) =>
-        Effect.map(placement.resolve(project.root, null), (found) => ({
-          projectId: project.id,
-          repository: found.path,
-        })),
+        placement.resolve(project.root, null).pipe(
+          Effect.flatMap((found) => repositoryTop(found.path)),
+          Effect.map(Option.map((repository) => ({ projectId: project.id, repository }))),
+        ),
       { concurrency: 4 },
     );
-    const grouped = Object.entries(EffectArray.groupBy(placed, (entry) => entry.repository));
-    return yield* Effect.filter(
-      grouped,
-      ([repository]) =>
-        fs.exists(path.join(repository, ".git")).pipe(Effect.orElseSucceed(() => false)),
-      { concurrency: 4 },
-    ).pipe(
-      Effect.map((found) =>
-        found.map(([repository, entries]) => ({
-          repository,
-          projectIds: EffectArray.map(entries, (entry) => entry.projectId),
-        })),
-      ),
-    );
+    return Object.entries(
+      EffectArray.groupBy(EffectArray.getSomes(placed), (entry) => entry.repository),
+    ).map(([repository, entries]) => ({
+      repository,
+      projectIds: EffectArray.map(entries, (entry) => entry.projectId),
+    }));
   });
 
   /**
@@ -137,6 +127,11 @@ const make = Effect.gen(function* () {
   });
 
   const failed = (cause: unknown) => DiscoveryFailed.make({ reason: "report", cause });
+  /** Written beside and renamed over, so a reader or a crash never sees half a file. */
+  const writeWhole = (file: string, text: string) =>
+    fs
+      .writeFileString(`${file}.partial`, text)
+      .pipe(Effect.andThen(fs.rename(`${file}.partial`, file)), Effect.mapError(failed));
   const indexFile = path.join(reports, "index.json");
   const IndexJson = Schema.fromJsonString(ImprovementScan);
   // One scan at a time: a second request waits and then scans again from fresh signals.
@@ -152,7 +147,7 @@ const make = Effect.gen(function* () {
   /**
    * Discovers and writes one Markdown report per repository under the storage root, never into
    * the repository itself, then an index of them that {@link latest} reads. Every scan replaces the
-   * reports of the previous one.
+   * reports of the previous one, removing those of repositories it no longer found.
    */
   const scan = Effect.fn("ProjectImprovement.scan")(function* () {
     const { interpret } = yield* interpreter.model;
@@ -191,8 +186,7 @@ const make = Effect.gen(function* () {
           `${path.basename(repository.repository)}-${sha256(repository.repository).slice(0, 8)}.md`,
         );
         const markdown = improvementReport(repository, generatedAt);
-        return fs.writeFileString(file, markdown).pipe(
-          Effect.mapError(failed),
+        return writeWhole(file, markdown).pipe(
           Effect.as<ImprovementReport>({
             repository: repository.repository,
             file,
@@ -205,7 +199,18 @@ const make = Effect.gen(function* () {
     );
     const result: ImprovementScan = { generatedAt, reports: written };
     yield* Schema.encodeEffect(IndexJson)(result).pipe(
-      Effect.flatMap((text) => fs.writeFileString(indexFile, text)),
+      Effect.mapError(failed),
+      Effect.flatMap((text) => writeWhole(indexFile, text)),
+    );
+    // After the index: a crash before this leaves extra files, never an index naming missing ones.
+    const current = written.map((report) => path.basename(report.file));
+    yield* fs.readDirectory(reports).pipe(
+      Effect.map((names) =>
+        names.filter((name) => name.endsWith(".md") && !current.includes(name)),
+      ),
+      Effect.flatMap((stale) =>
+        Effect.forEach(stale, (name) => fs.remove(path.join(reports, name)), { concurrency: 4 }),
+      ),
       Effect.mapError(failed),
     );
     return result;
