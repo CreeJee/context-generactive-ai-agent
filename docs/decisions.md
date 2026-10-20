@@ -2354,3 +2354,4 @@
 - `vp run dev`(`all`, `agent`)는 기본으로 `tools/profile`의 OTLP 수집기를 `127.0.0.1:4318`에 띄우고, 백엔드에 `OTEL_TRACES_EXPORTER=otlp`와 그 endpoint를 넘긴다. span은 `apps/agent/build/dev-spans-<backend-port>.ndjson`에 쌓이고 `node tools/profile/main.ts summarize`로 읽는다.
 - `--otlp-port`로 포트를 바꾸고 `--no-otel`로 끈다. 끄면 백엔드는 호출한 쪽의 `OTEL_*`를 그대로 받는다. 별도 환경변수는 두지 않는다.
 - 이유: 실행 중인 서버에서 find_memory 실패의 단계별 시간과 오류 여부를 재시작 없이 다시 볼 수 없었다. 로컬 수집기는 문자열 속성을 버리므로 프롬프트나 오류 본문은 파일에 남지 않는다. 수집기는 백엔드보다 나중에 끝내 마지막 span까지 받는다.
+- 수정(2026-10-20): 수집기는 `127.0.0.1`에만 연다. 처음에는 모든 인터페이스(`*:4318`)에 열려 같은 네트워크에서 span을 넣을 수 있었고, `127.0.0.1`만 보는 시작 전 포트 검사도 충돌을 잡지 못했다. dev는 수집기의 stdin을 파이프로 잡고, 수집기는 `--until-stdin-closes`로 stdin이 닫히면 끝난다. Effect `ChildProcess`가 macOS에서 자식을 별도 프로세스 그룹(`detached`)으로 띄워, dev가 자기 종료 처리를 끝내기 전에 죽으면 수집기만 남아 다음 실행이 `EADDRINUSE`로 실패했다.

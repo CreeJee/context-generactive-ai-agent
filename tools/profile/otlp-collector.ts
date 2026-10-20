@@ -85,4 +85,8 @@ export const otlpCollector = (port: number) =>
       yield* Console.log(`OTLP 수집 중: http://127.0.0.1:${port} -> ${file}`);
       return HttpRouter.serve(Layer.mergeAll(traces, metrics), { disableLogger: true });
     }),
-  ).pipe(Layer.provide(NodeHttpServer.layer(NodeHttpServer.createServer, { port })), Layer.launch);
+  ).pipe(
+    // Loopback only: spans are local profiling data, not a network service.
+    Layer.provide(NodeHttpServer.layer(NodeHttpServer.createServer, { port, host: "127.0.0.1" })),
+    Layer.launch,
+  );
