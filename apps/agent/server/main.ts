@@ -226,7 +226,7 @@ if (folderArgument === "acp") {
   await serve({
     build,
     port,
-    exposure: commandLine.broadcast ? { _tag: "Broadcast" } : { _tag: "Loopback" },
+    exposure: { kind: commandLine.broadcast ? "broadcast" : "loopback" },
     clientDirectory,
     developmentBuildId,
     runtimeInstanceId,

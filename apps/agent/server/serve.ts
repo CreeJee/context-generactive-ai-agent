@@ -18,10 +18,10 @@ import {
 const { extname, resolve, sep } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
 /**
- * Who can reach the server. `Loopback` listens on 127.0.0.1 and answers only loopback Host names (R14).
- * `Broadcast` listens on every interface and answers any Host, because the network can already reach it.
+ * Who can reach the server. `loopback` listens on 127.0.0.1 and answers only loopback Host names (R14).
+ * `broadcast` listens on every interface and answers any Host, because the network can already reach it.
  */
-export type Exposure = { readonly _tag: "Loopback" } | { readonly _tag: "Broadcast" };
+export type Exposure = { readonly kind: "loopback" } | { readonly kind: "broadcast" };
 
 export interface ServeOptions {
   readonly build: ServerBuild;
@@ -124,10 +124,12 @@ export function openInBrowser(url: string) {
 
 /** Serves the app per its exposure: client files directly, everything else through React Router. */
 export function serve(options: ServeOptions) {
-  const listen = Match.valueTags(options.exposure, {
-    Loopback: () => ({ address: "127.0.0.1", acceptsHost: isLoopbackHost }),
-    Broadcast: () => ({ address: "0.0.0.0", acceptsHost: () => true }),
-  });
+  const listen = Match.value(options.exposure).pipe(
+    Match.discriminatorsExhaustive("kind")({
+      loopback: () => ({ address: "127.0.0.1", acceptsHost: isLoopbackHost }),
+      broadcast: () => ({ address: "0.0.0.0", acceptsHost: () => true }),
+    }),
+  );
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
   const development = isTruthy(options.developmentBuildId)
