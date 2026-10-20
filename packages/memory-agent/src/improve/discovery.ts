@@ -8,11 +8,15 @@ import {
   Option,
   Path,
   Schema,
-  Semaphore,
+  Cause,
+  Exit,
+  FiberHandle,
+  Ref,
 } from "effect";
 import { SqlClient } from "effect/sql";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Checkouts } from "../imports/checkouts.ts";
+import { Embedder } from "../memory/embedding/embedder.ts";
 import { Projects } from "../projects/projects.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
@@ -20,6 +24,8 @@ import {
   type ImprovementReport,
   ImprovementScan,
   type ReportedItem,
+  type ScanFailure,
+  ScanState,
 } from "./contracts.ts";
 import { ImprovementInterpreter } from "./interpret.ts";
 import { grouping, improvementItems } from "./items.ts";
@@ -53,6 +59,7 @@ const make = Effect.gen(function* () {
   const projects = yield* Projects;
   const checkouts = yield* Checkouts;
   const sql = yield* SqlClient.SqlClient;
+  const embedder = yield* Embedder;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const reports = path.join((yield* StorageRoot).path, "improvements");
@@ -121,6 +128,9 @@ const make = Effect.gen(function* () {
         collectSignals(projectIds, since).pipe(
           Effect.flatMap((signals) => improvementItems(repository, signals)),
           Effect.map((items): RepositoryImprovements => ({ repository, projectIds, items })),
+          // Held by the service, so the background scan needs nothing from whoever started it.
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.provideService(Embedder, embedder),
         ),
       { concurrency: 1 },
     );
@@ -134,8 +144,13 @@ const make = Effect.gen(function* () {
       .pipe(Effect.andThen(fs.rename(`${file}.partial`, file)), Effect.mapError(failed));
   const indexFile = path.join(reports, "index.json");
   const IndexJson = Schema.fromJsonString(ImprovementScan);
-  // One scan at a time: a second request waits and then scans again from fresh signals.
-  const scanning = yield* Semaphore.make(1);
+  const state = yield* Ref.make<ScanState>({ status: "idle" });
+  // The one background scan; closing the service's Scope interrupts it.
+  const running = yield* FiberHandle.make<void, never>();
+  const now = Effect.map(DateTime.now, DateTime.formatIso);
+  /** Progress counts only while a scan runs; a late update after a stop changes nothing. */
+  const advance = (change: (running: Extract<ScanState, { status: "running" }>) => ScanState) =>
+    Ref.update(state, (current) => (ScanState.guards.running(current) ? change(current) : current));
 
   /** The last recorded scan, or none before the first one. */
   const latest = Effect.gen(function* () {
@@ -152,19 +167,35 @@ const make = Effect.gen(function* () {
   const scan = Effect.fn("ProjectImprovement.scan")(function* () {
     const { interpret } = yield* interpreter.model;
     const found = yield* discover();
+    const candidatesOf = (items: readonly ImprovementItem[]) =>
+      Object.values(EffectArray.groupBy(items, (item) => item.source)).flatMap((group) =>
+        group.slice(0, grouping.candidatesPerSource),
+      );
+    yield* advance((current) => ({
+      ...current,
+      repositories: { done: 0, total: found.length },
+      items: {
+        done: 0,
+        total: found.reduce((sum, repository) => sum + candidatesOf(repository.items).length, 0),
+      },
+    }));
     // Repositories one at a time, two model calls at once within each: the user's own chats share
     // the provider.
     const interpreted = yield* Effect.forEach(
       found,
       (repository) =>
         Effect.forEach(
-          Object.values(EffectArray.groupBy(repository.items, (item) => item.source)).flatMap(
-            (items) => items.slice(0, grouping.candidatesPerSource),
-          ),
+          candidatesOf(repository.items),
           (item) =>
             interpret(item).pipe(
               Effect.map(
                 Option.map((interpretation): ReportedItem => ({ ...item, interpretation })),
+              ),
+              Effect.tap(() =>
+                advance((current) => ({
+                  ...current,
+                  items: { ...current.items, done: current.items.done + 1 },
+                })),
               ),
             ),
           { concurrency: 2 },
@@ -173,6 +204,12 @@ const make = Effect.gen(function* () {
             repository: repository.repository,
             items: EffectArray.getSomes(results).sort((a, b) => b.count - a.count),
           })),
+          Effect.tap(() =>
+            advance((current) => ({
+              ...current,
+              repositories: { ...current.repositories, done: current.repositories.done + 1 },
+            })),
+          ),
         ),
       { concurrency: 1 },
     );
@@ -214,9 +251,74 @@ const make = Effect.gen(function* () {
       Effect.mapError(failed),
     );
     return result;
-  }, scanning.withPermits(1));
+  });
 
-  return { discover, latest, scan };
+  /** The scan in the background, leaving how it ended in {@link state}. */
+  const background = scan().pipe(
+    Effect.asVoid,
+    Effect.catchTags({
+      DiscoveryFailed: (failure) => Effect.fail<ScanFailure>(failure.reason),
+      SignalsFailed: () => Effect.fail<ScanFailure>("storage"),
+      EmbeddingError: () => Effect.fail<ScanFailure>("embedding"),
+      InterpretationUnavailable: () => Effect.fail<ScanFailure>("model_unavailable"),
+    }),
+    Effect.onExit((exit) =>
+      Effect.flatMap(now, (at) =>
+        Ref.set(
+          state,
+          Exit.match(exit, {
+            onSuccess: (): ScanState => ({ status: "idle" }),
+            onFailure: (cause): ScanState =>
+              Cause.hasInterruptsOnly(cause)
+                ? { status: "stopped", at }
+                : {
+                    status: "failed",
+                    at,
+                    reason: Option.getOrElse(
+                      Cause.findErrorOption(cause),
+                      () => "internal" as const,
+                    ),
+                  },
+          }),
+        ),
+      ),
+    ),
+    Effect.tapCause((cause) =>
+      Cause.hasDies(cause)
+        ? Effect.logError("Project improvement scan failed", cause)
+        : Effect.void,
+    ),
+    Effect.ignore,
+  );
+
+  /** Starts a scan unless one is running, and answers where it stands. */
+  const start = Effect.gen(function* () {
+    const startedAt = yield* now;
+    const claimed = yield* Ref.modify(state, (current): [boolean, ScanState] =>
+      ScanState.guards.running(current)
+        ? [false, current]
+        : [
+            true,
+            {
+              status: "running",
+              startedAt,
+              repositories: { done: 0, total: 0 },
+              items: { done: 0, total: 0 },
+            },
+          ],
+    );
+    // Only the claim decides: a scan that just recorded its end may still sit in the handle, and
+    // replacing it there loses nothing.
+    if (claimed) yield* FiberHandle.run(running, background);
+    return yield* Ref.get(state);
+  });
+
+  /** Interrupts a running scan; its partial results are not recorded. */
+  const stop = FiberHandle.clear(running).pipe(Effect.andThen(Ref.get(state)));
+
+  const status = Effect.all({ state: Ref.get(state), scan: latest });
+
+  return { discover, latest, scan, start, stop, status };
 });
 
 /** Finds what to improve in the repositories behind the open projects. */

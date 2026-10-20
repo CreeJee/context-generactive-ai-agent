@@ -68,6 +68,35 @@ export const ImprovementScan = Schema.Struct({
 });
 export type ImprovementScan = typeof ImprovementScan.Type;
 
+/** Why a scan stopped short. `internal` is a defect; its cause goes to the log, not the page. */
+export const ScanFailure = Schema.Literals([
+  "storage",
+  "report",
+  "embedding",
+  "model_unavailable",
+  "internal",
+]);
+export type ScanFailure = typeof ScanFailure.Type;
+
+const Progress = Schema.Struct({ done: Schema.Int, total: Schema.Int });
+
+/** Where the background scan stands. A finished scan's result is the recorded index. */
+export const ScanState = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("idle") }),
+  Schema.Struct({
+    status: Schema.Literal("running"),
+    startedAt: Schema.String,
+    /** Repositories whose items were all read; the total is known once signals are grouped. */
+    repositories: Progress,
+    /** Items the model has read, out of all it will read. */
+    items: Progress,
+  }),
+  Schema.Struct({ status: Schema.Literal("failed"), reason: ScanFailure, at: Schema.String }),
+  /** The user stopped it; nothing of that scan was recorded. */
+  Schema.Struct({ status: Schema.Literal("stopped"), at: Schema.String }),
+]).pipe(Schema.toTaggedUnion("status"));
+export type ScanState = typeof ScanState.Type;
+
 /** How the app names each kind of item, in reports and on the settings page. */
 export const sourceLabels: Record<ReportedItem["source"], string> = {
   correction: "반복된 정정",

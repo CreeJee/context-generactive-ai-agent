@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
 import type { ImprovementReport, ImprovementScan } from "memory-agent";
-import { reportedTitle, sourceLabels } from "memory-agent/definitions";
+import { reportedTitle, type ScanFailure, ScanState, sourceLabels } from "memory-agent/definitions";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
@@ -19,17 +19,32 @@ class ImprovementRequestFailed extends Schema.TaggedError<ImprovementRequestFail
 
 const queryKey = ["settings", "improvements"];
 
-/** Why a scan failed, as the server names it. */
-const FailureBody = Schema.Struct({
-  reason: Schema.Literals(["storage", "report", "embedding", "model_unavailable"]),
-});
-const failures: Record<typeof FailureBody.Type.reason, string> = {
+/** Why a request or a scan failed, as the server names it. */
+const FailureBody = Schema.Struct({ reason: Schema.Literals(["report"]) });
+const failures: Record<ScanFailure, string> = {
   storage: "프로젝트 사용 기록을 읽지 못했어요.",
   report: "개선 문서를 쓰거나 읽지 못했어요.",
   embedding: "임베딩 모델로 비슷한 정정을 묶지 못했어요. 임베딩 설정을 확인하세요.",
   model_unavailable:
     "개선 항목을 해석할 모델이 없어요. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도하세요.",
+  internal: "개선 항목을 찾는 중 오류가 났어요. 다시 시도하세요.",
 };
+
+interface Status {
+  readonly state: ScanState;
+  readonly scan: ImprovementScan | null;
+}
+
+/** One line on where the scan stands; nothing while idle. */
+const stateLine = ScanState.match({
+  idle: () => null,
+  running: ({ repositories, items }) =>
+    repositories.total === 0
+      ? "사용 기록에서 신호를 모으는 중이에요."
+      : `찾는 중이에요. 저장소 ${repositories.done}/${repositories.total} · 해석한 항목 ${items.done}/${items.total}`,
+  failed: ({ reason }) => failures[reason],
+  stopped: () => "찾기를 중지했어요. 이전 결과는 그대로예요.",
+});
 
 type ReportedItem = ImprovementReport["items"][number];
 const byStatus = Match.discriminatorsExhaustive("status");
@@ -46,11 +61,20 @@ const requestFailure = (failure: Error) =>
   Schema.is(ImprovementRequestFailed)(failure) ? failure.message : "요청을 처리하지 못했어요.";
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-function request(method: "GET" | "POST"): Promise<{ scan: ImprovementScan | null }> {
+function request<A>(action?: "start" | "stop"): Promise<A> {
   return runUiEffect(
     Effect.gen(function* () {
       const response = yield* uiPromise(() =>
-        appFetch("/api/settings/improvements", method === "POST" ? { method } : undefined),
+        appFetch(
+          "/api/settings/improvements",
+          action === undefined
+            ? undefined
+            : {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action }),
+              },
+        ),
       );
       if (!response.ok) {
         if (response.status === 404)
@@ -66,7 +90,7 @@ function request(method: "GET" | "POST"): Promise<{ scan: ImprovementScan | null
           }),
         });
       }
-      return yield* uiPromise<{ scan: ImprovementScan | null }>(() => response.json());
+      return yield* uiPromise<A>(() => response.json());
     }),
   );
 }
@@ -137,29 +161,54 @@ export function ImprovementSettings() {
   const [error, setError] = useState<string | null>(null);
   const { data, error: queryError } = useQuery({
     queryKey,
-    queryFn: () => request("GET"),
+    queryFn: () => request<Status>(),
+    // Follow a running scan; otherwise the page only changes when the user acts.
+    refetchInterval: (query) =>
+      query.state.data !== undefined && ScanState.guards.running(query.state.data.state)
+        ? 2000
+        : false,
     retry: false,
   });
-  const scan = useMutation({
-    mutationFn: () => request("POST"),
-    onSuccess: (result) => {
+  const command = useMutation({
+    mutationFn: (action: "start" | "stop") => request<Pick<Status, "state">>(action),
+    onSuccess: ({ state }) => {
       setError(null);
-      cache.setQueryData(queryKey, result);
+      cache.setQueryData<Status>(queryKey, (current) =>
+        current === undefined ? current : { ...current, state },
+      );
     },
     onError: (failure) => setError(requestFailure(failure)),
   });
   const latest = data?.scan ?? null;
+  const running = data !== undefined && ScanState.guards.running(data.state);
+  const line = data === undefined ? null : stateLine(data.state);
   return (
     <FieldGroup>
       <PageHeader
         title="프로젝트 개선"
         description="열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아, 저장소마다 고칠 항목과 작업 명세를 문서로 남겨요. 코드와 에이전트 지침을 함께 고치는 명세예요. 앱은 저장소를 직접 바꾸지 않아요."
         action={
-          <Button size="sm" disabled={scan.isPending} onClick={() => scan.mutate()}>
-            {scan.isPending ? "찾는 중…" : latest === null ? "개선 항목 찾기" : "다시 찾기"}
-          </Button>
+          running ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={command.isPending}
+              onClick={() => command.mutate("stop")}
+            >
+              중지
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={command.isPending || data === undefined}
+              onClick={() => command.mutate("start")}
+            >
+              {latest === null ? "개선 항목 찾기" : "다시 찾기"}
+            </Button>
+          )
         }
       />
+      {line !== null && <FieldDescription role="status">{line}</FieldDescription>}
       <PageError error={error ?? (queryError === null ? null : requestFailure(queryError))} />
       {data === undefined ? (
         queryError === null && (
