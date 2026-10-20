@@ -1,9 +1,10 @@
 import { it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Embedder } from "../src/memory/embedding/embedder.ts";
+import { parseInterpretation } from "../src/improve/interpret.ts";
 import { improvementItems } from "../src/improve/items.ts";
 import { improvementReport } from "../src/improve/report.ts";
 import { collectSignals, failureSignature } from "../src/improve/signals.ts";
@@ -48,33 +49,58 @@ const correction = (user: string, text: string, corrected: string, createdAt: st
     );
   });
 const failed = (id: string, text: string, createdAt: string) =>
-  node(id, "tool_result", text, createdAt, JSON.stringify({ toolName: "Bash", ok: false }));
+  node(
+    id,
+    "tool_result",
+    text,
+    createdAt,
+    JSON.stringify({ toolName: "Bash", ok: false, importedFrom: "claude-code" }),
+  );
 
 describe("project improvement discovery", () => {
-  it("quotes what the user wrote so it cannot add headings to the report", () => {
+  it("keeps user and model text from adding headings to the report", () => {
     const report = improvementReport(
       {
         repository: "/repo",
-        projectIds: ["p1"],
         items: [
           {
             id: "i1",
             repository: "/repo",
             source: "correction",
-            title: "제목\n## 끼어든 제목",
+            title: "묶음",
             count: 2,
             evidence: ["u1"],
             excerpts: ["## 끼어든 제목\n본문"],
             latestAt: null,
+            interpretation: {
+              status: "interpreted",
+              title: "제목\n## 모델 제목",
+              problem: "문제\n## 모델 문단",
+              rule: "규칙",
+              change: "변경",
+              acceptance: "확인",
+            },
           },
         ],
       },
       "2026-10-20T00:00:00.000Z",
     );
     expect(report.split("\n").filter((line) => line.startsWith("## "))).toEqual([
-      "## 1. 제목 ## 끼어든 제목",
+      "## 1. 제목 ## 모델 제목",
     ]);
   });
+
+  it.effect("reads a fenced verdict and drops what the model skips", () =>
+    Effect.gen(function* () {
+      const improve = yield* parseInterpretation(
+        '```json\n{"verdict":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}\n```',
+      );
+      expect(Option.map(improve, (found) => found.status)).toEqual(Option.some("interpreted"));
+      expect(yield* parseInterpretation('{"verdict":"skip","reason":"평범한 요청"}')).toEqual(
+        Option.none(),
+      );
+    }),
+  );
 
   it("groups failures by cause, not by the path or number they mention", () => {
     expect(failureSignature("Exit code 1\nError: cannot open /a/b/c.ts at line 12")).toBe(
@@ -84,7 +110,7 @@ describe("project improvement discovery", () => {
       failureSignature(
         "Permission to use Bash with command cd /repo && sed -n 1,2p f has been denied.",
       ),
-    ).toBe("permission denied: Bash sed");
+    ).toBe(failureSignature("Permission to use Bash with command head -5 f has been denied."));
   });
 
   it.effect("finds repeated corrections and tool failures within the lookback window", () =>
@@ -106,6 +132,15 @@ describe("project improvement discovery", () => {
         yield* failed("f2", "Exit code 2\nError: cannot open /b/two.ts", recent);
         yield* failed("f3", "Error: cannot open /c/three.ts", recent);
         yield* failed("f4", "Error: timeout after 30s", recent);
+        // This app's own tool asking the agent to retry, and a call the user declined: neither counts.
+        yield* node(
+          "own",
+          "tool_result",
+          "Error: cannot open /e.ts",
+          recent,
+          JSON.stringify({ toolName: "read_file", ok: false }),
+        );
+        yield* failed("declined", "The user doesn't want to proceed with this tool use.", recent);
         yield* node(
           "ok",
           "tool_result",

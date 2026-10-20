@@ -31,6 +31,12 @@ export const grouping = {
   correctionSimilarity: 0.85,
   evidence: 20,
   excerpts: 5,
+  /**
+   * The most repeated items of each kind the model reads in a repository; each costs one model
+   * call. Per kind, so frequent tool failures cannot crowd out the corrections. This is the only
+   * cut: every item the model reads and keeps goes into the report.
+   */
+  candidatesPerSource: 5,
 } as const;
 
 const itemId = (repository: string, source: ImprovementItem["source"], key: string) =>

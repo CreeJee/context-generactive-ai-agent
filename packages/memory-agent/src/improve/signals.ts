@@ -45,13 +45,15 @@ export class SignalsFailed extends Schema.TaggedError<SignalsFailed>()("SignalsF
 }) {}
 
 const excerptLength = 400;
-const deniedCommand = /^Permission to use (\S+) with command (?:cd \S+ && )?([^\s;|&]+)/u;
+const claudeCodeDeclined = "The user doesn't want to proceed with this tool use.";
+const deniedCommand = /^Permission to use (\S+) with command /u;
 const exitLine = /^Exit code \d+$/u;
 
 /**
  * The first meaningful line of a failed tool result with paths, quoted text and numbers made
- * generic, so failures of one cause group together. A denied permission keeps the tool and the
- * command it ran, because the same command keeps being denied for the same reason.
+ * generic, so failures of one cause group together. Denied permissions group by tool: the commands
+ * differ (`sed`, `head`, `grep`) but the fix is one rule about which tool to use, and the excerpts
+ * keep the commands.
  */
 export const failureSignature = (text: string) => {
   const first =
@@ -61,7 +63,7 @@ export const failureSignature = (text: string) => {
       .find((line) => line !== "" && !exitLine.test(line)) ?? "";
   const denied = deniedCommand.exec(first);
   return denied !== null
-    ? `permission denied: ${denied[1]} ${denied[2]}`
+    ? `permission denied: ${denied[1]}`
     : first
         .replace(/(["'`]).*?\1/gu, "<text>")
         .replace(/(?:~|\.{0,2})?(?:\/[\w.@+-]+)+/gu, "<path>")
@@ -117,10 +119,17 @@ export const collectSignals = Effect.fn("Improve.collectSignals")(function* (
           WHERE e.kind = 'corrects' AND u.kind = 'user'
             AND u.project_id IN ${sql.in(projectIds)} AND u.created_at >= ${since})
         WHERE latest = 1 ORDER BY seq`),
+      // Only calls from imported conversations. A failure of this app's own tools is a recovery
+      // hint to the agent (read again, start the page over) and says nothing about the project.
+      // A call the user declined in Claude Code did not fail; Claude Code reports it with this
+      // fixed text and no other mark.
       rows(FailureRow)(sql`SELECT project_id, id, json_extract(detail, '$.toolName') AS tool_name,
           substr(text, 1, 2000) AS text, created_at
         FROM nodes
         WHERE kind = 'tool_result' AND json_extract(detail, '$.ok') = 0
+          AND json_extract(detail, '$.importedFrom') IS NOT NULL
+          AND NOT (json_extract(detail, '$.importedFrom') = 'claude-code'
+            AND text LIKE ${`${claudeCodeDeclined}%`})
           AND project_id IN ${sql.in(projectIds)} AND created_at >= ${since}
         ORDER BY seq`),
       rows(CardRow)(sql`SELECT g.project_id, c.goal_instance_id, c.card_id, c.failure_streak,
