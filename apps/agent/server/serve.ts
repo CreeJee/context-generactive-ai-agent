@@ -7,7 +7,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
 import { createRequestListener } from "@react-router/node";
-import { Cause, Console, Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
+import { Cause, Console, Effect, FileSystem, Fiber, Match, Option, Schema, Stream } from "effect";
 import type { ServerBuild } from "react-router";
 import {
   developmentBuildHeader,
@@ -17,9 +17,16 @@ import {
 
 const { extname, resolve, sep } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
+/**
+ * Who can reach the server. `Loopback` listens on 127.0.0.1 and answers only loopback Host names (R14).
+ * `Broadcast` listens on every interface and answers any Host, because the network can already reach it.
+ */
+export type Exposure = { readonly _tag: "Loopback" } | { readonly _tag: "Broadcast" };
+
 export interface ServeOptions {
   readonly build: ServerBuild;
   readonly port: number;
+  readonly exposure: Exposure;
   /** React Router's client build (`build/client`). */
   readonly clientDirectory: string;
   /** Present only for the stable development backend behind the HMR frontend. */
@@ -115,8 +122,12 @@ export function openInBrowser(url: string) {
   );
 }
 
-/** Serves the app on 127.0.0.1: client files directly, everything else through React Router. */
+/** Serves the app per its exposure: client files directly, everything else through React Router. */
 export function serve(options: ServeOptions) {
+  const listen = Match.valueTags(options.exposure, {
+    Loopback: () => ({ address: "127.0.0.1", acceptsHost: isLoopbackHost }),
+    Broadcast: () => ({ address: "0.0.0.0", acceptsHost: () => true }),
+  });
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
   const development = isTruthy(options.developmentBuildId)
@@ -127,7 +138,7 @@ export function serve(options: ServeOptions) {
     : null;
 
   const server = NodeHttpServer.createServer((request, response) => {
-    if (!isLoopbackHost(request.headers.host)) {
+    if (!listen.acceptsHost(request.headers.host)) {
       response
         .writeHead(403, { "content-type": "text/plain; charset=utf-8" })
         .end("forbidden host");
@@ -217,7 +228,7 @@ export function serve(options: ServeOptions) {
     Effect.callback<void, Cause.UnknownError>((resume) => {
       const onError = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
       server.once("error", onError);
-      server.listen(options.port, "127.0.0.1", () => resume(Effect.void));
+      server.listen(options.port, listen.address, () => resume(Effect.void));
       return Effect.sync(() => server.off("error", onError));
     }),
   );

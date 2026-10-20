@@ -2319,5 +2319,6 @@
 - 실행 단계는 Vite+ 가이드가 권장하는 glibc 기반 `debian:bookworm-slim`에 `libatomic1`을 더한다. Alpine(`gcompat`)은 실행 파일이 `fcntl64`, `__res_init` 심볼을 찾지 못해 시작하지 못했고, `onnxruntime-node`에 musl 바이너리가 없어 musl 빌드도 할 수 없다. distroless(`cc-debian12`)는 `libatomic.so.1`이 없다. amd64와 arm64 컨테이너 모두 HTTP 200과 루프백이 아닌 Host의 403을 확인했다.
 - 빌드 단계의 Rust는 이미지의 비루트 `vp` 사용자 소유로 복사한다. cargo가 `/usr/local/cargo`에 git과 레지스트리 캐시를 쓴다.
 - 서버의 루프백 전용 정책(위 "배포: 실행 파일")은 바꾸지 않는다. 컨테이너 안에서 `socat`이 `0.0.0.0:8080`을 `127.0.0.1:5173`으로 넘기고, 호스트에는 `-p 127.0.0.1:5173:8080`처럼 루프백에만 publish한다. 브라우저의 Host는 `localhost`라 기존 Host 검사를 통과하고, 루프백이 아닌 Host는 컨테이너에서도 403이다.
-- 한계: 비밀값은 OS 키체인(`@napi-rs/keyring`)에 저장하는데, 컨테이너에는 Linux Secret Service(D-Bus)가 없다. 따라서 API 키와 OAuth 토큰 저장은 컨테이너에서 동작하지 않을 것으로 본다(미검증). 파일 기반 비밀 저장소는 별도 결정으로 남긴다.
+- `--broadcast` 플래그를 둔다. 서버를 `0.0.0.0`에 열고 Host 검사를 하지 않는다. 네트워크에서 이미 닿는 서버라 DNS rebinding 방어의 의미가 없기 때문이다. 교차 사이트 검사(`rejectCrossSite`)는 그대로다. 인증이 없으므로 실행 시 stderr로 경고하고, 기본값은 루프백 그대로다. 컨테이너에서는 `docker run -p 5173:5173 … --broadcast`로 앱 포트를 직접 publish한다.
+- 한계: 비밀값은 OS 키체인(`@napi-rs/keyring`)에 저장하는데 컨테이너에는 Secret Service가 없다. 컨테이너에서 `POST /api/settings/kagi` `register`가 `{"error":"keychain_failed","reason":"write"}`로 실패함을 확인했다. 컨테이너 안에 `gnome-keyring`과 D-Bus 세션을 띄워 봤지만 기본 keyring이 만들어지지 않아 여전히 실패했다. 다른 저장소로 대신 저장하지 않는다는 원칙(R14)과 맞물려 있어 해결 방식은 별도로 정한다.
 - 이전 `apps/agent/Dockerfile`은 React Router 템플릿(npm, `package-lock.json`)의 잔재라 현재 저장소에서 빌드되지 않았다. 이 파일로 교체하고, `apps/agent/.dockerignore`는 루트 컨텍스트용 `Dockerfile.dockerignore`로 바꾼다.

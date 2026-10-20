@@ -32,8 +32,10 @@ const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 const { dirname } = nodePath;
 
 const usage = `사용법:
-  context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]
+  context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>] [--broadcast]
       폴더(없으면 실행한 위치)를 프로젝트로 열어요. 앱이 이미 실행 중이면 그 앱에서 열어요.
+      --broadcast: 이 컴퓨터 밖(같은 네트워크, 컨테이너 밖)에서도 접속할 수 있게 모든 네트워크에 열어요.
+      인증이 없으니 믿을 수 있는 네트워크에서만 쓰세요.
   context-agent acp [--port 5173]
       에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)
   context-agent --version
@@ -47,6 +49,7 @@ const commandLineOptions = {
   ),
   open: Flag.Boolean("open").pipe(Flag.withDefault(true)),
   storage: Flag.String("storage").pipe(Flag.optional),
+  broadcast: Flag.Boolean("broadcast").pipe(Flag.withDefault(false)),
   devBackend: Flag.Boolean("dev-backend").pipe(Flag.withDefault(false)),
   help: Flag.Boolean("help").pipe(Flag.withAlias("h"), Flag.withDefault(false)),
   version: Flag.Boolean("version").pipe(Flag.withAlias("v"), Flag.withDefault(false)),
@@ -223,6 +226,7 @@ if (folderArgument === "acp") {
   await serve({
     build,
     port,
+    exposure: commandLine.broadcast ? { _tag: "Broadcast" } : { _tag: "Loopback" },
     clientDirectory,
     developmentBuildId,
     runtimeInstanceId,
@@ -241,6 +245,13 @@ if (folderArgument === "acp") {
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`));
+  if (commandLine.broadcast)
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    Effect.runSync(
+      Console.error(
+        `--broadcast: 모든 네트워크의 ${port} 포트에 열었어요. 인증이 없으니 같은 네트워크의 누구나 이 앱을 쓸 수 있어요.`,
+      ),
+    );
   const page = await runNativeEffect(pageFor(folder));
   if (commandLine.open) openInBrowser(page);
 }

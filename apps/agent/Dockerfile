@@ -5,6 +5,9 @@
 # so the stages must not cross-compile from $BUILDPLATFORM.
 #   pnpm build:docker   linux/amd64 and linux/arm64 executables in apps/agent/dist/docker/context-agent-linux-<arch>/
 #   pnpm start:docker   builds the image for this machine and runs it at http://localhost:5173
+# To reach it from other machines, run the app with --broadcast and publish its port directly:
+#   docker run -p 5173:5173 -v context-agent-data:/data context-agent --broadcast
+# --broadcast has no authentication: anyone who can reach the port can use the app.
 
 FROM rust:1.99.0-slim-bookworm AS rust
 
