@@ -2309,10 +2309,15 @@
 - 메인 채팅과 btw가 compatible 모델에 tool을 줄지는 선택된 endpoint 계정에 등록된 그 모델의 `toolCalling`으로만 정한다(`compatibleToolCalling`). 계정 도입 전 단일 `openaiCompatible` 설정은 `compatibleAccountsOf`가 읽어 같은 판단에 들어간다. 메인 채팅이 레거시 `openaiCompatible.toolCalling`만 읽어, 계정으로 저장된 설정(레거시 키를 지움)에서는 tool이 항상 빠지고 모델이 "확인하겠습니다"만 내고 멈췄다.
 - compatible 어댑터는 provider 턴이 끝날 때(`RUN_FINISHED`) `Compatible model turn finished` 로그에 SDK run ID, `finishReason`, 보낸 tool 정의 수, 받은 tool call 수만 남긴다. 프롬프트·응답 본문·모델 ID·endpoint·키는 남기지 않는다. 진단용 임시 로그가 아니라 유지한다.
 
-## Docker로 Linux 실행 파일 빌드 (2026-10-20)
+## Docker로 Linux 실행 파일 빌드와 실행 (2026-10-20)
 
-- `apps/agent/Dockerfile`은 `pnpm build`(`vp run package`)가 만드는 실행 파일을 Linux에서 빌드해 꺼내는 용도다. 앱을 컨테이너 서비스로 띄우는 이미지가 아니다. 서버는 `127.0.0.1`에만 열고 루프백이 아닌 Host를 거부하므로(위 "배포: 실행 파일"), 포트를 publish해도 컨테이너 밖에서는 붙지 못한다.
-- 빌드 컨텍스트는 저장소 루트다. `docker build -f apps/agent/Dockerfile --target artifact --output type=local,dest=out .`를 실행하면 `out/context-agent-linux-<arch>/`에 실행 파일과 `.sha256`이 생긴다. 아키텍처는 Docker 호스트를 따르고, 다른 아키텍처는 `--platform`으로 고른다.
-- 툴체인은 `.node-version`(Node 26.8.2), `devEngines`(pnpm 12.13.0), turbovec용 Rust 1.99.0으로 고정한다. 설치는 `--ignore-scripts`로 한다. prepare 스크립트는 git hook과 lint 도구만 바꾸고 빌드에는 쓰이지 않는다.
+- `apps/agent/Dockerfile`은 `pnpm build`(`vp run package`)가 만드는 실행 파일을 Linux에서 빌드하고, 그 실행 파일을 컨테이너에서 실행한다. 빌드 컨텍스트는 저장소 루트다.
+  - `pnpm build:docker`: linux/amd64와 linux/arm64 실행 파일을 함께 만들어 `apps/agent/dist/docker/context-agent-linux-<arch>/`에 둔다.
+  - `pnpm start:docker`: 이 머신용 이미지를 만들고 `http://localhost:5173`으로 실행한다. 저장 루트는 `context-agent-data` 볼륨(`/data`), 프로젝트 폴더는 `/workspace`다.
+- 아키텍처에 묶이지 않게 플랫폼마다 따로 빌드한다(다른 아키텍처는 에뮬레이션). 실행 파일에는 대상 플랫폼의 Node와 네이티브 addon(turbovec, onnxruntime 등)이 들어가므로 `$BUILDPLATFORM`에서 교차 컴파일하지 않는다. Docker로는 Linux만 만든다. macOS와 Windows는 각 머신에서 `pnpm build`로 만든다.
+- 빌드 단계는 Vite+ Docker 가이드를 따라 `ghcr.io/voidzero-dev/vite-plus`(로컬 vite-plus와 같은 버전)를 쓰고, turbovec용 Rust 1.99.0만 더한다. Node는 `vp`가 `.node-version`에서 받는다. 설치는 `--ignore-scripts`로 한다. prepare 스크립트는 git hook과 lint 도구만 바꾸고 빌드에는 쓰이지 않는다.
+- 실행 단계는 Vite+ 가이드가 권장하는 glibc 기반 `debian:bookworm-slim`에 `libatomic1`을 더한다. Alpine(`gcompat`)은 실행 파일이 `fcntl64`, `__res_init` 심볼을 찾지 못해 시작하지 못했고, `onnxruntime-node`에 musl 바이너리가 없어 musl 빌드도 할 수 없다. distroless(`cc-debian12`)는 `libatomic.so.1`이 없다. amd64와 arm64 컨테이너 모두 HTTP 200과 루프백이 아닌 Host의 403을 확인했다.
+- 빌드 단계의 Rust는 이미지의 비루트 `vp` 사용자 소유로 복사한다. cargo가 `/usr/local/cargo`에 git과 레지스트리 캐시를 쓴다.
+- 서버의 루프백 전용 정책(위 "배포: 실행 파일")은 바꾸지 않는다. 컨테이너 안에서 `socat`이 `0.0.0.0:8080`을 `127.0.0.1:5173`으로 넘기고, 호스트에는 `-p 127.0.0.1:5173:8080`처럼 루프백에만 publish한다. 브라우저의 Host는 `localhost`라 기존 Host 검사를 통과하고, 루프백이 아닌 Host는 컨테이너에서도 403이다.
+- 한계: 비밀값은 OS 키체인(`@napi-rs/keyring`)에 저장하는데, 컨테이너에는 Linux Secret Service(D-Bus)가 없다. 따라서 API 키와 OAuth 토큰 저장은 컨테이너에서 동작하지 않을 것으로 본다(미검증). 파일 기반 비밀 저장소는 별도 결정으로 남긴다.
 - 이전 `apps/agent/Dockerfile`은 React Router 템플릿(npm, `package-lock.json`)의 잔재라 현재 저장소에서 빌드되지 않았다. 이 파일로 교체하고, `apps/agent/.dockerignore`는 루트 컨텍스트용 `Dockerfile.dockerignore`로 바꾼다.
-- 실행 파일은 glibc와 `libatomic.so.1`이 필요하다. `debian:bookworm-slim`에서는 `libatomic1`을 설치한 뒤 `--version`이 동작하는 것을 확인했다.
