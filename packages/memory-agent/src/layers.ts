@@ -8,8 +8,6 @@ import { Effect, Layer } from "effect";
 import { ProviderUnavailable, type ProviderId } from "./providers/contracts.ts";
 import { AgentChat, GoalWorkerConfiguration, type GoalWorkerOptions } from "./agent/chat.ts";
 import { BtwChat } from "./btw/chat.ts";
-import { HarnessStore } from "./rrsi/store.ts";
-import { Rrsi } from "./rrsi/service.ts";
 import { ProjectImprovement } from "./improve/discovery.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
@@ -212,7 +210,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
       ),
     ),
   );
-  const harness = HarnessStore.layer.pipe(Layer.provide(foundation));
   const compatibleSettings = (options.compatibleSettings ?? OpenAICompatibleSettings.layer).pipe(
     Layer.provide(foundation),
   );
@@ -352,12 +349,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     directImageExecutor,
     imageMediaWorkflow,
   );
-  const rrsi = Rrsi.layer.pipe(
-    Layer.provide(providerRegistry),
-    Layer.provide(harness),
-    Layer.provide(compatibleSettings),
-    Layer.provide(foundation),
-  );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
     MemorySearch.layer,
@@ -412,8 +403,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
         SecretSweep.layer(options.sweepSecrets),
       ),
     ),
-    Layer.provideMerge(harness),
-    Layer.provideMerge(rrsi),
     Layer.provideMerge(retrieval),
     Layer.provideMerge(BackgroundTasks.layer),
     Layer.provideMerge(memory),

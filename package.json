@@ -12,7 +12,6 @@
     "typecheck": "typecheck_result=0; vp run agent#typecheck || typecheck_result=1; vp run memory-agent#typecheck || typecheck_result=1; vp run utils#typecheck || typecheck_result=1; tsc -p apps/agent/server/tests/tsconfig.json --noEmit || typecheck_result=1; tsc -p tools/profile/tsconfig.json || typecheck_result=1; exit $typecheck_result",
     "ready": "vp check && vp run typecheck && vp run -r test && vp run -r build",
     "dev": "vp run agent#dev",
-    "dev:rrsi": "node apps/agent/scripts/dev-rrsi.ts",
     "dev:agent": "pnpm --filter agent dev:agent",
     "dev:web": "pnpm --filter agent dev:web",
     "prepare": "vp config && effect-tsgo patch --typescript --oxlint"

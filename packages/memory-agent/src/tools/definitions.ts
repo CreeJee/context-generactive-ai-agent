@@ -30,7 +30,6 @@ export {
   type BundleText,
 } from "../report/bundle-contract.ts";
 export { runHasFailure, runPlace } from "../report/bundle-digest.ts";
-export { MemoryTaskSource } from "../rrsi/contracts.ts";
 export {
   ReportDeliveryFailure,
   ReportDeliveryResult,
