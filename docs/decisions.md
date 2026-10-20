@@ -2308,3 +2308,11 @@
 
 - 메인 채팅과 btw가 compatible 모델에 tool을 줄지는 선택된 endpoint 계정에 등록된 그 모델의 `toolCalling`으로만 정한다(`compatibleToolCalling`). 계정 도입 전 단일 `openaiCompatible` 설정은 `compatibleAccountsOf`가 읽어 같은 판단에 들어간다. 메인 채팅이 레거시 `openaiCompatible.toolCalling`만 읽어, 계정으로 저장된 설정(레거시 키를 지움)에서는 tool이 항상 빠지고 모델이 "확인하겠습니다"만 내고 멈췄다.
 - compatible 어댑터는 provider 턴이 끝날 때(`RUN_FINISHED`) `Compatible model turn finished` 로그에 SDK run ID, `finishReason`, 보낸 tool 정의 수, 받은 tool call 수만 남긴다. 프롬프트·응답 본문·모델 ID·endpoint·키는 남기지 않는다. 진단용 임시 로그가 아니라 유지한다.
+
+## Docker로 Linux 실행 파일 빌드 (2026-10-20)
+
+- `apps/agent/Dockerfile`은 `pnpm build`(`vp run package`)가 만드는 실행 파일을 Linux에서 빌드해 꺼내는 용도다. 앱을 컨테이너 서비스로 띄우는 이미지가 아니다. 서버는 `127.0.0.1`에만 열고 루프백이 아닌 Host를 거부하므로(위 "배포: 실행 파일"), 포트를 publish해도 컨테이너 밖에서는 붙지 못한다.
+- 빌드 컨텍스트는 저장소 루트다. `docker build -f apps/agent/Dockerfile --target artifact --output type=local,dest=out .`를 실행하면 `out/context-agent-linux-<arch>/`에 실행 파일과 `.sha256`이 생긴다. 아키텍처는 Docker 호스트를 따르고, 다른 아키텍처는 `--platform`으로 고른다.
+- 툴체인은 `.node-version`(Node 26.8.2), `devEngines`(pnpm 12.13.0), turbovec용 Rust 1.99.0으로 고정한다. 설치는 `--ignore-scripts`로 한다. prepare 스크립트는 git hook과 lint 도구만 바꾸고 빌드에는 쓰이지 않는다.
+- 이전 `apps/agent/Dockerfile`은 React Router 템플릿(npm, `package-lock.json`)의 잔재라 현재 저장소에서 빌드되지 않았다. 이 파일로 교체하고, `apps/agent/.dockerignore`는 루트 컨텍스트용 `Dockerfile.dockerignore`로 바꾼다.
+- 실행 파일은 glibc와 `libatomic.so.1`이 필요하다. `debian:bookworm-slim`에서는 `libatomic1`을 설치한 뒤 `--version`이 동작하는 것을 확인했다.
