@@ -2311,7 +2311,7 @@
 
 ## Docker로 Linux 실행 파일 빌드와 실행 (2026-10-20)
 
-- `apps/agent/Dockerfile`은 `pnpm build`(`vp run package`)가 만드는 실행 파일을 Linux에서 빌드하고, 그 실행 파일을 컨테이너에서 실행한다. 빌드 컨텍스트는 저장소 루트다.
+- 저장소 루트의 `Dockerfile`은 `pnpm build`(`vp run package`)가 만드는 실행 파일을 Linux에서 빌드하고, 그 실행 파일을 컨테이너에서 실행한다. 빌드 컨텍스트가 저장소 루트이므로 `docker build .`만으로 쓸 수 있게 루트에 둔다.
   - `pnpm build:docker`: linux/amd64와 linux/arm64 실행 파일을 함께 만들어 `apps/agent/dist/docker/context-agent-linux-<arch>/`에 둔다.
   - `pnpm start:docker`: 이 머신용 이미지를 만들고 `http://localhost:5173`으로 실행한다. 저장 루트는 `context-agent-data` 볼륨(`/data`), 비밀값은 `context-agent-secrets` 볼륨(`/secrets`), 프로젝트 폴더는 `/workspace`다.
 - 아키텍처에 묶이지 않게 플랫폼마다 따로 빌드한다(다른 아키텍처는 에뮬레이션). 실행 파일에는 대상 플랫폼의 Node와 네이티브 addon(turbovec, onnxruntime 등)이 들어가므로 `$BUILDPLATFORM`에서 교차 컴파일하지 않는다. Docker로는 Linux만 만든다. macOS와 Windows는 각 머신에서 `pnpm build`로 만든다.
@@ -2326,4 +2326,4 @@
   - 파일 이름은 `sha256(service + "\n" + account)`이고, 같은 문자열을 AAD로 써서 다른 entry로 복사한 파일은 복호화되지 않는다. 쓰기는 임시 파일과 rename으로 하며 권한은 폴더 0700, 파일 0600이다.
   - 세 키체인 사용처(`SecretStore`, OpenAI 호환 계정 키, OAuth 자격증명)는 모두 `openKeyringEntry`로 entry를 연다. 컨테이너에서 Kagi 키 저장, 재시작 후 유지, 키 없는 실행의 실패를 확인했다.
 - 저장 루트 잠금(`backend.lock`)에 소유 프로세스의 시작 시각(`performance.timeOrigin`)을 함께 남긴다. 기록의 pid가 현재 프로세스와 같아도 시작 시각이 다르면 이전 실행이 남긴 것으로 보고 지운다. 강제 종료된 컨테이너를 같은 볼륨으로 다시 띄우면 진입점이 매번 같은 pid를 받아, 살아 있는 소유자로 오인하고 시작하지 못했다. 같은 프로세스 안의 두 번째 잠금은 여전히 거부한다.
-- 이전 `apps/agent/Dockerfile`은 React Router 템플릿(npm, `package-lock.json`)의 잔재라 현재 저장소에서 빌드되지 않았다. 이 파일로 교체하고, `apps/agent/.dockerignore`는 루트 컨텍스트용 `Dockerfile.dockerignore`로 바꾼다.
+- 이전 `apps/agent/Dockerfile`은 React Router 템플릿(npm, `package-lock.json`)의 잔재라 현재 저장소에서 빌드되지 않았다. 이 파일을 지우고 루트 `Dockerfile`과 `.dockerignore`로 대체한다. `tools/rrsi/Dockerfile`은 자기 `Dockerfile.dockerignore`를 그대로 쓴다.
