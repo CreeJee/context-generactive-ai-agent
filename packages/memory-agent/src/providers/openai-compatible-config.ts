@@ -40,7 +40,7 @@ const connectionFields = {
   toolCalling: Schema.Boolean,
 };
 /**
- * One endpoint and one of its models, as a run, test or RRSI client uses them. Also the shape of
+ * One endpoint and one of its models, as a run or test uses them. Also the shape of
  * the single endpoint stored before compatible accounts.
  */
 export const OpenAICompatibleConfiguration = Schema.Struct({

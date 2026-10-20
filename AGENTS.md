@@ -38,7 +38,7 @@ release. Add a tool name to select part of the graph. For example, run
 - 테스트를 추가할때 명확히 필요한 부분만 테스트하고, 과하게 테스트를 만들거나 검증하지 않도록하기 (ex: rust 를 사용하는데 cargo가 있는지 확인하기)
 - 하위호환성의 기준점은 github 릴리즈 기준으로만 잡기
 
-- 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 `switch`로 분기하시오. `"key" in obj` 식 판별은 쓰지 마시오.
+- 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 Effect의 `match`로 분기하시오. Schema로 정의한 유니온은 `Schema.toTaggedUnion("<tag>")`의 `.match`를, 일반 값은 `Match.discriminatorsExhaustive("<tag>")`(`_tag`이면 `Match.valueTags`)를 쓰고, 모든 경우를 처리하게 하시오. `switch`는 새로 쓰지 마시오. `"key" in obj` 식 판별은 쓰지 마시오.
 - 확정한 제품과 설계 결정은 [docs/decisions.md](docs/decisions.md)에 날짜와 함께 남기시오.
 
 ## CodeGraph로 코드 탐색하기

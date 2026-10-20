@@ -201,7 +201,18 @@ const stableBackend = Effect.fnUntraced(function* (buildId: string) {
 
 function webFrontend(manifest: typeof Manifest.Type) {
   return packageCommand(
-    ["exec", "react-router", "dev", "--port", String(webPort), "--strictPort"],
+    // Same address as the backend: Vite's default `localhost` binds only IPv6 [::1] on macOS, so
+    // 127.0.0.1 did not reach the frontend. Browsers still reach it as `localhost` over IPv4.
+    [
+      "exec",
+      "react-router",
+      "dev",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(webPort),
+      "--strictPort",
+    ],
     {
       CONTEXT_AGENT_DEV_BACKEND: manifest.backendUrl,
       CONTEXT_AGENT_BUILD_ID: manifest.buildId,
@@ -226,7 +237,7 @@ const stop = Effect.fn("dev.stop")(function* (
 }, Effect.ignore());
 
 const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
-  yield* assertPortAvailable(webPort, "localhost", "Frontend");
+  yield* assertPortAvailable(webPort, "127.0.0.1", "Frontend");
   const manifest = yield* readManifest();
   yield* waitForBackend(manifest.backendUrl, manifest.buildId);
   yield* Console.log(`Stable agent backend: ${manifest.backendUrl}`);
@@ -236,7 +247,7 @@ const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
 
 const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: boolean) {
   yield* assertPortAvailable(backendPort, "127.0.0.1", "Backend");
-  if (includeWeb) yield* assertPortAvailable(webPort, "localhost", "Frontend");
+  if (includeWeb) yield* assertPortAvailable(webPort, "127.0.0.1", "Frontend");
   if (spans.kind === "local") yield* assertPortAvailable(spans.port, "127.0.0.1", "Span collector");
   const buildId = yield* nativePromise(() => developmentBuildId(app));
   yield* buildBackend(buildId);
@@ -291,7 +302,7 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
     return;
   }
   web = yield* webFrontend({ backendUrl, buildId });
-  yield* Console.log(`HMR frontend: http://localhost:${webPort}`);
+  yield* Console.log(`HMR frontend: http://127.0.0.1:${webPort}`);
   const first = yield* Effect.raceFirst(
     backend.exitCode.pipe(Effect.map((code) => ({ child: "backend", code }))),
     web.exitCode.pipe(Effect.map((code) => ({ child: "web", code }))),

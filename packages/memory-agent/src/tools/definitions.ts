@@ -238,3 +238,5 @@ export const permissionReviewInterrupt = defineInterrupt({
   payloadSchema: toToolSchema(PermissionReviewPayload),
   responseSchema: toToolSchema(PermissionReviewResponse),
 });
+export { reportedTitle, ScanState, sourceLabels } from "../improve/contracts.ts";
+export type { ScanFailure } from "../improve/contracts.ts";

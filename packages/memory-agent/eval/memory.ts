@@ -6,7 +6,7 @@ import { isTruthy } from "../src/truthy.ts";
 // Needs the models under ~/.context-generactive-agent/models. Reports macOS physical footprint
 // (`footprint`), which is what memory pressure counts; compare scenarios run together.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { runProcess } from "../src/rrsi/command.ts";
+import { runProcess } from "../src/runtime/run-process.ts";
 import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Duration, FileSystem } from "effect";

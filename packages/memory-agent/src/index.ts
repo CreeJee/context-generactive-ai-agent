@@ -1,7 +1,5 @@
-export { Rrsi } from "./rrsi/service.ts";
-export { HarnessStore } from "./rrsi/store.ts";
-export { Command as RrsiCommand } from "./rrsi/contracts.ts";
-export type { HarnessVersion, ExperimentRecord, RrsiSettings } from "./rrsi/contracts.ts";
+export { ProjectImprovement } from "./improve/discovery.ts";
+export type { ImprovementItem, ImprovementReport, ImprovementScan } from "./improve/contracts.ts";
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
 export {
   OpenAICompatibleSettings,

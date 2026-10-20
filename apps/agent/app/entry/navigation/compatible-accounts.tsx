@@ -183,19 +183,37 @@ function AddEndpointForm({
 
 function ModelForm({
   initial,
-  suggestions,
   busy,
+  onDiscover,
   onSave,
   onClose,
 }: {
   initial: CompatibleModelInput;
-  suggestions: readonly string[];
   busy: boolean;
+  onDiscover: () => Promise<readonly string[]>;
   onSave: (model: CompatibleModelInput) => void;
   onClose: () => void;
 }) {
   const [model, setModel] = useState(initial);
+  const [suggestions, setSuggestions] = useState<readonly string[]>([]);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovery, setDiscovery] = useState<string | null>(null);
   const idPrefix = useId();
+  const discover = () => {
+    setDiscovering(true);
+    setDiscovery(null);
+    void onDiscover()
+      .then(
+        (ids) => {
+          setSuggestions(ids);
+          setDiscovery(
+            `${ids.length}개 모델을 불러왔어요. 목록에 없어도 ID를 직접 입력할 수 있어요.`,
+          );
+        },
+        (failure: Error) => setDiscovery(compatibleErrorMessage(failure)),
+      )
+      .finally(() => setDiscovering(false));
+  };
   return (
     <form
       aria-label="모델 등록"
@@ -207,12 +225,17 @@ function ModelForm({
     >
       <Field>
         <FieldLabel htmlFor={`${idPrefix}-id`}>모델 ID</FieldLabel>
-        <Input
-          id={`${idPrefix}-id`}
-          required
-          value={model.id}
-          onChange={(event) => setModel({ ...model, id: event.target.value })}
-        />
+        <div className="flex gap-1">
+          <Input
+            id={`${idPrefix}-id`}
+            required
+            value={model.id}
+            onChange={(event) => setModel({ ...model, id: event.target.value })}
+          />
+          <Button type="button" variant="outline" disabled={busy || discovering} onClick={discover}>
+            {discovering && <Spinner />} 모델 목록 불러오기
+          </Button>
+        </div>
         {suggestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5" aria-label="서버의 모델">
             {suggestions.slice(0, 20).map((id) => (
@@ -227,6 +250,11 @@ function ModelForm({
               </Button>
             ))}
           </div>
+        )}
+        {discovery !== null && (
+          <p role="status" className="text-2xs text-muted-foreground">
+            {discovery}
+          </p>
         )}
         <FieldDescription>서버에서 쓰는 정확한 ID를 입력하세요.</FieldDescription>
       </Field>
@@ -316,7 +344,6 @@ function EndpointCard({
   const [baseUrl, setBaseUrl] = useState(account.baseUrl);
   const [apiKey, setApiKey] = useState("");
   const [removeKey, setRemoveKey] = useState(false);
-  const [suggestions, setSuggestions] = useState<readonly string[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const run = (task: () => Promise<void>, done?: string) => {
@@ -512,8 +539,8 @@ function EndpointCard({
         <ModelForm
           key={mode.initial.id}
           initial={mode.initial}
-          suggestions={suggestions}
           busy={busy}
+          onDiscover={() => handlers.onDiscover(account.id)}
           onSave={(model) =>
             void change(
               { intent: "save-model", accountId: account.id, model },
@@ -530,23 +557,6 @@ function EndpointCard({
             onClick={() => setMode({ type: "model", initial: newModel() })}
           >
             <PlusIcon /> 모델 추가
-          </Button>
-          <Button
-            variant="ghost-muted"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              void run(() =>
-                handlers.onDiscover(account.id).then((ids) => {
-                  setSuggestions(ids);
-                  setMessage(
-                    `${ids.length}개 모델을 불러왔어요. 목록에 없어도 ID를 직접 입력할 수 있어요.`,
-                  );
-                }),
-              ).then(() => setMode({ type: "model", initial: newModel() }))
-            }
-          >
-            서버 모델 불러오기
           </Button>
         </div>
       )}

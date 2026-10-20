@@ -30,7 +30,6 @@ import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
   type CompatibleKeyStore,
-  CompatibleCompletionRejected,
   OpenAICompatibleFailed,
   validateCompatibleConnection,
   validateCompatibleModel,
@@ -142,10 +141,6 @@ const jsonStringify = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-const jsonParse = EffectFunction.flow(
-  Schema.decodeResult(Schema.fromJsonString(Schema.Json)),
-  Result.getOrThrow,
-);
 
 const configuration = {
   baseUrl: "http://127.0.0.1:1234/v1",
@@ -182,115 +177,6 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
-  effectTest.live.each([
-    [100, 80, "memory_capacity_exceeded"],
-    [60, 80, "request_rejected"],
-    [-100, 80, "request_rejected"],
-  ] as const)(
-    "classifies structured capacity rejection (%s / %s) without response text",
-    ([estimated, limit, reason]) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const privateText = "private endpoint, model, request and credential";
-          const f = fixture(
-            nativeFetch(() =>
-              Effect.sync(() =>
-                Response.json(
-                  {
-                    error: {
-                      message: privateText,
-                      estimated_bytes: estimated,
-                      limit_bytes: limit,
-                    },
-                  },
-                  { status: 400 },
-                ),
-              ),
-            ),
-            { openaiCompatible: configuration },
-          );
-          const client = yield* f.api.pinRrsiClient;
-          const failure = yield* sdkCall(() =>
-            client
-              .complete('{"messages":[]}', new AbortController().signal)
-              .catch((error: Error) => error),
-          );
-          expect(failure).toBeInstanceOf(CompatibleCompletionRejected);
-          expect(failure).toMatchObject({ status: 400, reason });
-          expect(jsonStringify(failure)).not.toContain(privateText);
-        }),
-      ),
-  );
-
-  effectTest.live("keeps unstructured provider rejections generic", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = fixture(
-          nativeFetch(() =>
-            Effect.sync(() => new Response("private provider traceback", { status: 502 })),
-          ),
-          {
-            openaiCompatible: configuration,
-          },
-        );
-        const client = yield* f.api.pinRrsiClient;
-        expect(
-          (yield* Effect.flip(
-            sdkCall(() => client.complete('{"messages":[]}', new AbortController().signal)),
-          )).cause,
-        ).toMatchObject({ status: 502, reason: "request_rejected" });
-      }),
-    ),
-  );
-  effectTest.live("pins remote compatible endpoints and honors the configured output budget", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const seen: string[] = [];
-        const f = fixture(
-          nativeFetch((url, options) =>
-            Effect.sync(() => {
-              expect(url).toBe("https://compatible.example/v1/chat/completions");
-              seen.push(
-                EffectFunction.flow(
-                  Schema.decodeUnknownResult(Schema.String),
-                  Result.getOrThrow,
-                )(options?.body),
-              );
-              return Response.json({
-                choices: [{ message: { content: "OK" } }],
-                usage: { prompt_tokens: 2000000, completion_tokens: 1 },
-              });
-            }),
-          ),
-          {
-            provider: "openai-compatible",
-            model: "remote",
-            reasoningEffort: "default",
-            openaiCompatible: {
-              ...configuration,
-              baseUrl: "https://compatible.example/v1",
-              model: "remote",
-              outputBudget: 8192,
-              contextWindow: 32768,
-            },
-          },
-        );
-        const client = yield* f.api.pinRrsiClient;
-        yield* sdkCall(() =>
-          client.complete(
-            jsonStringify({
-              model: "candidate-model",
-              max_tokens: 1,
-              messages: [{ role: "user", content: "hello" }],
-            }),
-            new AbortController().signal,
-          ),
-        );
-        expect(jsonParse(seen[0]!)).toMatchObject({ model: "remote", max_tokens: 8192 });
-      }),
-    ),
-  );
-
   effectTest.live.each([
     ["private question", "text:16:plain"],
     ["<tool_response>private result</tool_response>", "text:45:tool-response"],
