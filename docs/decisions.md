@@ -2348,3 +2348,9 @@
 - 호스트는 `memory-search`와 `vector-search-controlled` 응답을 고정 2초가 아니라 요청 예산(`remainingMs`, `budgetMs`)에 2초를 더한 만큼 기다린다(`native-search/client.ts`의 `replyDeadline`). 나머지 명령은 2초 그대로다.
 - 이유: 50k 크기 상한을 뺀 뒤(위 2026-10-20 항목), 남은 예산이 직전 호출 시간 이상이면 다음 엔진 호출을 허용한다. 이미 허용된 호출은 중단할 수 없어 예산 끝 근처까지 간다. 호스트 타이머도 2초라 네이티브가 `budget-exceeded`를 돌려주기 전에 `request-timeout`이 먼저 났고, find_memory가 `NativeMemorySearchFailed` 대신 `VectorIndexError(search)`로 실패했다.
 - 호스트 타이머는 멈춘 worker를 끊는 용도로만 남는다. 예산 소진은 네이티브가 typed 결과로 알린다.
+
+## dev 실행의 span 수집 기본 활성화 (2026-10-20)
+
+- `vp run dev`(`all`, `agent`)는 기본으로 `tools/profile`의 OTLP 수집기를 `127.0.0.1:4318`에 띄우고, 백엔드에 `OTEL_TRACES_EXPORTER=otlp`와 그 endpoint를 넘긴다. span은 `apps/agent/build/dev-spans-<backend-port>.ndjson`에 쌓이고 `node tools/profile/main.ts summarize`로 읽는다.
+- `--otlp-port`로 포트를 바꾸고 `--no-otel`로 끈다. 끄면 백엔드는 호출한 쪽의 `OTEL_*`를 그대로 받는다. 별도 환경변수는 두지 않는다.
+- 이유: 실행 중인 서버에서 find_memory 실패의 단계별 시간과 오류 여부를 재시작 없이 다시 볼 수 없었다. 로컬 수집기는 문자열 속성을 버리므로 프롬프트나 오류 본문은 파일에 남지 않는다. 수집기는 백엔드보다 나중에 끝내 마지막 span까지 받는다.

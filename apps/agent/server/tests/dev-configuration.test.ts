@@ -30,6 +30,18 @@ describe("development configuration", () => {
     );
   });
 
+  test("collects spans locally unless turned off", () => {
+    const spans = (args: string[]) =>
+      runtime.runSync(readDevConfiguration(args, {}, "/tmp/app")).spans;
+    expect(spans([])).toEqual({
+      kind: "local",
+      port: 4318,
+      file: "/tmp/app/build/dev-spans-5180.ndjson",
+    });
+    expect(spans(["--otlp-port", "4400"])).toMatchObject({ kind: "local", port: 4400 });
+    expect(spans(["--no-otel"])).toEqual({ kind: "off" });
+  });
+
   test("invalid settings fail before starting either server", () => {
     for (const args of [
       ["--backend-port", "NaN"],

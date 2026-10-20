@@ -51,6 +51,13 @@ export const readDevConfiguration = Effect.fn("dev.readConfiguration")(function*
     });
   const storage = Option.getOrUndefined(parsed.storage) ?? environment.CONTEXT_AGENT_HOME;
   const manifest = Option.getOrUndefined(parsed.manifest) ?? environment.CONTEXT_AGENT_DEV_MANIFEST;
+  const spans: DevSpans = parsed.otel
+    ? {
+        kind: "local",
+        port: yield* port(Option.getOrUndefined(parsed.otlpPort) ?? "4318", "otlp-port"),
+        file: join(app, "build", `dev-spans-${backendPort}.ndjson`),
+      }
+    : { kind: "off" };
   return {
     mode,
     help: parsed.help,
@@ -61,14 +68,26 @@ export const readDevConfiguration = Effect.fn("dev.readConfiguration")(function*
       manifest === undefined
         ? join(app, "build", `dev-backend-${backendPort}.json`)
         : resolve(manifest),
+    spans,
   };
 });
+
+/**
+ * Where the dev backend's spans go. `local` starts the profiling tool's OTLP collector beside the
+ * backend; `off` leaves the backend with the caller's own `OTEL_*` variables, if any.
+ */
+export type DevSpans =
+  | { readonly kind: "off" }
+  | { readonly kind: "local"; readonly port: number; readonly file: string };
 
 export const devHelp = `Usage: vp run dev [all|agent|web] [options]
   --backend-port <port>  Backend port (default 5180)
   --web-port <port>      HMR frontend port (default 5173)
   --storage <directory> Isolated storage root (default application storage)
   --manifest <file>     Backend connection file shared by agent/web terminals
+  --otlp-port <port>    Local span collector port (default 4318); spans go to
+                        build/dev-spans-<backend-port>.ndjson
+  --no-otel             Do not start the span collector
   -h, --help            Show configuration help without starting servers
 CLI options override CONTEXT_AGENT_DEV_BACKEND_PORT, CONTEXT_AGENT_DEV_WEB_PORT,
 CONTEXT_AGENT_HOME and CONTEXT_AGENT_DEV_MANIFEST. Backend changes require a manual restart.`;
@@ -79,5 +98,7 @@ const devCommandLine = {
   webPort: Flag.String("web-port").pipe(Flag.optional),
   storage: Flag.String("storage").pipe(Flag.optional),
   manifest: Flag.String("manifest").pipe(Flag.optional),
+  otlpPort: Flag.String("otlp-port").pipe(Flag.optional),
+  otel: Flag.Boolean("otel").pipe(Flag.withDefault(true)),
   help: Flag.Boolean("help").pipe(Flag.withAlias("h"), Flag.withDefault(false)),
 };
