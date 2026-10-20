@@ -15,7 +15,8 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Checkouts } from "../imports/checkouts.ts";
 import { Projects } from "../projects/projects.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import { ImprovementItem, improvementItems } from "./items.ts";
+import { ImprovementInterpreter, ItemInterpretation } from "./interpret.ts";
+import { grouping, ImprovementItem, improvementItems } from "./items.ts";
 import { improvementReport } from "./report.ts";
 import { collectSignals } from "./signals.ts";
 
@@ -37,13 +38,20 @@ export interface RepositoryImprovements {
   readonly items: readonly ImprovementItem[];
 }
 
+/** An item the model judged worth fixing, or could not judge. */
+export const ReportedItem = Schema.Struct({
+  ...ImprovementItem.fields,
+  interpretation: ItemInterpretation,
+});
+export type ReportedItem = typeof ReportedItem.Type;
+
 /** One repository's recorded report: the Markdown document and the items in it. */
 export const ImprovementReport = Schema.Struct({
   repository: Schema.String,
   /** Where the document was written, under the storage root. */
   file: Schema.String,
   markdown: Schema.String,
-  items: Schema.Array(ImprovementItem),
+  items: Schema.Array(ReportedItem),
 });
 export type ImprovementReport = typeof ImprovementReport.Type;
 
@@ -65,6 +73,7 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const reports = path.join((yield* StorageRoot).path, "improvements");
+  const interpreter = yield* ImprovementInterpreter;
 
   /**
    * Open projects grouped by the repository they belong to. A worktree project, even one whose
@@ -146,11 +155,36 @@ const make = Effect.gen(function* () {
    * reports of the previous one.
    */
   const scan = Effect.fn("ProjectImprovement.scan")(function* () {
+    const { interpret } = yield* interpreter.model;
     const found = yield* discover();
+    // Repositories one at a time, two model calls at once within each: the user's own chats share
+    // the provider.
+    const interpreted = yield* Effect.forEach(
+      found,
+      (repository) =>
+        Effect.forEach(
+          Object.values(EffectArray.groupBy(repository.items, (item) => item.source)).flatMap(
+            (items) => items.slice(0, grouping.candidatesPerSource),
+          ),
+          (item) =>
+            interpret(item).pipe(
+              Effect.map(
+                Option.map((interpretation): ReportedItem => ({ ...item, interpretation })),
+              ),
+            ),
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map((results) => ({
+            repository: repository.repository,
+            items: EffectArray.getSomes(results).sort((a, b) => b.count - a.count),
+          })),
+        ),
+      { concurrency: 1 },
+    );
     const generatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* fs.makeDirectory(reports, { recursive: true }).pipe(Effect.mapError(failed));
     const written = yield* Effect.forEach(
-      found,
+      interpreted,
       (repository) => {
         const file = path.join(
           reports,
@@ -185,7 +219,8 @@ export class ProjectImprovement extends Context.Service<
   ProjectImprovement,
   Effect.Success<typeof make>
 >()("memory-agent/improve/discovery/ProjectImprovement") {
-  static readonly layer = Layer.effect(ProjectImprovement, make).pipe(
-    Layer.provide(Checkouts.layer),
+  static readonly layerNoDeps = Layer.effect(ProjectImprovement, make);
+  static readonly layer = ProjectImprovement.layerNoDeps.pipe(
+    Layer.provide(Layer.mergeAll(Checkouts.layer, ImprovementInterpreter.layer)),
   );
 }

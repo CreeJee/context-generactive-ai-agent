@@ -313,7 +313,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
-    ProjectImprovement.layer,
     Skills.layer({
       ...optionalProperty("home", options.skillsHome),
       ...optionalProperty("builtin", options.skillsBuiltin),
@@ -367,6 +366,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     QueueDelivery.layer,
     TurnSummaries.layer(options.summarizeAutomatically),
     ReportDiagnoser.layer,
+    ProjectImprovement.layer,
   ).pipe(Layer.provideMerge(providers));
   // Kanban boards run their cards as session subagents, so they sit above the tools.
   const kanbanRuntime = KanbanTools.layer.pipe(
