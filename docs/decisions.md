@@ -2380,3 +2380,10 @@
 
 - 사용자 결정: 리터럴 태그를 가진 서로소 유니온의 분기는 `switch` 대신 Effect의 `match`로 쓴다. Schema 유니온은 `Schema.toTaggedUnion("<tag>")`로 정의해 `.match`로, 일반 값은 `Match.discriminatorsExhaustive("<tag>")`(`_tag`이면 `Match.valueTags`)로 분기한다. 모든 경우를 처리해야 타입 검사를 통과한다.
 - 새 코드에는 `switch`를 쓰지 않는다. 기존 `switch`는 그 코드를 고칠 때 함께 바꾼다. `"key" in obj` 판별 금지는 그대로다.
+
+## 메모리 탐색 랩과 셸 스킬 경계 (2026-10-21)
+
+- 탐색 단계 격리 랩(`packages/memory-agent/eval/memory-research-lab.ts`)은 패키지 스크립트 `eval:memory-lab`이 진입점이다(스테이지 선택 인자는 `--` 뒤). 셸 스킬 `memory-research-lab`은 레포 루트 실행과, 기본 TMPDIR이 쓰기 불가한 샌드박스에서만 `node_modules/.vp-tmp`로 TMPDIR을 폴백하는 래퍼일 뿐 유일 경로가 아니다.
+- 랩의 프로젝트 루트는 랩 실행 cwd(패키지 디렉터리)다. `Projects.add`는 실존하는 디렉터리만 등록하므로 존재하지 않는 임시 `project` 폴더 등록은 `ProjectRootRejected(not_found)`로 거부된다. 임시 스토리지 루트(`node_modules/.vp-tmp`)는 패키지 루트와 겹치지 않아 `overlaps_storage`도 피한다.
+- `MemorySearch.tuned`는 `SearchTuning`(trigram 텍스트 채널 on/off 등)만 바꾼다. 벡터 채널은 튜닝과 무관하게 항상 시도되므로, 임베더 없는 스테이지(fts-only·morph-only)의 `degraded vector`와 `unindexed > 0`은 설계된 정상 상태다. 랩 판정은 이 스테이지들을 고장 판정에서 제외한다.
+- 태그드 스키마 에러(`Schema.TaggedError`)의 `message`는 빈 문자열이다. 실패 사유를 사용자에게 보여줄 때는 `Error.message` 대신 태그와 필드(예: `Cause.pretty` 꼬리)를 렌더링한다.

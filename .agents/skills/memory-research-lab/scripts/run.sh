@@ -1,21 +1,21 @@
-# run_skill network: localhost
 #!/bin/sh
 # memory-research-lab: time isolated stages of memory search to find the failing one.
 # Usage: memory-research-lab [stage]
 # Stages: fake-embed | real-embed | fts-only | morph-only | full. No argument runs all of them.
-# Runs the real lab script (packages/memory-agent/eval/memory-research-lab.ts), which mirrors
-# eval/recall.ts's corpus, seeding and layer assembly, from packages/memory-agent.
-# vp/node workers create IPC under TMPDIR/claude; the sandbox may deny the default TMPDIR,
-# so TMPDIR is pointed into node_modules (gitignored) where writes are allowed.
+# The lab itself lives in packages/memory-agent/eval and is also runnable directly with
+# `vp run eval:memory-lab` from that package. This skill only adds: running it from the repo
+# root and, when the default temp dir is not writable (Orca sandbox), a TMPDIR fallback
+# under node_modules (gitignored) where vp/node workers create their IPC sockets.
 set -u
 VTMP="$PWD/node_modules/.vp-tmp"
-mkdir -p "$VTMP"
-TMPDIR="$VTMP"
-export TMPDIR
+if [ ! -w "${TMPDIR:-/tmp}" ]; then
+  mkdir -p "$VTMP"
+  TMPDIR="$VTMP"
+  export TMPDIR
+fi
 cd packages/memory-agent
-stage="${1:-}"
-if [ -n "$stage" ]; then
-  node --no-warnings eval/memory-research-lab.ts "$stage"
+if [ -n "${1:-}" ]; then
+  exec vp run eval:memory-lab -- "$1"
 else
-  node --no-warnings eval/memory-research-lab.ts
+  exec vp run eval:memory-lab
 fi

@@ -123,10 +123,12 @@ const stages: readonly Stage[] = [
   {
     name: "fake-embed",
     detail: "레포의 가짜 임베더(문자 trigram SHA-256) + 가짜 형태소 + trigram",
-    embedder: timedEmbedder(fakeEmbedderLayer).layer,
+    ...(() => {
+      const timed = timedEmbedder(fakeEmbedderLayer);
+      return { embedder: timed.layer, embedNanos: timed.nanos };
+    })(),
     morph: fakeMorphLayer,
     text: true,
-    embedNanos: { value: 0n },
   },
   ...(embedVariant
     ? [
@@ -236,8 +238,10 @@ type StageOutcome =
   | { readonly kind: "failed"; readonly name: string; readonly reason: string };
 
 /** One stage's seeding, indexing and timed queries inside its own runtime. */
-const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage, base: string) {
-  const project = yield* (yield* Projects).add(join(base, "project"));
+const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) {
+  // The lab's project root is the package directory itself, like the product registering the
+  // folder it runs in; the temporary storage root lives outside it under node_modules/.vp-tmp.
+  const project = yield* (yield* Projects).add(process.cwd());
   const nodes = yield* Nodes;
   const keys = MutableHashMap.empty<string, string>();
   for (const statements of sets.flatMap((set) => set.sessions)) {
@@ -351,16 +355,25 @@ const evaluateStage = Effect.fn("lab.stage")(function* (stage: Stage) {
           kanbanWorktreesBase: join(base, "kanban"),
         }),
       ),
-      (servicesContext) => Effect.provideContext(runStageEffects(stage, base), servicesContext),
+      (servicesContext) => Effect.provideContext(runStageEffects(stage), servicesContext),
     ),
   ).pipe(
     // The stage result is what matters; a failed stage becomes one failed stage, not a dead run.
     Effect.catchCause((cause) => {
       const error = Cause.squash(cause);
+      // Tagged schema errors render empty `message`s; the tag and fields are the reason.
+      const reason =
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : `${error instanceof Error ? "" : String(error)}${Cause.pretty(cause)
+              .split("\n")
+              .filter((line) => line.trim().length > 0)
+              .slice(-6)
+              .join(" | ")}`;
       return Effect.succeed({
         kind: "failed" as const,
         name: stage.name,
-        reason: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+        reason: reason.slice(0, 400),
       } satisfies StageOutcome);
     }),
   );
@@ -375,7 +388,11 @@ const top3 = (result: StageResult | undefined, setName: string): number | null =
   return set === undefined ? null : set.top3 / set.total;
 };
 
-const only = process.argv[2];
+/** Stages that run with no embedder: the vector channel is absent by design there, so its
+ * degraded/unindexed signals are the expected state, not failures. */
+const withoutEmbedder = (name: string) => name === "fts-only" || name === "morph-only";
+
+const only = process.argv.slice(2).find((argument) => argument !== "--");
 const results: StageOutcome[] = [];
 for (const stage of stages) {
   if (only !== undefined && stage.name !== only) continue;
@@ -392,7 +409,12 @@ for (const stage of stages) {
         `  ${set.name.padEnd(9)}: top1 ${set.top1}/${set.total} top3 ${set.top3}/${set.total} top5 ${set.top5}/${set.total} MRR ${set.mrr} | index ${ok.indexMs}ms, search ${set.searchMsPerQuery}ms/query (max ${set.maxQueryMs}ms), embed ${ok.embedMsPerQuery}ms/query`,
       );
     console.log(
-      `  unindexed ${ok.unindexed} | degraded ${ok.degraded.length > 0 ? ok.degraded.join(",") : "없음"}`,
+      `  unindexed ${ok.unindexed}${withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : ""} | degraded ${
+        ok.degraded.length > 0
+          ? ok.degraded.join(",") +
+            (withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : "")
+          : "없음"
+      }`,
     );
     if (ok.sets.some((set) => set.missCount > 0)) {
       console.log(
@@ -461,14 +483,18 @@ for (const set of sets) {
   }
 }
 const degradedStages = results.flatMap((result) =>
-  result.kind === "ok" && result.degraded.includes("vector") ? [result.name] : [],
+  result.kind === "ok" && !withoutEmbedder(result.name) && result.degraded.includes("vector")
+    ? [result.name]
+    : [],
 );
 if (degradedStages.length > 0)
   lines.push(
     `- 임베더가 실행 중 실패한 단계: ${degradedStages.join(", ")} (degraded vector) — 모델 로딩/워커 실패`,
   );
 const unindexedStages = results.flatMap((result) =>
-  result.kind === "ok" && result.unindexed > 0 ? [`${result.name}(${result.unindexed})`] : [],
+  result.kind === "ok" && !withoutEmbedder(result.name) && result.unindexed > 0
+    ? [`${result.name}(${result.unindexed})`]
+    : [],
 );
 if (unindexedStages.length > 0)
   lines.push(
