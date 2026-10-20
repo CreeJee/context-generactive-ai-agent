@@ -1,14 +1,17 @@
 import { chat } from "@tanstack/ai";
-import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
-import { abortControllerFor } from "../runtime/abort-controller.ts";
 
 export class InterpretationUnavailable extends Schema.TaggedError<InterpretationUnavailable>()(
   "InterpretationUnavailable",
   {
-    /** No model is selected, or its provider is not signed in or cannot be reached. */
-    reason: Schema.Literals(["model_unavailable"]),
+    /**
+     * `model_unavailable`: no model is selected, or its provider is not signed in or cannot be
+     * resolved. `model_unreachable`: model calls kept failing or went silent in a row, so the
+     * server is taken to be down rather than the items being at fault.
+     */
+    reason: Schema.Literals(["model_unavailable", "model_unreachable"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -56,8 +59,27 @@ export const interpretationPrompt = (item: ImprovementItem) =>
     ...item.excerpts.map((excerpt, index) => `[${index + 1}]\n${excerpt}`),
   ].join("\n");
 
-const interpretTimeoutMs = 120_000;
+/**
+ * How long a call may go without a single streamed chunk. Reasoning models stream their thinking
+ * too (the local GLM sent a chunk at least every 0.2 s), so silence this long means a stuck server
+ * or connection, not a slow answer.
+ */
+const silenceLimit = Duration.seconds(60);
+/** Failed calls in a row that stop the scan: the server is down, not one prompt at fault. */
+const failuresInARow = 2;
 const maxText = 800;
+
+/**
+ * The iterable without `return`. A stream awaits `return` when it ends early, but an async
+ * generator's `return` waits behind its pending `next`, which only the abort ends, and the abort
+ * runs after the stream: with `return` a silent call would never end.
+ */
+const withoutReturn = <A>(iterable: AsyncIterable<A>): AsyncIterable<A> => ({
+  [Symbol.asyncIterator]: () => {
+    const iterator = iterable[Symbol.asyncIterator]();
+    return { next: () => iterator.next() };
+  },
+});
 
 /** Strips a code fence the model may add despite the instructions, then decodes. */
 export const parseInterpretation = (answer: string) =>
@@ -100,10 +122,46 @@ const make = Effect.gen(function* () {
     if (auth.status !== "signed-in") return yield* unavailable(null);
     const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
     const adapter = services.runtime.adapter(selection);
+    // Per scan: a later scan starts trusting the server again.
+    const consecutiveFailures = yield* Ref.make(0);
+
+    /** The answer's text, streamed so silence can be told from a long answer. */
+    const answer = (item: ImprovementItem, threadId: string) =>
+      Effect.acquireRelease(
+        Effect.sync(() => new AbortController()),
+        (controller) => Effect.sync(() => controller.abort()),
+      ).pipe(
+        Effect.flatMap((controller) =>
+          Stream.fromAsyncIterable(
+            withoutReturn(
+              chat({
+                adapter,
+                messages: [{ role: "user", content: interpretationPrompt(item) }],
+                systemPrompts: [interpretationInstructions],
+                threadId,
+                abortController: controller,
+                stream: true,
+              }),
+            ),
+            (cause) => cause,
+          ).pipe(
+            Stream.timeoutOrElse({
+              duration: silenceLimit,
+              orElse: () => Stream.fail("silent" as const),
+            }),
+            Stream.runFold(
+              () => "",
+              (text, chunk) => (chunk.type === "TEXT_MESSAGE_CONTENT" ? text + chunk.delta : text),
+            ),
+          ),
+        ),
+        Effect.scoped,
+      );
 
     /**
      * One item: none when the model judges it not worth fixing. A failed or unusable answer
-     * becomes a `failed` interpretation, so one item cannot sink the scan.
+     * becomes a `failed` interpretation, so one item cannot sink the scan; {@link failuresInARow}
+     * failed calls in a row fail the scan as `model_unreachable`.
      */
     const interpret = Effect.fn("ImprovementInterpreter.interpret")(function* (
       item: ImprovementItem,
@@ -111,23 +169,19 @@ const make = Effect.gen(function* () {
       const failed = (reason: "model_failed" | "invalid_answer") =>
         Option.some<ItemInterpretation>({ status: "failed", reason });
       return yield* crypto.randomUUIDv4().pipe(
-        Effect.flatMap((threadId) =>
-          Effect.tryPromise((signal) =>
-            chat({
-              adapter,
-              messages: [{ role: "user", content: interpretationPrompt(item) }],
-              systemPrompts: [interpretationInstructions],
-              threadId,
-              abortController: abortControllerFor(signal),
-              stream: false,
-            }),
-          ),
-        ),
-        Effect.timeout(interpretTimeoutMs),
+        Effect.flatMap((threadId) => answer(item, threadId)),
         Effect.matchEffect({
-          onFailure: () => Effect.succeed(failed("model_failed")),
-          onSuccess: (answer) =>
-            parseInterpretation(answer).pipe(
+          onFailure: (cause) =>
+            Ref.updateAndGet(consecutiveFailures, (count) => count + 1).pipe(
+              Effect.filterOrFail(
+                (count) => count < failuresInARow,
+                () => InterpretationUnavailable.make({ reason: "model_unreachable", cause }),
+              ),
+              Effect.as(failed("model_failed")),
+            ),
+          onSuccess: (text) =>
+            Ref.set(consecutiveFailures, 0).pipe(
+              Effect.andThen(parseInterpretation(text)),
               Effect.catchTag("SchemaError", () => Effect.succeed(failed("invalid_answer"))),
             ),
         }),

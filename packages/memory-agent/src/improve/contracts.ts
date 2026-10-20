@@ -74,6 +74,7 @@ export const ScanFailure = Schema.Literals([
   "report",
   "embedding",
   "model_unavailable",
+  "model_unreachable",
   "internal",
 ]);
 export type ScanFailure = typeof ScanFailure.Type;

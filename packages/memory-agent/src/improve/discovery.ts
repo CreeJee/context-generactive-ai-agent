@@ -260,7 +260,7 @@ const make = Effect.gen(function* () {
       DiscoveryFailed: (failure) => Effect.fail<ScanFailure>(failure.reason),
       SignalsFailed: () => Effect.fail<ScanFailure>("storage"),
       EmbeddingError: () => Effect.fail<ScanFailure>("embedding"),
-      InterpretationUnavailable: () => Effect.fail<ScanFailure>("model_unavailable"),
+      InterpretationUnavailable: (failure) => Effect.fail<ScanFailure>(failure.reason),
     }),
     Effect.onExit((exit) =>
       Effect.flatMap(now, (at) =>
