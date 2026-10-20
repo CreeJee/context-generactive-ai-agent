@@ -1,5 +1,8 @@
-//! Admission is a measured-envelope policy, NOT a preemptive deadline guarantee.
+//! Admission is a measured-time policy, NOT a preemptive deadline guarantee.
 //! The pinned engine includes synchronous mask construction and cold cache warming.
+//! Index and allowlist size are not admission bounds: the engine call costs a few ms
+//! up to 800k vectors (docs/decisions.md, 2026-10-20). A later call in the same
+//! request is admitted only while the remaining budget covers the previous call.
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::{
@@ -208,8 +211,15 @@ pub(crate) fn claim(
     Some(state.clone())
 }
 
-pub(crate) fn admitted(size: usize, dim: usize, bits: usize, k: u32, remaining: Duration) -> bool {
-    size <= 50_000 && dim == 384 && bits == 4 && k <= 48 && remaining >= Duration::from_millis(12)
+/// `previous` is the measured span of the request's previous engine call, zero before the first.
+pub(crate) fn admitted(
+    dim: usize,
+    bits: usize,
+    k: u32,
+    remaining: Duration,
+    previous: Duration,
+) -> bool {
+    dim == 384 && bits == 4 && k <= 48 && remaining >= previous.max(Duration::from_millis(12))
 }
 
 pub fn search(
@@ -236,10 +246,13 @@ pub fn search(
     {
         return outcome(Outcome::InvalidInput, start);
     }
-    let remaining = cell.remaining();
-    if !admitted(index.len(), query.len(), index.bit_width(), k, remaining)
-        || allowed.as_ref().is_some_and(|ids| ids.len() > 50_000)
-    {
+    if !admitted(
+        query.len(),
+        index.bit_width(),
+        k,
+        cell.remaining(),
+        Duration::ZERO,
+    ) {
         return outcome(Outcome::BudgetExceeded, start);
     }
     let ids = match allowed {
@@ -257,11 +270,11 @@ pub fn search(
         return outcome(Outcome::Cancelled, start);
     }
     if !admitted(
-        index.len(),
         query.len(),
         index.bit_width(),
         k,
         cell.remaining(),
+        Duration::ZERO,
     ) {
         return outcome(Outcome::BudgetExceeded, start);
     }
@@ -382,11 +395,13 @@ mod tests {
         );
     }
     #[test]
-    fn measured_envelope_does_not_clip() {
-        assert!(admitted(50_000, 384, 4, 48, Duration::from_millis(12)));
-        assert!(!admitted(50_001, 384, 4, 48, Duration::from_millis(12)));
-        assert!(!admitted(50_000, 384, 4, 49, Duration::from_millis(12)));
-        assert!(!admitted(50_000, 384, 4, 48, Duration::from_millis(11)));
-        assert!(!admitted(50_000, 383, 4, 48, Duration::from_millis(12)));
+    fn admission_needs_previous_call_span() {
+        let ms = Duration::from_millis;
+        assert!(admitted(384, 4, 48, ms(12), Duration::ZERO));
+        assert!(!admitted(384, 4, 49, ms(12), Duration::ZERO));
+        assert!(!admitted(384, 4, 48, ms(11), Duration::ZERO));
+        assert!(!admitted(383, 4, 48, ms(12), Duration::ZERO));
+        assert!(admitted(384, 4, 48, ms(30), ms(30)));
+        assert!(!admitted(384, 4, 48, ms(29), ms(30)));
     }
 }

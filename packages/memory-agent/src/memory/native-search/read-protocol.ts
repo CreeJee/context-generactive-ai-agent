@@ -13,6 +13,8 @@ const Budget = Schema.Finite.check(Schema.makeFilter((value) => value >= 0 && va
 const Bytes = Count.check(Schema.makeFilter((value) => value <= 1_048_576));
 const ids = Schema.Array(Schema.String);
 const elapsed = Schema.Finite.check(Schema.makeFilter((value) => value >= 0));
+/** Same bound as the native `admitted`: a larger vector k fails the whole read. */
+export const maxVectorK = 48;
 
 export const NativeReadInput = Schema.Struct({
   allowedProjects: ids,
@@ -21,7 +23,7 @@ export const NativeReadInput = Schema.Struct({
   trigramTerms: ids,
   shortTerms: ids,
   morphTerms: ids,
-  vectorK: Count,
+  vectorK: Count.check(Schema.makeFilter((value) => value <= maxVectorK)),
   textK: Count,
   morphK: Count,
   textEnabled: Schema.Boolean,
