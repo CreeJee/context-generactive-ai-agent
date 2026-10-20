@@ -7,7 +7,7 @@ import { Hex } from "effect/encoding";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
 import { nativeFailure } from "memory-agent/native-effect";
-import { DateTime, Option, Schema, Scope, Exit, Cause } from "effect";
+import { DateTime, Match, Option, Schema, Scope, Exit, Cause } from "effect";
 
 const { join, resolve } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
@@ -94,6 +94,8 @@ export const affectsDevelopmentBackend = (file: string) => {
 
 const LockRecord = Schema.Struct({
   pid: Schema.Finite,
+  /** The owner process's start time; tells this process apart from an earlier one given the same pid. */
+  startedAt: Schema.optional(Schema.Finite),
   instanceId: Schema.String,
   port: Schema.Finite,
 });
@@ -216,34 +218,58 @@ function acquireStorageLockBody(storageRoot: string, port: number, instanceId: s
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const file = join(storageRoot, "backend.lock");
-        const record = { pid: process.pid, instanceId, port };
+        const record = { pid: process.pid, startedAt: performance.timeOrigin, instanceId, port };
         yield* fs.makeDirectory(storageRoot, { recursive: true, mode: 0o700 });
         const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(LockRecord))(record);
         const create = fs.writeFileString(file, encoded, {
           flag: "wx",
           mode: 0o600,
         });
-        yield* create.pipe(
-          Effect.catch((error) =>
-            Effect.gen(function* () {
-              if (error.reason._tag !== "AlreadyExists") return yield* error;
-              const existing = Option.getOrNull(decodeLock(yield* fs.readFileString(file)));
-              if (existing !== null && processIsAlive(existing.pid))
-                return yield* new Cause.UnknownError(
-                  new Error(`backend already owns this storage root on port ${existing.port}`),
-                );
-              yield* fs.remove(file);
-              yield* create;
+        // A record with this process's pid but another start time was left by an earlier run whose pid
+        // was reused, as a restarted container's entrypoint gets the same pid every time.
+        const liveOwner = (record: typeof LockRecord.Type) =>
+          Match.value(record.pid === process.pid).pipe(
+            Match.when(true, () => record.startedAt === performance.timeOrigin),
+            Match.when(false, () => processIsAlive(record.pid)),
+            Match.exhaustive,
+          );
+        const takeOverStale = fs.readFileString(file).pipe(
+          Effect.map(decodeLock),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (record) =>
+                Effect.fail(
+                  new Cause.UnknownError(
+                    new Error(`backend already owns this storage root on port ${record.port}`),
+                  ),
+                ).pipe(Effect.when(Effect.succeed(liveOwner(record)))),
             }),
           ),
+          Effect.andThen(fs.remove(file)),
+          Effect.andThen(create),
+        );
+        yield* create.pipe(
+          Effect.catchReason("PlatformError", "AlreadyExists", () => takeOverStale),
         );
         const scope = yield* Scope.make();
         yield* Scope.addFinalizer(
           scope,
-          Effect.gen(function* () {
-            const existing = Option.getOrNull(decodeLock(yield* fs.readFileString(file)));
-            if (existing?.instanceId === instanceId) yield* fs.remove(file);
-          }).pipe(Effect.ignore),
+          fs.readFileString(file).pipe(
+            Effect.map(decodeLock),
+            Effect.flatMap((record) =>
+              fs
+                .remove(file)
+                .pipe(
+                  Effect.when(
+                    Effect.succeed(
+                      Option.exists(record, (owner) => owner.instanceId === instanceId),
+                    ),
+                  ),
+                ),
+            ),
+            Effect.ignore,
+          ),
         );
         return () => fingerprintRuntime.runPromise(Scope.close(scope, Exit.void));
       }),
