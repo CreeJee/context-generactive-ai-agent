@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { cn } from "cn";
 import { CheckIcon, PencilIcon, PlugIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -52,12 +52,14 @@ export type CompatibleHandlers = {
 const newModel = (id = ""): CompatibleModelInput => ({
   id,
   contextWindow: 32768,
-  outputBudget: 4096,
+  outputBudget: null,
   toolCalling: true,
 });
 
+/** The limit a turned-on output limit starts from. */
+const initialOutputBudget = 4096;
+
 function ConnectionFields({
-  idPrefix,
   baseUrl,
   apiKey,
   hasApiKey,
@@ -66,7 +68,6 @@ function ConnectionFields({
   onApiKey,
   onRemoveKey,
 }: {
-  idPrefix: string;
   baseUrl: string;
   apiKey: string;
   hasApiKey: boolean;
@@ -75,6 +76,7 @@ function ConnectionFields({
   onApiKey: (value: string) => void;
   onRemoveKey: (value: boolean) => void;
 }) {
+  const idPrefix = useId();
   return (
     <>
       <Field>
@@ -132,6 +134,7 @@ function AddEndpointForm({
   const [label, setLabel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const labelId = useId();
   return (
     <form
       aria-label="새 OpenAI 호환 엔드포인트"
@@ -147,9 +150,9 @@ function AddEndpointForm({
       }}
     >
       <Field>
-        <FieldLabel htmlFor="compatible-new-label">이름 (선택)</FieldLabel>
+        <FieldLabel htmlFor={labelId}>이름 (선택)</FieldLabel>
         <Input
-          id="compatible-new-label"
+          id={labelId}
           value={label}
           maxLength={80}
           placeholder="비워 두면 서버 주소로 불러요"
@@ -158,7 +161,6 @@ function AddEndpointForm({
         />
       </Field>
       <ConnectionFields
-        idPrefix="compatible-new"
         baseUrl={baseUrl}
         apiKey={apiKey}
         hasApiKey={false}
@@ -180,14 +182,12 @@ function AddEndpointForm({
 }
 
 function ModelForm({
-  accountId,
   initial,
   suggestions,
   busy,
   onSave,
   onClose,
 }: {
-  accountId: string;
   initial: CompatibleModelInput;
   suggestions: readonly string[];
   busy: boolean;
@@ -195,7 +195,7 @@ function ModelForm({
   onClose: () => void;
 }) {
   const [model, setModel] = useState(initial);
-  const idPrefix = `compatible-${accountId}-model`;
+  const idPrefix = useId();
   return (
     <form
       aria-label="모델 등록"
@@ -245,17 +245,33 @@ function ModelForm({
           />
         </Field>
         <Field>
-          <FieldLabel htmlFor={`${idPrefix}-output`}>최대 출력 토큰</FieldLabel>
-          <Input
-            id={`${idPrefix}-output`}
-            type="number"
-            required
-            min={1}
-            max={model.contextWindow - 1}
-            step={1}
-            value={model.outputBudget}
-            onChange={(event) => setModel({ ...model, outputBudget: Number(event.target.value) })}
-          />
+          <div className="flex items-center gap-2">
+            <Switch
+              id={`${idPrefix}-output-limit`}
+              checked={model.outputBudget !== null}
+              onCheckedChange={(limited) =>
+                setModel({ ...model, outputBudget: limited ? initialOutputBudget : null })
+              }
+            />
+            <FieldLabel htmlFor={`${idPrefix}-output-limit`}>최대 출력 토큰 제한</FieldLabel>
+          </div>
+          {model.outputBudget === null ? (
+            <FieldDescription>
+              제한 없음: 서버의 한도까지 출력해요. 추론 모델은 추론도 이 한도를 써요.
+            </FieldDescription>
+          ) : (
+            <Input
+              id={`${idPrefix}-output`}
+              aria-label="최대 출력 토큰"
+              type="number"
+              required
+              min={1}
+              max={model.contextWindow - 1}
+              step={1}
+              value={model.outputBudget}
+              onChange={(event) => setModel({ ...model, outputBudget: Number(event.target.value) })}
+            />
+          )}
         </Field>
       </div>
       <div className="flex items-center gap-2">
@@ -419,7 +435,6 @@ function EndpointCard({
           }}
         >
           <ConnectionFields
-            idPrefix={`compatible-${account.id}`}
             baseUrl={baseUrl}
             apiKey={apiKey}
             hasApiKey={account.hasApiKey}
@@ -446,7 +461,8 @@ function EndpointCard({
               <span className="text-muted-foreground">
                 {" "}
                 · {model.contextWindow.toLocaleString()} / 출력{" "}
-                {model.outputBudget.toLocaleString()} · 도구 {model.toolCalling ? "켬" : "끔"}
+                {model.outputBudget === null ? "제한 없음" : model.outputBudget.toLocaleString()} ·
+                도구 {model.toolCalling ? "켬" : "끔"}
               </span>
             </span>
             <Button
@@ -495,7 +511,6 @@ function EndpointCard({
       {mode.type === "model" ? (
         <ModelForm
           key={mode.initial.id}
-          accountId={account.id}
           initial={mode.initial}
           suggestions={suggestions}
           busy={busy}

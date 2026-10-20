@@ -3,6 +3,19 @@ import { Effect, Schema } from "effect";
 /** Used when the server never reports the model's real context window. */
 export const OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW = 32_000;
 
+/**
+ * The `max_tokens` a request sends; `null` sends none, so the server's own limit applies. Reasoning
+ * models count their reasoning against it.
+ */
+export const CompatibleOutputBudget = Schema.NullOr(Schema.Int);
+
+/** Tokens a request keeps free for the reply; none when the output is unlimited. */
+export const reservedOutput = (outputBudget: number | null) => outputBudget ?? 0;
+
+/** The request's `max_tokens`, absent when the output is unlimited. */
+export const maxTokensOf = (outputBudget: number | null) =>
+  outputBudget === null ? {} : { max_tokens: outputBudget };
+
 // Optional in the encoded payload, but always present after decoding: the key-default
 // keeps `Type` required so consumers never have to re-guard a value that cannot be absent.
 export const OpenAICompatibleContextWindow = Schema.Int.check(
@@ -23,7 +36,7 @@ const connectionFields = {
   baseUrl: Schema.NonEmptyString,
   model: Schema.NonEmptyString,
   contextWindow: OpenAICompatibleContextWindow,
-  outputBudget: Schema.Int,
+  outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
 };
 /**
@@ -40,7 +53,7 @@ export type OpenAICompatibleConfiguration = typeof OpenAICompatibleConfiguration
 export const CompatibleModel = Schema.Struct({
   id: Schema.NonEmptyString,
   contextWindow: OpenAICompatibleContextWindow,
-  outputBudget: Schema.Int,
+  outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
   /** Reasoning efforts the endpoint's model list published for this model, when it did. */
   reasoning: Schema.optional(CompatibleReasoning),
@@ -49,7 +62,7 @@ export type CompatibleModel = typeof CompatibleModel.Type;
 export const CompatibleModelInput = Schema.Struct({
   id: Schema.String,
   contextWindow: Schema.Int,
-  outputBudget: Schema.Int,
+  outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
 });
 export type CompatibleModelInput = typeof CompatibleModelInput.Type;

@@ -41,6 +41,8 @@ import {
   CompatibleConnectionInput,
   CompatibleModelInput,
   LEGACY_COMPATIBLE_CREDENTIAL_ENTRY,
+  maxTokensOf,
+  reservedOutput,
   selectedCompatibleAccount,
   type CompatibleAccount,
   type CompatibleAccounts,
@@ -220,8 +222,8 @@ export const validateCompatibleModel = Effect.fnUntraced(function* (
   if (
     value.contextWindow < 1024 ||
     value.contextWindow > 10_000_000 ||
-    value.outputBudget < 1 ||
-    value.outputBudget >= value.contextWindow ||
+    (value.outputBudget !== null &&
+      (value.outputBudget < 1 || value.outputBudget >= value.contextWindow)) ||
     !isTruthy(value.id.trim())
   )
     return yield* invalidSettings();
@@ -586,7 +588,7 @@ function makeOpenAICompatibleSettingsBody(
             body: stringifyJson({
               model: settings.model,
               messages: [{ role: "user", content: "Reply OK" }],
-              max_tokens: Math.min(16, settings.outputBudget),
+              max_tokens: Math.min(16, settings.outputBudget ?? 16),
               stream: false,
             }),
           },
@@ -651,7 +653,7 @@ function makeOpenAICompatibleSettingsBody(
             body: stringifyJson({
               ...payload,
               model: configuration.model,
-              max_tokens: configuration.outputBudget,
+              ...maxTokensOf(configuration.outputBudget),
               stream: false,
             }),
           }),
@@ -816,7 +818,8 @@ function makeOpenAICompatibleSettingsBody(
                   Result.getOrThrow,
                 )(rawBody),
               };
-              payload.max_tokens = settings.outputBudget;
+              if (settings.outputBudget === null) delete payload.max_tokens;
+              else payload.max_tokens = settings.outputBudget;
               if (selection.reasoningEffort === "default") delete payload.reasoning_effort;
               else payload.reasoning_effort = selection.reasoningEffort;
               if (!settings.toolCalling) {
@@ -844,7 +847,10 @@ function makeOpenAICompatibleSettingsBody(
               let estimatedInput = 0;
               for (const character of body)
                 estimatedInput += character.charCodeAt(0) < 128 ? 0.25 : 1;
-              if (Math.ceil(estimatedInput) + settings.outputBudget > settings.contextWindow)
+              if (
+                Math.ceil(estimatedInput) + reservedOutput(settings.outputBudget) >
+                settings.contextWindow
+              )
                 return yield* new CompatibleRunRequestFailed({
                   reason: { _tag: "ContextLimitExceeded" },
                 });
@@ -903,7 +909,7 @@ function makeOpenAICompatibleSettingsBody(
             Effect.gen(function* () {
               const request = {
                 ...options,
-                modelOptions: { ...options.modelOptions, max_tokens: settings.outputBudget },
+                modelOptions: { ...options.modelOptions, ...maxTokensOf(settings.outputBudget) },
               };
               if (!settings.toolCalling) request.tools = [];
               const toolDefinitions = request.tools?.length ?? 0;
@@ -981,7 +987,9 @@ function makeOpenAICompatibleSettingsBody(
     },
     contextWindow: (modelId) => {
       const settings = isTruthy(account) ? compatibleEndpointModel(account, modelId) : null;
-      return isTruthy(settings) ? settings.contextWindow - settings.outputBudget : 0;
+      return isTruthy(settings)
+        ? settings.contextWindow - reservedOutput(settings.outputBudget)
+        : 0;
     },
     contextWindowKnown: () => true,
     agentLoop: subscriptionAgentLoop,

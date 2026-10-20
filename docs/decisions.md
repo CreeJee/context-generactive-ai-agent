@@ -2336,3 +2336,9 @@
   - 세 키체인 사용처(`SecretStore`, OpenAI 호환 계정 키, OAuth 자격증명)는 모두 `openKeyringEntry`로 entry를 연다. 컨테이너에서 Kagi 키 저장, 재시작 후 유지, 키 없는 실행의 실패를 확인했다.
 - 저장 루트 잠금(`backend.lock`)에 소유 프로세스의 시작 시각(`performance.timeOrigin`)을 함께 남긴다. 기록의 pid가 현재 프로세스와 같아도 시작 시각이 다르면 이전 실행이 남긴 것으로 보고 지운다. 강제 종료된 컨테이너를 같은 볼륨으로 다시 띄우면 진입점이 매번 같은 pid를 받아, 살아 있는 소유자로 오인하고 시작하지 못했다. 같은 프로세스 안의 두 번째 잠금은 여전히 거부한다.
 - 이전 `apps/agent/Dockerfile`은 React Router 템플릿(npm, `package-lock.json`)의 잔재라 현재 저장소에서 빌드되지 않았다. 이 파일을 지우고 루트 `Dockerfile`과 `.dockerignore`로 대체한다. `tools/rrsi/Dockerfile`은 자기 `Dockerfile.dockerignore`를 그대로 쓴다.
+
+## 호환 모델의 출력 한도 없음 (2026-10-20)
+
+- 호환 모델의 `outputBudget`은 `null`(제한 없음)을 받는다. `null`이면 요청에 `max_tokens`를 넣지 않아 서버 자체 한도가 적용되고, 입력 창은 `contextWindow` 전체다. 새 모델을 등록할 때 기본값도 제한 없음이며, 설정에서 스위치로 켜면 4096부터 입력한다. 이미 저장된 숫자 값은 그대로 읽는다.
+- 이유: 출력 한도는 서버 정책에서 받아 오지 않고 사람이 넣는 값이며 기본 4096이었다. 추론 모델은 추론 토큰도 `max_tokens`에 포함되므로, GLM-5.3-Flash(vLLM, 약 225 tok/s)가 4096 한도에서 약 20초 추론하다 답 없이 끝났고 run은 `completed`로 보였다. 이 vLLM 서버는 `max_model_len`(1,048,576)만 알리고 출력만의 한도는 없다.
+- 같은 서버에서 `reasoning_effort`(`none`/`low`/`high`)와 `chat_template_kwargs.enable_thinking=false`는 추론 토큰 수를 일관되게 줄이지 못했다. 추론 제어가 먹는지는 모델의 chat template에 달려 있어, 이 서버에서 추론 길이를 막는 수단은 출력 한도뿐이다.
