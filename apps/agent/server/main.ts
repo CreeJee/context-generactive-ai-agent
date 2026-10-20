@@ -1,6 +1,6 @@
 import { NodeCrypto, NodePath, NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Option, Path, Schema, Stdio } from "effect";
-import { Config, Console, Crypto, Effect } from "effect";
+import { Config, Console, Crypto, Effect, Match } from "effect";
 import { Argument, Flag } from "effect/cli";
 import { runNativeEffect } from "memory-agent/native-effect";
 // The app's production entry: `context-agent [folder]` serves the web app, runs the agent in this
@@ -26,7 +26,7 @@ import { readReleaseInfo } from "./release-info.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
 import { parseCommandLine } from "./command-line.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
-import { openInBrowser, serve } from "./serve.ts";
+import { openInBrowser, serve, type Exposure } from "./serve.ts";
 
 const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 const { dirname } = nodePath;
@@ -226,7 +226,11 @@ if (folderArgument === "acp") {
   await serve({
     build,
     port,
-    exposure: { kind: commandLine.broadcast ? "broadcast" : "loopback" },
+    exposure: Match.value(commandLine.broadcast).pipe(
+      Match.when(true, (): Exposure => ({ kind: "broadcast" })),
+      Match.when(false, (): Exposure => ({ kind: "loopback" })),
+      Match.exhaustive,
+    ),
     clientDirectory,
     developmentBuildId,
     runtimeInstanceId,
@@ -245,13 +249,12 @@ if (folderArgument === "acp") {
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`));
-  if (commandLine.broadcast)
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(
-      Console.error(
-        `--broadcast: 모든 네트워크의 ${port} 포트에 열었어요. 인증이 없으니 같은 네트워크의 누구나 이 앱을 쓸 수 있어요.`,
-      ),
-    );
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  Effect.runSync(
+    Console.error(
+      `--broadcast: 모든 네트워크의 ${port} 포트에 열었어요. 인증이 없으니 같은 네트워크의 누구나 이 앱을 쓸 수 있어요.`,
+    ).pipe(Effect.when(Effect.succeed(commandLine.broadcast))),
+  );
   const page = await runNativeEffect(pageFor(folder));
   if (commandLine.open) openInBrowser(page);
 }

@@ -7,7 +7,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
 import { createRequestListener } from "@react-router/node";
-import { Cause, Console, Effect, FileSystem, Fiber, Match, Option, Schema, Stream } from "effect";
+import { Cause, Console, Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
 import type { ServerBuild } from "react-router";
 import {
   developmentBuildHeader,
@@ -122,14 +122,18 @@ export function openInBrowser(url: string) {
   );
 }
 
+function listenFor(exposure: Exposure) {
+  switch (exposure.kind) {
+    case "loopback":
+      return { address: "127.0.0.1", acceptsHost: isLoopbackHost };
+    case "broadcast":
+      return { address: "0.0.0.0", acceptsHost: () => true };
+  }
+}
+
 /** Serves the app per its exposure: client files directly, everything else through React Router. */
 export function serve(options: ServeOptions) {
-  const listen = Match.value(options.exposure).pipe(
-    Match.discriminatorsExhaustive("kind")({
-      loopback: () => ({ address: "127.0.0.1", acceptsHost: isLoopbackHost }),
-      broadcast: () => ({ address: "0.0.0.0", acceptsHost: () => true }),
-    }),
-  );
+  const listen = listenFor(options.exposure);
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
   const development = isTruthy(options.developmentBuildId)
