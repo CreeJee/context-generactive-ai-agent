@@ -1,29 +1,8 @@
 import { chat } from "@tanstack/ai";
 import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
-import type { ImprovementItem } from "./items.ts";
-
-/** What the model made of one item: the problem and how to stop it, or why it could not say. */
-export const ItemInterpretation = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("interpreted"),
-    /** One line naming the problem. */
-    title: Schema.String,
-    /** What kept going wrong, from the evidence. */
-    problem: Schema.String,
-    /** The instruction to add to the repository's agent guidance file. */
-    rule: Schema.String,
-    /** The code, script or configuration change that removes the cause. */
-    change: Schema.String,
-    acceptance: Schema.String,
-  }),
-  /** The model could not be asked or did not answer usably; the item keeps its raw evidence. */
-  Schema.Struct({
-    status: Schema.Literal("failed"),
-    reason: Schema.Literals(["model_failed", "invalid_answer"]),
-  }),
-]).pipe(Schema.toTaggedUnion("status"));
-export type ItemInterpretation = typeof ItemInterpretation.Type;
+import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
+import { abortControllerFor } from "../runtime/abort-controller.ts";
 
 export class InterpretationUnavailable extends Schema.TaggedError<InterpretationUnavailable>()(
   "InterpretationUnavailable",
@@ -103,13 +82,6 @@ export const parseInterpretation = (answer: string) =>
       }),
     ),
   );
-
-/** TanStack AI takes an AbortController; follow the interruption signal Effect passes in. */
-const abortControllerFor = (signal: AbortSignal) => {
-  const controller = new AbortController();
-  signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  return controller;
-};
 
 const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;

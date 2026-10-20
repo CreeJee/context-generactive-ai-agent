@@ -1,28 +1,15 @@
-import { Effect, Array as EffectArray, Schema } from "effect";
+import { Effect, Array as EffectArray } from "effect";
 import { Embedder } from "../memory/embedding/embedder.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
+import { ImprovementItem } from "./contracts.ts";
 import { Signal } from "./signals.ts";
-
-/** One thing to improve in one repository and the evidence for it. */
-export const ImprovementItem = Schema.Struct({
-  /** Stable for the same repository, source and grouping key, so a rerun finds the same item. */
-  id: Schema.String,
-  repository: Schema.String,
-  source: Schema.Literals(["correction", "tool_failure", "card_failure"]),
-  title: Schema.String,
-  /** How many signals it groups; a card counts its failures and replans. */
-  count: Schema.Int,
-  /** Node ids, or `goal/card` ids for cards; the newest first, at most {@link grouping.evidence}. */
-  evidence: Schema.Array(Schema.String),
-  excerpts: Schema.Array(Schema.String),
-  latestAt: Schema.NullOr(Schema.String),
-});
-export type ImprovementItem = typeof ImprovementItem.Type;
 
 /** How much repetition makes a signal worth an improvement, and how much evidence an item keeps. */
 export const grouping = {
   toolFailureRepeats: 3,
   correctionRepeats: 2,
+  /** Failures and replans of one card together; a single replan is ordinary planning. */
+  cardRepeats: 2,
   /**
    * Cosine similarity of two corrections about the same thing; vectors are L2-normalized. Short
    * Korean messages sit close together: on real use, 0.75 put 103 of 125 corrections in one group,
@@ -84,16 +71,18 @@ const toolFailureItems = (repository: string, failures: readonly ToolFailure[]) 
     });
 
 const cardItems = (repository: string, cards: readonly CardFailure[]) =>
-  cards.map((card): ImprovementItem => ({
-    id: itemId(repository, "card_failure", `${card.goalInstanceId}/${card.cardId}`),
-    repository,
-    source: "card_failure",
-    title: card.reason ?? `card ${card.cardId}`,
-    count: card.failureStreak + card.replans,
-    evidence: [`${card.goalInstanceId}/${card.cardId}`],
-    excerpts: card.reason === null ? [] : [card.reason],
-    latestAt: null,
-  }));
+  cards
+    .filter((card) => card.failureStreak + card.replans >= grouping.cardRepeats)
+    .map((card): ImprovementItem => ({
+      id: itemId(repository, "card_failure", `${card.goalInstanceId}/${card.cardId}`),
+      repository,
+      source: "card_failure",
+      title: card.reason ?? `card ${card.cardId}`,
+      count: card.failureStreak + card.replans,
+      evidence: [`${card.goalInstanceId}/${card.cardId}`],
+      excerpts: card.reason === null ? [] : [card.reason],
+      latestAt: card.createdAt,
+    }));
 
 /** Corrections that say the same thing, found by the meaning of what the user wrote. */
 const correctionItems = Effect.fn("Improve.correctionItems")(function* (

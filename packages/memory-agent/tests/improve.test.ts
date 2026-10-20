@@ -103,6 +103,9 @@ describe("project improvement discovery", () => {
   );
 
   it("groups failures by cause, not by the path or number they mention", () => {
+    expect(failureSignature("Error: can't find module 'foo'")).toBe(
+      failureSignature("Error: can't find module 'bar'"),
+    );
     expect(failureSignature("Exit code 1\nError: cannot open /a/b/c.ts at line 12")).toBe(
       failureSignature("Error: cannot open /x/y.ts at line 3"),
     );

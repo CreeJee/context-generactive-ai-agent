@@ -1,5 +1,4 @@
-import type { ReportedItem } from "./discovery.ts";
-import { ItemInterpretation } from "./interpret.ts";
+import { ItemInterpretation, type ReportedItem, reportedTitle, sourceLabels } from "./contracts.ts";
 
 /** What each kind of item asks to change when the model could not read it. */
 const changeOf: Record<ReportedItem["source"], string> = {
@@ -9,12 +8,6 @@ const changeOf: Record<ReportedItem["source"], string> = {
     "같은 원인으로 도구 호출이 반복해서 실패했다. 실패 원인을 코드·스크립트·설정에서 없애고, 에이전트 지침 파일에 올바른 사용법을 추가한다.",
   card_failure:
     "칸반 카드가 반복해서 실패하거나 다시 계획됐다. 실패 원인을 코드에서 고치고, 같은 작업을 할 때 지킬 점을 에이전트 지침 파일에 추가한다.",
-};
-
-const sourceLabel: Record<ReportedItem["source"], string> = {
-  correction: "반복된 정정",
-  tool_failure: "반복된 도구 실패",
-  card_failure: "칸반 카드 실패",
 };
 
 const failureLabel: Record<"model_failed" | "invalid_answer", string> = {
@@ -57,18 +50,11 @@ const specOf = (repository: string, item: ReportedItem) =>
     ],
   });
 
-/** The item's name: the model's title when it read the item, otherwise the grouping label. */
-export const reportedTitle = (item: ReportedItem) =>
-  ItemInterpretation.match(item.interpretation, {
-    interpreted: ({ title }) => title,
-    failed: () => item.title,
-  });
-
 const itemSection = (repository: string, item: ReportedItem, index: number) =>
   [
     `## ${index + 1}. ${line(reportedTitle(item))}`,
     "",
-    `- 종류: ${sourceLabel[item.source]} (${item.count}회)`,
+    `- 종류: ${sourceLabels[item.source]} (${item.count}회)`,
     ...(item.latestAt === null ? [] : [`- 마지막 발생: ${item.latestAt}`]),
     `- 항목 id: \`${item.id}\``,
     "",
