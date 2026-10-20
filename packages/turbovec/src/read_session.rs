@@ -319,9 +319,6 @@ impl MemoryReadSession {
                         seq as u64,
                         row.get::<_, i64>(1).map_err(|_| Outcome::ReadFailed)?,
                     );
-                    if allowed.len() > 50_000 {
-                        return Err(Outcome::BudgetExceeded);
-                    }
                 }
             }
             out.candidate_count = allowed.len() as u32;
@@ -331,20 +328,25 @@ impl MemoryReadSession {
                 check()?;
                 let mut remaining = allowed.clone();
                 let mut seen = HashSet::new();
+                let mut last_call = Duration::ZERO;
                 while !remaining.is_empty() && !inner.is_empty() {
                     let take =
                         (input.vector_k as usize - out.vector_seqs.len()).min(remaining.len());
                     let previous = seen.len();
+                    // Each round rescans the whole allowlist; admit it only while the budget
+                    // still covers the round before it.
                     if !admitted(
-                        inner.len(),
                         query.len(),
                         inner.bit_width(),
                         input.vector_k,
                         cell.remaining(),
+                        last_call,
                     ) {
                         return Err(Outcome::BudgetExceeded);
                     }
+                    let call = Instant::now();
                     let result = inner.try_search_with_allowlist(query, take, Some(&remaining));
+                    last_call = call.elapsed();
                     // Never convert cancellation/deadline into a degraded success.
                     check()?;
                     record_vector_channel(&mut out, result, |hits, out| {
@@ -368,7 +370,7 @@ impl MemoryReadSession {
                         break;
                     }
                     // Exclude all chunks of selected parents before the next bounded search.
-                    // Keep each call inside the measured k <= 48 admission envelope.
+                    // Keep each call inside the k <= 48 admission bound.
                     remaining.retain(|id| parents.get(id).is_some_and(|p| !seen.contains(p)));
                 }
                 if out.vector_unavailable {
