@@ -27,6 +27,8 @@ const failures: Record<ScanFailure, string> = {
   embedding: "임베딩 모델로 비슷한 정정을 묶지 못했어요. 임베딩 설정을 확인하세요.",
   model_unavailable:
     "개선 항목을 해석할 모델이 없어요. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도하세요.",
+  model_unreachable:
+    "모델 서버가 응답하지 않아 찾기를 멈췄어요. 모델 서버 연결을 확인한 뒤 다시 시도하세요.",
   internal: "개선 항목을 찾는 중 오류가 났어요. 다시 시도하세요.",
 };
 
