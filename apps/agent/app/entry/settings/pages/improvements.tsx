@@ -1,5 +1,5 @@
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
-import { Effect, Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
@@ -31,6 +31,21 @@ const sourceLabels: Record<ImprovementItem["source"], string> = {
   tool_failure: "반복된 도구 실패",
   card_failure: "칸반 카드 실패",
 };
+
+type ReportedItem = ImprovementReport["items"][number];
+const byStatus = Match.discriminatorsExhaustive("status");
+/** The model's title for an item it read; the grouping label when it could not. */
+const itemTitle = (item: ReportedItem) =>
+  Match.value(item.interpretation).pipe(
+    byStatus({ interpreted: ({ title }) => title, failed: () => item.title }),
+  );
+const itemRule = (item: ReportedItem) =>
+  Match.value(item.interpretation).pipe(
+    byStatus({
+      interpreted: ({ rule }) => `지침: ${rule}`,
+      failed: () => "모델이 해석하지 못했어요. 문서의 근거를 직접 확인하세요.",
+    }),
+  );
 
 /** What a failed request says: this page's own wording, never a browser or transport message. */
 const requestFailure = (failure: Error) =>
@@ -74,10 +89,13 @@ function Report({ report }: { report: ImprovementReport }) {
       ) : (
         <ol className="flex flex-col gap-1 text-xs">
           {report.items.map((item) => (
-            <li key={item.id} className="flex items-baseline gap-2">
-              <Badge variant="outline">{sourceLabels[item.source]}</Badge>
-              <span className="min-w-0 flex-1 truncate">{item.title}</span>
-              <span className="shrink-0 text-muted-foreground">{item.count}회</span>
+            <li key={item.id} className="flex flex-col gap-0.5">
+              <div className="flex items-baseline gap-2">
+                <Badge variant="outline">{sourceLabels[item.source]}</Badge>
+                <span className="min-w-0 flex-1 truncate">{itemTitle(item)}</span>
+                <span className="shrink-0 text-muted-foreground">{item.count}회</span>
+              </div>
+              <span className="pl-1 text-muted-foreground">{itemRule(item)}</span>
             </li>
           ))}
         </ol>
