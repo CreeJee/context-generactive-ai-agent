@@ -73,13 +73,6 @@ export class OpenAICompatibleFailed extends Schema.TaggedError<OpenAICompatibleF
     ]),
   },
 ) {}
-export class CompatibleCompletionRejected extends Schema.TaggedError<CompatibleCompletionRejected>()(
-  "CompatibleCompletionRejected",
-  {
-    status: Schema.Int,
-    reason: Schema.Literals(["memory_capacity_exceeded", "request_rejected"]),
-  },
-) {}
 /**
  * Why this app refused or failed a request the compatible SDK sent through its fetch or stream.
  * It is thrown back to the SDK, so its message is fixed text without URLs, headers or payloads.
@@ -116,16 +109,6 @@ export class CompatibleRunRequestFailed extends Schema.TaggedError<CompatibleRun
     }
   }
 }
-const decodeMemoryCapacity = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      error: Schema.Struct({
-        estimated_bytes: Schema.Finite.check(Schema.isGreaterThan(0)),
-        limit_bytes: Schema.Finite.check(Schema.isGreaterThan(0)),
-      }),
-    }),
-  ),
-);
 export interface CompatibleKeyStore {
   get(): Promise<string | null>;
   set(value: string | null): Promise<void>;
@@ -624,59 +607,6 @@ function makeOpenAICompatibleSettingsBody(
       endpoint: chosen ?? (first === undefined ? null : compatibleEndpointModel(account, first.id)),
     };
   };
-  const pinRrsiClient = Effect.gen(function* () {
-    const pinned = yield* updates.withPermit(
-      Effect.gen(function* () {
-        const selected = selectedEndpoint(yield* config.read);
-        if (selected === null || selected.endpoint === null)
-          return yield* new OpenAICompatibleFailed({ operation: "validation" });
-        const { key } = yield* accountSnapshot(selected.account.id);
-        return { configuration: selected.endpoint, key };
-      }),
-    );
-    const { configuration, key } = pinned;
-    const context = yield* Effect.context<never>();
-    const complete = (body: string) =>
-      Effect.gen(function* () {
-        // The worker's SDK asks to stream; servers such as vLLM reject its stream_options once the
-        // gateway answers in one response.
-        const { stream_options: _streamOptions, ...payload } = yield* Schema.decodeEffect(
-          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-        )(body);
-        const signal = yield* Effect.abortSignal;
-        const response = yield* attempt("test", () =>
-          fetcher(`${configuration.baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: authorized(key),
-            redirect: "error",
-            signal,
-            body: stringifyJson({
-              ...payload,
-              model: configuration.model,
-              max_tokens: configuration.outputBudget,
-              stream: false,
-            }),
-          }),
-        );
-        const text = yield* attempt("test", () => response.text());
-        if (!response.ok) {
-          const capacity = Option.getOrUndefined(decodeMemoryCapacity(text));
-          return yield* new CompatibleCompletionRejected({
-            status: response.status,
-            reason:
-              capacity !== undefined && capacity.error.estimated_bytes > capacity.error.limit_bytes
-                ? "memory_capacity_exceeded"
-                : "request_rejected",
-          });
-        }
-        return text;
-      }).pipe(Effect.scoped);
-    return {
-      configuration,
-      complete: (body: string, signal: AbortSignal) =>
-        Effect.runPromiseWith(context)(complete(body), { signal }),
-    };
-  });
   const services: ProviderConfiguration = {
     provider,
     auth: {
@@ -992,7 +922,6 @@ function makeOpenAICompatibleSettingsBody(
   /** A runtime pinned to the settings saved now; resolve again to see later changes. */
   const runtime = Effect.map(read, runtimeFor);
   return {
-    pinRrsiClient,
     status,
     create,
     rename,

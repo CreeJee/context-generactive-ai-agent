@@ -1,7 +1,7 @@
 import { Console, Effect } from "effect";
 import { OAuthCheckFailed } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { runProcess } from "../src/rrsi/command.ts";
+import { runProcess } from "../src/runtime/run-process.ts";
 import {
   createSubscriptionOAuthClient,
   OAuthHarnessError,
