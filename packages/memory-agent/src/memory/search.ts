@@ -17,6 +17,7 @@ import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
 import { ChunkSpan } from "./embedding/chunks.ts";
+import { maxVectorK } from "./native-search/read-protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
 
 export interface FindInput {
@@ -301,7 +302,7 @@ const make = (tuning: SearchTuning) =>
         trigramTerms: grouped.trigram,
         shortTerms: grouped.short,
         morphTerms: terms,
-        vectorK: limit * 4,
+        vectorK: Math.min(limit * 4, maxVectorK),
         textK: limit * 2,
         morphK: limit * 2,
         textEnabled: tuning.text && limit > 0,
