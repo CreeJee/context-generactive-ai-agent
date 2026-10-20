@@ -36,7 +36,7 @@ if (configuration.help) {
   Effect.runSync(Console.log(devHelp));
   process.exit(0);
 }
-const { backendPort, webPort, manifestFile, mode } = configuration;
+const { backendPort, webPort, manifestFile, mode, spans } = configuration;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 const Manifest = Schema.Struct({
@@ -140,6 +140,39 @@ const removeManifest = Effect.fn("dev.removeManifest")(function* (buildId: strin
   if (current?.buildId === buildId) yield* fs.remove(manifestFile, { force: true });
 }, Effect.ignore());
 
+/** The backend's `OTEL_*` variables for the local collector; the caller's own otherwise. */
+const spanExport = () => {
+  switch (spans.kind) {
+    case "local":
+      return {
+        OTEL_TRACES_EXPORTER: "otlp",
+        OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${spans.port}`,
+      };
+    case "off":
+      return {};
+  }
+};
+
+/** The profiling tool's OTLP collector, appending the backend's spans to `file`. */
+const spanCollector = Effect.fnUntraced(function* (port: number, file: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const root = nodePath.join(app, "..", "..");
+  return yield* spawner.spawn(
+    ChildProcess.make(
+      process.execPath,
+      [
+        nodePath.join(root, "tools", "profile", "main.ts"),
+        "collect-otlp",
+        "--port",
+        String(port),
+        "--out",
+        file,
+      ],
+      { cwd: root, stdin: "ignore", stdout: "inherit", stderr: "inherit", forceKillAfter: 5_000 },
+    ),
+  );
+});
+
 const stableBackend = Effect.fnUntraced(function* (buildId: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const args = [
@@ -153,7 +186,7 @@ const stableBackend = Effect.fnUntraced(function* (buildId: string) {
   return yield* spawner.spawn(
     ChildProcess.make(process.execPath, args, {
       cwd: app,
-      env: { CONTEXT_AGENT_BUILD_ID: buildId },
+      env: { CONTEXT_AGENT_BUILD_ID: buildId, ...spanExport() },
       extendEnv: true,
       stdin: "inherit",
       stdout: "inherit",
@@ -201,8 +234,11 @@ const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
 const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: boolean) {
   yield* assertPortAvailable(backendPort, "127.0.0.1", "Backend");
   if (includeWeb) yield* assertPortAvailable(webPort, "localhost", "Frontend");
+  if (spans.kind === "local") yield* assertPortAvailable(spans.port, "127.0.0.1", "Span collector");
   const buildId = yield* nativePromise(() => developmentBuildId(app));
   yield* buildBackend(buildId);
+  const collector = spans.kind === "local" ? yield* spanCollector(spans.port, spans.file) : null;
+  if (spans.kind === "local") yield* Console.log(`Collecting spans into ${spans.file}`);
   const backend = yield* stableBackend(buildId);
   let web: ChildProcessSpawner.ChildProcessHandle | null = null;
   let stopping = false;
@@ -213,6 +249,8 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
       concurrency: "unbounded",
       discard: true,
     });
+    // After the backend: its runtime exports the last spans as it stops.
+    yield* stop(collector, signal);
     yield* removeManifest(buildId);
   });
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;

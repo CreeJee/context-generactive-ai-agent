@@ -116,6 +116,37 @@ it("times out the caller without pretending an active transport job has terminat
     ).pipe(Effect.timeout("5 seconds")),
   ));
 
+it("waits past a budgeted search's budget for its own budget-exceeded reply", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      withTestPlatform(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-late-" });
+          const owner = yield* makeNativeOwner(
+            { kind: "setup", epoch: "late", dimensions: 384, bits: 4, cacheDirectory: directory },
+            new URL("./worker.ts", import.meta.url),
+            // The reply reaches the host after the budget and after the plain 2 s reply timeout.
+            gatedTransport((command, transport) =>
+              Effect.sleep("2500 millis").pipe(Effect.andThen(transport.send(command))),
+            ),
+          );
+          expect(
+            yield* owner.execute({
+              kind: "vector-search-controlled",
+              epoch: owner.epoch,
+              requestId: "late",
+              query: new Float32Array(384).fill(1 / Math.sqrt(384)),
+              k: 1,
+              allowedIds: [],
+              budgetMs: 2_000,
+            }),
+          ).toMatchObject({ kind: "controlled-result", outcome: "budget-exceeded" });
+        }),
+      ),
+    ).pipe(Effect.timeout("8 seconds")),
+  ));
+
 it("bounds admission, removes interrupted queued waits, and settles every waiter on worker exit", () =>
   Effect.runPromise(
     Effect.scoped(
