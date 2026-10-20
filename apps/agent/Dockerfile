@@ -6,9 +6,10 @@
 #   pnpm build:docker   linux/amd64 and linux/arm64 executables in apps/agent/dist/docker/context-agent-linux-<arch>/
 #   pnpm start:docker   builds the image for this machine and runs it at http://localhost:5173
 # To reach it from other machines, run the app with --broadcast and publish its port directly:
-#   docker run -p 5173:5173 -v context-agent-data:/data context-agent --broadcast
+#   docker run -p 5173:5173 -v context-agent-data:/data -v context-agent-secrets:/secrets context-agent --broadcast
 # --broadcast has no authentication: anyone who can reach the port can use the app.
-# Containers have no OS keychain, so secrets (API keys, OAuth tokens) are AES-GCM encrypted files in /data/secrets.
+# Containers have no OS keychain, so secrets (API keys, OAuth tokens) are AES-GCM encrypted files in their own
+# /secrets volume, kept apart from the /data storage volume.
 # Their key stays outside the volume: pass CONTEXT_AGENT_SECRET_KEY (`openssl rand -base64 32`) or a Docker secret
 # via CONTEXT_AGENT_SECRET_KEY_FILE. Without it, saving a secret fails; losing it makes the stored secrets unreadable.
 
@@ -33,11 +34,12 @@ COPY --from=build /tmp/out/ /
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 ca-certificates socat tini \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd --create-home agent && mkdir /data /workspace && chown agent:agent /data /workspace
+  && useradd --create-home agent \
+  && mkdir /data /secrets /workspace && chown agent:agent /data /secrets /workspace && chmod 700 /secrets
 COPY --from=build /tmp/out/context-agent-linux-*/context-agent /usr/local/bin/context-agent
 USER agent
-ENV CONTEXT_AGENT_SECRET_DIRECTORY=/data/secrets
-VOLUME ["/data"]
+ENV CONTEXT_AGENT_SECRET_DIRECTORY=/secrets
+VOLUME ["/data", "/secrets"]
 WORKDIR /workspace
 # The app listens only on 127.0.0.1 and refuses non-loopback Host headers (DNS rebinding guard), so socat
 # forwards the container port to it. Publish it on the host's loopback only: -p 127.0.0.1:5173:8080.

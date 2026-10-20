@@ -2313,7 +2313,7 @@
 
 - `apps/agent/Dockerfile`은 `pnpm build`(`vp run package`)가 만드는 실행 파일을 Linux에서 빌드하고, 그 실행 파일을 컨테이너에서 실행한다. 빌드 컨텍스트는 저장소 루트다.
   - `pnpm build:docker`: linux/amd64와 linux/arm64 실행 파일을 함께 만들어 `apps/agent/dist/docker/context-agent-linux-<arch>/`에 둔다.
-  - `pnpm start:docker`: 이 머신용 이미지를 만들고 `http://localhost:5173`으로 실행한다. 저장 루트는 `context-agent-data` 볼륨(`/data`), 프로젝트 폴더는 `/workspace`다.
+  - `pnpm start:docker`: 이 머신용 이미지를 만들고 `http://localhost:5173`으로 실행한다. 저장 루트는 `context-agent-data` 볼륨(`/data`), 비밀값은 `context-agent-secrets` 볼륨(`/secrets`), 프로젝트 폴더는 `/workspace`다.
 - 아키텍처에 묶이지 않게 플랫폼마다 따로 빌드한다(다른 아키텍처는 에뮬레이션). 실행 파일에는 대상 플랫폼의 Node와 네이티브 addon(turbovec, onnxruntime 등)이 들어가므로 `$BUILDPLATFORM`에서 교차 컴파일하지 않는다. Docker로는 Linux만 만든다. macOS와 Windows는 각 머신에서 `pnpm build`로 만든다.
 - 빌드 단계는 Vite+ Docker 가이드를 따라 `ghcr.io/voidzero-dev/vite-plus`(로컬 vite-plus와 같은 버전)를 쓰고, turbovec용 Rust 1.99.0만 더한다. Node는 `vp`가 `.node-version`에서 받는다. 설치는 `--ignore-scripts`로 한다. prepare 스크립트는 git hook과 lint 도구만 바꾸고 빌드에는 쓰이지 않는다.
 - 실행 단계는 Vite+ 가이드가 권장하는 glibc 기반 `debian:bookworm-slim`에 `libatomic1`을 더한다. Alpine(`gcompat`)은 실행 파일이 `fcntl64`, `__res_init` 심볼을 찾지 못해 시작하지 못했고, `onnxruntime-node`에 musl 바이너리가 없어 musl 빌드도 할 수 없다. distroless(`cc-debian12`)는 `libatomic.so.1`이 없다. amd64와 arm64 컨테이너 모두 HTTP 200과 루프백이 아닌 Host의 403을 확인했다.
@@ -2321,7 +2321,7 @@
 - 서버의 루프백 전용 정책(위 "배포: 실행 파일")은 바꾸지 않는다. 컨테이너 안에서 `socat`이 `0.0.0.0:8080`을 `127.0.0.1:5173`으로 넘기고, 호스트에는 `-p 127.0.0.1:5173:8080`처럼 루프백에만 publish한다. 브라우저의 Host는 `localhost`라 기존 Host 검사를 통과하고, 루프백이 아닌 Host는 컨테이너에서도 403이다.
 - `--broadcast` 플래그를 둔다. 서버를 `0.0.0.0`에 열고 Host 검사를 하지 않는다. 네트워크에서 이미 닿는 서버라 DNS rebinding 방어의 의미가 없기 때문이다. 교차 사이트 검사(`rejectCrossSite`)는 그대로다. 인증이 없으므로 실행 시 stderr로 경고하고, 기본값은 루프백 그대로다. 컨테이너에서는 `docker run -p 5173:5173 … --broadcast`로 앱 포트를 직접 publish한다.
 - 비밀값(API 키, OAuth 토큰, Kagi 키)의 저장소는 `CONTEXT_AGENT_SECRET_DIRECTORY`로 고른다. 없으면 지금처럼 OS 키체인이고, 있으면 그 폴더에 entry마다 AES-256-GCM으로 암호화한 파일 하나를 둔다(`memory-agent/src/runtime/keyring.ts`). 컨테이너에는 OS 키체인(Secret Service)이 없어 키체인 저장이 `keychain_failed`로 실패했고, 컨테이너 안 `gnome-keyring`과 D-Bus도 기본 keyring을 만들지 못했다.
-  - 파일 저장소는 명시적으로만 켠다. 키체인이 실패했다고 파일로 바꾸지 않고, 파일 저장소가 실패해도 키체인으로 바꾸지 않는다(R14). Docker 이미지는 `CONTEXT_AGENT_SECRET_DIRECTORY=/data/secrets`로 켠다.
+  - 파일 저장소는 명시적으로만 켠다. 키체인이 실패했다고 파일로 바꾸지 않고, 파일 저장소가 실패해도 키체인으로 바꾸지 않는다(R14). Docker 이미지는 `CONTEXT_AGENT_SECRET_DIRECTORY=/secrets`로 켜고, 저장 루트와 따로 백업·삭제할 수 있게 별도 볼륨으로 둔다.
   - 암호화 키는 볼륨 밖에서 받는다. `CONTEXT_AGENT_SECRET_KEY`(Base64 32바이트, `openssl rand -base64 32`) 또는 Docker secret 파일 경로인 `CONTEXT_AGENT_SECRET_KEY_FILE`이다. 키가 없으면 저장과 읽기가 `SecretFileStoreFailed`(`key_missing`)로 실패한다. 키를 잃으면 저장된 값을 읽을 수 없다.
   - 파일 이름은 `sha256(service + "\n" + account)`이고, 같은 문자열을 AAD로 써서 다른 entry로 복사한 파일은 복호화되지 않는다. 쓰기는 임시 파일과 rename으로 하며 권한은 폴더 0700, 파일 0600이다.
   - 세 키체인 사용처(`SecretStore`, OpenAI 호환 계정 키, OAuth 자격증명)는 모두 `openKeyringEntry`로 entry를 연다. 컨테이너에서 Kagi 키 저장, 재시작 후 유지, 키 없는 실행의 실패를 확인했다.
