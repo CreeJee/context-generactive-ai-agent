@@ -1,0 +1,11 @@
+.git
+.codegraph
+node_modules
+**/node_modules
+**/dist
+**/build
+.rrsi-local
+.env*
+
+**/target
+**/*.node

@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "vp run --no-cache agent#package",
+    "build:docker": "docker buildx build --platform linux/amd64,linux/arm64 --target artifact --output type=local,dest=apps/agent/dist/docker,platform-split=false .",
     "start": "node apps/agent/dist/context-agent.mjs",
+    "start:docker": "docker build -t context-agent . && docker run --rm -it -p 127.0.0.1:5173:8080 -e CONTEXT_AGENT_SECRET_KEY -v context-agent-data:/data -v context-agent-secrets:/secrets context-agent",
     "test:browser": "vp test --config apps/agent/vite.browser.config.ts --run",
     "typecheck": "typecheck_result=0; vp run agent#typecheck || typecheck_result=1; vp run memory-agent#typecheck || typecheck_result=1; vp run utils#typecheck || typecheck_result=1; tsc -p apps/agent/server/tests/tsconfig.json --noEmit || typecheck_result=1; tsc -p tools/profile/tsconfig.json || typecheck_result=1; exit $typecheck_result",
     "ready": "vp check && vp run typecheck && vp run -r test && vp run -r build",

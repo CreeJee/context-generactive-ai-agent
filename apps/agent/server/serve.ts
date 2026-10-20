@@ -17,9 +17,16 @@ import {
 
 const { extname, resolve, sep } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
+/**
+ * Who can reach the server. `loopback` listens on 127.0.0.1 and answers only loopback Host names (R14).
+ * `broadcast` listens on every interface and answers any Host, because the network can already reach it.
+ */
+export type Exposure = { readonly kind: "loopback" } | { readonly kind: "broadcast" };
+
 export interface ServeOptions {
   readonly build: ServerBuild;
   readonly port: number;
+  readonly exposure: Exposure;
   /** React Router's client build (`build/client`). */
   readonly clientDirectory: string;
   /** Present only for the stable development backend behind the HMR frontend. */
@@ -115,8 +122,18 @@ export function openInBrowser(url: string) {
   );
 }
 
-/** Serves the app on 127.0.0.1: client files directly, everything else through React Router. */
+function listenFor(exposure: Exposure) {
+  switch (exposure.kind) {
+    case "loopback":
+      return { address: "127.0.0.1", acceptsHost: isLoopbackHost };
+    case "broadcast":
+      return { address: "0.0.0.0", acceptsHost: () => true };
+  }
+}
+
+/** Serves the app per its exposure: client files directly, everything else through React Router. */
 export function serve(options: ServeOptions) {
+  const listen = listenFor(options.exposure);
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
   const development = isTruthy(options.developmentBuildId)
@@ -127,7 +144,7 @@ export function serve(options: ServeOptions) {
     : null;
 
   const server = NodeHttpServer.createServer((request, response) => {
-    if (!isLoopbackHost(request.headers.host)) {
+    if (!listen.acceptsHost(request.headers.host)) {
       response
         .writeHead(403, { "content-type": "text/plain; charset=utf-8" })
         .end("forbidden host");
@@ -217,7 +234,7 @@ export function serve(options: ServeOptions) {
     Effect.callback<void, Cause.UnknownError>((resume) => {
       const onError = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
       server.once("error", onError);
-      server.listen(options.port, "127.0.0.1", () => resume(Effect.void));
+      server.listen(options.port, listen.address, () => resume(Effect.void));
       return Effect.sync(() => server.off("error", onError));
     }),
   );

@@ -21,7 +21,7 @@ import {
   Scope,
   Exit,
 } from "effect";
-import { requireRuntime } from "../runtime/resources.ts";
+import { openKeyringEntry } from "../runtime/keyring.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { oauthProtocolCrypto } from "./node-runtime.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
@@ -90,15 +90,10 @@ const credentialStoreFailure = (provider: OAuthProvider, stage: CredentialStoreS
   });
 
 const keychainEntry = (provider: OAuthProvider, account = "subscription-oauth") => {
-  let AsyncEntry: typeof import("@napi-rs/keyring").AsyncEntry;
-  try {
-    ({ AsyncEntry } = requireRuntime("@napi-rs/keyring"));
-  } catch {
-    throw credentialStoreFailure(provider, "module_load");
-  }
+  // Opening an entry also loads the native keyring addon; `module_load` stays decodable for old records.
   const open = (account: string) => {
     try {
-      return new AsyncEntry(providerKeychainService(provider), account);
+      return openKeyringEntry(providerKeychainService(provider), account);
     } catch {
       throw credentialStoreFailure(provider, "entry_open");
     }
