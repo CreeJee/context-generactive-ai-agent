@@ -1,5 +1,5 @@
 import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
-import { requireRuntime } from "../runtime/resources.ts";
+import { openKeyringEntry } from "../runtime/keyring.ts";
 
 /** Keychain service name every secret of this app is stored under. */
 export const keychainService = "context-generactive-agent";
@@ -7,7 +7,7 @@ export const keychainService = "context-generactive-agent";
 /** Names of the secrets the app keeps. Each one is a separate keychain entry. */
 export type SecretName = "kagi-api-key";
 
-/** The OS keychain refused or failed. Never answered by storing the secret somewhere else (R14). */
+/** The secret backend refused or failed. Never answered by storing the secret somewhere else (R14). */
 export class SecretStoreFailed extends Schema.TaggedError<SecretStoreFailed>()(
   "SecretStoreFailed",
   { operation: Schema.Literals(["read", "write", "delete"]) },
@@ -21,8 +21,7 @@ export interface SecretStoreApi {
 }
 
 /** The native keyring addon loads on first use, so a failure to load is a failed operation. */
-const entry = (name: SecretName) =>
-  new (requireRuntime("@napi-rs/keyring").AsyncEntry)(keychainService, name);
+const entry = (name: SecretName) => openKeyringEntry(keychainService, name);
 
 const keychain: SecretStoreApi = {
   get: (name) =>

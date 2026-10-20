@@ -8,6 +8,9 @@
 # To reach it from other machines, run the app with --broadcast and publish its port directly:
 #   docker run -p 5173:5173 -v context-agent-data:/data context-agent --broadcast
 # --broadcast has no authentication: anyone who can reach the port can use the app.
+# Containers have no OS keychain, so secrets (API keys, OAuth tokens) are AES-GCM encrypted files in /data/secrets.
+# Their key stays outside the volume: pass CONTEXT_AGENT_SECRET_KEY (`openssl rand -base64 32`) or a Docker secret
+# via CONTEXT_AGENT_SECRET_KEY_FILE. Without it, saving a secret fails; losing it makes the stored secrets unreadable.
 
 FROM rust:1.99.0-slim-bookworm AS rust
 
@@ -33,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 ca-c
   && useradd --create-home agent && mkdir /data /workspace && chown agent:agent /data /workspace
 COPY --from=build /tmp/out/context-agent-linux-*/context-agent /usr/local/bin/context-agent
 USER agent
+ENV CONTEXT_AGENT_SECRET_DIRECTORY=/data/secrets
 VOLUME ["/data"]
 WORKDIR /workspace
 # The app listens only on 127.0.0.1 and refuses non-loopback Host headers (DNS rebinding guard), so socat

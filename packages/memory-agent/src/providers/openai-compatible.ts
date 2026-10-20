@@ -27,7 +27,7 @@ import {
   type GlobalConfigFailed,
   type Settings,
 } from "../config/global-config.ts";
-import { requireRuntime } from "../runtime/resources.ts";
+import { openKeyringEntry } from "../runtime/keyring.ts";
 import {
   ModelUnavailable,
   type AgentModelRuntime,
@@ -133,7 +133,7 @@ export interface CompatibleKeyStore {
 /** One keychain entry per compatible account, named by the account's `credentialEntry`. */
 export type CompatibleKeychain = (entry: string) => CompatibleKeyStore;
 const keyEntry = (entry: string) =>
-  new (requireRuntime("@napi-rs/keyring").AsyncEntry)(
+  openKeyringEntry(
     // Native host/SDK configuration boundary reads or forwards the host environment.
     Effect.runSync(
       Config.String("CONTEXT_AGENT_CREDENTIAL_NAMESPACE").pipe(
