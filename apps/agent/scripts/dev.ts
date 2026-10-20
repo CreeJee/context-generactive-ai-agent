@@ -167,8 +167,11 @@ const spanCollector = Effect.fnUntraced(function* (port: number, file: string) {
         String(port),
         "--out",
         file,
+        "--until-stdin-closes",
       ],
-      { cwd: root, stdin: "ignore", stdout: "inherit", stderr: "inherit", forceKillAfter: 5_000 },
+      // The open stdin pipe is the collector's lifetime: it ends when this process does, even
+      // if this process is killed before its own shutdown reaches the collector.
+      { cwd: root, stdin: "pipe", stdout: "inherit", stderr: "inherit", forceKillAfter: 5_000 },
     ),
   );
 });
