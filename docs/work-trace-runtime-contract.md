@@ -1,6 +1,7 @@
 # Work Trace 런타임 계약
 
 > 상태: WT-01 기준선 · 2026-09-20 · 기준 커밋 `f471284`
+> 수정: 2026-10-21 — checkpoint·evidence·채택 이력을 없애고 heartbeat와 실패 원인으로 바꿨다. 아래 "진행 위치와 실패 (2026-10-21)"가 앞의 내용보다 우선한다.
 
 이 문서는 Work Trace 구현이 재사용할 현재 실행 계약과, 서로 다른 "resume" 의미의 경계를 기록한다. 구현 중 TanStack AI API는 설치된 `@tanstack/ai` 0.55.0과 `@tanstack/ai-persistence` 0.6.0의 소스 및 패키지 스킬을 기준으로 한다.
 
@@ -47,7 +48,7 @@
 
 - 조건: 서버 재시작, crash, 실패 또는 명시적 중단으로 원 provider continuation이 없다.
 - 동작: 원 Task 아래 새 AgentRunAttempt와 새 child `runId`를 만든다. `resumed_from`으로 이전 attempt를 연결한다.
-- 입력: 원 task, durable transcript, 완료가 확정된 tool result와 artifact, 마지막 checkpoint, 중단 사유 및 남은 작업 요약.
+- 입력: 원 task와 같은 thread의 durable transcript. 끝나지 않은 도구 호출 id가 있으면 함께 알린다. (2026-10-21부터 checkpoint는 없다.)
 - 금지: 이전 token stream 복원으로 가장하기, 실행 여부가 불명확한 비멱등 tool 자동 재호출, pending approval 자동 승계.
 - 동시성: Task당 active attempt 하나를 원자적으로 claim한다.
 
@@ -69,7 +70,7 @@
 
 1. 하나의 논리 Task에 여러 child chat run이 생길 수 있다.
 2. TanStack `createOrResume`은 같은 run record의 멱등 생성이지 새 logical attempt 생성이 아니다.
-3. Work Trace에는 `resumed_from`, `invocation_id`, `parent_tool_call_id`, adoption과 resumability처럼 SDK run에 없는 필드가 필요하다.
+3. Work Trace에는 `resumed_from`, `invocation_id`, `parent_tool_call_id`, heartbeat와 실패 원인처럼 SDK run에 없는 필드가 필요하다.
 4. TanStack status 의미와 앱 task/attempt 상태를 결합하면 SDK upgrade와 interrupt 처리에서 충돌한다.
 
 관계:
@@ -100,12 +101,12 @@ Work Trace는 별도 session-scoped trace endpoint를 사용한다. 기존 chat 
 
 ## 상태와 UX 용어
 
-| 표시          | 실제 의미                                                          | 새 attempt             |
-| ------------- | ------------------------------------------------------------------ | ---------------------- |
-| 다시 연결     | producer가 살아 있는 동일 run의 delivery/trace stream에 rejoin     | 만들지 않음            |
-| 승인 후 계속  | pending interrupt에 응답하여 같은 앱 작업을 continuation           | 일반적으로 만들지 않음 |
-| 이어서 작업   | continuation이 소실된 Task를 durable checkpoint에서 logical resume | 만듦                   |
-| 처음부터 다시 | 과거 attempt를 입력 근거로 사용하지 않는 명시적 restart            | 만듦                   |
+| 표시          | 실제 의미                                                      | 새 attempt             |
+| ------------- | -------------------------------------------------------------- | ---------------------- |
+| 다시 연결     | producer가 살아 있는 동일 run의 delivery/trace stream에 rejoin | 만들지 않음            |
+| 승인 후 계속  | pending interrupt에 응답하여 같은 앱 작업을 continuation       | 일반적으로 만들지 않음 |
+| 다시 시도     | continuation이 소실·실패한 Task를 transcript를 보고 다시 실행  | 만듦                   |
+| 처음부터 다시 | 과거 attempt를 입력 근거로 사용하지 않는 명시적 restart        | 만듦                   |
 
 UI와 API는 위 용어를 혼용하지 않는다.
 
@@ -115,11 +116,50 @@ UI와 API는 위 용어를 혼용하지 않는다.
 2. named agent의 identity와 작업 Invocation/Attempt 이력을 분리한다.
 3. 하나의 Task에는 active attempt가 최대 하나다.
 4. 이전 attempt는 resume 후에도 immutable history로 남는다.
-5. 완료가 확인된 tool result만 resume context에서 재사용한다.
-6. 실행 여부가 불명확한 비멱등 tool은 `uncertain`으로 표시하고 자동 실행하지 않는다.
+5. 시작했지만 끝나지 않은 도구 호출은 attempt의 `pending_tool_call_ids`에 남긴다.
+6. 그런 호출이 남은 task는 `blocked`가 되고, 사용자 확인(`confirmUncertain`) 없이 다시 실행하지 않는다.
 7. 이전 attempt의 pending approval은 새 attempt에서 다시 확인한다.
 8. trace event는 영속화 후 전달하며 live UI와 review UI가 같은 event를 읽는다.
 9. operational trace는 memory graph와 분리한다.
+
+## 진행 위치와 실패 (2026-10-21)
+
+### Heartbeat
+
+- attempt 행의 `heartbeat_state`(`working`·`idle`·`waiting`), `heartbeat_step`(한 줄), `heartbeat_at`만 덮어쓴다. 이력은 쌓지 않는다.
+- 상태 전이와 도구 시작·종료가 단계를 바꾼다. 실행 fiber가 살아 있는 동안 `keepAlive`가 10초(`heartbeatIntervalMs`)마다 시각을 갱신한다. ticker는 job의 Scope에 묶여 job이 끝나면 멈춘다.
+- heartbeat 변화는 `run_events`에 쓰지 않는다. trace SSE는 `progress` 프레임으로 알리고, 화면은 task tree를 다시 읽는다.
+
+### Fatal 판정
+
+- store watchdog은 10초마다 origin이 있는 live attempt 중 `heartbeat_at`이 60초(`heartbeatLostMs`)보다 오래된 것을 `failed`/`HeartbeatLost`로 바꾸고 부모에게 알린다.
+- 실패 원인은 `AttemptFailure { reason: AttemptFailureReason, stage: AttemptFailureStage }`이다. reason은 리터럴 태그 유니온이고 오류 본문을 담지 않는다.
+
+| reason                | 언제                                           |
+| --------------------- | ---------------------------------------------- |
+| `ModelRunError`       | 모델 스트림이 `RUN_ERROR`를 보냄               |
+| `ModelStreamFailed`   | 모델 스트림 자체가 실패                        |
+| `AgentCrashed`        | 자식 런타임이 결과를 기록하기 전에 죽음        |
+| `HeartbeatLost`       | heartbeat가 끊김                               |
+| `ServerRestarted`     | 서버가 live attempt를 두고 재시작              |
+| `ExternalAgentFailed` | ACP 에이전트가 실패·연결 끊김·사용 불가로 끝남 |
+| `ProcessExited`       | 백그라운드 명령이 0이 아닌 코드나 신호로 끝남  |
+| `ProcessTimedOut`     | 백그라운드 명령이 시간 제한을 넘음             |
+| `OperationFailed`     | 백그라운드 작업이 결과 없이 실패               |
+| `ResultStorageFailed` | 작업은 끝났지만 결과를 저장하지 못함           |
+
+- 실패는 attempt의 `failure`, 종료 이벤트 payload, 부모 알림 payload에 같은 값으로 남는다. task tree는 최신 attempt의 실패를 `latestFailure`로 보인다.
+
+### 재시도
+
+- 서버 재시작은 live attempt를 `interrupted`/`ServerRestarted`로 닫고 부모에게 알린다. 자동으로 다시 실행하지 않는다.
+- 부모 모델의 `resume_subagent`, 또는 화면의 "다시 시도"가 남긴 `work_tasks.retry_requested_at`을 다음 부모 run이 원자적으로 가져가 새 attempt를 시작한다.
+- 새 attempt는 같은 thread의 transcript로 이어서 판단한다. 이전 승인은 만료된 것으로 본다.
+
+### 저장하지 않는 것
+
+- `work_checkpoints`, `evidence_refs`, `report_adoptions`, `work_recovery_jobs`는 없다. `run_events`에는 수명 주기 이벤트만 남는다.
+- 보고서 검토 여부는 부모 run의 메모리에만 있다. 최종 답변 출처(`final_answer_sources`)는 claim·task·attempt만 기록한다.
 
 ## 검증 명령
 

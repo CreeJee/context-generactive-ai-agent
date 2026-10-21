@@ -664,6 +664,7 @@
 - 완료가 확인된 tool result만 논리적 재개에 재사용한다. 실행 여부가 불명확한 비멱등 tool과 이전 attempt의 pending approval은 자동으로 계속하지 않는다.
 - Work Trace는 부모 chat stream과 독립된 session-scoped SSE로 전달한다. SQLite event store를 원본으로 삼고, 기존 SSE offset/rejoin 패턴을 재사용해 프로세스 재시작 뒤에도 replay한다.
 - 세부 계약과 구현 불변식은 [Work Trace 런타임 계약](./work-trace-runtime-contract.md)에 기록한다.
+- 수정(2026-10-21): checkpoint로 이어가기를 없앴다. 새 attempt는 같은 thread의 transcript를 보고 task를 다시 실행한다. 아래 "Work Trace 축소와 heartbeat·fatal 기록 (2026-10-21)"을 따른다.
 
 ### 승인된 Plan의 서버 자동 진행 (2026-10-02)
 
@@ -940,6 +941,22 @@
 | `PlatformError`(카드 id 생성)                                        | 500         | `platform_failed`                         |
 
 - 보드·판단·설정 화면은 응답 코드(`ApiError.code`)로 문구를 고르고, 오류를 문자열로 바꿔 보이지 않는다.
+
+### Work Trace 축소와 heartbeat·fatal 기록 (2026-10-21)
+
+- 사용자 결정: 사용자가 Work Trace에서 알고 싶은 것은 "지금 어디쯤 하고 있나"다. 세밀한 재개 스냅샷과 이력은 저장하지 않는다. 실패한 작업은 task 단위로 다시 실행한다.
+- 진행 위치는 Orca처럼 heartbeat로 보인다. 자식 에이전트와 백그라운드 작업은 attempt 행에 상태(`working`·`idle`·`waiting`), 현재 단계 한 줄, 마지막 활동 시각만 덮어쓴다. 이력은 쌓지 않는다. 실행 fiber가 살아 있는 동안 10초마다 시각을 갱신한다.
+- `events/app-events.ts`의 `heartbeatMs`는 SSE 연결 유지 프레임이지 에이전트 생존 신호가 아니다. 그 값은 재사용하지 않고, scope에 묶은 `Effect.forever(sleep → 작업)` 패턴만 따른다.
+- 사용자 결정: heartbeat가 끊기거나 프로세스가 종료되면 fatal로 판정한다. 60초 넘게 갱신이 없는 live attempt는 store의 watchdog이 `HeartbeatLost`로 실패 처리한다. 자식 런타임의 defect는 `AgentCrashed`, 모델 오류는 `ModelRunError`, 스트림 실패는 `ModelStreamFailed`다. 외부 ACP 에이전트의 실패·연결 끊김은 `ExternalAgentFailed{code}`다. 셸 명령의 비정상 종료와 시간 초과는 `ProcessExited{exitCode, signal}`·`ProcessTimedOut`이다. 결과 없는 백그라운드 실패는 `OperationFailed`, 결과 저장 실패는 `ResultStorageFailed`, 서버 재시작은 `ServerRestarted`다.
+- 실패는 리터럴 태그 유니온 `AttemptFailureReason`과 단계(`start`·`model`·`tool`·`approval`·`finish`·`process`·`restart`)로 attempt에 저장한다. 같은 값을 종료 이벤트와 부모 알림 payload에 싣고, 메시지 카드와 Work Trace 패널에 보인다. 오류 본문·경로·공급자 텍스트는 저장하지 않는다. 어떤 비정상 종료도 `running`으로 남거나 조용히 사라지지 않게 한다.
+- 함께 고친 버그: 외부 에이전트가 `failed`·`disconnected`·`unavailable`로 끝나거나 백그라운드 셸이 실패해도 Work Trace에는 완료로 남았다. 이제 결과 보고서는 그대로 조회할 수 있고 attempt는 실패로 기록한다.
+- 재시도: 서버 재시작 뒤 자동 재개는 하지 않는다. 화면의 "다시 시도"는 `work_tasks.retry_requested_at`에 요청을 남기고, 다음 부모 run 하나가 가져가 새 attempt를 시작한다. 부모 모델의 `resume_subagent`도 같은 task 재실행이다. 끝나지 않은 도구 호출은 attempt의 `pending_tool_call_ids`로 알고, 이런 task는 확인 없이 다시 돌리지 않는다.
+- `run_events`에는 수명 주기 이벤트(queued·started·approval·steered·interrupted·completed·failed·cancelled·resume_requested)만 남긴다. SSE cursor 용도다. heartbeat 변화는 이벤트를 쓰지 않고 메모리 알림으로 SSE `progress` 프레임만 보낸다.
+- 사용자 결정: 스냅샷·이력 용도 테이블은 DB에서 지운다. 제거한 것은 `work_checkpoints`, `evidence_refs`, `report_adoptions`, `work_recovery_jobs`와 잔여 `_v2`·`_v3`이다. 0.0.17 릴리즈에 포함됐으므로 예전 마이그레이션은 두고 새 마이그레이션에서 `DROP TABLE IF EXISTS`로 지운다. 미해결 도구 호출, 대기 중인 재시도 요청, 재시작 실패는 먼저 새 열로 옮긴다.
+- 실제 의존성을 확인해 남긴 것: `work_tasks`, `agent_invocations`, `agent_run_attempts`(heartbeat와 실패 원인), `run_events`(SSE cursor), `work_artifacts`(자식의 파일 쓰기 결과), `parent_notification_holds`(취소 뒤 자동 재개 금지), `parent_notifications`, `final_answer_*`, `lifecycle_operations`·`purge_receipts`(삭제 영수증).
+- `final_answer_sources`는 claim·task·attempt만 기록한다. 기억 승격은 evidence를 더 검증하지 않고 채택된 claim만 확인한다. 예전 승격의 evidence id는 `memory_candidate_evidence`에 이력으로만 남긴다.
+- 칸반 카드 run의 fence는 `pending_tool_call_ids`가 남은 attempt를 막는다. 제보 묶음의 Work Trace 항목에는 실패 태그를 함께 싣는다.
+- Goal worker의 실패는 이미 chat run 코드(`worker_execution_failed`)로 보이므로 이번 범위에 넣지 않는다.
 
 ## 기억·검색·평가
 
@@ -1623,12 +1640,12 @@
 
 - `BackgroundTasks.start`는 Promise 콜백 대신 환경이 제공된 Effect 작업을 받는다. 셸·ACP Promise는 전용 SDK 연결 경계에서 Effect로 변환한다. 그 연결의 취소 finalizer는 원본 작업의 종료를 기다리며, 내부 실행은 Fiber/interruption으로 관리한다.
 - 부모 취소 신호도 Effect interruption으로 변환한다. 작업의 `Exit`에 따라 완료·실패·취소를 한 번 기록하고 작업 finalizer가 끝난 뒤 종료 상태와 알림을 전달한다. 접수 기록과 fiber 등록은 짧은 중단 불가능 구간으로 묶고 동시 동일 호출은 직렬화하여 중복 실행을 막는다.
-- 실행 오류, 결과 저장·디코딩 오류, Work Trace 오류와 접근 거부를 typed error로 분리한다. 결과 저장 실패를 실행 실패로 다시 저장하지 않는다. 저장 실패 시 Work Trace에 `background_result_storage_failed`를 남기고 결과 조회에는 사용 불가·재실행 주의 상태를 전달한다. Work Trace 종료 기록 자체도 실패하면 성공 알림을 내보내지 않고 운영 오류를 기록한다.
+- 실행 오류, 결과 저장·디코딩 오류, Work Trace 오류와 접근 거부를 typed error로 분리한다. 결과 저장 실패를 실행 실패로 다시 저장하지 않는다. 저장 실패 시 Work Trace에 실패 원인 `ResultStorageFailed`를 남기고(2026-10-21부터 typed failure) 결과 조회에는 사용 불가·재실행 주의 상태를 전달한다. Work Trace 종료 기록 자체도 실패하면 성공 알림을 내보내지 않고 운영 오류를 기록한다.
 
 ### 병렬 위임과 백그라운드 도구 실행 (2026-10-04)
 
 - 메인은 독립 작업·세션 Goal/Plan·통합·최종 검증을 소유한다. 자식은 배정된 작업만 수행하며 세션 워크플로·메모리 승격·외부 재위임 도구를 받지 않는다. 부모 워크플로와 자동 후속 턴 문맥도 자식 프롬프트에서 제외한다. 위임에는 선택적인 담당 영역과 완료 기준을 전달한다.
-- 여러 자식 보고서는 `get_subagent_reports`로 병렬 조회하되 각 attempt의 검토 이력을 따로 남긴다. 조회와 채택은 분리하며 최종 답변의 근거는 기존 `adopt_subagent_reports`로 기록한다. 자식의 큰 현재 도구 출력은 원본을 보관하고 미리보기와 페이지 조회 참조를 전달한다.
+- 여러 자식 보고서는 `get_subagent_reports`로 병렬 조회한다. 검토 여부는 그 부모 run 안에서만 기억한다(2026-10-21부터 검토 이력을 저장하지 않는다). 조회와 채택은 분리하며 최종 답변의 근거는 기존 `adopt_subagent_reports`로 기록한다. 자식의 큰 현재 도구 출력은 원본을 보관하고 미리보기와 페이지 조회 참조를 전달한다.
 - 메인의 `run_shell`과 `delegate_to_agent`는 기본 1초까지만 완료를 기다린다. 오래 걸리면 Work Trace task/attempt 접수를 반환하고 실행을 계속한다. `yieldMs: 0`은 즉시 반환하며, 빠르게 끝나면 기존 형태의 결과를 반환한다. 승인 정책·명령 타임아웃·ACP 직렬화는 유지한다. 자식 셸은 기존 동기 실행을 유지한다.
 - 완료는 기존 운영 알림과 idle 후속 턴으로 전달한다. `get_background_result`는 해당 세션의 삭제되지 않은 결과를 4000자 페이지로 제공한다. 요청·결과는 비밀정보를 제거한 뒤 저장한다. 세션/작업 취소와 삭제는 실행 정리를 기다리며 저장 결과도 삭제한다. 같은 run/tool-call 재전송은 실행을 반복하지 않는다. 재시작 시 미완료 작업은 interrupted로 남기며 자동 재실행하지 않는다.
 - 실제 모델 평가는 임시 프로젝트와 현재 선택된 OpenAI 계정·모델로 지침만 비교한다. 요청 횟수와 입력 추정 예산을 제한하며 사용자 설정은 바꾸지 않는다. 2026-10-04 `gpt-6-sol`/medium 1회씩에서 두 지침 모두 자식 실행 중 부모의 파일 읽기·보고서 검토·정답 반환을 확인했다. 실행 시간은 약 52.8초/49.8초, 응답은 각 9회였지만 표본 하나이며 구 런타임 대비 속도·비용 개선의 증거로 사용하지 않는다.
