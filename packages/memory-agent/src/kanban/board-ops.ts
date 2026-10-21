@@ -18,11 +18,7 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     const known = new Set(before.plan?.steps.map((step) => step.id) ?? []);
     const result = yield* workflows.editBoard(
       sessionId,
-      // The draft is not checked here: a resolution card copies a stored title as it is.
-      BoardEdit.cases.AddCard.make(
-        { planVersion: before.plan?.version ?? 0, card },
-        { disableChecks: true },
-      ),
+      BoardEdit.cases.AddCard.make({ planVersion: before.plan?.version ?? 0, card }),
       author,
     );
     return Match.valueTags(result, {
