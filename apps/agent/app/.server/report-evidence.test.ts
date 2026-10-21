@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 import { Database } from "memory-agent";
 import { reportBundleResponse } from "./report-evidence";
@@ -62,7 +62,7 @@ describe("report evidence bundle route", () => {
             ),
         ).pipe(Effect.exit);
         expect(collected).toEqual(["p1/s1"]);
-        expect(allowed._tag).toBe("Failure");
+        expect(Exit.isFailure(allowed)).toBe(true);
       }),
     );
   });

@@ -1,5 +1,5 @@
 import type { Cause } from "effect";
-import { Effect, Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 import { OAuthHarnessError, OAuthProfileRejected, OAuthProfileStoreFailed } from "memory-agent";
 
 /**
@@ -44,36 +44,26 @@ const reply = (status: number, error: string) =>
  * The response for an expected account failure, chosen by tag and reason. Keychain, database and
  * provider causes never leave the server.
  */
-export const accountFailureResponse = (failure: AccountRouteFailure): Response => {
-  switch (failure._tag) {
-    case "OAuthProfileRejected":
-      switch (failure.reason) {
-        case "invalid_oauth_profile":
-          return reply(400, failure.reason);
-        case "oauth_profile_not_found":
-          return reply(404, failure.reason);
-        case "oauth_profile_missing_credential":
-        case "oauth_profile_removing":
-        case "oauth_profile_in_use":
-        case "oauth_profile_conflicting_credential":
-        case "oauth_profile_copy_unverified":
-          return reply(409, failure.reason);
-      }
-    case "OAuthProfileStoreFailed":
-      return reply(503, "account_store_unavailable");
-    case "OAuthHarnessError":
-      switch (failure.code) {
-        case "login_in_progress":
-          return reply(409, failure.code);
-        default:
-          return reply(502, "account_login_failed");
-      }
-    case "AccountLoginFailed":
-      return reply(500, "account_action_failed");
-    case "UnknownError":
-      return reply(400, "invalid_json");
-  }
+/** The status for each reason an OAuth profile is rejected; the reason itself is the error. */
+const oauthProfileStatus: Record<OAuthProfileRejected["reason"], number> = {
+  invalid_oauth_profile: 400,
+  oauth_profile_not_found: 404,
+  oauth_profile_missing_credential: 409,
+  oauth_profile_removing: 409,
+  oauth_profile_in_use: 409,
+  oauth_profile_conflicting_credential: 409,
+  oauth_profile_copy_unverified: 409,
 };
+
+export const accountFailureResponse = (failure: AccountRouteFailure): Response =>
+  Match.valueTags(failure, {
+    OAuthProfileRejected: ({ reason }) => reply(oauthProfileStatus[reason], reason),
+    OAuthProfileStoreFailed: () => reply(503, "account_store_unavailable"),
+    OAuthHarnessError: ({ code }) =>
+      code === "login_in_progress" ? reply(409, code) : reply(502, "account_login_failed"),
+    AccountLoginFailed: () => reply(500, "account_action_failed"),
+    UnknownError: () => reply(400, "invalid_json"),
+  });
 
 /** Answers each expected failure of an account route; a failure outside the table fails to type. */
 export const answerAccountFailures = <A, E extends AccountRouteFailure, R>(

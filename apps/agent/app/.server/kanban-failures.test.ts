@@ -27,7 +27,7 @@ describe("kanbanFailureResponse", () => {
         yield* answered(
           KanbanStorageFailed.make({
             operation: "decision",
-            reason: { _tag: "Storage" },
+            reason: KanbanStorageFailed.fields.reason.cases.Storage.make({}),
             cause: new Error("SQLITE_BUSY: /Users/someone/.context-generactive-agent/agent.db"),
           }),
         ),
@@ -36,7 +36,7 @@ describe("kanbanFailureResponse", () => {
         yield* answered(
           CardWorktreeFailed.make({
             operation: "settle",
-            reason: { _tag: "GitFailed", exitCode: 128 },
+            reason: CardWorktreeFailed.fields.reason.cases.GitFailed.make({ exitCode: 128 }),
             cause: "fatal: /Users/someone/project is not clean",
           }),
         ),
