@@ -2,6 +2,7 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import { NodePath, NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
 import { Cause, Clock, Config, Console, Effect, FileSystem, Layer } from "effect";
+import { DateTime, Ref, Sink, Stdio, Stream } from "effect";
 import { nativePromise } from "memory-agent/native-effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -38,6 +39,7 @@ if (configuration.help) {
 }
 const { backendPort, webPort, manifestFile, mode, spans } = configuration;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
+const backendLogDirectory = nodePath.join(app, "build", "logs");
 
 const Manifest = Schema.Struct({
   backendUrl: Schema.String,
@@ -193,11 +195,57 @@ const stableBackend = Effect.fnUntraced(function* (buildId: string) {
       extendEnv: true,
       // The open stdin pipe is the backend's lifetime, as with the span collector.
       stdin: "pipe",
-      stdout: "inherit",
-      stderr: "inherit",
+      stdout: "pipe",
+      stderr: "pipe",
       forceKillAfter: 5_000,
     }),
   );
+});
+
+/**
+ * The backend's output, shown here as before and written to a log file of its own for each start,
+ * so one file never holds every run. A failed file write stops only the file copy: the terminal
+ * keeps draining the backend's pipes.
+ */
+const recordBackendOutput = Effect.fnUntraced(function* (
+  backend: ChildProcessSpawner.ChildProcessHandle,
+  buildId: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const stdio = yield* Stdio.Stdio;
+  const started = DateTime.formatIso(yield* DateTime.now).replaceAll(/[:.]/gu, "-");
+  const path = nodePath.join(backendLogDirectory, `dev-backend-${backendPort}-${started}.log`);
+  yield* fs.makeDirectory(backendLogDirectory, { recursive: true });
+  const file = yield* fs.open(path, { flag: "wx" });
+  const writing = yield* Ref.make(true);
+  const toFile = (chunk: Uint8Array) =>
+    Effect.when(
+      file
+        .writeAll(chunk)
+        .pipe(
+          Effect.catchTag("PlatformError", (error) =>
+            Ref.set(writing, false).pipe(
+              Effect.andThen(Console.error(`Backend log file stopped: ${error.message}`)),
+            ),
+          ),
+        ),
+      Ref.get(writing),
+    );
+  yield* toFile(new TextEncoder().encode(`=== backend ${buildId} ===\n`));
+  const copy = <E, R>(
+    output: Stream.Stream<Uint8Array, E>,
+    terminal: Sink.Sink<void, Uint8Array, never, E, R>,
+  ) => output.pipe(Stream.tap(toFile), Stream.run(terminal));
+  yield* Effect.forkScoped(
+    Effect.all(
+      [
+        copy(backend.stdout, stdio.stdout({ endOnDone: false })),
+        copy(backend.stderr, stdio.stderr({ endOnDone: false })),
+      ],
+      { concurrency: "unbounded", discard: true },
+    ),
+  );
+  return path;
 });
 
 function webFrontend(manifest: typeof Manifest.Type) {
@@ -255,6 +303,7 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
   const collector = spans.kind === "local" ? yield* spanCollector(spans.port, spans.file) : null;
   if (spans.kind === "local") yield* Console.log(`Collecting spans into ${spans.file}`);
   const backend = yield* stableBackend(buildId);
+  yield* Console.log(`Backend log: ${yield* recordBackendOutput(backend, buildId)}`);
   let web: ChildProcessSpawner.ChildProcessHandle | null = null;
   let stopping = false;
   const shutdown = Effect.fn("dev.shutdown")(function* (signal: ChildProcess.Signal) {
