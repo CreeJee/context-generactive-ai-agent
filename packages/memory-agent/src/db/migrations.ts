@@ -1727,6 +1727,46 @@ export const migrations: readonly string[] = [
   )
   BEGIN SELECT RAISE(ABORT, 'nodes are immutable evidence'); END;
   `,
+  `
+  -- Work Trace keeps where a task is and what a retry needs, not a resume snapshot per tool call.
+  -- A retry reruns the task; whether a tool call may have run is read from its run events.
+  UPDATE final_answer_sources SET evidence_ref_id = NULL
+    WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE source_kind = 'checkpoint');
+  UPDATE memory_candidate_evidence
+    SET evidence_ref_id = NULL,
+        source_deleted_at = coalesce(source_deleted_at, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+    WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE source_kind = 'checkpoint');
+  DELETE FROM evidence_refs WHERE source_kind = 'checkpoint';
+  DELETE FROM run_events WHERE kind = 'checkpoint_created';
+  DROP TABLE work_checkpoints;
+
+  CREATE TABLE work_recovery_jobs_v2 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL UNIQUE REFERENCES work_tasks(id) ON DELETE CASCADE,
+    interrupted_attempt_id TEXT NOT NULL UNIQUE REFERENCES agent_run_attempts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'blocked', 'claimed', 'completed', 'failed')),
+    blocker TEXT CHECK (blocker IS NULL OR blocker IN (
+      'uncertain_side_effect', 'origin_deleted', 'agent_deleted', 'task_unavailable'
+    )),
+    claimed_by TEXT,
+    claimed_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    confirm_uncertain INTEGER NOT NULL DEFAULT 0 CHECK (confirm_uncertain IN (0, 1))
+  );
+  INSERT INTO work_recovery_jobs_v2
+    (id, project_id, task_id, interrupted_attempt_id, status, blocker, claimed_by, claimed_at,
+     created_at, updated_at, confirm_uncertain)
+  SELECT id, project_id, task_id, interrupted_attempt_id, status,
+    CASE WHEN blocker IN ('missing_checkpoint', 'approval_expired') THEN 'task_unavailable'
+      ELSE blocker END,
+    claimed_by, claimed_at, created_at, updated_at, confirm_uncertain
+  FROM work_recovery_jobs;
+  DROP TABLE work_recovery_jobs;
+  ALTER TABLE work_recovery_jobs_v2 RENAME TO work_recovery_jobs;
+  CREATE INDEX work_recovery_jobs_status ON work_recovery_jobs(status, created_at, id);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

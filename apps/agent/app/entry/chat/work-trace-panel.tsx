@@ -9,7 +9,6 @@ import {
   NetworkIcon,
   PanelRightOpenIcon,
   RefreshCwIcon,
-  ShieldAlertIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
@@ -37,8 +36,8 @@ const statusLabel: Readonly<Record<TraceTaskView["status"], string>> = {
   waiting: "승인 대기",
   blocked: "확인 필요",
   interrupted: "중단됨",
-  resumable: "재개 가능",
-  resuming: "재개 중",
+  resumable: "다시 시도 가능",
+  resuming: "다시 시도 중",
   completed: "완료",
   failed: "실패",
   cancelled: "취소됨",
@@ -69,8 +68,6 @@ function evidenceLocatorLabel(locator: EvidenceLocator | null) {
       return `Tool call ${locator.toolCallId} · Thread ${locator.threadId}`;
     case "tool_result":
       return `Tool result ${locator.toolCallId} · Thread ${locator.threadId}`;
-    case "checkpoint":
-      return `Checkpoint ${locator.checkpointId}`;
     case "artifact":
       return `Artifact ${locator.artifactId}`;
     case "file":
@@ -193,32 +190,11 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                 Run {attempt.chatRunId}
               </p>
               {attempt.resumedFromAttemptId && (
-                <p className="mt-1 text-muted-foreground">이전 attempt의 checkpoint에서 재개됨</p>
+                <p className="mt-1 text-muted-foreground">이전 실행을 다시 시도함</p>
               )}
             </li>
           ))}
         </ol>
-      </section>
-      <section aria-labelledby="trace-checkpoints">
-        <h3 id="trace-checkpoints" className="flex items-center gap-2 text-sm font-medium">
-          <ShieldAlertIcon className="size-4" aria-hidden /> Checkpoint
-        </h3>
-        {detail.checkpoints.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">저장된 checkpoint가 없어요.</p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {detail.checkpoints.map((checkpoint) => (
-              <li key={checkpoint.id} className="rounded-md bg-muted/50 p-2 text-xs">
-                <p>{checkpoint.remainingWork || "남은 작업이 기록되지 않았어요."}</p>
-                <p className="mt-1 text-muted-foreground">
-                  완료 tool {checkpoint.completedToolCallIds.length} · 불확실 tool{" "}
-                  {checkpoint.uncertainToolCallIds.length} · 승인{" "}
-                  {checkpoint.pendingApprovalIds.length}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
       <section aria-labelledby="trace-evidence">
         <h3 id="trace-evidence" className="flex items-center gap-2 text-sm font-medium">

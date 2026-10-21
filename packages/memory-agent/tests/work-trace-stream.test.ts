@@ -107,7 +107,6 @@ describe("Work Trace durable stream source", () => {
           expect.objectContaining({
             task: expect.objectContaining({ id: handle.taskId }),
             attempts: [expect.objectContaining({ id: handle.id, chatRunId: handle.chatRunId })],
-            checkpoints: [],
           }),
         );
       }),

@@ -37,7 +37,7 @@ export const TaskStatus = Schema.Literals([
 ]);
 export type TaskStatus = typeof TaskStatus.Type;
 
-/** Physical lifecycle of one provider run. Resumability is a separate derived decision. */
+/** Physical lifecycle of one provider run. Whether a retry is safe is derived from run events. */
 export const AttemptStatus = Schema.Literals([
   "queued",
   "running",
@@ -60,34 +60,6 @@ export const ResumeReason = Schema.Literals([
 ]);
 export type ResumeReason = typeof ResumeReason.Type;
 
-export const ResumeBlocker = Schema.Literals([
-  "attempt_alive",
-  "task_terminal",
-  "active_attempt_exists",
-  "missing_checkpoint",
-  "uncertain_side_effect",
-  "pending_approval",
-  "legacy_record",
-  "not_authorized",
-]);
-export type ResumeBlocker = typeof ResumeBlocker.Type;
-
-export const Resumability = Schema.Union([
-  Schema.Struct({ state: Schema.Literal("not_needed") }),
-  Schema.Struct({
-    state: Schema.Literal("available"),
-    reason: ResumeReason,
-    checkpointId: Schema.String,
-    requiresConfirmation: Schema.Boolean,
-  }),
-  Schema.Struct({
-    state: Schema.Literal("blocked"),
-    reason: ResumeReason,
-    blockers: Schema.Array(ResumeBlocker),
-  }),
-]);
-export type Resumability = typeof Resumability.Type;
-
 /** A report returning is not evidence that the parent reviewed or used it. */
 export const ReportDisposition = Schema.Literals([
   "returned",
@@ -104,7 +76,6 @@ export const EvidenceSourceKind = Schema.Literals([
   "tool_result",
   "file",
   "artifact",
-  "checkpoint",
   "memory",
 ]);
 export type EvidenceSourceKind = typeof EvidenceSourceKind.Type;
@@ -138,7 +109,6 @@ export const EvidenceLocator = Schema.Union([
     endLine: Schema.optional(Schema.Finite),
   }),
   Schema.Struct({ kind: Schema.Literal("artifact"), artifactId: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("checkpoint"), checkpointId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("memory"), memoryId: Schema.String }),
 ]);
 export type EvidenceLocator = typeof EvidenceLocator.Type;
@@ -184,7 +154,6 @@ export const RunEventKind = Schema.Literals([
   "tool_failed",
   "tool_uncertain",
   "steered",
-  "checkpoint_created",
   "attempt_interrupted",
   "attempt_completed",
   "attempt_failed",
@@ -258,7 +227,6 @@ export const AgentRunAttempt = Schema.Struct({
   supersededByAttemptId: Schema.NullOr(Schema.String),
   startedAt: Schema.NullOr(Schema.Finite),
   finishedAt: Schema.NullOr(Schema.Finite),
-  resumability: Resumability,
 });
 export type AgentRunAttempt = typeof AgentRunAttempt.Type;
 
@@ -276,20 +244,6 @@ export const RunEvent = Schema.Struct({
   occurredAt: Schema.Finite,
 });
 export type RunEvent = typeof RunEvent.Type;
-
-export const WorkCheckpoint = Schema.Struct({
-  id: Schema.String,
-  taskId: Schema.String,
-  attemptId: Schema.String,
-  eventSequence: Schema.Finite,
-  transcriptMessageId: Schema.NullOr(Schema.String),
-  completedToolCallIds: Schema.Array(Schema.String),
-  uncertainToolCallIds: Schema.Array(Schema.String),
-  pendingApprovalIds: Schema.Array(Schema.String),
-  remainingWork: Schema.String,
-  createdAt: Schema.Finite,
-});
-export type WorkCheckpoint = typeof WorkCheckpoint.Type;
 
 export const EvidenceRef = Schema.Struct({
   id: Schema.String,

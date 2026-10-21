@@ -73,13 +73,6 @@ describe("Work Trace task lifecycle", () => {
           expect(yield* trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
             status: "waiting_for_stop",
           });
-          yield* trace.checkpoint("s1", {
-            handle,
-            completedToolCallIds: [],
-            uncertainToolCallIds: [],
-            pendingApprovalIds: [],
-            remainingWork: "Stopped by archive request.",
-          });
           yield* trace.transitionAttempt(
             handle,
             "s1",
@@ -137,14 +130,6 @@ describe("Work Trace task lifecycle", () => {
             },
             verification: "verified",
           });
-          yield* trace.checkpoint("s1", {
-            handle,
-            transcriptMessageId: "message-1",
-            completedToolCallIds: ["tool-1"],
-            uncertainToolCallIds: [],
-            pendingApprovalIds: [],
-            remainingWork: "",
-          });
           yield* trace.transitionAttempt(
             handle,
             "s1",
@@ -189,12 +174,6 @@ describe("Work Trace task lifecycle", () => {
             verification: "source_deleted",
             sourceDeletedAt: expect.any(Number),
           });
-          expect(
-            yield* sqlGet(
-              "SELECT count(*) AS count FROM work_checkpoints WHERE task_id = ?",
-              handle.taskId,
-            ),
-          ).toEqual({ count: 0 });
           expect(
             yield* sqlGet(
               "SELECT count(*) AS count FROM run_events WHERE task_id = ?",

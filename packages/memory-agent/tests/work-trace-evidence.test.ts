@@ -64,16 +64,9 @@ describe("Work Trace evidence and artifact provenance", () => {
           locator: { kind: "tool_result", threadId: handle.threadId, toolCallId: "tool-1" },
           verification: "verified",
         });
-        const checkpoint = yield* trace.checkpoint("s1", {
-          handle,
-          completedToolCallIds: [],
-          uncertainToolCallIds: [],
-          pendingApprovalIds: [],
-          remainingWork: "",
-        });
         const hidden = yield* trace.recordEvidence({
           handle,
-          locator: { kind: "checkpoint", checkpointId: checkpoint.checkpointId },
+          locator: { kind: "tool_call", threadId: handle.threadId, toolCallId: "tool-1" },
           redaction: "redacted",
         });
         const artifact = yield* trace.recordArtifact({
@@ -188,31 +181,6 @@ describe("Work Trace evidence and artifact provenance", () => {
             }),
           ),
         ).toMatchObject({ reason: "foreign_thread" });
-        const other = yield* trace.startAttempt({
-          sessionId: "s1",
-          parentRunId: "parent-1",
-          parentToolCallId: "call-2",
-          agentId: "agent-1",
-          title: "Other",
-          request: "Other work",
-          kind: "start",
-          threadId: "subagent-agent-1-other",
-        });
-        const otherCheckpoint = yield* trace.checkpoint("s1", {
-          handle: other,
-          completedToolCallIds: [],
-          uncertainToolCallIds: [],
-          pendingApprovalIds: [],
-          remainingWork: "",
-        });
-        expect(
-          yield* Effect.flip(
-            trace.recordEvidence({
-              handle,
-              locator: { kind: "checkpoint", checkpointId: otherCheckpoint.checkpointId },
-            }),
-          ),
-        ).toMatchObject({ reason: "foreign_checkpoint" });
         yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
         yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
         expect(yield* trace.taskDetail("s1", handle.taskId)).toBeNull();

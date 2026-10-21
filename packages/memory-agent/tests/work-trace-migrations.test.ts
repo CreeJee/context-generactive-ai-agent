@@ -111,7 +111,7 @@ describe("Work Trace migration", () => {
             `SELECT name FROM sqlite_schema
            WHERE type = 'table' AND name IN
              ('work_tasks', 'agent_invocations', 'agent_run_attempts', 'run_events',
-              'work_checkpoints', 'evidence_refs', 'work_artifacts', 'report_adoptions')
+              'evidence_refs', 'work_artifacts', 'report_adoptions')
            ORDER BY name`,
           )
           .all(),
@@ -119,7 +119,7 @@ describe("Work Trace migration", () => {
 
       expect(result.version).toEqual({ user_version: migrations.length });
       expect(result.agent).toEqual({ id: "agent-1", last_task: "legacy task" });
-      expect(result.tables).toHaveLength(8);
+      expect(result.tables).toHaveLength(7);
     }),
   );
 

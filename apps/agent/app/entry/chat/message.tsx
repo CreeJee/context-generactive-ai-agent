@@ -194,9 +194,9 @@ function taskStatus(task: TraceTaskView) {
     case "interrupted":
       return { label: "중단됨", variant: "destructive" as const };
     case "resumable":
-      return { label: "재개 가능", variant: "destructive" as const };
+      return { label: "다시 시도 가능", variant: "destructive" as const };
     case "resuming":
-      return { label: "새 실행으로 재개 중", variant: "outline" as const };
+      return { label: "새 실행으로 다시 시도 중", variant: "outline" as const };
     case "completed":
       return { label: "완료", variant: "secondary" as const };
     case "failed":
@@ -222,6 +222,14 @@ type DeleteActionResult =
   | { readonly status: "deleted" }
   | { readonly status: "blocked"; readonly reason: string }
   | { readonly status: "failed" };
+/** A subagent task that ended without completing can be rerun as a new attempt. */
+const retryableTaskStatuses: readonly TraceTaskView["status"][] = [
+  "blocked",
+  "interrupted",
+  "resumable",
+  "failed",
+  "cancelled",
+];
 const archivableTaskStatuses: readonly TraceTaskView["status"][] = [
   "queued",
   "running",
@@ -284,7 +292,7 @@ function TaskSummaryCard({
       Effect.gen(function* () {
         if (
           !window.confirm(
-            "이 작업의 transcript·checkpoint·locator를 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
+            "이 작업의 transcript·locator를 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
           )
         )
           return;
@@ -319,11 +327,11 @@ function TaskSummaryCard({
         </span>
       </div>
       {task.latestResumedFromAttemptId && (
-        <p className="mt-1 text-xs text-muted-foreground">이전 실행에서 새 attempt로 재개됨</p>
+        <p className="mt-1 text-xs text-muted-foreground">이전 실행을 새 attempt로 다시 시도함</p>
       )}
       {task.status === "resumable" && (
         <p className="mt-1 text-xs text-destructive">
-          실행 연결이 소실됐어요. checkpoint에서 새 attempt로 재개할 수 있어요.
+          실행이 중단됐어요. 작업을 새 attempt로 다시 시도할 수 있어요.
         </p>
       )}
       {resumeState === "confirm-uncertain" && (
@@ -332,26 +340,28 @@ function TaskSummaryCard({
         </p>
       )}
       {resumeState === "failed" && (
-        <p className="mt-1 text-xs text-destructive">최신 상태에서 재개할 수 없어요.</p>
+        <p className="mt-1 text-xs text-destructive">최신 상태에서 다시 시도할 수 없어요.</p>
       )}
       <div className="mt-2 flex items-center justify-end gap-1">
-        {task.status === "resumable" && task.latestAttemptId && (
-          <Button
-            type="button"
-            size="xs"
-            variant={resumeState === "confirm-uncertain" ? "destructive" : "outline"}
-            disabled={readOnly || resumeState === "requesting" || resumeState === "queued"}
-            onClick={() => void resume(resumeState === "confirm-uncertain")}
-          >
-            {resumeState === "requesting"
-              ? "요청 중"
-              : resumeState === "queued"
-                ? "재개 요청됨"
-                : resumeState === "confirm-uncertain"
-                  ? "위험 확인 후 재개"
-                  : "재개"}
-          </Button>
-        )}
+        {retryableTaskStatuses.includes(task.status) &&
+          task.agentId !== null &&
+          task.latestAttemptId && (
+            <Button
+              type="button"
+              size="xs"
+              variant={resumeState === "confirm-uncertain" ? "destructive" : "outline"}
+              disabled={readOnly || resumeState === "requesting" || resumeState === "queued"}
+              onClick={() => void resume(resumeState === "confirm-uncertain")}
+            >
+              {resumeState === "requesting"
+                ? "요청 중"
+                : resumeState === "queued"
+                  ? "다시 시도 요청됨"
+                  : resumeState === "confirm-uncertain"
+                    ? "위험 확인 후 다시 시도"
+                    : "다시 시도"}
+            </Button>
+          )}
         {archivableTaskStatuses.includes(task.status) && (
           <Button
             type="button"

@@ -29,7 +29,6 @@ const TraceSummary = Schema.Struct({
   parent_tool_call_id: Schema.String,
   chat_run_id: Schema.String,
   event_kinds: Schema.String,
-  checkpoints: Schema.Finite,
   evidence_kinds: Schema.String,
   evidence_count: Schema.Finite,
 });
@@ -139,7 +138,6 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
                   t.parent_run_id, t.parent_tool_call_id, a.chat_run_id,
                   (SELECT group_concat(kind, ',') FROM run_events e
                    WHERE e.attempt_id = a.id ORDER BY e.attempt_sequence) AS event_kinds,
-                  (SELECT count(*) FROM work_checkpoints c WHERE c.attempt_id = a.id) AS checkpoints,
                   (SELECT group_concat(source_kind, ',') FROM evidence_refs r
                    WHERE r.attempt_id = a.id ORDER BY r.created_at, r.id) AS evidence_kinds,
                   (SELECT count(*) FROM evidence_refs r WHERE r.attempt_id = a.id) AS evidence_count
@@ -156,15 +154,13 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(trace.event_kinds.split(",")).toEqual([
           "attempt_queued",
           "attempt_started",
-          "checkpoint_created",
           "attempt_completed",
           "report_returned",
           "report_reviewed",
           "report_not_used",
         ]);
-        expect(trace.checkpoints).toBe(1);
-        expect(trace.evidence_count).toBe(2);
-        expect(trace.evidence_kinds.split(",").sort()).toEqual(["checkpoint", "message"]);
+        expect(trace.evidence_count).toBe(1);
+        expect(trace.evidence_kinds).toBe("message");
         expect(
           yield* encodeJson(
             yield* sqlAll(
@@ -182,7 +178,6 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         const detail = yield* sdk(() => detailResponse.text());
         expect(detail).toContain(trace.chat_run_id);
         expect(detail).toContain('"sourceKind":"message"');
-        expect(detail).toContain('"sourceKind":"checkpoint"');
         const terminalResume = yield* chat.requestTraceResume(
           sessionId,
           null,
@@ -382,7 +377,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
     }),
   );
 
-  it.effect("resume_subagent runs a new child attempt from the durable checkpoint", () =>
+  it.effect("resume_subagent retries the task as a new child attempt", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession();
       yield* send(sessionId, 'call run_subagent {"task":"collect facts"}');
@@ -404,7 +399,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         `call resume_subagent ${yield* encodeJson({ taskId: ids.task_id, expectedAttemptId: ids.attempt_id })}`,
       );
       expect(resumed).toContain('"status":"completed"');
-      expect(resumed).toContain("Resume the interrupted task as a new execution attempt");
+      expect(resumed).toContain("Retry this task as a new execution attempt");
       const result = yield* Schema.decodeUnknownEffect(ResumeResult)(
         yield* sqlGet(
           `SELECT count(*) AS attempts,
@@ -423,7 +418,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
 // Reopening replaces the block's agent, so each restart test has a block of its own and reads
 // services through `env.use` once it has reopened.
 testAgent({ testProvider: { responder: heldDefaultTurn } })("subagent blocked recovery", (it) => {
-  it.effect("restart recovery stays blocked when the checkpoint has an uncertain side effect", () =>
+  it.effect("restart recovery stays blocked when a requested tool call never settled", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { sessionId } = yield* parentSession();
@@ -432,8 +427,14 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagent blocked re
       yield* sqlTransaction(
         Effect.gen(function* () {
           yield* sqlRun(
-            `UPDATE work_checkpoints SET uncertain_tool_call_ids = '["non-idempotent-write"]'
-             WHERE attempt_id = ?`,
+            `INSERT INTO run_events
+               (id, origin_session_id, task_id, invocation_id, attempt_id, attempt_sequence, kind,
+                visibility, redaction, summary, payload, occurred_at)
+             SELECT 'uncertain-write', t.origin_session_id, a.task_id, a.invocation_id, a.id,
+               (SELECT max(attempt_sequence) + 1 FROM run_events WHERE attempt_id = a.id),
+               'tool_requested', 'summary', 'clear', 'Requested write',
+               '{"toolCallId":"non-idempotent-write","toolName":"write_file"}', 1
+             FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id WHERE a.id = ?`,
             ids.attempt_id,
           );
           yield* sqlRun(
@@ -489,8 +490,8 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
           "the child to stop",
         );
         expect(yield* relayed.pending(sessionId)).toEqual([]);
-        // Create a safe checkpoint with no uncertain tool side effects, then simulate a crash while
-        // that newest child attempt is still running.
+        // Finish a child with no unfinished tool call, then simulate a crash while that newest
+        // child attempt is still running.
         yield* send(sessionId, 'call run_subagent {"task":"recover facts"}');
         const ids = yield* latestAttempt(sessionId);
         yield* sqlTransaction(

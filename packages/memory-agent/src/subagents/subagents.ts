@@ -38,7 +38,12 @@ import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
-import { WorkTraceRejected, WorkTraceStore, type AttemptHandle } from "../work-trace/store.ts";
+import {
+  WorkTraceRejected,
+  WorkTraceStore,
+  type AttemptHandle,
+  type ResumeContext,
+} from "../work-trace/store.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { childTools } from "./role.ts";
@@ -75,14 +80,14 @@ export class SubagentAdoptionRejected extends Schema.TaggedError<SubagentAdoptio
 const adoptionRejected = (reason: SubagentAdoptionRejected["reason"]) =>
   SubagentAdoptionRejected.make({ reason, message: adoptionMessages[reason] });
 
-export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt for a durable interrupted task).
+export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt that retries a failed or interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
 - Before delegating, reserve a concrete independent task for yourself and assign separate ownership to each child. After dispatch, immediately do your own task while children run; delegation is not a reason to stop working.
 - Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Completion notifications arrive before your next model step, or trigger a follow-up when you are idle. Do not repeatedly poll for progress.
 - wait_subagents defaults to a nonblocking status check (timeoutMs 0). If it returns pending, continue independent work. Set a positive bounded timeout only when no useful independent work remains and your next step depends on a child's result. A positive timeout pauses your model turn. Waiting returns status, not reports.
 - Retrieve finished answers and evidence with get_subagent_reports for a batch, or get_subagent_report for one. Skip status checks when a completion notification already identifies the attempt. A receipt, notification, or wait result is not a reviewed report.
-- Resume an interrupted task only with its trace task/attempt ids. Never set confirmUncertain unless the user explicitly accepts the listed possible duplicate side effects.
+- Retry a failed or interrupted task only with its trace task/attempt ids. Never set confirmUncertain unless the user explicitly accepts the listed possible duplicate side effects.
 - A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.
 - Before a final answer after reviewing subagent reports, call adopt_subagent_reports with only the reports and evidence ids actually used. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer. Unlisted reviewed reports are recorded as not used.`;
 
@@ -216,7 +221,7 @@ const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.S
 const ResumeSubagentInput = Schema.Struct({
   taskId: Schema.String.annotate({ description: "The durable Work Trace task id." }),
   expectedAttemptId: Schema.String.annotate({
-    description: "The latest interrupted/failed attempt shown by Work Trace.",
+    description: "The latest failed or interrupted attempt shown by Work Trace.",
   }),
   confirmUncertain: Schema.Boolean.pipe(
     Schema.withDecodingDefaultTypeKey(Effect.succeed(false)),
@@ -332,6 +337,20 @@ export interface SubagentRunTools {
 }
 
 const everyCallReason = "호출할 때마다 확인하는 도구예요.";
+
+/** A retry reruns the task in the same thread, so the child's earlier transcript is in context. */
+const retryMessage = (context: ResumeContext) =>
+  [
+    "Retry this task as a new execution attempt. Your earlier messages in this conversation show what a previous attempt already did; continue from there instead of starting over.",
+    `Original task:\n${context.originalRequest}`,
+    context.completedToolCallIds.length > 0
+      ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
+      : "No completed tool calls were recorded.",
+    context.uncertainToolCallIds.length > 0
+      ? `Tool calls that may have run (check their effects before repeating): ${context.uncertainToolCallIds.join(", ")}`
+      : "No tool call was left unfinished.",
+    "Old approvals are expired. Request fresh approval for any gated action.",
+  ].join("\n\n");
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
@@ -583,25 +602,6 @@ const make = Effect.gen(function* () {
         let lastMessageId: string | null = null;
         let failure: string | null = null;
         const toolStates = MutableHashMap.empty<string, ChildToolState>();
-        const completedTools = () =>
-          [...toolStates].flatMap(([id, state]) => {
-            switch (state.status) {
-              case "completed":
-                return [id];
-              default:
-                return [];
-            }
-          });
-        const runningTools = () =>
-          [...toolStates].flatMap(([id, state]) => {
-            switch (state.status) {
-              case "running":
-              case "denied":
-                return [id];
-              default:
-                return [];
-            }
-          });
         yield* trace.transitionAttempt(
           handle,
           binding.sessionId,
@@ -731,18 +731,6 @@ const make = Effect.gen(function* () {
                       mediaType: "text/plain",
                       verification: "verified",
                     });
-                  const saved = yield* trace.checkpoint(binding.sessionId, {
-                    handle,
-                    completedToolCallIds: completedTools(),
-                    uncertainToolCallIds: runningTools(),
-                    pendingApprovalIds: [],
-                    remainingWork: "Continue the assigned task from the saved transcript.",
-                  });
-                  yield* trace.recordEvidence({
-                    handle,
-                    locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
-                    verification: "verified",
-                  });
                 }),
               );
             },
@@ -849,24 +837,7 @@ const make = Effect.gen(function* () {
           : isTruthy(failure)
             ? "failed"
             : "completed";
-        const saved = yield* trace.checkpoint(binding.sessionId, {
-          handle,
-          transcriptMessageId: lastMessageId,
-          completedToolCallIds: completedTools(),
-          uncertainToolCallIds: runningTools(),
-          pendingApprovalIds: [],
-          remainingWork: status === "completed" ? "" : "Resume the unfinished assigned task.",
-        });
-        yield* trace.recordEvidence({
-          handle,
-          locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
-          verification: "verified",
-        });
-        if (
-          status === "completed" &&
-          isTruthy(lastMessageId) &&
-          HashSet.has(persistedMessageIds, lastMessageId)
-        )
+        if (isTruthy(lastMessageId) && HashSet.has(persistedMessageIds, lastMessageId))
           yield* trace.recordEvidence({
             handle,
             locator: { kind: "message", threadId, messageId: lastMessageId },
@@ -969,7 +940,7 @@ const make = Effect.gen(function* () {
               yield* finish("failed", "", detail, row.id);
             }),
           ),
-          // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
+          // Keep the named-agent permit until the SDK has stopped and recorded its outcome.
           // Releasing on Effect interruption alone would let the next message overlap that stream.
           Effect.ensuring(
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -989,19 +960,12 @@ const make = Effect.gen(function* () {
         const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
           Effect.ensuring(
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // Interruption aborts the SDK signal; retain the service until the checkpoint settles.
+            // Interruption aborts the SDK signal; retain the service until the outcome is recorded.
             Effect.gen(function* () {
               if (isTruthy(pending)) {
                 const outcome = yield* nativePromise(() => pending!.catch(() => null));
                 if (onSettled !== undefined) yield* onSettled(outcome);
               } else {
-                yield* trace.checkpoint(binding.sessionId, {
-                  handle,
-                  completedToolCallIds: [],
-                  uncertainToolCallIds: [],
-                  pendingApprovalIds: [],
-                  remainingWork: task,
-                });
                 yield* trace.transitionAttempt(
                   handle,
                   binding.sessionId,
@@ -1173,36 +1137,16 @@ const make = Effect.gen(function* () {
       return missing;
     }
     const known = existing.value;
-    const context = claim.context;
-    const resumeMessage = [
-      "Resume the interrupted task as a new execution attempt.",
-      `Original task:\n${context.originalRequest}`,
-      isTruthy(context.remainingWork)
-        ? `Remaining work:\n${context.remainingWork}`
-        : "Review what remains.",
-      context.completedToolCallIds.length > 0
-        ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
-        : "No completed tool calls were recorded.",
-      context.uncertainToolCallIds.length > 0
-        ? `Uncertain tool calls (do not repeat automatically): ${context.uncertainToolCallIds.join(", ")}`
-        : "No uncertain tool calls were recorded.",
-      context.expiredApprovalIds.length > 0
-        ? `Expired approvals (request fresh approval if still needed): ${context.expiredApprovalIds.join(", ")}`
-        : "No pending approvals were carried over.",
-      `Checkpoint: ${context.checkpointId}`,
-    ].join("\n\n");
-    {
-      const row = yield* startAgain(
-        known.instructions,
-        binding.runId,
-        context.originalRequest,
-        known.id,
-      );
-      const receipt: SubagentReport = yield* nativePromise(() =>
-        launch(binding, row, resumeMessage, claim.handle),
-      );
-      return receipt;
-    }
+    const row = yield* startAgain(
+      known.instructions,
+      binding.runId,
+      claim.context.originalRequest,
+      known.id,
+    );
+    const receipt: SubagentReport = yield* nativePromise(() =>
+      launch(binding, row, retryMessage(claim.context), claim.handle),
+    );
+    return receipt;
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -1222,32 +1166,17 @@ const make = Effect.gen(function* () {
                     return;
                   }
                   const known = existing.value;
-                  const context = claim.context;
-                  const message = [
-                    "Automatically resume the interrupted task as a new execution attempt.",
-                    `Original task:\n${context.originalRequest}`,
-                    isTruthy(context.remainingWork)
-                      ? `Remaining work:\n${context.remainingWork}`
-                      : "Review what remains.",
-                    context.completedToolCallIds.length > 0
-                      ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
-                      : "No completed tool calls were recorded.",
-                    "Old approvals are expired. Request fresh approval for any gated action.",
-                    `Checkpoint: ${context.checkpointId}`,
-                  ].join("\n\n");
-                  {
-                    const row = yield* startAgain(
-                      known.instructions,
-                      binding.runId,
-                      context.originalRequest,
-                      known.id,
-                    );
-                    yield* nativePromise(() =>
-                      launch(binding, row, message, claim.handle, (outcome) =>
-                        trace.finishRecoveryJob(jobId, outcome?.status === "completed"),
-                      ),
-                    );
-                  }
+                  const row = yield* startAgain(
+                    known.instructions,
+                    binding.runId,
+                    claim.context.originalRequest,
+                    known.id,
+                  );
+                  yield* nativePromise(() =>
+                    launch(binding, row, retryMessage(claim.context), claim.handle, (outcome) =>
+                      trace.finishRecoveryJob(jobId, outcome?.status === "completed"),
+                    ),
+                  );
                 }),
               ),
             ),
@@ -1293,17 +1222,19 @@ const make = Effect.gen(function* () {
         const row = found.value;
         const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
         if (!terminal(attempt.status)) return { ...base, status: "running" };
-        const checkpoint = [...detail.checkpoints]
-          .reverse()
-          .find((entry) => entry.attemptId === attemptId && entry.transcriptMessageId);
+        // The attempt's last message is recorded as message evidence when it ends.
+        const answerId = detail.evidence.findLast(
+          (entry) => entry.attemptId === attemptId && entry.locator?.kind === "message",
+        )?.locator;
         const messages = yield* nativePromise(() =>
           chatState.persistence.stores.messages.loadThread(attempt.threadId),
         );
-        const message = isTruthy(checkpoint?.transcriptMessageId)
-          ? messages.find(
-              (entry) => entry.role === "assistant" && entry.id === checkpoint.transcriptMessageId,
-            )
-          : undefined;
+        const message =
+          answerId?.kind === "message"
+            ? messages.find(
+                (entry) => entry.role === "assistant" && entry.id === answerId.messageId,
+              )
+            : undefined;
         const answer = Schema.is(Schema.String)(message?.content)
           ? message.content
           : (message?.content ?? [])
@@ -1412,7 +1343,7 @@ const make = Effect.gen(function* () {
       const resumeTool = toolDefinition({
         name: "resume_subagent",
         description:
-          "Resume one durable interrupted subagent task as a new background attempt and immediately return its running receipt. Completed tool calls are not rerun, uncertain side effects require explicit user confirmation, and old approvals are not carried over.",
+          "Retry one failed or interrupted subagent task as a new background attempt in the same conversation and immediately return its running receipt. Completed tool calls are not rerun, unfinished tool calls require explicit user confirmation, and old approvals are not carried over.",
         inputSchema: toToolSchema(ResumeSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "resume_subagent", JSON.stringify(input)),
@@ -1663,7 +1594,7 @@ const make = Effect.gen(function* () {
      * Runs one attempt of a named child that no parent chat run started, such as a kanban card's
      * agent, and waits for its outcome. `register` sees the attempt before the child can call a
      * tool; when it fails the child never starts. Interrupting the effect stops the child and
-     * waits until its checkpoint is saved.
+     * waits until its outcome is recorded.
      */
     runAttempt: <E>(
       binding: Omit<SubagentBinding, "abortSignal" | "deliveredParentNotificationIds">,
@@ -1740,7 +1671,7 @@ const make = Effect.gen(function* () {
       );
     },
 
-    /** Stop exactly one live child and wait until its checkpoint and terminal transition settle. */
+    /** Stop exactly one live child and wait until its terminal transition settles. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     stopTask(taskId: string) {
       return runEffect(

@@ -3,7 +3,7 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { WorkTraceStore, type AttemptHandle } from "../src/work-trace/store.ts";
 import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const AttemptLineage = Schema.Struct({
@@ -44,6 +44,30 @@ const seed = Effect.fnUntraced(function* () {
   );
 });
 
+const toolCall = Effect.fnUntraced(function* (
+  trace: WorkTraceStore["Service"],
+  handle: AttemptHandle,
+  toolCallId: string,
+  settled: boolean,
+) {
+  const payload = { toolCallId, toolName: "write_file" };
+  yield* trace.appendEvent({
+    handle,
+    sessionId: "s1",
+    kind: "tool_requested",
+    summary: "Requested",
+    payload,
+  });
+  if (settled)
+    yield* trace.appendEvent({
+      handle,
+      sessionId: "s1",
+      kind: "tool_completed",
+      summary: "Completed",
+      payload,
+    });
+});
+
 const interruptedAttempt = Effect.fnUntraced(function* (
   trace: WorkTraceStore["Service"],
   uncertain: readonly string[] = [],
@@ -59,13 +83,8 @@ const interruptedAttempt = Effect.fnUntraced(function* (
     threadId: "subagent-agent-1",
   });
   yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-  yield* trace.checkpoint("s1", {
-    handle,
-    completedToolCallIds: ["tool-complete"],
-    uncertainToolCallIds: uncertain,
-    pendingApprovalIds: ["approval-expired"],
-    remainingWork: "Write the verified report.",
-  });
+  yield* toolCall(trace, handle, "tool-complete", true);
+  for (const toolCallId of uncertain) yield* toolCall(trace, handle, toolCallId, false);
   yield* trace.transitionAttempt(
     handle,
     "s1",
@@ -100,11 +119,8 @@ describe("Work Trace logical resume", () => {
           expect(resumed.handle.chatRunId).not.toBe(previous.chatRunId);
           expect(resumed.context).toEqual({
             originalRequest: "Research the code",
-            remainingWork: "Write the verified report.",
             completedToolCallIds: ["tool-complete"],
             uncertainToolCallIds: [],
-            expiredApprovalIds: ["approval-expired"],
-            checkpointId: expect.any(String),
           });
 
           expect(
@@ -165,13 +181,7 @@ describe("Work Trace logical resume", () => {
           threadId: "subagent-agent-1",
         });
         yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-        yield* trace.checkpoint("s1", {
-          handle,
-          completedToolCallIds: ["tool-complete"],
-          uncertainToolCallIds: [],
-          pendingApprovalIds: [],
-          remainingWork: "Finish the report.",
-        });
+        yield* toolCall(trace, handle, "tool-complete", true);
         yield* trace.transitionAttempt(
           handle,
           "s1",
@@ -206,7 +216,7 @@ describe("Work Trace logical resume", () => {
     ),
   );
 
-  it.effect("requires explicit confirmation when a checkpoint has uncertain side effects", () =>
+  it.effect("requires explicit confirmation when a requested tool call never settled", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
@@ -325,7 +335,7 @@ describe("Work Trace logical resume", () => {
     ),
   );
 
-  it.effect("rejects stale attempt ids and tasks without a durable checkpoint", () =>
+  it.effect("rejects stale attempt ids and retries a failed attempt without tool calls", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
@@ -353,9 +363,13 @@ describe("Work Trace logical resume", () => {
           status: "blocked",
           reason: "stale_attempt",
         });
-        expect(yield* trace.claimResume({ ...base, expectedAttemptId: handle.id })).toEqual({
-          status: "blocked",
-          reason: "missing_checkpoint",
+        expect(yield* trace.claimResume({ ...base, expectedAttemptId: handle.id })).toMatchObject({
+          status: "started",
+          context: {
+            originalRequest: "Research",
+            completedToolCallIds: [],
+            uncertainToolCallIds: [],
+          },
         });
       }),
     ),

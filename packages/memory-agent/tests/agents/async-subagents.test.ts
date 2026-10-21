@@ -555,7 +555,7 @@ testAgent({ testProvider })("held parent notifications across restart", (it) => 
 });
 
 testAgent({ testProvider })("background children when the agent closes", (it) => {
-  it.effect("service disposal aborts and checkpoints background children", () =>
+  it.effect("service disposal aborts background children and records them cancelled", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { sessionId } = yield* parentSession;
@@ -563,7 +563,6 @@ testAgent({ testProvider })("background children when the agent closes", (it) =>
       yield* env.reopen;
       const detail = yield* (yield* env.use(WorkTraceStore)).taskDetail(sessionId, receipt.taskId);
       expect(detail?.attempts[0]?.status).toBe("cancelled");
-      expect(detail?.checkpoints.length).toBeGreaterThan(0);
     }),
   );
 });

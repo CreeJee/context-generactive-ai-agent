@@ -57,7 +57,6 @@ export class WorkTraceRejected extends Schema.TaggedError<WorkTraceRejected>()(
       "missing_file_digest",
       "locator_kind_changed",
       "foreign_thread",
-      "foreign_checkpoint",
       "foreign_artifact",
       "artifact_kind_mismatch",
       "origin_missing",
@@ -93,10 +92,10 @@ const RecoveryRow = Schema.Struct({
   agent_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
 });
-const RecoveryAssessment = Schema.Struct({
-  checkpoint_id: Schema.NullOr(Schema.String),
-  uncertain_count: Schema.Finite,
-  approval_count: Schema.Finite,
+const ToolCallRow = Schema.Struct({
+  tool_call_id: Schema.String,
+  completed: Schema.Finite,
+  settled: Schema.Finite,
 });
 const RecoveryJobRow = Schema.Struct({
   id: Schema.String,
@@ -191,7 +190,6 @@ const AttemptViewRow = Schema.Struct({
   status: AttemptStatus,
   resumed_from_attempt_id: Schema.NullOr(Schema.String),
   superseded_by_attempt_id: Schema.NullOr(Schema.String),
-  resumability: Schema.String,
   started_at: Schema.NullOr(Schema.Finite),
   finished_at: Schema.NullOr(Schema.Finite),
   created_at: Schema.Finite,
@@ -211,24 +209,6 @@ const ResumeTaskRow = Schema.Struct({
   previous_attempt_number: Schema.Finite,
   previous_status: AttemptStatus,
   thread_id: Schema.String,
-});
-const CheckpointViewRow = Schema.Struct({
-  id: Schema.String,
-  attempt_id: Schema.String,
-  event_sequence: Schema.Finite,
-  transcript_message_id: Schema.NullOr(Schema.String),
-  completed_tool_call_ids: Schema.String,
-  uncertain_tool_call_ids: Schema.String,
-  pending_approval_ids: Schema.String,
-  remaining_work: Schema.String,
-  created_at: Schema.Finite,
-});
-const CheckpointRow = Schema.Struct({
-  id: Schema.String,
-  completed_tool_call_ids: Schema.String,
-  uncertain_tool_call_ids: Schema.String,
-  pending_approval_ids: Schema.String,
-  remaining_work: Schema.String,
 });
 const EvidenceRow = Schema.Struct({
   id: Schema.String,
@@ -314,7 +294,7 @@ const PendingLifecycleRow = Schema.Struct({
 });
 const decodeAttempt = Schema.decodeUnknownEffect(AttemptRow);
 const decodeRecoveryRows = Schema.decodeUnknownEffect(Schema.Array(RecoveryRow));
-const decodeRecoveryAssessment = Schema.decodeUnknownEffect(RecoveryAssessment);
+const decodeToolCallRows = Schema.decodeUnknownEffect(Schema.Array(ToolCallRow));
 const decodeRecoveryJobRows = Schema.decodeUnknownEffect(Schema.Array(RecoveryJobRow));
 const decodeNotificationTask = Schema.decodeUnknownEffect(NotificationTaskRow);
 const decodeParentNotificationRows = Schema.decodeUnknownEffect(
@@ -331,10 +311,8 @@ const decodeLifecycleOperation = Schema.decodeUnknownEffect(LifecycleOperationRo
 const decodeLifecycleTask = Schema.decodeUnknownEffect(LifecycleTaskRow);
 const decodeTaskViewRows = Schema.decodeUnknownEffect(Schema.Array(TaskViewRow));
 const decodeAttemptViewRows = Schema.decodeUnknownEffect(Schema.Array(AttemptViewRow));
-const decodeCheckpointViewRows = Schema.decodeUnknownEffect(Schema.Array(CheckpointViewRow));
 const decodeStoredEventRows = Schema.decodeUnknownEffect(Schema.Array(StoredEventRow));
 const decodeResumeTask = Schema.decodeUnknownEffect(ResumeTaskRow);
-const decodeCheckpoint = Schema.decodeUnknownEffect(CheckpointRow);
 const decodeEvidenceRows = Schema.decodeUnknownEffect(Schema.Array(EvidenceRow));
 const decodeEvidenceRow = Schema.decodeUnknownEffect(EvidenceRow);
 const decodeArtifactRows = Schema.decodeUnknownEffect(Schema.Array(ArtifactRow));
@@ -357,9 +335,6 @@ const decodeOriginSessions = Schema.decodeUnknownEffect(
 );
 const decodeEvidenceLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(EvidenceLocator));
 const decodeArtifactLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(ArtifactLocator));
-const decodeStringArray = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Array(Schema.String)),
-);
 const decodeRunResult = Schema.decodeUnknownEffect(
   Schema.Struct({
     changes: Schema.Finite,
@@ -370,7 +345,6 @@ const decodePayload = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonValue
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeEvidenceLocator = Schema.encodeEffect(Schema.fromJsonString(EvidenceLocator));
 const encodeArtifactLocator = Schema.encodeEffect(Schema.fromJsonString(ArtifactLocator));
-const encodeStringArray = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export interface TraceTaskView {
   readonly id: string;
@@ -408,7 +382,6 @@ export interface TraceAttemptView {
   readonly status: AttemptStatus;
   readonly resumedFromAttemptId: string | null;
   readonly supersededByAttemptId: string | null;
-  readonly resumability: JsonValue;
   readonly startedAt: number | null;
   readonly finishedAt: number | null;
   readonly createdAt: number;
@@ -423,7 +396,6 @@ export interface TraceTreeSnapshot {
 export interface TraceTaskDetail {
   readonly task: TraceTaskView;
   readonly attempts: readonly TraceAttemptView[];
-  readonly checkpoints: readonly TraceCheckpointView[];
   readonly evidence: readonly TraceEvidenceView[];
   readonly artifacts: readonly TraceArtifactView[];
   readonly adoptions: readonly TraceReportAdoptionView[];
@@ -491,18 +463,6 @@ export interface TraceArtifactView {
   readonly updatedAt: number;
 }
 
-export interface TraceCheckpointView {
-  readonly id: string;
-  readonly attemptId: string;
-  readonly eventSequence: number;
-  readonly transcriptMessageId: string | null;
-  readonly completedToolCallIds: readonly string[];
-  readonly uncertainToolCallIds: readonly string[];
-  readonly pendingApprovalIds: readonly string[];
-  readonly remainingWork: string;
-  readonly createdAt: number;
-}
-
 export interface TraceEventView {
   readonly cursor: number;
   readonly id: string;
@@ -528,13 +488,11 @@ export interface ParentNotificationView {
   readonly createdAt: number;
 }
 
+/** What a retry tells the new attempt. Tool calls come from the previous attempt's run events. */
 export interface ResumeContext {
   readonly originalRequest: string;
-  readonly remainingWork: string;
   readonly completedToolCallIds: readonly string[];
   readonly uncertainToolCallIds: readonly string[];
-  readonly expiredApprovalIds: readonly string[];
-  readonly checkpointId: string;
 }
 
 export type ResumeClaim =
@@ -552,7 +510,6 @@ export type ResumeClaim =
         | "task_deleted"
         | "attempt_alive"
         | "task_terminal"
-        | "missing_checkpoint"
         | "uncertain_side_effect"
         | "stale_attempt"
         | "origin_deleted"
@@ -591,15 +548,6 @@ export interface AppendEventInput {
   readonly redaction?: RedactionState;
   readonly payload?: Readonly<Record<string, JsonValue>>;
   readonly occurredAt?: number;
-}
-
-export interface CheckpointInput {
-  readonly handle: AttemptHandle;
-  readonly transcriptMessageId?: string | null;
-  readonly completedToolCallIds: readonly string[];
-  readonly uncertainToolCallIds: readonly string[];
-  readonly pendingApprovalIds: readonly string[];
-  readonly remainingWork: string;
 }
 
 export interface RecordEvidenceInput {
@@ -768,17 +716,6 @@ const make = Effect.gen(function* () {
       )
         return yield* rejected("foreign_thread", "Evidence locator belongs to another thread");
       if (
-        locator.kind === "checkpoint" &&
-        !isTruthy(
-          yield* first(sql`SELECT 1 FROM work_checkpoints WHERE id = ${locator.checkpointId}
-            AND attempt_id = ${input.handle.id} AND task_id = ${input.handle.taskId}`),
-        )
-      )
-        return yield* rejected(
-          "foreign_checkpoint",
-          "Evidence checkpoint does not belong to this attempt",
-        );
-      if (
         locator.kind === "artifact" &&
         !isTruthy(
           yield* first(sql`SELECT 1 FROM work_artifacts
@@ -868,6 +805,27 @@ const make = Effect.gen(function* () {
       return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
     }).pipe(sql.withTransaction);
 
+  /**
+   * Tool calls an attempt requested, read from its run events. A call with neither a completed nor
+   * a failed event may have run, so a retry must not repeat it without the user's confirmation.
+   */
+  const toolCallsOf = Effect.fnUntraced(function* (attemptId: string) {
+    const rows = yield* decodeToolCallRows(
+      yield* sql`SELECT json_extract(payload, '$.toolCallId') AS tool_call_id,
+          max(kind = 'tool_completed') AS completed,
+          max(kind IN ('tool_completed', 'tool_failed')) AS settled
+        FROM run_events
+        WHERE attempt_id = ${attemptId}
+          AND kind IN ('tool_requested', 'tool_completed', 'tool_failed')
+          AND json_extract(payload, '$.toolCallId') IS NOT NULL
+        GROUP BY tool_call_id ORDER BY min(seq)`,
+    );
+    return {
+      completed: rows.filter((row) => row.completed === 1).map((row) => row.tool_call_id),
+      uncertain: rows.filter((row) => row.settled === 0).map((row) => row.tool_call_id),
+    };
+  });
+
   // Attempts the previous process left running are interrupted before any new work starts.
   const recoveredAttempts = yield* Effect.gen(function* () {
     const now = effectClock.currentTimeMillisUnsafe();
@@ -878,35 +836,18 @@ const make = Effect.gen(function* () {
         WHERE a.status IN ('queued', 'running', 'waiting', 'blocked')`,
     );
     for (const row of attempts) {
-      const assessmentRow = yield* first(sql`SELECT c.id AS checkpoint_id,
-          coalesce(json_array_length(c.uncertain_tool_call_ids), 0) AS uncertain_count,
-          coalesce(json_array_length(c.pending_approval_ids), 0) AS approval_count
-        FROM work_checkpoints c WHERE c.attempt_id = ${row.id}
-        ORDER BY c.event_sequence DESC LIMIT 1`);
-      const assessment = isTruthy(assessmentRow)
-        ? yield* decodeRecoveryAssessment(assessmentRow)
-        : { checkpoint_id: null, uncertain_count: 0, approval_count: 0 };
       const blocker =
         row.origin_session_id === null
           ? "origin_deleted"
           : row.agent_id === null
             ? "agent_deleted"
-            : assessment.checkpoint_id === null
-              ? "missing_checkpoint"
-              : assessment.uncertain_count > 0
-                ? "uncertain_side_effect"
-                : assessment.approval_count > 0
-                  ? "approval_expired"
-                  : null;
+            : (yield* toolCallsOf(row.id)).uncertain.length > 0
+              ? "uncertain_side_effect"
+              : null;
       const safe = blocker === null;
-      const resumability = yield* encodeJson(
-        safe
-          ? { state: "logical_resume", reason: "server_restarted", blockers: [] }
-          : { state: "blocked", reason: "server_restarted", blockers: [blocker] },
-      );
       yield* run(sql`UPDATE agent_run_attempts
         SET status = 'interrupted', resume_reason = 'server_restarted',
-            resumability = ${resumability}, finished_at = ${now}, updated_at = ${now}
+            finished_at = ${now}, updated_at = ${now}
         WHERE id = ${row.id}`);
       yield* run(sql`UPDATE work_tasks SET status = ${safe ? "resumable" : "blocked"},
           active_attempt_id = NULL, updated_at = ${now}
@@ -1183,27 +1124,6 @@ const make = Effect.gen(function* () {
           ...optionalProperty("deliveredToRunId", deliveredToRunId),
         });
       return appended;
-    }).pipe(sql.withTransaction);
-
-  const checkpoint = (sessionId: string, input: CheckpointInput) =>
-    Effect.gen(function* () {
-      const event = yield* appendEvent({
-        handle: input.handle,
-        sessionId,
-        kind: "checkpoint_created",
-        summary: "Checkpoint saved",
-      });
-      const id = yield* crypto.randomUUIDv4();
-      yield* run(sql`INSERT INTO work_checkpoints
-        (id, task_id, attempt_id, event_sequence, transcript_message_id,
-         completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-         remaining_work, created_at)
-        VALUES (${id}, ${input.handle.taskId}, ${input.handle.id}, ${event.attemptSequence},
-          ${input.transcriptMessageId ?? null}, ${yield* encodeStringArray(input.completedToolCallIds)},
-          ${yield* encodeStringArray(input.uncertainToolCallIds)},
-          ${yield* encodeStringArray(input.pendingApprovalIds)}, ${input.remainingWork},
-          ${event.occurredAt})`);
-      return { checkpointId: id, ...event };
     }).pipe(sql.withTransaction);
 
   const evidenceForTask = (taskId: string) =>
@@ -1565,52 +1485,24 @@ const make = Effect.gen(function* () {
   const attemptsForTask = Effect.fnUntraced(function* (taskId: string) {
     const rows = yield* decodeAttemptViewRows(
       yield* sql`SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-          resumed_from_attempt_id, superseded_by_attempt_id, resumability,
+          resumed_from_attempt_id, superseded_by_attempt_id,
           started_at, finished_at, created_at, updated_at
         FROM agent_run_attempts WHERE task_id = ${taskId} ORDER BY attempt_number`,
     );
-    return yield* Effect.forEach(rows, (row) =>
-      Effect.map(decodePayload(row.resumability), (resumability): TraceAttemptView => ({
-        id: row.id,
-        invocationId: row.invocation_id,
-        attemptNumber: row.attempt_number,
-        chatRunId: row.chat_run_id,
-        threadId: row.thread_id,
-        status: row.status,
-        resumedFromAttemptId: row.resumed_from_attempt_id,
-        supersededByAttemptId: row.superseded_by_attempt_id,
-        resumability,
-        startedAt: row.started_at,
-        finishedAt: row.finished_at,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })),
-    );
-  });
-
-  const checkpointsForTask = Effect.fnUntraced(function* (taskId: string) {
-    const rows = yield* decodeCheckpointViewRows(
-      yield* sql`SELECT id, attempt_id, event_sequence, transcript_message_id,
-          completed_tool_call_ids, uncertain_tool_call_ids, pending_approval_ids,
-          remaining_work, created_at
-        FROM work_checkpoints WHERE task_id = ${taskId} ORDER BY created_at, id`,
-    );
-    return yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const view: TraceCheckpointView = {
-          id: row.id,
-          attemptId: row.attempt_id,
-          eventSequence: row.event_sequence,
-          transcriptMessageId: row.transcript_message_id,
-          completedToolCallIds: yield* decodeStringArray(row.completed_tool_call_ids),
-          uncertainToolCallIds: yield* decodeStringArray(row.uncertain_tool_call_ids),
-          pendingApprovalIds: yield* decodeStringArray(row.pending_approval_ids),
-          remainingWork: row.remaining_work,
-          createdAt: row.created_at,
-        };
-        return view;
-      }),
-    );
+    return rows.map((row): TraceAttemptView => ({
+      id: row.id,
+      invocationId: row.invocation_id,
+      attemptNumber: row.attempt_number,
+      chatRunId: row.chat_run_id,
+      threadId: row.thread_id,
+      status: row.status,
+      resumedFromAttemptId: row.resumed_from_attempt_id,
+      supersededByAttemptId: row.superseded_by_attempt_id,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   });
 
   const detailOf = Effect.fnUntraced(function* <E>(
@@ -1620,7 +1512,6 @@ const make = Effect.gen(function* () {
     return {
       task,
       attempts: yield* attemptsForTask(task.id),
-      checkpoints: yield* checkpointsForTask(task.id),
       evidence: yield* evidenceForTask(task.id),
       artifacts: yield* artifactsForTask(task.id),
       adoptions: yield* reportAdoptionsForTask(task.id),
@@ -1690,14 +1581,8 @@ const make = Effect.gen(function* () {
       if (task.status === "completed") return resumeBlocked("task_terminal");
       if (task.previous_attempt_id !== input.expectedAttemptId)
         return resumeBlocked("stale_attempt");
-      const checkpointRow = yield* first(sql`SELECT id, completed_tool_call_ids,
-          uncertain_tool_call_ids, pending_approval_ids, remaining_work
-        FROM work_checkpoints WHERE attempt_id = ${task.previous_attempt_id}
-        ORDER BY event_sequence DESC LIMIT 1`);
-      if (!isTruthy(checkpointRow)) return resumeBlocked("missing_checkpoint");
-      const checkpoint = yield* decodeCheckpoint(checkpointRow);
-      const uncertainToolCallIds = yield* decodeStringArray(checkpoint.uncertain_tool_call_ids);
-      if (uncertainToolCallIds.length > 0 && !input.confirmUncertain)
+      const toolCalls = yield* toolCallsOf(task.previous_attempt_id);
+      if (toolCalls.uncertain.length > 0 && !input.confirmUncertain)
         return resumeBlocked("uncertain_side_effect");
 
       const now = effectClock.currentTimeMillisUnsafe();
@@ -1719,7 +1604,7 @@ const make = Effect.gen(function* () {
         VALUES (${attemptId}, ${task.id}, ${invocationId}, ${attemptNumber}, ${chatRunId},
           ${task.thread_id}, 'queued', ${task.previous_attempt_id}, ${resumeReason}, ${now}, ${now})`);
       yield* run(sql`UPDATE agent_run_attempts SET superseded_by_attempt_id = ${attemptId},
-          resumability = '{"state":"not_needed"}', updated_at = ${now}
+          updated_at = ${now}
         WHERE id = ${task.previous_attempt_id}`);
       yield* run(sql`UPDATE work_tasks SET status = 'resuming', active_attempt_id = ${attemptId},
           updated_at = ${now}
@@ -1736,7 +1621,7 @@ const make = Effect.gen(function* () {
         handle,
         sessionId: input.sessionId,
         kind: "resume_requested",
-        summary: "Resume requested from the latest checkpoint",
+        summary: "Retry requested",
         occurredAt: now,
       });
       const claim: ResumeClaim = {
@@ -1745,11 +1630,8 @@ const make = Effect.gen(function* () {
         agentId: task.agent_id,
         context: {
           originalRequest: task.request,
-          remainingWork: checkpoint.remaining_work,
-          completedToolCallIds: yield* decodeStringArray(checkpoint.completed_tool_call_ids),
-          uncertainToolCallIds,
-          expiredApprovalIds: yield* decodeStringArray(checkpoint.pending_approval_ids),
-          checkpointId: checkpoint.id,
+          completedToolCallIds: toolCalls.completed,
+          uncertainToolCallIds: toolCalls.uncertain,
         },
       };
       return claim;
@@ -2036,8 +1918,6 @@ const make = Effect.gen(function* () {
     const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL,
         verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
       WHERE task_id = ${taskId}`)).changes;
-    const checkpoints = (yield* run(sql`DELETE FROM work_checkpoints WHERE task_id = ${taskId}`))
-      .changes;
     yield* run(sql`DELETE FROM chat_metadata
       WHERE namespace = 'background-task-result' AND key = ${taskId}`);
     const events = (yield* run(sql`DELETE FROM run_events WHERE task_id = ${taskId}`)).changes;
@@ -2046,7 +1926,7 @@ const make = Effect.gen(function* () {
       SET summary = 'Deleted task lifecycle notification', payload = '{}'
       WHERE task_id = ${taskId}`);
     const receiptId = yield* crypto.randomUUIDv4();
-    const purgedCounts = yield* encodeJson({ evidence, artifacts, checkpoints, events });
+    const purgedCounts = yield* encodeJson({ evidence, artifacts, events });
     const retainedKinds = yield* encodeJson([
       "task_tombstone",
       "attempt_lineage",
@@ -2203,15 +2083,8 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, reason: "task_terminal" as const };
       if (task.previous_attempt_id !== input.expectedAttemptId)
         return { status: "blocked" as const, reason: "stale_attempt" as const };
-      const checkpointRow = yield* first(sql`SELECT id, completed_tool_call_ids,
-          uncertain_tool_call_ids, pending_approval_ids, remaining_work
-        FROM work_checkpoints WHERE attempt_id = ${task.previous_attempt_id}
-        ORDER BY event_sequence DESC LIMIT 1`);
-      if (!isTruthy(checkpointRow))
-        return { status: "blocked" as const, reason: "missing_checkpoint" as const };
-      const checkpoint = yield* decodeCheckpoint(checkpointRow);
-      const uncertain = yield* decodeStringArray(checkpoint.uncertain_tool_call_ids);
-      if (uncertain.length > 0 && !input.confirmUncertain)
+      const toolCalls = yield* toolCallsOf(task.previous_attempt_id);
+      if (toolCalls.uncertain.length > 0 && !input.confirmUncertain)
         return { status: "blocked" as const, reason: "uncertain_side_effect" as const };
 
       const now = effectClock.currentTimeMillisUnsafe();
@@ -2269,9 +2142,11 @@ const make = Effect.gen(function* () {
             break;
           case "blocked": {
             const blocker =
-              claim.reason === "origin_deleted" || claim.reason === "agent_deleted"
+              claim.reason === "origin_deleted" ||
+              claim.reason === "agent_deleted" ||
+              claim.reason === "uncertain_side_effect"
                 ? claim.reason
-                : "missing_checkpoint";
+                : "task_unavailable";
             yield* run(sql`UPDATE work_recovery_jobs SET status = 'blocked', blocker = ${blocker},
                 updated_at = ${now}
               WHERE id = ${job.id}`);
@@ -2443,7 +2318,6 @@ const make = Effect.gen(function* () {
       ),
     releaseParentNotifications,
     transitionAttempt,
-    checkpoint,
     recordEvidence,
     setEvidenceVerification,
     markEvidenceSourceDeleted,
