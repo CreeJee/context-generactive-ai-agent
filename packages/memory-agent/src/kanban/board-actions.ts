@@ -1,6 +1,7 @@
-import { Context, Effect, Layer, Match, Option, Predicate, Schema } from "effect";
+import { Context, Effect, Layer, Match, Option, Predicate, Schema, type Types } from "effect";
 import {
   BoardEdit,
+  BoardEditRefused,
   BoardEditResult,
   CardDraft,
   CardPatch,
@@ -54,6 +55,12 @@ export class KanbanActionRefused extends Schema.TaggedError<KanbanActionRefused>
       "card_not_blocked",
       "card_not_running",
       "reorder_across_columns",
+      /** A card waiting for a person's decision stays until it is answered or cancelled. */
+      "card_waiting",
+      /** Other cards of the Plan depend on it; they would be left waiting for nothing. */
+      "card_has_dependents",
+      /** The transfer target is this Plan, another project's conversation, or has no Plan. */
+      "transfer_target_invalid",
     ]),
   },
 ) {}
@@ -129,6 +136,22 @@ export interface KanbanBoardView {
 
 /** A card attempt is running or waiting in the queue while the card is in these columns. */
 const running = (card: PlanStep) => card.status === "in_progress" || card.status === "verify";
+
+/** The card as a draft for another Plan: its contract travels, its dependencies do not. */
+const draftOf = (card: PlanStep): CardDraft => {
+  const draft: Types.Mutable<CardDraft> = {
+    title: card.title,
+    description: card.description,
+    dependsOn: [],
+    acceptanceCriteria: card.acceptanceCriteria,
+  };
+  if (card.outcome !== undefined) draft.outcome = card.outcome;
+  if (card.boundaries !== undefined) draft.boundaries = card.boundaries;
+  if (card.risk !== undefined) draft.risk = card.risk;
+  if (card.requiredEvidence !== undefined) draft.requiredEvidence = card.requiredEvidence;
+  if (card.humanDecision !== undefined) draft.humanDecision = card.humanDecision;
+  return draft;
+};
 
 const describePatch = (patch: CardPatch) =>
   Object.entries(patch)
@@ -415,6 +438,51 @@ const make = Effect.gen(function* () {
         yield* poke;
         return yield* applied;
       });
+      /**
+       * Moves the card to another conversation's Plan of the same project. Only a card that is not
+       * started, or blocked, goes: it is added there first (so a refused add leaves this Plan as
+       * it was), then cancelled here, which keeps its earlier work on its card branch.
+       */
+      const transfer = Effect.fnUntraced(function* (toSessionId: string, at: string | null) {
+        if (toSessionId === sessionId) return yield* refuse("transfer_target_invalid");
+        if (running(card)) return yield* refuse("card_running");
+        if (card.status === "human_decision") return yield* refuse("card_waiting");
+        if (card.status === "done")
+          return yield* BoardEditRefused.make({ reason: "card_finished" });
+        const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
+        if (steps.some((step) => step.id !== card.id && step.dependsOn.includes(card.id)))
+          return yield* refuse("card_has_dependents");
+        const [source, target] = yield* Effect.all([
+          sessions.get(sessionId),
+          sessions.get(toSessionId).pipe(
+            Effect.asSome,
+            Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
+          ),
+        ]);
+        if (Option.isNone(target) || target.value.projectId !== source.projectId)
+          return yield* refuse("transfer_target_invalid");
+        const targetPlan = (yield* workflows.get(toSessionId)).plan;
+        if (targetPlan === null) return yield* refuse("transfer_target_invalid");
+        const before = at === null ? -1 : targetPlan.steps.findIndex((step) => step.id === at);
+        const added = { planVersion: targetPlan.version, card: draftOf(card) };
+        yield* workflows.editBoard(
+          toSessionId,
+          BoardEdit.cases.AddCard.make(before < 0 ? added : { ...added, index: before }),
+          author,
+        );
+        yield* ops.cancelCard(sessionId, card.id, author);
+        yield* Option.match(kanban, {
+          onNone: () => Effect.void,
+          onSome: (goal) => retire(goal, [card.id]),
+        });
+        yield* poke;
+        const targetKanban = yield* kanbanOf(toSessionId);
+        yield* Option.match(targetKanban, {
+          onNone: () => Effect.void,
+          onSome: (goal) => orchestrator.poke(goal.goalInstanceId),
+        });
+        return yield* applied;
+      });
       return yield* Match.valueTags(intent, {
         Reorder: Effect.fnUntraced(function* ({ at }) {
           const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
@@ -461,6 +529,7 @@ const make = Effect.gen(function* () {
           yield* poke;
           return result;
         }),
+        Transfer: ({ toSessionId, at }) => transfer(toSessionId, at),
       });
     }),
 

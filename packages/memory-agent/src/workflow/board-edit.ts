@@ -326,5 +326,10 @@ export const BoardIntent = Schema.TaggedUnion({
   /** A change to an executing card, which the orchestrator settles. */
   ChangeRequest: { cardId: Schema.String, patch: CardPatch },
   Cancel: { cardId: Schema.String },
+  /**
+   * The card leaves this Plan for another conversation's Plan of the same project, placed before
+   * `at` there (or last). It keeps its contract, loses its dependencies and starts over there.
+   */
+  Transfer: { cardId: Schema.String, toSessionId: Schema.String, at: Schema.NullOr(Schema.String) },
 });
 export type BoardIntent = typeof BoardIntent.Type;

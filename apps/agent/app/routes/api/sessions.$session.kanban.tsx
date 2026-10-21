@@ -44,9 +44,9 @@ export function loader({ params }: Route.LoaderArgs) {
 /**
  * POST /api/sessions/:session/kanban { _tag: "Start" } runs the executing Plan as a kanban board;
  * { _tag: "RestartLoop" } runs a board's loop again after it stopped.
- * A `BoardIntent` (Reorder, Requeue, Hold, Release, ChangeRequest, Cancel) is what a person meant
- * by dragging a card; the owner decides the card's status and refuses (409) an intent the card's
- * state does not fit. A change request to an executing card is stored (202).
+ * A `BoardIntent` (Reorder, Requeue, Hold, Release, ChangeRequest, Cancel, Transfer) is what a
+ * person meant by dragging a card; the owner decides the card's status and refuses (409) an intent
+ * the card's state does not fit. A change request to an executing card is stored (202).
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export function action({ request, params }: Route.ActionArgs) {
@@ -93,6 +93,11 @@ export function action({ request, params }: Route.ActionArgs) {
         Release: applyIntent,
         ChangeRequest: applyIntent,
         Cancel: applyIntent,
+        // The card lands on another conversation's board, so that board is told too.
+        Transfer: (intent) =>
+          applyIntent(intent).pipe(
+            Effect.tap(() => events.publishSession(intent.toSessionId, "run-state")),
+          ),
         SetPriority: ({ priority }) =>
           Effect.gen(function* () {
             yield* actions.setPriority(params.session, priority);
