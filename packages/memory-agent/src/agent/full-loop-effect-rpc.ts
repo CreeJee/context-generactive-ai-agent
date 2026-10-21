@@ -39,6 +39,14 @@ export const FullLoopOwnerRequest = Schema.Struct({
   input: Schema.Json,
 });
 
+const OwnerRejection = Schema.Literals([
+  "unauthorized",
+  "invalid_operation",
+  "operation_conflict",
+  "non_monotonic",
+  "uncertain_run",
+]);
+
 export const FullLoopOwnerReply = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("succeeded"),
@@ -50,15 +58,9 @@ export const FullLoopOwnerReply = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("rejected"),
     operationId: positiveSafeInteger,
-    reason: Schema.Literals([
-      "unauthorized",
-      "invalid_operation",
-      "operation_conflict",
-      "non_monotonic",
-      "uncertain_run",
-    ]),
+    reason: OwnerRejection,
   }),
-]);
+]).pipe(Schema.toTaggedUnion("type"));
 
 export const FullLoopRunPayload = Schema.Struct({
   capability: FullLoopCapability,
@@ -73,6 +75,12 @@ export const FullLoopRunPayload = Schema.Struct({
   ownerPort: OwnerPort,
 });
 
+/** Why the owner did not answer a worker request with success, as the worker last saw it. */
+export const OwnerRefusal = Schema.Union([
+  OwnerRejection,
+  Schema.Literals(["pending", "uncertain", "unknown_interrupt", "unknown_tool_outcome"]),
+]);
+
 export class FullLoopRpcError extends Schema.TaggedError<FullLoopRpcError>()("FullLoopRpcError", {
   reason: Schema.Literals([
     "unauthorized",
@@ -81,11 +89,14 @@ export class FullLoopRpcError extends Schema.TaggedError<FullLoopRpcError>()("Fu
     "worker_failed",
     "saturated",
   ]),
+  refusal: Schema.optional(OwnerRefusal),
 }) {
   override get message() {
-    return this.reason === "worker_failed"
-      ? "Goal worker failed; dispatched owner operations have no replay"
-      : `Goal worker RPC ${this.reason}`;
+    if (this.reason === "worker_failed")
+      return "Goal worker failed; dispatched owner operations have no replay";
+    return this.refusal === undefined
+      ? `Goal worker RPC ${this.reason}`
+      : `Goal worker RPC ${this.reason} (${this.refusal})`;
   }
 }
 

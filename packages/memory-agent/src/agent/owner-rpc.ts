@@ -244,9 +244,15 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
   ): Effect.fn.Return<OwnerRpcReply, OwnerRpcFailure, R> {
     const { operationId, operation } = request;
     const capability = Object.freeze({ ...request.capability });
+    // The worker sees only the reason; the log also names the check that refused, never the input.
     const reject = (
       reason: Extract<OwnerRpcReply, { type: "rejected" }>["reason"],
-    ): OwnerRpcReply => ({ type: "rejected", operationId, reason });
+      check: string,
+    ) =>
+      Effect.as(
+        Effect.logWarning("Owner RPC rejected", { operation, operationId, reason, check }),
+        { type: "rejected", operationId, reason } satisfies OwnerRpcReply,
+      );
     const permitted = (permits: OwnerRpcPermits) =>
       Effect.suspend(() => permits(capability)).pipe(
         Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "authority", cause })),
@@ -258,7 +264,7 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       operationId < 1 ||
       !Object.hasOwn(options.handlers, operation)
     )
-      return reject("invalid_operation");
+      return yield* reject("invalid_operation", "envelope");
     // Input without a canonical JSON form is the worker's invalid operation, not an owner failure.
     const prepared = yield* Effect.try(() => ({
       fingerprint: ownerRpcFingerprint(operation, request.input),
@@ -267,7 +273,7 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       Effect.asSome,
       Effect.catchTag("UnknownError", () => Effect.succeedNone),
     );
-    if (Option.isNone(prepared)) return reject("invalid_operation");
+    if (Option.isNone(prepared)) return yield* reject("invalid_operation", "input_json");
     const { fingerprint, input } = prepared.value;
     // Deliberately excludes generation/token: rotating authority cannot reset a run's
     // operation IDs or bypass an uncertain side effect in that same run.
@@ -291,25 +297,26 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
           : Effect.succeed(false),
       ),
     );
-    if (!initiallyActive && !(yield* finalization)) return reject("unauthorized");
+    if (!initiallyActive && !(yield* finalization))
+      return yield* reject("unauthorized", "inactive");
     const authorized = yield* Effect.try(() =>
       isTruthy(handler.authorize)
         ? handler.authorize(structuredClone(input), capability) === true
         : true,
     ).pipe(Effect.catchTag("UnknownError", () => Effect.succeed(false)));
-    if (!authorized) return reject("invalid_operation");
+    if (!authorized) return yield* reject("invalid_operation", "authorize");
     const admission = yield* Effect.suspend(() =>
       options.ledger.reserve(runKey, operationId, fingerprint, handler.sideEffect),
     ).pipe(Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "reserve", cause })));
     switch (admission.type) {
       case "rejected":
-        return reject(admission.reason);
+        return yield* reject(admission.reason, "ledger");
       case "existing":
-        if (!initiallyActive) return reject("unauthorized");
+        if (!initiallyActive) return yield* reject("unauthorized", "inactive_replay");
         return ownerRpcFingerprintDigest(admission.record.fingerprint) ===
           ownerRpcFingerprintDigest(fingerprint)
           ? structuredClone(admission.record.reply)
-          : reject("operation_conflict");
+          : yield* reject("operation_conflict", "fingerprint");
       case "reserved":
         break;
     }
@@ -334,7 +341,8 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       Effect.uninterruptible,
     );
     const stillActive = yield* permitted(options.permits);
-    if (!stillActive && !(yield* finalization)) return reject("unauthorized");
+    if (!stillActive && !(yield* finalization))
+      return yield* reject("unauthorized", "inactive_after");
     return reply;
   });
 }

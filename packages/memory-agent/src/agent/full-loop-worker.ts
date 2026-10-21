@@ -16,6 +16,7 @@ import { decodeFullLoopValue, encodeFullLoopValue } from "./full-loop-codec.ts";
 import {
   FullLoopCapability,
   FullLoopCapabilityMiddleware,
+  FullLoopOwnerReply,
   FullLoopOwnerRpcGroup,
   FullLoopRpcError,
   FullLoopRpcGroup,
@@ -90,7 +91,8 @@ function runFullLoop(
             (entry: ReturnType<typeof defineInterrupt>) => entry.id === value.definition.id,
           );
           // The owner answered with an interrupt this worker never registered.
-          if (definition === undefined) throw FullLoopRpcError.make({ reason: "owner_rejected" });
+          if (definition === undefined)
+            throw FullLoopRpcError.make({ reason: "owner_rejected", refusal: "unknown_interrupt" });
           const { definition: _definition, ...input } = value;
           return definition.interrupt(input);
         }
@@ -116,10 +118,15 @@ function runFullLoop(
           operation,
           input: encodeFullLoopValue(input),
         });
-        if (reply.type !== "succeeded")
-          return yield* FullLoopRpcError.make({ reason: "owner_rejected" });
-        // SAFETY: operation-specific owner handlers validated the encoded SDK payload.
-        return decodeFullLoopValue(reply.output) as any;
+        const refused = (refusal: FullLoopRpcError["refusal"]) =>
+          FullLoopRpcError.make({ reason: "owner_rejected", refusal });
+        return yield* FullLoopOwnerReply.match(reply, {
+          // SAFETY: operation-specific owner handlers validated the encoded SDK payload.
+          succeeded: ({ output }) => Effect.succeed(decodeFullLoopValue(output) as any),
+          pending: () => Effect.fail(refused("pending")),
+          uncertain: () => Effect.fail(refused("uncertain")),
+          rejected: ({ reason }) => Effect.fail(refused(reason)),
+        });
       });
       const rpc = (operation: string, input: any): Promise<any> =>
         runNativeEffect(rpcEffect(operation, input));
@@ -146,7 +153,10 @@ function runFullLoop(
                   case "failed":
                     return yield* OwnerToolFailed.make({ result: result.outcome.failure });
                   default:
-                    return yield* FullLoopRpcError.make({ reason: "owner_rejected" });
+                    return yield* FullLoopRpcError.make({
+                      reason: "owner_rejected",
+                      refusal: "unknown_tool_outcome",
+                    });
                 }
               }),
             );
