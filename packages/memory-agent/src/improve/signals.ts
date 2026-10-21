@@ -5,9 +5,8 @@ import { SqlClient, type SqlError } from "effect/sql";
  * Evidence from real use that a project could work better: what the user had to correct, tool
  * calls that kept failing there, and kanban cards that failed or were replanned.
  */
-export const Signal = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("correction"),
+export const Signal = Schema.TaggedUnion({
+  correction: {
     projectId: Schema.String,
     /** The user message that made the correction. */
     nodeId: Schema.String,
@@ -15,9 +14,8 @@ export const Signal = Schema.Union([
     /** The latest message it corrected. */
     corrected: Schema.String,
     createdAt: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("tool_failure"),
+  },
+  tool_failure: {
     projectId: Schema.String,
     nodeId: Schema.String,
     toolName: Schema.String,
@@ -25,9 +23,8 @@ export const Signal = Schema.Union([
     signature: Schema.String,
     excerpt: Schema.String,
     createdAt: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("card_failure"),
+  },
+  card_failure: {
     projectId: Schema.String,
     goalInstanceId: Schema.String,
     cardId: Schema.String,
@@ -36,8 +33,8 @@ export const Signal = Schema.Union([
     reason: Schema.NullOr(Schema.String),
     /** When the card's latest attempt last changed. */
     createdAt: Schema.String,
-  }),
-]).pipe(Schema.toTaggedUnion("kind"));
+  },
+});
 export type Signal = typeof Signal.Type;
 
 export class SignalsFailed extends Schema.TaggedError<SignalsFailed>()("SignalsFailed", {
@@ -151,32 +148,35 @@ export const collectSignals = Effect.fn("Improve.collectSignals")(function* (
     { concurrency: 3 },
   );
   return [
-    ...corrections.map((row): Signal => ({
-      kind: "correction",
-      projectId: row.project_id,
-      nodeId: row.id,
-      text: row.text.slice(0, excerptLength),
-      corrected: row.corrected.slice(0, excerptLength),
-      createdAt: row.created_at,
-    })),
-    ...failures.map((row): Signal => ({
-      kind: "tool_failure",
-      projectId: row.project_id,
-      nodeId: row.id,
-      toolName: row.tool_name ?? "unknown",
-      signature: failureSignature(row.text),
-      excerpt: row.text.slice(0, excerptLength),
-      createdAt: row.created_at,
-    })),
-    ...cards.map((row): Signal => ({
-      kind: "card_failure",
-      projectId: row.project_id,
-      goalInstanceId: row.goal_instance_id,
-      cardId: row.card_id,
-      failureStreak: row.failure_streak,
-      replans: row.replans,
-      reason: row.reason,
-      createdAt: row.latest_at,
-    })),
+    ...corrections.map((row) =>
+      Signal.cases.correction.make({
+        projectId: row.project_id,
+        nodeId: row.id,
+        text: row.text.slice(0, excerptLength),
+        corrected: row.corrected.slice(0, excerptLength),
+        createdAt: row.created_at,
+      }),
+    ),
+    ...failures.map((row) =>
+      Signal.cases.tool_failure.make({
+        projectId: row.project_id,
+        nodeId: row.id,
+        toolName: row.tool_name ?? "unknown",
+        signature: failureSignature(row.text),
+        excerpt: row.text.slice(0, excerptLength),
+        createdAt: row.created_at,
+      }),
+    ),
+    ...cards.map((row) =>
+      Signal.cases.card_failure.make({
+        projectId: row.project_id,
+        goalInstanceId: row.goal_instance_id,
+        cardId: row.card_id,
+        failureStreak: row.failure_streak,
+        replans: row.replans,
+        reason: row.reason,
+        createdAt: row.latest_at,
+      }),
+    ),
   ];
 });

@@ -49,14 +49,11 @@ const stateLine = ScanState.match({
 });
 
 type ReportedItem = ImprovementReport["items"][number];
-const byStatus = Match.discriminatorsExhaustive("status");
 const itemRule = (item: ReportedItem) =>
-  Match.value(item.interpretation).pipe(
-    byStatus({
-      interpreted: ({ rule }) => `지침: ${rule}`,
-      failed: () => "모델이 해석하지 못했어요. 문서의 근거를 직접 확인하세요.",
-    }),
-  );
+  Match.valueTags(item.interpretation, {
+    interpreted: ({ rule }) => `지침: ${rule}`,
+    failed: () => "모델이 해석하지 못했어요. 문서의 근거를 직접 확인하세요.",
+  });
 
 /** What a failed request says: this page's own wording, never a browser or transport message. */
 const requestFailure = (failure: Error) =>

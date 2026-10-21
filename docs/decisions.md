@@ -2424,3 +2424,12 @@
 - Effect 자체 타입은 그 모듈의 함수(`Exit.isFailure`, `Result.isSuccess`, `Cause.isFailReason`, `Effect.catchTag`/`catchReason`, `Predicate.isTagged`)를 쓴다.
 - 남길 수 있는 곳은 제네릭 제약 `E extends { readonly _tag: string }`과 외부 라이브러리 타입에 맞춰야 하는 경계뿐이다.
 - 적용은 Orca orchestration으로 범위를 디렉터리별로 나눠 두 웨이브(정의 → 사용처)로 일괄 진행했다.
+
+## 판별 키가 다른 도메인 유니온도 `_tag`로 통일한다 (2026-10-21)
+
+- 사용자 결정: 우리 도메인 유니온이 `status`·`verdict`·`kind` 같은 키로 판별하던 것(`Schema.Union([...]).pipe(Schema.toTaggedUnion("status"))`)도 `_tag` 키의 `Schema.TaggedUnion`으로 바꾼다. Effect 헬퍼(`Match.valueTags`, `Effect.catchTag`, `Predicate.isTagged`)가 전부 `_tag`에만 붙기 때문이다. 케이스 이름은 기존 판별 값을 그대로 둔다.
+- 외부 프로토콜(OAuth, native-search 워커, 공급자 API), 가져오기 파일 형식, HTTP 요청 본문의 `type`·`action` 리터럴 구조체는 우리 유니온이 아니라 상대 형식이므로 바꾸지 않는다.
+- improve의 `index.json`은 0.0.17이 `status` 키로 썼다. 읽을 때 `SchemaError`는 "기록된 스캔 없음"으로 보고 다음 스캔이 다시 쓴다. 모델 답 JSON의 판별 키도 `_tag`다.
+- `FullLoopOwnerReply`는 SQLite `owner_rpc_operations.reply_json`에 `type` 키로 영속되는 `OwnerRpcReply`와 같은 값이라, ledger의 저장 행 호환을 포함해 별도 웨이브에서 함께 바꾼다.
+- 워크플로 저장소가 쓰는 값은 손으로 쓴 JSON 리터럴이 아니라 엔진이 읽는 코덱(`Schema.toCodecJson(Schema.Exit(...))`)으로 인코딩한다. 코덱의 형식이 바뀌면 저장값도 같이 따라간다.
+- `X.make(...)`는 유효한 값에만 쓴다. `disableChecks`로 검사를 끄지 않고, 값을 구성 단계에서 검사 조건에 맞게 만든다(충돌 해결 카드 제목은 trim한 뒤 `Resolve conflicts:` 접두어를 붙인다).

@@ -5,7 +5,7 @@ import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
-import type { ImprovementItem } from "../src/improve/contracts.ts";
+import { type ImprovementItem, ItemInterpretation } from "../src/improve/contracts.ts";
 import { ImprovementInterpreter } from "../src/improve/interpret.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import type { ProviderServices } from "../src/providers/contracts.ts";
@@ -26,7 +26,7 @@ const item: ImprovementItem = {
 
 type Reply = "silent" | "answered";
 const answered: ScriptedTurn = {
-  text: '{"verdict":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}',
+  text: '{"_tag":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}',
 };
 
 /** A signed-in provider whose model answers with `turns` in order. */
@@ -108,7 +108,7 @@ it.effect("a silent model call fails the item, and a second in a row stops the s
   Effect.gen(function* () {
     const { unanswered } = yield* interpreter(["silent", "silent"]);
     expect(yield* unanswered(item)).toEqual(
-      Option.some({ status: "failed", reason: "model_failed" }),
+      Option.some(ItemInterpretation.cases.failed.make({ reason: "model_failed" })),
     );
     const stopped = yield* Effect.flip(unanswered(item));
     expect(stopped.reason).toBe("model_unreachable");
@@ -119,11 +119,11 @@ it.effect("an answer between failures starts the count again", () =>
   Effect.gen(function* () {
     const { unanswered, answeredCall } = yield* interpreter(["silent", "answered", "silent"]);
     yield* unanswered(item);
-    expect(Option.map(yield* answeredCall(item), (found) => found.status)).toEqual(
-      Option.some("interpreted"),
+    expect(Option.exists(yield* answeredCall(item), ItemInterpretation.guards.interpreted)).toBe(
+      true,
     );
     expect(yield* unanswered(item)).toEqual(
-      Option.some({ status: "failed", reason: "model_failed" }),
+      Option.some(ItemInterpretation.cases.failed.make({ reason: "model_failed" })),
     );
   }).pipe(withTestPlatform),
 );

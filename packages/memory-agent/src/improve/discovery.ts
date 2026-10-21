@@ -144,19 +144,25 @@ const make = Effect.gen(function* () {
       .pipe(Effect.andThen(fs.rename(`${file}.partial`, file)), Effect.mapError(failed));
   const indexFile = path.join(reports, "index.json");
   const IndexJson = Schema.fromJsonString(ImprovementScan);
-  const state = yield* Ref.make<ScanState>({ status: "idle" });
+  const state = yield* Ref.make<ScanState>(ScanState.cases.idle.make({}));
   // The one background scan; closing the service's Scope interrupts it.
   const running = yield* FiberHandle.make<void, never>();
   const now = Effect.map(DateTime.now, DateTime.formatIso);
   /** Progress counts only while a scan runs; a late update after a stop changes nothing. */
-  const advance = (change: (running: Extract<ScanState, { status: "running" }>) => ScanState) =>
+  const advance = (change: (running: typeof ScanState.cases.running.Type) => ScanState) =>
     Ref.update(state, (current) => (ScanState.guards.running(current) ? change(current) : current));
 
-  /** The last recorded scan, or none before the first one. */
+  /**
+   * The last recorded scan, or none before the first one. An index in an older shape counts as no
+   * scan; the next scan writes it again.
+   */
   const latest = Effect.gen(function* () {
     if (!(yield* fs.exists(indexFile).pipe(Effect.mapError(failed)))) return Option.none();
     const text = yield* fs.readFileString(indexFile).pipe(Effect.mapError(failed));
-    return Option.some(yield* Schema.decodeEffect(IndexJson)(text).pipe(Effect.mapError(failed)));
+    return yield* Schema.decodeEffect(IndexJson)(text).pipe(
+      Effect.asSome,
+      Effect.catchTag("SchemaError", () => Effect.succeedNone),
+    );
   });
 
   /**
@@ -267,18 +273,17 @@ const make = Effect.gen(function* () {
         Ref.set(
           state,
           Exit.match(exit, {
-            onSuccess: (): ScanState => ({ status: "idle" }),
+            onSuccess: (): ScanState => ScanState.cases.idle.make({}),
             onFailure: (cause): ScanState =>
               Cause.hasInterruptsOnly(cause)
-                ? { status: "stopped", at }
-                : {
-                    status: "failed",
+                ? ScanState.cases.stopped.make({ at })
+                : ScanState.cases.failed.make({
                     at,
                     reason: Option.getOrElse(
                       Cause.findErrorOption(cause),
                       () => "internal" as const,
                     ),
-                  },
+                  }),
           }),
         ),
       ),
@@ -299,12 +304,11 @@ const make = Effect.gen(function* () {
         ? [false, current]
         : [
             true,
-            {
-              status: "running",
+            ScanState.cases.running.make({
               startedAt,
               repositories: { done: 0, total: 0 },
               items: { done: 0, total: 0 },
-            },
+            }),
           ],
     );
     // Only the claim decides: a scan that just recorded its end may still sit in the handle, and

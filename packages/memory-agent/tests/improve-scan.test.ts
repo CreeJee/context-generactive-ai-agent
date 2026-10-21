@@ -14,7 +14,7 @@ import {
 import { expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
-import type { ItemInterpretation } from "../src/improve/contracts.ts";
+import { ItemInterpretation, ScanState } from "../src/improve/contracts.ts";
 import { ProjectImprovement } from "../src/improve/discovery.ts";
 import { ImprovementInterpreter } from "../src/improve/interpret.ts";
 import { Checkouts } from "../src/imports/checkouts.ts";
@@ -29,14 +29,13 @@ const embedder = Layer.succeed(Embedder, {
   runtime: () => ({ kind: "other" }),
 });
 
-const interpreted: ItemInterpretation = {
-  status: "interpreted",
+const interpreted = ItemInterpretation.cases.interpreted.make({
   title: "t",
   problem: "p",
   rule: "r",
   change: "c",
   acceptance: "a",
-};
+});
 
 /**
  * A git repository with one open project and three failures of one cause, scanned by a model that
@@ -88,13 +87,13 @@ const fixture = Effect.fnUntraced(function* () {
       );
   });
   yield* Effect.provideContext(seed, services);
-  return { improvement: Context.get(services, ProjectImprovement), asked, release };
+  return { improvement: Context.get(services, ProjectImprovement), asked, release, storage };
 });
 
 const settled = (improvement: ProjectImprovement["Service"]) =>
   improvement.status.pipe(
     Effect.repeat({
-      until: ({ state }) => state.status !== "running",
+      until: ({ state }) => !ScanState.guards.running(state),
       schedule: Schedule.spaced("10 millis"),
     }),
     Effect.timeout("10 seconds"),
@@ -108,14 +107,13 @@ const live = <A, E>(
 live("a second start joins the running scan, and a stopped scan records nothing", () =>
   Effect.gen(function* () {
     const { improvement, asked } = yield* fixture();
-    expect((yield* improvement.start).status).toBe("running");
+    expect(ScanState.guards.running(yield* improvement.start)).toBe(true);
     yield* Deferred.await(asked);
-    expect((yield* improvement.start).status).toBe("running");
-    expect((yield* improvement.stop).status).toBe("stopped");
-    expect(yield* improvement.status).toEqual({
-      state: { status: "stopped", at: expect.any(String) },
-      scan: Option.none(),
-    });
+    expect(ScanState.guards.running(yield* improvement.start)).toBe(true);
+    expect(ScanState.guards.stopped(yield* improvement.stop)).toBe(true);
+    const { state, scan } = yield* improvement.status;
+    expect(ScanState.guards.stopped(state)).toBe(true);
+    expect(scan).toEqual(Option.none());
   }),
 );
 
@@ -126,9 +124,29 @@ live("a finished scan is recorded and the state returns to idle", () =>
     yield* Deferred.await(asked);
     yield* Deferred.succeed(release, undefined);
     const { state, scan } = yield* settled(improvement);
-    expect(state).toEqual({ status: "idle" });
+    expect(state).toEqual(ScanState.cases.idle.make({}));
     expect(Option.map(scan, ({ reports }) => reports.map((report) => report.items.length))).toEqual(
       Option.some([1]),
     );
+  }),
+);
+
+live("an index from before tagged interpretations counts as no recorded scan", () =>
+  Effect.gen(function* () {
+    const { improvement, storage } = yield* fixture();
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const reports = path.join(storage, "improvements");
+    yield* fs.makeDirectory(reports, { recursive: true });
+    // As release 0.0.17 wrote it: the interpretation keyed by `status`.
+    yield* fs.writeFileString(
+      path.join(reports, "index.json"),
+      `{"generatedAt":"2026-10-20T00:00:00.000Z","reports":[{"repository":"/repo",
+        "file":"/storage/improvements/repo.md","markdown":"# repo","items":[{"id":"i1",
+        "repository":"/repo","source":"tool_failure","title":"t","count":3,"evidence":["f1"],
+        "excerpts":["Error"],"latestAt":null,"interpretation":{"status":"interpreted",
+        "title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}}]}]}`,
+    );
+    expect(yield* improvement.latest).toEqual(Option.none());
   }),
 );

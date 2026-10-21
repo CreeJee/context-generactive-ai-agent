@@ -3,11 +3,12 @@ import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
+import { ItemInterpretation } from "../src/improve/contracts.ts";
 import { Embedder } from "../src/memory/embedding/embedder.ts";
 import { parseInterpretation } from "../src/improve/interpret.ts";
 import { improvementItems } from "../src/improve/items.ts";
 import { improvementReport } from "../src/improve/report.ts";
-import { collectSignals, failureSignature } from "../src/improve/signals.ts";
+import { collectSignals, failureSignature, Signal } from "../src/improve/signals.ts";
 import { sqlRun } from "./support/sql.ts";
 
 /** Texts about logging point one way, everything else the other. */
@@ -72,14 +73,13 @@ describe("project improvement discovery", () => {
             evidence: ["u1"],
             excerpts: ["## 끼어든 제목\n본문"],
             latestAt: null,
-            interpretation: {
-              status: "interpreted",
+            interpretation: ItemInterpretation.cases.interpreted.make({
               title: "제목\n## 모델 제목",
               problem: "문제\n## 모델 문단",
               rule: "규칙",
               change: "변경",
               acceptance: "확인",
-            },
+            }),
           },
         ],
       },
@@ -93,10 +93,10 @@ describe("project improvement discovery", () => {
   it.effect("reads a fenced verdict and drops what the model skips", () =>
     Effect.gen(function* () {
       const improve = yield* parseInterpretation(
-        '```json\n{"verdict":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}\n```',
+        '```json\n{"_tag":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}\n```',
       );
-      expect(Option.map(improve, (found) => found.status)).toEqual(Option.some("interpreted"));
-      expect(yield* parseInterpretation('{"verdict":"skip","reason":"평범한 요청"}')).toEqual(
+      expect(Option.exists(improve, ItemInterpretation.guards.interpreted)).toBe(true);
+      expect(yield* parseInterpretation('{"_tag":"skip","reason":"평범한 요청"}')).toEqual(
         Option.none(),
       );
     }),
@@ -153,10 +153,9 @@ describe("project improvement discovery", () => {
         );
 
         const signals = yield* collectSignals(["p1"], "2026-10-01T00:00:00.000Z");
-        expect(signals.map((signal) => signal.kind).sort()).toEqual([
-          ...Array(3).fill("correction"),
-          ...Array(4).fill("tool_failure"),
-        ]);
+        expect(signals.filter(Signal.guards.correction)).toHaveLength(3);
+        expect(signals.filter(Signal.guards.tool_failure)).toHaveLength(4);
+        expect(signals).toHaveLength(7);
         const items = yield* improvementItems("/repo", signals);
         expect(
           items.map(({ source, count, evidence }) => ({
