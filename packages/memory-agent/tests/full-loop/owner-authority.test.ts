@@ -243,7 +243,7 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
         expect(calls).toBe(0);
         expect(phases).toBe(1);
         const answered = adapter.invocations[1]?.messages.filter((m) => m.role === "tool") ?? [];
-        expect(answered.map((m) => [m.toolCallId, String(m.content)])).toEqual([
+        expect(answered.map((m) => [m.toolCallId, m.content])).toEqual([
           ["cut", expect.stringContaining("not valid JSON")],
           ["invalid", expect.stringContaining("Input validation failed for tool owner_tool")],
         ]);
