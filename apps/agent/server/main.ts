@@ -182,13 +182,13 @@ if (folderArgument === "acp") {
     stopping = true;
     void closeBackend().finally(() => process.exit(0));
   };
-  // The dev script holds this pipe: when it ends, even killed outright, so does the backend.
+  // The dev script holds stdin open and never writes to it. Its end, or a failed read, means the
+  // script is gone, even killed outright, so the backend stops too.
+  const devScriptGone = Effect.flatMap(Stdio.Stdio, (stdio) => Stream.runDrain(stdio.stdin)).pipe(
+    Effect.exit,
+  );
   if (commandLine.devBackend)
-    void ManagedRuntime.make(NodeServices.layer)
-      .runPromise(
-        Effect.flatMap(Stdio.Stdio, (stdio) => Stream.runDrain(stdio.stdin)).pipe(Effect.ignore),
-      )
-      .then(shutdown);
+    void ManagedRuntime.make(NodeServices.layer).runPromise(devScriptGone).then(shutdown);
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.once(signal, shutdown);
     await runNativeEffect(
