@@ -191,7 +191,8 @@ const stableBackend = Effect.fnUntraced(function* (buildId: string) {
       cwd: app,
       env: { CONTEXT_AGENT_BUILD_ID: buildId, ...spanExport() },
       extendEnv: true,
-      stdin: "inherit",
+      // The open stdin pipe is the backend's lifetime, as with the span collector.
+      stdin: "pipe",
       stdout: "inherit",
       stderr: "inherit",
       forceKillAfter: 5_000,
@@ -267,11 +268,16 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
     yield* stop(collector, signal);
     yield* removeManifest(buildId);
   });
+  // A second Ctrl+C while the children drain kills them now instead of leaving them behind.
+  const forceStop = Effect.forEach([web, backend, collector], (child) => stop(child, "SIGKILL"), {
+    concurrency: "unbounded",
+    discard: true,
+  }).pipe(Effect.andThen(removeManifest(buildId)));
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   const handlers = signals.map(
-    (signal) => () => void developmentRuntime.runPromise(shutdown(signal)),
+    (signal) => () => void developmentRuntime.runPromise(stopping ? forceStop : shutdown(signal)),
   );
-  signals.forEach((signal, index) => process.once(signal, handlers[index]!));
+  signals.forEach((signal, index) => process.on(signal, handlers[index]!));
   yield* Effect.addFinalizer(() =>
     shutdown("SIGTERM").pipe(
       Effect.ensuring(

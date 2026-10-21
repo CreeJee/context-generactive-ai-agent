@@ -177,12 +177,19 @@ if (folderArgument === "acp") {
   const closeBackend = () => runNativeEffect(Scope.close(backendScope, Exit.void));
   await runNativeEffect(Scope.addFinalizer(backendScope, Effect.promise(releaseStorageLock)));
   let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    void closeBackend().finally(() => process.exit(0));
+  };
+  // The dev script holds this pipe: when it ends, even killed outright, so does the backend.
+  if (commandLine.devBackend)
+    void ManagedRuntime.make(NodeServices.layer)
+      .runPromise(
+        Effect.flatMap(Stdio.Stdio, (stdio) => Stream.runDrain(stdio.stdin)).pipe(Effect.ignore),
+      )
+      .then(shutdown);
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    const shutdown = () => {
-      if (stopping) return;
-      stopping = true;
-      void closeBackend().finally(() => process.exit(0));
-    };
     process.once(signal, shutdown);
     await runNativeEffect(
       Scope.addFinalizer(
