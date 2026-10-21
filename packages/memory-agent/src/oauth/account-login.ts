@@ -25,10 +25,14 @@ type Attempt = {
   login?: LoginAttempt;
   completed?: Promise<void>;
 };
-export type AccountLoginState =
-  | { status: "idle" | "completed"; authorizationUrl?: never; error?: never }
-  | { status: "pending"; authorizationUrl: string; error?: never }
-  | { status: "error"; authorizationUrl?: never; error: "login_failed" | "credential_unavailable" };
+/** Where a provider's add-account login stands, as the account page shows it. */
+export type AccountLoginState = Data.TaggedEnum<{
+  idle: {};
+  completed: {};
+  pending: { readonly authorizationUrl: string };
+  error: { readonly error: "login_failed" | "credential_unavailable" };
+}>;
+export const AccountLoginState = Data.taggedEnum<AccountLoginState>();
 
 /** Each login gets a fresh keychain slot; the legacy provider client is never used to add accounts. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
@@ -75,11 +79,11 @@ function createOAuthAccountLoginManagerBody(
     );
   const state = (provider: OAuthProvider): AccountLoginState =>
     Option.match(MutableHashMap.get(entries, provider), {
-      onNone: (): AccountLoginState => ({ status: "idle" }),
+      onNone: (): AccountLoginState => AccountLoginState.idle(),
       onSome: LoginEntry.$match({
         running: (entry): AccountLoginState =>
           isTruthy(entry.attempt.login)
-            ? { status: "pending", authorizationUrl: entry.attempt.login.authorizationUrl }
+            ? AccountLoginState.pending({ authorizationUrl: entry.attempt.login.authorizationUrl })
             : entry.result,
         settled: (entry) => entry.result,
       }),
@@ -102,7 +106,7 @@ function createOAuthAccountLoginManagerBody(
         MutableHashMap.set(
           entries,
           provider,
-          LoginEntry.running({ attempt, result: { status: "idle" } }),
+          LoginEntry.running({ attempt, result: AccountLoginState.idle() }),
         );
         return yield* Effect.gen(function* () {
           const login = yield* nativePromise(() => startLogin(provider, attempt.id));
@@ -120,7 +124,7 @@ function createOAuthAccountLoginManagerBody(
                   yield* store.publish(provider, attempt.id, attempt.label, accounts);
                   if (!(yield* store.list(provider)).some((profile) => profile.selected))
                     yield* store.select(provider, attempt.id, accounts);
-                  recordResult(provider, { status: "completed" });
+                  recordResult(provider, AccountLoginState.completed());
                 }),
               ),
               // Any failed completion is the attempt's outcome; the page shows it as login_failed.
@@ -135,8 +139,8 @@ function createOAuthAccountLoginManagerBody(
                         }),
                       ),
                     );
-                    recordResult(provider, { status: "error", error: "login_failed" });
-                  } else recordResult(provider, { status: "completed" });
+                    recordResult(provider, AccountLoginState.error({ error: "login_failed" }));
+                  } else recordResult(provider, AccountLoginState.completed());
                 }),
               ),
               Effect.ensuring(
@@ -161,7 +165,7 @@ function createOAuthAccountLoginManagerBody(
                 entries,
                 provider,
                 LoginEntry.settled({
-                  result: { status: "error", error: "credential_unavailable" },
+                  result: AccountLoginState.error({ error: "credential_unavailable" }),
                 }),
               ),
             ).pipe(Effect.andThen(profiles(provider))),

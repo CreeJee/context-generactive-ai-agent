@@ -1,9 +1,16 @@
 import { it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Data, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { CompatibleRequestFailedReason, makeCompatibleClient } from "./compatible-client.ts";
+import {
+  CompatibleAccountsView,
+  CompatibleRequestFailedReason,
+  makeCompatibleClient,
+} from "./compatible-client.ts";
 
 const reasons = CompatibleRequestFailedReason.cases;
+/** A subscription provider's `/api/accounts` body, which the compatible client refuses. */
+type SubscriptionView = Data.TaggedEnum<{ subscription: { readonly profiles: readonly [] } }>;
+const SubscriptionView = Data.taggedEnum<SubscriptionView>();
 
 const decodeBody = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
@@ -14,7 +21,8 @@ it.effect("validates the endpoint list with the shared server schema", () =>
     const client = makeCompatibleClient(() =>
       Promise.resolve(
         Response.json({
-          type: "compatible-endpoint",
+          // Encoded as the server sends it, before decoding fills the model's context window.
+          ...CompatibleAccountsView.make({ accounts: [] }),
           accounts: [
             {
               id: "a",
@@ -31,7 +39,7 @@ it.effect("validates the endpoint list with the shared server schema", () =>
     const view = yield* client.effects.list();
     expect(view.accounts[0]?.models[0]?.contextWindow).toBe(32_000);
     const malformed = makeCompatibleClient(() =>
-      Promise.resolve(Response.json({ type: "subscription", profiles: [] })),
+      Promise.resolve(Response.json(SubscriptionView.subscription({ profiles: [] }))),
     );
     const failure = yield* Effect.flip(malformed.effects.list());
     expect(failure.reason).toEqual(reasons.InvalidResponse.make({}));
@@ -61,7 +69,7 @@ it.effect("connect preserves an omitted key and sends null only for explicit rem
     const requests: RequestInit[] = [];
     const client = makeCompatibleClient((_url, init = {}) => {
       requests.push(init);
-      return Promise.resolve(Response.json({ type: "compatible-endpoint", accounts: [] }));
+      return Promise.resolve(Response.json(CompatibleAccountsView.make({ accounts: [] })));
     });
     const connection = {
       intent: "connect",

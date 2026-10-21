@@ -3,16 +3,7 @@ import { Cause, Clock, Context, Duration, Effect, Layer, Option, Result, Schema 
 import { DurableClock, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowStorage } from "../workflow/owner-workflow-storage.ts";
-import type { RelayedApprovalView } from "./relayed-state.ts";
-
-const ApprovalRequester = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("subagent"),
-    subagentId: Schema.String,
-    name: Schema.NullOr(Schema.String),
-  }),
-  Schema.Struct({ kind: Schema.Literal("external_agent"), agent: Schema.String }),
-]);
+import { ApprovalRequester, type RelayedApprovalView } from "./relayed-state.ts";
 
 const RelayedApprovalPayload = Schema.Struct({
   approvalId: Schema.String,

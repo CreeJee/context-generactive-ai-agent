@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect, Schema } from "effect";
 import { render } from "vitest-browser-react";
+import { ReportDeliveryResult } from "memory-agent/definitions";
 import { describe, expect, vi } from "vite-plus/test";
 import "../../app.css";
 import { ReportDelivery } from "./report-delivery";
@@ -15,7 +16,11 @@ describe("report review and delivery", () => {
       const replies = [
         Response.json({ configured: true, webhookIdSuffix: "5678", defectReports: true }),
         new Response(null, { status: 504 }),
-        Response.json({ status: "uncertain_duplicate", attemptedAt: "2026-10-12T00:00:00.000Z" }),
+        Response.json(
+          ReportDeliveryResult.cases.uncertain_duplicate.make({
+            attemptedAt: "2026-10-12T00:00:00.000Z",
+          }),
+        ),
       ];
       const bodies: string[] = [];
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {

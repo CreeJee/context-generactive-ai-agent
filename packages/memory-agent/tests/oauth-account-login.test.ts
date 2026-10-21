@@ -15,7 +15,7 @@ import {
 } from "effect";
 import { describe, expect, vi } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { createOAuthAccountLoginManager } from "../src/oauth/account-login.ts";
+import { AccountLoginState, createOAuthAccountLoginManager } from "../src/oauth/account-login.ts";
 import { createProfileCredentialStore, OAuthProfiles } from "../src/oauth/accounts.ts";
 import { providerProtocols, type OAuthProvider } from "../src/oauth/protocol.ts";
 import { createSubscriptionOAuthClient } from "../src/oauth/validation-harness.ts";
@@ -119,6 +119,10 @@ const fixture = Effect.fn("oauthLoginTest.fixture")(function* () {
   };
 });
 
+/** The authorization URL of a login waiting for the browser. */
+const authorizationUrl = (login: AccountLoginState) =>
+  AccountLoginState.$is("pending")(login) ? login.authorizationUrl : undefined;
+
 describe("multi-account OAuth login manager", () => {
   it.live.each(["openai", "anthropic"] as const)(
     "%s production callback admits one exchange and publishes one selected profile",
@@ -178,7 +182,7 @@ describe("multi-account OAuth login manager", () => {
           | undefined;
         try {
           const pending = yield* sdkCall(() => manager.start(provider, "concurrent profile"));
-          const authorize = new URL(pending.login.authorizationUrl!);
+          const authorize = new URL(authorizationUrl(pending.login)!);
           const callback = new URL(authorize.searchParams.get("redirect_uri")!);
           callback.searchParams.set("code", "first-code");
           callback.searchParams.set("state", authorize.searchParams.get("state")!);
@@ -209,7 +213,9 @@ describe("multi-account OAuth login manager", () => {
           yield* response.text;
           yield* sdkCall(() => login.completed);
           yield* waitUntil(
-            Effect.map(manager.profiles(provider), (state) => state.login.status === "completed"),
+            Effect.map(manager.profiles(provider), (state) =>
+              AccountLoginState.$is("completed")(state.login),
+            ),
             "login completion",
             1000,
           );
@@ -240,14 +246,16 @@ describe("multi-account OAuth login manager", () => {
         yield* profiles.importLegacy(provider, accounts, legacyStore);
         for (const suffix of [1, 2]) {
           const pending = yield* sdkCall(() => manager.start(provider, `계정 ${suffix}`));
-          expect(pending.login).toMatchObject({ status: "pending" });
+          expect(AccountLoginState.$is("pending")(pending.login)).toBe(true);
           const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, provider))!;
           yield* sdkCall(() =>
             accounts.write(provider, attempt.id, credential(`${provider}-${suffix}`)),
           );
           attempt.succeed();
           yield* waitUntil(
-            Effect.map(manager.profiles(provider), (state) => state.login.status === "completed"),
+            Effect.map(manager.profiles(provider), (state) =>
+              AccountLoginState.$is("completed")(state.login),
+            ),
             "login completion",
             1000,
           );

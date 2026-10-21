@@ -1,7 +1,7 @@
 import { Array as EffectArray } from "effect";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, layer as testLayer } from "@effect/vitest";
-import { Embedder, EmbeddingError } from "../memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder, EmbeddingError } from "../memory/embedding/embedder.ts";
 import { builtInWorkflowRules, WorkflowRules } from "./rules.ts";
 import { fakeEmbedderLayer, fakeVector } from "../testing/fake-embedder.ts";
 
@@ -38,7 +38,7 @@ describe("WorkflowRules", () => {
         calls.push(texts.length);
         return texts.map(fakeVector);
       }),
-    runtime: () => ({ kind: "other" }),
+    runtime: () => EmbedderRuntime.other(),
   });
   testLayer(WorkflowRules.layer.pipe(Layer.provide(countingEmbedder)))((it) => {
     it.effect("shares rule vectors across equivalent queries while embedding each query", () =>
@@ -63,7 +63,7 @@ describe("WorkflowRules", () => {
         }
         return texts.map(fakeVector);
       }),
-    runtime: () => ({ kind: "other" }),
+    runtime: () => EmbedderRuntime.other(),
   });
   testLayer(WorkflowRules.layer.pipe(Layer.provide(recoveringEmbedder)))((it) => {
     it.effect("retries rule vectors after a failed embedding", () =>

@@ -1,6 +1,8 @@
 import { it as effectTest } from "@effect/vitest";
 import { Context, Effect, Result, Layer, pipe } from "effect";
 import {
+  AuthConnectionState,
+  ImageExecutorModel,
   ProviderRegistry,
   ProviderToolCapabilityRegistry,
   RouteCatalog,
@@ -41,7 +43,7 @@ const media = {
   id: "media:openai:direct_adapter:gpt-image-2" as const,
   provider: "openai" as const,
   executionMode: "direct_adapter" as const,
-  executorModel: { type: "explicit" as const, model: "gpt-image-2" as const },
+  executorModel: ImageExecutorModel.explicit({ model: "gpt-image-2" }),
   operations: ["generate", "edit"] as const,
   authentication: {
     mechanism: "openai_api_key" as const,
@@ -58,7 +60,7 @@ const media = {
     id: "openai:direct_adapter:gpt-image-2" as const,
     provider: "openai" as const,
     executionMode: "direct_adapter" as const,
-    executorModel: { type: "explicit" as const, model: "gpt-image-2" as const },
+    executorModel: ImageExecutorModel.explicit({ model: "gpt-image-2" }),
     verification: "unverified" as const,
     productionEnabled: false,
     authentication: "openai_api_key" as const,
@@ -139,7 +141,7 @@ describe("RouteCatalog", () => {
           crossProvider: true,
         });
         expect(chat.model).toBe("claude-test");
-        expect(media.executorModel).toEqual({ type: "explicit", model: "gpt-image-2" });
+        expect(media.executorModel).toEqual(ImageExecutorModel.explicit({ model: "gpt-image-2" }));
       }),
   );
 
@@ -149,12 +151,12 @@ describe("RouteCatalog", () => {
         ...media,
         id: "media:openai:provider_tool:image_generation" as const,
         executionMode: "provider_tool" as const,
-        executorModel: { type: "provider_managed" as const },
+        executorModel: ImageExecutorModel.provider_managed(),
         billingAttribution: "provider_managed" as const,
       };
       const catalog = yield* makeRouteCatalog(source({ ...loaded, media: [managed] }));
       const snapshot = yield* catalog.refresh;
-      expect(snapshot.media[0]?.executorModel).toEqual({ type: "provider_managed" });
+      expect(snapshot.media[0]?.executorModel).toEqual(ImageExecutorModel.provider_managed());
       expect(snapshot.media[0]?.billingAttribution).toBe("provider_managed");
     }),
   );
@@ -215,10 +217,10 @@ describe("RouteCatalog", () => {
           provider: providerId,
           auth: {
             provider: providerId,
-            status: Effect.succeed({ provider: providerId, status: "signed-in" }),
-            connect: Effect.succeed({ provider: providerId, status: "signed-in" }),
-            cancel: Effect.succeed({ provider: providerId, status: "signed-out" }),
-            disconnect: Effect.succeed({ provider: providerId, status: "signed-out" }),
+            status: Effect.succeed(AuthConnectionState["signed-in"]({ provider: providerId })),
+            connect: Effect.succeed(AuthConnectionState["signed-in"]({ provider: providerId })),
+            cancel: Effect.succeed(AuthConnectionState["signed-out"]({ provider: providerId })),
+            disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider: providerId })),
           },
           models: {
             provider: providerId,

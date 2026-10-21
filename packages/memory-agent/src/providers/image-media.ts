@@ -1,17 +1,7 @@
 import { Result, Function as EffectFunction } from "effect";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { isTruthy } from "../truthy.ts";
-import {
-  Config,
-  ConfigProvider,
-  HashSet,
-  Option,
-  Context,
-  Effect,
-  Layer,
-  Predicate,
-  Schema,
-} from "effect";
+import { Config, ConfigProvider, HashSet, Option, Context, Effect, Layer, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
 import { Attachments, type Attachment, type AttachmentsApi } from "../attachments/attachments.ts";
@@ -22,11 +12,12 @@ import {
 import { ImageFeature, decideImageContext, type ImageFeatureApi } from "./image-feature.ts";
 import {
   ImageRouter,
-  type ImageRerouteConfirmation,
+  ImageRerouteConfirmation,
   type ImageRouteDecision,
   type ImageRouterApi,
 } from "./image-router.ts";
 import { ProviderId } from "./contracts.ts";
+import { ImageExecutorModel } from "./image-contracts.ts";
 import { RouteCatalog, type RouteCatalogApi } from "./route-catalog.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -97,7 +88,7 @@ export class DirectImageExecutor extends Context.Service<
             );
             if (key === undefined)
               return yield* new DirectImageExecutionFailed({ reason: "not_configured" });
-            if (decision.executorMediaModel.type !== "explicit")
+            if (!ImageExecutorModel.$is("explicit")(decision.executorMediaModel))
               return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
             const model = decision.executorMediaModel.model;
             const fetch = yield* FetchHttpClient.Fetch;
@@ -215,8 +206,7 @@ export class ImageMediaUnavailable extends Schema.TaggedError<ImageMediaUnavaila
   },
 ) {}
 const ImageRerouteConfirmationValue = Schema.declare(
-  (input): input is ImageRerouteConfirmation =>
-    Predicate.hasProperty(input, "type") && input.type === "confirmation_required",
+  ImageRerouteConfirmation.$is("confirmation_required"),
 );
 export class ImageMediaExecutionFailed extends Schema.TaggedError<ImageMediaExecutionFailed>()(
   "ImageMediaExecutionFailed",

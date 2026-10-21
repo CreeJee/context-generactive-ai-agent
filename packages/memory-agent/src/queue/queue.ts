@@ -1,7 +1,24 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Clock, Context, Crypto, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Clock,
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  Match,
+  MutableHashMap,
+  Option,
+  Schema,
+} from "effect";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
-import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "./queue-state.ts";
+import {
+  type DeliveryVia,
+  NextDelivery,
+  QueueItemState,
+  type QueuedMessage,
+  type QueueSnapshot,
+} from "./queue-state.ts";
 
 const Row = Schema.Struct({
   id: Schema.String,
@@ -18,25 +35,17 @@ const Row = Schema.Struct({
 });
 
 function toMessage(row: typeof Row.Type): QueuedMessage {
-  let state: QueueItemState;
-  switch (row.state) {
-    case "waiting":
-      state = { kind: "waiting", steered: row.steered === 1 };
-      break;
-    case "editing":
-      state = { kind: "editing", draft: row.draft ?? row.text };
-      break;
-    case "held":
-      state = { kind: "held", draft: row.draft };
-      break;
-    case "delivered":
-      // The table checks that a delivered row names how it was delivered.
-      state = { kind: "delivered", via: row.delivered_via ?? "next_turn", runId: row.run_id };
-      break;
-    case "failed":
-      state = { kind: "failed", reason: row.failure ?? "" };
-      break;
-  }
+  const state = Match.value(row.state).pipe(
+    Match.when("waiting", () => QueueItemState.waiting({ steered: row.steered === 1 })),
+    Match.when("editing", () => QueueItemState.editing({ draft: row.draft ?? row.text })),
+    Match.when("held", () => QueueItemState.held({ draft: row.draft })),
+    // The table checks that a delivered row names how it was delivered.
+    Match.when("delivered", () =>
+      QueueItemState.delivered({ via: row.delivered_via ?? "next_turn", runId: row.run_id }),
+    ),
+    Match.when("failed", () => QueueItemState.failed({ reason: row.failure ?? "" })),
+    Match.exhaustive,
+  );
   return {
     id: row.id,
     seq: row.seq,
@@ -83,7 +92,7 @@ const make = Effect.gen(function* () {
     if (message === null) return yield* QueueChangeRefused.make({ id, reason: "not_found" });
     if (Option.getOrUndefined(MutableHashMap.get(reservations, sessionId))?.id === id)
       return yield* QueueChangeRefused.make({ id, reason: "reserved" });
-    if (message.state.kind === "delivered")
+    if (QueueItemState.$is("delivered")(message.state))
       return yield* QueueChangeRefused.make({ id, reason: "delivered" });
     return message;
   });
@@ -178,22 +187,18 @@ const make = Effect.gen(function* () {
       Effect.map(listMessages(sessionId, recentRunId), (items): QueueSnapshot => {
         // Only the first nonterminal entry determines whether the page may request the next turn.
         // Batch selection for a tool boundary happens separately against the latest queue state.
-        for (const item of items) {
-          switch (item.state.kind) {
-            case "failed":
-            case "delivered":
-              continue;
-            case "waiting":
-              return { items, nextDelivery: { kind: item.state.steered ? "server" : "ready" } };
-            case "editing":
-            case "held":
-              return {
-                items,
-                nextDelivery: { kind: "blocked", messageId: item.id, reason: item.state.kind },
-              };
-          }
-        }
-        return { items, nextDelivery: { kind: "empty" } };
+        const first = Arr.findFirst(items, (item) =>
+          QueueItemState.$match(item.state, {
+            failed: () => Option.none(),
+            delivered: () => Option.none(),
+            waiting: ({ steered }) =>
+              Option.some(steered ? NextDelivery.server() : NextDelivery.ready()),
+            editing: () =>
+              Option.some(NextDelivery.blocked({ messageId: item.id, reason: "editing" })),
+            held: () => Option.some(NextDelivery.blocked({ messageId: item.id, reason: "held" })),
+          }),
+        );
+        return { items, nextDelivery: Option.getOrElse(first, () => NextDelivery.empty()) };
       }),
 
     /**
@@ -224,12 +229,12 @@ const make = Effect.gen(function* () {
     /** Stores unsaved edit text. A waiting message becomes editing; a held one stays held. */
     edit: (sessionId: string, id: string, draft: string) =>
       change(sessionId, id, (message) =>
-        setState(id, message.state.kind === "held" ? "held" : "editing", { draft }),
+        setState(id, QueueItemState.$is("held")(message.state) ? "held" : "editing", { draft }),
       ),
 
     save: (sessionId: string, id: string, text: string) =>
       change(sessionId, id, (message) =>
-        setState(id, message.state.kind === "held" ? "held" : "waiting", { text }),
+        setState(id, QueueItemState.$is("held")(message.state) ? "held" : "waiting", { text }),
       ),
 
     remove: (sessionId: string, id: string) =>
@@ -245,15 +250,15 @@ const make = Effect.gen(function* () {
         sessionId,
         id,
         (message): Effect.Effect<void, QueueChangeRefused | SqlError.SqlError> => {
-          switch (message.state.kind) {
-            case "held":
-            case "failed":
-              return Effect.asVoid(setState(id, "waiting"));
-            case "waiting":
-            case "editing":
-            case "delivered":
-              return Effect.fail(QueueChangeRefused.make({ id, reason: "not_held" }));
-          }
+          const send = () => Effect.asVoid(setState(id, "waiting"));
+          const refuse = () => Effect.fail(QueueChangeRefused.make({ id, reason: "not_held" }));
+          return QueueItemState.$match(message.state, {
+            held: send,
+            failed: send,
+            waiting: refuse,
+            editing: refuse,
+            delivered: refuse,
+          });
         },
       ),
 

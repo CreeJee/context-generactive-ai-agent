@@ -25,10 +25,10 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { dayAndTime } from "~/lib/dates";
 import {
+  EmbedderRuntime,
   EmbeddingCommand,
   type EmbeddingChoice,
-  type EmbeddingOverview,
-  type GpuState,
+  GpuState,
   refusalOf,
 } from "../../api";
 import { useEmbeddingQuery } from "../../queries/global";
@@ -47,45 +47,32 @@ const modeNames = { cpu: "CPU", gpu: "GPU" } as const;
 const gibibytes = (bytes: number) => Math.round(bytes / 1024 ** 3);
 
 /** What the model runs on in this process, as a badge. */
-function RunningBadge({ running }: { running: EmbeddingOverview["running"] }) {
-  switch (running.kind) {
-    case "other":
-      return null;
-    case "local":
-      if (running.device === null)
-        return (
-          <Badge variant="secondary">{modeNames[running.mode]} 모드, 아직 불러오지 않음</Badge>
-        );
-      switch (running.mode) {
-        case "cpu":
-          return <Badge variant="secondary">CPU에서 실행 중</Badge>;
-        case "gpu":
-          return running.device === "webgpu" ? (
-            <Badge variant="secondary">GPU(WebGPU)에서 실행 중</Badge>
-          ) : (
-            <Badge variant="outline">GPU 모드, CPU에서 실행 중</Badge>
-          );
-      }
-  }
+function RunningBadge({ running }: { running: EmbedderRuntime }) {
+  return EmbedderRuntime.$match(running, {
+    other: () => null,
+    local: ({ mode, device }) =>
+      device === null ? (
+        <Badge variant="secondary">{modeNames[mode]} 모드, 아직 불러오지 않음</Badge>
+      ) : mode === "cpu" ? (
+        <Badge variant="secondary">CPU에서 실행 중</Badge>
+      ) : device === "webgpu" ? (
+        <Badge variant="secondary">GPU(WebGPU)에서 실행 중</Badge>
+      ) : (
+        <Badge variant="outline">GPU 모드, CPU에서 실행 중</Badge>
+      ),
+  });
 }
 
 /** What the running model means for the user, in words; nothing when the badge says it all. */
-function runningNote(running: EmbeddingOverview["running"]) {
-  switch (running.kind) {
-    case "other":
-      return null;
-    case "local":
-      if (running.device === null) return "모델은 처음 임베딩할 때 불러와요.";
-      switch (running.mode) {
-        case "cpu":
-          return null;
-        case "gpu":
-          return running.device === "webgpu"
-            ? null
-            : "WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같지만 더 느려요.";
-      }
-  }
-}
+const runningNote = EmbedderRuntime.$match({
+  other: () => null,
+  local: ({ mode, device }) =>
+    device === null
+      ? "모델은 처음 임베딩할 때 불러와요."
+      : mode === "gpu" && device !== "webgpu"
+        ? "WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같지만 더 느려요."
+        : null,
+});
 
 /** Why WebGPU could not be used, by the code the check stores; any other value reads generically. */
 const GpuUnavailableReason = Schema.Literals([
@@ -107,18 +94,13 @@ const gpuUnavailableText = (reason: string) =>
     ? gpuUnavailableReasons[reason]
     : "확인 중 문제가 생겼어요.";
 
-function gpuText(gpu: GpuState) {
-  switch (gpu.status) {
-    case "unchecked":
-      return "아직 확인하지 않았어요.";
-    case "checking":
-      return "확인하는 중이에요. 처음이면 원본 모델(약 390MB)을 내려받아요.";
-    case "available":
-      return `쓸 수 있어요(${dayAndTime(gpu.checkedAt)} 확인).`;
-    case "unavailable":
-      return `쓸 수 없어요(${dayAndTime(gpu.checkedAt)} 확인): ${gpuUnavailableText(gpu.reason)}`;
-  }
-}
+const gpuText = GpuState.$match({
+  unchecked: () => "아직 확인하지 않았어요.",
+  checking: () => "확인하는 중이에요. 처음이면 원본 모델(약 390MB)을 내려받아요.",
+  available: ({ checkedAt }) => `쓸 수 있어요(${dayAndTime(checkedAt)} 확인).`,
+  unavailable: ({ checkedAt, reason }) =>
+    `쓸 수 없어요(${dayAndTime(checkedAt)} 확인): ${gpuUnavailableText(reason)}`,
+});
 
 /** How the embedding model runs: on the CPU with little memory, or on the GPU with little CPU. */
 export function EmbeddingSettings() {
@@ -127,7 +109,7 @@ export function EmbeddingSettings() {
   const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
 
-  const checking = overview.gpu.status === "checking";
+  const checking = GpuState.$is("checking")(overview.gpu);
   const indexing = overview.unindexed > 0;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -152,7 +134,7 @@ export function EmbeddingSettings() {
   );
   const note = runningNote(overview.running);
   const restartNeeded =
-    overview.running.kind === "local" && overview.running.mode !== overview.next;
+    EmbedderRuntime.$is("local")(overview.running) && overview.running.mode !== overview.next;
 
   return (
     <FieldGroup>

@@ -1,5 +1,5 @@
 import { DateTime, Effect, Schema } from "effect";
-import { ProviderId, ProviderRegistry } from "memory-agent";
+import { AuthConnectionState, ProviderId, ProviderRegistry } from "memory-agent";
 import { agent } from "~/.server/agent";
 import type { Route } from "./+types/models._index";
 
@@ -18,7 +18,7 @@ export function loader({ request }: Route.LoaderArgs) {
     const configuredAt = developmentTiming ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
     const status = yield* configured.auth.status;
     const authenticatedAt = developmentTiming ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
-    if (status.status !== "signed-in")
+    if (!AuthConnectionState.$is("signed-in")(status))
       return Response.json({ error: "login_required", auth: status }, { status: 401 });
 
     const models = yield* configured.models.list;

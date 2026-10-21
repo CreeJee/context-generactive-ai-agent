@@ -16,7 +16,7 @@ import {
 } from "effect";
 import { Hex } from "effect/encoding";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import { ReportDeliveryFailure, type ReportDeliveryResult } from "./delivery-contract.ts";
+import { ReportDeliveryFailure, ReportDeliveryResult } from "./delivery-contract.ts";
 
 /**
  * Hosts an execute-webhook URL may point at. The URL's token is the only credential: anyone holding
@@ -306,9 +306,11 @@ const make = (options: ReportDeliveryOptions) =>
         return yield* Attempt.$match(claimed, {
           sending: () => Effect.fail(ReportDeliveryError.make({ reason: "in_progress" })),
           delivered: ({ at }): Effect.Effect<ReportDeliveryResult> =>
-            Effect.succeed({ status: "duplicate", deliveredAt: at }),
+            Effect.succeed(ReportDeliveryResult.cases.duplicate.make({ deliveredAt: at })),
           uncertain: ({ at }): Effect.Effect<ReportDeliveryResult> =>
-            Effect.succeed({ status: "uncertain_duplicate", attemptedAt: at }),
+            Effect.succeed(
+              ReportDeliveryResult.cases.uncertain_duplicate.make({ attemptedAt: at }),
+            ),
         });
       const messageId = yield* postWithShortWaits(target, report, 0).pipe(
         Effect.tapError((error) =>
@@ -322,7 +324,7 @@ const make = (options: ReportDeliveryOptions) =>
       );
       const deliveredAt = yield* now;
       yield* setAttempt(hash, Attempt.delivered({ at: deliveredAt }));
-      return { status: "delivered", messageId, deliveredAt };
+      return ReportDeliveryResult.cases.delivered.make({ messageId, deliveredAt });
     });
 
     /**

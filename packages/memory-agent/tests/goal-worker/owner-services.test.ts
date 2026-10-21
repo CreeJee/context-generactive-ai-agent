@@ -20,10 +20,13 @@ import { expect } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../../src/agent/chat.ts";
 import { chatPersistence } from "../../src/chat-state/persistence.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
-import { Embedder } from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { createOAuthAccountLoginManager } from "../../src/oauth/account-login.ts";
+import {
+  AccountLoginState,
+  createOAuthAccountLoginManager,
+} from "../../src/oauth/account-login.ts";
 import { createProfileCredentialStore, OAuthProfiles } from "../../src/oauth/accounts.ts";
 import { NormalizedStreamEvent, providerProtocols } from "../../src/oauth/protocol.ts";
 import {
@@ -56,6 +59,9 @@ import {
   send,
 } from "./goal-session.ts";
 import { sqlGet } from "../support/sql.ts";
+/** The authorization URL of a login waiting for the browser. */
+const authorizationUrl = (login: AccountLoginState) =>
+  AccountLoginState.$is("pending")(login) ? login.authorizationUrl : undefined;
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -120,7 +126,7 @@ const countedEmbedder = Layer.effect(
             ownership.embeddings.push({ threadId, texts });
             return texts.map(fakeVector);
           }),
-        runtime: () => ({ kind: "other" as const }),
+        runtime: () => EmbedderRuntime.other(),
       };
     }),
     () => Effect.sync(() => void ownership.activeEmbedders--),
@@ -273,8 +279,8 @@ testAgent({
           sdkCall(() => manager.cancel("openai")).pipe(Effect.orDie),
         );
         const pending = yield* sdkCall(() => manager.start("openai", "owner account"));
-        expect(pending.login.status).toBe("pending");
-        const authorization = new URL(pending.login.authorizationUrl!);
+        expect(AccountLoginState.$is("pending")(pending.login)).toBe(true);
+        const authorization = new URL(authorizationUrl(pending.login)!);
         const callback = new URL(authorization.searchParams.get("redirect_uri")!);
         callback.searchParams.set("code", "fake-code");
         callback.searchParams.set("state", authorization.searchParams.get("state")!);
@@ -291,11 +297,15 @@ testAgent({
           "terminated worker run fails",
           1000,
         );
-        expect((yield* manager.profiles("openai")).login.status).toBe("pending");
+        expect(AccountLoginState.$is("pending")((yield* manager.profiles("openai")).login)).toBe(
+          true,
+        );
         const client = yield* testHttpClient();
         expect((yield* client.get(callback.toString())).status).toBe(200);
         yield* waitUntil(
-          Effect.map(manager.profiles("openai"), (state) => state.login.status === "completed"),
+          Effect.map(manager.profiles("openai"), (state) =>
+            AccountLoginState.$is("completed")(state.login),
+          ),
           "owner login completes",
           1000,
         );
@@ -319,19 +329,19 @@ testAgent({
 
         const wrong = yield* sdkCall(() => manager.start("openai", "wrong state"));
         const wrongCallback = new URL(
-          new URL(wrong.login.authorizationUrl!).searchParams.get("redirect_uri")!,
+          new URL(authorizationUrl(wrong.login)!).searchParams.get("redirect_uri")!,
         );
         wrongCallback.searchParams.set("code", "fake-code");
         wrongCallback.searchParams.set("state", "wrong-state");
         expect((yield* client.get(wrongCallback.toString())).status).toBe(400);
         yield* waitUntil(
           Effect.map(manager.profiles("openai"), (state) =>
-            Schema.is(
-              Schema.Struct({
-                status: Schema.Literal("error"),
-                error: Schema.Literal("login_failed"),
-              }),
-            )(state.login),
+            AccountLoginState.$match(state.login, {
+              error: ({ error }) => error === "login_failed",
+              idle: () => false,
+              pending: () => false,
+              completed: () => false,
+            }),
           ),
           "wrong OAuth state rejected",
           1000,

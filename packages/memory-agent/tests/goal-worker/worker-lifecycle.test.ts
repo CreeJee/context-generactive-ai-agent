@@ -7,7 +7,7 @@ import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { OwnerRpcAdmission, OwnerRpcReply } from "../../src/agent/owner-rpc.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
-import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
   goalSession,
@@ -152,8 +152,8 @@ const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed")
   });
   yield* Effect.scoped(artifacts.acquire(revision.goal_instance_id));
   const admission = yield* (yield* workflowRunBindings).bind(id, `${id}-old`, revision.id);
-  expect(admission.status).toBe("bound");
-  if (admission.status !== "bound") return yield* Effect.die("the earlier run was not bound");
+  expect(Admission.$is("bound")(admission)).toBe(true);
+  if (!Admission.$is("bound")(admission)) return yield* Effect.die("the earlier run was not bound");
   yield* sqlRun(
     "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, ?, ?)",
     `${id}-old`,

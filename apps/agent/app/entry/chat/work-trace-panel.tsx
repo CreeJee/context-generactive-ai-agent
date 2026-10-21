@@ -1,5 +1,5 @@
 import { isTruthy } from "../../truthy.ts";
-import { Schema } from "effect";
+import { Data, Schema } from "effect";
 import type { HeartbeatState, TraceTaskDetail, TraceTaskView } from "memory-agent";
 import {
   ActivityIcon,
@@ -58,6 +58,7 @@ function connectionLabel(connection: TraceConnection) {
 }
 
 type ArtifactLocator = NonNullable<TraceTaskDetail["artifacts"][number]["locator"]>;
+const ArtifactLocator = Data.taggedEnum<ArtifactLocator>();
 
 const heartbeatLabel: Readonly<Record<HeartbeatState, string>> = {
   working: "작업 중",
@@ -65,16 +66,15 @@ const heartbeatLabel: Readonly<Record<HeartbeatState, string>> = {
   waiting: "응답 대기",
 };
 
+const locatorLabel = ArtifactLocator.$match({
+  file: ({ path, sha256 }) => `${path} · sha256 ${sha256}`,
+  generated: ({ reference }) => `Generated ${reference}`,
+  external: ({ reference }) => `External ${reference}`,
+});
+
 function artifactLocatorLabel(locator: ArtifactLocator | null) {
   if (!isTruthy(locator)) return "원본 위치가 삭제되었거나 가려졌어요.";
-  switch (locator.kind) {
-    case "file":
-      return `${locator.path} · sha256 ${locator.sha256}`;
-    case "generated":
-      return `Generated ${locator.reference}`;
-    case "external":
-      return `External ${locator.reference}`;
-  }
+  return locatorLabel(locator);
 }
 
 function TaskTree({

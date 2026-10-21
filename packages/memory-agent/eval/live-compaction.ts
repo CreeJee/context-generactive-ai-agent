@@ -1,4 +1,5 @@
 import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { AuthConnectionState } from "../src/providers/contracts.ts";
 import { Config, Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -153,7 +154,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     Effect.gen(function* () {
       const provider = yield* (yield* ProviderRegistry).get("openai");
       const auth = yield* provider.auth.status;
-      if (auth.status !== "signed-in") throw new Error("openai_not_signed_in");
+      if (!AuthConnectionState.$is("signed-in")(auth)) throw new Error("openai_not_signed_in");
       yield* provider.models.select(model, effort);
       const project = yield* (yield* Projects).add(projectRoot);
       const session = yield* (yield* Sessions).create(project.id);

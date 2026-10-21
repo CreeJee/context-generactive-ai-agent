@@ -3,6 +3,9 @@ import { it as effectTest } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import {
   FixedImageRouteRejected,
+  ImageExecutorModel,
+  ImageRerouteConfirmation,
+  ImageRouteDecision,
   ImageRouteFacts,
   ImageRouteUnavailable,
   ImageRoutingInvalidRequest,
@@ -39,7 +42,7 @@ function media(
     id: `media:openai:direct_adapter:${model}`,
     provider: "openai",
     executionMode: "direct_adapter",
-    executorModel: { type: "explicit", model },
+    executorModel: ImageExecutorModel.explicit({ model }),
     operations: edit ? ["generate", "edit"] : ["generate"],
     authentication: { mechanism: "openai_api_key", status: "signed-in", verified: true },
     entitlement: { status: "verified", source: "account_capability", detail: "fixture" },
@@ -48,7 +51,7 @@ function media(
       id: `openai:direct_adapter:${model}`,
       provider: "openai",
       executionMode: "direct_adapter",
-      executorModel: { type: "explicit", model },
+      executorModel: ImageExecutorModel.explicit({ model }),
       verification: "verified",
       productionEnabled: options.production ?? true,
       authentication: "openai_api_key",
@@ -182,7 +185,9 @@ describe("image router", () => {
       expect(first.preference).toBe("balanced");
       expect(first.executorMediaRouteId).toBe(quality.id);
       expect(first.initiatorChatModel).toBe("claude-test");
-      expect(first.executorMediaModel).toEqual({ type: "explicit", model: "gpt-image-2" });
+      expect(first.executorMediaModel).toEqual(
+        ImageExecutorModel.explicit({ model: "gpt-image-2" }),
+      );
     }),
   );
 
@@ -324,10 +329,10 @@ describe("image router", () => {
           "provider overloaded",
           request,
         );
-        expect(reroute.type).toBe("confirmation_required");
+        expect(ImageRerouteConfirmation.$is("confirmation_required")(reroute)).toBe(true);
         expect(reroute.failedDecision).toBe(decision);
         expect(reroute.alternatives.length).toBeGreaterThan(0);
-        expect(reroute.alternatives.every((candidate) => candidate.type === "selected")).toBe(true);
+        expect(reroute.alternatives.every(ImageRouteDecision.$is("selected"))).toBe(true);
       }),
   );
 

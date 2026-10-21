@@ -28,8 +28,8 @@ import {
   percentTone,
   ProviderMark,
   usedPercent,
+  QuotaStatus,
   windowLabel,
-  type QuotaStatus,
 } from "./account-profiles";
 import { timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
@@ -78,6 +78,35 @@ function AccountName({ entry }: { entry: AccountEntry }) {
  * The tightest window only, as time to reset and percent used, like a status bar; every window
  * stays in the tooltip and in the account manager.
  */
+/** An observed or stale quota's tightest window; a stale one is dimmed. */
+const tightestWindow = (quota: Data.TaggedEnum.Value<QuotaStatus, "observed" | "stale">) => {
+  const tightest = quota.windows.reduce<(typeof quota.windows)[number] | undefined>(
+    (worst, window) =>
+      worst === undefined || usedPercent(window) > usedPercent(worst) ? window : worst,
+    undefined,
+  );
+  if (tightest === undefined) return null;
+  const used = Math.round(usedPercent(tightest));
+  const until =
+    tightest.resetsAt !== null && tightest.resetsAt !== ""
+      ? timeUntil(tightest.resetsAt, DateTime.nowUnsafe())
+      : null;
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-baseline gap-1.5 tabular-nums",
+        QuotaStatus.$is("stale")(quota) && "opacity-50",
+      )}
+      title={quota.windows
+        .map((window) => `${windowLabel(window)} ${Math.round(usedPercent(window))}%`)
+        .join(" · ")}
+    >
+      {until !== null && <span className="text-2xs text-muted-foreground">{until}</span>}
+      <span className={cn("text-xs font-medium", percentTone(used))}>{used}%</span>
+    </span>
+  );
+};
+
 function QuotaHeadline({ entry }: { entry: AccountEntry }) {
   return AccountEntry.$match(entry, {
     compatible: ({ account }) => (
@@ -85,42 +114,16 @@ function QuotaHeadline({ entry }: { entry: AccountEntry }) {
         {account.models.length > 0 ? `모델 ${account.models.length}개` : "모델 없음"}
       </span>
     ),
-    profile: ({ quota }) => {
-      switch (quota?.status) {
-        case undefined:
-          return null;
-        case "unavailable":
-          return <span className="shrink-0 text-2xs text-muted-foreground">조회 불가</span>;
-        case "observed":
-        case "stale": {
-          const tightest = quota.windows.reduce<(typeof quota.windows)[number] | undefined>(
-            (worst, window) =>
-              worst === undefined || usedPercent(window) > usedPercent(worst) ? window : worst,
-            undefined,
-          );
-          if (tightest === undefined) return null;
-          const used = Math.round(usedPercent(tightest));
-          const until =
-            tightest.resetsAt !== null && tightest.resetsAt !== ""
-              ? timeUntil(tightest.resetsAt, DateTime.nowUnsafe())
-              : null;
-          return (
-            <span
-              className={cn(
-                "flex shrink-0 items-baseline gap-1.5 tabular-nums",
-                quota.status === "stale" && "opacity-50",
-              )}
-              title={quota.windows
-                .map((window) => `${windowLabel(window)} ${Math.round(usedPercent(window))}%`)
-                .join(" · ")}
-            >
-              {until !== null && <span className="text-2xs text-muted-foreground">{until}</span>}
-              <span className={cn("text-xs font-medium", percentTone(used))}>{used}%</span>
-            </span>
-          );
-        }
-      }
-    },
+    profile: ({ quota }) =>
+      quota === undefined
+        ? null
+        : QuotaStatus.$match(quota, {
+            unavailable: () => (
+              <span className="shrink-0 text-2xs text-muted-foreground">조회 불가</span>
+            ),
+            observed: tightestWindow,
+            stale: tightestWindow,
+          }),
   });
 }
 

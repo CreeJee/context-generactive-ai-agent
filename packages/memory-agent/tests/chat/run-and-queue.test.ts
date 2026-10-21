@@ -2,6 +2,7 @@ import { Effect, Option, Schedule, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { MessageQueue } from "../../src/queue/queue.ts";
+import { NextDelivery, QueueEdit, QueueItemState } from "../../src/queue/queue-state.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -44,32 +45,35 @@ const Cancelled = Schema.Struct({
 const Queued = Schema.Struct({
   id: Schema.String,
   text: Schema.String,
-  state: Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("waiting"), steered: Schema.Boolean }),
-    Schema.Struct({ kind: Schema.Literal("editing"), draft: Schema.String }),
-    Schema.Struct({ kind: Schema.Literal("held"), draft: Schema.NullOr(Schema.String) }),
-    Schema.Struct({
-      kind: Schema.Literal("delivered"),
+  state: Schema.TaggedUnion({
+    waiting: { steered: Schema.Boolean },
+    editing: { draft: Schema.String },
+    held: { draft: Schema.NullOr(Schema.String) },
+    delivered: {
       via: Schema.Literals(["tool_boundary", "steer", "next_turn"]),
       runId: Schema.NullOr(Schema.String),
-    }),
-    Schema.Struct({ kind: Schema.Literal("failed"), reason: Schema.String }),
-  ]),
+    },
+    failed: { reason: Schema.String },
+  }),
 });
 const QueueSnapshot = Schema.Struct({
   items: Schema.Array(Queued),
-  nextDelivery: Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("ready") }),
-    Schema.Struct({ kind: Schema.Literal("server") }),
-    Schema.Struct({
-      kind: Schema.Literal("blocked"),
-      messageId: Schema.String,
-      reason: Schema.Literals(["editing", "held"]),
-    }),
-    Schema.Struct({ kind: Schema.Literal("empty") }),
-  ]),
+  nextDelivery: Schema.TaggedUnion({
+    ready: {},
+    server: {},
+    blocked: { messageId: Schema.String, reason: Schema.Literals(["editing", "held"]) },
+    empty: {},
+  }),
 });
 const decodeQueued = Schema.decodeUnknownEffect(Queued);
+/** The state's case name, for comparing a queue's order at a glance. */
+const stateName = QueueItemState.$match({
+  waiting: () => "waiting",
+  editing: () => "editing",
+  held: () => "held",
+  delivered: () => "delivered",
+  failed: () => "failed",
+});
 
 /** A fresh session with a chosen model whose delayed model turns wait for `release`. */
 const chatSession = Effect.gen(function* () {
@@ -265,15 +269,13 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         const barrier = yield* queue.add(sessionId, "editing", [], false);
         const next = yield* queue.add(sessionId, "waiting", [], false);
         yield* queue.edit(sessionId, barrier.id, "draft");
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({
-          kind: "blocked",
-          messageId: barrier.id,
-          reason: "editing",
-        });
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(
+          NextDelivery.blocked({ messageId: barrier.id, reason: "editing" }),
+        );
         expect(yield* queue.claimNext(sessionId)).toBeNull();
         expect(yield* queue.deliverable(sessionId)).toEqual([]);
         yield* queue.remove(sessionId, barrier.id);
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({ kind: "ready" });
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.ready());
         expect((yield* queue.deliverable(sessionId)).map((message) => message.id)).toEqual([
           next.id,
         ]);
@@ -320,13 +322,14 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const item = yield* queue.add(sessionId, "first", [], false);
       expect((yield* queue.claimNext(sessionId))?.id).toBe(item.id);
       yield* queue.holdWaiting(sessionId, "stopped");
-      expect((yield* queue.get(sessionId, item.id))?.state).toEqual({
-        kind: "waiting",
-        steered: false,
-      });
+      expect((yield* queue.get(sessionId, item.id))?.state).toEqual(
+        QueueItemState.waiting({ steered: false }),
+      );
       expect(yield* queue.claimNext(sessionId)).toBeNull();
       yield* queue.releaseNext(sessionId, item.id);
-      expect((yield* queue.get(sessionId, item.id))?.state).toEqual({ kind: "held", draft: null });
+      expect((yield* queue.get(sessionId, item.id))?.state).toEqual(
+        QueueItemState.held({ draft: null }),
+      );
       expect(yield* queue.claimNext(sessionId)).toBeNull();
       yield* queue.confirm(sessionId, item.id);
       expect((yield* queue.claimNext(sessionId))?.id).toBe(item.id);
@@ -339,20 +342,18 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const queue = yield* MessageQueue;
       expect(yield* queueOf(sessionId)).toMatchObject({
         items: [],
-        nextDelivery: { kind: "empty" },
+        nextDelivery: NextDelivery.empty(),
       });
       const first = yield* queue.add(sessionId, "first", [], false);
       const second = yield* queue.add(sessionId, "second", [], false);
       expect(yield* queueOf(sessionId)).toMatchObject({
         items: [{ id: first.id }, { id: second.id }],
-        nextDelivery: { kind: "ready" },
+        nextDelivery: NextDelivery.ready(),
       });
       yield* queue.edit(sessionId, first.id, "draft");
-      expect((yield* queueOf(sessionId)).nextDelivery).toEqual({
-        kind: "blocked",
-        messageId: first.id,
-        reason: "editing",
-      });
+      expect((yield* queueOf(sessionId)).nextDelivery).toEqual(
+        NextDelivery.blocked({ messageId: first.id, reason: "editing" }),
+      );
     }),
   );
 
@@ -390,7 +391,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
 
       const queued = yield* enqueue(session.id, "look in the tests folder", "queue");
       expect(queued.status).toBe(201);
-      expect((yield* decodeQueued(queued.body)).state).toEqual({ kind: "waiting", steered: false });
+      expect((yield* decodeQueued(queued.body)).state).toEqual(
+        QueueItemState.waiting({ steered: false }),
+      );
       yield* session.release;
 
       yield* until(() => session.invocations().length === 2, "the provider continuation");
@@ -403,7 +406,11 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
           ),
       ).toBe(true);
       const [delivered] = (yield* queueOf(session.id)).items;
-      expect(delivered?.state).toMatchObject({ kind: "delivered", via: "tool_boundary" });
+      expect(
+        delivered !== undefined &&
+          QueueItemState.$is("delivered")(delivered.state) &&
+          delivered.state.via,
+      ).toBe("tool_boundary");
       expect(yield* userTexts(session.id)).toEqual([
         "please check files",
         "look in the tests folder",
@@ -443,7 +450,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
           schedule: Schedule.spaced(20),
         }),
       );
-      expect((yield* queueOf(session.id)).nextDelivery).toEqual({ kind: "empty" });
+      expect((yield* queueOf(session.id)).nextDelivery).toEqual(NextDelivery.empty());
       expect(yield* userTexts(session.id)).toEqual([
         "please be slow",
         "and the tests",
@@ -474,26 +481,30 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       yield* until(() => tab.answer().includes("done"), "the first answer");
       yield* until(() => !tab.client.getIsLoading(), "the run to finish");
       // No tool call happened, so both are still waiting for the page.
-      expect((yield* queueOf(session.id)).items.map((message) => message.state.kind)).toEqual([
-        "waiting",
-        "waiting",
-      ]);
+      expect((yield* queueOf(session.id)).items.map((message) => stateName(message.state))).toEqual(
+        ["waiting", "waiting"],
+      );
 
       // Supplying an ID is no longer a valid request; the server alone picks the head.
       yield* sdk(() => tab.client.sendMessage("and once more", { queuedMessageId: second.id }));
       expect(tab.client.getError()?.message).toContain("400");
 
       // A snapshot captured `first`, but the server must select the current head after an edit.
-      const edited = yield* agent.editQueued(session.id, "tab", first.id, {
-        action: "save",
-        text: "hello, freshly edited",
-      });
+      const edited = yield* agent.editQueued(
+        session.id,
+        "tab",
+        first.id,
+        QueueEdit.save({ text: "hello, freshly edited" }),
+      );
       expect(edited.status).toBe(200);
       yield* sdk(() => tab.client.sendMessage("stale client placeholder", { queuedNext: true }));
       yield* until(() => tab.answer().includes("Hello from fast-1"), "the next turn");
       yield* until(() => !tab.client.getIsLoading(), "the next turn to finish");
       expect(
-        (yield* queueOf(session.id)).items.map((message) => [message.text, message.state.kind]),
+        (yield* queueOf(session.id)).items.map((message) => [
+          message.text,
+          stateName(message.state),
+        ]),
       ).toEqual([
         ["hello, freshly edited", "delivered"],
         ["and once more", "waiting"],
@@ -522,7 +533,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
             case "editing": {
               // The page saw a ready head, then the user started editing it.
               const item = yield* queue.add(session.id, "previously ready", [], false);
-              expect((yield* queue.snapshot(session.id)).nextDelivery.kind).toBe("ready");
+              expect((yield* queue.snapshot(session.id)).nextDelivery).toEqual(
+                NextDelivery.ready(),
+              );
               yield* queue.edit(session.id, item.id, "unsaved draft");
               return item.id;
             }
@@ -532,7 +545,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         const tab = yield* openTab(session.id);
         yield* sdk(() => tab.client.sendMessage("stale client placeholder", { queuedNext: true }));
         expect(tab.client.getError()?.message).toContain("409");
-        if (item !== null) expect((yield* queue.get(session.id, item))?.state.kind).toBe("editing");
+        if (item !== null)
+          expect((yield* queue.get(session.id, item))?.state).toEqual(
+            QueueItemState.editing({ draft: "unsaved draft" }),
+          );
         expect(yield* userTexts(session.id)).toEqual([]);
       }),
   );
@@ -548,10 +564,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       yield* sdk(() => tab.client.sendMessage({ content: [] }, { queuedNext: true }));
       yield* until(() => !tab.client.getIsLoading(), "the run to finish");
       expect(tab.client.getError()).toBeUndefined();
-      expect((yield* queue.get(session.id, stale.id))?.state).toMatchObject({
-        kind: "delivered",
-        via: "next_turn",
-      });
+      const staleState = (yield* queue.get(session.id, stale.id))?.state;
+      expect(
+        staleState !== undefined && QueueItemState.$is("delivered")(staleState) && staleState.via,
+      ).toBe("next_turn");
       expect(yield* userTexts(session.id)).toEqual(["edited on server"]);
       expect(
         session
@@ -608,7 +624,8 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(tab.client.getError()).toBeUndefined();
       yield* queueOf(session.id).pipe(
         Effect.repeat({
-          until: (snapshot) => snapshot.items[0]?.state.kind === "held",
+          until: (snapshot) =>
+            snapshot.items[0] !== undefined && QueueItemState.$is("held")(snapshot.items[0].state),
           schedule: Schedule.spaced(20),
         }),
       );
@@ -629,14 +646,11 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       tab.client.stop();
 
       const [held] = (yield* queueOf(session.id)).items;
-      expect(held?.state).toEqual({ kind: "held", draft: null });
-      const confirmed = yield* agent.editQueued(session.id, null, held!.id, {
-        action: "confirm",
-      });
-      expect((yield* decodeQueued(yield* json(confirmed))).state).toEqual({
-        kind: "waiting",
-        steered: false,
-      });
+      expect(held?.state).toEqual(QueueItemState.held({ draft: null }));
+      const confirmed = yield* agent.editQueued(session.id, null, held!.id, QueueEdit.confirm());
+      expect((yield* decodeQueued(yield* json(confirmed))).state).toEqual(
+        QueueItemState.waiting({ steered: false }),
+      );
     }),
   );
 });
@@ -658,23 +672,21 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
         );
 
         expect(yield* texts).toEqual(["first", "second", "third"]);
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({ kind: "ready" });
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.ready());
         yield* queue.edit(sessionId, b!.id, "second, half typed");
         // The edited message and everything after it wait; unsaved text is not the message.
         expect(yield* texts).toEqual(["first"]);
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({ kind: "ready" });
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.ready());
         // A snapshot is advisory: delivery reselects after each edit.
         yield* queue.edit(sessionId, a!.id, "first draft");
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual({
-          kind: "blocked",
-          messageId: a!.id,
-          reason: "editing",
-        });
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(
+          NextDelivery.blocked({ messageId: a!.id, reason: "editing" }),
+        );
         expect(yield* queue.deliverable(sessionId)).toEqual([]);
         yield* queue.save(sessionId, a!.id, "first");
         expect(yield* queue.get(sessionId, b!.id)).toMatchObject({
           text: "second",
-          state: { kind: "editing", draft: "second, half typed" },
+          state: QueueItemState.editing({ draft: "second, half typed" }),
         });
         yield* queue.save(sessionId, b!.id, "second, edited");
         expect(yield* texts).toEqual(["first", "second, edited", "third"]);
@@ -685,27 +697,23 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
         const after = yield* current(MessageQueue);
         // Nothing goes out on its own after a restart; the unsaved edit is kept as a draft.
         expect(yield* after.deliverable(sessionId)).toEqual([]);
-        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual({
-          kind: "blocked",
-          messageId: b!.id,
-          reason: "held",
-        });
+        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual(
+          NextDelivery.blocked({ messageId: b!.id, reason: "held" }),
+        );
         expect((yield* after.list(sessionId, null)).map((message) => message.state)).toEqual([
-          { kind: "held", draft: null },
-          { kind: "held", draft: "third, unsaved" },
+          QueueItemState.held({ draft: null }),
+          QueueItemState.held({ draft: "third, unsaved" }),
         ]);
         yield* after.confirm(sessionId, b!.id);
         expect((yield* after.deliverable(sessionId)).map((message) => message.text)).toEqual([
           "second, edited",
         ]);
         yield* after.markDelivered(b!.id, "next_turn", null);
-        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual({
-          kind: "blocked",
-          messageId: c!.id,
-          reason: "held",
-        });
+        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual(
+          NextDelivery.blocked({ messageId: c!.id, reason: "held" }),
+        );
         yield* after.remove(sessionId, c!.id);
-        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual({ kind: "empty" });
+        expect((yield* after.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.empty());
       }),
   );
 

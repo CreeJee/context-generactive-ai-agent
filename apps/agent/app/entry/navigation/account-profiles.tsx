@@ -1,6 +1,6 @@
 import { Meter } from "@base-ui/react/meter";
 import { cn } from "cn";
-import { DateTime } from "effect";
+import { Data, DateTime } from "effect";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -22,10 +22,11 @@ import { Spinner } from "~/components/ui/spinner";
 import {
   type ApiError,
   isApiError,
+  AccountLoginState,
   type AccountAction,
   type AccountsView,
   type OAuthProfile,
-  type ProviderAuthState,
+  ProviderAuthState,
   type ProviderId,
   type SubscriptionAccountProvider,
   type SubscriptionQuotaReport,
@@ -36,7 +37,8 @@ import { koreanShortTime, timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
 
 export type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
-type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
+export const QuotaStatus = Data.taggedEnum<QuotaStatus>();
+type QuotaWindow = Data.TaggedEnum.Value<QuotaStatus, "observed">["windows"][number];
 
 /**
  * Anthropic names its windows; OpenAI reports `primary`/`secondary` with a length, which labels
@@ -58,7 +60,7 @@ export const windowLabel = (window: Pick<QuotaWindow, "name" | "windowSeconds">)
 
 /** Why a quota has no numbers; the app never estimates one. */
 export function quotaUnavailableText(
-  reason: Extract<QuotaStatus, { status: "unavailable" }>["reason"],
+  reason: Data.TaggedEnum.Value<QuotaStatus, "unavailable">["reason"],
 ): string {
   switch (reason) {
     case "credential_expired":
@@ -137,14 +139,11 @@ function QuotaGauge({
 const quotaMeta = (quota: QuotaStatus | undefined, failed: boolean) => {
   if (failed) return "한도 상태를 확인하지 못했어요";
   if (quota === undefined) return "한도 확인 중";
-  switch (quota.status) {
-    case "unavailable":
-      return quotaUnavailableText(quota.reason);
-    case "observed":
-      return `${koreanShortTime(quota.observedAt)} 조회`;
-    case "stale":
-      return `최근 조회 실패 · ${koreanShortTime(quota.observedAt)} 기준 값`;
-  }
+  return QuotaStatus.$match(quota, {
+    unavailable: ({ reason }) => quotaUnavailableText(reason),
+    observed: ({ observedAt }) => `${koreanShortTime(observedAt)} 조회`,
+    stale: ({ observedAt }) => `최근 조회 실패 · ${koreanShortTime(observedAt)} 기준 값`,
+  });
 };
 
 const rowLabel = (provider: ProviderId, label: string) => `${label} (${providerLabels[provider]})`;
@@ -174,7 +173,7 @@ function ProfileCard({
     setRenaming(false);
   };
   const windows =
-    !quotaFailed && quota !== undefined && quota.status !== "unavailable" ? quota : null;
+    !quotaFailed && quota !== undefined && !QuotaStatus.$is("unavailable")(quota) ? quota : null;
   const now = DateTime.nowUnsafe();
   return (
     <li
@@ -256,7 +255,7 @@ function ProfileCard({
             <QuotaGauge
               key={window.name}
               window={window}
-              stale={windows.status === "stale"}
+              stale={QuotaStatus.$is("stale")(windows)}
               now={now}
             />
           ))}
@@ -267,7 +266,7 @@ function ProfileCard({
 }
 
 /** The provider's connection failure with its diagnostic fields folded away. */
-function AuthErrorAlert({ auth }: { auth: Extract<ProviderAuthState, { status: "error" }> }) {
+function AuthErrorAlert({ auth }: { auth: Data.TaggedEnum.Value<ProviderAuthState, "error"> }) {
   return (
     <Alert variant="destructive" className="min-w-0">
       <AlertDescription className="min-w-0 wrap-break-word">
@@ -338,39 +337,34 @@ function LoginStatus({
   group: ProviderAccounts;
   onCancel: () => void;
 }) {
-  switch (view?.login.status) {
-    case "pending": {
-      const { authorizationUrl } = view.login;
-      return (
-        <div className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs">
-          <Spinner />
-          <span className="min-w-0 flex-1">
-            브라우저에서 {providerLabels[provider]} 로그인을 완료하세요
-          </span>
-          <Button
-            variant="ghost-muted"
-            size="sm"
-            onClick={() => window.open(authorizationUrl, "_blank", "noopener")}
-          >
-            다시 열기
-          </Button>
-          <Button variant="ghost-muted" size="sm" onClick={onCancel}>
-            취소
-          </Button>
-        </div>
-      );
-    }
-    case "error":
-      return (
-        <Alert variant="destructive">
-          <AlertDescription>새 계정 로그인을 완료하지 못했어요. 다시 시도하세요.</AlertDescription>
-        </Alert>
-      );
-    case "idle":
-    case "completed":
-    case undefined:
-      return null;
-  }
+  if (view === undefined) return null;
+  return AccountLoginState.$match(view.login, {
+    pending: ({ authorizationUrl }) => (
+      <div className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs">
+        <Spinner />
+        <span className="min-w-0 flex-1">
+          브라우저에서 {providerLabels[provider]} 로그인을 완료하세요
+        </span>
+        <Button
+          variant="ghost-muted"
+          size="sm"
+          onClick={() => window.open(authorizationUrl, "_blank", "noopener")}
+        >
+          다시 열기
+        </Button>
+        <Button variant="ghost-muted" size="sm" onClick={onCancel}>
+          취소
+        </Button>
+      </div>
+    ),
+    error: () => (
+      <Alert variant="destructive">
+        <AlertDescription>새 계정 로그인을 완료하지 못했어요. 다시 시도하세요.</AlertDescription>
+      </Alert>
+    ),
+    idle: () => null,
+    completed: () => null,
+  });
 }
 
 function AddAccountForm({
@@ -443,7 +437,7 @@ function ProviderAccountsSection({
           <PlusIcon /> 계정 추가
         </Button>
       </ProviderHeader>
-      {group.auth?.status === "error" && <AuthErrorAlert auth={group.auth} />}
+      {ProviderAuthState.$is("error")(group.auth) && <AuthErrorAlert auth={group.auth} />}
       {group.view === undefined ? (
         <Spinner />
       ) : profiles.length > 0 ? (
@@ -590,7 +584,7 @@ export function AccountManager({
         setError(null);
         runners[provider](next).then(
           (view) => {
-            if (next.intent === "add" && view.login.status === "pending")
+            if (next.intent === "add" && AccountLoginState.$is("pending")(view.login))
               window.open(view.login.authorizationUrl, "_blank", "noopener");
           },
           (failure) => setError(accountErrorMessage(isApiError(failure) ? failure : null)),

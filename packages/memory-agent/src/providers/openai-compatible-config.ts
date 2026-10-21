@@ -162,3 +162,10 @@ export const OpenAICompatibleStatus = Schema.Struct({
   accounts: Schema.Array(CompatibleAccountStatus),
 });
 export type OpenAICompatibleStatus = typeof OpenAICompatibleStatus.Type;
+
+/** `/api/accounts` for the compatible provider: its endpoints, tagged by connection kind. */
+export const CompatibleAccountsView = Schema.TaggedStruct(
+  "compatible-endpoint",
+  OpenAICompatibleStatus.fields,
+);
+export type CompatibleAccountsView = typeof CompatibleAccountsView.Type;

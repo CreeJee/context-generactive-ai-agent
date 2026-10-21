@@ -3,7 +3,7 @@ import { expect } from "vite-plus/test";
 import { goalWorkerAuthority } from "../../src/agent/goal-worker-authority.ts";
 import { goalWorkerGenerationStore } from "../../src/agent/goal-worker-generation-store.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
@@ -54,14 +54,10 @@ const bindLatest = Effect.fnUntraced(function* (session: string, runId: string) 
   return boundRun(yield* (yield* workflowRunBindings).bind(session, runId, revision.id));
 });
 
-const boundRun = (admission: Admission) => {
-  switch (admission.status) {
-    case "bound":
-      return admission.binding;
-    case "refused":
-      return expect.unreachable(`run refused: ${admission.reason}`);
-  }
-};
+const boundRun = Admission.$match({
+  bound: ({ binding }) => binding,
+  refused: ({ reason }) => expect.unreachable(`run refused: ${reason}`),
+});
 
 const recordRun = (session: string, runId: string, status: string) =>
   sqlRun(

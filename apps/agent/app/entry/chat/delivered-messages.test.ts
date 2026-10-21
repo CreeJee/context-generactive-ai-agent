@@ -1,5 +1,5 @@
 import type { UIMessage } from "@tanstack/ai-react";
-import type { QueuedMessage } from "memory-agent/definitions";
+import { type QueuedMessage, QueueItemState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
 import { missingDeliveredMessages } from "./delivered-messages";
 
@@ -14,7 +14,7 @@ const delivered = (id: string, text: string): QueuedMessage => ({
   seq: 1,
   text,
   attachmentIds: [],
-  state: { kind: "delivered", via: "tool_boundary", runId: "run" },
+  state: QueueItemState.delivered({ via: "tool_boundary", runId: "run" }),
   createdAt: 1,
 });
 

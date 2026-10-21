@@ -26,13 +26,20 @@ import type {
 import { ChatClient, fetchServerSentEvents, type UIMessage } from "@tanstack/ai-client";
 import type { StreamChunk } from "@tanstack/ai";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
+import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { Option, Schema } from "effect";
 import {
   PermissionReviewPayload,
   approvalToolDefinitions,
   permissionReviewInterrupt,
 } from "../tools/definitions.ts";
-import { AppRequestFailed, AppRequestReason, type AppApi, type ProjectSummary } from "./app-api.ts";
+import {
+  AppRequestFailed,
+  AppRequestReason,
+  AuthSummary,
+  type AppApi,
+  type ProjectSummary,
+} from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import {
@@ -192,18 +199,10 @@ function promptText(blocks: readonly ContentBlock[]) {
     .join("");
 }
 
-const requesterLabel = (
-  requester:
-    | { readonly kind: "subagent"; readonly name: string | null }
-    | { readonly kind: "external_agent"; readonly agent: string },
-) => {
-  switch (requester.kind) {
-    case "subagent":
-      return isTruthy(requester.name) ? `서브에이전트 ${requester.name}` : "일회성 서브에이전트";
-    case "external_agent":
-      return `외부 에이전트 ${requester.agent}`;
-  }
-};
+const requesterLabel = ApprovalRequester.match({
+  subagent: ({ name }) => (isTruthy(name) ? `서브에이전트 ${name}` : "일회성 서브에이전트"),
+  external_agent: ({ agent }) => `외부 에이전트 ${agent}`,
+});
 
 const cut = (text: string) =>
   text.length > maxToolOutput ? `${text.slice(0, maxToolOutput)}\n…` : text;
@@ -466,7 +465,7 @@ export function startAcpAgent(options: {
       runNativeEffect(
         Effect.gen(function* () {
           const auth = yield* nativePromise(() => api.auth());
-          if (auth.status !== "signed-in")
+          if (!AuthSummary.guards["signed-in"](auth))
             return yield* AppRequestFailed.make({
               status: 401,
               code: "login_required",

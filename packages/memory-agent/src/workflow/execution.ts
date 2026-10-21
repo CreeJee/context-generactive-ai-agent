@@ -1,4 +1,13 @@
-import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Struct,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { PlanSchedule, planSchedule, stalledEvidence } from "./plan-schedule.ts";
 import { endedWithKnownEffectsSql } from "./run-bindings.ts";
@@ -36,17 +45,16 @@ const executionFields = {
   progress: Progress,
 };
 
-export const WorkflowExecutionState = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("idle") }),
-  Schema.Struct({ kind: Schema.Literal("running"), ...executionFields }),
-  Schema.Struct({ kind: Schema.Literal("ready"), ...executionFields }),
+export const WorkflowExecutionState = Schema.TaggedUnion({
+  idle: {},
+  running: executionFields,
+  ready: executionFields,
   /**
    * A run cut off by a server restart before it ran any tool. A new run continues the Plan at
    * `retryAt`: the time of the provider retry it was waiting for, or the restart itself.
    */
-  Schema.Struct({ kind: Schema.Literal("retrying"), ...executionFields, retryAt: Schema.Finite }),
-  Schema.Struct({
-    kind: Schema.Literal("blocked"),
+  retrying: { ...executionFields, retryAt: Schema.Finite },
+  blocked: {
     runId: Schema.String,
     reason: Schema.Literals([
       ...WorkflowBlocker.fields.reason.literals,
@@ -54,13 +62,18 @@ export const WorkflowExecutionState = Schema.Union([
       "server_restarted",
     ]),
     ...blockerFields,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("stopped"),
+  },
+  stopped: {
     reason: Schema.Literals(["user", "run_failed", "workflow_changed", "completed"]),
-  }),
-]);
+  },
+});
 export type WorkflowExecutionState = typeof WorkflowExecutionState.Type;
+const { cases } = WorkflowExecutionState;
+const isRunning = WorkflowExecutionState.isAnyOf(["running"]);
+const isRetrying = WorkflowExecutionState.isAnyOf(["retrying"]);
+/** A run that ended with its Plan left to continue. */
+const isPending = WorkflowExecutionState.isAnyOf(["ready", "retrying"]);
+const executionKeys = Struct.keys(executionFields);
 
 export class WorkflowExecutionFailed extends Schema.TaggedError<WorkflowExecutionFailed>()(
   "WorkflowExecutionFailed",
@@ -111,7 +124,7 @@ const make = Effect.gen(function* () {
     Request: Schema.String,
     Result: Schema.Struct({ key: Schema.String }),
     execute: (kind) => sql`SELECT key FROM chat_metadata
-      WHERE namespace = ${namespace} AND json_extract(value, '$.kind') = ${kind}`,
+      WHERE namespace = ${namespace} AND json_extract(value, '$._tag') = ${kind}`,
   });
   const endedWithKnownEffects = (runId: string) =>
     sql`SELECT 1 AS ended FROM chat_runs r
@@ -122,7 +135,7 @@ const make = Effect.gen(function* () {
     select(sessionId).pipe(
       Effect.map(
         Option.match({
-          onNone: (): WorkflowExecutionState => ({ kind: "idle" }),
+          onNone: (): WorkflowExecutionState => cases.idle.make({}),
           onSome: (row) => row.value,
         }),
       ),
@@ -133,7 +146,7 @@ const make = Effect.gen(function* () {
       ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`;
     return state;
   });
-  const sessionsIn = (kind: WorkflowExecutionState["kind"]) =>
+  const sessionsIn = (kind: keyof typeof cases) =>
     sessionsOf(kind).pipe(Effect.map((rows) => rows.map((row) => row.key)));
   const current = Effect.fnUntraced(function* (
     sessionId: string,
@@ -143,7 +156,7 @@ const make = Effect.gen(function* () {
   ) {
     const execution = yield* read(sessionId);
     return (
-      execution.kind === kind &&
+      WorkflowExecutionState.isAnyOf([kind])(execution) &&
       execution.runId === runId &&
       executable(state) &&
       execution.goalVersion === state.goal?.version &&
@@ -164,7 +177,7 @@ const make = Effect.gen(function* () {
             Effect.forEach(sessions, (sessionId) =>
               read(sessionId).pipe(
                 Effect.map((execution) =>
-                  execution.kind === "retrying" ? [{ sessionId, runId: execution.runId }] : [],
+                  isRetrying(execution) ? [{ sessionId, runId: execution.runId }] : [],
                 ),
               ),
             ),
@@ -193,7 +206,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const execution = yield* read(sessionId);
           return (
-            execution.kind === "retrying" &&
+            isRetrying(execution) &&
             execution.retryAt <= now &&
             (yield* current(sessionId, runId, state, "retrying")) &&
             (yield* endedWithKnownEffects(runId))
@@ -217,20 +230,28 @@ const make = Effect.gen(function* () {
       return yield* writing(
         Effect.gen(function* () {
           const previous = yield* read(sessionId);
-          if (previous.kind !== "running" || previous.runId !== runId) return previous;
+          if (!isRunning(previous) || previous.runId !== runId) return previous;
           return (yield* endedWithKnownEffects(runId))
-            ? yield* save(sessionId, { ...previous, kind: "retrying", retryAt: resumeAt ?? now })
-            : yield* save(sessionId, {
-                kind: "blocked",
-                runId,
-                reason: "server_restarted",
-                detail:
-                  "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
-                evidence: [
+            ? yield* save(
+                sessionId,
+                cases.retrying.make({
+                  ...Struct.pick(previous, executionKeys),
+                  retryAt: resumeAt ?? now,
+                }),
+              )
+            : yield* save(
+                sessionId,
+                cases.blocked.make({
                   runId,
-                  "Owner tool operation without a recorded result before the restart",
-                ],
-              });
+                  reason: "server_restarted",
+                  detail:
+                    "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
+                  evidence: [
+                    runId,
+                    "Owner tool operation without a recorded result before the restart",
+                  ],
+                }),
+              );
         }),
       );
     }),
@@ -241,19 +262,21 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             if (!executable(state) || state.goal === null || state.plan === null) return;
             const previous = yield* read(sessionId);
-            if (previous.kind === "running" && previous.runId === runId) return;
-            const continued = previous.kind === "ready" || previous.kind === "retrying";
-            yield* save(sessionId, {
-              kind: "running",
-              runId,
-              goalVersion: state.goal.version,
-              planVersion: state.plan.version,
-              noProgressRuns: !userTurn && continued ? previous.noProgressRuns : 0,
-              progress: progressOf(
-                state,
-                !userTurn && continued ? previous.progress.toolResults : [],
-              ),
-            });
+            if (isRunning(previous) && previous.runId === runId) return;
+            const continued = isPending(previous);
+            yield* save(
+              sessionId,
+              cases.running.make({
+                runId,
+                goalVersion: state.goal.version,
+                planVersion: state.plan.version,
+                noProgressRuns: !userTurn && continued ? previous.noProgressRuns : 0,
+                progress: progressOf(
+                  state,
+                  !userTurn && continued ? previous.progress.toolResults : [],
+                ),
+              }),
+            );
           }),
         ),
     ),
@@ -268,16 +291,18 @@ const make = Effect.gen(function* () {
         writing(
           Effect.gen(function* () {
             const previous = yield* read(sessionId);
-            if (previous.kind !== "running" || previous.runId !== runId) return;
+            if (!isRunning(previous) || previous.runId !== runId) return;
             if (
               !executable(state) ||
               state.goal?.version !== previous.goalVersion ||
               state.plan?.version !== previous.planVersion
             ) {
-              yield* save(sessionId, {
-                kind: "stopped",
-                reason: state.goal?.status === "completed" ? "completed" : "workflow_changed",
-              });
+              yield* save(
+                sessionId,
+                cases.stopped.make({
+                  reason: state.goal?.status === "completed" ? "completed" : "workflow_changed",
+                }),
+              );
               return;
             }
             const progress = progressOf(
@@ -295,17 +320,15 @@ const make = Effect.gen(function* () {
             yield* save(
               sessionId,
               PlanSchedule.$is("stalled")(schedule)
-                ? {
-                    kind: "blocked",
+                ? cases.blocked.make({
                     runId,
                     reason: "dependency_stalled",
                     detail:
                       "남은 단계가 모두 막혔거나 끝나지 않은 단계를 기다리고 있어 바로 시작할 단계가 없어요. 막힌 단계나 단계 의존 관계를 확인해 주세요.",
                     evidence: stalledEvidence(schedule),
-                  }
+                  })
                 : noProgressRuns >= 2
-                  ? {
-                      kind: "blocked",
+                  ? cases.blocked.make({
                       runId,
                       reason: "repeated_failure",
                       detail:
@@ -314,8 +337,12 @@ const make = Effect.gen(function* () {
                         previous.runId,
                         "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
                       ],
-                    }
-                  : { ...previous, kind: "ready", progress, noProgressRuns },
+                    })
+                  : cases.ready.make({
+                      ...Struct.pick(previous, executionKeys),
+                      progress,
+                      noProgressRuns,
+                    }),
             );
           }),
         ),
@@ -326,9 +353,9 @@ const make = Effect.gen(function* () {
         writing(
           Effect.gen(function* () {
             const current = yield* read(sessionId);
-            if (current.kind !== "running" || current.runId !== runId)
+            if (!isRunning(current) || current.runId !== runId)
               return { error: "execution_not_running" as const };
-            return yield* save(sessionId, { kind: "blocked", runId, ...blocker });
+            return yield* save(sessionId, cases.blocked.make({ runId, ...blocker }));
           }),
         ),
     ),
@@ -338,12 +365,8 @@ const make = Effect.gen(function* () {
         writing(
           Effect.gen(function* () {
             const current = yield* read(sessionId);
-            if (
-              (current.kind !== "ready" && current.kind !== "retrying") ||
-              current.runId !== runId
-            )
-              return;
-            yield* save(sessionId, { kind: "blocked", runId, ...blocker });
+            if (!isPending(current) || current.runId !== runId) return;
+            yield* save(sessionId, cases.blocked.make({ runId, ...blocker }));
           }),
         ),
     ),
@@ -353,9 +376,8 @@ const make = Effect.gen(function* () {
         writing(
           Effect.gen(function* () {
             const current = yield* read(sessionId);
-            if (runId !== undefined && (current.kind !== "running" || current.runId !== runId))
-              return;
-            yield* save(sessionId, { kind: "stopped", reason });
+            if (runId !== undefined && (!isRunning(current) || current.runId !== runId)) return;
+            yield* save(sessionId, cases.stopped.make({ reason }));
           }),
         ),
     ),

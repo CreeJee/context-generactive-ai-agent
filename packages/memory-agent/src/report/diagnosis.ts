@@ -1,4 +1,5 @@
 import { chat } from "@tanstack/ai";
+import { AuthConnectionState } from "../providers/contracts.ts";
 import { Context, Crypto, Effect, Layer, Schema } from "effect";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -113,7 +114,7 @@ export class ReportDiagnoser extends Context.Service<
         const selection = yield* active.selected.pipe(Effect.mapError(unavailable));
         if (selection === null) return yield* unavailable(null);
         const auth = yield* active.auth(selection);
-        if (auth.status !== "signed-in") return yield* unavailable(null);
+        if (!AuthConnectionState.$is("signed-in")(auth)) return yield* unavailable(null);
         const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
         const threadId = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
         const sourceSessionId = input.sourceSessionId;

@@ -18,7 +18,7 @@ import { ItemInterpretation, ScanState } from "../src/improve/contracts.ts";
 import { ProjectImprovement } from "../src/improve/discovery.ts";
 import { ImprovementInterpreter } from "../src/improve/interpret.ts";
 import { Checkouts } from "../src/imports/checkouts.ts";
-import { Embedder } from "../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../src/memory/embedding/embedder.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { sqlRun } from "./support/sql.ts";
 
@@ -26,7 +26,7 @@ const embedder = Layer.succeed(Embedder, {
   identity: "fixture",
   dimensions: 1,
   embed: (texts) => Effect.succeed(texts.map(() => Float32Array.from([1]))),
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
 });
 
 const interpreted = ItemInterpretation.cases.interpreted.make({

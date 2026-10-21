@@ -15,6 +15,7 @@ import {
   DateTime,
   Clock,
   Context,
+  Data,
   Effect,
   FileSystem,
   Layer,
@@ -41,14 +42,16 @@ import {
 } from "./config.ts";
 
 /** What the settings page shows for one server. Environment and header values are never included. */
-export type McpServerState =
-  | { readonly status: "untrusted" }
+export type McpServerState = Data.TaggedEnum<{
+  untrusted: {};
   /** Trusted once, but the configuration has changed since. */
-  | { readonly status: "changed" }
+  changed: {};
   /** Trusted, not started yet (it starts with the next run). */
-  | { readonly status: "trusted" }
-  | { readonly status: "connected"; readonly tools: readonly string[] }
-  | { readonly status: "failed"; readonly failure: ShownFailure<McpFailureCode> };
+  trusted: {};
+  connected: { readonly tools: readonly string[] };
+  failed: { readonly failure: ShownFailure<McpFailureCode> };
+}>;
+export const McpServerState = Data.taggedEnum<McpServerState>();
 
 export interface McpServerView {
   readonly scope: McpScope;
@@ -315,7 +318,10 @@ const make = Effect.gen(function* () {
   const connect = (project: Project, server: ConfiguredServer): Connection => {
     const key = connectionKey(project, server);
     const existing = Option.getOrUndefined(MutableHashMap.get(connections, key));
-    if (existing?.fingerprint === server.fingerprint && existing.state.status !== "failed")
+    if (
+      existing?.fingerprint === server.fingerprint &&
+      !McpServerState.$is("failed")(existing.state)
+    )
       return existing;
     if (isTruthy(existing)) close(key);
     // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
@@ -336,7 +342,7 @@ const make = Effect.gen(function* () {
     const connection: Connection = {
       fingerprint: server.fingerprint,
       client,
-      state: { status: "trusted" },
+      state: McpServerState.trusted(),
       discovering: null,
     };
     MutableHashMap.set(connections, key, connection);
@@ -354,7 +360,7 @@ const make = Effect.gen(function* () {
         const client = yield* withTimeout(connection.client, connectTimeoutMs, "connect");
         const tools = yield* withTimeout(client.tools(), connectTimeoutMs, "tools/list");
         if (Option.getOrUndefined(MutableHashMap.get(connections, key)) !== connection) return [];
-        connection.state = { status: "connected", tools: tools.map((tool) => tool.name) };
+        connection.state = McpServerState.connected({ tools: tools.map((tool) => tool.name) });
         return tools.flatMap((tool): AnyServerTool[] => {
           const execute = tool.execute;
           if (!isTruthy(execute)) return [];
@@ -390,7 +396,7 @@ const make = Effect.gen(function* () {
           void connection.client.then((client) => client.close()).catch(() => undefined);
           return Effect.map(failureOf(failure), (shown): AnyServerTool[] => {
             if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
-              connection.state = { status: "failed", failure: shown };
+              connection.state = McpServerState.failed({ failure: shown });
             return [];
           });
         }),
@@ -407,14 +413,14 @@ const make = Effect.gen(function* () {
     project: Project,
     entry: Effect.Success<ReturnType<typeof configured>>["servers"][number],
   ): McpServerState => {
-    if (entry.trusted === null) return { status: "untrusted" };
-    if (entry.trusted !== entry.server.fingerprint) return { status: "changed" };
+    if (entry.trusted === null) return McpServerState.untrusted();
+    if (entry.trusted !== entry.server.fingerprint) return McpServerState.changed();
     const connection = Option.getOrUndefined(
       MutableHashMap.get(connections, connectionKey(project, entry.server)),
     );
     return connection?.fingerprint === entry.server.fingerprint
       ? connection.state
-      : { status: "trusted" };
+      : McpServerState.trusted();
   };
 
   const overview = Effect.fn("mcp.overview")(function* (project: Project) {

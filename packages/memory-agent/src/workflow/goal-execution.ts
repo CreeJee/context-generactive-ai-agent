@@ -1,11 +1,11 @@
-import { Context, Effect, Exit, Layer, Match, Schema } from "effect";
+import { Context, Effect, Exit, Layer, Schema } from "effect";
 import { DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import {
   AdmissionWait,
   ExecutionAdmission,
   type ExecutionSaturated,
 } from "../runtime/execution-admission.ts";
-import type { Admission, RunBinding } from "./run-bindings.ts";
+import { Admission, type RunBinding } from "./run-bindings.ts";
 import {
   GoalExecutionError,
   GoalExecutionPayload,
@@ -105,14 +105,13 @@ const make = Effect.gen(function* () {
                 executionId,
                 payload,
               },
-              Effect.flatMap(bind, (result) =>
-                Match.value(result).pipe(
-                  Match.discriminatorsExhaustive("status")({
-                    bound: ({ binding }) => Effect.succeed(binding),
-                    refused: ({ reason }) =>
-                      Effect.fail(GoalExecutionAdmissionRefused.make({ reason })),
-                  }),
-                ),
+              Effect.flatMap(
+                bind,
+                Admission.$match({
+                  bound: ({ binding }) => Effect.succeed(binding),
+                  refused: ({ reason }) =>
+                    Effect.fail(GoalExecutionAdmissionRefused.make({ reason })),
+                }),
               ),
             )
             .pipe(

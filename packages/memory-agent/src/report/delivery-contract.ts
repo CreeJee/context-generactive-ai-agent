@@ -13,17 +13,13 @@ export const ReportDeliveryFailure = Schema.Literals([
 ]);
 export type ReportDeliveryFailure = typeof ReportDeliveryFailure.Type;
 
-export const ReportDeliveryResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("delivered"),
-    messageId: Schema.String,
-    deliveredAt: Schema.String,
-  }),
+export const ReportDeliveryResult = Schema.TaggedUnion({
+  delivered: { messageId: Schema.String, deliveredAt: Schema.String },
   /** The same text was already delivered by this server process; resend requires a confirmation. */
-  Schema.Struct({ status: Schema.Literal("duplicate"), deliveredAt: Schema.String }),
+  duplicate: { deliveredAt: Schema.String },
   /** An earlier attempt may have reached Discord; the user checks the channel before resending. */
-  Schema.Struct({ status: Schema.Literal("uncertain_duplicate"), attemptedAt: Schema.String }),
-]);
+  uncertain_duplicate: { attemptedAt: Schema.String },
+});
 export type ReportDeliveryResult = typeof ReportDeliveryResult.Type;
 
 export const ReportDeliveryStatus = Schema.Struct({

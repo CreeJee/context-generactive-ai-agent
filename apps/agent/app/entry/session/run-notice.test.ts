@@ -2,6 +2,7 @@ import { isTruthy } from "../../truthy.ts";
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
 import { allowedWorkflowActions } from "./workflow-test-fixtures";
+import { WorkflowExecutionState } from "../api";
 import { noticeOf, RunNotice } from "./run-notice";
 
 const record = (
@@ -58,15 +59,14 @@ describe("run notices", () => {
   test("a restart that the server continues by itself says when", () => {
     const resuming: SessionRunState = {
       ...ended("failed", serverRestartedCode),
-      execution: {
-        kind: "retrying",
+      execution: WorkflowExecutionState.retrying({
         runId: "run-1",
         goalVersion: 1,
         planVersion: 1,
         noProgressRuns: 0,
         progress: { completedSteps: [], evidence: [], toolResults: [] },
         retryAt: 9_000,
-      },
+      }),
     };
     expect(noticeOf(resuming, page)).toEqual(RunNotice.resuming({ at: 9_000 }));
   });

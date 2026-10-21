@@ -1,4 +1,5 @@
 import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
+import { AuthConnectionState } from "../src/providers/contracts.ts";
 import { nativeStream } from "../src/runtime/native-stream.ts";
 import { Array as EffectArray } from "effect";
 import { it as effectTest } from "@effect/vitest";
@@ -193,21 +194,25 @@ describe("account-bound subscription provider", () => {
           catalogKey: bound.catalogKey,
         });
         for (let round = 0; round < 2; round++) {
-          expect((yield* configured.auth.disconnect).status).toBe("signed-out");
+          expect(AuthConnectionState.$is("signed-out")(yield* configured.auth.disconnect)).toBe(
+            true,
+          );
           expect(yield* profiles.list(provider)).toEqual([]);
           expect(() => bound.forRun()).toThrow("not_connected");
-          expect((yield* configured.auth.connect).status).toBe("pending");
+          expect(AuthConnectionState.$is("pending")(yield* configured.auth.connect)).toBe(true);
           expect(yield* profiles.list(provider)).toEqual([]);
           finish();
           expect(
-            (yield* configured.auth.status.pipe(
-              Effect.repeat({
-                while: (status) => status.status !== "signed-in",
-                schedule: Schedule.spaced("20 millis"),
-              }),
-              Effect.timeout("1000 millis"),
-            )).status,
-          ).toBe("signed-in");
+            AuthConnectionState.$is("signed-in")(
+              yield* configured.auth.status.pipe(
+                Effect.repeat({
+                  until: AuthConnectionState.$is("signed-in"),
+                  schedule: Schedule.spaced("20 millis"),
+                }),
+                Effect.timeout("1000 millis"),
+              ),
+            ),
+          ).toBe(true);
           expect(yield* profiles.list(provider)).toMatchObject([
             { id: created[round], provider, selected: true },
           ]);

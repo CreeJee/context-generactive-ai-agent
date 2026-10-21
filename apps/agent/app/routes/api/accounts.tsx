@@ -1,11 +1,13 @@
 import { isTruthy } from "../../truthy.ts";
-import { Effect, Result, Schema } from "effect";
+import { Data, Effect, Result, Schema } from "effect";
 import {
   AppEvents,
   OAuthAccountLogins,
   OAuthProfiles,
   SubscriptionAccountProvider,
   logFailure,
+  type AccountLoginState,
+  type OAuthProfile,
 } from "memory-agent";
 import { accountLogin, answerAccountFailures } from "~/.server/account-failures";
 import { agent } from "~/.server/agent";
@@ -25,10 +27,10 @@ const SubscriptionAction = Schema.Struct({
 });
 const Action = Schema.Union([SubscriptionAction, CompatibleAccountCommand]);
 /** Views are tagged by connection kind, the way `/api/accounts` serves every provider. */
-const subscriptionView = <A extends object>(view: A) => ({
-  type: "subscription" as const,
-  ...view,
-});
+type SubscriptionView = Data.TaggedEnum<{
+  subscription: { readonly profiles: readonly OAuthProfile[]; readonly login: AccountLoginState };
+}>;
+const SubscriptionView = Data.taggedEnum<SubscriptionView>();
 const reply = <A,>(value: A, status = 200) =>
   Response.json(value, {
     status,
@@ -48,7 +50,9 @@ export function loader({ request }: Route.LoaderArgs) {
         yield* (yield* OAuthProfiles)
           .importLegacy(provider)
           .pipe(Effect.catch(logFailure("Legacy OAuth account import failed")));
-        return reply(subscriptionView(yield* (yield* OAuthAccountLogins).profiles(provider)));
+        return reply(
+          SubscriptionView.subscription(yield* (yield* OAuthAccountLogins).profiles(provider)),
+        );
       }).pipe(
         Effect.catchTag("OAuthProfileStoreFailed", () =>
           Effect.succeed(reply({ error: "account_list_unavailable" }, 503)),
@@ -98,11 +102,13 @@ export function action({ request }: Route.ActionArgs) {
               Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
             ),
           );
-          return reply(subscriptionView(started));
+          return reply(SubscriptionView.subscription(started));
         }
         if (intent === "cancel")
           return reply(
-            subscriptionView(yield* accountLogin("cancel", () => manager.cancel(provider))),
+            SubscriptionView.subscription(
+              yield* accountLogin("cancel", () => manager.cancel(provider)),
+            ),
           );
         switch (intent) {
           case "remove":
@@ -115,7 +121,7 @@ export function action({ request }: Route.ActionArgs) {
             yield* profiles.select(provider, accountId!);
             break;
         }
-        return reply(subscriptionView(yield* manager.profiles(provider)));
+        return reply(SubscriptionView.subscription(yield* manager.profiles(provider)));
       });
     }).pipe(
       // Never expose keychain/native OAuth errors or tokens to the browser.

@@ -9,7 +9,7 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import { Spinner } from "~/components/ui/spinner";
-import { type RelayedApprovalView } from "../api";
+import { ApprovalRequester, type RelayedApprovalView } from "../api";
 import { ApprovalCard } from "./approval";
 import { requesterLabel, useDelegatedWork } from "../session/delegated-work";
 import { useProjectScope } from "../events/context";
@@ -63,7 +63,12 @@ export function SubagentPanel({
               </ItemMedia>
               <ItemContent className="min-w-0">
                 <ItemTitle>
-                  {requesterLabel({ kind: "subagent", subagentId: child.id, name: child.name })}
+                  {requesterLabel(
+                    ApprovalRequester.cases.subagent.make({
+                      subagentId: child.id,
+                      name: child.name,
+                    }),
+                  )}
                   <Badge variant="secondary">
                     <Spinner /> 작업 중
                   </Badge>

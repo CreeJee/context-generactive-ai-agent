@@ -2,10 +2,12 @@ import { NodeFileSystem } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { assertInstanceOf, assertTrue, strictEqual } from "@effect/vitest/utils";
 import { Context, Effect, FileSystem, Layer } from "effect";
+import { expect } from "vite-plus/test";
 import {
   GlobalConfig,
   GlobalConfigFailed,
   GlobalConfigFailedReason,
+  GpuCheck,
 } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 
@@ -55,5 +57,24 @@ it.effect("returns write failures without treating them as settings validation f
     assertInstanceOf(failure, GlobalConfigFailed);
     strictEqual(failure.operation, "write");
     assertTrue(GlobalConfigFailedReason.guards.WriteFailed(failure.reason));
+  }),
+);
+
+it.effect("reads a GPU check 0.0.17 stored under status and writes it back under _tag", () =>
+  Effect.gen(function* () {
+    const { fs, root, configAt } = yield* fixture;
+    yield* fs.writeFileString(
+      `${root}/config.json`,
+      '{"gpuCheck":{"status":"unavailable","checkedAt":"2026-09-16T00:00:00.000Z","reason":"no WebGPU device"}}',
+    );
+    const config = yield* configAt(root);
+    const check = GpuCheck.cases.unavailable.make({
+      checkedAt: "2026-09-16T00:00:00.000Z",
+      reason: "no WebGPU device",
+    });
+    expect((yield* config.read).gpuCheck).toEqual(check);
+    yield* config.update({ imageGenerationEnabled: true });
+    expect(yield* fs.readFileString(`${root}/config.json`)).toContain('"_tag": "unavailable"');
+    expect((yield* config.read).gpuCheck).toEqual(check);
   }),
 );

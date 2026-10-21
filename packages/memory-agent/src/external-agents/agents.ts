@@ -69,27 +69,29 @@ const connectTimeoutMs = 30_000;
 const retryDelayMs = 100;
 
 /** Connection state of one external agent, as settings show it. */
-export type AgentLinkState =
-  | { readonly status: "idle" }
-  | { readonly status: "connecting"; readonly failures: number }
-  | { readonly status: "connected"; readonly agent: string | null; readonly loadSession: boolean }
+export type AgentLinkState = Data.TaggedEnum<{
+  idle: {};
+  connecting: { readonly failures: number };
+  connected: { readonly agent: string | null; readonly loadSession: boolean };
   /** The last attempt failed; the next use (or the automatic reconnect) tries again. */
-  | {
-      readonly status: "retrying";
-      readonly failures: number;
-      readonly failure: ShownFailure<ExternalAgentFailureCode>;
-    }
+  retrying: {
+    readonly failures: number;
+    readonly failure: ShownFailure<ExternalAgentFailureCode>;
+  };
   /** Gave up after consecutive failures; only a manual reconnect tries again. */
-  | {
-      readonly status: "stopped";
-      readonly failures: number;
-      readonly failure: ShownFailure<ExternalAgentFailureCode>;
-    };
+  stopped: {
+    readonly failures: number;
+    readonly failure: ShownFailure<ExternalAgentFailureCode>;
+  };
+}>;
+export const AgentLinkState = Data.taggedEnum<AgentLinkState>();
 
-export type AgentTrustState =
-  | { readonly status: "untrusted" }
-  | { readonly status: "changed" }
-  | { readonly status: "trusted"; readonly link: AgentLinkState };
+export type AgentTrustState = Data.TaggedEnum<{
+  untrusted: {};
+  changed: {};
+  trusted: { readonly link: AgentLinkState };
+}>;
+export const AgentTrustState = Data.taggedEnum<AgentTrustState>();
 
 export interface ExternalAgentView {
   readonly scope: AgentScope;
@@ -503,7 +505,7 @@ const make = Effect.gen(function* () {
   /** One connection attempt. Success clears the failure count; failure adds to it. */
   const attempt = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> => {
     if (isTruthy(link.attempt)) return link.attempt;
-    link.state = { status: "connecting", failures: link.failures };
+    link.state = AgentLinkState.connecting({ failures: link.failures });
     const pending = startProcess(project, agent, link).then(
       (live) => {
         link.attempt = null;
@@ -514,7 +516,10 @@ const make = Effect.gen(function* () {
         }
         link.live = live;
         link.failures = 0;
-        link.state = { status: "connected", agent: live.agentName, loadSession: live.loadSession };
+        link.state = AgentLinkState.connected({
+          agent: live.agentName,
+          loadSession: live.loadSession,
+        });
         return live;
       },
       (error) => {
@@ -530,8 +535,8 @@ const make = Effect.gen(function* () {
           if (link.attempt === null)
             link.state =
               failures >= maxConsecutiveFailures
-                ? { status: "stopped", failures, failure }
-                : { status: "retrying", failures, failure };
+                ? AgentLinkState.stopped({ failures, failure })
+                : AgentLinkState.retrying({ failures, failure });
           throw error;
         });
       },
@@ -567,7 +572,7 @@ const make = Effect.gen(function* () {
     const link: Link = {
       fingerprint: agent.fingerprint,
       retired: false,
-      state: { status: "idle" },
+      state: AgentLinkState.idle(),
       live: null,
       attempt: null,
       failures: 0,
@@ -602,15 +607,15 @@ const make = Effect.gen(function* () {
           shadowed: entry.shadowed,
           state:
             entry.trusted === null
-              ? { status: "untrusted" }
+              ? AgentTrustState.untrusted()
               : entry.trusted !== entry.agent.fingerprint
-                ? { status: "changed" }
-                : {
-                    status: "trusted",
-                    link: Option.getOrUndefined(
-                      MutableHashMap.get(links, linkKey(project, entry.agent)),
-                    )?.state ?? { status: "idle" },
-                  },
+                ? AgentTrustState.changed()
+                : AgentTrustState.trusted({
+                    link:
+                      Option.getOrUndefined(
+                        MutableHashMap.get(links, linkKey(project, entry.agent)),
+                      )?.state ?? AgentLinkState.idle(),
+                  }),
         }),
       ),
     );

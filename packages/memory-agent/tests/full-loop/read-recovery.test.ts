@@ -20,7 +20,7 @@ import {
   GoalExecutionErrorReason,
   GoalExecutionPayload,
 } from "../../src/workflow/goal-execution-contracts.ts";
-import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -40,7 +40,7 @@ const backgroundRead = {
   name: "get_background_result",
   args: { taskId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", offset: 0 },
 };
-const refused = { status: "refused", reason: "run_outcome_uncertain" };
+const refused = Admission.refused({ reason: "run_outcome_uncertain" });
 
 /**
  * A fresh session whose Goal run failed after an authorized read left its only tool call
@@ -187,8 +187,10 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         ).toBe(true);
         expect(yield* f.history).toEqual(before);
         expect(
-          (yield* f.owner.preview(f.session, `${f.session}:next-report`, f.revision.id)).status,
-        ).toBe("bound");
+          Admission.$is("bound")(
+            yield* f.owner.preview(f.session, `${f.session}:next-report`, f.revision.id),
+          ),
+        ).toBe(true);
         yield* f.updateOperation(
           1,
           "fingerprint=?",
@@ -410,9 +412,11 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
       expect(
         ReadRecoveryPreview.$is("recovered")(yield* f.recovery.assess(f.session, f.runId)),
       ).toBe(true);
-      expect((yield* f.owner.preview(f.session, `${f.session}:fresh`, f.revision.id)).status).toBe(
-        "bound",
-      );
+      expect(
+        Admission.$is("bound")(
+          yield* f.owner.preview(f.session, `${f.session}:fresh`, f.revision.id),
+        ),
+      ).toBe(true);
     }),
   );
 
@@ -447,8 +451,10 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         expect(ReadRecoveryConfirmResult.$is("recovered")(result)).toBe(true);
         expect(yield* f.history).toEqual(before);
         expect(
-          (yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).status,
-        ).toBe("bound");
+          Admission.$is("bound")(
+            yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id),
+          ),
+        ).toBe(true);
         expect(yield* f.history).toEqual(before);
         expect(yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).toEqual(result);
         expect(yield* f.receipts).toEqual({ n: 1 });
@@ -506,16 +512,15 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         );
         const bindings = yield* reopened(workflowRunBindings);
         const binding = yield* bindings.bind(f.session, next, f.revision.id);
-        expect(binding.status).toBe("bound");
-        if (binding.status !== "bound") return yield* Effect.die("new binding expected");
+        expect(Admission.$is("bound")(binding)).toBe(true);
+        if (!Admission.$is("bound")(binding)) return yield* Effect.die("new binding expected");
         const ledger = yield* reopened(makeSqliteOwnerRpcLedger);
         expect(
           yield* ledger.reserve(yield* toJson(binding.binding), 1, "new-effect", true),
         ).toEqual(OwnerRpcAdmission.reserved());
-        expect(yield* bindings.bind(f.session, f.runId, f.revision.id)).toEqual({
-          status: "refused",
-          reason: "run_id_conflict",
-        });
+        expect(yield* bindings.bind(f.session, f.runId, f.revision.id)).toEqual(
+          Admission.refused({ reason: "run_id_conflict" }),
+        );
       }),
   );
 });

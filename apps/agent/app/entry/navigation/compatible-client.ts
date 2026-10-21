@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect";
 import {
+  CompatibleAccountsView,
   CompatibleConnectionInput,
   CompatibleModelInput,
-  OpenAICompatibleStatus,
 } from "memory-agent/compatible-config";
 import { appFetch } from "../shared/backend-restart";
 import { appQueryKeys } from "../queries/keys";
@@ -52,11 +52,7 @@ const CompatibleAction = Schema.Union([
   }),
 ]);
 type CompatibleAction = typeof CompatibleAction.Type;
-export const CompatibleAccountsView = Schema.Struct({
-  type: Schema.Literal("compatible-endpoint"),
-  ...OpenAICompatibleStatus.fields,
-});
-export type CompatibleAccountsView = typeof CompatibleAccountsView.Type;
+export { CompatibleAccountsView };
 const TestResult = Schema.Struct({ ok: Schema.Literal(true) });
 const ModelList = Schema.Struct({ models: Schema.Array(Schema.Struct({ id: Schema.String })) });
 

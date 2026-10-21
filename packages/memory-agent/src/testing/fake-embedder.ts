@@ -1,6 +1,11 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { Crypto, Effect, Layer } from "effect";
-import { Embedder, EmbeddingError, normalize } from "../memory/embedding/embedder.ts";
+import {
+  EmbedderRuntime,
+  Embedder,
+  EmbeddingError,
+  normalize,
+} from "../memory/embedding/embedder.ts";
 
 // Match the measured native search admission envelope used by the application.
 const dimensions = 384;
@@ -42,5 +47,5 @@ export const fakeEmbedderLayer = Layer.succeed(Embedder, {
       Effect.provideContext(cryptoContext),
       Effect.mapError((cause) => EmbeddingError.make({ cause })),
     ),
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
 });

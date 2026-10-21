@@ -11,7 +11,7 @@ import {
   type OAuthConnectionStatus,
 } from "../src/oauth/validation-harness.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
-import { ModelUnavailable } from "../src/providers/contracts.ts";
+import { AuthConnectionState, ModelUnavailable } from "../src/providers/contracts.ts";
 import {
   createSubscriptionProvider,
   parseSubscriptionCatalog,
@@ -396,19 +396,19 @@ describe("subscription provider product services", () => {
           config: settingsStore(),
           client: fake.client,
         });
-        expect(yield* provider.auth.connect).toEqual({
-          provider: "anthropic",
-          status: "pending",
-          authorizationUrl: "https://example.test/anthropic/authorize",
-        });
+        expect(yield* provider.auth.connect).toEqual(
+          AuthConnectionState.pending({
+            provider: "anthropic",
+            authorizationUrl: "https://example.test/anthropic/authorize",
+          }),
+        );
         expect(provider.auth).not.toHaveProperty("token");
         expect(provider.auth).not.toHaveProperty("credential");
         fake.complete();
         yield* Effect.yieldNow;
-        expect(yield* provider.auth.status).toEqual({
-          provider: "anthropic",
-          status: "signed-in",
-        });
+        expect(yield* provider.auth.status).toEqual(
+          AuthConnectionState["signed-in"]({ provider: "anthropic" }),
+        );
       }),
   );
 
@@ -437,7 +437,7 @@ describe("subscription provider product services", () => {
         config: settingsStore(),
         client,
       });
-      expect((yield* provider.auth.connect).status).toBe("pending");
+      expect(AuthConnectionState.$is("pending")(yield* provider.auth.connect)).toBe(true);
       rejectLogin(
         OAuthHarnessError.fromCode("provider_rejected", 403, {
           provider: "openai",
@@ -448,9 +448,9 @@ describe("subscription provider product services", () => {
       );
       yield* Effect.yieldNow;
       const state = yield* provider.auth.status;
+      expect(AuthConnectionState.$is("error")(state)).toBe(true);
       expect(state).toMatchObject({
         provider: "openai",
-        status: "error",
         code: "provider_rejected",
         operation: "token_exchange",
         httpStatus: 403,
@@ -488,11 +488,10 @@ describe("subscription provider product services", () => {
           modelCatalog: () => Promise.resolve([]),
         },
       });
-      expect(yield* provider.auth.status).toMatchObject({
-        status: "error",
-        credentialStage: "read",
-      });
-      expect((yield* provider.auth.connect).status).toBe("pending");
+      const unreadable = yield* provider.auth.status;
+      expect(AuthConnectionState.$is("error")(unreadable)).toBe(true);
+      expect(unreadable).toMatchObject({ credentialStage: "read" });
+      expect(AuthConnectionState.$is("pending")(yield* provider.auth.connect)).toBe(true);
       login.reject(
         OAuthHarnessError.fromCode("credential_store_unavailable", null, {
           provider: "openai",
@@ -501,8 +500,9 @@ describe("subscription provider product services", () => {
         }),
       );
       yield* Effect.yieldNow;
-      expect(yield* provider.auth.status).toMatchObject({
-        status: "error",
+      const unwritable = yield* provider.auth.status;
+      expect(AuthConnectionState.$is("error")(unwritable)).toBe(true);
+      expect(unwritable).toMatchObject({
         code: "credential_store_unavailable",
         credentialStage: "write",
       });
@@ -530,10 +530,9 @@ describe("subscription provider product services", () => {
       });
 
       yield* provider.auth.connect;
-      expect(yield* provider.auth.cancel).toEqual({
-        provider: "openai",
-        status: "signed-out",
-      });
+      expect(yield* provider.auth.cancel).toEqual(
+        AuthConnectionState["signed-out"]({ provider: "openai" }),
+      );
       expect(fake.cancelled).toBe(true);
 
       expect(yield* provider.models.select("gpt-6-astra")).toEqual({

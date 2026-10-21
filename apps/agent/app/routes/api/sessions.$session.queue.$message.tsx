@@ -4,15 +4,15 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session.queue.$message";
 
-const QueueEdit = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("edit"), draft: Schema.String }),
-  Schema.Struct({ action: Schema.Literal("save"), text: Schema.String }),
-  Schema.Struct({ action: Schema.Literal("remove") }),
-  Schema.Struct({ action: Schema.Literal("confirm") }),
-]);
+const QueueEdit = Schema.TaggedUnion({
+  edit: { draft: Schema.String },
+  save: { text: Schema.String },
+  remove: {},
+  confirm: {},
+});
 
 /**
- * POST /api/sessions/:session/queue/:message { action } — edit (store unsaved text), save, remove,
+ * POST /api/sessions/:session/queue/:message { _tag } — edit (store unsaved text), save, remove,
  * or confirm a held message. Only the page holding the session may change the queue.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.

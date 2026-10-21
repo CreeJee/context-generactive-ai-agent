@@ -1,4 +1,5 @@
 import * as acp from "@agentclientprotocol/sdk";
+import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import type { AnyMessage, SessionNotification } from "@agentclientprotocol/sdk";
 import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
@@ -37,7 +38,9 @@ const editor = Effect.fnUntraced(function* (answerPermission: "allow" | "reject"
         stream: streams.agent,
         api: createAppApi("http://app.test", (input, init) =>
           new URL(input instanceof Request ? input.url : input).pathname === "/api/auth"
-            ? Promise.resolve(Response.json({ status: "signed-in" }))
+            ? Promise.resolve(
+                Response.json(AuthConnectionState["signed-in"]({ provider: "openai" })),
+              )
             : fetcher(input, init),
         ),
       });

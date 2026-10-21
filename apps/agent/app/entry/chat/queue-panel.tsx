@@ -9,7 +9,7 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import type { DeliveryVia, QueuedMessage } from "memory-agent/definitions";
+import { type DeliveryVia, type QueuedMessage, QueueItemState } from "memory-agent/definitions";
 import { Button } from "~/components/ui/button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
@@ -29,31 +29,29 @@ const deliveryLabel = (via: DeliveryVia) => {
 
 /** Icon, colour and short label for each state; delivery says only "delivered", never "done". */
 function stateView(message: QueuedMessage, editingHere: boolean) {
-  const { state } = message;
-  switch (state.kind) {
-    case "waiting":
-      return {
-        icon: Clock3Icon,
-        tone: "text-muted-foreground",
-        label: state.steered ? "끼어들기" : null,
-      };
-    case "editing":
-      return {
-        icon: PencilLineIcon,
-        tone: "text-primary",
-        label: editingHere ? "편집 중" : "편집 중, 저장 안 됨",
-      };
-    case "held":
-      return {
-        icon: CircleAlertIcon,
-        tone: "text-amber-600 dark:text-amber-400",
-        label: state.draft === null ? "확인 필요" : "확인 필요, 편집 저장 안 됨",
-      };
-    case "delivered":
-      return { icon: CheckIcon, tone: "text-muted-foreground", label: deliveryLabel(state.via) };
-    case "failed":
-      return { icon: CircleXIcon, tone: "text-destructive", label: "전달 실패" };
-  }
+  return QueueItemState.$match(message.state, {
+    waiting: ({ steered }) => ({
+      icon: Clock3Icon,
+      tone: "text-muted-foreground",
+      label: steered ? "끼어들기" : null,
+    }),
+    editing: () => ({
+      icon: PencilLineIcon,
+      tone: "text-primary",
+      label: editingHere ? "편집 중" : "편집 중, 저장 안 됨",
+    }),
+    held: ({ draft }) => ({
+      icon: CircleAlertIcon,
+      tone: "text-amber-600 dark:text-amber-400",
+      label: draft === null ? "확인 필요" : "확인 필요, 편집 저장 안 됨",
+    }),
+    delivered: ({ via }) => ({
+      icon: CheckIcon,
+      tone: "text-muted-foreground",
+      label: deliveryLabel(via),
+    }),
+    failed: () => ({ icon: CircleXIcon, tone: "text-destructive", label: "전달 실패" }),
+  });
 }
 
 function RowAction({
@@ -128,7 +126,7 @@ export function QueuePanel({
       <ul className="flex max-h-40 flex-col overflow-y-auto px-1.5 pb-1.5">
         {shown.map((message) => {
           const editingHere = message.id === editingId;
-          const kind = message.state.kind;
+          const failed = QueueItemState.$is("failed")(message.state);
           const view = stateView(message, editingHere);
           const Icon = view.icon;
           return (
@@ -152,7 +150,7 @@ export function QueuePanel({
               {view.label && (
                 <span className={cn("shrink-0 text-xs", view.tone)}>{view.label}</span>
               )}
-              {(kind === "held" || kind === "failed") && (
+              {(failed || QueueItemState.$is("held")(message.state)) && (
                 <Button
                   size="xs"
                   variant="outline"
@@ -166,7 +164,7 @@ export function QueuePanel({
               {!editingHere && (
                 // Row actions stay out of the way until the row is hovered or focused.
                 <div className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
-                  {kind !== "failed" && (
+                  {!failed && (
                     <RowAction label="편집" disabled={busy} onClick={() => onEdit(message)}>
                       <PencilIcon />
                     </RowAction>

@@ -1,4 +1,5 @@
-import { Effect, FiberSet, Schema } from "effect";
+import { Effect, FiberSet, Schema, Struct } from "effect";
+import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
@@ -34,8 +35,8 @@ const route = Effect.fnUntraced(function* (request: Request) {
     const configured = yield* registry.get(provider ?? registry.providers[0]!);
     const state = yield* configured.auth.status;
     return Response.json(
-      state.status === "pending"
-        ? { provider: state.provider, status: state.status, authUrl: state.authorizationUrl }
+      AuthConnectionState.$is("pending")(state)
+        ? { ...Struct.omit(state, ["authorizationUrl"]), authUrl: state.authorizationUrl }
         : state,
     );
   }

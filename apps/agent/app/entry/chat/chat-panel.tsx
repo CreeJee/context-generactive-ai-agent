@@ -1,4 +1,4 @@
-import { Data, Effect, Fiber } from "effect";
+import { Data, Effect, Fiber, Match } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
@@ -26,6 +26,7 @@ import { DraftImage, renumberReferences, useDraftImages } from "./draft-images";
 import { missingDeliveredMessages } from "./delivered-messages";
 import { interruptContinuationState } from "../session/interrupt-recovery";
 import {
+  ArchiveTaskResult,
   isApiError,
   chatFetch,
   compactErrorMessage,
@@ -33,8 +34,12 @@ import {
   eventDecoders,
   type CompactResult,
   type ContextView,
+  NextDelivery,
+  QueueEdit,
+  QueueItemState,
   type QueuedMessage,
   type QueueSnapshot,
+  ResumeTaskResult,
   type WorkflowPhase,
   type WorkflowState,
 } from "../api";
@@ -177,17 +182,14 @@ const contentOf = (text: string, attachmentIds: readonly string[]) => ({
 });
 
 /** The queued message that goes next, if the one at the front is simply waiting. */
-const isEditable = (message: QueuedMessage) => {
-  switch (message.state.kind) {
-    case "waiting":
-    case "editing":
-    case "held":
-      return true;
-    case "delivered":
-    case "failed":
-      return false;
-  }
-};
+const isEditable = (message: QueuedMessage) =>
+  QueueItemState.$match(message.state, {
+    waiting: () => true,
+    editing: () => true,
+    held: () => true,
+    delivered: () => false,
+    failed: () => false,
+  });
 
 /**
  * One session: follows who may change it, and remounts the conversation of a read-only page when
@@ -503,7 +505,7 @@ function ChatPanel({
               confirmUncertain,
             }),
           );
-          if (result.status === "queued") {
+          if (ResumeTaskResult.guards.queued(result)) {
             setNotice(done("다시 시도 요청을 저장했어요. 다음 실행에서 새 attempt로 시작해요."));
             return ResumeActionResult.queued();
           }
@@ -534,12 +536,12 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         const result = yield* uiPromise(() => archiveTraceMutation.mutateAsync(task.id));
-        if (result.status === "completed") {
+        if (ArchiveTaskResult.guards.completed(result)) {
           setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
           return ArchiveActionResult.archived();
         }
         setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
-        return result.status === "blocked"
+        return ArchiveTaskResult.guards.blocked(result)
           ? ArchiveActionResult.blocked({ reason: result.blocker })
           : ArchiveActionResult.failed();
       }).pipe(
@@ -557,12 +559,12 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         const result = yield* uiPromise(() => deleteTraceMutation.mutateAsync(task.id));
-        if (result.status === "completed") {
+        if (ArchiveTaskResult.guards.completed(result)) {
           setNotice(done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."));
           return DeleteActionResult.deleted();
         }
         setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
-        return result.status === "blocked"
+        return ArchiveTaskResult.guards.blocked(result)
           ? DeleteActionResult.blocked({ reason: result.blocker })
           : DeleteActionResult.failed();
       }).pipe(
@@ -600,7 +602,7 @@ function ChatPanel({
   const pendingQueuedStart = useRef(false);
   /** The snapshot only hints when to start; the server selects the current queued turn. */
   const sendNextQueued = (snapshot: QueueSnapshot) => {
-    if (snapshot.nextDelivery.kind !== "ready") return;
+    if (!NextDelivery.$is("ready")(snapshot.nextDelivery)) return;
     if (mutationBlocked) {
       pendingQueuedStart.current = true;
       return;
@@ -635,7 +637,10 @@ function ChatPanel({
                 queryClient.fetchQuery(sessionQueries.transcript(projectId, sessionId)),
               )).messages,
             );
-          if (state.lastRun?.status === "completed" && snapshot.nextDelivery.kind === "ready")
+          if (
+            state.lastRun?.status === "completed" &&
+            NextDelivery.$is("ready")(snapshot.nextDelivery)
+          )
             sendNextQueued(snapshot);
         }).pipe(
           Effect.ensuring(
@@ -664,7 +669,7 @@ function ChatPanel({
 
   // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
   const saveEditDraft = useEffectEvent((id: string, text: string) =>
-    queue.change(id, { action: "edit", draft: text }),
+    queue.change(id, QueueEdit.edit({ draft: text })),
   );
   useEffect(() => {
     if (!(editing !== null)) return;
@@ -680,15 +685,14 @@ function ChatPanel({
 
   const startEdit = (message: QueuedMessage) => {
     if (editing !== null || readOnly) return;
-    const text =
-      message.state.kind === "editing"
-        ? message.state.draft
-        : message.state.kind === "held" && message.state.draft !== null
-          ? message.state.draft
-          : message.text;
+    const text = Match.value(message.state).pipe(
+      Match.tag("editing", ({ draft }) => draft),
+      Match.tag("held", ({ draft }) => draft ?? message.text),
+      Match.orElse(() => message.text),
+    );
     setComposer(Composer.editing({ id: message.id, draft: text }));
     setNotice(null);
-    void queue.change(message.id, { action: "edit", draft: text });
+    void queue.change(message.id, QueueEdit.edit({ draft: text }));
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -701,7 +705,7 @@ function ChatPanel({
         const snapshot = yield* uiPromise(() =>
           queue.change(
             editing.id,
-            outcome === "save" && text.length > 0 ? { action: "save", text } : { action: "remove" },
+            outcome === "save" && text.length > 0 ? QueueEdit.save({ text }) : QueueEdit.remove(),
           ),
         );
         // Saved while nothing runs: the queue may be free to go now.
@@ -713,7 +717,7 @@ function ChatPanel({
   const confirmQueued = (message: QueuedMessage) =>
     runUiEffect(
       Effect.gen(function* () {
-        const snapshot = yield* uiPromise(() => queue.change(message.id, { action: "confirm" }));
+        const snapshot = yield* uiPromise(() => queue.change(message.id, QueueEdit.confirm()));
         if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
       }),
     );
@@ -723,7 +727,7 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         if (editing?.id === message.id) return yield* uiPromise(() => finishEdit("remove"));
-        yield* uiPromise(() => queue.change(message.id, { action: "remove" }));
+        yield* uiPromise(() => queue.change(message.id, QueueEdit.remove()));
       }),
     );
 

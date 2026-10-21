@@ -1,12 +1,7 @@
 import { isTruthy } from "../../truthy.ts";
-import { Context, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
-import {
-  GlobalConfig,
-  type EmbeddingChoice,
-  type GpuCheck,
-  type Settings,
-} from "../../config/global-config.ts";
+import { GlobalConfig, type EmbeddingChoice, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { AppEvents } from "../../events/app-events.ts";
@@ -15,17 +10,23 @@ import {
   Embedder,
   embeddingModeFor,
   gpuMemoryThreshold,
-  type EmbedderRuntime,
+  EmbedderRuntime,
   type EmbeddingMode,
 } from "./embedder.ts";
 import { MemoryGraphMaintenance } from "../maintenance.ts";
 import { Indexer } from "./indexer.ts";
 
-/** Whether WebGPU was found to work here, or is being checked now. */
-export type GpuState =
-  | GpuCheck
-  | { readonly status: "unchecked" }
-  | { readonly status: "checking" };
+/**
+ * Whether WebGPU was found to work here, or is being checked now. The first two cases are the
+ * stored `GpuCheck`.
+ */
+export type GpuState = Data.TaggedEnum<{
+  available: { readonly checkedAt: string };
+  unavailable: { readonly checkedAt: string; readonly reason: string };
+  unchecked: {};
+  checking: {};
+}>;
+export const GpuState = Data.taggedEnum<GpuState>();
 
 export interface EmbeddingOverview {
   readonly choice: EmbeddingChoice;
@@ -75,7 +76,7 @@ const make = Effect.gen(function* () {
    */
   const startCheck = Effect.suspend(() => {
     // Tests and evaluations run other embedders; there is no local model to check for them.
-    if (checking || embedder.runtime().kind !== "local") return Effect.void;
+    if (checking || !EmbedderRuntime.$is("local")(embedder.runtime())) return Effect.void;
     checking = true;
     events.publishGlobal("embedding");
     return Effect.asVoid(
@@ -100,7 +101,7 @@ const make = Effect.gen(function* () {
 
   // A changed chunk identity must rebuild existing conversations even when no new import or
   // chat arrives. The service Scope owns the drain; failed nodes remain pending for the next run.
-  if (embedder.runtime().kind === "local")
+  if (EmbedderRuntime.$is("local")(embedder.runtime()))
     yield* Effect.forkIn(
       indexer.indexAll().pipe(
         Effect.catchTags({
@@ -115,8 +116,8 @@ const make = Effect.gen(function* () {
   const overview = Effect.gen(function* () {
     const settings = yield* config.read;
     const gpu: GpuState = checking
-      ? { status: "checking" }
-      : (settings.gpuCheck ?? { status: "unchecked" });
+      ? GpuState.checking()
+      : (settings.gpuCheck ?? GpuState.unchecked());
     return {
       choice: settings.embeddingDevice ?? "auto",
       running: embedder.runtime(),

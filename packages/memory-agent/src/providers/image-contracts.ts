@@ -1,10 +1,13 @@
 import { OPENAI_IMAGE_MODELS, type OpenAIImageModel } from "@tanstack/ai-openai";
+import { Data } from "effect";
 
 export type ImageExecutionMode = "provider_tool" | "direct_adapter";
 export type ImageRouteVerification = "unverified" | "verified" | "unsupported";
-export type ImageExecutorModel =
-  | { readonly type: "provider_managed" }
-  | { readonly type: "explicit"; readonly model: OpenAIImageModel };
+export type ImageExecutorModel = Data.TaggedEnum<{
+  provider_managed: {};
+  explicit: { readonly model: OpenAIImageModel };
+}>;
+export const ImageExecutorModel = Data.taggedEnum<ImageExecutorModel>();
 
 export interface ImageRouteContract {
   readonly id: `openai:${ImageExecutionMode}:${string}`;
@@ -70,7 +73,7 @@ export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.f
     id: "openai:provider_tool:image_generation",
     provider: "openai",
     executionMode: "provider_tool",
-    executorModel: { type: "provider_managed" },
+    executorModel: ImageExecutorModel.provider_managed(),
     verification: "unverified",
     productionEnabled: false,
     authentication: "openai_api_key",
@@ -106,7 +109,7 @@ export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.f
       id: `openai:direct_adapter:${model}`,
       provider: "openai",
       executionMode: "direct_adapter",
-      executorModel: { type: "explicit", model },
+      executorModel: ImageExecutorModel.explicit({ model }),
       verification: "verified",
       productionEnabled: true,
       authentication: "openai_api_key",

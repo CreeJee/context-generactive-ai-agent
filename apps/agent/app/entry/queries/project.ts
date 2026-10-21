@@ -1,7 +1,7 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect, Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
-import { api } from "../api";
+import { AgentTrustState, api } from "../api";
 import { appQueryKeys } from "./keys";
 
 export const projectQueries = {
@@ -99,6 +99,6 @@ export const useSuspenseProjectKanbanQuery = (projectId: string) =>
 
 export function usableAgents(overview: Awaited<ReturnType<typeof api.externalAgents>>) {
   return overview.agents
-    .filter((agent) => !agent.shadowed && agent.state.status === "trusted")
+    .filter((agent) => !agent.shadowed && AgentTrustState.$is("trusted")(agent.state))
     .map((agent) => agent.name);
 }

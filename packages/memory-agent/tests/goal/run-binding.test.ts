@@ -5,7 +5,7 @@ import { decodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import * as workerPreflight from "../../src/agent/full-loop-preflight.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
@@ -141,7 +141,9 @@ type Refusal = "unresolved-bound-run" | "foreign-session" | "changed-goal";
 const refusedRequest = Effect.fnUntraced(function* (refusal: Refusal, session: string) {
   const reserved = `${session}:reserved`;
   const { id } = yield* latestRevision(session);
-  expect((yield* (yield* workflowRunBindings).bind(session, reserved, id)).status).toBe("bound");
+  expect(
+    Admission.$is("bound")(yield* (yield* workflowRunBindings).bind(session, reserved, id)),
+  ).toBe(true);
   switch (refusal) {
     case "unresolved-bound-run":
       return { session, runId: `${session}:bypass` };
@@ -305,10 +307,10 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         expect(continued.status).toBe(200);
         const { id } = yield* latestRevision(target.session);
         expect(
-          yield* (yield* workflowRunBindings).preview(target.session, target.runId, id),
-        ).toMatchObject({
-          status: "bound",
-        });
+          Admission.$is("bound")(
+            yield* (yield* workflowRunBindings).preview(target.session, target.runId, id),
+          ),
+        ).toBe(true);
       }),
     );
 

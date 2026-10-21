@@ -1,7 +1,17 @@
 import { isTruthy } from "../truthy.ts";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema, Semaphore } from "effect";
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Predicate,
+  Schema,
+  SchemaTransformation,
+  Semaphore,
+} from "effect";
 import { ProviderId } from "../providers/contracts.ts";
 import {
   CompatibleAccounts,
@@ -17,15 +27,45 @@ export const EmbeddingChoice = Schema.Literals(["auto", "cpu", "gpu"]);
 export type EmbeddingChoice = typeof EmbeddingChoice.Type;
 
 /** Whether the full-precision model ran on WebGPU when this machine was last checked. */
-export const GpuCheck = Schema.Union([
-  Schema.Struct({ status: Schema.Literal("available"), checkedAt: Schema.String }),
+export const GpuCheck = Schema.TaggedUnion({
+  available: { checkedAt: Schema.String },
+  unavailable: { checkedAt: Schema.String, reason: Schema.String },
+});
+export type GpuCheck = typeof GpuCheck.Type;
+
+/**
+ * `gpuCheck` as the settings file holds it. Releases up to 0.0.17 named the case under `status`;
+ * reading still takes that form, and writing always names the case under `_tag`.
+ */
+const StoredGpuCheck = Schema.Union([
+  GpuCheck,
+  Schema.Struct({ status: Schema.Literal("available"), checkedAt: Schema.String }).pipe(
+    Schema.decodeTo(
+      GpuCheck.cases.available,
+      SchemaTransformation.transform({
+        decode: ({ checkedAt }) => GpuCheck.cases.available.make({ checkedAt }),
+        encode: ({ checkedAt }) => ({ status: "available" as const, checkedAt }),
+      }),
+    ),
+  ),
   Schema.Struct({
     status: Schema.Literal("unavailable"),
     checkedAt: Schema.String,
     reason: Schema.String,
-  }),
+  }).pipe(
+    Schema.decodeTo(
+      GpuCheck.cases.unavailable,
+      SchemaTransformation.transform({
+        decode: ({ checkedAt, reason }) => GpuCheck.cases.unavailable.make({ checkedAt, reason }),
+        encode: ({ checkedAt, reason }) => ({
+          status: "unavailable" as const,
+          checkedAt,
+          reason,
+        }),
+      }),
+    ),
+  ),
 ]);
-export type GpuCheck = typeof GpuCheck.Type;
 
 /** Persisted, versioned policy for model-dependent capabilities. Missing entries deny access. */
 export const ModelFeatureFlagSettings = Schema.Struct({
@@ -89,7 +129,7 @@ export const Settings = Schema.Struct({
   crossProviderMediaConsent: Schema.optional(CrossProviderMediaConsentSettings),
   /** Takes effect when the app next starts; `auto` when unset. */
   embeddingDevice: Schema.optional(EmbeddingChoice),
-  gpuCheck: Schema.optional(GpuCheck),
+  gpuCheck: Schema.optional(StoredGpuCheck),
   /** `defaultSummaryStartPercent` when unset. */
   summaryStartPercent: Schema.optional(SummaryStartPercent),
   /** Half the CPU cores (1 to 4) when unset; read via `KanbanSettings`. */

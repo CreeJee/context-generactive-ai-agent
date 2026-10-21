@@ -23,6 +23,7 @@ import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import {
   Embedder,
+  EmbedderRuntime,
   EmbeddingError,
   localModel,
   modelFile,
@@ -67,7 +68,7 @@ const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
   dimensions,
   embed: () => Effect.fail(EmbeddingError.make({ cause: "disabled" })),
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
 });
 
 /** Embedder wrapper plus the accumulated embed time it reports through. */

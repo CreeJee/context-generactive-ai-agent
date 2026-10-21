@@ -19,7 +19,7 @@ import {
   Semaphore,
 } from "effect";
 import { RpcClient, type RpcClientError } from "effect/rpc";
-import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
+import { GlobalConfig, GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
@@ -48,14 +48,15 @@ export { EmbeddingDevice } from "./embedding-rpc.ts";
 export type EmbeddingMode = "cpu" | "gpu";
 
 /** How an embedder runs, for settings. Test and evaluation embedders are `other`. */
-export type EmbedderRuntime =
-  | {
-      readonly kind: "local";
-      readonly mode: EmbeddingMode;
-      /** Null until the model has loaded. */
-      readonly device: EmbeddingDevice | null;
-    }
-  | { readonly kind: "other" };
+export type EmbedderRuntime = Data.TaggedEnum<{
+  local: {
+    readonly mode: EmbeddingMode;
+    /** Null until the model has loaded. */
+    readonly device: EmbeddingDevice | null;
+  };
+  other: {};
+}>;
+export const EmbedderRuntime = Data.taggedEnum<EmbedderRuntime>();
 
 export interface EmbedderApi {
   /** Changes whenever vectors from this embedder are not comparable with earlier ones. */
@@ -181,7 +182,9 @@ function embeddingModeForBody(settings: Settings, memoryBytes: number): Embeddin
     case "gpu":
       return "gpu";
     case "auto":
-      return memoryBytes >= gpuMemoryThreshold && settings.gpuCheck?.status === "available"
+      return memoryBytes >= gpuMemoryThreshold &&
+        settings.gpuCheck !== undefined &&
+        GpuCheck.guards.available(settings.gpuCheck)
         ? "gpu"
         : "cpu";
   }
@@ -358,8 +361,8 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
       dimensions: localModel.dimensions,
       runtime: () =>
         LocalPurpose.$match(purpose, {
-          app: ({ mode }): EmbedderRuntime => ({ kind: "local", mode, device: model.device() }),
-          evaluation: (): EmbedderRuntime => ({ kind: "other" }),
+          app: ({ mode }) => EmbedderRuntime.local({ mode, device: model.device() }),
+          evaluation: () => EmbedderRuntime.other(),
         }),
       embed: model.embed,
       chunks: model.chunks,
@@ -383,31 +386,30 @@ export const checkGpu = (storageRoot: string) =>
       return yield* model.embed(["준비"]).pipe(
         Effect.map((): GpuCheck =>
           model.device() === "webgpu"
-            ? {
-                status: "available",
+            ? GpuCheck.cases.available.make({
                 checkedAt: DateTime.formatIso(
                   DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
                 ),
-              }
-            : {
-                status: "unavailable",
+              })
+            : GpuCheck.cases.unavailable.make({
                 checkedAt: DateTime.formatIso(
                   DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
                 ),
                 reason: "no WebGPU device",
-              },
+              }),
         ),
         Effect.catchTag("EmbeddingError", (error) =>
-          Effect.succeed<GpuCheck>({
-            status: "unavailable",
-            checkedAt: DateTime.formatIso(
-              DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-            ),
-            // A code, not the worker's text: that can hold paths and native messages.
-            reason: Schema.is(EmbeddingWorkerFailed)(error.cause)
-              ? `worker_${error.cause.stage}_failed`
-              : "embedding_failed",
-          }),
+          Effect.succeed<GpuCheck>(
+            GpuCheck.cases.unavailable.make({
+              checkedAt: DateTime.formatIso(
+                DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+              ),
+              // A code, not the worker's text: that can hold paths and native messages.
+              reason: Schema.is(EmbeddingWorkerFailed)(error.cause)
+                ? `worker_${error.cause.stage}_failed`
+                : "embedding_failed",
+            }),
+          ),
         ),
       );
     }),

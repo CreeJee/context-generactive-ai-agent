@@ -3,6 +3,7 @@ import { OPENAI_IMAGE_MODELS, createOpenaiImage } from "@tanstack/ai-openai";
 import { imageGenerationTool } from "@tanstack/ai-openai/tools";
 import {
   anthropicImageProviderContract,
+  ImageExecutorModel,
   imageRouteContracts,
   productionImageRouteContracts,
 } from "memory-agent";
@@ -22,7 +23,10 @@ describe("image route contracts", () => {
       imageRouteContracts
         .filter((route) => route.executionMode === "direct_adapter")
         .map((route) =>
-          route.executorModel.type === "explicit" ? route.executorModel.model : "managed",
+          ImageExecutorModel.$match(route.executorModel, {
+            explicit: ({ model }) => model,
+            provider_managed: () => "managed",
+          }),
         ),
     ).toEqual([...OPENAI_IMAGE_MODELS]);
   });
@@ -31,7 +35,7 @@ describe("image route contracts", () => {
     const route = imageRouteContracts.find(
       (candidate) => candidate.id === "openai:provider_tool:image_generation",
     );
-    expect(route?.executorModel).toEqual({ type: "provider_managed" });
+    expect(route?.executorModel).toEqual(ImageExecutorModel.provider_managed());
     expect(route?.billingAttribution).toBe("provider_managed");
     expect(route?.cancellation).toBe("chat_run_abort_signal");
   });
@@ -40,7 +44,7 @@ describe("image route contracts", () => {
     const route = imageRouteContracts.find(
       (candidate) => candidate.id === "openai:direct_adapter:gpt-image-2",
     );
-    expect(route?.executorModel).toEqual({ type: "explicit", model: "gpt-image-2" });
+    expect(route?.executorModel).toEqual(ImageExecutorModel.explicit({ model: "gpt-image-2" }));
     expect(route?.billingAttribution).toBe("executor_model");
     expect(route?.cancellation).toBe("request_abort_signal");
   });
@@ -48,7 +52,10 @@ describe("image route contracts", () => {
   it("records installed direct adapter edit limits", () => {
     const byModel = Object.fromEntries(
       imageRouteContracts.flatMap((route) =>
-        route.executorModel.type === "explicit" ? [[route.executorModel.model, route]] : [],
+        ImageExecutorModel.$match(route.executorModel, {
+          explicit: ({ model }) => [[model, route] as const],
+          provider_managed: () => [],
+        }),
       ),
     );
     expect(byModel["gpt-image-2"]?.input.maximumSourceImages).toBe(16);

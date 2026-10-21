@@ -1,4 +1,4 @@
-import { DateTime, Effect, Function as EffectFunction, Option, Schema } from "effect";
+import { Data, DateTime, Effect, Function as EffectFunction, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { recoveredReadRunSql } from "../agent/owner-read-recovery.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
@@ -12,16 +12,17 @@ export type RunBinding = {
   readonly workflowRevisionId: number;
 };
 
-export type Admission =
-  | { readonly status: "bound"; readonly binding: RunBinding }
-  | {
-      readonly status: "refused";
-      readonly reason:
-        | "legacy_unbound"
-        | "workflow_changed"
-        | "run_id_conflict"
-        | "run_outcome_uncertain";
-    };
+export type Admission = Data.TaggedEnum<{
+  bound: { readonly binding: RunBinding };
+  refused: {
+    readonly reason:
+      | "legacy_unbound"
+      | "workflow_changed"
+      | "run_id_conflict"
+      | "run_outcome_uncertain";
+  };
+}>;
+export const Admission = Data.taggedEnum<Admission>();
 
 /**
  * An owner operation that may have run a tool. Middleware hooks and routed persistence are owner
@@ -141,7 +142,7 @@ export const workflowRunBindings = Effect.gen(function* () {
     sql.withTransaction(
       Effect.gen(function* (): Effect.fn.Return<Admission, SqlError.SqlError | Schema.SchemaError> {
         const goal = yield* identity(sessionId);
-        if (Option.isNone(goal)) return { status: "refused", reason: "legacy_unbound" };
+        if (Option.isNone(goal)) return Admission.refused({ reason: "legacy_unbound" });
         const state = Option.getOrUndefined(yield* latest(sessionId));
         if (
           state === undefined ||
@@ -149,9 +150,9 @@ export const workflowRunBindings = Effect.gen(function* () {
           state.goal_instance_id !== goal.value.goal_instance_id ||
           state.goal_version === null
         )
-          return { status: "refused", reason: "workflow_changed" };
+          return Admission.refused({ reason: "workflow_changed" });
         if ((yield* claimed(runId)).length > 0)
-          return { status: "refused", reason: "run_id_conflict" };
+          return Admission.refused({ reason: "run_id_conflict" });
         // A crashed, aborted or failed run may have performed an external side effect.
         // Do not silently start another one until the owner can prove or resolve it.
         // SDK completion does not prove every owner operation settled. Inspect all
@@ -161,7 +162,7 @@ export const workflowRunBindings = Effect.gen(function* () {
           (yield* previous(sessionId, resumeRunId ?? "")).length > 0 ||
           (yield* unresolved(sessionId, goal.value.goal_instance_id)).length > 0
         )
-          return { status: "refused", reason: "run_outcome_uncertain" };
+          return Admission.refused({ reason: "run_outcome_uncertain" });
         switch (mode) {
           case "commit":
             yield* sql`
@@ -173,8 +174,7 @@ export const workflowRunBindings = Effect.gen(function* () {
           case "preview":
             break;
         }
-        return {
-          status: "bound",
+        return Admission.bound({
           binding: {
             runId,
             sessionId,
@@ -183,7 +183,7 @@ export const workflowRunBindings = Effect.gen(function* () {
             planVersion: state.plan_version,
             workflowRevisionId: state.id,
           },
-        };
+        });
       }),
     );
   return {

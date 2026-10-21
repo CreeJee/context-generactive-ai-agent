@@ -13,7 +13,14 @@ import {
   Ref,
   Schema,
 } from "effect";
-import { ProviderId, type AuthConnectionState, type ProviderModel } from "./contracts.ts";
+import {
+  AuthConnectionState,
+  NativeToolSupport,
+  ProviderConnection,
+  ProviderId,
+  type AuthStatus,
+  type ProviderModel,
+} from "./contracts.ts";
 import type { ImageRouteContract } from "./image-contracts.ts";
 import { imageRouteContracts } from "./image-contracts.ts";
 import { ProviderRegistry } from "./registry.ts";
@@ -29,7 +36,7 @@ export type RouteEvidenceStatus = "verified" | "unverified" | "unsupported";
 
 export interface RouteAuthEvidence {
   readonly mechanism: "subscription_oauth" | "openai_api_key" | "openai_compatible";
-  readonly status: AuthConnectionState["status"];
+  readonly status: AuthStatus;
   readonly planType?: string;
   readonly verified: boolean;
 }
@@ -163,23 +170,27 @@ const freezeSnapshot = (snapshot: RouteCatalogSnapshot): RouteCatalogSnapshot =>
     execution: Object.freeze([...snapshot.execution].toSorted(compareId)),
   });
 
+/** The case a connection is in, as route evidence names it. */
+const authStatus = AuthConnectionState.$match({
+  "signed-out": () => "signed-out" as const,
+  pending: () => "pending" as const,
+  "signed-in": () => "signed-in" as const,
+  error: () => "error" as const,
+});
+
 const authEvidence = (
   provider: ProviderId,
-  status: AuthConnectionState,
+  state: AuthConnectionState,
   mechanism: RouteAuthEvidence["mechanism"],
 ): RouteAuthEvidence => {
+  const signedIn = AuthConnectionState.$is("signed-in")(state) ? state : null;
   const evidence: RouteAuthEvidence = {
     mechanism,
-    status: status.status,
-    verified:
-      mechanism !== "openai_compatible" &&
-      status.status === "signed-in" &&
-      status.provider === provider,
+    status: authStatus(state),
+    verified: mechanism !== "openai_compatible" && signedIn?.provider === provider,
   };
   return Object.freeze(
-    status.status === "signed-in" && status.planType !== undefined
-      ? { ...evidence, planType: status.planType }
-      : evidence,
+    signedIn?.planType !== undefined ? { ...evidence, planType: signedIn.planType } : evidence,
   );
 };
 
@@ -218,10 +229,11 @@ const sourceFromServices = Effect.gen(function* () {
           ),
         );
         const connection = providerConnection(provider);
+        const compatible = ProviderConnection.isAnyOf(["compatible-endpoint"])(connection);
         const authentication = authEvidence(
           provider,
           status,
-          connection.type === "compatible-endpoint" ? "openai_compatible" : "subscription_oauth",
+          compatible ? "openai_compatible" : "subscription_oauth",
         );
         MutableHashMap.set(authByProvider, provider, authentication);
         const models = yield* configuration.models.list.pipe(
@@ -254,38 +266,30 @@ const sourceFromServices = Effect.gen(function* () {
             authentication,
             entitlement: Object.freeze({
               status: authentication.verified ? "verified" : "unverified",
-              source:
-                connection.type === "compatible-endpoint"
-                  ? "endpoint_configuration"
-                  : "provider_model_catalog",
-              detail:
-                connection.type === "compatible-endpoint"
-                  ? "Model is configured locally; endpoint authentication and model access are unverified."
-                  : "Model was returned by the configured provider catalog.",
+              source: compatible ? "endpoint_configuration" : "provider_model_catalog",
+              detail: compatible
+                ? "Model is configured locally; endpoint authentication and model access are unverified."
+                : "Model was returned by the configured provider catalog.",
             }),
           });
           chat.push(chatRoute);
 
-          const support = connection.nativeTools;
-          const resolved = yield* (() => {
-            switch (support.type) {
-              case "unsupported":
-                return Effect.succeed([]);
-              case "vendor-native":
-                return tools.resolve({ provider: support.vendor, model: model.id }).pipe(
-                  Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
-                  Effect.mapError(
-                    (cause) =>
-                      new RouteCatalogRefreshFailed({
-                        provider,
-                        operation: "tools",
-                        reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                        cause,
-                      }),
-                  ),
-                );
-            }
-          })();
+          const resolved = yield* NativeToolSupport.match(connection.nativeTools, {
+            unsupported: () => Effect.succeed([]),
+            "vendor-native": ({ vendor }) =>
+              tools.resolve({ provider: vendor, model: model.id }).pipe(
+                Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
+                Effect.mapError(
+                  (cause) =>
+                    new RouteCatalogRefreshFailed({
+                      provider,
+                      operation: "tools",
+                      reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+                      cause,
+                    }),
+                ),
+              ),
+          });
           for (const descriptor of resolved) {
             execution.push(
               Object.freeze({
@@ -325,7 +329,11 @@ const sourceFromServices = Effect.gen(function* () {
         );
       const openAIAuth =
         Option.getOrUndefined(MutableHashMap.get(authByProvider, "openai")) ??
-        authEvidence("openai", { provider: "openai", status: "signed-out" }, "subscription_oauth");
+        authEvidence(
+          "openai",
+          AuthConnectionState["signed-out"]({ provider: "openai" }),
+          "subscription_oauth",
+        );
       for (const contract of imageRouteContracts) {
         const authentication =
           contract.executionMode === "direct_adapter"

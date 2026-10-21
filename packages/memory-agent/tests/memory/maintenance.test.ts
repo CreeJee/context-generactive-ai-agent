@@ -1,7 +1,7 @@
 import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { Embedder } from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { EmbeddingSetup } from "../../src/memory/embedding/setup.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
@@ -300,7 +300,7 @@ const release = Deferred.makeUnsafe<void>();
 const gatedEmbedder = Layer.succeed(Embedder, {
   identity: "gated-test-384",
   dimensions: 384,
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
   embed: (texts) =>
     Deferred.succeed(entered, undefined).pipe(
       Effect.andThen(Deferred.await(release)),

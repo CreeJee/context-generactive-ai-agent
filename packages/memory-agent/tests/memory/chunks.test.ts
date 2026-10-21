@@ -1,7 +1,12 @@
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { expect } from "vite-plus/test";
 import { chunkText } from "../../src/memory/embedding/chunks.ts";
-import { Embedder, EmbeddingError, normalize } from "../../src/memory/embedding/embedder.ts";
+import {
+  EmbedderRuntime,
+  Embedder,
+  EmbeddingError,
+  normalize,
+} from "../../src/memory/embedding/embedder.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -26,7 +31,7 @@ const vector = (text: string) => {
 const chunked = Layer.succeed(Embedder, {
   identity: "chunk-contract-v1",
   dimensions: 384,
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
   chunks: (texts) =>
     Effect.forEach(
       texts,

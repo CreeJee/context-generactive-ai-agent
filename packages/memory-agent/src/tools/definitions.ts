@@ -36,6 +36,7 @@ export {
   ReportDeliveryStatus,
 } from "../report/delivery-contract.ts";
 export type {
+  UncertainContinue,
   UncertainRun,
   UncertainTool,
   UncertainToolState,
@@ -54,12 +55,13 @@ export {
 export type { SubagentStatus, SubagentView } from "../subagents/subagent-state.ts";
 export { loopRetrySchedule, type LoopHealth } from "../runtime/loop-health.ts";
 export type { ProviderRetryView } from "../workflow/provider-retry.ts";
-export type { ApprovalRequester, RelayedApprovalView } from "../approvals/relayed-state.ts";
+export { ApprovalRequester, type RelayedApprovalView } from "../approvals/relayed-state.ts";
 export {
   queueDeliveredEvent,
+  NextDelivery,
+  QueueEdit,
+  QueueItemState,
   type DeliveryVia,
-  type QueueEdit,
-  type QueueItemState,
   type QueuedMessage,
   type QueueSnapshot,
 } from "../queue/queue-state.ts";

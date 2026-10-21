@@ -1,7 +1,12 @@
 import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
-import type { ModelSelection, ProviderId, ProviderServices } from "./contracts.ts";
+import {
+  AuthConnectionState,
+  type ModelSelection,
+  type ProviderId,
+  type ProviderServices,
+} from "./contracts.ts";
 import { ProviderRegistry } from "./registry.ts";
 
 export interface ResolvedProvider {
@@ -34,11 +39,12 @@ const make = Effect.gen(function* () {
     Effect.flatMap(registry.get(provider), ({ auth }) => auth.status).pipe(
       // An unreachable provider is reported as its auth state; chat callers branch on the status.
       Effect.catchTag(["ProviderUnavailable", "ProviderOperationFailed"], () =>
-        Effect.succeed({
-          provider,
-          status: "error" as const,
-          message: "Provider authentication is unavailable.",
-        }),
+        Effect.succeed(
+          AuthConnectionState.error({
+            provider,
+            message: "Provider authentication is unavailable.",
+          }),
+        ),
       ),
     );
 

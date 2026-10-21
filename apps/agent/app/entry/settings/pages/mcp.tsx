@@ -6,7 +6,7 @@ import { Badge } from "~/components/ui/badge";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemDescription, ItemGroup } from "~/components/ui/item";
 import type { McpFailureCode } from "memory-agent/definitions";
-import { type McpServerView, type Project } from "../../api";
+import { McpServerState, type McpServerView, type Project } from "../../api";
 import { useSuspenseMcpQuery } from "../../queries/project";
 import { useMcpTrustMutation } from "../../queries/mutations/project";
 import {
@@ -23,18 +23,13 @@ import {
 
 function McpStateBadge({ server }: { server: McpServerView }) {
   if (server.shadowed) return shadowedBadge;
-  switch (server.state.status) {
-    case "untrusted":
-      return <Badge variant="outline">신뢰 필요</Badge>;
-    case "changed":
-      return <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>;
-    case "trusted":
-      return <Badge variant="secondary">다음 대화에서 시작</Badge>;
-    case "connected":
-      return <Badge>도구 {server.state.tools.length}개</Badge>;
-    case "failed":
-      return <Badge variant="destructive">시작 실패</Badge>;
-  }
+  return McpServerState.$match(server.state, {
+    untrusted: () => <Badge variant="outline">신뢰 필요</Badge>,
+    changed: () => <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>,
+    trusted: () => <Badge variant="secondary">다음 대화에서 시작</Badge>,
+    connected: ({ tools }) => <Badge>도구 {tools.length}개</Badge>,
+    failed: () => <Badge variant="destructive">시작 실패</Badge>,
+  });
 }
 
 const mcpFailureText = {
@@ -100,7 +95,9 @@ function McpSettingsContent({ project }: { project: Project }) {
       ) : (
         <ItemGroup>
           {overview.servers.map((server) => {
-            const active = server.state.status !== "untrusted" && server.state.status !== "changed";
+            const active =
+              !McpServerState.$is("untrusted")(server.state) &&
+              !McpServerState.$is("changed")(server.state);
             return (
               <ConfigEntry
                 key={`${server.scope}/${server.name}`}
@@ -112,7 +109,7 @@ function McpSettingsContent({ project }: { project: Project }) {
                 secretKind={server.transport === "stdio" ? "환경 변수" : "헤더"}
                 secretNames={[...server.envNames, ...server.headerNames]}
                 problem={
-                  server.state.status === "failed"
+                  McpServerState.$is("failed")(server.state)
                     ? {
                         text: mcpFailureText[server.state.failure.code],
                         detail: server.state.failure.detail,
@@ -123,14 +120,14 @@ function McpSettingsContent({ project }: { project: Project }) {
                   !server.shadowed && (
                     <TrustButton
                       active={active}
-                      changed={server.state.status === "changed"}
+                      changed={McpServerState.$is("changed")(server.state)}
                       busy={busy}
                       onClick={() => void trust(server, !active)}
                     />
                   )
                 }
               >
-                {server.state.status === "connected" && server.state.tools.length > 0 && (
+                {McpServerState.$is("connected")(server.state) && server.state.tools.length > 0 && (
                   <ItemDescription>
                     <code>{server.state.tools.join(", ")}</code>
                   </ItemDescription>

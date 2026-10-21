@@ -1,7 +1,8 @@
-import { Effect, Match } from "effect";
+import { Effect, Match, Predicate } from "effect";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
+import { ProviderAuthState } from "./api";
 import {
   useAddProjectMutation,
   useSelectModelMutation,
@@ -47,6 +48,7 @@ import {
   projectErrorMessage,
   refusalOf,
   type ModelSelection,
+  type PendingLifecycle,
   type ProviderId,
 } from "./api";
 import { SessionView, type SlashSupport } from "./chat/chat-panel";
@@ -80,6 +82,16 @@ const locationParsers = {
   boardCard: parseAsString,
 };
 
+/** Entering a session's board closes the project board, so the two never share a URL. */
+const leaveProjectBoard = { boards: null, boardCard: null } as const;
+/** Changing project drops every session and board of the one left. */
+const leaveProject = {
+  ...leaveProjectBoard,
+  session: null,
+  card: null,
+  board: null,
+} as const;
+
 function Placeholder({
   icon,
   title,
@@ -110,12 +122,10 @@ export function App() {
     "openai-compatible": compatibleAuth.data ?? null,
   };
   const [provider, setProvider] = useState<ProviderId>("openai");
-  const openAIModels = useModelsQuery("openai", auth.openai?.status === "signed-in");
-  const anthropicModels = useModelsQuery("anthropic", auth.anthropic?.status === "signed-in");
-  const compatibleModels = useModelsQuery(
-    "openai-compatible",
-    compatibleAuth.data?.status === "signed-in",
-  );
+  const signedInAuth = ProviderAuthState.$is("signed-in");
+  const openAIModels = useModelsQuery("openai", signedInAuth(auth.openai));
+  const anthropicModels = useModelsQuery("anthropic", signedInAuth(auth.anthropic));
+  const compatibleModels = useModelsQuery("openai-compatible", signedInAuth(compatibleAuth.data));
   const modelQueries = {
     openai: openAIModels,
     anthropic: anthropicModels,
@@ -162,8 +172,8 @@ export function App() {
     });
   }, [projects, projectsQuery.data, setLocation]);
 
-  const signedIn = auth[provider]?.status === "signed-in";
-  const selectedSignedIn = selection !== null && auth[selection.provider]?.status === "signed-in";
+  const signedIn = signedInAuth(auth[provider]);
+  const selectedSignedIn = selection !== null && signedInAuth(auth[selection.provider]);
   useEffect(() => {
     const selected =
       modelQueries[provider].data?.selected ??
@@ -192,17 +202,15 @@ export function App() {
   }, [projectId, sessions, sessionsQuery.data, setLocation]);
 
   const selectProject = (id: string) =>
-    void setLocation(
-      { project: id, session: null, card: null, board: null, boards: null, boardCard: null },
-      { history: "push" },
-    );
+    void setLocation({ ...leaveProject, project: id }, { history: "push" });
   useEffect(() => setArchiveError(null), [projectId]);
 
-  const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
+  const refreshPendingLifecycle = (pending: PendingLifecycle) => {
     setArchiveError(
-      status === "waiting_for_stop"
-        ? "실행이 멈추기를 기다리고 있어요. 아직 대화를 바꾸지 않았어요."
-        : "지금은 대화를 바꿀 수 없어요. 실행 상태를 확인한 뒤 다시 시도하세요.",
+      Match.valueTags(pending, {
+        waiting_for_stop: () => "실행이 멈추기를 기다리고 있어요. 아직 대화를 바꾸지 않았어요.",
+        blocked: () => "지금은 대화를 바꿀 수 없어요. 실행 상태를 확인한 뒤 다시 시도하세요.",
+      }),
     );
   };
 
@@ -215,7 +223,7 @@ export function App() {
           const result = yield* uiPromise(() =>
             lifecycleMutation.mutateAsync(SessionLifecycleChange.archive({ sessionId: id })),
           );
-          if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+          if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
           setArchiveError(null);
           const remaining = sessions.filter((item) => item.id !== id);
           if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
@@ -236,7 +244,7 @@ export function App() {
           const result = yield* uiPromise(() =>
             lifecycleMutation.mutateAsync(SessionLifecycleChange.delete({ sessionId: id })),
           );
-          if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+          if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
           setArchiveError(null);
           const remaining = sessions.filter((item) => item.id !== id);
           if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
@@ -257,7 +265,7 @@ export function App() {
           const result = yield* uiPromise(() =>
             lifecycleMutation.mutateAsync(SessionLifecycleChange.restore({ sessionId: id })),
           );
-          if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+          if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
           setArchiveError(null);
         }).pipe(
           Effect.catchTag("UnknownError", (failure) =>
@@ -272,7 +280,7 @@ export function App() {
     runUiEffect(
       Effect.gen(function* () {
         const project = yield* uiPromise(() => addProjectMutation.mutateAsync(root));
-        void setLocation({ project: project.id, session: null }, { history: "push" });
+        void setLocation({ ...leaveProject, project: project.id }, { history: "push" });
         return null;
       }).pipe(
         Effect.catchTag("UnknownError", (failure) =>
@@ -473,7 +481,7 @@ export function App() {
                 onHide={(hiddenId) => {
                   void hideProjectMutation.mutateAsync(hiddenId).then(() => {
                     const left = projects.filter((project) => project.id !== hiddenId);
-                    void setLocation({ project: left.at(0)?.id ?? null, session: null });
+                    void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
                   });
                 }}
               />
@@ -484,7 +492,7 @@ export function App() {
                 projectId={projectId}
                 holder={pageHolder()}
                 onOpenCard={(session, card) =>
-                  void setLocation({ session, card }, { history: "push" })
+                  void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
                 }
               />
             )}
@@ -555,7 +563,7 @@ export function App() {
               }
               onOpenSession={(session) =>
                 void setLocation(
-                  { session, board: true, card: null, boards: null, boardCard: null },
+                  { ...leaveProjectBoard, session, board: true, card: null },
                   { history: "push" },
                 )
               }

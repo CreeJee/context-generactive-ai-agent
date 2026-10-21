@@ -2,25 +2,26 @@ import { Schema } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import {
+  ImageExecutorModel,
   DirectImageExecutionFailed,
   ImageMediaApprovalRequired,
   ImageMediaExecutionFailed,
   ImageMediaUnavailable,
   makeImageMediaWorkflow,
   type ImageFeatureApi,
-  type ImageRouteDecision,
+  ImageRerouteConfirmation,
+  ImageRouteDecision,
   type ImageRouterApi,
 } from "memory-agent";
 import { describe, expect } from "vite-plus/test";
 
-const decision: ImageRouteDecision = {
-  type: "selected",
+const decision: ImageRouteDecision = ImageRouteDecision.selected({
   mode: "auto",
   preference: "balanced",
   initiatorChatRouteId: "chat:anthropic:claude-test",
   initiatorChatModel: "claude-test",
   executorMediaRouteId: "media:openai:direct_adapter:gpt-image-2",
-  executorMediaModel: { type: "explicit", model: "gpt-image-2" },
+  executorMediaModel: ImageExecutorModel.explicit({ model: "gpt-image-2" }),
   provider: "openai",
   initiatorProvider: "openai",
   crossProvider: false,
@@ -32,7 +33,7 @@ const decision: ImageRouteDecision = {
   score: 1,
   reasons: ["fixture"],
   ranking: [],
-};
+});
 const feature: ImageFeatureApi = {
   status: Effect.succeed({ imageGenerationEnabled: true }),
   setImageGenerationEnabled: () => Effect.die("unused"),
@@ -40,12 +41,9 @@ const feature: ImageFeatureApi = {
 const router: ImageRouterApi = {
   select: () => Effect.succeed(decision),
   rerouteAfterFailure: (failedDecision, reason) =>
-    Effect.succeed({
-      type: "confirmation_required",
-      failedDecision,
-      reason,
-      alternatives: [],
-    }),
+    Effect.succeed(
+      ImageRerouteConfirmation.confirmation_required({ failedDecision, reason, alternatives: [] }),
+    ),
 };
 const request = {
   initiatorChatRouteId: decision.initiatorChatRouteId,
@@ -113,7 +111,7 @@ describe("ImageMediaWorkflow", () => {
         expect(asset).toMatchObject({
           initiatorChatModel: "claude-test",
           executorMediaRouteId: decision.executorMediaRouteId,
-          executorMediaModel: { type: "explicit", model: "gpt-image-2" },
+          executorMediaModel: ImageExecutorModel.explicit({ model: "gpt-image-2" }),
           executionMode: "direct_adapter",
           estimatedCostUsd: 0.1,
           providerRequestId: "request-1",
@@ -209,9 +207,9 @@ describe("ImageMediaWorkflow", () => {
       const result = yield* Effect.result(workflow.generate(request));
       const failed = Result.isFailure(result) && result.failure;
       expect(failed).toBeInstanceOf(ImageMediaExecutionFailed);
-      expect(failed).toMatchObject({
-        reroute: { type: "confirmation_required", alternatives: [] },
-      });
+      const reroute = failed instanceof ImageMediaExecutionFailed ? failed.reroute : undefined;
+      expect(ImageRerouteConfirmation.$is("confirmation_required")(reroute)).toBe(true);
+      expect(failed).toMatchObject({ reroute: { alternatives: [] } });
     }),
   );
 });

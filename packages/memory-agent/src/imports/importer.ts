@@ -13,6 +13,7 @@ import { DateTime, Clock, Semaphore } from "effect";
 import { Worker } from "node:worker_threads";
 import {
   Context,
+  Data,
   Deferred,
   Effect,
   Exit,
@@ -70,20 +71,17 @@ export interface ImportFailure {
 }
 
 /** The pass running now, or the latest one this server ran. */
-export type ImportActivity =
-  | (PassProgress & { readonly status: "running"; readonly startedAt: string })
-  | (PassProgress & {
-      readonly status: "finished";
-      readonly startedAt: string;
-      readonly finishedAt: string;
-    })
-  | {
-      /** The worker itself failed (not one transcript): nothing after that point was read. */
-      readonly status: "crashed";
-      readonly startedAt: string;
-      readonly finishedAt: string;
-      readonly reason: ImportWorkerFailed["reason"];
-    };
+export type ImportActivity = Data.TaggedEnum<{
+  running: PassProgress & { readonly startedAt: string };
+  finished: PassProgress & { readonly startedAt: string; readonly finishedAt: string };
+  /** The worker itself failed (not one transcript): nothing after that point was read. */
+  crashed: {
+    readonly startedAt: string;
+    readonly finishedAt: string;
+    readonly reason: ImportWorkerFailed["reason"];
+  };
+}>;
+export const ImportActivity = Data.taggedEnum<ImportActivity>();
 
 export interface ImportOverview {
   readonly enabled: boolean;
@@ -286,7 +284,7 @@ const make = (watching: boolean, home: string) =>
                 Progress: (progress) =>
                   Effect.as(
                     Effect.sync(() => {
-                      activity = { status: "running", startedAt, ...progressOf(progress) };
+                      activity = ImportActivity.running({ startedAt, ...progressOf(progress) });
                       events.publishGlobal("imports");
                     }),
                     outcome,
@@ -324,12 +322,11 @@ const make = (watching: boolean, home: string) =>
     const crashed = (startedAt: string, reason: ImportWorkerFailed["reason"]) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
         Effect.sync(() => {
-          activity = {
-            status: "crashed",
+          activity = ImportActivity.crashed({
             startedAt,
             finishedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
             reason,
-          };
+          });
           events.publishGlobal("imports");
         }),
       );
@@ -343,19 +340,24 @@ const make = (watching: boolean, home: string) =>
         const done = yield* Deferred.make<number, ImportWorkerFailed>();
         running = done;
         const startedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-        activity = { status: "running", startedAt, checked: 0, total: 0, written: 0, failed: 0 };
+        activity = ImportActivity.running({
+          startedAt,
+          checked: 0,
+          total: 0,
+          written: 0,
+          failed: 0,
+        });
         events.publishGlobal("imports");
         yield* pass(startedAt).pipe(
           Effect.tap((progress) =>
             Effect.sync(() => {
-              activity = {
-                status: "finished",
+              activity = ImportActivity.finished({
                 startedAt,
                 finishedAt: DateTime.formatIso(
                   DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
                 ),
                 ...progress,
-              };
+              });
               events.publishGlobal("imports");
             }),
           ),
@@ -448,7 +450,7 @@ const make = (watching: boolean, home: string) =>
       const settings = yield* config.read;
       // While a pass runs, the counts it started from are good enough and spare the worker a walk.
       const counts =
-        current?.status === "running" && isTruthy(latestCounts)
+        ImportActivity.$is("running")(current) && isTruthy(latestCounts)
           ? latestCounts
           : yield* countTranscripts.pipe(
               // The worker could not count: the last counts, or none, until it can.

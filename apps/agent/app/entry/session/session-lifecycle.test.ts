@@ -2,7 +2,12 @@ import { it } from "@effect/vitest";
 import { afterEach, describe, expect, vi } from "vite-plus/test";
 import { sessionHolderHeader } from "memory-agent/definitions";
 import { Cause, Effect, Schema } from "effect";
-import { makeSessionLifecycleClient, ApiError } from "../api";
+import {
+  ApiError,
+  ArchiveTaskResult,
+  makeSessionLifecycleClient,
+  SessionArchiveResult,
+} from "../api";
 const appFetch = vi.fn<typeof fetch>();
 const api = makeSessionLifecycleClient(appFetch);
 
@@ -17,13 +22,12 @@ const session = {
   worktreePath: null,
   branch: null,
 };
-const waiting = {
-  status: "waiting_for_stop",
+const waiting = ArchiveTaskResult.cases.waiting_for_stop.make({
   operationId: "operation-1",
   targetId: session.id,
-};
-const blocked = { status: "blocked", blocker: "live_attempt" };
-const completed = { status: "completed", targetId: session.id };
+});
+const blocked = ArchiveTaskResult.cases.blocked.make({ blocker: "live_attempt" });
+const completed = ArchiveTaskResult.cases.completed.make({ targetId: session.id });
 const actions = [
   {
     name: "archive",
@@ -63,10 +67,9 @@ describe("server-authoritative session lifecycle client", () => {
       Effect.gen(function* () {
         const snapshot = { ...session, archivedAt: archived ? session.archivedAt : null };
         respond(snapshot);
-        expect(yield* call(() => api.setArchived(session.id, "holder-1", archived))).toEqual({
-          status: "completed",
-          session: snapshot,
-        });
+        expect(yield* call(() => api.setArchived(session.id, "holder-1", archived))).toEqual(
+          SessionArchiveResult.completed({ session: snapshot }),
+        );
       }),
   );
 

@@ -29,6 +29,7 @@ import {
 } from "../config/global-config.ts";
 import { openKeyringEntry } from "../runtime/keyring.ts";
 import {
+  AuthConnectionState,
   ModelUnavailable,
   type AgentModelRuntime,
   type ProviderConfiguration,
@@ -610,13 +611,14 @@ function makeOpenAICompatibleSettingsBody(
     provider,
     auth: {
       provider,
-      status: Effect.map(read, (account) => ({
-        provider,
-        status: isTruthy(account) ? ("signed-in" as const) : ("signed-out" as const),
-      })).pipe(Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "auth" }))),
-      connect: Effect.succeed({ provider, status: "signed-out" }),
-      cancel: Effect.succeed({ provider, status: "signed-out" }),
-      disconnect: Effect.succeed({ provider, status: "signed-out" }),
+      status: Effect.map(read, (account) =>
+        isTruthy(account)
+          ? AuthConnectionState["signed-in"]({ provider })
+          : AuthConnectionState["signed-out"]({ provider }),
+      ).pipe(Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "auth" }))),
+      connect: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
+      cancel: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
+      disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
     },
     models: {
       provider,

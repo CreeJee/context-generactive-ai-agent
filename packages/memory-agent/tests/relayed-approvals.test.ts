@@ -13,14 +13,17 @@ import {
   Schema,
   Scope,
 } from "effect";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect } from "vite-plus/test";
 import { RelayedApprovals, type RelayedRequest } from "../src/approvals/relayed.ts";
+import { ApprovalRequester } from "../src/approvals/relayed-state.ts";
 import { Database } from "../src/db/database.ts";
+import { migrations } from "../src/db/migrations.ts";
 import { sdkCancellation } from "./support/sdk-cancellation.ts";
 import { sqlGet, sqlRun } from "./support/sql.ts";
 
 const request: RelayedRequest = {
-  requester: { kind: "subagent", subagentId: "child", name: null },
+  requester: ApprovalRequester.cases.subagent.make({ subagentId: "child", name: null }),
   toolName: "write_file",
   argumentsJson: "{}",
   reason: "Approve this write",
@@ -165,6 +168,53 @@ describe("durable relayed approvals", () => {
         expect(yield* reopened.relay.answer("s", approval!.id, true)).toBe(true);
         expect(yield* reopened.relay.pending("s")).toEqual([]);
         expect(yield* scheduled).toEqual({ count: 0 });
+        yield* Scope.close(reopened.scope, Exit.void);
+      }),
+    ).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer])),
+  );
+
+  it.live("resumes an approval whose requester 0.0.17 stored under kind", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-requester-" });
+        const file = path.join(directory, "owner.db");
+        const first = yield* openRelay(file);
+        const { controller } = yield* sdkCancellation;
+        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
+        void waiting.catch(() => false);
+        const [approval] = yield* pending(first.relay, "s", 1);
+        yield* Scope.close(first.scope, Exit.void);
+
+        const requesterMigration = migrations.findIndex((step) =>
+          step.includes("relayed approval's requester names its case"),
+        );
+        expect(requesterMigration).toBeGreaterThanOrEqual(0);
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() => new DatabaseSync(file)),
+          (sqlite) =>
+            Effect.sync(() => {
+              // The payload as 0.0.17 wrote it, with the requester's case under kind.
+              sqlite.exec(`UPDATE owner_workflow_executions
+                SET payload_json = json_set(payload_json, '$.requester',
+                  json_object('kind', 'subagent', 'subagentId', 'child', 'name', NULL))
+                WHERE workflow_name = 'RelayedApprovalExecution'`);
+              sqlite.exec(`DELETE FROM effect_sql_migrations WHERE migration_id > ${requesterMigration};
+                PRAGMA user_version = ${requesterMigration}`);
+            }),
+          (sqlite) => Effect.sync(() => sqlite.close()),
+        );
+
+        const reopened = yield* openRelay(file);
+        expect(yield* reopened.relay.pending("s")).toMatchObject([
+          {
+            id: approval!.id,
+            requester: ApprovalRequester.cases.subagent.make({ subagentId: "child", name: null }),
+          },
+        ]);
+        expect(yield* reopened.relay.answer("s", approval!.id, true)).toBe(true);
+        expect(yield* reopened.relay.pending("s")).toEqual([]);
         yield* Scope.close(reopened.scope, Exit.void);
       }),
     ).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer])),

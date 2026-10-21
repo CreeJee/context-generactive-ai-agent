@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
+  CompatibleAccountsView,
   CompatibleConnectionInput,
   CompatibleModelInput,
   OpenAICompatibleSettings,
@@ -52,8 +53,7 @@ export type CompatibleAccountCommand = typeof CompatibleAccountCommand.Type;
 
 const reply = <A>(value: A, status = 200) =>
   Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
-const view = (status: OpenAICompatibleStatus) =>
-  reply({ type: "compatible-endpoint" as const, ...status });
+const view = (status: OpenAICompatibleStatus) => reply(CompatibleAccountsView.make(status));
 
 const respond = (
   effect: Effect.Effect<

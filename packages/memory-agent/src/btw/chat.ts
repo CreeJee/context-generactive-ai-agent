@@ -1,4 +1,5 @@
 import { chatParamsFromRequestBody, toServerSentEventsResponse } from "@tanstack/ai";
+import { AuthConnectionState } from "../providers/contracts.ts";
 import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
 import { Cause, Context, Effect, Layer, Option, Stream } from "effect";
 import { failureTags } from "../runtime/logged-failures.ts";
@@ -57,9 +58,9 @@ const make = Effect.gen(function* () {
     if (liveRuns.get(threadId) !== null) return json(409, { error: "run_in_progress" });
     const selection = yield* active.selected;
     const auth = yield* active.authFor(selection?.provider ?? (yield* active.provider));
-    if (auth.status === "error")
+    if (AuthConnectionState.$is("error")(auth))
       return json(503, { error: "provider_auth_unavailable", provider: auth.provider });
-    if (auth.status !== "signed-in") return json(401, { error: "login_required" });
+    if (!AuthConnectionState.$is("signed-in")(auth)) return json(401, { error: "login_required" });
     if (selection === null) return json(412, { error: "model_selection_required" });
 
     const params = yield* Effect.tryPromise(() => request.json()).pipe(

@@ -9,7 +9,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
-import type { WorkflowPhase, WorkflowState } from "../api";
+import { WorkflowExecutionState, type WorkflowPhase, type WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
 import { cardStatusLabels } from "./board-panel";
 
@@ -194,12 +194,12 @@ export function WorkflowArtifactPanel({
           : planStatusLabels[plan.status]}
       </AlertTitle>
       <AlertDescription>
-        {execution?.kind === "blocked" && (
+        {WorkflowExecutionState.$is("blocked")(execution) && (
           <p className="mb-3 whitespace-pre-wrap" role="status">
             자동 진행 중단: {execution.detail}
           </p>
         )}
-        {execution?.kind === "retrying" ? (
+        {WorkflowExecutionState.$is("retrying")(execution) ? (
           <p className="mb-3" role="status">
             서버가 다시 시작돼 끊긴 실행을 {localTime(execution.retryAt)}에 남은 단계부터 이어서
             진행해요.

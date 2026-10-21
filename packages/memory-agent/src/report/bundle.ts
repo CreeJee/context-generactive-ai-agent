@@ -2,10 +2,10 @@ import { Config, Crypto, DateTime, Effect, Option, Schema } from "effect";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
-import { ExternalAgents } from "../external-agents/agents.ts";
+import { AgentLinkState, AgentTrustState, ExternalAgents } from "../external-agents/agents.ts";
 import { Importer } from "../imports/importer.ts";
 import { BoardHealth } from "../kanban/board-health.ts";
-import { McpServers } from "../mcp/servers.ts";
+import { McpServers, McpServerState } from "../mcp/servers.ts";
 import type { Project } from "../projects/projects.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { DefectReporter } from "../runtime/defect-reporter.ts";
@@ -81,6 +81,29 @@ const CardRow = Schema.Struct({
 });
 
 const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
+
+/** An MCP server's state by its case name, with the failure code when it failed. */
+const mcpStatus = McpServerState.$match({
+  untrusted: () => ({ status: "untrusted", code: null }),
+  changed: () => ({ status: "changed", code: null }),
+  trusted: () => ({ status: "trusted", code: null }),
+  connected: () => ({ status: "connected", code: null }),
+  failed: ({ failure }) => ({ status: "failed", code: failure.code }),
+});
+
+/** An external agent's trust, or its link once trusted, by case name, with any failure code. */
+const agentStatus = AgentTrustState.$match({
+  untrusted: () => ({ status: "untrusted", code: null }),
+  changed: () => ({ status: "changed", code: null }),
+  trusted: ({ link }) =>
+    AgentLinkState.$match(link, {
+      idle: () => ({ status: "idle", code: null }),
+      connecting: () => ({ status: "connecting", code: null }),
+      connected: () => ({ status: "connected", code: null }),
+      retrying: ({ failure }) => ({ status: "retrying", code: failure.code }),
+      stopped: ({ failure }) => ({ status: "stopped", code: failure.code }),
+    }),
+});
 
 export const loopHealthText = LoopHealth.match({
   Healthy: () => "Healthy",
@@ -197,21 +220,14 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
           kind: "mcp" as const,
           name: server.name,
           scope: server.scope,
-          status: server.state.status,
-          code: server.state.status === "failed" ? server.state.failure.code : null,
+          ...mcpStatus(server.state),
         })),
-        ...agents.agents.map((agent) => {
-          const link = agent.state.status === "trusted" ? agent.state.link : null;
-          const code =
-            link?.status === "retrying" || link?.status === "stopped" ? link.failure.code : null;
-          return {
-            kind: "agent" as const,
-            name: agent.name,
-            scope: agent.scope,
-            status: link === null ? agent.state.status : link.status,
-            code,
-          };
-        }),
+        ...agents.agents.map((agent) => ({
+          kind: "agent" as const,
+          name: agent.name,
+          scope: agent.scope,
+          ...agentStatus(agent.state),
+        })),
       ]);
     }),
   );

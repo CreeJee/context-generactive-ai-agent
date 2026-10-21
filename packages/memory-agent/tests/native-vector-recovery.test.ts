@@ -5,7 +5,7 @@ import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
-import { Embedder } from "../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../src/memory/embedding/embedder.ts";
 import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 
@@ -43,7 +43,7 @@ layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
           Layer.succeed(Embedder, {
             identity,
             dimensions: 384,
-            runtime: () => ({ kind: "other" }),
+            runtime: () => EmbedderRuntime.other(),
             embed: () => Effect.succeed([]),
           }),
         );

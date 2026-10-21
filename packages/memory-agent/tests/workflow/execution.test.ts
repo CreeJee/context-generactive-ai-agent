@@ -19,7 +19,7 @@ import type {
   ScriptedToolCall,
   ScriptedTurn,
 } from "../../src/testing/scripted-adapter.ts";
-import { WorkflowExecution } from "../../src/workflow/execution.ts";
+import { WorkflowExecution, WorkflowExecutionState } from "../../src/workflow/execution.ts";
 import {
   type UpdatePlan,
   UpdateWorkflowProgress,
@@ -247,8 +247,11 @@ const writeContract = Effect.gen(function* () {
 });
 
 const completesGoal = (session: Session) => waitFor(session.goalStatus, "completed");
+const isBlocked = WorkflowExecutionState.isAnyOf(["blocked"]);
+const stopped = (reason: (typeof WorkflowExecutionState.cases.stopped.Type)["reason"]) =>
+  WorkflowExecutionState.cases.stopped.make({ reason });
 const blocks = Effect.fnUntraced(function* (session: Session) {
-  yield* waitFor(session.execution.pipe(Effect.map((state) => state.kind)), "blocked");
+  yield* waitFor(session.execution.pipe(Effect.map(isBlocked)), true);
   expect(yield* session.execution).toMatchObject({ reason: "repeated_failure" });
 });
 
@@ -271,7 +274,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       expect(
         (yield* (yield* Nodes).session(session.id)).filter((node) => node.kind === "user"),
       ).toHaveLength(1);
-      expect(yield* session.execution).toEqual({ kind: "stopped", reason: "completed" });
+      expect(yield* session.execution).toEqual(stopped("completed"));
     }),
   );
 
@@ -370,7 +373,6 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       ]);
       yield* session.run();
       expect(yield* session.execution).toMatchObject({
-        kind: "blocked",
         reason: "user_decision",
         detail: "Choose the deployment target",
       });
@@ -397,7 +399,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
         [p1, { ...p1, id: "p2", dependsOn: ["p1"] }, { ...p1, id: "p3" }],
       );
       yield* session.run();
-      yield* waitFor(session.execution.pipe(Effect.map((state) => state.kind)), "blocked");
+      yield* waitFor(session.execution.pipe(Effect.map(isBlocked)), true);
       expect(yield* session.execution).toMatchObject({
         reason: "dependency_stalled",
         evidence: ["p1 [blocked]", "p2 waits on p1 [blocked]"],
@@ -436,7 +438,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       ]);
       yield* session.run();
       expect((yield* (yield* Workflows).get(session.id)).phase).toBe("plan");
-      expect(yield* session.execution).toEqual({ kind: "stopped", reason: "workflow_changed" });
+      expect(yield* session.execution).toEqual(stopped("workflow_changed"));
       expect(session.invocations()).toHaveLength(2);
     }),
   );
@@ -499,7 +501,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
         { text: "I will check.", failAfterText: "provider failed" },
       ]);
       yield* session.run();
-      expect(yield* session.execution).toEqual({ kind: "stopped", reason: "run_failed" });
+      expect(yield* session.execution).toEqual(stopped("run_failed"));
       expect(session.invocations()).toHaveLength(1);
     }),
   );
@@ -518,10 +520,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution across 
       yield* blocks(session);
       expect(session.invocations()).toHaveLength(2);
       yield* env.reopen;
-      expect(yield* session.execution).toMatchObject({
-        kind: "blocked",
-        reason: "repeated_failure",
-      });
+      expect(yield* session.execution).toMatchObject({ reason: "repeated_failure" });
       expect(yield* session.readySessions).not.toContain(session.id);
     }),
   );
@@ -531,9 +530,9 @@ testAgent({ testProvider: { responder } })("automatic workflow execution across 
       const env = yield* TestEnv;
       const session = yield* executing([{ text: "I will review." }]);
       yield* session.run();
-      expect((yield* session.execution).kind).toBe("ready");
+      expect(WorkflowExecutionState.isAnyOf(["ready"])(yield* session.execution)).toBe(true);
       expect((yield* session.cancel).status).toBe(200);
-      expect(yield* session.execution).toEqual({ kind: "stopped", reason: "user" });
+      expect(yield* session.execution).toEqual(stopped("user"));
       yield* env.reopen;
       expect(yield* session.readySessions).not.toContain(session.id);
       expect(session.invocations()).toHaveLength(1);

@@ -1,5 +1,6 @@
 import { Data, Function as EffectFunction } from "effect";
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
+import { WorkflowExecutionState } from "../api";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
 export type RunNotice = Data.TaggedEnum<{
@@ -36,7 +37,7 @@ function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice 
   if (!(lastRun !== null)) return null;
   // A restart is recorded as an error; the status may have been rewritten since.
   if (lastRun.error?.code === serverRestartedCode)
-    return state.execution?.kind === "retrying"
+    return WorkflowExecutionState.$is("retrying")(state.execution)
       ? RunNotice.resuming({ at: state.execution.retryAt })
       : RunNotice.restarted();
   switch (lastRun.status) {

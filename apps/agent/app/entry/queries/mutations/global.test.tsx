@@ -3,7 +3,13 @@ import { Deferred, Effect, Fiber } from "effect";
 import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, vi } from "vite-plus/test";
-import { api, type ModelSelection, type ProviderId } from "../../api";
+import {
+  AccountLoginState,
+  api,
+  ProviderAuthState,
+  type ModelSelection,
+  type ProviderId,
+} from "../../api";
 import { uiPromise } from "../../shared/ui-effect";
 import { globalQueries } from "../global";
 import { useSwitchAccountMutation } from "./global";
@@ -62,7 +68,10 @@ it.live(
       const refresh = yield* Deferred.make<void>();
       const selectEntered = yield* Deferred.make<void>();
       const selectRelease = yield* Deferred.make<ModelSelection>();
-      vi.spyOn(api, "accountAction").mockResolvedValue({ profiles: [], login: { status: "idle" } });
+      vi.spyOn(api, "accountAction").mockResolvedValue({
+        profiles: [],
+        login: AccountLoginState.idle(),
+      });
       vi.spyOn(api, "accountQuota").mockImplementation(() =>
         runPromise(
           Deferred.await(refresh).pipe(
@@ -73,7 +82,7 @@ it.live(
       vi.spyOn(api, "auth").mockImplementation(() =>
         runPromise(
           Deferred.await(refresh).pipe(
-            Effect.as({ provider: "anthropic", status: "signed-in" } as const),
+            Effect.as(ProviderAuthState["signed-in"]({ provider: "anthropic" })),
           ),
         ),
       );
@@ -115,7 +124,8 @@ it.live(
         new QueryObserver(client, {
           ...globalQueries.auth("anthropic"),
           staleTime: Infinity,
-          initialData: { provider: "anthropic", status: "signed-in" },
+          initialData: (): ProviderAuthState =>
+            ProviderAuthState["signed-in"]({ provider: "anthropic" }),
         }).subscribe(() => {}),
         new QueryObserver(client, {
           ...globalQueries.accountQuota("anthropic"),

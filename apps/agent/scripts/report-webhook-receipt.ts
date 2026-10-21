@@ -1,7 +1,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { ConfigProvider, Console, Effect, Layer, Schema, Stdio } from "effect";
 import { Flag } from "effect/cli";
-import { ReportDelivery } from "memory-agent";
+import { ReportDelivery, ReportDeliveryResult } from "memory-agent";
 import { loadEnv } from "vite-plus";
 import { parseCommandLine } from "../server/command-line.ts";
 
@@ -45,13 +45,13 @@ const text = [
 const program = Effect.gen(function* () {
   const delivery = yield* ReportDelivery;
   const result = yield* delivery.send({ text, evidence: null }, false);
-  switch (result.status) {
-    case "delivered":
-      return yield* Console.log(`delivered: HTTP 2xx (wait=true), message id ${result.messageId}`);
-    case "duplicate":
-    case "uncertain_duplicate":
-      return yield* Console.log(`not sent: ${result.status}`);
-  }
+  return yield* Console.log(
+    ReportDeliveryResult.match(result, {
+      delivered: ({ messageId }) => `delivered: HTTP 2xx (wait=true), message id ${messageId}`,
+      duplicate: () => "not sent: duplicate",
+      uncertain_duplicate: () => "not sent: uncertain_duplicate",
+    }),
+  );
 }).pipe(
   Effect.catchTag("ReportDeliveryError", (error) =>
     Console.log(

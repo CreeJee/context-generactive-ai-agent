@@ -8,7 +8,7 @@ import {
   BackgroundTasks,
 } from "../../src/tools/background.ts";
 import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
-import { WorkTraceStore } from "../../src/work-trace/store.ts";
+import { LifecycleOutcome, LifecycleRequest, WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { inRun } from "../support/run-span.ts";
 import { freshSession, sdk } from "./agent-env.ts";
@@ -224,15 +224,13 @@ testAgent()("background task lifecycle", (it) => {
         intent: "delete",
         idempotencyKey: `${sessionId}:delete`,
       });
-      switch (requested.status) {
-        case "requested":
-          expect((yield* trace.finalizeTaskLifecycle(requested.operationId)).status).toBe(
-            "completed",
-          );
-          break;
-        default:
-          expect.unreachable(`delete not requested: ${requested.status}`);
-      }
+      expect(LifecycleRequest.$is("requested")(requested)).toBe(true);
+      if (LifecycleRequest.$is("requested")(requested))
+        expect(
+          LifecycleOutcome.$is("completed")(
+            yield* trace.finalizeTaskLifecycle(requested.operationId),
+          ),
+        ).toBe(true);
       expect(
         yield* sdk(() => persistence.stores.metadata.get("background-task-result", receipt.taskId)),
       ).toBeNull();

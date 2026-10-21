@@ -1,4 +1,5 @@
 import { chat } from "@tanstack/ai";
+import { AuthConnectionState } from "../providers/contracts.ts";
 import { Context, Crypto, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
@@ -119,7 +120,7 @@ const make = Effect.gen(function* () {
     const selection = yield* active.selected.pipe(Effect.mapError(unavailable));
     if (selection === null) return yield* unavailable(null);
     const auth = yield* active.auth(selection);
-    if (auth.status !== "signed-in") return yield* unavailable(null);
+    if (!AuthConnectionState.$is("signed-in")(auth)) return yield* unavailable(null);
     const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
     const adapter = services.runtime.adapter(selection);
     // Per scan: a later scan starts trusting the server again.

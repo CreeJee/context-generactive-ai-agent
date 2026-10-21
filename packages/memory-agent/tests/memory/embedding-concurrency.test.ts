@@ -2,14 +2,14 @@ import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import * as nativeClient from "../../src/memory/native-search/client.ts";
 import { OwnerCommand } from "../../src/memory/native-search/worker-protocol.ts";
-import { Embedder } from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { fakeVector } from "../../src/testing/fake-embedder.ts";
-import { WorkTraceStore } from "../../src/work-trace/store.ts";
+import { LifecycleOutcome, WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
 
@@ -33,7 +33,7 @@ vi.spyOn(nativeClient, "makeNativeOwner").mockImplementation((...args) =>
 const embedder = Layer.succeed(Embedder, {
   identity: "concurrent-chunks",
   dimensions: 384,
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
   chunks: (texts) => Effect.succeed(texts.map((text) => [{ start: 0, end: text.length }])),
   embed: (texts) => Effect.succeed(texts.map(fakeVector)),
 });
@@ -115,9 +115,9 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
         const { operationId } = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ operationId: Schema.String }),
         )(request);
-        expect(yield* trace.finalizeSessionLifecycle(operationId)).toMatchObject({
-          status: "completed",
-        });
+        expect(
+          LifecycleOutcome.$is("completed")(yield* trace.finalizeSessionLifecycle(operationId)),
+        ).toBe(true);
         yield* Ref.set(beforeSave, Effect.void);
         yield* Deferred.succeed(release, undefined);
         expect(yield* Fiber.join(indexing)).toBe(0);

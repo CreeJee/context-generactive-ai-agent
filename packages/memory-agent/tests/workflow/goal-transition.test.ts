@@ -1,11 +1,11 @@
 import { layer } from "@effect/vitest";
-import { Cause, Effect, Layer, Schema } from "effect";
+import { Cause, Data, Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { isTruthy } from "../../src/truthy.ts";
-import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
-import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
+import { NewGoalSettlement, Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { inRun } from "../support/run-span.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
@@ -99,9 +99,10 @@ const latestRevision = (session: string) =>
 
 const bindRun = Effect.fnUntraced(function* (session: string, runId: string) {
   expect(
-    (yield* (yield* workflowRunBindings).bind(session, runId, yield* latestRevision(session)))
-      .status,
-  ).toBe("bound");
+    Admission.$is("bound")(
+      yield* (yield* workflowRunBindings).bind(session, runId, yield* latestRevision(session)),
+    ),
+  ).toBe(true);
 });
 
 const startRun = (session: string, runId: string, status: string) =>
@@ -158,12 +159,12 @@ const withInvokingRun = Effect.fnUntraced(function* () {
   return { ...f, invoking, request, settle };
 });
 
-type Admission =
-  | { readonly type: "applied" }
-  | { readonly type: "refused"; readonly reason: string };
+/** What `startNewGoal` does in a case: apply the new Goal, or refuse it for `reason`. */
+type Expected = Data.TaggedEnum<{ applied: {}; refused: { readonly reason: string } }>;
+const Expected = Data.taggedEnum<Expected>();
 
-const applied: Admission = { type: "applied" };
-const refused = (reason: string): Admission => ({ type: "refused", reason });
+const applied = Expected.applied();
+const refused = (reason: string) => Expected.refused({ reason });
 
 /** Goal phase, the earlier run completed with a settled receipt, and the current Goal named. */
 const admissible = {
@@ -182,7 +183,7 @@ const transitionCases: ReadonlyArray<{
   readonly historicalRun: "completed" | "running" | "failed" | "missing";
   readonly ownerEffect: "succeeded" | "pending" | "uncertain";
   readonly previous: "current" | "stale" | "none";
-  readonly admission: Admission;
+  readonly admission: Expected;
 }> = [
   { ...admissible, name: "goal with an existing Goal", admission: applied },
   { ...admissible, name: "plan with an existing Goal", phase: "plan", admission: applied },
@@ -280,22 +281,24 @@ testAgent()("explicit new Goal transition", (it) => {
         }
       })();
       const before = yield* rows("revisions", session);
-      switch (c.admission.type) {
-        case "applied":
-          expect(yield* workflows.startNewGoal(session, transition(previous))).toMatchObject({
-            goal: { version: 1 },
-            plan: null,
-          });
-          expect(yield* identity(session)).not.toBe(old);
-          break;
-        case "refused":
-          expect(
-            yield* Effect.flip(workflows.startNewGoal(session, transition(previous))),
-          ).toMatchObject({ reason: c.admission.reason });
-          expect(yield* identity(session)).toBe(old);
-          expect(yield* rows("revisions", session)).toEqual(before);
-          break;
-      }
+      yield* Expected.$match(c.admission, {
+        applied: () =>
+          Effect.gen(function* () {
+            expect(yield* workflows.startNewGoal(session, transition(previous))).toMatchObject({
+              goal: { version: 1 },
+              plan: null,
+            });
+            expect(yield* identity(session)).not.toBe(old);
+          }),
+        refused: ({ reason }) =>
+          Effect.gen(function* () {
+            expect(
+              yield* Effect.flip(workflows.startNewGoal(session, transition(previous))),
+            ).toMatchObject({ reason });
+            expect(yield* identity(session)).toBe(old);
+            expect(yield* rows("revisions", session)).toEqual(before);
+          }),
+      });
     }),
   );
 
@@ -381,8 +384,8 @@ testAgent()("deferred new Goal request", (it) => {
         const result = yield* f.settle();
         expect(result).toEqual(
           status === "interrupted"
-            ? { status: "accepted" }
-            : { status: "rejected", reason: "run_outcome_uncertain" },
+            ? NewGoalSettlement.accepted()
+            : NewGoalSettlement.rejected({ reason: "run_outcome_uncertain" }),
         );
         expect(yield* f.settle()).toEqual(result);
         expect(yield* identity(f.session)).toBe(f.old);
@@ -439,7 +442,9 @@ testAgent()("deferred new Goal request", (it) => {
         );
         yield* setRun(f.invoking, "completed");
         const before = yield* rows("revisions", f.session);
-        expect(yield* f.settle()).toEqual({ status: "rejected", reason: "owner_effect_uncertain" });
+        expect(yield* f.settle()).toEqual(
+          NewGoalSettlement.rejected({ reason: "owner_effect_uncertain" }),
+        );
         expect(yield* identity(f.session)).toBe(f.old);
         expect(yield* rows("revisions", f.session)).toEqual(before);
       }),
@@ -503,7 +508,7 @@ testAgent()("new Goal transition across reopening", (it) => {
         const state = yield* f.workflows.get(f.session);
         expect(yield* f.request()).toEqual({ status: "accepted", runId: f.invoking });
         expect(yield* f.request()).toEqual({ status: "accepted", runId: f.invoking });
-        expect(yield* f.settle()).toEqual({ status: "accepted" });
+        expect(yield* f.settle()).toEqual(NewGoalSettlement.accepted());
         expect(yield* identity(f.session)).toBe(f.old);
         expect(yield* f.workflows.get(f.session)).toEqual(state);
         const source = yield* latestRevision(f.session);
@@ -513,10 +518,9 @@ testAgent()("new Goal transition across reopening", (it) => {
         ]);
         yield* setRun(f.invoking, "completed");
         const applied = yield* f.settle();
-        expect(applied).toMatchObject({ status: "applied" });
         const newId = yield* identity(f.session);
         expect(newId).not.toBe(f.old);
-        expect(applied).toMatchObject({ goalInstanceId: newId });
+        expect(applied).toEqual(NewGoalSettlement.applied({ goalInstanceId: newId }));
         expect(yield* f.settle()).toEqual(applied);
         expect(yield* rows("goalInstances", f.session)).toHaveLength(2);
         yield* expectHistoryKept(f.session, before);
@@ -541,15 +545,14 @@ testAgent()("new Goal transition across reopening", (it) => {
       yield* f.workflows.updatePlan(f.session, { ...plan, summary: "concurrent revision" });
       const before = yield* rows("revisions", f.session);
       yield* setRun(f.invoking, "completed");
-      expect(yield* f.settle()).toEqual({ status: "rejected", reason: "workflow_changed" });
+      expect(yield* f.settle()).toEqual(NewGoalSettlement.rejected({ reason: "workflow_changed" }));
       expect(yield* identity(f.session)).toBe(f.old);
       expect(yield* rows("revisions", f.session)).toEqual(before);
       yield* env.reopen;
       const workflows = yield* env.use(Workflows);
-      expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual({
-        status: "rejected",
-        reason: "workflow_changed",
-      });
+      expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual(
+        NewGoalSettlement.rejected({ reason: "workflow_changed" }),
+      );
     }),
   );
 
@@ -568,7 +571,7 @@ testAgent()("new Goal transition across reopening", (it) => {
           yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", f.invoking),
         ).not.toEqual({ status: "completed" });
         const result = yield* workflows.settleNewGoalRequest(f.session, f.invoking);
-        expect(result).toMatchObject({ status: "rejected", reason: "run_outcome_uncertain" });
+        expect(result).toEqual(NewGoalSettlement.rejected({ reason: "run_outcome_uncertain" }));
         expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual(result);
         expect(yield* identity(f.session)).toBe(f.old);
         expect(yield* rows("goalInstances", f.session)).toHaveLength(1);

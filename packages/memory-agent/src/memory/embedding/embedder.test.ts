@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
+import { GpuCheck } from "../../config/global-config.ts";
 import { embeddingModeFor, gpuMemoryThreshold, planBatches } from "./embedder.ts";
 
 describe("how the model runs", () => {
   const plenty = gpuMemoryThreshold;
   const little = gpuMemoryThreshold - 1;
-  const available = { status: "available", checkedAt: "2026-09-16T00:00:00.000Z" } as const;
-  const unavailable = {
-    status: "unavailable",
+  const available = GpuCheck.cases.available.make({ checkedAt: "2026-09-16T00:00:00.000Z" });
+  const unavailable = GpuCheck.cases.unavailable.make({
     checkedAt: "2026-09-16T00:00:00.000Z",
     reason: "no WebGPU device",
-  } as const;
+  });
 
   it("auto takes the GPU only with enough memory and a WebGPU that worked", () => {
     expect(embeddingModeFor({}, plenty)).toBe("cpu");

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
-import type { ModelSelection, ProviderAuthState } from "../api";
+import { ProviderAuthState, type ModelSelection } from "../api";
 import { AccountModelPanel, accountSummary } from "./account-model-panel";
 import { ReportLink } from "../report/report-link";
 import { ThemeSelect, themes } from "../shared/theme";
@@ -13,11 +13,7 @@ describe("compact sidebar controls", () => {
       model: "a-very-long-model-name",
       reasoningEffort: "high",
     };
-    const error: ProviderAuthState = {
-      provider: "anthropic",
-      status: "error",
-      message: "연결 실패",
-    };
+    const error = ProviderAuthState.error({ provider: "anthropic", message: "연결 실패" });
     expect(accountSummary("anthropic", error, selection, "Very Long Model")).toMatchObject({
       status: "연결 오류",
       model: "ChatGPT / Very Long Model",
@@ -44,7 +40,7 @@ describe("compact sidebar controls", () => {
     const html = renderToStaticMarkup(
       <AccountModelPanel
         provider="openai"
-        auth={{ provider: "openai", status: "signed-in" }}
+        auth={ProviderAuthState["signed-in"]({ provider: "openai" })}
         selection={{ provider: "openai", model: "gpt", reasoningEffort: "high" }}
         modelName="GPT"
       >

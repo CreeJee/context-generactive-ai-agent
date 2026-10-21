@@ -13,6 +13,7 @@ import {
   Schema,
   Scope,
 } from "effect";
+import { DatabaseSync } from "node:sqlite";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
@@ -24,6 +25,7 @@ import {
 import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Database } from "../../src/db/database.ts";
+import { migrations } from "../../src/db/migrations.ts";
 import { NodeDetail } from "../../src/memory/nodes.ts";
 import {
   SubscriptionStreamFailed,
@@ -33,7 +35,7 @@ import {
   ExecutionAdmission,
   defaultExecutionAdmissionLimits,
 } from "../../src/runtime/execution-admission.ts";
-import { WorkflowExecution } from "../../src/workflow/execution.ts";
+import { WorkflowExecution, WorkflowExecutionState } from "../../src/workflow/execution.ts";
 import {
   ProviderRetries,
   ProviderRetryOutcome,
@@ -94,14 +96,15 @@ const runningGoal = Effect.fnUntraced(function* (runId: string) {
     "INSERT OR REPLACE INTO chat_metadata (namespace, key, value) VALUES (?, ?, ?)",
     "memory-agent/workflow-execution",
     "s",
-    yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-      kind: "running",
-      runId,
-      goalVersion: 1,
-      planVersion: 1,
-      noProgressRuns: 0,
-      progress: { completedSteps: [], evidence: [], toolResults: [] },
-    }),
+    yield* Schema.encodeEffect(Schema.fromJsonString(WorkflowExecutionState))(
+      WorkflowExecutionState.cases.running.make({
+        runId,
+        goalVersion: 1,
+        planVersion: 1,
+        noProgressRuns: 0,
+        progress: { completedSteps: [], evidence: [], toolResults: [] },
+      }),
+    ),
   );
   yield* sqlRun(
     "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, 's', 'failed', 1)",
@@ -189,10 +192,7 @@ describe("durable provider retry", () => {
           ProviderRetryOutcome.Exhausted(),
         );
         expect(yield* storedWaits(sql)).toEqual([]);
-        expect(yield* execution.get("s")).toMatchObject({
-          kind: "blocked",
-          reason: "external_dependency",
-        });
+        expect(yield* execution.get("s")).toMatchObject({ reason: "external_dependency" });
         yield* Scope.close(scope, Exit.void);
       }),
     ),
@@ -205,7 +205,6 @@ describe("durable provider retry", () => {
         yield* Effect.gen(function* () {
           yield* runningGoal("quiet");
           expect(yield* execution.afterRestart("s", "quiet", 9_000)).toMatchObject({
-            kind: "retrying",
             runId: "quiet",
             retryAt: 9_000,
           });
@@ -224,7 +223,6 @@ describe("durable provider retry", () => {
           // A succeeded shell call the session history does not hold may be repeated unknowingly.
           yield* shellRun("unrecorded");
           expect(yield* execution.afterRestart("s", "unrecorded", undefined)).toMatchObject({
-            kind: "blocked",
             reason: "server_restarted",
           });
           yield* shellRun("recorded");
@@ -236,12 +234,55 @@ describe("durable provider retry", () => {
               ok: true,
             }),
           );
-          expect(yield* execution.afterRestart("s", "recorded", undefined)).toMatchObject({
-            kind: "retrying",
-            runId: "recorded",
-          });
+          expect(
+            WorkflowExecutionState.isAnyOf(["retrying"])(
+              yield* execution.afterRestart("s", "recorded", undefined),
+            ),
+          ).toBe(true);
         }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         yield* Scope.close(scope, Exit.void);
+      }),
+    ),
+  );
+
+  it.effect("continues a ready execution 0.0.17 stored under kind", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const file = yield* tempFile;
+        yield* Scope.close((yield* open(file)).scope, Exit.void);
+        const executionMigration = migrations.findIndex((step) =>
+          step.includes("workflow execution state names its case under _tag"),
+        );
+        expect(executionMigration).toBeGreaterThanOrEqual(0);
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() => new DatabaseSync(file)),
+          (sqlite) =>
+            Effect.sync(() => {
+              // The state as 0.0.17 wrote it, with its case under kind.
+              sqlite
+                .prepare("INSERT INTO chat_metadata (namespace, key, value) VALUES (?, 's', ?)")
+                .run(
+                  "memory-agent/workflow-execution",
+                  '{"kind":"ready","runId":"run-1","goalVersion":2,"planVersion":3,"noProgressRuns":1,"progress":{"completedSteps":["p1"],"evidence":["e1"],"toolResults":[]}}',
+                );
+              sqlite.exec(`DELETE FROM effect_sql_migrations WHERE migration_id > ${executionMigration};
+                PRAGMA user_version = ${executionMigration}`);
+            }),
+          (sqlite) => Effect.sync(() => sqlite.close()),
+        );
+
+        const reopened = yield* open(file);
+        expect(yield* reopened.execution.readySessions()).toEqual(["s"]);
+        expect(yield* reopened.execution.get("s")).toEqual(
+          WorkflowExecutionState.cases.ready.make({
+            runId: "run-1",
+            goalVersion: 2,
+            planVersion: 3,
+            noProgressRuns: 1,
+            progress: { completedSteps: ["p1"], evidence: ["e1"], toolResults: [] },
+          }),
+        );
+        yield* Scope.close(reopened.scope, Exit.void);
       }),
     ),
   );

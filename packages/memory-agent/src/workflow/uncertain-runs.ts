@@ -1,4 +1,4 @@
-import { DateTime, Effect, HashSet, Schema } from "effect";
+import { Data, DateTime, Effect, HashSet, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { readOnlyToolNames } from "../tools/effects.ts";
 import { invocationFieldSql, resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
@@ -28,9 +28,11 @@ export interface UncertainRun {
 export const UncertainContinueRequest = Schema.Struct({ runIds: Schema.Array(Schema.String) });
 export type UncertainContinueRequest = typeof UncertainContinueRequest.Type;
 
-export type UncertainContinue =
-  | { readonly status: "acknowledged" }
-  | { readonly status: "refused"; readonly reason: "run_in_progress" | "uncertain_runs_changed" };
+export type UncertainContinue = Data.TaggedEnum<{
+  acknowledged: {};
+  refused: { readonly reason: "run_in_progress" | "uncertain_runs_changed" };
+}>;
+export const UncertainContinue = Data.taggedEnum<UncertainContinue>();
 
 const Operation = Schema.Struct({
   status: Schema.Literals(["pending", "succeeded", "uncertain", "rejected"]),
@@ -155,7 +157,7 @@ export const uncertainRuns = Effect.gen(function* () {
             SqlError.SqlError | Schema.SchemaError
           > {
             if ((yield* producing(sessionId)).length > 0)
-              return { status: "refused", reason: "run_in_progress" };
+              return UncertainContinue.refused({ reason: "run_in_progress" });
             const runs = yield* Schema.decodeUnknownEffect(Runs)(yield* blocking(sessionId));
             for (const { runId } of runs) yield* decodeOperations(yield* operations(runId));
             const current = runs.map((run) => run.runId);
@@ -165,12 +167,12 @@ export const uncertainRuns = Effect.gen(function* () {
               current.length !== asked.size ||
               !current.every((id) => asked.has(id))
             )
-              return { status: "refused", reason: "uncertain_runs_changed" };
+              return UncertainContinue.refused({ reason: "uncertain_runs_changed" });
             for (const runId of current)
               yield* sql`
                 INSERT INTO workflow_uncertain_acknowledgements (run_id, session_id, acknowledged_at)
                 VALUES (${runId}, ${sessionId}, ${at}) ON CONFLICT DO NOTHING`;
-            return { status: "acknowledged" };
+            return UncertainContinue.acknowledged();
           }),
         )
         .pipe(

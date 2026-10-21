@@ -6,7 +6,7 @@ import { Cause, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { sdkPromise } from "../runtime/sdk-promise.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
-import type { ModelSelection } from "../providers/contracts.ts";
+import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { Nodes, type Node, type NodeKind } from "../memory/nodes.ts";
 import { GlobalConfig } from "../config/global-config.ts";
 import {
@@ -147,7 +147,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       const selection = yield* active.selected;
       if (!isTruthy(selection)) return "unavailable" as const;
       const auth = yield* active.auth(selection);
-      if (auth.status !== "signed-in") return "unavailable" as const;
+      if (!AuthConnectionState.$is("signed-in")(auth)) return "unavailable" as const;
 
       const messages = yield* summaryPromise("load-messages", () =>
         messageStore.loadThread(sessionId),

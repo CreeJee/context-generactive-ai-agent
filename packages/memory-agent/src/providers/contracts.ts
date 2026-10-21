@@ -1,6 +1,6 @@
 import type { GlobalConfigFailed } from "../config/global-config.ts";
 import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware } from "@tanstack/ai";
-import { Effect, Schema } from "effect";
+import { Data, Effect, Schema } from "effect";
 
 /** Persisted model connection ID. Compatible endpoints are not an OpenAI vendor identity. */
 export const ProviderId = Schema.Literals(["openai", "anthropic", "openai-compatible"]);
@@ -14,48 +14,41 @@ export type ProviderVendor = typeof ProviderVendor.Type;
 export const SubscriptionAccountProvider = ProviderVendor;
 export type SubscriptionAccountProvider = typeof SubscriptionAccountProvider.Type;
 
-export const NativeToolSupport = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("vendor-native"), vendor: ProviderVendor }),
-  Schema.Struct({ type: Schema.Literal("unsupported") }),
-]);
+export const NativeToolSupport = Schema.TaggedUnion({
+  "vendor-native": { vendor: ProviderVendor },
+  unsupported: {},
+});
 export type NativeToolSupport = typeof NativeToolSupport.Type;
 
-export const ProviderConnection = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("subscription"),
+export const ProviderConnection = Schema.TaggedUnion({
+  subscription: {
     accountProvider: SubscriptionAccountProvider,
     nativeTools: NativeToolSupport,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("compatible-endpoint"),
+  },
+  "compatible-endpoint": {
     protocol: Schema.Literal("openai-chat-completions"),
     nativeTools: NativeToolSupport,
-  }),
-]);
+  },
+});
 export type ProviderConnection = typeof ProviderConnection.Type;
+
+const subscriptionConnection = (vendor: ProviderVendor): ProviderConnection =>
+  ProviderConnection.cases.subscription.make({
+    accountProvider: vendor,
+    nativeTools: NativeToolSupport.cases["vendor-native"].make({ vendor }),
+  });
+const connections = {
+  openai: subscriptionConnection("openai"),
+  anthropic: subscriptionConnection("anthropic"),
+  "openai-compatible": ProviderConnection.cases["compatible-endpoint"].make({
+    protocol: "openai-chat-completions",
+    nativeTools: NativeToolSupport.cases.unsupported.make({}),
+  }),
+} satisfies Record<ProviderId, ProviderConnection>;
 
 /** Resolve persisted IDs once; consumers dispatch on connection kind and tool support. */
 export function providerConnection(provider: ProviderId): ProviderConnection {
-  switch (provider) {
-    case "openai":
-      return {
-        type: "subscription",
-        accountProvider: "openai",
-        nativeTools: { type: "vendor-native", vendor: "openai" },
-      };
-    case "anthropic":
-      return {
-        type: "subscription",
-        accountProvider: "anthropic",
-        nativeTools: { type: "vendor-native", vendor: "anthropic" },
-      };
-    case "openai-compatible":
-      return {
-        type: "compatible-endpoint",
-        protocol: "openai-chat-completions",
-        nativeTools: { type: "unsupported" },
-      };
-  }
+  return connections[provider];
 }
 
 /** A model is never identified without its provider. */
@@ -108,30 +101,27 @@ export class ProviderOperationFailed extends Schema.TaggedError<ProviderOperatio
   { provider: ProviderId, operation: Schema.Literals(["auth", "catalog", "model"]) },
 ) {}
 
-export type AuthConnectionState =
-  | { readonly provider: ProviderId; readonly status: "signed-out" }
-  | {
-      readonly provider: ProviderId;
-      readonly status: "pending";
-      readonly authorizationUrl: string;
-    }
-  | {
-      readonly provider: ProviderId;
-      readonly status: "signed-in";
-      readonly planType?: string;
-    }
-  | {
-      readonly provider: ProviderId;
-      readonly status: "error";
-      readonly message: string;
-      readonly code?: string;
-      readonly operation?: string;
-      readonly httpStatus?: number;
-      readonly providerCode?: string;
-      readonly credentialStage?: string;
-      readonly transportCode?: string;
-      readonly proxyRoute?: "direct" | "unavailable" | "attempted";
-    };
+type AuthConnectionCases = {
+  readonly "signed-out": { readonly provider: ProviderId };
+  readonly pending: { readonly provider: ProviderId; readonly authorizationUrl: string };
+  readonly "signed-in": { readonly provider: ProviderId; readonly planType?: string };
+  readonly error: {
+    readonly provider: ProviderId;
+    readonly message: string;
+    readonly code?: string;
+    readonly operation?: string;
+    readonly httpStatus?: number;
+    readonly providerCode?: string;
+    readonly credentialStage?: string;
+    readonly transportCode?: string;
+    readonly proxyRoute?: "direct" | "unavailable" | "attempted";
+  };
+};
+/** A provider's account connection, in the case its login is in. */
+export type AuthConnectionState = Data.TaggedEnum<AuthConnectionCases>;
+export const AuthConnectionState = Data.taggedEnum<AuthConnectionState>();
+/** The case an `AuthConnectionState` is in. */
+export type AuthStatus = keyof AuthConnectionCases;
 
 /** Authentication lifecycle only. Deliberately has no token or credential getter. */
 export interface AuthProvider {

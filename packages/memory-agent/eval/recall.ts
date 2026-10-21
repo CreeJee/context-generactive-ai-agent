@@ -18,6 +18,7 @@ import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import {
+  EmbedderRuntime,
   Embedder,
   EmbeddingError,
   localModel,
@@ -52,7 +53,7 @@ const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
   dimensions: 384,
   embed: () => Effect.fail(EmbeddingError.make({ cause: "disabled" })),
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
 });
 
 interface Configuration {

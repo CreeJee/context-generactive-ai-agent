@@ -7,7 +7,7 @@ import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemGroup } from "~/components/ui/item";
 import { externalAgentFailureText } from "memory-agent/definitions";
-import { type ExternalAgentView, type Project } from "../../api";
+import { AgentLinkState, AgentTrustState, type ExternalAgentView, type Project } from "../../api";
 import { useSuspenseAgentsQuery } from "../../queries/project";
 import { AgentChange, useExternalAgentMutation } from "../../queries/mutations/project";
 import {
@@ -25,51 +25,40 @@ import {
 
 function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
   if (agent.shadowed) return shadowedBadge;
-  switch (agent.state.status) {
-    case "untrusted":
-      return <Badge variant="outline">신뢰 필요</Badge>;
-    case "changed":
-      return <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>;
-    case "trusted":
-      switch (agent.state.link.status) {
-        case "idle":
-          return <Badge variant="secondary">쓸 때 시작</Badge>;
-        case "connecting":
-          return <Badge variant="secondary">연결 중</Badge>;
-        case "connected":
-          return <Badge>연결됨</Badge>;
-        case "retrying":
-          return <Badge variant="outline">연결 실패 {agent.state.link.failures}회</Badge>;
-        case "stopped":
-          return <Badge variant="destructive">재연결 중단</Badge>;
-      }
-  }
+  return AgentTrustState.$match(agent.state, {
+    untrusted: () => <Badge variant="outline">신뢰 필요</Badge>,
+    changed: () => <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>,
+    trusted: ({ link }) =>
+      AgentLinkState.$match(link, {
+        idle: () => <Badge variant="secondary">쓸 때 시작</Badge>,
+        connecting: () => <Badge variant="secondary">연결 중</Badge>,
+        connected: () => <Badge>연결됨</Badge>,
+        retrying: ({ failures }) => <Badge variant="outline">연결 실패 {failures}회</Badge>,
+        stopped: () => <Badge variant="destructive">재연결 중단</Badge>,
+      }),
+  });
 }
 
 /** Why a trusted agent is not connected, when it tried and failed. */
 function agentProblem(agent: ExternalAgentView): ConfigProblem | null {
-  switch (agent.state.status) {
-    case "untrusted":
-    case "changed":
-      return null;
-    case "trusted":
-      switch (agent.state.link.status) {
-        case "idle":
-        case "connecting":
-        case "connected":
-          return null;
-        case "retrying":
-          return {
-            text: externalAgentFailureText[agent.state.link.failure.code],
-            detail: agent.state.link.failure.detail,
-          };
-        case "stopped":
-          return {
-            text: `${externalAgentFailureText[agent.state.link.failure.code]} 두 번 연달아 실패해서 멈췄어요. 다시 연결을 눌러 주세요.`,
-            detail: agent.state.link.failure.detail,
-          };
-      }
-  }
+  return AgentTrustState.$match(agent.state, {
+    untrusted: () => null,
+    changed: () => null,
+    trusted: ({ link }) =>
+      AgentLinkState.$match(link, {
+        idle: () => null,
+        connecting: () => null,
+        connected: () => null,
+        retrying: ({ failure }): ConfigProblem => ({
+          text: externalAgentFailureText[failure.code],
+          detail: failure.detail,
+        }),
+        stopped: ({ failure }): ConfigProblem => ({
+          text: `${externalAgentFailureText[failure.code]} 두 번 연달아 실패해서 멈췄어요. 다시 연결을 눌러 주세요.`,
+          detail: failure.detail,
+        }),
+      }),
+  });
 }
 
 /** External ACP agents (Codex and others) the conversation may delegate to (R17). */
@@ -126,9 +115,10 @@ function AgentSettingsContent({ project }: { project: Project }) {
       ) : (
         <ItemGroup>
           {overview.agents.map((agent) => {
-            const trusted = agent.state.status === "trusted";
+            const trusted = AgentTrustState.$is("trusted")(agent.state);
             const stopped =
-              agent.state.status === "trusted" && agent.state.link.status === "stopped";
+              AgentTrustState.$is("trusted")(agent.state) &&
+              AgentLinkState.$is("stopped")(agent.state.link);
             return (
               <ConfigEntry
                 key={`${agent.scope}/${agent.name}`}
@@ -155,7 +145,7 @@ function AgentSettingsContent({ project }: { project: Project }) {
                       )}
                       <TrustButton
                         active={trusted}
-                        changed={agent.state.status === "changed"}
+                        changed={AgentTrustState.$is("changed")(agent.state)}
                         busy={busy}
                         onClick={() =>
                           void apply(

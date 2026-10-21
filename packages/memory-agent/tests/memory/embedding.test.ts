@@ -20,12 +20,13 @@ import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.t
 import { GlobalConfig, type Settings } from "../../src/config/global-config.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import {
+  EmbedderRuntime,
   Embedder,
   EmbeddingError,
   localModel,
   modelFile,
 } from "../../src/memory/embedding/embedder.ts";
-import { EmbeddingSetup } from "../../src/memory/embedding/setup.ts";
+import { EmbeddingSetup, GpuState } from "../../src/memory/embedding/setup.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -115,9 +116,13 @@ testAgent()("Indexer + VectorIndex", (it) => {
       const first = yield* setup.overview;
       const chosen = yield* setup.choose("gpu");
       // The test embedder is not the local model, so nothing is checked.
-      expect(first).toMatchObject({ choice: "auto", running: { kind: "other" }, next: "cpu" });
-      expect(first.gpu).toEqual({ status: "unchecked" });
-      expect(chosen).toMatchObject({ choice: "gpu", next: "gpu", gpu: { status: "unchecked" } });
+      expect(first).toMatchObject({
+        choice: "auto",
+        running: EmbedderRuntime.other(),
+        next: "cpu",
+      });
+      expect(first.gpu).toEqual(GpuState.unchecked());
+      expect(chosen).toMatchObject({ choice: "gpu", next: "gpu", gpu: GpuState.unchecked() });
       expect((yield* (yield* GlobalConfig).read).embeddingDevice).toBe("gpu");
     }),
   );
@@ -256,7 +261,7 @@ const lateIdentity = "late-publication-fixture";
 const lateEmbedder = Layer.succeed(Embedder, {
   identity: lateIdentity,
   dimensions: 384,
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
   chunks: (texts: readonly string[]) =>
     Effect.succeed(texts.map((text) => [{ start: 0, end: text.length }])),
   embed: Effect.fnUntraced(function* (texts: readonly string[]) {
@@ -534,8 +539,10 @@ describe.skipIf(!cachedModels.gpu)("the gpu mode (downloaded full-precision mode
           const [vector] = yield* embedder.embed(sentence);
           const runtime = embedder.runtime();
           const [reference] = yield* (yield* Reference).embed(sentence);
-          expect(runtime).toMatchObject({ kind: "local", mode: "gpu" });
-          expect(["webgpu", "cpu"]).toContain(runtime.kind === "local" ? runtime.device : null);
+          expect(EmbedderRuntime.$is("local")(runtime) && runtime.mode).toBe("gpu");
+          expect(["webgpu", "cpu"]).toContain(
+            EmbedderRuntime.$is("local")(runtime) ? runtime.device : null,
+          );
           expect(embedder.identity).toContain("@fp32/");
           expect(dot(vector!, reference!)).toBeGreaterThan(0.9999);
         }),

@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { type Data, Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { BotIcon, RefreshCwIcon } from "lucide-react";
 import { Schema } from "effect";
@@ -25,7 +25,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { timeOfDay } from "~/lib/dates";
-import { ImportCommand, type ImportActivity, refusalOf } from "../../api";
+import { ImportActivity, ImportCommand, refusalOf } from "../../api";
 import { useImportsQuery } from "../../queries/global";
 import { useImportMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError, shortPath } from "../shared";
@@ -100,47 +100,44 @@ const crashReasons = {
   count: "기록 수를 세지 못했어요",
   pass: "기록을 읽다가 실패했어요",
   lost: "가져오기 작업이 끊겼어요",
-} satisfies Record<Extract<ImportActivity, { status: "crashed" }>["reason"], string>;
+} satisfies Record<Data.TaggedEnum.Value<ImportActivity, "crashed">["reason"], string>;
 
 /** How often the page asks again while a pass reads, and while its nodes wait to be indexed. */
 /** The pass this server is running, or how its latest one went. */
 function ImportActivityLine({ activity }: { activity: ImportActivity }) {
-  switch (activity.status) {
-    case "running":
-      return (
-        <FieldDescription className="flex items-center">
-          <Spinner className="mr-1.5" />
-          <span>
-            기록을 읽는 중이에요. <AnimatedNumber value={activity.checked} />/
-            <AnimatedNumber value={activity.total} />
-            개를 확인하고 노드 <AnimatedNumber value={activity.written} />
-            개를 더했어요.
-            {activity.failed > 0 && (
-              <>
-                {" "}
-                <AnimatedNumber value={activity.failed} />
-                개는 읽지 못했어요.
-              </>
-            )}
-          </span>
-        </FieldDescription>
-      );
-    case "finished":
-      return (
-        <FieldDescription>
-          {timeOfDay(activity.finishedAt)}에 기록 {activity.checked}개를 확인하고 노드{" "}
-          {activity.written}개를 더했어요.
-          {activity.failed > 0 && ` ${activity.failed}개는 읽지 못했어요.`}
-        </FieldDescription>
-      );
-    case "crashed":
-      return (
-        <FieldError>
-          {timeOfDay(activity.finishedAt)}에 가져오기가 중간에 멈췄어요:{" "}
-          {crashReasons[activity.reason]}
-        </FieldError>
-      );
-  }
+  return ImportActivity.$match(activity, {
+    running: (activity) => (
+      <FieldDescription className="flex items-center">
+        <Spinner className="mr-1.5" />
+        <span>
+          기록을 읽는 중이에요. <AnimatedNumber value={activity.checked} />/
+          <AnimatedNumber value={activity.total} />
+          개를 확인하고 노드 <AnimatedNumber value={activity.written} />
+          개를 더했어요.
+          {activity.failed > 0 && (
+            <>
+              {" "}
+              <AnimatedNumber value={activity.failed} />
+              개는 읽지 못했어요.
+            </>
+          )}
+        </span>
+      </FieldDescription>
+    ),
+    finished: (activity) => (
+      <FieldDescription>
+        {timeOfDay(activity.finishedAt)}에 기록 {activity.checked}개를 확인하고 노드{" "}
+        {activity.written}개를 더했어요.
+        {activity.failed > 0 && ` ${activity.failed}개는 읽지 못했어요.`}
+      </FieldDescription>
+    ),
+    crashed: (activity) => (
+      <FieldError>
+        {timeOfDay(activity.finishedAt)}에 가져오기가 중간에 멈췄어요:{" "}
+        {crashReasons[activity.reason]}
+      </FieldError>
+    ),
+  });
 }
 
 /** Migrating other coding agents' local conversations into this app's memory. */
@@ -150,7 +147,7 @@ export function ImportSettings() {
   const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
 
-  const reading = overview.activity?.status === "running";
+  const reading = ImportActivity.$is("running")(overview.activity);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const apply = (command: ImportCommand) =>

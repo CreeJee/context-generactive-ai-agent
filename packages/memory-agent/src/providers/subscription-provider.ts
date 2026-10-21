@@ -26,7 +26,7 @@ import type { ProviderProtocol } from "../oauth/protocol.ts";
 import {
   ModelUnavailable,
   ProviderOperationFailed,
-  type AuthConnectionState,
+  AuthConnectionState,
   type ModelSelection,
   type ProviderConfiguration,
   type SubscriptionAccountProvider,
@@ -267,11 +267,12 @@ export function createSubscriptionProvider(
   const provider = options.protocol.provider;
   const client = options.client ?? createSubscriptionOAuthClient({ protocol: options.protocol });
   let pending: LoginAttempt | null = null;
-  let loginError: Extract<AuthConnectionState, { status: "error" }> | null = null;
+  let loginError: Data.TaggedEnum.Value<AuthConnectionState, "error"> | null = null;
   const failureState = (
     error: OAuthHarnessError | null,
-  ): Extract<AuthConnectionState, { status: "error" }> => {
-    if (error === null) return { provider, status: "error", message: "Login did not complete." };
+  ): Data.TaggedEnum.Value<AuthConnectionState, "error"> => {
+    if (error === null)
+      return AuthConnectionState.error({ provider, message: "Login did not complete." });
     const message = {
       cancelled: "Login was cancelled.",
       callback_invalid: "The browser returned an invalid login callback.",
@@ -284,9 +285,8 @@ export function createSubscriptionProvider(
       provider_rejected: "The provider rejected the login request.",
       transport_unavailable: "The login server or provider could not be reached.",
     } satisfies Record<OAuthHarnessError["code"], string>;
-    return {
+    return AuthConnectionState.error({
       provider,
-      status: "error",
       message: message[error.code] ?? "Login did not complete.",
       code: error.code,
       ...optionalProperty("operation", error.operation ?? undefined),
@@ -295,8 +295,12 @@ export function createSubscriptionProvider(
       ...optionalProperty("credentialStage", error.credentialStage ?? undefined),
       ...optionalProperty("transportCode", error.transportCode ?? undefined),
       ...optionalProperty("proxyRoute", error.proxyRoute ?? undefined),
-    };
+    });
   };
+  const connectionState = (connection: { readonly connected: boolean }): AuthConnectionState =>
+    connection.connected
+      ? AuthConnectionState["signed-in"]({ provider })
+      : AuthConnectionState["signed-out"]({ provider });
   let catalogCache: {
     readonly key: string;
     readonly models: ReadonlyArray<ProviderModel>;
@@ -307,13 +311,10 @@ export function createSubscriptionProvider(
     Cause.UnknownError
   > {
     if (pending !== null)
-      return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
+      return AuthConnectionState.pending({ provider, authorizationUrl: pending.authorizationUrl });
     if (loginError !== null) return loginError;
     return yield* nativePromise(() => client.status()).pipe(
-      Effect.map((connection): AuthConnectionState => ({
-        provider,
-        status: connection.connected ? "signed-in" : "signed-out",
-      })),
+      Effect.map(connectionState),
       Effect.catchIf(
         (failure): failure is Cause.UnknownError & { readonly cause: OAuthHarnessError } =>
           failure.cause instanceof OAuthHarnessError &&
@@ -325,7 +326,11 @@ export function createSubscriptionProvider(
   const status = authState().pipe(Effect.mapError(() => operationFailure(provider, "auth")));
   const connect = Effect.gen(function* () {
     const current = yield* authState();
-    if (current.status === "signed-in" || current.status === "pending") return current;
+    if (
+      AuthConnectionState.$is("signed-in")(current) ||
+      AuthConnectionState.$is("pending")(current)
+    )
+      return current;
     loginError = null;
     const started = yield* Effect.result(nativePromise(() => client.startLogin()));
     if (Result.isFailure(started)) {
@@ -345,11 +350,7 @@ export function createSubscriptionProvider(
         loginError = failureState(error instanceof OAuthHarnessError ? error : null);
       },
     );
-    return {
-      provider,
-      status: "pending",
-      authorizationUrl: attempt.authorizationUrl,
-    } satisfies AuthConnectionState;
+    return AuthConnectionState.pending({ provider, authorizationUrl: attempt.authorizationUrl });
   }).pipe(Effect.mapError(() => operationFailure(provider, "auth")));
   const cancel = Effect.sync(() => {
     const attempt = pending;
@@ -375,10 +376,7 @@ export function createSubscriptionProvider(
     loginError = null;
     attempt?.cancel();
     return yield* fromPromise(provider, "auth", () => client.disconnect()).pipe(
-      Effect.map((connection): AuthConnectionState => ({
-        provider,
-        status: connection.connected ? "signed-in" : "signed-out",
-      })),
+      Effect.map(connectionState),
     );
   }).pipe(Effect.ensuring(invalidateCatalog));
 

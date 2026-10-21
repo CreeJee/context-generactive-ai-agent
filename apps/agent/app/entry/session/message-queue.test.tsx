@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import type { QueueSnapshot } from "../api";
-import { api } from "../api";
+import { api, NextDelivery, QueueEdit, QueueItemState } from "../api";
 import { SessionEventScopeContext } from "../events/context";
 import { appQueryKeys } from "../events/query-keys";
 import { useMessageQueue } from "./message-queue";
@@ -27,7 +27,7 @@ const item: QueueSnapshot["items"][number] = {
   seq: 1,
   text: "queued text",
   attachmentIds: [],
-  state: { kind: "waiting", steered: false },
+  state: QueueItemState.waiting({ steered: false }),
   createdAt: 1,
 };
 
@@ -57,32 +57,34 @@ describe("queue snapshot from server", () => {
   test("passes through server readiness rather than interpreting waiting item states", () => {
     const blocked = readSnapshot({
       items: [item],
-      nextDelivery: { kind: "blocked", messageId: item.id, reason: "held" },
+      nextDelivery: NextDelivery.blocked({ messageId: item.id, reason: "held" }),
     });
     expect(blocked.items).toEqual([item]);
-    expect(blocked.nextDelivery).toEqual({ kind: "blocked", messageId: item.id, reason: "held" });
+    expect(blocked.nextDelivery).toEqual(
+      NextDelivery.blocked({ messageId: item.id, reason: "held" }),
+    );
 
     const ready = readSnapshot({
       items: [item],
-      nextDelivery: { kind: "ready" },
+      nextDelivery: NextDelivery.ready(),
     });
-    expect(ready.nextDelivery).toEqual({ kind: "ready" });
+    expect(ready.nextDelivery).toEqual(NextDelivery.ready());
   });
 
   it.live("a queue edit fetches the latest complete server snapshot", () =>
     Effect.gen(function* () {
       const updated: QueueSnapshot = {
-        items: [{ ...item, state: { kind: "held", draft: null } }],
-        nextDelivery: { kind: "blocked", messageId: item.id, reason: "held" },
+        items: [{ ...item, state: QueueItemState.held({ draft: null }) }],
+        nextDelivery: NextDelivery.blocked({ messageId: item.id, reason: "held" }),
       };
       vi.spyOn(api, "editQueued").mockResolvedValue(null);
       vi.spyOn(api, "queue").mockResolvedValue(updated);
       const queue = readSnapshot({
         items: [item],
-        nextDelivery: { kind: "ready" },
+        nextDelivery: NextDelivery.ready(),
       });
       expect(
-        yield* sdkCall(() => queue.change(item.id, { action: "edit", draft: item.text })),
+        yield* sdkCall(() => queue.change(item.id, QueueEdit.edit({ draft: item.text }))),
       ).toEqual(updated);
     }),
   );

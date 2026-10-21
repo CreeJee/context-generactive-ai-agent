@@ -4,6 +4,7 @@ import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
+import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgents, ExternalPromptOutcome } from "../external-agents/agents.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
@@ -130,7 +131,7 @@ const make = Effect.gen(function* () {
                     sessionId,
                     runId,
                     {
-                      requester: { kind: "external_agent", agent },
+                      requester: ApprovalRequester.cases.external_agent.make({ agent }),
                       toolName: request.toolCall.title ?? "external tool",
                       argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
                       reason: "외부 에이전트가 권한을 요청했어요.",

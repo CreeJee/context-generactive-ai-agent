@@ -1,10 +1,12 @@
 import { it as effectTest } from "@effect/vitest";
-import { Effect, FileSystem, Path, Result, Layer, Schema } from "effect";
+import { Effect, FileSystem, Path, Result, Layer, Schema, Struct } from "effect";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import {
+  AuthConnectionState,
+  NativeToolSupport,
   ProviderId,
   ProviderConnection,
   ProviderUnavailable,
@@ -24,10 +26,10 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
   provider,
   auth: {
     provider,
-    status: Effect.succeed({ provider, status: "signed-out" }),
-    connect: Effect.succeed({ provider, status: "signed-out" }),
-    cancel: Effect.succeed({ provider, status: "signed-out" }),
-    disconnect: Effect.succeed({ provider, status: "signed-out" }),
+    status: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
+    connect: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
+    cancel: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
+    disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
   },
   models: {
     provider,
@@ -55,20 +57,27 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
 describe("provider-neutral contracts", () => {
   test("separates endpoint protocol, subscription account vendor and native tool support", () => {
     const endpoint = providerConnection("openai-compatible");
-    expect(endpoint).toEqual({
-      type: "compatible-endpoint",
-      protocol: "openai-chat-completions",
-      nativeTools: { type: "unsupported" },
-    });
-    expect(providerConnection("openai")).toEqual({
-      type: "subscription",
-      accountProvider: "openai",
-      nativeTools: { type: "vendor-native", vendor: "openai" },
-    });
-    expectTypeOf<Extract<ProviderConnection, { type: "compatible-endpoint" }>>().not.toHaveProperty(
-      "accountProvider",
+    expect(endpoint).toEqual(
+      ProviderConnection.cases["compatible-endpoint"].make({
+        protocol: "openai-chat-completions",
+        nativeTools: NativeToolSupport.cases.unsupported.make({}),
+      }),
     );
-    expect(Schema.is(ProviderConnection)({ ...endpoint, type: "subscription" })).toBe(false);
+    const openai = ProviderConnection.cases.subscription.make({
+      accountProvider: "openai",
+      nativeTools: NativeToolSupport.cases["vendor-native"].make({ vendor: "openai" }),
+    });
+    expect(providerConnection("openai")).toEqual(openai);
+    expectTypeOf<
+      (typeof ProviderConnection.cases)["compatible-endpoint"]["Type"]
+    >().not.toHaveProperty("accountProvider");
+    // A subscription case without its account provider is not a connection.
+    expect(
+      Schema.is(ProviderConnection)({
+        ...endpoint,
+        ...Struct.omit(openai, ["accountProvider", "nativeTools"]),
+      }),
+    ).toBe(false);
   });
 
   test("accepts compatible models without treating them as OAuth or native tool providers", () => {
@@ -217,9 +226,12 @@ describe("provider-neutral contracts", () => {
       expect(Result.isFailure(missingRuntime) && missingRuntime.failure).toEqual(
         ProviderUnavailable.make({ provider: "openai" }),
       );
-      expect(yield* active.authFor("anthropic")).toMatchObject({
-        status: "error",
-      });
+      expect(yield* active.authFor("anthropic")).toEqual(
+        AuthConnectionState.error({
+          provider: "anthropic",
+          message: "Provider authentication is unavailable.",
+        }),
+      );
     }).pipe(withTestPlatform),
   );
 

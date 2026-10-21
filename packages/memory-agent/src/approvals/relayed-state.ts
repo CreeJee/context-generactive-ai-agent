@@ -1,9 +1,12 @@
 /** Approval requests that cannot pause the run, as the page sees them. Safe to import in the browser. */
+import { Schema } from "effect";
 
 /** Who is asking, when it is not the conversation's own agent. */
-export type ApprovalRequester =
-  | { readonly kind: "subagent"; readonly subagentId: string; readonly name: string | null }
-  | { readonly kind: "external_agent"; readonly agent: string };
+export const ApprovalRequester = Schema.TaggedUnion({
+  subagent: { subagentId: Schema.String, name: Schema.NullOr(Schema.String) },
+  external_agent: { agent: Schema.String },
+});
+export type ApprovalRequester = typeof ApprovalRequester.Type;
 
 export interface RelayedApprovalView {
   readonly id: string;

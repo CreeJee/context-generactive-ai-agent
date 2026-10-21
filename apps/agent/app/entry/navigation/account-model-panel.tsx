@@ -2,7 +2,7 @@ import { Function as EffectFunction } from "effect";
 import { CircleAlertIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Collapsible, CollapsibleContent } from "~/components/ui/collapsible";
-import type { ModelSelection, ProviderAuthState, ProviderId } from "../api";
+import { ProviderAuthState, type ModelSelection, type ProviderId } from "../api";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
 import { providerLabels as providerLabel } from "./providers";
@@ -22,20 +22,17 @@ function accountSummaryBody(
 ) {
   const status = !(auth !== null)
     ? "확인 중"
-    : auth.status === "signed-in"
-      ? "연결됨"
-      : auth.status === "pending"
-        ? "로그인 대기"
-        : auth.status === "error"
-          ? "연결 오류"
-          : provider === "openai-compatible"
-            ? "설정 필요"
-            : "로그인 필요";
+    : ProviderAuthState.$match(auth, {
+        "signed-in": () => "연결됨",
+        pending: () => "로그인 대기",
+        error: () => "연결 오류",
+        "signed-out": () => (provider === "openai-compatible" ? "설정 필요" : "로그인 필요"),
+      });
   const model =
     selection !== null
       ? `${providerLabel[selection.provider]} / ${modelName ?? selection.model}`
       : "모델 미선택";
-  return { status, model, hasError: auth?.status === "error" };
+  return { status, model, hasError: ProviderAuthState.$is("error")(auth) };
 }
 
 /** Keep settings out of the default sidebar height while exposing the current selection. */

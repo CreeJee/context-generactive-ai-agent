@@ -25,7 +25,7 @@ import {
 import { OwnerNativeBuild } from "../../src/agent/owner-native-build.ts";
 import { NativeRegistrationError } from "../../src/agent/owner-native-error.ts";
 import { StorageRoot } from "../../src/config/storage-root.ts";
-import { Embedder } from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Graph } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
@@ -186,7 +186,7 @@ const countedEmbedder = Layer.sync(Embedder, () => {
         embedderOwners.embeddings++;
         return texts.map(fakeVector);
       }),
-    runtime: () => ({ kind: "other" }),
+    runtime: () => EmbedderRuntime.other(),
   };
 });
 

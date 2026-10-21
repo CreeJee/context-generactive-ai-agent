@@ -6,9 +6,13 @@ import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { OwnerRpcAdmission, OwnerRpcReply } from "../../src/agent/owner-rpc.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { RunEventRejected, workflowRunEvents } from "../../src/workflow/run-events.ts";
-import { UncertainRunsFailed, uncertainRuns } from "../../src/workflow/uncertain-runs.ts";
+import {
+  UncertainContinue,
+  UncertainRunsFailed,
+  uncertainRuns,
+} from "../../src/workflow/uncertain-runs.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { sqlAll, sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
@@ -64,14 +68,10 @@ const finishRun = (session: string, runId: string, status: string) =>
     DateTime.toEpochMillis(DateTime.nowUnsafe()),
   );
 
-const boundRun = (admission: Admission) => {
-  switch (admission.status) {
-    case "bound":
-      return admission.binding;
-    case "refused":
-      return expect.unreachable(`run refused: ${admission.reason}`);
-  }
-};
+const boundRun = Admission.$match({
+  bound: ({ binding }) => binding,
+  refused: ({ reason }) => expect.unreachable(`run refused: ${reason}`),
+});
 
 testAgent()("workflow run bindings", (it) => {
   it.effect("acknowledges only the current uncertain runs and rolls back a failed write", () =>
@@ -95,10 +95,9 @@ testAgent()("workflow run bindings", (it) => {
           tools: [{ toolCallId: "call", name: "run_shell", call: null, state: "uncertain" }],
         },
       ]);
-      expect(yield* owner.acknowledge(session, ["stale"])).toEqual({
-        status: "refused",
-        reason: "uncertain_runs_changed",
-      });
+      expect(yield* owner.acknowledge(session, ["stale"])).toEqual(
+        UncertainContinue.refused({ reason: "uncertain_runs_changed" }),
+      );
       yield* sqlExec(
         "CREATE TEMP TRIGGER reject_ack BEFORE INSERT ON workflow_uncertain_acknowledgements BEGIN SELECT RAISE(ABORT, 'fixture'); END",
       );
@@ -110,7 +109,7 @@ testAgent()("workflow run bindings", (it) => {
       ).toBe(true);
       expect(yield* owner.list(session)).toHaveLength(1);
       yield* sqlExec("DROP TRIGGER reject_ack");
-      expect(yield* owner.acknowledge(session, [runId])).toEqual({ status: "acknowledged" });
+      expect(yield* owner.acknowledge(session, [runId])).toEqual(UncertainContinue.acknowledged());
       expect(yield* owner.list(session)).toEqual([]);
     }),
   );
@@ -121,36 +120,35 @@ testAgent()("workflow run bindings", (it) => {
       Effect.gen(function* () {
         const session = yield* freshSession;
         const owner = yield* workflowRunBindings;
-        expect(yield* owner.bind(session, `${session}:legacy`, 0)).toEqual({
-          status: "refused",
-          reason: "legacy_unbound",
-        });
+        expect(yield* owner.bind(session, `${session}:legacy`, 0)).toEqual(
+          Admission.refused({ reason: "legacy_unbound" }),
+        );
         yield* (yield* Workflows).updateGoal(session, goal);
         const first = `${session}:first`;
         const second = `${session}:second`;
         const revision = yield* latestRevision(session);
         const goalInstanceId = yield* goalInstance(session);
-        expect(yield* owner.bind(session, first, revision)).toMatchObject({
-          status: "bound",
-          binding: { goalInstanceId, goalVersion: 1, planVersion: null },
+        const bound = yield* owner.bind(session, first, revision);
+        expect(Admission.$is("bound")(bound) && bound.binding).toMatchObject({
+          goalInstanceId,
+          goalVersion: 1,
+          planVersion: null,
         });
-        expect(yield* owner.bind(session, first, revision)).toEqual({
-          status: "refused",
-          reason: "run_id_conflict",
-        });
-        expect(yield* owner.bind(session, second, revision)).toEqual({
-          status: "refused",
-          reason: "run_outcome_uncertain",
-        });
+        expect(yield* owner.bind(session, first, revision)).toEqual(
+          Admission.refused({ reason: "run_id_conflict" }),
+        );
+        expect(yield* owner.bind(session, second, revision)).toEqual(
+          Admission.refused({ reason: "run_outcome_uncertain" }),
+        );
         yield* finishRun(session, first, "completed");
         yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["New outcome"] });
-        expect(yield* owner.bind(session, second, revision)).toEqual({
-          status: "refused",
-          reason: "workflow_changed",
-        });
-        expect(yield* bindLatest(session, second)).toMatchObject({
-          status: "bound",
-          binding: { goalInstanceId, goalVersion: 2 },
+        expect(yield* owner.bind(session, second, revision)).toEqual(
+          Admission.refused({ reason: "workflow_changed" }),
+        );
+        const rebound = yield* bindLatest(session, second);
+        expect(Admission.$is("bound")(rebound) && rebound.binding).toMatchObject({
+          goalInstanceId,
+          goalVersion: 2,
         });
         expect(
           yield* sqlGet("SELECT goal_version FROM workflow_run_bindings WHERE run_id = ?", first),
@@ -168,11 +166,10 @@ testAgent()("workflow run bindings", (it) => {
         const revision = yield* latestRevision(session);
         expect(yield* goalInstance(other)).not.toBe(goalInstanceId);
         const shared = `${session}:shared`;
-        expect((yield* bindLatest(session, shared)).status).toBe("bound");
-        expect(yield* bindLatest(other, shared)).toEqual({
-          status: "refused",
-          reason: "run_id_conflict",
-        });
+        expect(Admission.$is("bound")(yield* bindLatest(session, shared))).toBe(true);
+        expect(yield* bindLatest(other, shared)).toEqual(
+          Admission.refused({ reason: "run_id_conflict" }),
+        );
         yield* finishRun(session, shared, "failed");
         const operation = (id: number, fingerprint: string, status: string) =>
           sqlRun(
@@ -195,16 +192,16 @@ testAgent()("workflow run bindings", (it) => {
         const admits = () =>
           Effect.map(
             bindings.bind(session, `${session}:different`, revision, undefined, "preview"),
-            (admission) => admission.status,
+            Admission.$is("bound"),
           );
         // Owner bookkeeping, an authorization and a read the next run cannot know of repeat nothing.
         yield* operation(1, '{"operation":"middleware"}', "succeeded");
         yield* step(2, "toolAuthorize", "run_shell", "succeeded");
         yield* step(3, "tool", "read_file", "succeeded");
-        expect(yield* admits()).toBe("bound");
+        expect(yield* admits()).toBe(true);
         // An effectful tool is known to the next run only through its recorded result.
         yield* step(4, "tool", "run_shell", "succeeded");
-        expect(yield* admits()).toBe("refused");
+        expect(yield* admits()).toBe(false);
         yield* (yield* Nodes).append({
           projectId: (yield* TestEnv).project.id,
           sessionId: session,
@@ -213,13 +210,12 @@ testAgent()("workflow run bindings", (it) => {
           text: "done",
           detail: { toolName: "run_shell", toolCallId: "run_shell-call", ok: true },
         });
-        expect(yield* admits()).toBe("bound");
+        expect(yield* admits()).toBe(true);
         // A tool the run left uncertain may have changed something.
         yield* step(5, "tool", "read_file", "uncertain");
-        expect(yield* bindLatest(session, `${session}:different`)).toEqual({
-          status: "refused",
-          reason: "run_outcome_uncertain",
-        });
+        expect(yield* bindLatest(session, `${session}:different`)).toEqual(
+          Admission.refused({ reason: "run_outcome_uncertain" }),
+        );
         expect(
           String(
             (yield* Effect.flip(
@@ -280,9 +276,10 @@ testAgent()("workflow run bindings", (it) => {
         yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["Revised outcome"] });
         const receipts = () => sqlAll("SELECT * FROM owner_rpc_operations WHERE run_id = ?", old);
         const before = yield* receipts();
-        expect(yield* bindLatest(session, `${session}:new`)).toMatchObject(
-          blocked ? { status: "refused", reason: "run_outcome_uncertain" } : { status: "bound" },
-        );
+        const admitted = yield* bindLatest(session, `${session}:new`);
+        if (blocked)
+          expect(admitted).toEqual(Admission.refused({ reason: "run_outcome_uncertain" }));
+        else expect(Admission.$is("bound")(admitted)).toBe(true);
         expect(yield* receipts()).toEqual(before);
       }),
   );
@@ -298,7 +295,7 @@ testAgent()("workflow run event journal", (it) => {
         const session = yield* withGoal(["Replay output"]);
         const other = yield* freshSession;
         const run = `${session}:journaled`;
-        expect((yield* bindLatest(session, run)).status).toBe("bound");
+        expect(Admission.$is("bound")(yield* bindLatest(session, run))).toBe(true);
         const events = yield* workflowRunEvents;
         expect(
           yield* events

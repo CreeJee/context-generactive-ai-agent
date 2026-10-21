@@ -4,7 +4,7 @@ import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
-import { Embedder } from "../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../src/memory/embedding/embedder.ts";
 import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
 
 layer(NodeServices.layer)((it) => {
@@ -21,7 +21,7 @@ layer(NodeServices.layer)((it) => {
           Layer.succeed(Embedder, {
             identity: "native-factory-fixture",
             dimensions: 384,
-            runtime: () => ({ kind: "other" }),
+            runtime: () => EmbedderRuntime.other(),
             embed: () => Effect.succeed([]),
           }),
         );

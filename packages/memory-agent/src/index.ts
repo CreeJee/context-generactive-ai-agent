@@ -12,6 +12,7 @@ export {
 export {
   OpenAICompatibleConfiguration,
   OpenAICompatibleStatus,
+  CompatibleAccountsView,
   CompatibleAccountStatus,
   CompatibleConnectionInput,
   CompatibleModelInput,
@@ -49,7 +50,7 @@ export {
 export {
   OAuthAccountLogins,
   createOAuthAccountLoginManager,
-  type AccountLoginState,
+  AccountLoginState,
 } from "./oauth/account-login.ts";
 export { OAuthHarnessError } from "./oauth/validation-harness.ts";
 export { logDefect, logFailure } from "./runtime/logged-failures.ts";
@@ -129,7 +130,8 @@ export {
   ProviderOperationFailed,
   ProviderUnavailable,
   type AgentModelRuntime,
-  type AuthConnectionState,
+  AuthConnectionState,
+  type AuthStatus,
   type AuthProvider,
   type ModelCatalog,
   type ProviderConfiguration,
@@ -259,7 +261,7 @@ export {
   openAIImageRouteContracts,
   productionImageRouteContracts,
   type ImageExecutionMode,
-  type ImageExecutorModel,
+  ImageExecutorModel,
   type ImageRouteContract,
   type ImageRouteVerification,
   type UnsupportedImageProviderContract,
@@ -290,8 +292,8 @@ export {
   ImageRoutingInvalidRequest,
   makeImageRouter,
   rankImageRoutes,
-  type ImageRerouteConfirmation,
-  type ImageRouteDecision,
+  ImageRerouteConfirmation,
+  ImageRouteDecision,
   type ImageRouteFact,
   type ImageRouteFactsApi,
   type ImageRouteScore,
@@ -488,7 +490,7 @@ export {
 export {
   Importer,
   ImportWorkerFailed,
-  type ImportActivity,
+  ImportActivity,
   type ImportFailure,
   type ImportOverview,
   type UnplacedFolder,
@@ -498,7 +500,13 @@ export { TurnSummaries } from "./agent/turn-summaries.ts";
 export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
 export { MessageQueue, QueueChangeRefused } from "./queue/queue.ts";
 export { QueueDelivery, queueDeliveredEvent, type DeliveryBinding } from "./queue/delivery.ts";
-export type { DeliveryVia, QueueEdit, QueueItemState, QueuedMessage } from "./queue/queue-state.ts";
+export {
+  NextDelivery,
+  QueueEdit,
+  QueueItemState,
+  type DeliveryVia,
+  type QueuedMessage,
+} from "./queue/queue-state.ts";
 export { sessionHolderHeader, type ClaimResult, type LeaseView } from "./sessions/lease-state.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";
@@ -526,12 +534,12 @@ export {
   EmbeddingError,
   localModel,
   type EmbedderApi,
-  type EmbedderRuntime,
+  EmbedderRuntime,
   type EmbeddingDevice,
   type EmbeddingMode,
 } from "./memory/embedding/embedder.ts";
 export { Indexer } from "./memory/embedding/indexer.ts";
-export { EmbeddingSetup, type EmbeddingOverview, type GpuState } from "./memory/embedding/setup.ts";
+export { EmbeddingSetup, GpuState, type EmbeddingOverview } from "./memory/embedding/setup.ts";
 export {
   MorphAnalysisFailed,
   MorphAnalyzer,
@@ -626,7 +634,7 @@ export {
   mcpToolName,
   mcpToolPrefix,
   type McpOverview,
-  type McpServerState,
+  McpServerState,
   type McpServerView,
 } from "./mcp/servers.ts";
 export {
@@ -663,8 +671,8 @@ export {
 export {
   ExternalAgents,
   maxConsecutiveFailures,
-  type AgentLinkState,
-  type AgentTrustState,
+  AgentLinkState,
+  AgentTrustState,
   type ExternalAgentView,
   type ExternalAgentsOverview,
   type ExternalPromptOutcome,
@@ -747,6 +755,6 @@ export {
   type SessionEventTopic,
 } from "./events/app-events.ts";
 export { RelayedApprovals, type RelayedRequest } from "./approvals/relayed.ts";
-export type { ApprovalRequester, RelayedApprovalView } from "./approvals/relayed-state.ts";
+export { ApprovalRequester, type RelayedApprovalView } from "./approvals/relayed-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

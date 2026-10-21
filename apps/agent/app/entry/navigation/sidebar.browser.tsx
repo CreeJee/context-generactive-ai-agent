@@ -4,8 +4,9 @@ import { Array as EffectArray } from "effect";
 import { render } from "vitest-browser-react";
 import { describe, expect } from "vite-plus/test";
 import "../../app.css";
+import { AccountLoginState, ProviderAuthState } from "../api";
 import { AccountModelPanel } from "./account-model-panel";
-import { AccountManagerList } from "./account-profiles";
+import { AccountManagerList, QuotaStatus } from "./account-profiles";
 import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
 import type { CompatibleAccountChange } from "./compatible-client";
@@ -67,7 +68,7 @@ describe("sidebar disclosures", () => {
           <div className="w-72">
             <AccountModelPanel
               provider="openai"
-              auth={{ provider: "openai", status: "signed-in" }}
+              auth={ProviderAuthState["signed-in"]({ provider: "openai" })}
               selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
               modelName="Model 1"
             >
@@ -134,11 +135,10 @@ describe("sidebar disclosures", () => {
   it.live("the account manager lists every provider's accounts in one editable list", () =>
     Effect.gen(function* () {
       const actions: unknown[] = [];
-      const observed = {
-        status: "observed",
+      const observed = QuotaStatus.observed({
         windows: [{ name: "five_hour", usedPercent: 37, windowSeconds: 18_000, resetsAt: null }],
         observedAt: "2026-10-12T00:00:00.000Z",
-      } as const;
+      });
       const screen = yield* sdkCall(() =>
         render(
           <div className="w-96">
@@ -146,12 +146,12 @@ describe("sidebar disclosures", () => {
               providers={[
                 {
                   provider: "openai",
-                  auth: { provider: "openai", status: "signed-in" },
+                  auth: ProviderAuthState["signed-in"]({ provider: "openai" }),
                   view: {
                     profiles: [
                       { id: "a", provider: "openai", label: "개인", selected: true, createdAt: 1 },
                     ],
-                    login: { status: "idle" },
+                    login: AccountLoginState.idle(),
                   },
                   quota: {
                     provider: "openai",
@@ -161,7 +161,7 @@ describe("sidebar disclosures", () => {
                         accountId: "a",
                         label: "개인",
                         selected: true,
-                        quota: { status: "unavailable", reason: "credential_expired" },
+                        quota: QuotaStatus.unavailable({ reason: "credential_expired" }),
                       },
                     ],
                   },
@@ -170,7 +170,7 @@ describe("sidebar disclosures", () => {
                 },
                 {
                   provider: "anthropic",
-                  auth: { provider: "anthropic", status: "signed-in" },
+                  auth: ProviderAuthState["signed-in"]({ provider: "anthropic" }),
                   view: {
                     profiles: [
                       {
@@ -181,7 +181,7 @@ describe("sidebar disclosures", () => {
                         createdAt: 2,
                       },
                     ],
-                    login: { status: "idle" },
+                    login: AccountLoginState.idle(),
                   },
                   quota: {
                     provider: "anthropic",
@@ -251,7 +251,7 @@ describe("sidebar disclosures", () => {
                       selected: true,
                       createdAt: 1,
                     },
-                    quota: { status: "unavailable", reason: "lookup_failed" },
+                    quota: QuotaStatus.unavailable({ reason: "lookup_failed" }),
                     current: true,
                   }),
                   AccountEntry.profile({
@@ -263,8 +263,7 @@ describe("sidebar disclosures", () => {
                       selected: true,
                       createdAt: 2,
                     },
-                    quota: {
-                      status: "observed",
+                    quota: QuotaStatus.observed({
                       windows: [
                         {
                           name: "five_hour",
@@ -274,7 +273,7 @@ describe("sidebar disclosures", () => {
                         },
                       ],
                       observedAt: "2026-10-12T00:00:00.000Z",
-                    },
+                    }),
                     current: false,
                   }),
                   AccountEntry.compatible({

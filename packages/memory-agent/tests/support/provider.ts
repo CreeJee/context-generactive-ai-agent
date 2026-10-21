@@ -1,4 +1,4 @@
-import { ProviderOperationFailed } from "../../src/providers/contracts.ts";
+import { AuthConnectionState, ProviderOperationFailed } from "../../src/providers/contracts.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
 import { Cause, Deferred, Function, MutableHashMap, Option, Effect, Layer, Schema } from "effect";
@@ -6,7 +6,6 @@ import {
   GlobalConfig,
   ModelUnavailable,
   ProviderRegistry,
-  type AuthConnectionState,
   type Json,
   type MemoryAgentLayerOptions,
   type ModelSelection,
@@ -318,10 +317,10 @@ export const selectTestModel = Effect.fn("selectTestModel")(function* (
 });
 
 export function testProvider(options: TestProviderOptions = {}): TestProvider {
-  let auth: AuthConnectionState = {
-    provider: "openai",
-    status: options.signedIn === false ? "signed-out" : "signed-in",
-  };
+  let auth: AuthConnectionState =
+    options.signedIn === false
+      ? AuthConnectionState["signed-out"]({ provider: "openai" })
+      : AuthConnectionState["signed-in"]({ provider: "openai" });
   const responder = options.responder ?? defaultTestResponder;
   const adapter = new ScriptedTextAdapter(
     Effect.fn("testProvider.responder")((invocation: AdapterInvocation) =>
@@ -354,9 +353,13 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
         auth: {
           provider: "openai" as const,
           status: Effect.sync(() => auth),
-          connect: Effect.sync(() => (auth = { provider: "openai", status: "signed-in" })),
+          connect: Effect.sync(
+            () => (auth = AuthConnectionState["signed-in"]({ provider: "openai" })),
+          ),
           cancel: Effect.sync(() => auth),
-          disconnect: Effect.sync(() => (auth = { provider: "openai", status: "signed-out" })),
+          disconnect: Effect.sync(
+            () => (auth = AuthConnectionState["signed-out"]({ provider: "openai" })),
+          ),
         },
         models: {
           provider: "openai" as const,

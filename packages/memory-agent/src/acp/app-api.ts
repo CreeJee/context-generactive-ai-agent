@@ -2,6 +2,7 @@ import { isTruthy } from "../truthy.ts";
 import type { UIMessage } from "@tanstack/ai-client";
 import { Effect, Function as EffectFunction, Result, Schema } from "effect";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
+import { ApprovalRequester } from "../approvals/relayed-state.ts";
 
 /** Where the running app is, unless `CONTEXT_AGENT_URL` says otherwise. */
 export const defaultAppUrl = "http://127.0.0.1:5173";
@@ -12,7 +13,13 @@ const ProjectSummary = Schema.Struct({
   name: Schema.String,
 });
 const SessionSummary = Schema.Struct({ id: Schema.String, projectId: Schema.String });
-const AuthSummary = Schema.Struct({ status: Schema.String });
+/** The case of the app's provider connection; the bridge needs only whether it is signed in. */
+export const AuthSummary = Schema.TaggedUnion({
+  "signed-out": {},
+  pending: {},
+  "signed-in": {},
+  error: {},
+});
 const LeaseSummary = Schema.Struct({ state: Schema.Literals(["mine", "other", "free"]) });
 const RunSummary = Schema.Struct({
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
@@ -162,14 +169,7 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
         Schema.Array(
           Schema.Struct({
             id: Schema.String,
-            requester: Schema.Union([
-              Schema.Struct({
-                kind: Schema.Literal("subagent"),
-                subagentId: Schema.String,
-                name: Schema.NullOr(Schema.String),
-              }),
-              Schema.Struct({ kind: Schema.Literal("external_agent"), agent: Schema.String }),
-            ]),
+            requester: ApprovalRequester,
             toolName: Schema.String,
             argumentsJson: Schema.String,
           }),

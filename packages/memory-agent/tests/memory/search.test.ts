@@ -15,7 +15,7 @@ import {
 } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
-import { Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { kiwiModel, MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -383,7 +383,7 @@ const nativeTestEmbedderLayer = Layer.succeed(Embedder, {
         return vector;
       }),
     ),
-  runtime: () => ({ kind: "other" as const }),
+  runtime: () => EmbedderRuntime.other(),
 });
 
 testAgent({ embedder: nativeTestEmbedderLayer })(
@@ -418,7 +418,7 @@ const brokenEmbedder = Layer.succeed(Embedder, {
   identity: "broken",
   dimensions: 64,
   embed: () => Effect.fail(EmbeddingError.make({ cause: new Error("model not downloaded") })),
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
 });
 
 testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedder", (it) => {

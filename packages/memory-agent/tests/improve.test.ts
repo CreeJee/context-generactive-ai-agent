@@ -4,7 +4,7 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ItemInterpretation } from "../src/improve/contracts.ts";
-import { Embedder } from "../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../src/memory/embedding/embedder.ts";
 import { parseInterpretation } from "../src/improve/interpret.ts";
 import { improvementItems } from "../src/improve/items.ts";
 import { improvementReport } from "../src/improve/report.ts";
@@ -17,7 +17,7 @@ const embedder = Layer.succeed(Embedder, {
   dimensions: 2,
   embed: (texts) =>
     Effect.succeed(texts.map((text) => Float32Array.from(text.includes("로그") ? [1, 0] : [0, 1]))),
-  runtime: () => ({ kind: "other" }),
+  runtime: () => EmbedderRuntime.other(),
 });
 
 const run = Effect.fnUntraced(function* <A, E>(

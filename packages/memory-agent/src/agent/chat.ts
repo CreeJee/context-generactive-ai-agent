@@ -78,6 +78,8 @@ import {
 import { ImageRouter } from "../providers/image-router.ts";
 import { compatibleToolCalling } from "../providers/openai-compatible-config.ts";
 import {
+  AuthConnectionState,
+  ProviderConnection,
   providerConnection,
   ProviderId,
   type ModelSelection,
@@ -118,6 +120,7 @@ import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
+import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgentAdapter } from "../external-agents/adapter.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
 import { MemorySearch } from "../memory/search.ts";
@@ -127,7 +130,7 @@ import { QueueDelivery } from "../queue/delivery.ts";
 import { steerCuttable, type SteerCut } from "./steer-cut.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
-import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
+import { NextDelivery, QueueEdit, type QueuedMessage } from "../queue/queue-state.ts";
 import { modelHandoffHistory } from "./model-handoff.ts";
 import {
   budgetFor,
@@ -163,8 +166,13 @@ import {
   resolvedRunSql,
   toolOperationSql,
   workflowRunBindings,
+  Admission,
 } from "../workflow/run-bindings.ts";
-import { uncertainRuns, type UncertainContinueRequest } from "../workflow/uncertain-runs.ts";
+import {
+  UncertainContinue,
+  uncertainRuns,
+  type UncertainContinueRequest,
+} from "../workflow/uncertain-runs.ts";
 import {
   OwnerReadRecovery,
   ReadRecoveryAdmission,
@@ -184,10 +192,15 @@ import {
 } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
-import { Workflows, type WorkflowAction, type WorkflowPhase } from "../workflow/workflow.ts";
+import {
+  NewGoalSettlement,
+  Workflows,
+  type WorkflowAction,
+  type WorkflowPhase,
+} from "../workflow/workflow.ts";
 import { workflowRunEvents } from "../workflow/run-events.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
-import { WorkflowExecution } from "../workflow/execution.ts";
+import { WorkflowExecution, WorkflowExecutionState } from "../workflow/execution.ts";
 import { GoalExecutionAdmissionRefused, GoalExecutions } from "../workflow/goal-execution.ts";
 import { OwnerWorkflowAdmissionResult } from "../workflow/owner-workflow-storage.ts";
 import { ProviderRetries } from "../workflow/provider-retry.ts";
@@ -198,7 +211,12 @@ import {
 import { toolProgressFingerprint } from "../workflow/tool-progress.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
-import { WorkTraceStore } from "../work-trace/store.ts";
+import {
+  LifecycleOutcome,
+  LifecycleRequest,
+  ResumeRequest,
+  WorkTraceStore,
+} from "../work-trace/store.ts";
 import { BackgroundTasks } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
 import {
@@ -573,25 +591,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     interpretations: Interpretations,
     knowledge: KnowledgePromotions,
   });
-  const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) => {
-    const connection = providerConnection(selection.provider);
-    switch (connection.type) {
-      case "compatible-endpoint":
-        return active.runtime(selection);
-      case "subscription":
-        return isTruthy(registry?.subscriptionDependencies)
-          ? Effect.map(
-              registry.subscriptionDependencies(connection.accountProvider),
-              (dependencies) =>
-                (goalInstanceId === null
-                  ? nativeImplementations
-                  : goalNativeImplementations.forGoal(goalInstanceId))[
-                  connection.accountProvider
-                ].bind(dependencies),
+  const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) =>
+    ProviderConnection.match(providerConnection(selection.provider), {
+      "compatible-endpoint": () => active.runtime(selection),
+      subscription: ({ accountProvider }) =>
+        isTruthy(registry?.subscriptionDependencies)
+          ? Effect.map(registry.subscriptionDependencies(accountProvider), (dependencies) =>
+              (goalInstanceId === null
+                ? nativeImplementations
+                : goalNativeImplementations.forGoal(goalInstanceId))[accountProvider].bind(
+                dependencies,
+              ),
             )
-          : active.runtime(selection);
-    }
-  };
+          : active.runtime(selection),
+    });
   const usageLedger = yield* ApiUsage;
   const events = yield* AppEvents;
   const config = yield* GlobalConfig;
@@ -754,16 +767,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const humanDecisions = yield* HumanDecisions;
   /** Settles a queued new Goal; once it applies, the replaced Goal's waits for people close. */
   const settleNewGoal = (sessionId: string, runId: string) =>
-    workflows.settleNewGoalRequest(sessionId, runId).pipe(
-      Effect.tap((settled) => {
-        switch (settled.status) {
-          case "applied":
-            return humanDecisions.closeSuperseded(sessionId);
-          default:
-            return Effect.void;
-        }
-      }),
-    );
+    workflows
+      .settleNewGoalRequest(sessionId, runId)
+      .pipe(
+        Effect.tap((settled) =>
+          Effect.when(
+            humanDecisions.closeSuperseded(sessionId),
+            Effect.succeed(NewGoalSettlement.$is("applied")(settled)),
+          ),
+        ),
+      );
   /** Whether the session's current Goal runs as a kanban board, whose loop executes the cards. */
   const kanbanBoard = (sessionId: string) =>
     Effect.flatMap(workflows.goalInstanceId(sessionId), (goalInstanceId) =>
@@ -1020,18 +1033,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   ): Effect.Effect<
     QueuedMessage | null,
     QueueChangeRefused | SqlError.SqlError | Schema.SchemaError
-  > => {
-    switch (edit.action) {
-      case "edit":
-        return queue.edit(sessionId, id, edit.draft);
-      case "save":
-        return queue.save(sessionId, id, edit.text);
-      case "remove":
-        return queue.remove(sessionId, id);
-      case "confirm":
-        return queue.confirm(sessionId, id);
-    }
-  };
+  > =>
+    QueueEdit.$match(edit, {
+      edit: ({ draft }) => queue.edit(sessionId, id, draft),
+      save: ({ text }) => queue.save(sessionId, id, text),
+      remove: () => queue.remove(sessionId, id),
+      confirm: () => queue.confirm(sessionId, id),
+    });
 
   /** What the queue does once a run's stream ended, by how the run ended. */
   const settleQueueAfter = Effect.fnUntraced(function* (sessionId: string, runId: string) {
@@ -1332,17 +1340,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           intent,
           idempotencyKey,
         });
-        if (requested.status === "blocked") return json(409, requested);
-        if (requested.status === "completed") return json(200, requested);
+        if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
+        if (LifecycleRequest.$is("completed")(requested)) return json(200, requested);
         if (isTruthy(requested.activeAttemptId))
           yield* agentPromise("stop-subagent", () => subagents.stopTask(taskId)).pipe(
             Effect.andThen(background.stopTask(taskId)),
             Effect.timeoutOption(cancelWaitMs),
           );
-        if (requested.operationId === null)
-          return json(409, { status: "blocked", blocker: "operation_not_found" });
         const completed = yield* workTrace.finalizeTaskLifecycle(requested.operationId);
-        return completed.status === "completed" ? json(200, completed) : json(202, completed);
+        return LifecycleOutcome.$is("completed")(completed)
+          ? json(200, completed)
+          : json(202, completed);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** Queue a server-owned logical resume; the next valid parent binding executes it. */
@@ -1363,7 +1371,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           expectedAttemptId,
           confirmUncertain,
         });
-        return result.status === "queued" ? json(202, result) : json(409, result);
+        return ResumeRequest.$is("queued")(result) ? json(202, result) : json(409, result);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** Project-owned task detail remains available after its origin conversation is deleted. */
@@ -1514,9 +1522,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const selection = external === null ? yield* active.selected : null;
         if (external === null) {
           const auth = yield* active.authFor(selection?.provider ?? (yield* active.provider));
-          if (auth.status === "error")
+          if (AuthConnectionState.$is("error")(auth))
             return json(503, { error: "provider_auth_unavailable", provider: auth.provider });
-          if (auth.status !== "signed-in") return json(401, { error: "login_required" });
+          if (!AuthConnectionState.$is("signed-in")(auth))
+            return json(401, { error: "login_required" });
           if (!isTruthy(selection)) return json(412, { error: "model_selection_required" });
         }
 
@@ -1720,7 +1729,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                         sessionId,
                         runId,
                         {
-                          requester: { kind: "external_agent", agent: answeredBy },
+                          requester: ApprovalRequester.cases.external_agent.make({
+                            agent: answeredBy,
+                          }),
                           toolName: permission.toolCall.title ?? "external tool",
                           argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
                           reason: "외부 에이전트가 권한을 요청했어요.",
@@ -1931,7 +1942,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               : yield* execution.canResume(sessionId, last.runId, state)) ||
             state.phase !== workflow.phase ||
             state.plan?.version !== workflow.plan?.version ||
-            (yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
+            !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
             (yield* relayed.pending(sessionId)).length > 0
           )
             return json(409, { error: "workflow_followup_deferred" });
@@ -2736,7 +2747,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     cancel: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
-        const pendingExecution = (yield* execution.get(sessionId)).kind === "ready";
+        const pendingExecution = WorkflowExecutionState.isAnyOf(["ready"])(
+          yield* execution.get(sessionId),
+        );
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
         yield* events.publishSession(sessionId, "run-state");
@@ -2799,15 +2812,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           `operator-preview:${randomUUID()}`,
           latest.value.id,
         );
-        switch (admission.status) {
-          case "bound":
-            return json(200, { ...result, admission: ReadRecoveryAdmission.ready() });
-          case "refused":
-            return json(200, {
-              ...result,
-              admission: ReadRecoveryAdmission.blocked({ reason: admission.reason }),
-            });
-        }
+        return Admission.$match(admission, {
+          bound: () => json(200, { ...result, admission: ReadRecoveryAdmission.ready() }),
+          refused: ({ reason }) =>
+            json(200, { ...result, admission: ReadRecoveryAdmission.blocked({ reason }) }),
+        });
       }).pipe(
         Effect.catchTags({
           SessionNotFound: sessionNotFound,
@@ -2885,13 +2894,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
           return json(409, { error: "run_in_progress" });
         const result = yield* uncertain.acknowledge(sessionId, input.runIds);
-        switch (result.status) {
-          case "refused":
-            return json(409, { error: result.reason });
-          case "acknowledged":
-            yield* events.publishSession(sessionId, "run-state");
-            return json(200, result);
-        }
+        return yield* UncertainContinue.$match(result, {
+          refused: ({ reason }) => Effect.succeed(json(409, { error: reason })),
+          acknowledged: (acknowledged) =>
+            Effect.as(events.publishSession(sessionId, "run-state"), json(200, acknowledged)),
+        });
       }).pipe(Effect.catchTags({ SessionNotFound: sessionNotFound })),
 
     /**
@@ -3065,13 +3072,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           intent: archived ? "archive" : "restore",
           idempotencyKey,
         });
-        if (requested.status === "blocked") return json(409, requested);
-        if (requested.status === "completed") {
+        if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
+        if (LifecycleRequest.$is("completed")(requested)) {
           return json(200, yield* sessions.get(sessionId));
         }
         yield* stopSessionRuns(sessionId);
         const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
-        if (completed.status !== "completed") return json(202, completed);
+        if (!LifecycleOutcome.$is("completed")(completed)) return json(202, completed);
         return json(200, yield* sessions.get(sessionId));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -3085,8 +3092,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           intent: "delete",
           idempotencyKey,
         });
-        if (requested.status === "blocked") return json(409, requested);
-        if (requested.status === "completed") {
+        if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
+        if (LifecycleRequest.$is("completed")(requested)) {
           return json(200, requested);
         }
         yield* stopSessionRuns(sessionId);
@@ -3098,12 +3105,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             intent: "delete",
             idempotencyKey: `session:${requested.operationId}:task:${task.id}`,
           });
-          if (taskRequest.status === "blocked") return json(409, taskRequest);
-          if (taskRequest.status !== "completed" && isTruthy(taskRequest.operationId))
+          if (LifecycleRequest.$is("blocked")(taskRequest)) return json(409, taskRequest);
+          if (!LifecycleRequest.$is("completed")(taskRequest) && isTruthy(taskRequest.operationId))
             yield* workTrace.finalizeTaskLifecycle(taskRequest.operationId);
         }
         const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
-        if (completed.status === "completed") {
+        if (LifecycleOutcome.$is("completed")(completed)) {
           yield* attachments.purgeOrphans;
           return json(200, completed);
         }
@@ -3263,7 +3270,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
         // a run a restart cut off before it ran any tool.
         const restarted = last.status !== "completed";
-        if (restarted && (yield* execution.get(sessionId)).kind !== "retrying") return;
+        if (
+          restarted &&
+          !WorkflowExecutionState.isAnyOf(["retrying"])(yield* execution.get(sessionId))
+        )
+          return;
         const workflow = yield* workflows.reconcile(sessionId);
         // A kanban board's loop executes the Plan; the model runs only when the loop needs it.
         if (yield* kanbanBoard(sessionId)) {
@@ -3271,7 +3282,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (
             reasons === undefined ||
             restarted ||
-            (yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
+            !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
             (yield* relayed.pending(sessionId)).length > 0
           )
             return;
@@ -3289,7 +3300,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A user's queued request or pending approval takes precedence over automatic work.
         if (
           continuing &&
-          ((yield* queue.snapshot(sessionId)).nextDelivery.kind !== "empty" ||
+          (!NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
             (yield* relayed.pending(sessionId)).length > 0)
         )
           return;
@@ -3316,7 +3327,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         steered,
         Effect.map(
           queue.snapshot(sessionId),
-          (snapshot) => last.status === "completed" && snapshot.nextDelivery.kind === "server",
+          (snapshot) =>
+            last.status === "completed" && NextDelivery.$is("server")(snapshot.nextDelivery),
         ),
       ).pipe(Effect.flatMap(Option.match({ onSome: () => Effect.void, onNone: () => automatic })));
     }).pipe(

@@ -8,7 +8,7 @@ import { Cause, Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
-import type { ModelSelection } from "../providers/contracts.ts";
+import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Interpretations } from "./interpretations.ts";
 import { NodeRow, nodeOfRow, Nodes, type Node } from "./nodes.ts";
@@ -361,7 +361,7 @@ const make = Effect.gen(function* () {
       const selection = yield* active.selected;
       if (!isTruthy(selection)) return 0;
       const auth = yield* active.auth(selection);
-      if (auth.status !== "signed-in") return 0;
+      if (!AuthConnectionState.$is("signed-in")(auth)) return 0;
       let interpreted = 0;
       for (let round = 0; round < batchesPerRun; round++) {
         const batch = yield* nextBatch;

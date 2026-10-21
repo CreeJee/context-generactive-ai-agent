@@ -5,7 +5,13 @@ import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
-import { ExternalAgents, ExternalPromptOutcome } from "../../src/external-agents/agents.ts";
+import { ApprovalRequester } from "../../src/approvals/relayed-state.ts";
+import {
+  AgentLinkState,
+  AgentTrustState,
+  ExternalAgents,
+  ExternalPromptOutcome,
+} from "../../src/external-agents/agents.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -31,6 +37,12 @@ const processAlive = (pid: number) => {
 };
 
 /** Wait for an observation that itself needs an Effect, such as reading the start log. */
+/** A trusted agent whose link is connected, whatever it named itself. */
+const isConnected = (state: AgentTrustState | undefined) =>
+  state !== undefined &&
+  AgentTrustState.$is("trusted")(state) &&
+  AgentLinkState.$is("connected")(state.link);
+
 const eventually = <E, R>(condition: Effect.Effect<boolean, E, R>, what: string) =>
   condition.pipe(
     Effect.repeat({ until: (ready) => ready, schedule: Schedule.spaced(20) }),
@@ -73,14 +85,9 @@ const fakeAgentProject = Effect.fnUntraced(function* () {
     const lines = (yield* fs.readFileString(log)).trim().split("\n");
     return yield* Effect.forEach(lines, (line) => Schema.decodeEffect(Start)(line));
   });
-  const link = Effect.map(agents.overview(project), ({ agents: [view] }) => {
-    switch (view?.state.status) {
-      case "trusted":
-        return view.state.link;
-      default:
-        return null;
-    }
-  });
+  const link = Effect.map(agents.overview(project), ({ agents: [view] }) =>
+    view !== undefined && AgentTrustState.$is("trusted")(view.state) ? view.state.link : null,
+  );
   const prompt = (text: string, options: { signal?: AbortSignal; approve?: boolean } = {}) =>
     Effect.tryPromise({
       try: (signal) =>
@@ -113,7 +120,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         expect(trusted.agents[0]).toMatchObject({
           name: "fake",
           envNames: ["FAKE_ACP_LOG", "FAKE_ACP_REFUSE"],
-          state: { status: "trusted", link: { status: "idle" } },
+          state: AgentTrustState.trusted({ link: AgentLinkState.idle() }),
         });
         expect(yield* starts).toEqual([]);
 
@@ -142,7 +149,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         detail: expect.stringContaining("API_KEY="),
       };
       expect(outcome).toEqual(ExternalPromptOutcome.unavailable({ failure }));
-      expect(yield* link).toEqual({ status: "retrying", failures: 1, failure });
+      expect(yield* link).toEqual(AgentLinkState.retrying({ failures: 1, failure }));
       // The settings page's command line hides the same value.
       const listed = yield* agents.overview(project);
       expect(listed.agents[0]?.target).toContain("API_KEY=");
@@ -220,10 +227,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       const tasks = yield* BackgroundTasks;
       yield* tasks.stopSession(sessionId);
       expect(tasks.hasSession(sessionId)).toBe(false);
-      expect((yield* agents.overview(project)).agents[0]?.state).toMatchObject({
-        status: "trusted",
-        link: { status: "connected" },
-      });
+      expect(isConnected((yield* agents.overview(project)).agents[0]?.state)).toBe(true);
       expect(ExternalPromptOutcome.$is("completed")(yield* prompt("after cancellation"))).toBe(
         true,
       );
@@ -245,7 +249,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           "the automatic reconnect",
         );
         yield* eventually(
-          Effect.map(link, (state) => state?.status === "connected"),
+          Effect.map(link, (state) => state !== null && AgentLinkState.$is("connected")(state)),
           "ACP reconnect",
         );
         // The crashed prompt was not sent again: the new process has seen no prompt.
@@ -256,10 +260,13 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         yield* fs.writeFileString(refuse, "");
         yield* prompt("crash again");
         yield* eventually(
-          Effect.map(link, (state) => state?.status === "stopped"),
+          Effect.map(link, (state) => state !== null && AgentLinkState.$is("stopped")(state)),
           "ACP reconnect limit",
         );
-        expect(yield* link).toMatchObject({ status: "stopped", failures: 2 });
+        const stopped = yield* link;
+        expect(stopped !== null && AgentLinkState.$is("stopped")(stopped) && stopped.failures).toBe(
+          2,
+        );
         expect(yield* prompt("while stopped")).toEqual(
           ExternalPromptOutcome.unavailable({
             failure: { code: "stopped_after_failures", detail: null },
@@ -267,10 +274,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         );
 
         yield* fs.remove(refuse);
-        expect((yield* agents.reconnect(project, "fake")).agents[0]?.state).toMatchObject({
-          status: "trusted",
-          link: { status: "connected" },
-        });
+        expect(isConnected((yield* agents.reconnect(project, "fake")).agents[0]?.state)).toBe(true);
         expect(ExternalPromptOutcome.$is("completed")(yield* prompt("back"))).toBe(true);
       }),
     30_000,
@@ -328,7 +332,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         );
         const [request] = yield* relayed.pending(sessionId);
         expect(request).toMatchObject({
-          requester: { kind: "external_agent", agent: "fake" },
+          requester: ApprovalRequester.cases.external_agent.make({ agent: "fake" }),
           toolName: "Edit README.md",
           askedBy: "agent",
         });

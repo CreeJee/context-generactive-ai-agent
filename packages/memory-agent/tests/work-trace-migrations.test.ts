@@ -7,7 +7,11 @@ import { DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { migrateDatabase } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
-import { AttemptFailure, AttemptFailureReason } from "../src/work-trace/contracts.ts";
+import {
+  ArtifactLocator,
+  AttemptFailure,
+  AttemptFailureReason,
+} from "../src/work-trace/contracts.ts";
 
 const databaseFile = Effect.fn("workTrace.databaseFile")(function* () {
   const context = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
@@ -237,6 +241,60 @@ describe("Work Trace migration", () => {
         ).toThrow();
       }),
     ),
+  );
+
+  it.live("rewrites artifact locators 0.0.17 stored under kind as the store encodes them", () =>
+    Effect.gen(function* () {
+      const file = yield* databaseFile();
+      const locatorMigration = migrations.findIndex((step) =>
+        step.includes("artifact locator names its case under _tag"),
+      );
+      expect(locatorMigration).toBeGreaterThanOrEqual(0);
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => new DatabaseSync(file)),
+        (legacy) =>
+          Effect.sync(() => {
+            legacy.exec("PRAGMA foreign_keys = ON");
+            for (const step of migrations.slice(0, locatorMigration)) legacy.exec(step);
+            legacy.exec(`PRAGMA user_version = ${locatorMigration}`);
+            seedProjectSessionAndAgent(legacy);
+            seedTask(legacy);
+            // Locators as 0.0.17 wrote them, with the case under kind.
+            const insert = legacy.prepare(`INSERT INTO work_artifacts
+              (id, task_id, attempt_id, kind, locator, verification, created_at, updated_at)
+              VALUES (?, 'task-1', 'attempt-1', ?, ?, 'verified', 1, 1)`);
+            insert.run(
+              "artifact-file",
+              "file",
+              `{"kind":"file","path":"보고서/report.md","sha256":"${"a".repeat(64)}"}`,
+            );
+            insert.run("artifact-generated", "generated", '{"kind":"generated","reference":"g-1"}');
+            insert.run("artifact-external", "external", '{"kind":"external","reference":"x-1"}');
+          }),
+        (legacy) => Effect.sync(() => legacy.close()),
+      );
+
+      const rows = yield* withDatabase(file, (db) =>
+        db.sqlite.prepare("SELECT id, locator FROM work_artifacts ORDER BY id").all(),
+      );
+      const encode = Schema.encodeEffect(Schema.fromJsonString(ArtifactLocator));
+      expect(rows).toEqual([
+        {
+          id: "artifact-external",
+          locator: yield* encode(ArtifactLocator.cases.external.make({ reference: "x-1" })),
+        },
+        {
+          id: "artifact-file",
+          locator: yield* encode(
+            ArtifactLocator.cases.file.make({ path: "보고서/report.md", sha256: "a".repeat(64) }),
+          ),
+        },
+        {
+          id: "artifact-generated",
+          locator: yield* encode(ArtifactLocator.cases.generated.make({ reference: "g-1" })),
+        },
+      ]);
+    }),
   );
 
   it.live("keeps project-owned trace when its origin session is deleted", () =>

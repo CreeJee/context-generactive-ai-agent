@@ -1,4 +1,4 @@
-import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Context, Data, Effect, Layer, Schema } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import {
   RouteCatalog,
@@ -57,33 +57,39 @@ export const ImageRouteScore = Schema.Struct({
 });
 export type ImageRouteScore = typeof ImageRouteScore.Type;
 
-export interface ImageRouteDecision {
-  readonly type: "selected";
-  readonly mode: ImageRoutingMode;
-  readonly preference: ImageRoutingPreference;
-  readonly initiatorChatRouteId: ChatRoute["id"];
-  readonly initiatorChatModel: string;
-  readonly executorMediaRouteId: MediaRoute["id"];
-  readonly executorMediaModel: MediaRoute["executorModel"];
-  readonly provider: MediaRoute["provider"];
-  readonly initiatorProvider: ChatRoute["provider"];
-  readonly crossProvider: boolean;
-  readonly crossProviderConsentMode: CrossProviderMediaConsentMode;
-  readonly crossProviderApprovalRequired: boolean;
-  readonly accountId: string;
-  readonly executionMode: MediaRoute["executionMode"];
-  readonly estimatedCostUsd?: number;
-  readonly score: number;
-  readonly reasons: readonly string[];
-  readonly ranking: readonly ImageRouteScore[];
-}
+/** The route chosen for one image request. */
+export type ImageRouteDecision = Data.TaggedEnum<{
+  selected: {
+    readonly mode: ImageRoutingMode;
+    readonly preference: ImageRoutingPreference;
+    readonly initiatorChatRouteId: ChatRoute["id"];
+    readonly initiatorChatModel: string;
+    readonly executorMediaRouteId: MediaRoute["id"];
+    readonly executorMediaModel: MediaRoute["executorModel"];
+    readonly provider: MediaRoute["provider"];
+    readonly initiatorProvider: ChatRoute["provider"];
+    readonly crossProvider: boolean;
+    readonly crossProviderConsentMode: CrossProviderMediaConsentMode;
+    readonly crossProviderApprovalRequired: boolean;
+    readonly accountId: string;
+    readonly executionMode: MediaRoute["executionMode"];
+    readonly estimatedCostUsd?: number;
+    readonly score: number;
+    readonly reasons: readonly string[];
+    readonly ranking: readonly ImageRouteScore[];
+  };
+}>;
+export const ImageRouteDecision = Data.taggedEnum<ImageRouteDecision>();
 
-export interface ImageRerouteConfirmation {
-  readonly type: "confirmation_required";
-  readonly failedDecision: ImageRouteDecision;
-  readonly reason: string;
-  readonly alternatives: readonly ImageRouteDecision[];
-}
+/** Routes a failed image request may move to, each needing the user's confirmation. */
+export type ImageRerouteConfirmation = Data.TaggedEnum<{
+  confirmation_required: {
+    readonly failedDecision: ImageRouteDecision;
+    readonly reason: string;
+    readonly alternatives: readonly ImageRouteDecision[];
+  };
+}>;
+export const ImageRerouteConfirmation = Data.taggedEnum<ImageRerouteConfirmation>();
 
 export class ImageRouteFactsFailed extends Schema.TaggedError<ImageRouteFactsFailed>()(
   "ImageRouteFactsFailed",
@@ -426,33 +432,34 @@ function makeImageRouterBody(
         MutableHashMap.get(result.factById, selectedScore.routeId),
       )!;
       const preference = request.policy.preference ?? "balanced";
-      return Object.freeze({
-        type: "selected" as const,
-        mode: request.policy.mode,
-        preference,
-        initiatorChatRouteId: result.chat.id,
-        initiatorChatModel: result.chat.model,
-        executorMediaRouteId: route.id,
-        executorMediaModel: route.executorModel,
-        provider: route.provider,
-        initiatorProvider: result.chat.provider,
-        crossProvider: result.chat.provider !== route.provider,
-        crossProviderConsentMode:
-          Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) ??
-          (result.chat.provider === route.provider ? "always" : "disabled"),
-        crossProviderApprovalRequired:
-          result.chat.provider !== route.provider &&
-          Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) === "ask",
-        accountId: fact.accountId,
-        executionMode: route.executionMode,
-        ...optionalProperty("estimatedCostUsd", selectedScore.estimatedCostUsd),
-        score: selectedScore.score,
-        reasons: Object.freeze([
-          `${preference} preference selected the highest eligible deterministic score`,
-          ...fact.evidence,
-        ]),
-        ranking: result.ranking,
-      });
+      return Object.freeze(
+        ImageRouteDecision.selected({
+          mode: request.policy.mode,
+          preference,
+          initiatorChatRouteId: result.chat.id,
+          initiatorChatModel: result.chat.model,
+          executorMediaRouteId: route.id,
+          executorMediaModel: route.executorModel,
+          provider: route.provider,
+          initiatorProvider: result.chat.provider,
+          crossProvider: result.chat.provider !== route.provider,
+          crossProviderConsentMode:
+            Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) ??
+            (result.chat.provider === route.provider ? "always" : "disabled"),
+          crossProviderApprovalRequired:
+            result.chat.provider !== route.provider &&
+            Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) === "ask",
+          accountId: fact.accountId,
+          executionMode: route.executionMode,
+          ...optionalProperty("estimatedCostUsd", selectedScore.estimatedCostUsd),
+          score: selectedScore.score,
+          reasons: Object.freeze([
+            `${preference} preference selected the highest eligible deterministic score`,
+            ...fact.evidence,
+          ]),
+          ranking: result.ranking,
+        }),
+      );
     });
 
   return {
@@ -491,12 +498,13 @@ function makeImageRouterBody(
             }),
           );
         }
-        return Object.freeze({
-          type: "confirmation_required" as const,
-          failedDecision: decision,
-          reason,
-          alternatives: Object.freeze(alternatives),
-        });
+        return Object.freeze(
+          ImageRerouteConfirmation.confirmation_required({
+            failedDecision: decision,
+            reason,
+            alternatives: Object.freeze(alternatives),
+          }),
+        );
       }),
   };
 }

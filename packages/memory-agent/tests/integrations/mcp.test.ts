@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
-import { McpServers, mcpToolName } from "../../src/mcp/servers.ts";
+import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -182,7 +182,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
           transport: "stdio",
           envNames: ["FAKE_MCP_LOG", "API_TOKEN"],
           shadowed: false,
-          state: { status: "untrusted" },
+          state: McpServerState.untrusted(),
         }),
         expect.objectContaining({
           scope: "global",
@@ -191,7 +191,11 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
           headerNames: ["Authorization"],
           shadowed: true,
         }),
-        expect.objectContaining({ scope: "project", name: "docs", state: { status: "untrusted" } }),
+        expect.objectContaining({
+          scope: "project",
+          name: "docs",
+          state: McpServerState.untrusted(),
+        }),
       ]);
       // Values of the environment and headers never leave the server.
       expect(yield* encodeJson(listed)).not.toContain("NOT_SHOWN");
@@ -199,12 +203,13 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
       expect(yield* fake.starts).toBe(0);
       // `fake` needs NOT_SHOWN, which the environment does not have: trusting reports why it failed.
       const failed = yield* servers.setTrusted(project, "global", "fake", true);
-      expect(failed.servers[0]?.state).toEqual({
-        status: "failed",
-        failure: { code: "missing_env", detail: "NOT_SHOWN" },
-      });
+      expect(failed.servers[0]?.state).toEqual(
+        McpServerState.failed({ failure: { code: "missing_env", detail: "NOT_SHOWN" } }),
+      );
       const trusted = yield* servers.setTrusted(project, "project", "docs", true);
-      expect(trusted.servers[2]?.state).toEqual({ status: "connected", tools: ["echo", "where"] });
+      expect(trusted.servers[2]?.state).toEqual(
+        McpServerState.connected({ tools: ["echo", "where"] }),
+      );
       expect(yield* fake.starts).toBe(1);
       const tools = yield* inRun(servers.tools(project));
       expect(tools.map((tool) => tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
@@ -213,10 +218,12 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
       yield* writeJson(fake.config, {
         mcpServers: { docs: { ...fake.entry(), args: [fake.script, "--changed"] } },
       });
-      expect((yield* servers.overview(project)).servers[2]?.state).toEqual({ status: "changed" });
+      expect((yield* servers.overview(project)).servers[2]?.state).toEqual(
+        McpServerState.changed(),
+      );
       expect(yield* inRun(servers.tools(project))).toEqual([]);
       const untrusted = yield* servers.setTrusted(project, "project", "docs", false);
-      expect(untrusted.servers[2]?.state).toEqual({ status: "untrusted" });
+      expect(untrusted.servers[2]?.state).toEqual(McpServerState.untrusted());
     }),
   );
 });
@@ -249,10 +256,11 @@ testAgent()("MCP configuration errors", (it) => {
         mcpServers: { broken: { command: "/nonexistent/API_KEY=zq81Hd72kdP0xQ" } },
       });
       const failed = yield* (yield* McpServers).setTrusted(project, "global", "broken", true);
-      expect(failed.servers[0]?.state).toEqual({
-        status: "failed",
-        failure: { code: "start_failed", detail: expect.stringContaining("API_KEY=") },
-      });
+      expect(failed.servers[0]?.state).toEqual(
+        McpServerState.failed({
+          failure: { code: "start_failed", detail: expect.stringContaining("API_KEY=") },
+        }),
+      );
       // The settings page shows the configured command too, with the same value hidden.
       expect(failed.servers[0]?.target).toContain("API_KEY=");
       expect(yield* encodeJson(failed)).not.toContain("zq81Hd72kdP0xQ");

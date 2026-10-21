@@ -46,23 +46,18 @@ export const SubscriptionQuotaUnavailableReason = Schema.Literals([
 export type SubscriptionQuotaUnavailableReason = typeof SubscriptionQuotaUnavailableReason.Type;
 
 /** `stale` keeps the last observation and when the newer lookup failed; it is never reset to zero. */
-export const SubscriptionQuotaStatus = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("observed"),
+export const SubscriptionQuotaStatus = Schema.TaggedUnion({
+  observed: {
     windows: Schema.Array(SubscriptionQuotaWindow),
     observedAt: Schema.String,
-  }),
-  Schema.Struct({
-    status: Schema.Literal("stale"),
+  },
+  stale: {
     windows: Schema.Array(SubscriptionQuotaWindow),
     observedAt: Schema.String,
     failedAt: Schema.String,
-  }),
-  Schema.Struct({
-    status: Schema.Literal("unavailable"),
-    reason: SubscriptionQuotaUnavailableReason,
-  }),
-]);
+  },
+  unavailable: { reason: SubscriptionQuotaUnavailableReason },
+});
 export type SubscriptionQuotaStatus = typeof SubscriptionQuotaStatus.Type;
 
 export const SubscriptionAccountQuota = Schema.Struct({
@@ -114,7 +109,7 @@ export class SubscriptionUsage extends Context.Service<
   );
 }
 
-type ObservedQuota = Extract<SubscriptionQuotaStatus, { status: "observed" }>;
+type ObservedQuota = typeof SubscriptionQuotaStatus.cases.observed.Type;
 
 /** At most one provider lookup per account per minute; concurrent reads share it. */
 const observationTimeToLive = Duration.minutes(1);
@@ -160,23 +155,21 @@ export class SubscriptionQuota extends Context.Service<
         );
         const at = DateTime.formatIso(yield* DateTime.now);
         if (Result.isSuccess(windows)) {
-          const observed: ObservedQuota = {
-            status: "observed",
+          const observed: ObservedQuota = SubscriptionQuotaStatus.cases.observed.make({
             windows: windows.success,
             observedAt: at,
-          };
+          });
           yield* Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed));
           return observed;
         }
         const previous = (yield* Ref.get(lastObserved)).get(accountId);
         return previous === undefined
-          ? ({ status: "unavailable", reason: windows.failure } satisfies SubscriptionQuotaStatus)
-          : ({
-              status: "stale",
+          ? SubscriptionQuotaStatus.cases.unavailable.make({ reason: windows.failure })
+          : SubscriptionQuotaStatus.cases.stale.make({
               windows: previous.windows,
               observedAt: previous.observedAt,
               failedAt: at,
-            } satisfies SubscriptionQuotaStatus);
+            });
       });
       // Profile ids are unique across providers, so one cache per provider keys by id alone.
       const providerCache = (provider: SubscriptionAccountProvider) =>

@@ -1,7 +1,9 @@
-import { Effect, Result, Option, Schema } from "effect";
+import { Effect, Result, Option, Schema, Struct } from "effect";
 import {
   AppEvents,
+  AuthConnectionState,
   OAuthProfiles,
+  ProviderConnection,
   ProviderId,
   providerConnection,
   ProviderRegistry,
@@ -22,15 +24,9 @@ const providerFrom = (request: Request) => {
   return Schema.is(ProviderId)(value) ? value : null;
 };
 
-const browserState = (state: {
-  readonly provider: ProviderId;
-  readonly status: "signed-out" | "pending" | "signed-in" | "error";
-  readonly authorizationUrl?: string;
-  readonly planType?: string;
-  readonly message?: string;
-}) =>
-  state.status === "pending"
-    ? { provider: state.provider, status: state.status, authUrl: state.authorizationUrl }
+const browserState = (state: AuthConnectionState) =>
+  AuthConnectionState.$is("pending")(state)
+    ? { ...Struct.omit(state, ["authorizationUrl"]), authUrl: state.authorizationUrl }
     : state;
 
 /** GET /api/auth?provider=... reads one subscription provider's connection state. */
@@ -46,16 +42,13 @@ export function loader({ request }: Route.LoaderArgs) {
         const configured = yield* (yield* ProviderRegistry).get(provider);
         // Migrate when the sidebar first checks this provider. If the vault is unavailable,
         // keep the legacy connection usable; the next status request can retry the copy.
-        const connection = providerConnection(provider);
-        switch (connection.type) {
-          case "subscription":
-            yield* (yield* OAuthProfiles)
-              .importLegacy(connection.accountProvider)
-              .pipe(Effect.catch(logFailure("Legacy OAuth account import failed")));
-            break;
-          case "compatible-endpoint":
-            break;
-        }
+        yield* ProviderConnection.match(providerConnection(provider), {
+          subscription: ({ accountProvider }) =>
+            Effect.gen(function* () {
+              yield* (yield* OAuthProfiles).importLegacy(accountProvider);
+            }).pipe(Effect.catch(logFailure("Legacy OAuth account import failed"))),
+          "compatible-endpoint": () => Effect.void,
+        });
         return Response.json(browserState(yield* configured.auth.status));
       }).pipe(
         Effect.catchTags({
@@ -87,7 +80,10 @@ export function action({ request }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_intent" }, { status: 400 });
       const { intent, provider } = body.success;
-      if (provider === undefined || providerConnection(provider).type !== "subscription")
+      if (
+        provider === undefined ||
+        !ProviderConnection.isAnyOf(["subscription"])(providerConnection(provider))
+      )
         return Response.json({ error: "invalid_provider" }, { status: 400 });
 
       const response = Effect.gen(function* () {
@@ -101,12 +97,12 @@ export function action({ request }: Route.ActionArgs) {
         const state = yield* operation;
         const events = yield* AppEvents;
         events.publishGlobal("auth");
-        if (state.status === "pending")
+        if (AuthConnectionState.$is("pending")(state))
           yield* Effect.forkDetach(
             Effect.gen(function* () {
               for (;;) {
                 yield* Effect.sleep("250 millis");
-                if ((yield* configured.auth.status).status !== "pending") break;
+                if (!AuthConnectionState.$is("pending")(yield* configured.auth.status)) break;
               }
             }).pipe(
               Effect.catch(logFailure("OAuth login status polling stopped")),

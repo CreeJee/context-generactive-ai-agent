@@ -3,7 +3,13 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceStore, type AttemptHandle } from "../src/work-trace/store.ts";
+import {
+  ResumeClaim,
+  ResumeRequest,
+  TaskArchive,
+  WorkTraceStore,
+  type AttemptHandle,
+} from "../src/work-trace/store.ts";
 import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const AttemptLineage = Schema.Struct({
@@ -99,8 +105,8 @@ describe("Work Trace logical resume", () => {
             parentToolCallId: "call-resume-1",
             confirmUncertain: false,
           });
-          expect(resumed.status).toBe("started");
-          if (resumed.status !== "started") return;
+          expect(ResumeClaim.$is("started")(resumed)).toBe(true);
+          if (!ResumeClaim.$is("started")(resumed)) return;
           expect(resumed.handle.taskId).toBe(previous.taskId);
           expect(resumed.handle.id).not.toBe(previous.id);
           expect(resumed.handle.chatRunId).not.toBe(previous.chatRunId);
@@ -118,7 +124,7 @@ describe("Work Trace logical resume", () => {
               parentToolCallId: "call-resume-2",
               confirmUncertain: false,
             }),
-          ).toEqual({ status: "blocked", reason: "attempt_alive" });
+          ).toEqual(ResumeClaim.blocked({ reason: "attempt_alive" }));
 
           expect(
             yield* decodeLineage(
@@ -192,13 +198,12 @@ describe("Work Trace logical resume", () => {
           parentRunId: "parent-2",
           parentToolCallId: "call-resume-1",
         } as const;
-        expect(yield* trace.claimResume({ ...input, confirmUncertain: false })).toEqual({
-          status: "blocked",
-          reason: "uncertain_side_effect",
-        });
+        expect(yield* trace.claimResume({ ...input, confirmUncertain: false })).toEqual(
+          ResumeClaim.blocked({ reason: "uncertain_side_effect" }),
+        );
         const confirmed = yield* trace.claimResume({ ...input, confirmUncertain: true });
-        expect(confirmed.status).toBe("started");
-        if (confirmed.status === "started")
+        expect(ResumeClaim.$is("started")(confirmed)).toBe(true);
+        if (ResumeClaim.$is("started")(confirmed))
           expect(confirmed.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
       }),
     ),
@@ -215,16 +220,13 @@ describe("Work Trace logical resume", () => {
           taskId: previous.taskId,
           expectedAttemptId: previous.id,
         } as const;
-        expect(yield* trace.requestResume({ ...request, confirmUncertain: false })).toEqual({
-          status: "blocked",
-          reason: "uncertain_side_effect",
-        });
+        expect(yield* trace.requestResume({ ...request, confirmUncertain: false })).toEqual(
+          ResumeRequest.blocked({ reason: "uncertain_side_effect" }),
+        );
         const queued = yield* trace.requestResume({ ...request, confirmUncertain: true });
-        expect(queued).toMatchObject({
-          status: "queued",
-          taskId: previous.taskId,
-          expectedAttemptId: previous.id,
-        });
+        expect(queued).toEqual(
+          ResumeRequest.queued({ taskId: previous.taskId, expectedAttemptId: previous.id }),
+        );
         expect(
           yield* sqlGet(
             "SELECT retry_requested_at IS NOT NULL AS requested, retry_confirm_uncertain FROM work_tasks WHERE id = ?",
@@ -276,10 +278,9 @@ describe("Work Trace logical resume", () => {
         yield* seed();
         const handle = yield* interruptedAttempt(trace);
 
-        expect(yield* trace.archiveTask("s1", handle.taskId)).toEqual({
-          status: "archived",
-          taskId: handle.taskId,
-        });
+        expect(yield* trace.archiveTask("s1", handle.taskId)).toEqual(
+          TaskArchive.archived({ taskId: handle.taskId }),
+        );
         expect((yield* trace.taskTree("s1"))[0]?.status).toBe("archived");
         expect((yield* trace.taskDetail("s1", handle.taskId))?.attempts).toHaveLength(1);
         expect(
@@ -291,7 +292,7 @@ describe("Work Trace logical resume", () => {
             parentToolCallId: "resume-call",
             confirmUncertain: false,
           }),
-        ).toEqual({ status: "blocked", reason: "task_archived" });
+        ).toEqual(ResumeClaim.blocked({ reason: "task_archived" }));
       }),
     ),
   );
@@ -320,16 +321,13 @@ describe("Work Trace logical resume", () => {
           parentToolCallId: "call-2",
           confirmUncertain: false,
         } as const;
-        expect(yield* trace.claimResume({ ...base, expectedAttemptId: "stale" })).toEqual({
-          status: "blocked",
-          reason: "stale_attempt",
-        });
-        expect(yield* trace.claimResume({ ...base, expectedAttemptId: handle.id })).toMatchObject({
-          status: "started",
-          context: {
-            originalRequest: "Research",
-            uncertainToolCallIds: [],
-          },
+        expect(yield* trace.claimResume({ ...base, expectedAttemptId: "stale" })).toEqual(
+          ResumeClaim.blocked({ reason: "stale_attempt" }),
+        );
+        const retried = yield* trace.claimResume({ ...base, expectedAttemptId: handle.id });
+        expect(ResumeClaim.$is("started")(retried) && retried.context).toEqual({
+          originalRequest: "Research",
+          uncertainToolCallIds: [],
         });
       }),
     ),

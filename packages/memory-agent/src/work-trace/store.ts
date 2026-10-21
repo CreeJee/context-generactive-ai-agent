@@ -13,6 +13,7 @@ import {
   Clock,
   Context,
   Crypto,
+  Data,
   Effect,
   Layer,
   Option,
@@ -465,26 +466,101 @@ export interface ResumeContext {
   readonly uncertainToolCallIds: readonly string[];
 }
 
-export type ResumeClaim =
-  | {
-      readonly status: "started";
-      readonly handle: AttemptHandle;
-      readonly agentId: string;
-      readonly context: ResumeContext;
-    }
-  | {
-      readonly status: "blocked";
-      readonly reason:
-        | "task_not_found"
-        | "task_archived"
-        | "task_deleted"
-        | "attempt_alive"
-        | "task_terminal"
-        | "uncertain_side_effect"
-        | "stale_attempt"
-        | "origin_deleted"
-        | "agent_deleted";
-    };
+/** Why a task's retry cannot start. */
+export type ResumeBlocker =
+  | "task_not_found"
+  | "task_archived"
+  | "task_deleted"
+  | "attempt_alive"
+  | "task_terminal"
+  | "uncertain_side_effect"
+  | "stale_attempt"
+  | "origin_deleted"
+  | "agent_deleted";
+
+export type ResumeClaim = Data.TaggedEnum<{
+  started: {
+    readonly handle: AttemptHandle;
+    readonly agentId: string;
+    readonly context: ResumeContext;
+  };
+  blocked: { readonly reason: ResumeBlocker };
+}>;
+export const ResumeClaim = Data.taggedEnum<ResumeClaim>();
+
+/** A user's retry: queued for the next parent run, or why it cannot be. */
+export type ResumeRequest = Data.TaggedEnum<{
+  queued: { readonly taskId: string; readonly expectedAttemptId: string };
+  blocked: { readonly reason: ResumeBlocker };
+}>;
+export const ResumeRequest = Data.taggedEnum<ResumeRequest>();
+
+/** Archiving one settled task directly, without a lifecycle operation. */
+export type TaskArchive = Data.TaggedEnum<{
+  archived: { readonly taskId: string };
+  blocked: { readonly reason: "task_not_found" | "attempt_alive" | "task_not_archivable" };
+}>;
+export const TaskArchive = Data.taggedEnum<TaskArchive>();
+
+export type LifecycleIntent = "archive" | "restore" | "delete";
+
+/** A lifecycle operation as its row records it. */
+export interface LifecycleOperationView {
+  readonly operationId: string;
+  readonly projectId: string;
+  readonly sessionId: string | null;
+  readonly targetKind: "task" | "session";
+  readonly targetId: string;
+  readonly intent: LifecycleIntent;
+  readonly blocker: string | null;
+  readonly requestedAt: number;
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+}
+
+/** An operation still to finish. A new task operation names the child to stop first. */
+type PendingOperation = LifecycleOperationView & {
+  readonly agentId?: string | null;
+  readonly activeAttemptId?: string | null;
+};
+
+/**
+ * What asking for an archive, restore or delete gives: the recorded operation under its row's
+ * status, or, when none was recorded, `completed` for a target already in the asked state and
+ * `blocked` with why it cannot change.
+ */
+export type LifecycleRequest = Data.TaggedEnum<{
+  requested: PendingOperation;
+  cancelling: PendingOperation;
+  waiting_for_stop: PendingOperation;
+  purging: PendingOperation;
+  failed: PendingOperation;
+  completed: Omit<Partial<LifecycleOperationView>, "operationId"> & {
+    readonly operationId?: string | null;
+    readonly targetId: string;
+    readonly intent: LifecycleIntent;
+    readonly receiptId?: string | null;
+  };
+  blocked: Omit<Partial<LifecycleOperationView>, "operationId" | "blocker"> & {
+    readonly blocker: string | null;
+    readonly operationId?: string | null;
+  };
+}>;
+export const LifecycleRequest = Data.taggedEnum<LifecycleRequest>();
+
+/** Where finishing a lifecycle operation left it. */
+export type LifecycleOutcome = Data.TaggedEnum<{
+  completed: {
+    readonly operationId: string;
+    readonly targetId: string;
+    readonly intent?: LifecycleIntent;
+    readonly receiptId?: string | null;
+  };
+  /** A live attempt must stop first; finishing again completes it. */
+  waiting_for_stop: { readonly operationId: string; readonly targetId: string };
+  blocked: { readonly blocker: string; readonly operationId?: string };
+}>;
+export const LifecycleOutcome = Data.taggedEnum<LifecycleOutcome>();
 
 export interface AttemptHandle {
   readonly id: string;
@@ -657,9 +733,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* assertHandle(input.handle);
       const locator = yield* Schema.decodeEffect(ArtifactLocator)(input.locator);
-      if (locator.kind !== input.kind)
+      if (!ArtifactLocator.guards[input.kind](locator))
         return yield* rejected("artifact_kind_mismatch", "Artifact kind must match its locator");
-      if (locator.kind === "file") yield* assertSafeFile(locator);
+      if (ArtifactLocator.guards.file(locator)) yield* assertSafeFile(locator);
       const encoded = yield* encodeArtifactLocator(locator);
       const existing = yield* first(sql`SELECT * FROM work_artifacts
         WHERE attempt_id = ${input.handle.id} AND kind = ${input.kind} AND locator = ${encoded}`);
@@ -1378,10 +1454,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const resumeBlocked = (reason: Extract<ResumeClaim, { status: "blocked" }>["reason"]) => {
-    const claim: ResumeClaim = { status: "blocked", reason };
-    return claim;
-  };
+  const resumeBlocked = (reason: ResumeBlocker): ResumeClaim => ResumeClaim.blocked({ reason });
 
   const claimResume = (input: {
     readonly sessionId: string;
@@ -1456,32 +1529,31 @@ const make = Effect.gen(function* () {
         summary: "Retry requested",
         occurredAt: now,
       });
-      const claim: ResumeClaim = {
-        status: "started",
+      return ResumeClaim.started({
         handle,
         agentId: task.agent_id,
         context: { originalRequest: task.request, uncertainToolCallIds: uncertain },
-      };
-      return claim;
+      });
     }).pipe(sql.withTransaction);
 
-  const lifecycleOperationView = (row: typeof LifecycleOperationRow.Type) => ({
-    operationId: row.id,
-    projectId: row.project_id,
-    sessionId: row.origin_session_id,
-    targetKind: row.target_kind,
-    targetId: row.target_id,
-    intent: row.intent,
-    status: row.status,
-    blocker: row.blocker,
-    requestedAt: row.requested_at,
-    updatedAt: row.updated_at,
-    completedAt: row.completed_at,
-  });
+  /** A retried request answers with the operation it recorded, under that row's status. */
+  const lifecycleOperationView = (row: typeof LifecycleOperationRow.Type): LifecycleRequest =>
+    LifecycleRequest[row.status]({
+      operationId: row.id,
+      projectId: row.project_id,
+      sessionId: row.origin_session_id,
+      targetKind: row.target_kind,
+      targetId: row.target_id,
+      intent: row.intent,
+      blocker: row.blocker,
+      requestedAt: row.requested_at,
+      updatedAt: row.updated_at,
+      completedAt: row.completed_at,
+    });
 
   const requestSessionLifecycle = (input: {
     readonly sessionId: string;
-    readonly intent: "archive" | "restore" | "delete";
+    readonly intent: LifecycleIntent;
     readonly idempotencyKey: string;
   }) =>
     Effect.gen(function* () {
@@ -1494,12 +1566,11 @@ const make = Effect.gen(function* () {
           sql`SELECT project_id, archived_at FROM sessions WHERE id = ${input.sessionId}`,
         ),
       );
-      if (session === undefined)
-        return { status: "blocked" as const, blocker: "session_not_found" };
+      if (session === undefined) return LifecycleRequest.blocked({ blocker: "session_not_found" });
       if (input.intent === "restore" && session.archived_at === null)
-        return { status: "blocked" as const, blocker: "session_not_archived" };
+        return LifecycleRequest.blocked({ blocker: "session_not_archived" });
       if (input.intent === "archive" && session.archived_at !== null)
-        return { status: "completed" as const, targetId: input.sessionId, intent: input.intent };
+        return LifecycleRequest.completed({ targetId: input.sessionId, intent: input.intent });
       const now = effectClock.currentTimeMillisUnsafe();
       const operationId = yield* crypto.randomUUIDv4();
       yield* run(sql`INSERT INTO lifecycle_operations
@@ -1507,19 +1578,18 @@ const make = Effect.gen(function* () {
          idempotency_key, requested_at, updated_at)
         VALUES (${operationId}, ${session.project_id}, ${input.sessionId}, 'session',
           ${input.sessionId}, ${input.intent}, 'cancelling', ${input.idempotencyKey}, ${now}, ${now})`);
-      return {
+      return LifecycleRequest.cancelling({
         operationId,
         projectId: session.project_id,
         sessionId: input.sessionId,
-        targetKind: "session" as const,
+        targetKind: "session",
         targetId: input.sessionId,
         intent: input.intent,
-        status: "cancelling" as const,
         blocker: null,
         requestedAt: now,
         updatedAt: now,
         completedAt: null,
-      };
+      });
     }).pipe(sql.withTransaction);
 
   const purgeSession = Effect.fnUntraced(function* (
@@ -1589,10 +1659,10 @@ const make = Effect.gen(function* () {
   const finalizeSessionLifecycle = (operationId: string) =>
     Effect.gen(function* () {
       const found = yield* first(sql`SELECT * FROM lifecycle_operations WHERE id = ${operationId}`);
-      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
+      if (!isTruthy(found)) return LifecycleOutcome.blocked({ blocker: "operation_not_found" });
       const operation = yield* decodeLifecycleOperation(found);
       if (operation.status === "completed")
-        return { status: "completed" as const, operationId, targetId: operation.target_id };
+        return LifecycleOutcome.completed({ operationId, targetId: operation.target_id });
       const now = effectClock.currentTimeMillisUnsafe();
       const active = (yield* decodeId(
         yield* first(sql`SELECT coalesce(max(active_attempt_id), '') AS id FROM work_tasks
@@ -1601,7 +1671,7 @@ const make = Effect.gen(function* () {
       if (active !== "") {
         yield* run(sql`UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ${now}
           WHERE id = ${operationId}`);
-        return { status: "waiting_for_stop" as const, operationId, targetId: operation.target_id };
+        return LifecycleOutcome.waiting_for_stop({ operationId, targetId: operation.target_id });
       }
       switch (operation.intent) {
         case "restore":
@@ -1621,7 +1691,7 @@ const make = Effect.gen(function* () {
             yield* run(sql`UPDATE lifecycle_operations SET status = 'blocked',
                 blocker = 'task_purge_required', updated_at = ${now}
               WHERE id = ${operationId}`);
-            return { status: "blocked" as const, blocker: "task_purge_required", operationId };
+            return LifecycleOutcome.blocked({ blocker: "task_purge_required", operationId });
           }
           yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
             WHERE id = ${operationId}`);
@@ -1632,12 +1702,11 @@ const make = Effect.gen(function* () {
       yield* run(sql`UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
           updated_at = ${now}, completed_at = ${now}
         WHERE id = ${operationId}`);
-      return {
-        status: "completed" as const,
+      return LifecycleOutcome.completed({
         operationId,
         targetId: operation.target_id,
         intent: operation.intent,
-      };
+      });
     }).pipe(sql.withTransaction);
 
   /**
@@ -1647,37 +1716,35 @@ const make = Effect.gen(function* () {
   const requestTaskLifecycle = (input: {
     readonly sessionId: string;
     readonly taskId: string;
-    readonly intent: "archive" | "restore" | "delete";
+    readonly intent: LifecycleIntent;
     readonly idempotencyKey: string;
   }) =>
     Effect.gen(function* () {
       const retried = yield* first(sql`SELECT * FROM lifecycle_operations
         WHERE idempotency_key = ${input.idempotencyKey}`);
       if (isTruthy(retried))
-        return { ...lifecycleOperationView(yield* decodeLifecycleOperation(retried)) };
+        return lifecycleOperationView(yield* decodeLifecycleOperation(retried));
       const found = yield* first(sql`SELECT project_id, origin_session_id, agent_id, parent_run_id,
           active_attempt_id, archived_at, delete_requested_at, deleted_at, purge_receipt_id
         FROM work_tasks WHERE id = ${input.taskId} AND origin_session_id = ${input.sessionId}`);
       if (!isTruthy(found))
-        return { status: "blocked" as const, blocker: "task_not_found", operationId: null };
+        return LifecycleRequest.blocked({ blocker: "task_not_found", operationId: null });
       const task = yield* decodeLifecycleTask(found);
       if (task.deleted_at !== null)
-        return {
-          status: "completed" as const,
+        return LifecycleRequest.completed({
           targetId: input.taskId,
-          intent: "delete" as const,
+          intent: "delete",
           receiptId: task.purge_receipt_id,
           operationId: null,
-        };
+        });
       if (input.intent === "restore" && task.archived_at === null)
-        return { status: "blocked" as const, blocker: "task_not_archived", operationId: null };
+        return LifecycleRequest.blocked({ blocker: "task_not_archived", operationId: null });
       if (input.intent === "archive" && task.archived_at !== null)
-        return {
-          status: "completed" as const,
+        return LifecycleRequest.completed({
           targetId: input.taskId,
           intent: input.intent,
           operationId: null,
-        };
+        });
       const now = effectClock.currentTimeMillisUnsafe();
       const id = yield* crypto.randomUUIDv4();
       const status = task.active_attempt_id === null ? "requested" : "cancelling";
@@ -1689,21 +1756,20 @@ const make = Effect.gen(function* () {
       if (input.intent === "delete")
         yield* run(sql`UPDATE work_tasks SET delete_requested_at = ${now}, updated_at = ${now}
           WHERE id = ${input.taskId}`);
-      return {
+      return LifecycleRequest[status]({
         operationId: id,
         projectId: task.project_id,
         sessionId: task.origin_session_id,
-        targetKind: "task" as const,
+        targetKind: "task",
         targetId: input.taskId,
         intent: input.intent,
-        status,
         blocker: null,
         requestedAt: now,
         updatedAt: now,
         completedAt: null,
         agentId: task.agent_id,
         activeAttemptId: task.active_attempt_id,
-      };
+      });
     }).pipe(sql.withTransaction);
 
   const lifecycleTaskOf = (taskId: string) =>
@@ -1770,18 +1836,18 @@ const make = Effect.gen(function* () {
   const finalizeTaskLifecycle = (operationId: string) =>
     Effect.gen(function* () {
       const found = yield* first(sql`SELECT * FROM lifecycle_operations WHERE id = ${operationId}`);
-      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
+      if (!isTruthy(found)) return LifecycleOutcome.blocked({ blocker: "operation_not_found" });
       const operation = yield* decodeLifecycleOperation(found);
       if (operation.status === "completed") {
         yield* notifyLifecycle(operation, null);
-        return { status: "completed" as const, operationId, targetId: operation.target_id };
+        return LifecycleOutcome.completed({ operationId, targetId: operation.target_id });
       }
       const task = yield* lifecycleTaskOf(operation.target_id);
       const now = effectClock.currentTimeMillisUnsafe();
       if (task.active_attempt_id !== null) {
         yield* run(sql`UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ${now}
           WHERE id = ${operationId}`);
-        return { status: "waiting_for_stop" as const, operationId, targetId: operation.target_id };
+        return LifecycleOutcome.waiting_for_stop({ operationId, targetId: operation.target_id });
       }
       let receiptId: string | null = null;
       switch (operation.intent) {
@@ -1801,13 +1867,12 @@ const make = Effect.gen(function* () {
           updated_at = ${now}, completed_at = ${now}
         WHERE id = ${operationId}`);
       yield* notifyLifecycle(operation, receiptId);
-      return {
-        status: "completed" as const,
+      return LifecycleOutcome.completed({
         operationId,
         targetId: operation.target_id,
         intent: operation.intent,
         receiptId,
-      };
+      });
     }).pipe(sql.withTransaction);
 
   /** Finishes lifecycle operations a crash left between request and completion. */
@@ -1835,7 +1900,7 @@ const make = Effect.gen(function* () {
             intent: "delete",
             idempotencyKey: `session:${operation.id}:task:${task.id}`,
           });
-          if (requested.status !== "completed" && isTruthy(requested.operationId))
+          if (!LifecycleRequest.$is("completed")(requested) && isTruthy(requested.operationId))
             yield* finalizeTaskLifecycle(requested.operationId);
         }
       }
@@ -1855,18 +1920,16 @@ const make = Effect.gen(function* () {
           archived_at: Schema.NullOr(Schema.Finite),
         }),
       )(existing);
-      if (Option.isNone(decoded))
-        return { status: "blocked" as const, reason: "task_not_found" as const };
+      if (Option.isNone(decoded)) return TaskArchive.blocked({ reason: "task_not_found" });
       const task = decoded.value;
-      if (task.archived_at !== null) return { status: "archived" as const, taskId };
-      if (task.active_attempt_id !== null)
-        return { status: "blocked" as const, reason: "attempt_alive" as const };
+      if (task.archived_at !== null) return TaskArchive.archived({ taskId });
+      if (task.active_attempt_id !== null) return TaskArchive.blocked({ reason: "attempt_alive" });
       if (!["interrupted", "resumable", "completed", "failed", "cancelled"].includes(task.status))
-        return { status: "blocked" as const, reason: "task_not_archivable" as const };
+        return TaskArchive.blocked({ reason: "task_not_archivable" });
       const now = effectClock.currentTimeMillisUnsafe();
       yield* run(sql`UPDATE work_tasks SET archived_at = ${now}, updated_at = ${now}
         WHERE id = ${taskId}`);
-      return { status: "archived" as const, taskId };
+      return TaskArchive.archived({ taskId });
     }).pipe(sql.withTransaction);
 
   /**
@@ -1888,35 +1951,25 @@ const make = Effect.gen(function* () {
         JOIN agent_run_attempts a ON a.task_id = t.id
         WHERE t.id = ${input.taskId} AND t.origin_session_id = ${input.sessionId}
         ORDER BY a.attempt_number DESC LIMIT 1`);
-      if (!isTruthy(candidate))
-        return { status: "blocked" as const, reason: "task_not_found" as const };
+      const blocked = (reason: ResumeBlocker): ResumeRequest => ResumeRequest.blocked({ reason });
+      if (!isTruthy(candidate)) return blocked("task_not_found");
       const task = yield* decodeResumeTask(candidate);
       if (task.deleted_at !== null || task.delete_requested_at !== null)
-        return { status: "blocked" as const, reason: "task_deleted" as const };
-      if (task.archived_at !== null)
-        return { status: "blocked" as const, reason: "task_archived" as const };
-      if (task.origin_session_id === null)
-        return { status: "blocked" as const, reason: "origin_deleted" as const };
-      if (task.agent_id === null)
-        return { status: "blocked" as const, reason: "agent_deleted" as const };
-      if (isTruthy(task.active_attempt_id))
-        return { status: "blocked" as const, reason: "attempt_alive" as const };
-      if (task.status === "completed")
-        return { status: "blocked" as const, reason: "task_terminal" as const };
-      if (task.previous_attempt_id !== input.expectedAttemptId)
-        return { status: "blocked" as const, reason: "stale_attempt" as const };
+        return blocked("task_deleted");
+      if (task.archived_at !== null) return blocked("task_archived");
+      if (task.origin_session_id === null) return blocked("origin_deleted");
+      if (task.agent_id === null) return blocked("agent_deleted");
+      if (isTruthy(task.active_attempt_id)) return blocked("attempt_alive");
+      if (task.status === "completed") return blocked("task_terminal");
+      if (task.previous_attempt_id !== input.expectedAttemptId) return blocked("stale_attempt");
       if ((yield* pendingToolsOf(task.previous_attempt_id)).length > 0 && !input.confirmUncertain)
-        return { status: "blocked" as const, reason: "uncertain_side_effect" as const };
+        return blocked("uncertain_side_effect");
 
       const now = effectClock.currentTimeMillisUnsafe();
       yield* run(sql`UPDATE work_tasks SET retry_requested_at = ${now},
           retry_confirm_uncertain = ${input.confirmUncertain ? 1 : 0}, updated_at = ${now}
         WHERE id = ${task.id}`);
-      return {
-        status: "queued" as const,
-        taskId: task.id,
-        expectedAttemptId: task.previous_attempt_id,
-      };
+      return ResumeRequest.queued({ taskId: task.id, expectedAttemptId: task.previous_attempt_id });
     }).pipe(sql.withTransaction);
 
   /**
@@ -1933,7 +1986,7 @@ const make = Effect.gen(function* () {
           WHERE t.origin_session_id = ${sessionId} AND t.retry_requested_at IS NOT NULL
           ORDER BY t.retry_requested_at, t.id`,
       );
-      const claimed: Array<Extract<ResumeClaim, { readonly status: "started" }>> = [];
+      const claimed: Array<Data.TaggedEnum.Value<ResumeClaim, "started">> = [];
       for (const task of requested) {
         const acquired = yield* run(sql`UPDATE work_tasks SET retry_requested_at = NULL
           WHERE id = ${task.id} AND retry_requested_at IS NOT NULL`);
@@ -1946,15 +1999,17 @@ const make = Effect.gen(function* () {
           parentToolCallId: `retry:${task.previous_attempt_id}`,
           confirmUncertain: task.retry_confirm_uncertain === 1,
         });
-        if (claim.status === "started") claimed.push(claim);
-        else
-          yield* notifyParent({
-            taskId: task.id,
-            kind: "resume_blocked",
-            summary: `Requested retry could not start: ${claim.reason}`,
-            idempotencyKey: `retry:${task.previous_attempt_id}:blocked`,
-            payload: { reason: claim.reason },
-          });
+        yield* ResumeClaim.$match(claim, {
+          started: (started) => Effect.sync(() => claimed.push(started)),
+          blocked: ({ reason }) =>
+            notifyParent({
+              taskId: task.id,
+              kind: "resume_blocked",
+              summary: `Requested retry could not start: ${reason}`,
+              idempotencyKey: `retry:${task.previous_attempt_id}:blocked`,
+              payload: { reason },
+            }),
+        });
       }
       return claimed;
     }).pipe(sql.withTransaction);

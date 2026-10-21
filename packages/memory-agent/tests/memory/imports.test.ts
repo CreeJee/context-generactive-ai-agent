@@ -17,7 +17,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
-import { Importer } from "../../src/imports/importer.ts";
+import { ImportActivity, Importer } from "../../src/imports/importer.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -316,11 +316,11 @@ alone("a pass started from settings is answered at once and reports how it went"
     // Joining the running pass waits for it rather than starting a second one.
     const joined = yield* Effect.forkChild(importer.runOnce);
     yield* Effect.yieldNow;
-    expect((yield* importer.overview).activity?.status).toBe("running");
+    expect(ImportActivity.$is("running")((yield* importer.overview).activity)).toBe(true);
     expect(yield* Fiber.join(joined)).toBe(4);
     const finished = yield* importer.overview;
+    expect(ImportActivity.$is("finished")(finished.activity)).toBe(true);
     expect(finished.activity).toMatchObject({
-      status: "finished",
       checked: 1,
       total: 1,
       written: 4,

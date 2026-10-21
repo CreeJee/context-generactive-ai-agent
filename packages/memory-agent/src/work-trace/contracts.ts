@@ -74,11 +74,11 @@ export const ArtifactKind = Schema.Literals(["file", "generated", "external"]);
 export type ArtifactKind = typeof ArtifactKind.Type;
 
 /** Artifact metadata points at a result; generated contents remain in their owning store. */
-export const ArtifactLocator = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("file"), path: Schema.String, sha256: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("generated"), reference: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("external"), reference: Schema.String }),
-]);
+export const ArtifactLocator = Schema.TaggedUnion({
+  file: { path: Schema.String, sha256: Schema.String },
+  generated: { reference: Schema.String },
+  external: { reference: Schema.String },
+});
 export type ArtifactLocator = typeof ArtifactLocator.Type;
 
 /** User-visible trace never exposes internal reasoning. */

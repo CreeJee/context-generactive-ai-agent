@@ -4,6 +4,8 @@ import { isTruthy } from "../truthy.ts";
 import { Data, Effect, Function as EffectFunction } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
+  AgentLinkState as AgentLinkStateCase,
+  AgentTrustState as AgentTrustStateCase,
   Attachment,
   BoardEdit as BoardEditCase,
   BoardEditResult,
@@ -24,8 +26,8 @@ import type {
   EmbeddingOverview,
   ExternalAgentsOverview,
   ExternalAgentView,
-  GpuState,
-  ImportActivity,
+  GpuState as GpuStateCase,
+  ImportActivity as ImportActivityCase,
   ImportOverview,
   ImageFeatureStatus,
   ImageMediaAsset,
@@ -35,6 +37,7 @@ import type {
   CrossProviderMediaConsentMode,
   CrossProviderMediaConsentSettings,
   CrossProviderMediaRunApproval,
+  McpServerState as McpServerStateCase,
   McpServerView,
   ModelSelection,
   PermissionMode,
@@ -47,7 +50,7 @@ import type {
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
-  AccountLoginState,
+  AccountLoginState as AccountLoginStateCase,
   OAuthProfile,
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
@@ -62,13 +65,16 @@ import {
   type CompactResult,
   type ContextView,
   type LeaseView,
-  type QueueEdit,
+  NextDelivery,
+  QueueEdit,
+  QueueItemState,
   type QueuedMessage,
   type QueueSnapshot,
   type SessionRunState,
-  type ApprovalRequester,
+  ApprovalRequester,
   type RelayedApprovalView,
   type SubagentView,
+  type UncertainContinue,
   type UncertainRun,
   type UncertainTool,
 } from "memory-agent/definitions";
@@ -133,35 +139,50 @@ type ExternalAgentCommand = Data.TaggedEnum<{
 }>;
 const ExternalAgentCommand = Data.taggedEnum<ExternalAgentCommand>();
 
+export { ApprovalRequester, NextDelivery, QueueEdit, QueueItemState };
+
+/** How the embedding model runs in the server process, as the settings page shows it. */
+export type EmbedderRuntime = EmbeddingOverview["running"];
+export const EmbedderRuntime = Data.taggedEnum<EmbedderRuntime>();
+export type GpuState = GpuStateCase;
+export const GpuState = Data.taggedEnum<GpuState>();
+export type AgentTrustState = AgentTrustStateCase;
+export const AgentTrustState = Data.taggedEnum<AgentTrustState>();
+export type AgentLinkState = AgentLinkStateCase;
+export const AgentLinkState = Data.taggedEnum<AgentLinkState>();
+export type McpServerState = McpServerStateCase;
+export const McpServerState = Data.taggedEnum<McpServerState>();
+export type AccountLoginState = AccountLoginStateCase;
+export const AccountLoginState = Data.taggedEnum<AccountLoginState>();
+export type ImportActivity = ImportActivityCase;
+export const ImportActivity = Data.taggedEnum<ImportActivity>();
+/** Where the session's Plan execution stands, as its run state carries it. */
+export type WorkflowExecutionState = NonNullable<SessionRunState["execution"]>;
+export const WorkflowExecutionState = Data.taggedEnum<WorkflowExecutionState>();
+
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
 export type ImageSettingsView = ImageFeatureStatus & {
   readonly crossProviderMediaConsent: CrossProviderMediaConsentSettings;
 };
 
-export type ProviderAuthState =
-  | { readonly provider: ProviderId; readonly status: "signed-out" }
-  | {
-      readonly provider: ProviderId;
-      readonly status: "pending";
-      readonly authUrl: string;
-    }
-  | {
-      readonly provider: ProviderId;
-      readonly status: "signed-in";
-      readonly planType?: string;
-    }
-  | {
-      readonly provider: ProviderId;
-      readonly status: "error";
-      readonly message: string;
-      readonly code?: string;
-      readonly operation?: string;
-      readonly httpStatus?: number;
-      readonly providerCode?: string;
-      readonly credentialStage?: string;
-      readonly transportCode?: string;
-      readonly proxyRoute?: "direct" | "unavailable" | "attempted";
-    };
+/** A provider's connection as `/api/auth` sends it; a pending login's URL arrives as `authUrl`. */
+export type ProviderAuthState = Data.TaggedEnum<{
+  "signed-out": { readonly provider: ProviderId };
+  pending: { readonly provider: ProviderId; readonly authUrl: string };
+  "signed-in": { readonly provider: ProviderId; readonly planType?: string };
+  error: {
+    readonly provider: ProviderId;
+    readonly message: string;
+    readonly code?: string;
+    readonly operation?: string;
+    readonly httpStatus?: number;
+    readonly providerCode?: string;
+    readonly credentialStage?: string;
+    readonly transportCode?: string;
+    readonly proxyRoute?: "direct" | "unavailable" | "attempted";
+  };
+}>;
+export const ProviderAuthState = Data.taggedEnum<ProviderAuthState>();
 
 /** Local OAuth profiles of one provider and its pending account login, without secrets. */
 export type AccountsView = {
@@ -201,8 +222,6 @@ export type {
   EmbeddingOverview,
   ExternalAgentsOverview,
   ExternalAgentView,
-  GpuState,
-  ImportActivity,
   ImportOverview,
   ImageFeatureStatus,
   ImageMediaAsset,
@@ -218,13 +237,11 @@ export type {
   PermissionMode,
   Project,
   ProviderId,
-  QueueEdit,
   QueuedMessage,
   QueueSnapshot,
   Session,
   SessionRunState,
   SkillCatalog,
-  ApprovalRequester,
   RelayedApprovalView,
   SubagentView,
   UncertainRun,
@@ -250,14 +267,18 @@ export const ApiErrorCode = Schema.Literals([
   "backend_restarting",
   "btw_not_found",
   "card_finished",
+  "card_has_dependents",
   "card_held",
   "card_missing",
   "card_not_blocked",
   "card_not_held",
   "card_not_running",
   "card_not_waiting",
+  "card_running",
   "card_status_changed",
   "card_transition_invalid",
+  "card_waiting",
+  "transfer_target_invalid",
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
@@ -270,18 +291,14 @@ export const ApiErrorCode = Schema.Literals([
   "image_approval_required",
   "image_direct_workflow_required",
   "image_execution_failed",
-  "card_has_dependents",
   "image_feature_unavailable",
   "image_route_unavailable",
   "internal_error",
   "invalid_account_action",
   "invalid_account_id",
   "invalid_account_label",
-  "card_running",
   "invalid_agent_change",
   "invalid_answer",
-  "card_waiting",
-  "transfer_target_invalid",
   "invalid_board_edit",
   "invalid_chat_request",
   "invalid_conversation_settings",
@@ -414,34 +431,24 @@ const ErrorBody = Schema.Struct({
 });
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 type ErrorBody = typeof ErrorBody.Type;
-const ResumeTaskResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("queued"),
-    jobId: Schema.String,
-    taskId: Schema.String,
-    expectedAttemptId: Schema.String,
-  }),
-  Schema.Struct({ status: Schema.Literal("blocked"), reason: Schema.String }),
-]);
+export const ResumeTaskResult = Schema.TaggedUnion({
+  queued: { jobId: Schema.String, taskId: Schema.String, expectedAttemptId: Schema.String },
+  blocked: { reason: Schema.String },
+});
 const decodeResumeTaskResult = Schema.decodeUnknownOption(ResumeTaskResult);
-type ResumeTaskResult = typeof ResumeTaskResult.Type;
-const ArchiveTaskResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("completed"),
+export type ResumeTaskResult = typeof ResumeTaskResult.Type;
+export const ArchiveTaskResult = Schema.TaggedUnion({
+  completed: {
     operationId: Schema.optional(Schema.String),
     targetId: Schema.String,
     intent: Schema.optional(Schema.Literals(["archive", "restore", "delete"])),
     receiptId: Schema.optional(Schema.NullOr(Schema.String)),
-  }),
-  Schema.Struct({ status: Schema.Literal("blocked"), blocker: Schema.String }),
-  Schema.Struct({
-    status: Schema.Literal("waiting_for_stop"),
-    operationId: Schema.String,
-    targetId: Schema.String,
-  }),
-]);
+  },
+  blocked: { blocker: Schema.String },
+  waiting_for_stop: { operationId: Schema.String, targetId: Schema.String },
+});
 const decodeArchiveTaskResult = Schema.decodeUnknownOption(ArchiveTaskResult);
-type ArchiveTaskResult = typeof ArchiveTaskResult.Type;
+export type ArchiveTaskResult = typeof ArchiveTaskResult.Type;
 
 const SessionSnapshot = Schema.Struct({
   id: Schema.String,
@@ -455,8 +462,18 @@ const SessionSnapshot = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
 });
 const decodeSessionSnapshot = Schema.decodeUnknownOption(SessionSnapshot);
-type PendingSessionLifecycle = Exclude<ArchiveTaskResult, { status: "completed" }>;
-type SessionArchiveResult = { status: "completed"; session: Session } | PendingSessionLifecycle;
+/** A lifecycle change the server has not finished: why it is blocked, or the stop it waits for. */
+export type PendingLifecycle = Exclude<
+  ArchiveTaskResult,
+  typeof ArchiveTaskResult.cases.completed.Type
+>;
+/** Archiving or restoring a conversation: done, with the session as it now is, or pending. */
+export type SessionArchiveResult = Data.TaggedEnum<{
+  completed: { readonly session: Session };
+  blocked: { readonly blocker: string };
+  waiting_for_stop: { readonly operationId: string; readonly targetId: string };
+}>;
+export const SessionArchiveResult = Data.taggedEnum<SessionArchiveResult>();
 
 export function makeSessionLifecycleClient(appFetch: typeof fetch) {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -477,12 +494,15 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
         );
         const body: unknown = yield* uiPromise(() => response.json());
         const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-        if (response.status === 409 && result?.status === "blocked")
+        if (response.status === 409 && ArchiveTaskResult.guards.blocked(result))
           return { response, body, result };
         if (!response.ok)
           return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
         // Accepted is not completed, even if a malformed response claims otherwise.
-        if (response.status === 202 && (!isTruthy(result) || result.status === "completed"))
+        if (
+          response.status === 202 &&
+          (!isTruthy(result) || ArchiveTaskResult.guards.completed(result))
+        )
           return yield* apiError(502, undefined);
         return { response, body, result };
       }),
@@ -504,11 +524,11 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
               archived,
             }),
           );
-          if (isTruthy(result) && result.status !== "completed") return result;
+          if (isTruthy(result) && !ArchiveTaskResult.guards.completed(result)) return result;
           const session = Option.getOrUndefined(decodeSessionSnapshot(body));
           if (response.status !== 200 || !isTruthy(session) || session.id !== sessionId)
             return yield* apiError(502, undefined);
-          return { status: "completed", session };
+          return SessionArchiveResult.completed({ session });
         }),
       ),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -520,7 +540,10 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
               delete: true,
             }),
           );
-          if (!isTruthy(result) || (result.status === "completed" && response.status !== 200))
+          if (
+            !isTruthy(result) ||
+            (ArchiveTaskResult.guards.completed(result) && response.status !== 200)
+          )
             return yield* apiError(502, undefined);
           return result;
         }),
@@ -770,7 +793,7 @@ export const api = {
     ),
   /** Refused with 409 while something runs, or when the listed runs changed since they were shown. */
   continuePastUncertain: (sessionId: string, holder: string, runIds: readonly string[]) =>
-    call<{ status: "acknowledged" }>(
+    call<Data.TaggedEnum.Value<UncertainContinue, "acknowledged">>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/uncertain`,
       { runIds },
@@ -945,10 +968,10 @@ export const api = {
         const body: unknown = yield* uiPromise(() => response.json());
         const result = Option.getOrUndefined(decodeResumeTaskResult(body));
         // A safety refusal is an expected action result, not a transport failure.
-        if (response.status === 409 && result?.status === "blocked") return result;
+        if (response.status === 409 && ResumeTaskResult.guards.blocked(result)) return result;
         if (!response.ok)
           return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-        if (!isTruthy(result) || result.status !== "queued") return yield* apiError(502, undefined);
+        if (!ResumeTaskResult.guards.queued(result)) return yield* apiError(502, undefined);
         return result;
       }),
     ),
@@ -978,12 +1001,12 @@ export const api = {
         );
         const body: unknown = yield* uiPromise(() => response.json());
         const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-        if (response.status === 409 && result?.status === "blocked") return result;
+        if (response.status === 409 && ArchiveTaskResult.guards.blocked(result)) return result;
         if (!response.ok)
           return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
         if (
           !isTruthy(result) ||
-          (result.status !== "completed" && result.status !== "waiting_for_stop")
+          !ArchiveTaskResult.isAnyOf(["completed", "waiting_for_stop"])(result)
         )
           return yield* apiError(502, undefined);
         window.dispatchEvent(new CustomEvent("work-trace:changed"));
@@ -1016,12 +1039,12 @@ export const api = {
         );
         const body: unknown = yield* uiPromise(() => response.json());
         const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-        if (response.status === 409 && result?.status === "blocked") return result;
+        if (response.status === 409 && ArchiveTaskResult.guards.blocked(result)) return result;
         if (!response.ok)
           return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
         if (
           !isTruthy(result) ||
-          (result.status !== "completed" && result.status !== "waiting_for_stop")
+          !ArchiveTaskResult.isAnyOf(["completed", "waiting_for_stop"])(result)
         )
           return yield* apiError(502, undefined);
         window.dispatchEvent(new CustomEvent("work-trace:changed"));

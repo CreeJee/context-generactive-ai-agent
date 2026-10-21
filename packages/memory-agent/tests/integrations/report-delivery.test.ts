@@ -5,6 +5,7 @@ import {
   parseWebhookUrl,
   webhookConfigKey,
 } from "../../src/report/discord-webhook.ts";
+import { ReportDeliveryResult } from "../../src/report/delivery-contract.ts";
 import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
 
 interface Reply {
@@ -89,7 +90,7 @@ describe("report delivery to a Discord webhook", () => {
       ]);
       const reviewed = { text: "# 제보\n@everyone 승인 반복", evidence: '{"version":1}' };
       const sent = yield* delivery.send(reviewed, false);
-      expect(sent).toMatchObject({ status: "delivered", messageId: "m1" });
+      expect(ReportDeliveryResult.guards.delivered(sent) && sent.messageId).toBe("m1");
       const [request] = yield* Ref.get(received);
       expect(request?.url).toContain("wait=true");
       expect(request?.body).toContain('"allowed_mentions":{"parse":[]}');
@@ -97,17 +98,15 @@ describe("report delivery to a Discord webhook", () => {
       expect(request?.body).toContain('filename="context-agent-evidence.json"');
       expect(request?.body).toContain('{"version":1}');
 
-      expect(yield* delivery.send(reviewed, false)).toMatchObject({ status: "duplicate" });
+      expect(ReportDeliveryResult.guards.duplicate(yield* delivery.send(reviewed, false))).toBe(
+        true,
+      );
       expect(yield* Ref.get(received)).toHaveLength(1);
       // The same draft with other evidence is a different report.
-      expect(yield* delivery.send({ ...reviewed, evidence: null }, false)).toMatchObject({
-        status: "delivered",
-        messageId: "m2",
-      });
-      expect(yield* delivery.send(reviewed, true)).toMatchObject({
-        status: "delivered",
-        messageId: "m3",
-      });
+      const other = yield* delivery.send({ ...reviewed, evidence: null }, false);
+      expect(ReportDeliveryResult.guards.delivered(other) && other.messageId).toBe("m2");
+      const resent = yield* delivery.send(reviewed, true);
+      expect(ReportDeliveryResult.guards.delivered(resent) && resent.messageId).toBe("m3");
     }),
   );
 
@@ -118,7 +117,9 @@ describe("report delivery to a Discord webhook", () => {
         message("m1"),
         { status: 404, body: '{"message":"Unknown Webhook"}' },
       ]);
-      expect(yield* delivery.send(report("a"), false)).toMatchObject({ status: "delivered" });
+      expect(ReportDeliveryResult.guards.delivered(yield* delivery.send(report("a"), false))).toBe(
+        true,
+      );
       expect(yield* Ref.get(received)).toHaveLength(2);
 
       const failure = yield* Effect.flip(delivery.send(report("b"), false));
@@ -140,9 +141,9 @@ describe("report delivery to a Discord webhook", () => {
       });
       yield* Deferred.succeed(gate, undefined);
       expect(yield* Fiber.join(first)).toMatchObject({ reason: "uncertain" });
-      expect(yield* delivery.send(report("c"), false)).toMatchObject({
-        status: "uncertain_duplicate",
-      });
+      expect(
+        ReportDeliveryResult.guards.uncertain_duplicate(yield* delivery.send(report("c"), false)),
+      ).toBe(true);
     }),
   );
 });

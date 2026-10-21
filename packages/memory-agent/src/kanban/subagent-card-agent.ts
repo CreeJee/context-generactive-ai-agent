@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Crypto, Effect, HashSet, Layer, Option, Ref, Schema } from "effect";
+import { Context, Crypto, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -150,15 +150,14 @@ const make = Effect.gen(function* () {
           (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
         );
         if (outcome === null) return failed("not_started");
-        switch (outcome.status) {
-          case "completed":
-            return CardAgentOutcome.Finished({ report: outcome.answer });
-          case "failed":
-            return failed("failed");
-          case "cancelled":
-          case "interrupted":
-            return failed("cancelled");
-        }
+        return Match.value(outcome).pipe(
+          Match.discriminatorsExhaustive("status")({
+            completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
+            failed: () => failed("failed"),
+            cancelled: () => failed("cancelled"),
+            interrupted: () => failed("cancelled"),
+          }),
+        );
         // Its session, project or run records failed; the error stays in the logs only.
       }).pipe(
         // A database failure also names its kind (lock, constraint, ...), never its statement.

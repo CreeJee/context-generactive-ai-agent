@@ -6,7 +6,7 @@ import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { SqlClient } from "effect/sql";
 import { memoryAgentLayer } from "../../src/layers.ts";
-import { Embedder } from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -55,7 +55,7 @@ await Effect.runPromise(
                   identity: "fake-trigram-64",
                   dimensions: 64,
                   embed: (texts: readonly string[]) => Effect.succeed(texts.map(fakeVector)),
-                  runtime: () => ({ kind: "other" as const }),
+                  runtime: () => EmbedderRuntime.other(),
                 };
               }),
               () =>

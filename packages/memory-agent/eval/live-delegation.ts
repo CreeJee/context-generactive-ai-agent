@@ -21,7 +21,7 @@ import { optionalProperty } from "../src/optional-property.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import type { ProviderId } from "../src/providers/contracts.ts";
+import { AuthConnectionState, type ProviderId } from "../src/providers/contracts.ts";
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
@@ -202,7 +202,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     Effect.gen(function* () {
       yield* (yield* GlobalConfig).update(selection);
       const provider = yield* (yield* ProviderRegistry).get(selection.provider);
-      if ((yield* provider.auth.status).status !== "signed-in")
+      if (!AuthConnectionState.$is("signed-in")(yield* provider.auth.status))
         throw new Error("pilot_not_signed_in");
       const projects = yield* Projects;
       const initial = yield* projects.add(projectRoot);

@@ -1,6 +1,6 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
-import { type ApprovalRequester, type RelayedApprovalView, type SubagentView } from "../api";
+import { ApprovalRequester, type RelayedApprovalView, type SubagentView } from "../api";
 import { useProjectScope } from "../events/context";
 import { useApprovalsQuery, useSubagentsQuery } from "../queries/session";
 
@@ -24,11 +24,7 @@ function useDelegatedWorkBody(sessionId: string, _generating: boolean) {
   return { state };
 }
 
-export function requesterLabel(requester: ApprovalRequester) {
-  switch (requester.kind) {
-    case "subagent":
-      return isTruthy(requester.name) ? `서브에이전트 ${requester.name}` : "서브에이전트";
-    case "external_agent":
-      return `외부 에이전트 ${requester.agent}`;
-  }
-}
+export const requesterLabel = ApprovalRequester.match({
+  subagent: ({ name }) => (isTruthy(name) ? `서브에이전트 ${name}` : "서브에이전트"),
+  external_agent: ({ agent }) => `외부 에이전트 ${agent}`,
+});

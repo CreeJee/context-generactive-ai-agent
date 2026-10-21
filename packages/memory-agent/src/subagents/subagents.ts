@@ -34,13 +34,19 @@ import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
+import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { errorTag } from "../tools/failure.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
-import { AttemptFailureReason, attemptFailureCode } from "../work-trace/contracts.ts";
 import {
+  ArtifactLocator,
+  AttemptFailureReason,
+  attemptFailureCode,
+} from "../work-trace/contracts.ts";
+import {
+  ResumeClaim,
   WorkTraceRejected,
   WorkTraceStore,
   type AttemptHandle,
@@ -543,7 +549,10 @@ const make = Effect.gen(function* () {
             binding.sessionId,
             binding.runId,
             {
-              requester: { kind: "subagent", subagentId: row.id, name: row.name },
+              requester: ApprovalRequester.cases.subagent.make({
+                subagentId: row.id,
+                name: row.name,
+              }),
               toolName: hook.toolName,
               argumentsJson,
               reason,
@@ -707,7 +716,10 @@ const make = Effect.gen(function* () {
                     yield* trace.recordArtifact({
                       handle,
                       kind: "file",
-                      locator: { kind: "file", path: hook.result.path, sha256: hook.result.sha256 },
+                      locator: ArtifactLocator.cases.file.make({
+                        path: hook.result.path,
+                        sha256: hook.result.sha256,
+                      }),
                       mediaType: "text/plain",
                       verification: "verified",
                     });
@@ -1080,7 +1092,7 @@ const make = Effect.gen(function* () {
       parentToolCallId,
       confirmUncertain: input.confirmUncertain,
     });
-    if (claim.status === "blocked") {
+    if (ResumeClaim.$is("blocked")(claim)) {
       const blocked: SubagentReport = {
         status: "resume_blocked",
         taskId: input.taskId,

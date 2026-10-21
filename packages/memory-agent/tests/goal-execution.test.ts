@@ -10,7 +10,7 @@ import {
   GoalExecutionPayload,
   GoalExecutionSuccess,
 } from "../src/workflow/goal-execution-contracts.ts";
-import type { Admission } from "../src/workflow/run-bindings.ts";
+import { Admission } from "../src/workflow/run-bindings.ts";
 import { OwnerWorkflowAdmissionResult } from "../src/workflow/owner-workflow-storage.ts";
 import {
   GoalExecution,
@@ -73,7 +73,7 @@ describe("GoalExecution workflow", () => {
           payload,
           Effect.sync((): Admission => {
             binds += 1;
-            return { status: "bound", binding };
+            return Admission.bound({ binding });
           }),
         );
         expect(admitted).toEqual(OwnerWorkflowAdmissionResult.admitted({ value: binding }));
@@ -113,7 +113,7 @@ describe("GoalExecution workflow", () => {
             payload,
             Effect.sync((): Admission => {
               binds += 1;
-              return { status: "bound", binding };
+              return Admission.bound({ binding });
             }),
           );
           for (const owner of [
@@ -129,7 +129,7 @@ describe("GoalExecution workflow", () => {
                 changedOwner,
                 Effect.sync((): Admission => {
                   binds += 1;
-                  return { status: "bound", binding };
+                  return Admission.bound({ binding });
                 }),
               )
               .pipe(Effect.flip);
@@ -151,7 +151,7 @@ describe("GoalExecution workflow", () => {
         const goals = yield* GoalExecutions;
         yield* goals.admitAndStart(
           payload,
-          Effect.succeed<Admission>({ status: "bound", binding }),
+          Effect.succeed<Admission>(Admission.bound({ binding })),
         );
         yield* goals.fail(
           payload,
@@ -177,7 +177,7 @@ describe("GoalExecution workflow", () => {
           .admitAndStart(
             payload,
             sqlRun("INSERT INTO goal_execution_binding_probe VALUES (?)", "rolled-back").pipe(
-              Effect.as<Admission>({ status: "refused", reason: "workflow_changed" }),
+              Effect.as<Admission>(Admission.refused({ reason: "workflow_changed" })),
               Effect.provideService(SqlClient.SqlClient, sql),
               Effect.orDie,
             ),

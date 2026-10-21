@@ -3,6 +3,7 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
+import { ArtifactLocator } from "../src/work-trace/contracts.ts";
 import { WorkTraceRejected, WorkTraceStore } from "../src/work-trace/store.ts";
 import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
@@ -54,7 +55,10 @@ describe("Work Trace artifact provenance", () => {
         const artifact = yield* trace.recordArtifact({
           handle,
           kind: "file",
-          locator: { kind: "file", path: "reports/result.md", sha256: "a".repeat(64) },
+          locator: ArtifactLocator.cases.file.make({
+            path: "reports/result.md",
+            sha256: "a".repeat(64),
+          }),
           mediaType: "text/markdown",
           verification: "verified",
         });
@@ -78,7 +82,7 @@ describe("Work Trace artifact provenance", () => {
         const artifact = yield* trace.recordArtifact({
           handle,
           kind: "external",
-          locator: { kind: "external", reference: "private-object-17" },
+          locator: ArtifactLocator.cases.external.make({ reference: "private-object-17" }),
           mediaType: "application/json",
         });
         expect(
@@ -109,14 +113,17 @@ describe("Work Trace artifact provenance", () => {
         yield* trace.recordArtifact({
           handle,
           kind: "generated",
-          locator: { kind: "generated", reference: "artifact-store:item-1" },
+          locator: ArtifactLocator.cases.generated.make({ reference: "artifact-store:item-1" }),
         });
         expect(
           yield* Effect.flip(
             trace.recordArtifact({
               handle,
               kind: "file",
-              locator: { kind: "file", path: "../secret", sha256: "not-a-digest" },
+              locator: ArtifactLocator.cases.file.make({
+                path: "../secret",
+                sha256: "not-a-digest",
+              }),
             }),
           ),
         ).toMatchObject({ reason: "unsafe_file_path" });

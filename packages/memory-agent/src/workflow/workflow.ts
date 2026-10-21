@@ -5,6 +5,7 @@ import {
   Clock,
   Context,
   Crypto,
+  Data,
   Effect,
   Layer,
   Match,
@@ -260,6 +261,15 @@ export class NewGoalTransitionRefused extends Schema.TaggedError<NewGoalTransiti
     ]),
   },
 ) {}
+
+/** Where a run's queued new Goal stands once the owner settles it; `none` when it queued none. */
+export type NewGoalSettlement = Data.TaggedEnum<{
+  none: {};
+  accepted: {};
+  applied: { readonly goalInstanceId: string | null };
+  rejected: { readonly reason: string | null };
+}>;
+export const NewGoalSettlement = Data.taggedEnum<NewGoalSettlement>();
 
 export const UpdatePlan = Schema.Struct({
   summary: Schema.String,
@@ -951,22 +961,22 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.gen(function* () {
             const found = yield* settlementOf(runId);
             if (Option.isNone(found) || found.value.session_id !== sessionId)
-              return { status: "none" as const };
+              return NewGoalSettlement.none();
             const row = found.value;
             if (row.status === "applied")
-              return { status: "applied" as const, goalInstanceId: row.applied_goal_instance_id };
+              return NewGoalSettlement.applied({ goalInstanceId: row.applied_goal_instance_id });
             if (row.status === "rejected")
-              return { status: "rejected" as const, reason: row.reason };
+              return NewGoalSettlement.rejected({ reason: row.reason });
             const run = Option.getOrUndefined(yield* runOf(runId));
             if (
               run?.thread_id === sessionId &&
               (run.status === "running" || run.status === "interrupted")
             )
-              return { status: "accepted" as const };
+              return NewGoalSettlement.accepted();
             const reject = (reason: string) =>
               sql`UPDATE workflow_new_goal_requests SET status = 'rejected', reason = ${reason},
                 settled_at = ${nowIso()} WHERE run_id = ${runId} AND status = 'accepted'`.pipe(
-                Effect.as({ status: "rejected" as const, reason }),
+                Effect.as(NewGoalSettlement.rejected({ reason })),
               );
             if (run?.thread_id !== sessionId || run.status !== "completed")
               return yield* reject("run_outcome_uncertain");
@@ -979,7 +989,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 sql`UPDATE workflow_new_goal_requests
                   SET status = 'applied', applied_goal_instance_id = ${newId}, settled_at = ${nowIso()}
                   WHERE run_id = ${runId} AND status = 'accepted'`.pipe(
-                  Effect.as({ status: "applied" as const, goalInstanceId: newId }),
+                  Effect.as(NewGoalSettlement.applied({ goalInstanceId: newId })),
                 ),
               ),
               Effect.catchTag("NewGoalTransitionRefused", (error) => reject(error.reason)),

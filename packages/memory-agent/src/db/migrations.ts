@@ -1831,6 +1831,47 @@ export const migrations: readonly string[] = [
       AND json_extract(reply_json, '$.output[1][0][1][1][0][1][0]') = 'string'
       AND json_extract(reply_json, '$.output[1][0][1][1][0][1][1]') IN ('succeeded', 'failed');
   `,
+  `
+  -- A relayed approval's requester names its case under _tag instead of kind. The engine compares
+  -- a re-admitted payload by its JSON text, so the object is rebuilt in the order the payload
+  -- schema encodes it: _tag first, then the case's fields.
+  UPDATE owner_workflow_executions
+    SET payload_json = json_set(payload_json, '$.requester',
+      CASE json_extract(payload_json, '$.requester.kind')
+        WHEN 'subagent' THEN json_object('_tag', 'subagent',
+          'subagentId', json_extract(payload_json, '$.requester.subagentId'),
+          'name', json_extract(payload_json, '$.requester.name'))
+        ELSE json_object('_tag', 'external_agent',
+          'agent', json_extract(payload_json, '$.requester.agent'))
+      END)
+    WHERE workflow_name = 'RelayedApprovalExecution'
+      AND json_extract(payload_json, '$.requester.kind') IN ('subagent', 'external_agent');
+  `,
+  `
+  -- An artifact locator names its case under _tag instead of kind. The store finds an artifact
+  -- by its encoded locator text and UNIQUE (attempt_id, kind, locator) keys on it, so each text is
+  -- rewritten as the locator schema encodes it: _tag first, then the case's fields in order.
+  UPDATE work_artifacts
+    SET locator = CASE json_extract(locator, '$.kind')
+      WHEN 'file' THEN json_object('_tag', 'file',
+        'path', json_extract(locator, '$.path'),
+        'sha256', json_extract(locator, '$.sha256'))
+      ELSE json_object('_tag', json_extract(locator, '$.kind'),
+        'reference', json_extract(locator, '$.reference'))
+    END
+    WHERE locator IS NOT NULL
+      AND json_extract(locator, '$.kind') IN ('file', 'generated', 'external');
+  `,
+  `
+  -- A session's workflow execution state names its case under _tag instead of kind. The sessions
+  -- waiting to continue are found by that field; the other fields keep their order after it.
+  UPDATE chat_metadata
+    SET value = json_patch(json_object('_tag', json_extract(value, '$.kind')),
+      json_remove(value, '$.kind'))
+    WHERE namespace = 'memory-agent/workflow-execution'
+      AND json_extract(value, '$.kind') IN
+        ('idle', 'running', 'ready', 'retrying', 'blocked', 'stopped');
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -1,6 +1,13 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Data, Effect, Function as EffectFunction } from "effect";
-import { isApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
+import {
+  isApiError,
+  NextDelivery,
+  type QueuedMessage,
+  type QueueEdit,
+  QueueItemState,
+  type QueueSnapshot,
+} from "../api";
 import { useProjectScope } from "../events/context";
 import { useQueueQuery } from "../queries/session";
 import { useEditQueueMutation, useEnqueueMutation } from "../queries/mutations/session";
@@ -15,11 +22,12 @@ export type AddOutcome = Data.TaggedEnum<{
 export const AddOutcome = Data.taggedEnum<AddOutcome>();
 
 /** Messages a page can still change: everything that has not reached the agent. */
-export const isPending = (message: QueuedMessage) => message.state.kind !== "delivered";
+export const isPending = (message: QueuedMessage) =>
+  !QueueItemState.$is("delivered")(message.state);
 
 /** Messages a run took in while it answered; the conversation shows them, not the queue. */
 export const isTakenIn = (message: QueuedMessage) =>
-  message.state.kind === "delivered" && message.state.via !== "next_turn";
+  QueueItemState.$is("delivered")(message.state) && message.state.via !== "next_turn";
 
 /** The authoritative queue snapshot, refreshed by session SSE invalidations. */
 export const useMessageQueue: {
@@ -66,7 +74,7 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
 
   return {
     items: query.data?.items ?? [],
-    nextDelivery: query.data?.nextDelivery ?? { kind: "empty" as const },
+    nextDelivery: query.data?.nextDelivery ?? NextDelivery.empty(),
     refresh,
     add,
     change,

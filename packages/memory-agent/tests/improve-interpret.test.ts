@@ -8,7 +8,7 @@ import { StorageRoot } from "../src/config/storage-root.ts";
 import { type ImprovementItem, ItemInterpretation } from "../src/improve/contracts.ts";
 import { ImprovementInterpreter } from "../src/improve/interpret.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
-import type { ProviderServices } from "../src/providers/contracts.ts";
+import { AuthConnectionState, type ProviderServices } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { ScriptedTextAdapter, type ScriptedTurn } from "../src/testing/scripted-adapter.ts";
 import { withTestPlatform } from "./support/platform.ts";
@@ -34,10 +34,10 @@ const provider = (adapter: ScriptedTextAdapter): ProviderServices => ({
   provider: "openai",
   auth: {
     provider: "openai",
-    status: Effect.succeed({ provider: "openai", status: "signed-in" }),
-    connect: Effect.succeed({ provider: "openai", status: "signed-in" }),
-    cancel: Effect.succeed({ provider: "openai", status: "signed-in" }),
-    disconnect: Effect.succeed({ provider: "openai", status: "signed-out" }),
+    status: Effect.succeed(AuthConnectionState["signed-in"]({ provider: "openai" })),
+    connect: Effect.succeed(AuthConnectionState["signed-in"]({ provider: "openai" })),
+    cancel: Effect.succeed(AuthConnectionState["signed-in"]({ provider: "openai" })),
+    disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider: "openai" })),
   },
   models: {
     provider: "openai",

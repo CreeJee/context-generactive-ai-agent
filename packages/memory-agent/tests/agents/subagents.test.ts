@@ -2,9 +2,11 @@ import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
+import { ApprovalRequester } from "../../src/approvals/relayed-state.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { Subagents, subagentThreadId } from "../../src/subagents/subagents.ts";
+import { ResumeRequest } from "../../src/work-trace/store.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
@@ -165,10 +167,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           false,
         );
         expect(terminalResume.status).toBe(409);
-        expect(yield* sdk(() => terminalResume.json())).toEqual({
-          status: "blocked",
-          reason: "task_terminal",
-        });
+        expect(yield* sdk(() => terminalResume.json())).toEqual(
+          ResumeRequest.blocked({ reason: "task_terminal" }),
+        );
         yield* sqlTransaction(
           Effect.gen(function* () {
             yield* sqlRun(
@@ -189,11 +190,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           false,
         );
         expect(queuedResume.status).toBe(202);
-        expect(yield* sdk(() => queuedResume.json())).toMatchObject({
-          status: "queued",
-          taskId: trace.task_id,
-          expectedAttemptId: trace.attempt_id,
-        });
+        expect(yield* sdk(() => queuedResume.json())).toEqual(
+          ResumeRequest.queued({ taskId: trace.task_id, expectedAttemptId: trace.attempt_id }),
+        );
         const stream = yield* chat.traceStream(
           new Request("http://local/trace/stream?after=0"),
           sessionId,
@@ -262,11 +261,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         "the child's approval",
       );
       const [request] = yield* relayed.pending(sessionId);
-      expect(request).toMatchObject({
-        toolName: "save_shell_skill",
-        askedBy: "every_call",
-        requester: { kind: "subagent", name: null },
-      });
+      expect(request).toMatchObject({ toolName: "save_shell_skill", askedBy: "every_call" });
+      expect(ApprovalRequester.guards.subagent(request!.requester)).toBe(true);
+      expect(request!.requester).toMatchObject({ name: null });
       expect(yield* relayed.answer("another-session", request!.id, true)).toBe(false);
       expect(yield* relayed.answer(sessionId, request!.id, true)).toBe(true);
       const approvedAnswer = yield* Fiber.join(approved);

@@ -1,21 +1,21 @@
 import { it as effectTest } from "@effect/vitest";
 import { Effect } from "effect";
 import {
+  ImageExecutorModel,
   decideImageContext,
   makeImageFeature,
-  type ImageRouteDecision,
+  ImageRouteDecision,
   type Settings,
 } from "memory-agent";
 import { describe, expect, it } from "vite-plus/test";
 
-const directRoute: ImageRouteDecision = {
-  type: "selected",
+const directRoute: ImageRouteDecision = ImageRouteDecision.selected({
   mode: "auto",
   preference: "balanced",
   initiatorChatRouteId: "chat:anthropic:claude-test",
   initiatorChatModel: "claude-test",
   executorMediaRouteId: "media:openai:direct_adapter:gpt-image-2",
-  executorMediaModel: { type: "explicit", model: "gpt-image-2" },
+  executorMediaModel: ImageExecutorModel.explicit({ model: "gpt-image-2" }),
   provider: "openai",
   initiatorProvider: "anthropic",
   crossProvider: true,
@@ -26,11 +26,11 @@ const directRoute: ImageRouteDecision = {
   score: 1,
   reasons: ["fixture"],
   ranking: [],
-};
+});
 const providerToolRoute: ImageRouteDecision = {
   ...directRoute,
   executorMediaRouteId: "media:openai:provider_tool:image_generation",
-  executorMediaModel: { type: "provider_managed" },
+  executorMediaModel: ImageExecutorModel.provider_managed(),
   executionMode: "provider_tool",
 };
 const enabled = { imageGenerationEnabled: true };

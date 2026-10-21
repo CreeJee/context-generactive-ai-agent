@@ -6,7 +6,7 @@ import { isTruthy } from "../../src/truthy.ts";
 import { GoalExecution, GoalExecutions } from "../../src/workflow/goal-execution.ts";
 import { GoalExecutionPayload } from "../../src/workflow/goal-execution-contracts.ts";
 import { OwnerWorkflowAdmissionResult } from "../../src/workflow/owner-workflow-storage.ts";
-import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import {
   type UpdateWorkflowProgress,
@@ -117,7 +117,7 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
       break;
     }
     case "legacy":
-      expect((yield* bind).status).toBe("bound");
+      expect(Admission.$is("bound")(yield* bind)).toBe(true);
       break;
   }
   yield* sqlRun(

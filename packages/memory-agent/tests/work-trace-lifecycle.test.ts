@@ -1,10 +1,15 @@
-import { isTruthy } from "../src/truthy.ts";
 import { SqlClient } from "effect/sql";
 import { DateTime, Schema, Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { ArtifactLocator } from "../src/work-trace/contracts.ts";
+import {
+  LifecycleOutcome,
+  LifecycleRequest,
+  ResumeRequest,
+  WorkTraceStore,
+} from "../src/work-trace/store.ts";
 import { sqlGet, sqlRun } from "./support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -33,6 +38,17 @@ const seed = Effect.fnUntraced(function* () {
   yield* sqlRun(`INSERT INTO subagents
     (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
     VALUES ('agent-1', 's1', 'researcher', NULL, 'running', 'parent-1', 'task', 1, 1)`);
+});
+
+/** The operation a request recorded and still has to finish; null when it needs none. */
+const pendingOperationId = LifecycleRequest.$match({
+  requested: ({ operationId }) => operationId,
+  cancelling: ({ operationId }) => operationId,
+  waiting_for_stop: ({ operationId }) => operationId,
+  purging: ({ operationId }) => operationId,
+  failed: ({ operationId }) => operationId,
+  completed: () => null,
+  blocked: () => null,
 });
 
 const start = Effect.fnUntraced(function* (trace: WorkTraceStore["Service"]) {
@@ -65,14 +81,13 @@ describe("Work Trace task lifecycle", () => {
             intent: "archive",
             idempotencyKey: "archive-1",
           });
-          expect(requested).toMatchObject({
-            status: "cancelling",
-            operationId: expect.any(String),
-          });
-          if (!("operationId" in requested) || !isTruthy(requested.operationId)) return;
-          expect(yield* trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
-            status: "waiting_for_stop",
-          });
+          expect(LifecycleRequest.$is("cancelling")(requested)).toBe(true);
+          if (!LifecycleRequest.$is("cancelling")(requested)) return;
+          expect(
+            LifecycleOutcome.$is("waiting_for_stop")(
+              yield* trace.finalizeTaskLifecycle(requested.operationId),
+            ),
+          ).toBe(true);
           yield* trace.transitionAttempt(
             handle,
             "s1",
@@ -80,10 +95,8 @@ describe("Work Trace task lifecycle", () => {
             "attempt_cancelled",
             "Cancelled",
           );
-          expect(yield* trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
-            status: "completed",
-            intent: "archive",
-          });
+          const archived = yield* trace.finalizeTaskLifecycle(requested.operationId);
+          expect(LifecycleOutcome.$is("completed")(archived) && archived.intent).toBe("archive");
           expect((yield* trace.taskTree("s1"))[0]?.status).toBe("archived");
           expect(
             yield* sqlGet(
@@ -97,11 +110,12 @@ describe("Work Trace task lifecycle", () => {
             intent: "restore",
             idempotencyKey: "restore-1",
           });
-          if (!("operationId" in restored) || !isTruthy(restored.operationId)) return;
-          expect(yield* trace.finalizeTaskLifecycle(restored.operationId)).toMatchObject({
-            status: "completed",
-            intent: "restore",
-          });
+          const restoredId = pendingOperationId(restored);
+          if (restoredId === null) return;
+          const restoredOutcome = yield* trace.finalizeTaskLifecycle(restoredId);
+          expect(LifecycleOutcome.$is("completed")(restoredOutcome) && restoredOutcome.intent).toBe(
+            "restore",
+          );
           expect((yield* trace.taskTree("s1"))[0]?.status).toBe("cancelled");
         }),
       ),
@@ -118,11 +132,10 @@ describe("Work Trace task lifecycle", () => {
           yield* trace.recordArtifact({
             handle,
             kind: "file",
-            locator: {
-              kind: "file",
+            locator: ArtifactLocator.cases.file.make({
               path: "secret.txt",
               sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            },
+            }),
             verification: "verified",
           });
           yield* trace.transitionAttempt(
@@ -144,13 +157,12 @@ describe("Work Trace task lifecycle", () => {
             intent: "delete",
             idempotencyKey: "delete-1",
           });
-          if (!("operationId" in requested) || !isTruthy(requested.operationId)) return;
-          expect(retried).toMatchObject({ operationId: requested.operationId });
-          expect(yield* trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
-            status: "completed",
-            intent: "delete",
-            receiptId: expect.any(String),
-          });
+          const operationId = pendingOperationId(requested);
+          if (operationId === null) return;
+          expect(retried).toMatchObject({ operationId });
+          const deleted = yield* trace.finalizeTaskLifecycle(operationId);
+          expect(LifecycleOutcome.$is("completed")(deleted)).toBe(true);
+          expect(deleted).toMatchObject({ intent: "delete", receiptId: expect.any(String) });
           expect((yield* trace.taskTree("s1"))[0]).toMatchObject({
             status: "deleted",
             title: "Deleted task",
@@ -179,14 +191,11 @@ describe("Work Trace task lifecycle", () => {
           expect(
             yield* sqlGet(
               "SELECT count(*) AS count FROM purge_receipts WHERE operation_id = ?",
-              requested.operationId,
+              operationId,
             ),
           ).toEqual({ count: 1 });
           const receipt = yield* stringifyJson(
-            yield* sqlGet(
-              "SELECT * FROM purge_receipts WHERE operation_id = ?",
-              requested.operationId,
-            ),
+            yield* sqlGet("SELECT * FROM purge_receipts WHERE operation_id = ?", operationId),
           );
           expect(receipt).not.toContain("Sensitive research");
           expect(receipt).not.toContain("secret.txt");
@@ -203,7 +212,7 @@ describe("Work Trace task lifecycle", () => {
               expectedAttemptId: handle.id,
               confirmUncertain: false,
             }),
-          ).toEqual({ status: "blocked", reason: "task_deleted" });
+          ).toEqual(ResumeRequest.blocked({ reason: "task_deleted" }));
         }),
       ),
   );
@@ -221,7 +230,7 @@ describe("Work Trace task lifecycle", () => {
           intent: "delete",
           idempotencyKey: "crash-delete-1",
         });
-        expect(requested.status).toBe("requested");
+        expect(LifecycleRequest.$is("requested")(requested)).toBe(true);
         yield* trace.recoverLifecycleOperations();
         expect((yield* trace.taskTree("s1"))[0]?.status).toBe("deleted");
         yield* trace.recoverLifecycleOperations();
@@ -274,23 +283,27 @@ describe("Work Trace task lifecycle", () => {
             intent: "delete",
             idempotencyKey: "delete-session-1",
           });
-          if (!("operationId" in sessionRequest) || !isTruthy(sessionRequest.operationId)) return;
-          expect(yield* trace.finalizeSessionLifecycle(sessionRequest.operationId)).toMatchObject({
-            status: "blocked",
-            blocker: "task_purge_required",
-          });
+          const sessionOperationId = pendingOperationId(sessionRequest);
+          if (sessionOperationId === null) return;
+          expect(yield* trace.finalizeSessionLifecycle(sessionOperationId)).toEqual(
+            LifecycleOutcome.blocked({
+              blocker: "task_purge_required",
+              operationId: sessionOperationId,
+            }),
+          );
           const taskRequest = yield* trace.requestTaskLifecycle({
             sessionId: "s1",
             taskId: handle.taskId,
             intent: "delete",
             idempotencyKey: "delete-session-task-1",
           });
-          if (!("operationId" in taskRequest) || !isTruthy(taskRequest.operationId)) return;
-          yield* trace.finalizeTaskLifecycle(taskRequest.operationId);
-          expect(yield* trace.finalizeSessionLifecycle(sessionRequest.operationId)).toMatchObject({
-            status: "completed",
-            intent: "delete",
-          });
+          const taskOperationId = pendingOperationId(taskRequest);
+          if (taskOperationId === null) return;
+          yield* trace.finalizeTaskLifecycle(taskOperationId);
+          const sessionDeleted = yield* trace.finalizeSessionLifecycle(sessionOperationId);
+          expect(LifecycleOutcome.$is("completed")(sessionDeleted) && sessionDeleted.intent).toBe(
+            "delete",
+          );
 
           expect(yield* sqlGet("SELECT count(*) AS count FROM sessions WHERE id = 's1'")).toEqual({
             count: 0,

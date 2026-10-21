@@ -1,8 +1,7 @@
-import { Effect, Fiber, Match, Schema } from "effect";
+import { Data, Effect, Fiber, Match, Schema } from "effect";
 import type {
   ReportBundle,
   ReportDeliveryFailure,
-  ReportDeliveryResult,
   ReportDeliveryStatus,
 } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
@@ -14,11 +13,16 @@ import {
   type ReportRequestFailed,
 } from "./report-client";
 
-export type DeliveryOutcome =
-  | { readonly status: "idle" }
-  | { readonly status: "sending" }
-  | ReportDeliveryResult
-  | { readonly status: "failed"; readonly reason: ReportDeliveryFailure | "request_failed" };
+/** The send so far: nothing yet, under way, the server's `ReportDeliveryResult`, or a failure. */
+export type DeliveryOutcome = Data.TaggedEnum<{
+  idle: {};
+  sending: {};
+  delivered: { readonly messageId: string; readonly deliveredAt: string };
+  duplicate: { readonly deliveredAt: string };
+  uncertain_duplicate: { readonly attemptedAt: string };
+  failed: { readonly reason: ReportDeliveryFailure | "request_failed" };
+}>;
+export const DeliveryOutcome = Data.taggedEnum<DeliveryOutcome>();
 
 const deliveryStatuses = Schema.Literals([409, 503, 413, 423, 429, 410, 422, 502, 504]);
 /** The delivery route assigns one status code per reason; the rejected body is never read. */
@@ -61,22 +65,17 @@ export const deliveryFailureText = {
   request_failed: "로컬 서버 요청이 실패했어요",
 } satisfies Record<ReportDeliveryFailure | "request_failed", string>;
 
-export function deliveryOutcomeText(outcome: DeliveryOutcome): string | null {
-  switch (outcome.status) {
-    case "idle":
-      return null;
-    case "sending":
-      return "Discord로 보내는 중입니다.";
-    case "delivered":
-      return `개발자 Discord 채널로 보냈습니다 (메시지 ${outcome.messageId}).`;
-    case "duplicate":
-      return `이 문안은 ${koreanLocalTime(outcome.deliveredAt)}에 이미 보냈습니다.`;
-    case "uncertain_duplicate":
-      return `이 문안의 이전 전송(${koreanLocalTime(outcome.attemptedAt)})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내세요.`;
-    case "failed":
-      return `보내지 못했습니다: ${deliveryFailureText[outcome.reason]}. 위의 복사·텍스트 파일 저장으로 직접 게시할 수 있습니다.`;
-  }
-}
+export const deliveryOutcomeText: (outcome: DeliveryOutcome) => string | null =
+  DeliveryOutcome.$match({
+    idle: () => null,
+    sending: () => "Discord로 보내는 중입니다.",
+    delivered: ({ messageId }) => `개발자 Discord 채널로 보냈습니다 (메시지 ${messageId}).`,
+    duplicate: ({ deliveredAt }) => `이 문안은 ${koreanLocalTime(deliveredAt)}에 이미 보냈습니다.`,
+    uncertain_duplicate: ({ attemptedAt }) =>
+      `이 문안의 이전 전송(${koreanLocalTime(attemptedAt)})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내세요.`,
+    failed: ({ reason }) =>
+      `보내지 못했습니다: ${deliveryFailureText[reason]}. 위의 복사·텍스트 파일 저장으로 직접 게시할 수 있습니다.`,
+  });
 
 /**
  * Explicit, reviewed send to the developer's webhook: the draft as the message, the evidence bundle
@@ -90,7 +89,7 @@ export function ReportDelivery({
   evidence: ReportBundle | null;
 }) {
   const [config, setConfig] = useState<ReportDeliveryStatus | "unavailable" | null>(null);
-  const [outcome, setOutcome] = useState<DeliveryOutcome>({ status: "idle" });
+  const [outcome, setOutcome] = useState<DeliveryOutcome>(DeliveryOutcome.idle());
   const task = useRef<Fiber.Fiber<void> | null>(null);
   const run = (program: Effect.Effect<void>) => {
     if (task.current !== null) Effect.runFork(Fiber.interrupt(task.current));
@@ -108,12 +107,13 @@ export function ReportDelivery({
   }, []);
 
   const send = (resend: boolean) => {
-    setOutcome({ status: "sending" });
+    setOutcome(DeliveryOutcome.sending());
     run(
       sendReport({ text, evidence }, resend).pipe(
         Effect.match({
           onSuccess: setOutcome,
-          onFailure: (error) => setOutcome({ status: "failed", reason: deliveryFailure(error) }),
+          onFailure: (error) =>
+            setOutcome(DeliveryOutcome.failed({ reason: deliveryFailure(error) })),
         }),
       ),
     );
@@ -154,13 +154,14 @@ export function ReportDelivery({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={outcome.status === "sending"}
+              disabled={DeliveryOutcome.$is("sending")(outcome)}
               onClick={() => send(false)}
               className="rounded-md border px-3 py-2 disabled:opacity-50"
             >
               Discord로 보내기
             </button>
-            {(outcome.status === "duplicate" || outcome.status === "uncertain_duplicate") && (
+            {(DeliveryOutcome.$is("duplicate")(outcome) ||
+              DeliveryOutcome.$is("uncertain_duplicate")(outcome)) && (
               <button
                 type="button"
                 onClick={() => send(true)}
