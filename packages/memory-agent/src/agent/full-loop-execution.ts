@@ -44,6 +44,8 @@ import {
   type ChatMiddlewareContext,
   type AnyTextAdapter,
   type StreamChunk,
+  type Tool,
+  type ToolCall,
 } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
 import type { ExecutionAdmission } from "../runtime/execution-admission.ts";
@@ -206,19 +208,18 @@ const decodeToolJson = Schema.decodeResult(Schema.fromJsonString(Schema.Unknown)
  * A tool call's arguments as its input schema reads them, or the text the model gets back instead
  * of a run failure: arguments the stream cut off or the schema refuses are the model's to fix.
  */
-// SDK tool definitions and calls are opaque here, as everywhere in this boundary.
-// oxlint-disable-next-line anti-slop/no-unknown-parameters
-const toolJson = (call: any): Result.Result<any, string> =>
+const toolJson = (call: ToolCall): Result.Result<unknown, string> =>
   Result.mapError(
     decodeToolJson(call.function.arguments.trim() || "{}"),
     () =>
       `Tool arguments for ${call.function.name} are not valid JSON; they may have been cut off. Call the tool again with complete arguments, splitting large content across smaller calls.`,
   );
-// oxlint-disable-next-line anti-slop/no-unknown-parameters
-const toolInput = (tool: any, call: any): Result.Result<{ raw: any; args: any }, string> =>
+const toolInput = (
+  tool: Pick<Tool, "inputSchema">,
+  call: ToolCall,
+): Result.Result<{ raw: unknown; args: unknown }, string> =>
   Result.flatMap(toolJson(call), (raw) => {
-    if (!(isTruthy(tool.inputSchema) && isStandardSchema(tool.inputSchema)))
-      return Result.succeed({ raw, args: raw });
+    if (!isStandardSchema(tool.inputSchema)) return Result.succeed({ raw, args: raw });
     try {
       return Result.succeed({ raw, args: parseWithStandardSchema(tool.inputSchema, raw) });
     } catch (error) {
@@ -616,7 +617,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               return true;
             };
             /** The model gets `result` for `call` in place of running it; later hooks see it done. */
-            const answerInvalid = (call: any, result: string) => {
+            const answerInvalid = (call: ToolCall, result: string) => {
               MutableHashMap.set(completedTools, call.id, {
                 toolCallId: call.id,
                 toolName: call.function.name,
