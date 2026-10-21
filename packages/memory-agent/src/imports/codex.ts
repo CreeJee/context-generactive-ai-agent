@@ -2,7 +2,13 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
-import { branchOf, isInjectedText, type InjectedText, type TranscriptReader } from "./items.ts";
+import {
+  branchOf,
+  isInjectedText,
+  TranscriptItem,
+  type InjectedText,
+  type TranscriptReader,
+} from "./items.ts";
 
 /**
  * Codex CLI writes one rollout file per conversation under `~/.codex/sessions/<Y>/<M>/<D>`.
@@ -103,8 +109,7 @@ export const codexReader =
     switch (decoded.type) {
       case "session_meta":
         return [
-          {
-            kind: "session",
+          TranscriptItem.session({
             externalId: decoded.payload.session_id,
             cwd: decoded.payload.cwd,
             startedAt: decoded.timestamp,
@@ -115,7 +120,7 @@ export const codexReader =
                 }
               : null,
             branch: branchOf(decoded.payload.git?.branch),
-          },
+          }),
         ];
       case "response_item": {
         const payload = Option.getOrUndefined(decodePayload(decoded.payload));
@@ -136,44 +141,41 @@ export const codexReader =
               return [];
             const text = partsText(payload.content);
             if (text.length === 0 || (role === "user" && isInjectedText(text, injected))) return [];
-            return [{ kind: "message", role, externalId, at, text }];
+            return [TranscriptItem.message({ role, externalId, at, text })];
           }
           case "function_call":
             return [
-              {
-                kind: "tool_call",
+              TranscriptItem.tool_call({
                 externalId,
                 at,
                 toolName: payload.name,
                 toolCallId: payload.call_id,
                 text: `${payload.name} ${payload.arguments}`,
                 refs: refsInArguments(payload.arguments),
-              },
+              }),
             ];
           case "custom_tool_call":
             return [
-              {
-                kind: "tool_call",
+              TranscriptItem.tool_call({
                 externalId,
                 at,
                 toolName: payload.name,
                 toolCallId: payload.call_id,
                 text: `${payload.name} ${payload.input}`,
                 refs: [],
-              },
+              }),
             ];
           case "function_call_output":
           case "custom_tool_call_output":
             return [
-              {
-                kind: "tool_result",
+              TranscriptItem.tool_result({
                 externalId,
                 at,
                 toolCallId: payload.call_id,
                 // A rollout records what the tool returned, not whether the CLI treated it as an error.
                 ok: true,
                 text: isText(payload.output) ? payload.output : JSON.stringify(payload.output),
-              },
+              }),
             ];
         }
       }

@@ -3,6 +3,7 @@ import {
   Config,
   Context,
   Crypto,
+  Data,
   DateTime,
   Duration,
   Effect,
@@ -61,10 +62,12 @@ export class ReportDeliveryError extends Schema.TaggedError<ReportDeliveryError>
   },
 ) {}
 
-type Attempt =
-  | { readonly status: "sending" }
-  | { readonly status: "delivered"; readonly at: string }
-  | { readonly status: "uncertain"; readonly at: string };
+type Attempt = Data.TaggedEnum<{
+  sending: {};
+  delivered: { readonly at: string };
+  uncertain: { readonly at: string };
+}>;
+const Attempt = Data.taggedEnum<Attempt>();
 
 const RateLimitBody = Schema.Struct({ retry_after: Schema.Finite });
 const MessageBody = Schema.Struct({ id: Schema.String });
@@ -78,10 +81,12 @@ interface WebhookUrl {
 export const webhookConfigKey = "DISCORD_WEBHOOK_URL";
 
 /** The webhook the server was started with; read once, never sent to the browser. */
-type WebhookConfig =
-  | { readonly status: "missing" }
-  | { readonly status: "invalid" }
-  | { readonly status: "ready"; readonly webhook: WebhookUrl };
+type WebhookConfig = Data.TaggedEnum<{
+  missing: {};
+  invalid: {};
+  ready: { readonly webhook: WebhookUrl };
+}>;
+const WebhookConfig = Data.taggedEnum<WebhookConfig>();
 
 /** Accepts only an execute-webhook URL on Discord; loopback is allowed only for tests. */
 export const parseWebhookUrl: {
@@ -176,36 +181,31 @@ const make = (options: ReportDeliveryOptions) =>
     const config: WebhookConfig = yield* Config.option(Config.Redacted(webhookConfigKey)).pipe(
       Effect.map(
         Option.match({
-          onNone: (): WebhookConfig => ({ status: "missing" }),
+          onNone: (): WebhookConfig => WebhookConfig.missing(),
           onSome: (value): WebhookConfig => {
             const webhook = parseWebhookUrl(Redacted.value(value), allowLoopback);
-            return webhook === null ? { status: "invalid" } : { status: "ready", webhook };
+            return webhook === null ? WebhookConfig.invalid() : WebhookConfig.ready({ webhook });
           },
         }),
       ),
-      Effect.catchTag("ConfigError", () => Effect.succeed<WebhookConfig>({ status: "invalid" })),
+      Effect.catchTag("ConfigError", () => Effect.succeed(WebhookConfig.invalid())),
     );
 
-    const webhook = Effect.suspend((): Effect.Effect<WebhookUrl, ReportDeliveryError> => {
-      switch (config.status) {
-        case "missing":
-          return Effect.fail(ReportDeliveryError.make({ reason: "not_configured" }));
-        case "invalid":
-          return Effect.fail(ReportDeliveryError.make({ reason: "invalid_webhook_url" }));
-        case "ready":
-          return Effect.succeed(config.webhook);
-      }
-    });
+    const webhook = Effect.suspend((): Effect.Effect<WebhookUrl, ReportDeliveryError> =>
+      WebhookConfig.$match(config, {
+        missing: () => Effect.fail(ReportDeliveryError.make({ reason: "not_configured" })),
+        invalid: () => Effect.fail(ReportDeliveryError.make({ reason: "invalid_webhook_url" })),
+        ready: ({ webhook }) => Effect.succeed(webhook),
+      }),
+    );
 
-    const status = Effect.sync(() => {
-      switch (config.status) {
-        case "missing":
-        case "invalid":
-          return { configured: false, webhookIdSuffix: null };
-        case "ready":
-          return { configured: true, webhookIdSuffix: config.webhook.id.slice(-4) };
-      }
-    });
+    const status = Effect.sync(() =>
+      WebhookConfig.$match(config, {
+        missing: () => ({ configured: false, webhookIdSuffix: null }),
+        invalid: () => ({ configured: false, webhookIdSuffix: null }),
+        ready: ({ webhook }) => ({ configured: true, webhookIdSuffix: webhook.id.slice(-4) }),
+      }),
+    );
 
     const post = (target: WebhookUrl, body: FormData) =>
       Effect.gen(function* () {
@@ -297,32 +297,31 @@ const make = (options: ReportDeliveryOptions) =>
         attempts,
         (current): [Attempt | "claimed", ReadonlyMap<string, Attempt>] => {
           const previous = current.get(hash);
-          if (previous?.status === "sending") return [previous, current];
+          if (Attempt.$is("sending")(previous)) return [previous, current];
           if (previous !== undefined && !resend) return [previous, current];
-          return ["claimed", new Map(current).set(hash, { status: "sending" })];
+          return ["claimed", new Map(current).set(hash, Attempt.sending())];
         },
       );
       if (claimed !== "claimed")
-        switch (claimed.status) {
-          case "sending":
-            return yield* ReportDeliveryError.make({ reason: "in_progress" });
-          case "delivered":
-            return { status: "duplicate", deliveredAt: claimed.at };
-          case "uncertain":
-            return { status: "uncertain_duplicate", attemptedAt: claimed.at };
-        }
+        return yield* Attempt.$match(claimed, {
+          sending: () => Effect.fail(ReportDeliveryError.make({ reason: "in_progress" })),
+          delivered: ({ at }): Effect.Effect<ReportDeliveryResult> =>
+            Effect.succeed({ status: "duplicate", deliveredAt: at }),
+          uncertain: ({ at }): Effect.Effect<ReportDeliveryResult> =>
+            Effect.succeed({ status: "uncertain_duplicate", attemptedAt: at }),
+        });
       const messageId = yield* postWithShortWaits(target, report, 0).pipe(
         Effect.tapError((error) =>
           Effect.flatMap(now, (at) =>
-            setAttempt(hash, error.reason === "uncertain" ? { status: "uncertain", at } : null),
+            setAttempt(hash, error.reason === "uncertain" ? Attempt.uncertain({ at }) : null),
           ),
         ),
         Effect.onInterrupt(() =>
-          Effect.flatMap(now, (at) => setAttempt(hash, { status: "uncertain", at })),
+          Effect.flatMap(now, (at) => setAttempt(hash, Attempt.uncertain({ at }))),
         ),
       );
       const deliveredAt = yield* now;
-      yield* setAttempt(hash, { status: "delivered", at: deliveredAt });
+      yield* setAttempt(hash, Attempt.delivered({ at: deliveredAt }));
       return { status: "delivered", messageId, deliveredAt };
     });
 

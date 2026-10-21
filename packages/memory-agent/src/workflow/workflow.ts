@@ -14,12 +14,13 @@ import {
 } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { evaluateWorkflowAction, WorkflowActionReason } from "./actions.ts";
+import { evaluateWorkflowAction, WorkflowActionReason, WorkflowActionRequest } from "./actions.ts";
 import {
   completionEvidence,
   CompletionRequest,
   CompletionSnapshot,
   CriterionMapping,
+  Derived,
 } from "./completion-evidence.ts";
 import {
   BoardAuthor,
@@ -706,7 +707,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           sessionId,
           Effect.gen(function* () {
             const current = yield* get(sessionId);
-            const decision = evaluateWorkflowAction(current, { kind: "phase", phase });
+            const decision = evaluateWorkflowAction(
+              current,
+              WorkflowActionRequest.phase({ phase }),
+            );
             if (!decision.allowed)
               return yield* WorkflowTransitionRefused.make({ reason: decision.reason });
             const now = nowIso();
@@ -734,7 +738,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           sessionId,
           Effect.gen(function* () {
             const current = yield* get(sessionId);
-            const decision = evaluateWorkflowAction(current, { kind: "control", action });
+            const decision = evaluateWorkflowAction(
+              current,
+              WorkflowActionRequest.control({ action }),
+            );
             if (!decision.allowed)
               return yield* WorkflowProgressRefused.make({ reason: decision.reason });
             // An allowed control always has a goal; keep narrowing local to the mutation.
@@ -853,7 +860,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 request.mappings,
                 request.recorderRunId,
               );
-              if (derived.status === "accepted") snapshot = derived.snapshot;
+              if (Derived.$is("accepted")(derived)) snapshot = derived.snapshot;
             }
             // Native registration authorizes execution, not successful criterion coverage.
             // Legacy/unprovenanced Goals retain the release-compatible automatic completion.
@@ -1165,7 +1172,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 recorderRunId,
                 stageCompletion,
               );
-              if (derived.status === "refused")
+              if (Derived.$is("refused")(derived))
                 return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_invalid",
                 });
@@ -1202,7 +1209,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 snapshot.mappings,
                 recorderRunId,
               );
-              if (checked.status === "refused" || !sameSnapshot(checked.snapshot, snapshot))
+              if (Derived.$is("refused")(checked) || !sameSnapshot(checked.snapshot, snapshot))
                 return yield* WorkflowProgressRefused.make({
                   reason: "completion_evidence_invalid",
                 });

@@ -3,7 +3,7 @@ import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { SchemaTransformation } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
-import { DateTime, Option, Schema } from "effect";
+import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
 import { useState } from "react";
@@ -73,13 +73,15 @@ function resultText(result: ToolResult) {
 }
 
 /** Where a tool call stands, as the badge shows it. */
-type CallStatus =
-  | { readonly kind: "running" }
-  | { readonly kind: "awaiting-approval" }
-  | { readonly kind: "completed" }
-  | { readonly kind: "failed" }
-  | { readonly kind: "denied" }
-  | { readonly kind: "blocked" };
+type CallStatus = Data.TaggedEnum<{
+  running: {};
+  "awaiting-approval": {};
+  completed: {};
+  failed: {};
+  denied: {};
+  blocked: {};
+}>;
+const CallStatus = Data.taggedEnum<CallStatus>();
 
 /**
  * What a result says happened. A declined approval and a call the permission review refused are
@@ -112,6 +114,10 @@ const RefusedResult = Schema.Union([
   ),
 ]);
 const decodeRefusal = Schema.decodeUnknownOption(RefusedResult);
+const refusalStatus = {
+  denied: CallStatus.denied(),
+  blocked: CallStatus.blocked(),
+} satisfies Record<typeof RefusedResult.Type, CallStatus>;
 
 /** A write_file / edit_file result that carries a picture of the SVG it wrote. */
 const decodeDrawing = Schema.decodeUnknownOption(
@@ -135,30 +141,22 @@ function drawingOf(result: ToolResult | undefined) {
 function callStatus(call: ToolCall, result: ToolResult | undefined, awaitingApproval: boolean) {
   if (!isTruthy(result))
     return awaitingApproval || call.state === "approval-requested"
-      ? ({ kind: "awaiting-approval" } satisfies CallStatus)
-      : ({ kind: "running" } satisfies CallStatus);
+      ? CallStatus["awaiting-approval"]()
+      : CallStatus.running();
   const refusal = Option.getOrUndefined(decodeRefusal(resultText(result)));
-  if (isTruthy(refusal)) return { kind: refusal } satisfies CallStatus;
-  return result.state === "error"
-    ? ({ kind: "failed" } satisfies CallStatus)
-    : ({ kind: "completed" } satisfies CallStatus);
+  if (isTruthy(refusal)) return refusalStatus[refusal];
+  return result.state === "error" ? CallStatus.failed() : CallStatus.completed();
 }
 
 function StatusBadge({ status }: { status: CallStatus }) {
-  switch (status.kind) {
-    case "running":
-      return <Badge variant="outline">실행 중</Badge>;
-    case "awaiting-approval":
-      return <Badge variant="outline">승인 대기</Badge>;
-    case "completed":
-      return <Badge variant="secondary">완료</Badge>;
-    case "failed":
-      return <Badge variant="destructive">실패</Badge>;
-    case "denied":
-      return <Badge variant="destructive">거부됨</Badge>;
-    case "blocked":
-      return <Badge variant="destructive">자동 검토로 막힘</Badge>;
-  }
+  return CallStatus.$match(status, {
+    running: () => <Badge variant="outline">실행 중</Badge>,
+    "awaiting-approval": () => <Badge variant="outline">승인 대기</Badge>,
+    completed: () => <Badge variant="secondary">완료</Badge>,
+    failed: () => <Badge variant="destructive">실패</Badge>,
+    denied: () => <Badge variant="destructive">거부됨</Badge>,
+    blocked: () => <Badge variant="destructive">자동 검토로 막힘</Badge>,
+  });
 }
 
 const activeTaskStatuses: readonly TraceTaskView["status"][] = [
@@ -211,18 +209,24 @@ function taskStatus(task: TraceTaskView) {
   }
 }
 
-type ResumeActionResult =
-  | { readonly status: "queued" }
-  | { readonly status: "blocked"; readonly reason: string }
-  | { readonly status: "failed" };
-type ArchiveActionResult =
-  | { readonly status: "archived" }
-  | { readonly status: "blocked"; readonly reason: string }
-  | { readonly status: "failed" };
-type DeleteActionResult =
-  | { readonly status: "deleted" }
-  | { readonly status: "blocked"; readonly reason: string }
-  | { readonly status: "failed" };
+export type ResumeActionResult = Data.TaggedEnum<{
+  queued: {};
+  blocked: { readonly reason: string };
+  failed: {};
+}>;
+export const ResumeActionResult = Data.taggedEnum<ResumeActionResult>();
+export type ArchiveActionResult = Data.TaggedEnum<{
+  archived: {};
+  blocked: { readonly reason: string };
+  failed: {};
+}>;
+export const ArchiveActionResult = Data.taggedEnum<ArchiveActionResult>();
+export type DeleteActionResult = Data.TaggedEnum<{
+  deleted: {};
+  blocked: { readonly reason: string };
+  failed: {};
+}>;
+export const DeleteActionResult = Data.taggedEnum<DeleteActionResult>();
 /** A subagent task that ended without completing can be rerun as a new attempt. */
 const retryableTaskStatuses: readonly TraceTaskView["status"][] = [
   "blocked",
@@ -270,10 +274,12 @@ function TaskSummaryCard({
       Effect.gen(function* () {
         setResumeState("requesting");
         const result = yield* uiPromise(() => onResume(task, confirmUncertain));
-        if (result.status === "queued") return setResumeState("queued");
-        if (result.status === "blocked" && result.reason === "uncertain_side_effect")
-          return setResumeState("confirm-uncertain");
-        setResumeState("failed");
+        ResumeActionResult.$match(result, {
+          queued: () => setResumeState("queued"),
+          blocked: ({ reason }) =>
+            setResumeState(reason === "uncertain_side_effect" ? "confirm-uncertain" : "failed"),
+          failed: () => setResumeState("failed"),
+        });
       }),
     );
   const [archiveState, setArchiveState] = useState<"idle" | "requesting" | "failed">("idle");
@@ -283,7 +289,7 @@ function TaskSummaryCard({
       Effect.gen(function* () {
         setArchiveState("requesting");
         const result = yield* uiPromise(() => onArchive(task));
-        setArchiveState(result.status === "archived" ? "idle" : "failed");
+        setArchiveState(ArchiveActionResult.$is("archived")(result) ? "idle" : "failed");
       }),
     );
   const [deleteState, setDeleteState] = useState<"idle" | "requesting" | "failed">("idle");
@@ -299,7 +305,7 @@ function TaskSummaryCard({
           return;
         setDeleteState("requesting");
         const result = yield* uiPromise(() => onDelete(task));
-        setDeleteState(result.status === "deleted" ? "idle" : "failed");
+        setDeleteState(DeleteActionResult.$is("deleted")(result) ? "idle" : "failed");
       }),
     );
   const openTrace = () =>

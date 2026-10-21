@@ -4,10 +4,12 @@ import { layer } from "@effect/vitest";
 import { describe, expect, test } from "vite-plus/test";
 import type { Project } from "../projects/projects.ts";
 import type { Skill } from "../skills/skills.ts";
+import { RuleSource } from "./rules.ts";
 import {
   projectWorkflowRules,
   projectWorkflowRulesPath,
   skillWorkflowRules,
+  StructuredRuleOrigin,
   structuredWorkflowRules,
 } from "./sources.ts";
 
@@ -56,10 +58,11 @@ describe("workflow rule sources", () => {
         yield* fs.writeFileString(file, ruleFile("Check supported versions"));
         const first = yield* projectWorkflowRules(current);
         expect(first.problems).toEqual([]);
+        expect(RuleSource.guards.project(first.rules[0]?.source)).toBe(true);
         expect(first.rules[0]).toMatchObject({
           id: "project.release-check",
           priority: "required",
-          source: { kind: "project", path: projectWorkflowRulesPath },
+          source: { path: projectWorkflowRulesPath },
         });
         yield* fs.writeFileString(file, ruleFile("Check supported versions and rollback"));
         const second = yield* projectWorkflowRules(current);
@@ -86,20 +89,16 @@ describe("workflow rule sources", () => {
   });
 
   test("decodes the same resource format from an MCP source without elevating trust", () => {
-    const loaded = structuredWorkflowRules(ruleFile("Review the remote compatibility matrix"), {
-      kind: "mcp-resource",
-      serverId: "docs",
-      name: "workflow://release",
-    });
+    const loaded = structuredWorkflowRules(
+      ruleFile("Review the remote compatibility matrix"),
+      StructuredRuleOrigin["mcp-resource"]({ serverId: "docs", name: "workflow://release" }),
+    );
 
+    expect(RuleSource.guards["mcp-resource"](loaded.rules[0]?.source)).toBe(true);
     expect(loaded.rules[0]).toMatchObject({
       id: "project.release-check",
       priority: "recommended",
-      source: {
-        kind: "mcp-resource",
-        serverId: "docs",
-        name: "workflow://release",
-      },
+      source: { serverId: "docs", name: "workflow://release" },
     });
   });
 
@@ -110,11 +109,10 @@ describe("workflow rule sources", () => {
     );
 
     expect(
-      structuredWorkflowRules(resource, {
-        kind: "mcp-prompt",
-        serverId: "remote",
-        name: "rules",
-      }),
+      structuredWorkflowRules(
+        resource,
+        StructuredRuleOrigin["mcp-prompt"]({ serverId: "remote", name: "rules" }),
+      ),
     ).toMatchObject({ rules: [], problems: [{ problem: "invalid" }] });
   });
 
@@ -132,12 +130,11 @@ describe("workflow rule sources", () => {
         id: "skill.project.repair-pr",
         priority: "recommended",
         terms: [skill.name, skill.description],
-        source: {
-          kind: "skill",
+        source: RuleSource.cases.skill.make({
           name: skill.name,
           scope: skill.scope,
           contentHash: skill.contentHash,
-        },
+        }),
       }),
     ]);
   });

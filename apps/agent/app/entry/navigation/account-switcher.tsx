@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { DateTime } from "effect";
+import { Data, DateTime } from "effect";
 import { CheckIcon, ChevronsUpDownIcon, Settings2Icon } from "lucide-react";
 import {
   DropdownMenu,
@@ -35,46 +35,34 @@ import { timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
 
 /** One row of the switcher: a subscription login, or a compatible endpoint. */
-export type AccountEntry =
-  | {
-      readonly kind: "profile";
-      readonly provider: SubscriptionAccountProvider;
-      readonly profile: OAuthProfile;
-      readonly quota: QuotaStatus | undefined;
-      readonly current: boolean;
-    }
-  | {
-      readonly kind: "compatible";
-      readonly account: CompatibleAccountStatus;
-      readonly current: boolean;
-    };
+export type AccountEntry = Data.TaggedEnum<{
+  profile: {
+    readonly provider: SubscriptionAccountProvider;
+    readonly profile: OAuthProfile;
+    readonly quota: QuotaStatus | undefined;
+    readonly current: boolean;
+  };
+  compatible: {
+    readonly account: CompatibleAccountStatus;
+    readonly current: boolean;
+  };
+}>;
+export const AccountEntry = Data.taggedEnum<AccountEntry>();
 
-const entryKey = (entry: AccountEntry) => {
-  switch (entry.kind) {
-    case "profile":
-      return entry.profile.id;
-    case "compatible":
-      return `openai-compatible:${entry.account.id}`;
-  }
-};
+const entryKey = AccountEntry.$match({
+  profile: ({ profile }) => profile.id,
+  compatible: ({ account }) => `openai-compatible:${account.id}`,
+});
 
-const entryProvider = (entry: AccountEntry): ProviderId => {
-  switch (entry.kind) {
-    case "profile":
-      return entry.provider;
-    case "compatible":
-      return "openai-compatible";
-  }
-};
+const entryProvider = AccountEntry.$match({
+  profile: ({ provider }): ProviderId => provider,
+  compatible: (): ProviderId => "openai-compatible",
+});
 
-const entryLabel = (entry: AccountEntry) => {
-  switch (entry.kind) {
-    case "profile":
-      return entry.profile.label;
-    case "compatible":
-      return entry.account.label;
-  }
-};
+const entryLabel = AccountEntry.$match({
+  profile: ({ profile }) => profile.label,
+  compatible: ({ account }) => account.label,
+});
 
 /** Provider type and the user's name for the account, read together on one line. */
 function AccountName({ entry }: { entry: AccountEntry }) {
@@ -91,15 +79,13 @@ function AccountName({ entry }: { entry: AccountEntry }) {
  * stays in the tooltip and in the account manager.
  */
 function QuotaHeadline({ entry }: { entry: AccountEntry }) {
-  switch (entry.kind) {
-    case "compatible":
-      return (
-        <span className="shrink-0 text-2xs text-muted-foreground">
-          {entry.account.models.length > 0 ? `모델 ${entry.account.models.length}개` : "모델 없음"}
-        </span>
-      );
-    case "profile": {
-      const { quota } = entry;
+  return AccountEntry.$match(entry, {
+    compatible: ({ account }) => (
+      <span className="shrink-0 text-2xs text-muted-foreground">
+        {account.models.length > 0 ? `모델 ${account.models.length}개` : "모델 없음"}
+      </span>
+    ),
+    profile: ({ quota }) => {
       switch (quota?.status) {
         case undefined:
           return null;
@@ -134,8 +120,8 @@ function QuotaHeadline({ entry }: { entry: AccountEntry }) {
           );
         }
       }
-    }
-  }
+    },
+  });
 }
 
 function EntryRow({ entry }: { entry: AccountEntry }) {
@@ -212,15 +198,18 @@ export function AccountSwitcherMenu({
                   aria-label={`${entryLabel(entry)} (${providerLabels[entryProvider(entry)]})`}
                   onClick={() => {
                     if (entry.current) return;
-                    switch (entry.kind) {
-                      case "profile":
-                        return onSwitch({ provider: entry.provider, accountId: entry.profile.id });
-                      case "compatible":
-                        return onSwitch({
+                    onSwitch(
+                      AccountEntry.$match(entry, {
+                        profile: ({ provider, profile }): AccountTarget => ({
+                          provider,
+                          accountId: profile.id,
+                        }),
+                        compatible: ({ account }): AccountTarget => ({
                           provider: "openai-compatible",
-                          accountId: entry.account.id,
-                        });
-                    }
+                          accountId: account.id,
+                        }),
+                      }),
+                    );
                   }}
                 >
                   <EntryRow entry={entry} />
@@ -271,21 +260,23 @@ export function AccountSwitcher({
     profiles: readonly OAuthProfile[] | undefined,
     quota: SubscriptionQuotaReport | undefined,
   ): AccountEntry[] =>
-    (profiles ?? []).map((profile) => ({
-      kind: "profile",
-      provider,
-      profile,
-      quota: quota?.accounts.find((account) => account.accountId === profile.id)?.quota,
-      current: activeProvider === provider && profile.selected,
-    }));
+    (profiles ?? []).map((profile) =>
+      AccountEntry.profile({
+        provider,
+        profile,
+        quota: quota?.accounts.find((account) => account.accountId === profile.id)?.quota,
+        current: activeProvider === provider && profile.selected,
+      }),
+    );
   const entries: AccountEntry[] = [
     ...profiles("openai", openai.data?.profiles, openaiQuota.data),
     ...profiles("anthropic", anthropic.data?.profiles, anthropicQuota.data),
-    ...(compatible.data?.accounts ?? []).map((account): AccountEntry => ({
-      kind: "compatible",
-      account,
-      current: activeProvider === "openai-compatible" && account.selected,
-    })),
+    ...(compatible.data?.accounts ?? []).map((account) =>
+      AccountEntry.compatible({
+        account,
+        current: activeProvider === "openai-compatible" && account.selected,
+      }),
+    ),
   ];
   return (
     <AccountSwitcherMenu

@@ -1,9 +1,9 @@
 import { withTestPlatform } from "../../../tests/support/platform.ts";
 import { gatedTransport } from "../../../tests/support/native-owner.ts";
 import { Deferred, Effect, Exit, Fiber, FileSystem } from "effect";
-import { NativeOwnerFailed } from "./worker-protocol.ts";
+import { NativeOwnerFailed, OwnerCommand, OwnerReply } from "./worker-protocol.ts";
 import { expect, it } from "vite-plus/test";
-import { makeNativeOwner, type OwnerTransport } from "./client.ts";
+import { makeNativeOwner, OwnerInspection, type OwnerTransport } from "./client.ts";
 
 it("uses the actual additive native primitive for exact results, shared cancellation and admission budget", () =>
   Effect.runPromise(
@@ -35,34 +35,40 @@ it("uses the actual additive native primitive for exact results, shared cancella
           );
           const query = new Float32Array(384);
           query[0] = 1;
-          yield* owner.execute({
-            kind: "add",
-            epoch: owner.epoch,
-            requestId: "seed",
-            vectors: query,
-            ids: ["1"],
-          });
-          const legacy = yield* owner.execute({
-            kind: "vector-search",
-            epoch: owner.epoch,
-            requestId: "legacy",
-            query,
-            k: 1,
-            allowedIds: ["1"],
-          });
-          const request = (id: string, budgetMs: number) =>
-            owner.execute({
-              kind: "vector-search-controlled",
+          yield* owner.execute(
+            OwnerCommand.cases.add.make({
               epoch: owner.epoch,
-              requestId: id,
+              requestId: "seed",
+              vectors: query,
+              ids: ["1"],
+            }),
+          );
+          const legacy = yield* owner.execute(
+            OwnerCommand.cases["vector-search"].make({
+              epoch: owner.epoch,
+              requestId: "legacy",
               query,
               k: 1,
               allowedIds: ["1"],
-              budgetMs,
-            });
+            }),
+          );
+          const request = (id: string, budgetMs: number) =>
+            owner.execute(
+              OwnerCommand.cases["vector-search-controlled"].make({
+                epoch: owner.epoch,
+                requestId: id,
+                query,
+                k: 1,
+                allowedIds: ["1"],
+                budgetMs,
+              }),
+            );
           const result = yield* request("success", 2_000);
-          expect(result).toMatchObject({ kind: "controlled-result", outcome: "success" });
-          if (legacy.kind !== "vector-hits" || result.kind !== "controlled-result")
+          expect(result).toMatchObject({ outcome: "success" });
+          if (
+            !OwnerReply.guards["vector-hits"](legacy) ||
+            !OwnerReply.guards["controlled-result"](result)
+          )
             return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
           expect(result.ids).toEqual(legacy.ids);
           expect(result.scores).toEqual(legacy.scores);
@@ -70,19 +76,19 @@ it("uses the actual additive native primitive for exact results, shared cancella
           yield* Deferred.await(dispatched);
           yield* owner.cancel("cancelled");
           yield* Deferred.succeed(release, undefined);
-          expect(yield* Fiber.join(pending)).toMatchObject({
-            kind: "controlled-result",
-            outcome: "cancelled",
-            ids: [],
-          });
-          expect(yield* request("budget", 1)).toMatchObject({
-            kind: "controlled-result",
-            outcome: "budget-exceeded",
-            ids: [],
-          });
+          const cancelled = yield* Fiber.join(pending);
+          expect(OwnerReply.guards["controlled-result"](cancelled)).toBe(true);
+          expect(cancelled).toMatchObject({ outcome: "cancelled", ids: [] });
+          const exceeded = yield* request("budget", 1);
+          expect(OwnerReply.guards["controlled-result"](exceeded)).toBe(true);
+          expect(exceeded).toMatchObject({ outcome: "budget-exceeded", ids: [] });
           expect(
-            yield* owner.execute({ kind: "save", epoch: owner.epoch, requestId: "still-live" }),
-          ).toMatchObject({ kind: "ack" });
+            OwnerReply.guards.ack(
+              yield* owner.execute(
+                OwnerCommand.cases.save.make({ epoch: owner.epoch, requestId: "still-live" }),
+              ),
+            ),
+          ).toBe(true);
         }),
       ),
     ),
@@ -105,11 +111,13 @@ it("times out the caller without pretending an active transport job has terminat
             ),
           );
           const job = yield* Effect.forkScoped(
-            owner.execute({ kind: "validate", epoch: "timeout", requestId: "timed", ids: [] }),
+            owner.execute(
+              OwnerCommand.cases.validate.make({ epoch: "timeout", requestId: "timed", ids: [] }),
+            ),
           );
           yield* Deferred.await(blocked);
           expect(yield* Effect.flip(Fiber.join(job))).toMatchObject({ reason: "request-timeout" });
-          expect(yield* owner.inspect).toMatchObject({ kind: "open", queued: 0, active: 1 });
+          expect(yield* owner.inspect).toEqual(OwnerInspection.open({ queued: 0, active: 1 }));
           // The enclosing Scope still owns shutdown and actual native resource cleanup.
         }),
       ),
@@ -131,9 +139,8 @@ it("waits past a budgeted search's budget for its own budget-exceeded reply", ()
               Effect.sleep("2500 millis").pipe(Effect.andThen(transport.send(command))),
             ),
           );
-          expect(
-            yield* owner.execute({
-              kind: "vector-search-controlled",
+          const late = yield* owner.execute(
+            OwnerCommand.cases["vector-search-controlled"].make({
               epoch: owner.epoch,
               requestId: "late",
               query: new Float32Array(384).fill(1 / Math.sqrt(384)),
@@ -141,7 +148,9 @@ it("waits past a budgeted search's budget for its own budget-exceeded reply", ()
               allowedIds: [],
               budgetMs: 2_000,
             }),
-          ).toMatchObject({ kind: "controlled-result", outcome: "budget-exceeded" });
+          );
+          expect(OwnerReply.guards["controlled-result"](late)).toBe(true);
+          expect(late).toMatchObject({ outcome: "budget-exceeded" });
         }),
       ),
     ).pipe(Effect.timeout("8 seconds")),
@@ -164,7 +173,9 @@ it("bounds admission, removes interrupted queued waits, and settles every waiter
             ),
           );
           const request = (id: string) =>
-            owner.execute({ kind: "validate", epoch: "queue", requestId: id, ids: [] });
+            owner.execute(
+              OwnerCommand.cases.validate.make({ epoch: "queue", requestId: id, ids: [] }),
+            );
           const active = yield* Effect.forkScoped(request("active"));
           const transport = yield* Deferred.await(blocked);
           const waiting = yield* Effect.forEach(
@@ -172,18 +183,22 @@ it("bounds admission, removes interrupted queued waits, and settles every waiter
             (id) => Effect.forkScoped(request(id)),
           );
           yield* owner.inspect.pipe(
-            Effect.repeat({ until: (state) => state.kind === "open" && state.queued === 31 }),
+            Effect.repeat({
+              until: (state) => OwnerInspection.$is("open")(state) && state.queued === 31,
+            }),
           );
           expect(yield* Effect.flip(request("overflow"))).toMatchObject({ reason: "queue-full" });
           yield* Fiber.interrupt(waiting[0]!);
-          expect(yield* owner.inspect).toMatchObject({ kind: "open", queued: 30, active: 1 });
+          expect(yield* owner.inspect).toEqual(OwnerInspection.open({ queued: 30, active: 1 }));
           const replacement = yield* Effect.forkScoped(request("replacement"));
           yield* owner.inspect.pipe(
-            Effect.repeat({ until: (state) => state.kind === "open" && state.queued === 31 }),
+            Effect.repeat({
+              until: (state) => OwnerInspection.$is("open")(state) && state.queued === 31,
+            }),
           );
           // An interrupted active caller is not evidence that its native job terminated.
           yield* Fiber.interrupt(active);
-          expect(yield* owner.inspect).toMatchObject({ kind: "open", queued: 31, active: 1 });
+          expect(yield* owner.inspect).toEqual(OwnerInspection.open({ queued: 31, active: 1 }));
           expect(yield* Effect.flip(request("still-full"))).toMatchObject({ reason: "queue-full" });
           yield* transport.terminate;
           const failures = yield* Effect.forEach(
@@ -220,31 +235,37 @@ it("matches scoped host requests and releases its lease after owner shutdown", (
               );
               expect(owner.threadId).toBeGreaterThan(0);
               expect(
-                yield* owner.execute({
-                  kind: "add",
-                  epoch: "first",
-                  requestId: "add",
-                  ids: ["1"],
-                  vectors: new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
-                }),
-              ).toMatchObject({ kind: "ack", size: 1 });
+                yield* owner.execute(
+                  OwnerCommand.cases.add.make({
+                    epoch: "first",
+                    requestId: "add",
+                    ids: ["1"],
+                    vectors: new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
+                  }),
+                ),
+              ).toEqual(OwnerReply.cases.ack.make({ epoch: "first", requestId: "add", size: 1 }));
               const wrongEpoch = yield* Effect.exit(
-                owner.execute({ kind: "save", epoch: "wrong", requestId: "wrong" }),
+                owner.execute(OwnerCommand.cases.save.make({ epoch: "wrong", requestId: "wrong" })),
               );
               expect(Exit.isFailure(wrongEpoch)).toBe(true);
-              expect(
-                yield* owner.execute({
-                  kind: "vector-search",
+              const hits = yield* owner.execute(
+                OwnerCommand.cases["vector-search"].make({
                   epoch: "first",
                   requestId: "search",
                   query: new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
                   k: 1,
                   allowedIds: ["1"],
                 }),
-              ).toMatchObject({ kind: "vector-hits", ids: ["1"] });
+              );
+              expect(OwnerReply.guards["vector-hits"](hits)).toBe(true);
+              expect(hits).toMatchObject({ ids: ["1"] });
               expect(
-                yield* owner.execute({ kind: "save", epoch: "first", requestId: "save" }),
-              ).toMatchObject({ kind: "ack" });
+                OwnerReply.guards.ack(
+                  yield* owner.execute(
+                    OwnerCommand.cases.save.make({ epoch: "first", requestId: "save" }),
+                  ),
+                ),
+              ).toBe(true);
             }),
           );
           const reopened = yield* makeNativeOwner(

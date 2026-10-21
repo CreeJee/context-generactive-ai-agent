@@ -16,13 +16,14 @@ import {
 } from "./workflow.ts";
 import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { toToolSchema } from "../tools/schema.ts";
-import type { ResolvedRules } from "./rules.ts";
+import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
 import {
   PlanDependencyIssue,
   planDependencyIssues,
+  PlanSchedule,
   planSchedule,
   unmetDependencyText,
 } from "./plan-schedule.ts";
@@ -226,32 +227,27 @@ const scheduleText = (steps: readonly PlanStep[]) => {
     issues.length === 0
       ? ""
       : `\nThis saved Plan has dependency issues; unknown and self dependencies are ignored, cycles never become ready. Fix them with update_plan:\n${compactList(issues, issues.length)}`;
-  const schedule = planSchedule(steps);
-  switch (schedule.kind) {
-    case "finished":
-      return saved;
-    case "runnable":
-      return `\nReady steps (pending with every dependency completed): ${schedule.ready.join(", ") || "(none)"}. Continue in_progress steps first, then start a ready step; do not start a step whose dependencies are not completed.${saved}`;
-    case "stalled":
-      return `\nNo remaining step can start: every one is blocked or waits on an unfinished dependency.
-${compactList([...schedule.blocked.map((id) => `${id} [blocked]`), ...schedule.waiting.map(unmetDependencyText)], steps.length)}
-Automatic continuation stops in this state. Resolve the blocked step, or revise wrong dependsOn with update_plan.${saved}`;
-  }
+  return PlanSchedule.$match(planSchedule(steps), {
+    finished: () => saved,
+    runnable: ({ ready }) =>
+      `\nReady steps (pending with every dependency completed): ${ready.join(", ") || "(none)"}. Continue in_progress steps first, then start a ready step; do not start a step whose dependencies are not completed.${saved}`,
+    stalled: ({ blocked, waiting }) =>
+      `\nNo remaining step can start: every one is blocked or waits on an unfinished dependency.
+${compactList([...blocked.map((id) => `${id} [blocked]`), ...waiting.map(unmetDependencyText)], steps.length)}
+Automatic continuation stops in this state. Resolve the blocked step, or revise wrong dependsOn with update_plan.${saved}`,
+  });
 };
 
-const ruleSource = (rule: ResolvedRules["rules"][number]) => {
-  switch (rule.source.kind) {
-    case "builtin":
-      return `builtin:${rule.source.name}`;
-    case "project":
-      return `project:${rule.source.path}#${rule.source.contentHash.slice(0, 12)}`;
-    case "skill":
-      return `skill:${rule.source.scope}/${rule.source.name}#${rule.source.contentHash.slice(0, 12)}`;
-    case "mcp-resource":
-    case "mcp-prompt":
-      return `${rule.source.kind}:${rule.source.serverId}/${rule.source.name}#${rule.source.contentHash.slice(0, 12)}`;
-  }
-};
+const ruleSource = (rule: ResolvedRules["rules"][number]) =>
+  RuleSource.match(rule.source, {
+    builtin: ({ name }) => `builtin:${name}`,
+    project: ({ path, contentHash }) => `project:${path}#${contentHash.slice(0, 12)}`,
+    skill: ({ scope, name, contentHash }) => `skill:${scope}/${name}#${contentHash.slice(0, 12)}`,
+    "mcp-resource": ({ serverId, name, contentHash }) =>
+      `mcp-resource:${serverId}/${name}#${contentHash.slice(0, 12)}`,
+    "mcp-prompt": ({ serverId, name, contentHash }) =>
+      `mcp-prompt:${serverId}/${name}#${contentHash.slice(0, 12)}`,
+  });
 
 export const workflowInstructions: {
   (

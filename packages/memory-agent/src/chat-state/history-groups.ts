@@ -1,4 +1,5 @@
 import {
+  Data,
   MutableHashMap,
   MutableHashSet,
   Option,
@@ -13,13 +14,17 @@ export interface HistoryGroup {
   readonly messages: ModelMessage[];
 }
 
-export type HistoryGroupingResult =
-  | { readonly type: "ready"; readonly groups: HistoryGroup[] }
-  | { readonly type: "id-collision"; readonly id: string };
+export type HistoryGroupingResult = Data.TaggedEnum<{
+  ready: { readonly groups: HistoryGroup[] };
+  "id-collision": { readonly id: string };
+}>;
+export const HistoryGroupingResult = Data.taggedEnum<HistoryGroupingResult>();
 
-export type HistoryMessagesResult =
-  | { readonly type: "ready"; readonly messages: ModelMessage[] }
-  | { readonly type: "id-collision"; readonly id: string };
+export type HistoryMessagesResult = Data.TaggedEnum<{
+  ready: { readonly messages: ModelMessage[] };
+  "id-collision": { readonly id: string };
+}>;
+export const HistoryMessagesResult = Data.taggedEnum<HistoryMessagesResult>();
 
 /** Preserve released fallback cursors unless an explicit ID already reserves them. */
 export const historyProjectionMessages: {
@@ -82,7 +87,7 @@ function historyProjectionMessagesBody(
       : undefined;
     let id = retained ?? base;
     if (retained !== undefined && MutableHashSet.has(reservedIds, retained))
-      return { type: "id-collision", id: retained };
+      return HistoryMessagesResult["id-collision"]({ id: retained });
     let suffix = 0;
     while (MutableHashSet.has(reservedIds, id)) {
       id = `${base}:fallback:${suffix++}`;
@@ -90,7 +95,7 @@ function historyProjectionMessagesBody(
     MutableHashSet.add(reservedIds, id);
     normalized.push({ ...message, id });
   }
-  return { type: "ready", messages: normalized };
+  return HistoryMessagesResult.ready({ messages: normalized });
 }
 
 /**
@@ -123,14 +128,14 @@ function groupHistoryMessagesBody(
       id = `history-legacy-${namespace}-${index}`;
       // Never re-key an earlier page because a newly appended explicit ID collides.
       // The storage caller must handle this tagged result, not publish ambiguous cursors.
-      if (MutableHashSet.has(reservedIds, id)) return { type: "id-collision", id };
+      if (MutableHashSet.has(reservedIds, id)) return HistoryGroupingResult["id-collision"]({ id });
       MutableHashSet.add(reservedIds, id);
     }
     // Stable derived IDs allow the SDK to return retained UI IDs as cursors.
     // Reused assistant IDs become SDK segments only in this derived view.
     if (original.role === "assistant" && assistant !== undefined && id === assistant.id) {
       id = `${assistant.id}-segment-history-${index}`;
-      if (MutableHashSet.has(reservedIds, id)) return { type: "id-collision", id };
+      if (MutableHashSet.has(reservedIds, id)) return HistoryGroupingResult["id-collision"]({ id });
       MutableHashSet.add(reservedIds, id);
     }
     const message = original.id === id ? original : { ...original, id };
@@ -158,8 +163,9 @@ function groupHistoryMessagesBody(
   }
   const seen = MutableHashSet.empty<string>();
   for (const group of groups) {
-    if (MutableHashSet.has(seen, group.id)) return { type: "id-collision", id: group.id };
+    if (MutableHashSet.has(seen, group.id))
+      return HistoryGroupingResult["id-collision"]({ id: group.id });
     MutableHashSet.add(seen, group.id);
   }
-  return { type: "ready", groups };
+  return HistoryGroupingResult.ready({ groups });
 }

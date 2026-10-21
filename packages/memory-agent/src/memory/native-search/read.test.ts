@@ -1,8 +1,8 @@
 import { withTestPlatform } from "../../../tests/support/platform.ts";
 import { Effect, FileSystem, Path } from "effect";
 import { expect, it } from "vite-plus/test";
-import { makeNativeOwner } from "./client.ts";
-import { NativeOwnerFailed } from "./worker-protocol.ts";
+import { makeNativeOwner, OwnerInspection } from "./client.ts";
+import { NativeOwnerFailed, OwnerCommand, OwnerReply } from "./worker-protocol.ts";
 import {
   createApplicationReadFixture,
   createReadFixture,
@@ -79,21 +79,23 @@ it(
             matrix[384] = 0.8;
             matrix[385] = 0.6;
             matrix.set(query, 768);
-            yield* owner.execute({
-              kind: "add",
-              epoch: owner.epoch,
-              requestId: "seed",
-              vectors: matrix,
-              ids: ["1", "2", "3"],
-            });
-            const oldVectors = yield* owner.execute({
-              kind: "vector-search",
-              epoch: owner.epoch,
-              requestId: "old-vector",
-              query,
-              k: 2,
-              allowedIds: ["1", "2"],
-            });
+            yield* owner.execute(
+              OwnerCommand.cases.add.make({
+                epoch: owner.epoch,
+                requestId: "seed",
+                vectors: matrix,
+                ids: ["1", "2", "3"],
+              }),
+            );
+            const oldVectors = yield* owner.execute(
+              OwnerCommand.cases["vector-search"].make({
+                epoch: owner.epoch,
+                requestId: "old-vector",
+                query,
+                k: 2,
+                allowedIds: ["1", "2"],
+              }),
+            );
             const input: NativeReadInput = {
               allowedProjects: ["allowed"],
               embedder: "fixture",
@@ -111,12 +113,13 @@ it(
               outputBudgetBytes: 1_048_576,
             };
             const search = (id: string, patch: Partial<NativeReadInput> = {}) =>
-              owner.execute({
-                kind: "memory-search",
-                epoch: owner.epoch,
-                requestId: id,
-                input: { ...input, ...patch },
-              });
+              owner.execute(
+                OwnerCommand.cases["memory-search"].make({
+                  epoch: owner.epoch,
+                  requestId: id,
+                  input: { ...input, ...patch },
+                }),
+              );
             const oversized = yield* Effect.flip(
               search("too-many-empty-terms", {
                 shortTerms: Array.from({ length: 200_000 }, () => ""),
@@ -125,10 +128,15 @@ it(
             expect(oversized).toMatchObject({ reason: "input-budget" });
             // The preceding completed reply may still occupy its cleanup slot; the
             // rejected input must not add a queued request.
-            expect(yield* owner.inspect).toMatchObject({ kind: "open", queued: 0 });
+            const inspected = yield* owner.inspect;
+            expect(OwnerInspection.$is("open")(inspected)).toBe(true);
+            expect(inspected).toMatchObject({ queued: 0 });
             const reply = yield* search("scoped");
-            expect(reply).toMatchObject({ kind: "memory-result", result: { kind: "success" } });
-            if (reply.kind !== "memory-result" || oldVectors.kind !== "vector-hits")
+            expect(reply).toMatchObject({ result: { kind: "success" } });
+            if (
+              !OwnerReply.guards["memory-result"](reply) ||
+              !OwnerReply.guards["vector-hits"](oldVectors)
+            )
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
             expect(reply.result.vectorUnavailable).toBe(false);
             expect(reply.result.vectorSeqs).toEqual(oldVectors.ids);
@@ -141,7 +149,7 @@ it(
             expect(reply.result.unindexed).toBe(legacy.unindexed);
             expect(reply.result.uninterpreted).toBe(legacy.uninterpreted);
             const one = yield* search("one", { vectorK: 1 });
-            if (one.kind !== "memory-result")
+            if (!OwnerReply.guards["memory-result"](one))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
             expect(one.result.vectorIds).toEqual(["alpha"]);
             expect(one.result.sqliteExecutions).toBe(reply.result.sqliteExecutions);
@@ -155,15 +163,16 @@ it(
               ).run(100 + row, `candidate-${row}`);
               db.prepare("INSERT INTO node_vectors VALUES (?, 'fixture')").run(100 + row);
             }
-            yield* owner.execute({
-              kind: "add",
-              epoch: owner.epoch,
-              requestId: "grow",
-              vectors: extra,
-              ids: extraIds,
-            });
+            yield* owner.execute(
+              OwnerCommand.cases.add.make({
+                epoch: owner.epoch,
+                requestId: "grow",
+                vectors: extra,
+                ids: extraIds,
+              }),
+            );
             const grown = yield* search("grown");
-            if (grown.kind !== "memory-result")
+            if (!OwnerReply.guards["memory-result"](grown))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
             expect(grown.result.kind).toBe("success");
             expect(grown.result.candidateCount).toBe(52);
@@ -172,8 +181,8 @@ it(
             expect(grown.result.outputLogicalBytes).toBeLessThan(512);
             expect(grown.result.inputLogicalBytes).toBe(reply.result.inputLogicalBytes);
             const expired = yield* search("expired", { remainingMs: 0 });
+            expect(OwnerReply.guards["memory-result"](expired)).toBe(true);
             expect(expired).toMatchObject({
-              kind: "memory-result",
               result: {
                 kind: "budget-exceeded",
                 vectorUnavailable: false,
@@ -184,8 +193,8 @@ it(
               },
             });
             const empty = yield* search("empty", { allowedProjects: [] });
+            expect(OwnerReply.guards["memory-result"](empty)).toBe(true);
             expect(empty).toMatchObject({
-              kind: "memory-result",
               result: {
                 kind: "success",
                 vectorIds: [],
@@ -196,8 +205,8 @@ it(
               },
             });
             const small = yield* search("output", { outputBudgetBytes: 1 });
+            expect(OwnerReply.guards["memory-result"](small)).toBe(true);
             expect(small).toMatchObject({
-              kind: "memory-result",
               result: { kind: "budget-exceeded", vectorIds: [], textIds: [], morphIds: [] },
             });
           }),

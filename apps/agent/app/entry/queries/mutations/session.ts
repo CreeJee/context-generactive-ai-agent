@@ -258,9 +258,11 @@ function useCancelRunMutationBody(projectId: string, sessionId: string, holder: 
   });
 }
 
-type WorkflowChange =
-  | { readonly kind: "phase"; readonly phase: WorkflowPhase }
-  | { readonly kind: "control"; readonly action: WorkflowAction };
+export type WorkflowChange = Data.TaggedEnum<{
+  phase: { readonly phase: WorkflowPhase };
+  control: { readonly action: WorkflowAction };
+}>;
+export const WorkflowChange = Data.taggedEnum<WorkflowChange>();
 
 export const useWorkflowMutation: {
   (
@@ -271,14 +273,10 @@ export const useWorkflowMutation: {
 function useWorkflowMutationBody(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (change: WorkflowChange) => {
-      switch (change.kind) {
-        case "phase":
-          return api.setWorkflowPhase(sessionId, holder, change.phase);
-        case "control":
-          return api.controlWorkflow(sessionId, holder, change.action);
-      }
-    },
+    mutationFn: WorkflowChange.$match({
+      phase: ({ phase }) => api.setWorkflowPhase(sessionId, holder, phase),
+      control: ({ action }) => api.controlWorkflow(sessionId, holder, action),
+    }),
     onSuccess: () =>
       client.invalidateQueries({
         queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,

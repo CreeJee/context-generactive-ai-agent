@@ -2,7 +2,7 @@ import { describe, expect, test } from "vite-plus/test";
 import type { JsonValue } from "../src/json.ts";
 import { readClaudeCodeLine } from "../src/imports/claude-code.ts";
 import { codexReader } from "../src/imports/codex.ts";
-import type { TranscriptItem } from "../src/imports/items.ts";
+import { TranscriptItem } from "../src/imports/items.ts";
 
 /** A transcript line as the tools write it; the readers take it serialized, as it is on disk. */
 type TranscriptLine = { readonly [key: string]: JsonValue };
@@ -11,9 +11,16 @@ const claudeLine = (line: TranscriptLine) => readClaudeCodeLine(JSON.stringify(l
 const readCodex = codexReader("01a0-session");
 const codexLine = (line: TranscriptLine) => readCodex(JSON.stringify(line));
 
-const kinds = (items: readonly TranscriptItem[]) => items.map((item) => item.kind);
-const only = (items: readonly TranscriptItem[], kind: TranscriptItem["kind"]) =>
-  items.filter((item) => item.kind === kind);
+const kindOf = TranscriptItem.$match({
+  session: () => "session",
+  message: () => "message",
+  tool_call: () => "tool_call",
+  tool_result: () => "tool_result",
+  ignored: () => "ignored",
+});
+const kinds = (items: readonly TranscriptItem[]) => items.map(kindOf);
+const only = (items: readonly TranscriptItem[], kind: Parameters<typeof TranscriptItem.$is>[0]) =>
+  items.filter(TranscriptItem.$is(kind));
 
 describe("Claude Code transcripts", () => {
   const userLine = {
@@ -29,21 +36,23 @@ describe("Claude Code transcripts", () => {
   test("reads a statement with the conversation it belongs to", () => {
     const items = claudeLine(userLine);
     expect(kinds(items)).toEqual(["session", "message"]);
-    expect(items[0]).toEqual({
-      kind: "session",
-      externalId: "s-1",
-      cwd: "/Users/someone/work/app",
-      startedAt: "2026-09-01T10:00:00.000Z",
-      repository: null,
-      branch: "feature/recall",
-    });
-    expect(items[1]).toEqual({
-      kind: "message",
-      role: "user",
-      externalId: "u-1",
-      at: "2026-09-01T10:00:00.000Z",
-      text: "회상 기준을 정하자",
-    });
+    expect(items[0]).toEqual(
+      TranscriptItem.session({
+        externalId: "s-1",
+        cwd: "/Users/someone/work/app",
+        startedAt: "2026-09-01T10:00:00.000Z",
+        repository: null,
+        branch: "feature/recall",
+      }),
+    );
+    expect(items[1]).toEqual(
+      TranscriptItem.message({
+        role: "user",
+        externalId: "u-1",
+        at: "2026-09-01T10:00:00.000Z",
+        text: "회상 기준을 정하자",
+      }),
+    );
   });
 
   test("splits an assistant turn into its text and each tool call", () => {
@@ -174,15 +183,14 @@ describe("Codex rollouts", () => {
       },
     });
     expect(items).toEqual([
-      {
-        kind: "session",
+      TranscriptItem.session({
         externalId: "01a0-session",
         cwd: "/Users/someone/work/api",
         startedAt: "2026-09-02T01:00:00.000Z",
         repository: { remoteUrl: "git@github.com:someone/api.git", commit: "fb2039f" },
         // A detached HEAD names no branch.
         branch: null,
-      },
+      }),
     ]);
   });
 
@@ -194,13 +202,12 @@ describe("Codex rollouts", () => {
       payload: { type: "message", role: "user", content: [{ type: "input_text", text: "이어서" }] },
     });
     expect(items).toEqual([
-      {
-        kind: "message",
+      TranscriptItem.message({
         role: "user",
         externalId: "01a0-session:7",
         at: "2026-09-02T01:00:02.000Z",
         text: "이어서",
-      },
+      }),
     ]);
   });
 
@@ -216,8 +223,8 @@ describe("Codex rollouts", () => {
         call_id: "call_a",
       },
     });
+    expect(TranscriptItem.$is("tool_call")(call[0])).toBe(true);
     expect(call[0]).toMatchObject({
-      kind: "tool_call",
       toolName: "exec_command",
       toolCallId: "call_a",
       text: 'exec_command {"cmd":"ls","workdir":"/Users/someone/work/api"}',
@@ -235,8 +242,8 @@ describe("Codex rollouts", () => {
         status: "completed",
       },
     });
+    expect(TranscriptItem.$is("tool_call")(patch[0])).toBe(true);
     expect(patch[0]).toMatchObject({
-      kind: "tool_call",
       toolName: "apply_patch",
       text: "apply_patch *** Begin Patch",
       refs: [],
@@ -248,7 +255,8 @@ describe("Codex rollouts", () => {
       type: "response_item",
       payload: { type: "custom_tool_call_output", call_id: "call_b", output: "Exit code: 0" },
     });
-    expect(output[0]).toMatchObject({ kind: "tool_result", toolCallId: "call_b", ok: true });
+    expect(TranscriptItem.$is("tool_result")(output[0])).toBe(true);
+    expect(output[0]).toMatchObject({ toolCallId: "call_b", ok: true });
   });
 
   test("keeps an agent handoff as an assistant statement", () => {
@@ -265,7 +273,8 @@ describe("Codex rollouts", () => {
         ],
       },
     });
-    expect(items[0]).toMatchObject({ kind: "message", role: "assistant", text: "검토 끝" });
+    expect(TranscriptItem.$is("message")(items[0])).toBe(true);
+    expect(items[0]).toMatchObject({ role: "assistant", text: "검토 끝" });
   });
 
   test("drops what the CLI sends as a user message", () => {

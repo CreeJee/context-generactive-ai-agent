@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../../events/app-events.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
@@ -27,15 +27,19 @@ const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
 type Pending = typeof Pending.Type;
 
 /** How one batch is cut before embedding: whole nodes, or the embedder's chunk windows. */
-type Segmentation =
-  | { readonly kind: "whole" }
-  | { readonly kind: "chunked"; readonly spans: readonly (readonly ChunkSpan[])[] };
+type Segmentation = Data.TaggedEnum<{
+  whole: {};
+  chunked: { readonly spans: readonly (readonly ChunkSpan[])[] };
+}>;
+const Segmentation = Data.taggedEnum<Segmentation>();
 
 /** What the publication commit does with one node, decided in the commit's own transaction. */
-type NodeOutcome =
-  | { readonly kind: "indexed"; readonly seq: number }
-  | { readonly kind: "stale-chunks"; readonly vectorIds: readonly number[] }
-  | { readonly kind: "stale-whole"; readonly seq: number };
+type NodeOutcome = Data.TaggedEnum<{
+  indexed: { readonly seq: number };
+  "stale-chunks": { readonly vectorIds: readonly number[] };
+  "stale-whole": { readonly seq: number };
+}>;
+const NodeOutcome = Data.taggedEnum<NodeOutcome>();
 
 const failed = (reason: IndexingError["reason"]) => (cause: unknown) =>
   IndexingError.make({ reason, cause });
@@ -120,30 +124,26 @@ const make = Effect.gen(function* () {
     selectUnindexed(node.seq).pipe(
       Effect.map((current): NodeOutcome => {
         if (Option.exists(current, ({ text }) => text === node.text))
-          return { kind: "indexed", seq: node.seq };
-        switch (segmentation.kind) {
-          case "whole":
-            return { kind: "stale-whole", seq: node.seq };
-          case "chunked":
-            return { kind: "stale-chunks", vectorIds };
-        }
+          return NodeOutcome.indexed({ seq: node.seq });
+        return Segmentation.$match(segmentation, {
+          whole: () => NodeOutcome["stale-whole"]({ seq: node.seq }),
+          chunked: () => NodeOutcome["stale-chunks"]({ vectorIds }),
+        });
       }),
     );
 
   /** Writes one outcome inside the caller's transaction. */
-  const settle = (outcome: NodeOutcome) => {
-    switch (outcome.kind) {
-      case "indexed":
-        return sql`INSERT INTO node_vectors VALUES (${outcome.seq}, ${embedder.identity})`;
-      case "stale-chunks":
-        // The deletion trigger preserves removal IDs even if a purge already cascaded these rows.
-        // Uncommitted chunks never enter the search allowlist.
-        return sql`DELETE FROM node_vector_chunks WHERE vector_id IN ${sql.in(outcome.vectorIds)}`;
-      case "stale-whole":
-        return sql`INSERT OR IGNORE INTO memory_graph_vector_removals
-          VALUES (${outcome.seq}, ${embedder.identity})`;
-    }
-  };
+  const settle = NodeOutcome.$match({
+    indexed: (outcome) =>
+      sql`INSERT INTO node_vectors VALUES (${outcome.seq}, ${embedder.identity})`,
+    // The deletion trigger preserves removal IDs even if a purge already cascaded these rows.
+    // Uncommitted chunks never enter the search allowlist.
+    "stale-chunks": (outcome) =>
+      sql`DELETE FROM node_vector_chunks WHERE vector_id IN ${sql.in(outcome.vectorIds)}`,
+    "stale-whole": (outcome) =>
+      sql`INSERT OR IGNORE INTO memory_graph_vector_removals
+          VALUES (${outcome.seq}, ${embedder.identity})`,
+  });
 
   /** Embeds one batch of not-yet-indexed nodes. Returns how many were indexed. */
   const indexBatch = (limit: number) =>
@@ -154,16 +154,16 @@ const make = Effect.gen(function* () {
       // request at a time, and embedding needs the spans: the steps are sequential by data.
       const segmentation: Segmentation =
         embedder.chunks === undefined
-          ? { kind: "whole" }
-          : { kind: "chunked", spans: yield* embedder.chunks(pending.map((node) => node.text)) };
-      const inputs = pending.flatMap((node, row) => {
-        switch (segmentation.kind) {
-          case "whole":
-            return [{ node, ordinal: 0, start: 0, end: node.text.length }];
-          case "chunked":
-            return segmentation.spans[row]!.map((span, ordinal) => ({ node, ordinal, ...span }));
-        }
-      });
+          ? Segmentation.whole()
+          : Segmentation.chunked({
+              spans: yield* embedder.chunks(pending.map((node) => node.text)),
+            });
+      const inputs = pending.flatMap((node, row) =>
+        Segmentation.$match(segmentation, {
+          whole: () => [{ node, ordinal: 0, start: 0, end: node.text.length }],
+          chunked: ({ spans }) => spans[row]!.map((span, ordinal) => ({ node, ordinal, ...span })),
+        }),
+      );
       const embedded = yield* embedder.embed(
         inputs.map(({ node, start, end }) => node.text.slice(start, end)),
       );
@@ -186,20 +186,19 @@ const make = Effect.gen(function* () {
           // marks a fully committed node. Startup removes reserved chunks without that marker.
           // One connection runs a transaction's statements in order, so the inserts are sequential
           // and each RETURNING id lines up with its chunk.
-          const ids = yield* Effect.suspend(() => {
-            switch (segmentation.kind) {
-              case "whole":
-                return Effect.succeed(accepted.map((chunk) => chunk.node.seq));
-              case "chunked":
-                return sql.withTransaction(
+          const ids = yield* Effect.suspend(() =>
+            Segmentation.$match(segmentation, {
+              whole: () => Effect.succeed(accepted.map((chunk) => chunk.node.seq)),
+              chunked: () =>
+                sql.withTransaction(
                   Effect.forEach(accepted, (chunk) =>
                     reserveChunk({ seq: chunk.node.seq, ...chunk }).pipe(
                       Effect.map(({ vector_id }) => vector_id),
                     ),
                   ),
-                );
-            }
-          }).pipe(Effect.mapError(failed("mapping-commit-failed")));
+                ),
+            }),
+          ).pipe(Effect.mapError(failed("mapping-commit-failed")));
           const idsOf = (node: Pending) =>
             accepted.flatMap((chunk, row) => (chunk.node.seq === node.seq ? [ids[row]!] : []));
           return {
@@ -218,7 +217,7 @@ const make = Effect.gen(function* () {
                 Effect.map((outcomes) =>
                   outcomes.reduce(
                     (committed, outcome) =>
-                      outcome.kind === "indexed" ? committed + 1 : committed,
+                      NodeOutcome.$is("indexed")(outcome) ? committed + 1 : committed,
                     0,
                   ),
                 ),

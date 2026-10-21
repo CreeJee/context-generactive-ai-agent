@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Data, Schema } from "effect";
 import { cn } from "cn";
 import { CheckIcon, PencilIcon, PlugIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useId, useState } from "react";
@@ -324,11 +324,13 @@ function ModelForm({
   );
 }
 
-type CardMode =
-  | { readonly type: "view" }
-  | { readonly type: "rename" }
-  | { readonly type: "connect" }
-  | { readonly type: "model"; readonly initial: CompatibleModelInput };
+type CardMode = Data.TaggedEnum<{
+  view: {};
+  rename: {};
+  connect: {};
+  model: { readonly initial: CompatibleModelInput };
+}>;
+const CardMode = Data.taggedEnum<CardMode>();
 
 function EndpointCard({
   account,
@@ -341,7 +343,7 @@ function EndpointCard({
   busy: boolean;
   handlers: CompatibleHandlers;
 }) {
-  const [mode, setMode] = useState<CardMode>({ type: "view" });
+  const [mode, setMode] = useState<CardMode>(CardMode.view());
   const [label, setLabel] = useState(account.label);
   const [baseUrl, setBaseUrl] = useState(account.baseUrl);
   const [apiKey, setApiKey] = useState("");
@@ -354,7 +356,7 @@ function EndpointCard({
     return task().then(
       () => {
         if (done !== undefined) setMessage(done);
-        setMode({ type: "view" });
+        setMode(CardMode.view());
       },
       (failure: Error) => setError(compatibleErrorMessage(failure)),
     );
@@ -369,7 +371,7 @@ function EndpointCard({
       )}
       aria-label={`${account.label} (OpenAI 호환)`}
     >
-      {mode.type === "rename" ? (
+      {CardMode.$is("rename")(mode) ? (
         <form
           className="flex items-center gap-1"
           onSubmit={(event) => {
@@ -383,7 +385,7 @@ function EndpointCard({
             value={label}
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
-            onKeyDown={(event) => event.key === "Escape" && setMode({ type: "view" })}
+            onKeyDown={(event) => event.key === "Escape" && setMode(CardMode.view())}
             autoFocus
           />
           <Button type="submit" variant="ghost" size="icon" aria-label="이름 저장">
@@ -396,7 +398,7 @@ function EndpointCard({
             aria-label="이름 변경 취소"
             onClick={() => {
               setLabel(account.label);
-              setMode({ type: "view" });
+              setMode(CardMode.view());
             }}
           >
             <XIcon />
@@ -417,7 +419,7 @@ function EndpointCard({
             variant="ghost-muted"
             size="sm"
             aria-label={`${account.label} 이름 변경`}
-            onClick={() => setMode({ type: "rename" })}
+            onClick={() => setMode(CardMode.rename())}
           >
             <PencilIcon /> 이름 변경
           </Button>
@@ -425,7 +427,7 @@ function EndpointCard({
             variant="ghost-muted"
             size="sm"
             aria-label={`${account.label} 연결 수정`}
-            onClick={() => setMode({ type: "connect" })}
+            onClick={() => setMode(CardMode.connect())}
           >
             <PlugIcon /> 연결
           </Button>
@@ -443,7 +445,7 @@ function EndpointCard({
           </Button>
         </div>
       )}
-      {mode.type === "connect" && (
+      {CardMode.$is("connect")(mode) && (
         <form
           aria-label={`${account.label} 연결`}
           className="flex flex-col gap-3 rounded-md border border-dashed p-3"
@@ -473,7 +475,7 @@ function EndpointCard({
             onRemoveKey={setRemoveKey}
           />
           <div className="flex justify-end gap-1">
-            <Button type="button" variant="ghost-muted" onClick={() => setMode({ type: "view" })}>
+            <Button type="button" variant="ghost-muted" onClick={() => setMode(CardMode.view())}>
               취소
             </Button>
             <Button type="submit" variant="outline" disabled={busy}>
@@ -513,7 +515,7 @@ function EndpointCard({
               aria-label={`${model.id} 수정`}
               onClick={() => {
                 const { reasoning: _reasoning, ...input } = model;
-                setMode({ type: "model", initial: input });
+                setMode(CardMode.model({ initial: input }));
               }}
             >
               <PencilIcon />
@@ -537,7 +539,7 @@ function EndpointCard({
           </li>
         )}
       </ul>
-      {mode.type === "model" ? (
+      {CardMode.$is("model")(mode) ? (
         <ModelForm
           key={mode.initial.id}
           initial={mode.initial}
@@ -549,14 +551,14 @@ function EndpointCard({
               "모델을 저장했어요.",
             )
           }
-          onClose={() => setMode({ type: "view" })}
+          onClose={() => setMode(CardMode.view())}
         />
       ) : (
         <div className="flex gap-1">
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setMode({ type: "model", initial: newModel() })}
+            onClick={() => setMode(CardMode.model({ initial: newModel() }))}
           >
             <PlusIcon /> 모델 추가
           </Button>

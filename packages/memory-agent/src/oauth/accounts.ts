@@ -1,4 +1,14 @@
-import { Context, DateTime, Effect, Layer, MutableHashMap, Option, Ref, Schema } from "effect";
+import {
+  Context,
+  Data,
+  DateTime,
+  Effect,
+  Layer,
+  MutableHashMap,
+  Option,
+  Ref,
+  Schema,
+} from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
@@ -107,9 +117,11 @@ interface ProfileSnapshot {
 
 // Local server process only: no token or account label is retained. SQLite remains the source
 // for persisted profiles; this transient guard protects vault removal during a live model run.
-type ProfileRunState =
-  | { readonly status: "active"; readonly count: number }
-  | { readonly status: "removing" };
+type ProfileRunState = Data.TaggedEnum<{
+  active: { readonly count: number };
+  removing: {};
+}>;
+const ProfileRunState = Data.taggedEnum<ProfileRunState>();
 const runKey = (provider: OAuthProvider, id: string) => `${provider}:${id}`;
 
 const make = Effect.gen(function* () {
@@ -164,38 +176,25 @@ const make = Effect.gen(function* () {
   const runState = (provider: OAuthProvider, id: string) =>
     Option.getOrUndefined(MutableHashMap.get(runs, runKey(provider, id)));
   const inUse = (provider: OAuthProvider, id: string) =>
-    runState(provider, id)?.status === "active";
+    ProfileRunState.$is("active")(runState(provider, id));
   const removing = (provider: OAuthProvider, id: string) =>
-    runState(provider, id)?.status === "removing";
+    ProfileRunState.$is("removing")(runState(provider, id));
 
   /** Synchronous admission at run creation, an SDK boundary. Always call the release. */
   const acquireRun = (provider: OAuthProvider, id: string): (() => void) => {
     const name = runKey(provider, id);
     const current = runState(provider, id);
-    let count = 0;
-    switch (current?.status) {
-      case "removing":
-        throw rejected("oauth_profile_removing");
-      case "active":
-        count = current.count;
-        break;
-      case undefined:
-        break;
-    }
-    MutableHashMap.set(runs, name, { status: "active", count: count + 1 });
+    if (ProfileRunState.$is("removing")(current)) throw rejected("oauth_profile_removing");
+    const count = ProfileRunState.$is("active")(current) ? current.count : 0;
+    MutableHashMap.set(runs, name, ProfileRunState.active({ count: count + 1 }));
     let released = false;
     return () => {
       if (released) return;
       released = true;
       const active = Option.getOrUndefined(MutableHashMap.get(runs, name));
-      switch (active?.status) {
-        case "active":
-          if (active.count <= 1) MutableHashMap.remove(runs, name);
-          else MutableHashMap.set(runs, name, { status: "active", count: active.count - 1 });
-          break;
-        default:
-          break;
-      }
+      if (!ProfileRunState.$is("active")(active)) return;
+      if (active.count <= 1) MutableHashMap.remove(runs, name);
+      else MutableHashMap.set(runs, name, ProfileRunState.active({ count: active.count - 1 }));
     };
   };
 
@@ -210,11 +209,12 @@ const make = Effect.gen(function* () {
         if (inUse(provider, id)) return Effect.fail(rejected("oauth_profile_in_use"));
         if (
           [...runs].some(
-            ([entry, state]) => entry.startsWith(`${provider}:`) && state.status === "removing",
+            ([entry, state]) =>
+              entry.startsWith(`${provider}:`) && ProfileRunState.$is("removing")(state),
           )
         )
           return Effect.fail(rejected("oauth_profile_removing"));
-        const state: ProfileRunState = { status: "removing" };
+        const state: ProfileRunState = ProfileRunState.removing();
         MutableHashMap.set(runs, runKey(provider, id), state);
         return Effect.succeed(state);
       }),

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { modelMessagesToUIMessages, type ModelMessage } from "@tanstack/ai";
 import { describe, expect, it } from "vite-plus/test";
-import { groupHistoryMessages } from "./history-groups.ts";
+import { groupHistoryMessages, HistoryGroupingResult } from "./history-groups.ts";
 import {
   historyProjectionRollback,
   historyProjectionSchema,
@@ -27,26 +27,25 @@ function fixture() {
 }
 
 function publish(db: DatabaseSync, threadId: string, messages: ModelMessage[]) {
-  const grouping = groupHistoryMessages(threadId, messages);
-  switch (grouping.type) {
-    case "id-collision":
-      throw new Error(`Unexpected fixture collision: ${grouping.id}`);
-    case "ready": {
-      db.exec("SAVEPOINT history_fixture");
-      try {
-        db.prepare(releasedWriter).run(threadId, JSON.stringify(messages), 1);
-        db.prepare(sql.removeGroups).run(threadId);
-        const insert = db.prepare(sql.insertGroup);
-        for (const [ordinal, group] of grouping.groups.entries()) {
-          insert.run(threadId, ordinal, group.id, JSON.stringify(group.messages));
-        }
-        db.prepare(sql.publish).run(threadId);
-        db.exec("RELEASE history_fixture");
-      } catch (error) {
-        db.exec("ROLLBACK TO history_fixture; RELEASE history_fixture");
-        throw error;
-      }
+  const groups = HistoryGroupingResult.$match(groupHistoryMessages(threadId, messages), {
+    "id-collision": ({ id }) => {
+      throw new Error(`Unexpected fixture collision: ${id}`);
+    },
+    ready: ({ groups }) => groups,
+  });
+  db.exec("SAVEPOINT history_fixture");
+  try {
+    db.prepare(releasedWriter).run(threadId, JSON.stringify(messages), 1);
+    db.prepare(sql.removeGroups).run(threadId);
+    const insert = db.prepare(sql.insertGroup);
+    for (const [ordinal, group] of groups.entries()) {
+      insert.run(threadId, ordinal, group.id, JSON.stringify(group.messages));
     }
+    db.prepare(sql.publish).run(threadId);
+    db.exec("RELEASE history_fixture");
+  } catch (error) {
+    db.exec("ROLLBACK TO history_fixture; RELEASE history_fixture");
+    throw error;
   }
 }
 
@@ -351,54 +350,49 @@ describe("isolated history projection SQLite contract", () => {
       const source = JSON.stringify(original);
       publish(db, "a", original);
       const grouping = groupHistoryMessages("a", original);
-      expect(grouping.type).toBe("ready");
-      switch (grouping.type) {
-        case "id-collision":
+      expect(HistoryGroupingResult.$is("ready")(grouping)).toBe(true);
+      const groups = HistoryGroupingResult.$match(grouping, {
+        "id-collision": () => {
           throw new Error("Unexpected fixture collision");
-        case "ready": {
-          const replaceFromSnapshot = () => {
-            db.prepare(sql.markUnready).run("a");
-            db.prepare(sql.removeGroups).run("a");
-            for (const [ordinal, group] of grouping.groups.entries()) {
-              db.prepare(sql.insertGroup).run(
-                "a",
-                ordinal,
-                group.id,
-                JSON.stringify(group.messages),
-              );
-            }
-            return db.prepare(sql.publishIfCurrent).run("a", source).changes;
-          };
-          db.exec("SAVEPOINT backfill_fixture");
-          expect(replaceFromSnapshot()).toBe(1);
-          db.exec("RELEASE backfill_fixture");
-          expect(db.prepare(sql.initial).all("a", 50)).toHaveLength(5);
-
-          // A newer complete projection arrives while the older source is being prepared.
-          // Timestamp remains identical; checking updated_at alone would accept stale data.
-          const latest = transcript(6);
-          publish(db, "a", latest);
-          db.exec("SAVEPOINT backfill_fixture");
-          expect(replaceFromSnapshot()).toBe(0);
-          expect(db.prepare(sql.readiness).get("a")?.ready).toBe(0);
-          expect(db.prepare(sql.initial).all("a", 50)).toEqual([]);
-          db.exec("ROLLBACK TO backfill_fixture; RELEASE backfill_fixture");
-          expect(db.prepare(sql.readiness).get("a")?.ready).toBe(1);
-          expect(db.prepare(sql.initial).all("a", 50)).toHaveLength(6);
-          expect(
-            db.prepare("SELECT messages FROM chat_threads WHERE thread_id = ?").get("a")?.messages,
-          ).toBe(JSON.stringify(latest));
-
-          // A source removed during preparation must not be resurrected by backfill.
-          db.prepare("DELETE FROM chat_threads WHERE thread_id = ?").run("a");
-          db.exec("SAVEPOINT backfill_fixture");
-          expect(replaceFromSnapshot()).toBe(0);
-          db.exec("ROLLBACK TO backfill_fixture; RELEASE backfill_fixture");
-          expect(db.prepare(sql.readiness).get("a")).toBeUndefined();
-          expect(db.prepare(sql.cursor).get("a", "message-0")).toBeUndefined();
-          expect(db.prepare(sql.initial).all("a", 50)).toEqual([]);
+        },
+        ready: ({ groups }) => groups,
+      });
+      const replaceFromSnapshot = () => {
+        db.prepare(sql.markUnready).run("a");
+        db.prepare(sql.removeGroups).run("a");
+        for (const [ordinal, group] of groups.entries()) {
+          db.prepare(sql.insertGroup).run("a", ordinal, group.id, JSON.stringify(group.messages));
         }
-      }
+        return db.prepare(sql.publishIfCurrent).run("a", source).changes;
+      };
+      db.exec("SAVEPOINT backfill_fixture");
+      expect(replaceFromSnapshot()).toBe(1);
+      db.exec("RELEASE backfill_fixture");
+      expect(db.prepare(sql.initial).all("a", 50)).toHaveLength(5);
+
+      // A newer complete projection arrives while the older source is being prepared.
+      // Timestamp remains identical; checking updated_at alone would accept stale data.
+      const latest = transcript(6);
+      publish(db, "a", latest);
+      db.exec("SAVEPOINT backfill_fixture");
+      expect(replaceFromSnapshot()).toBe(0);
+      expect(db.prepare(sql.readiness).get("a")?.ready).toBe(0);
+      expect(db.prepare(sql.initial).all("a", 50)).toEqual([]);
+      db.exec("ROLLBACK TO backfill_fixture; RELEASE backfill_fixture");
+      expect(db.prepare(sql.readiness).get("a")?.ready).toBe(1);
+      expect(db.prepare(sql.initial).all("a", 50)).toHaveLength(6);
+      expect(
+        db.prepare("SELECT messages FROM chat_threads WHERE thread_id = ?").get("a")?.messages,
+      ).toBe(JSON.stringify(latest));
+
+      // A source removed during preparation must not be resurrected by backfill.
+      db.prepare("DELETE FROM chat_threads WHERE thread_id = ?").run("a");
+      db.exec("SAVEPOINT backfill_fixture");
+      expect(replaceFromSnapshot()).toBe(0);
+      db.exec("ROLLBACK TO backfill_fixture; RELEASE backfill_fixture");
+      expect(db.prepare(sql.readiness).get("a")).toBeUndefined();
+      expect(db.prepare(sql.cursor).get("a", "message-0")).toBeUndefined();
+      expect(db.prepare(sql.initial).all("a", 50)).toEqual([]);
     } finally {
       db.close();
     }

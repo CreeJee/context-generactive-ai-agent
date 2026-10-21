@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import { Clock, Context, Crypto, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Context, Crypto, Data, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { decodeFullLoopValue } from "./full-loop-codec.ts";
 import { GoalExecutionPayload } from "../workflow/goal-execution-contracts.ts";
@@ -173,7 +173,61 @@ type BlockReason =
   | "work_outstanding"
   | "assessment_changed"
   | "confirmation_conflict";
-const blocked = (reason: BlockReason) => ({ type: "blocked" as const, reason });
+type Blocked = { readonly reason: BlockReason };
+type NoReplay = "new_run_only_no_replay";
+
+/** The owner's reading of the run's records; `eligible` keeps the evidence a receipt stores. */
+type Assessment = Data.TaggedEnum<{
+  blocked: Blocked;
+  eligible: {
+    readonly assessmentId: string;
+    readonly row: typeof Row.Type;
+    readonly operation: typeof Operation.Type;
+    readonly authorization: typeof Operation.Type;
+    readonly execution: typeof Execution.Type;
+    readonly call: typeof Call.Type;
+  };
+}>;
+const Assessment = Data.taggedEnum<Assessment>();
+
+/** An operator preview. An `eligible` one also names the tool and arguments of the uncertain read. */
+export type ReadRecoveryPreview = Data.TaggedEnum<{
+  blocked: Blocked;
+  eligible: {
+    readonly assessmentId: string;
+    readonly runId: string;
+    readonly operationId: number;
+    readonly disposition: NoReplay;
+    readonly originalExceptionAvailable: false;
+  };
+  recovered: {
+    readonly receiptId: string;
+    readonly assessmentId: string;
+    readonly disposition: NoReplay;
+  };
+}>;
+export const ReadRecoveryPreview = Data.taggedEnum<ReadRecoveryPreview>();
+
+/** Whether the session admits a new run after a `recovered` preview. */
+export type ReadRecoveryAdmission = Data.TaggedEnum<{
+  ready: {};
+  blocked: { readonly reason: string };
+}>;
+export const ReadRecoveryAdmission = Data.taggedEnum<ReadRecoveryAdmission>();
+
+export type ReadRecoveryConfirmResult = Data.TaggedEnum<{
+  blocked: Blocked;
+  recovered: { readonly receiptId: string; readonly disposition: NoReplay };
+}>;
+export const ReadRecoveryConfirmResult = Data.taggedEnum<ReadRecoveryConfirmResult>();
+
+export type ReadRecoveryRevokeResult = Data.TaggedEnum<{
+  blocked: Blocked;
+  revoked: { readonly receiptId: string };
+}>;
+export const ReadRecoveryRevokeResult = Data.taggedEnum<ReadRecoveryRevokeResult>();
+
+const blocked = (reason: BlockReason) => Assessment.blocked({ reason });
 const digest = (value: string) => sha256(value);
 const parse = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, value: string) =>
   Schema.decodeOption(Schema.fromJsonString(schema))(value);
@@ -316,40 +370,35 @@ export const makeOwnerReadRecovery = Effect.gen(function* () {
       return blocked("execution_failure_mismatch");
     if (guards.outstanding !== 0) return blocked("work_outstanding");
     const assessmentId = digest(JSON.stringify([policy, row, operation, authorization, execution]));
-    return {
-      type: "eligible" as const,
+    return Assessment.eligible({
       assessmentId,
       row,
       operation,
       authorization,
       execution,
       call: call.value,
-    };
+    });
   };
-  const publicAssessment = (result: ReturnType<typeof assess>) => {
-    switch (result.type) {
-      case "blocked":
-        return result;
-      case "eligible": {
-        const base = {
-          type: "eligible" as const,
-          assessmentId: result.assessmentId,
-          runId: result.row.run_id,
-          operationId: result.operation.operation_id,
-          disposition: "new_run_only_no_replay" as const,
-          originalExceptionAvailable: false as const,
-        };
-        switch (result.call.name) {
-          case "get_background_result":
-            return { ...base, tool: result.call.name, taskId: result.call.args.taskId };
-          case "get_subagent_report":
-            return { ...base, tool: result.call.name, ...result.call.args };
-          case "get_subagent_reports":
-            return { ...base, tool: result.call.name, attempts: result.call.args.attempts };
-        }
+  const publicAssessment = Assessment.$match({
+    blocked: (result) => result,
+    eligible: (result) => {
+      const base = ReadRecoveryPreview.eligible({
+        assessmentId: result.assessmentId,
+        runId: result.row.run_id,
+        operationId: result.operation.operation_id,
+        disposition: "new_run_only_no_replay",
+        originalExceptionAvailable: false,
+      });
+      switch (result.call.name) {
+        case "get_background_result":
+          return { ...base, tool: result.call.name, taskId: result.call.args.taskId };
+        case "get_subagent_report":
+          return { ...base, tool: result.call.name, ...result.call.args };
+        case "get_subagent_reports":
+          return { ...base, tool: result.call.name, attempts: result.call.args.attempts };
       }
-    }
-  };
+    },
+  });
   const persisted = Effect.fnUntraced(function* (sessionId: string, runId: string) {
     return firstReceipt(
       yield* sql`SELECT rr.receipt_id,rr.assessment_id,rr.backup_reference FROM owner_read_recoveries rr
@@ -399,7 +448,7 @@ export const makeOwnerReadRecovery = Effect.gen(function* () {
                 value: { receiptId: validated.receiptId, confirmation: validated.confirmation },
               },
             );
-            return { type: "revoked" as const, receiptId: validated.receiptId };
+            return ReadRecoveryRevokeResult.revoked({ receiptId: validated.receiptId });
           }),
         ).pipe(storage("write"));
       }),
@@ -407,12 +456,11 @@ export const makeOwnerReadRecovery = Effect.gen(function* () {
       Effect.gen(function* () {
         const receipt = yield* persisted(sessionId, runId);
         if (Option.isSome(receipt) && receipt.value !== undefined)
-          return {
-            type: "recovered" as const,
+          return ReadRecoveryPreview.recovered({
             receiptId: receipt.value.receipt_id,
             assessmentId: receipt.value.assessment_id,
-            disposition: "new_run_only_no_replay" as const,
-          };
+            disposition: "new_run_only_no_replay",
+          });
         return publicAssessment(assess(yield* read(sessionId, runId)));
       }).pipe(storage("read")),
     confirm: (sessionId: string, runId: string, input: ReadRecoveryConfirmation) =>
@@ -426,46 +474,39 @@ export const makeOwnerReadRecovery = Effect.gen(function* () {
             if (Option.isSome(receipt) && receipt.value !== undefined)
               return receipt.value.assessment_id === validated.assessmentId &&
                 receipt.value.backup_reference === validated.backup.reference
-                ? {
-                    type: "recovered" as const,
+                ? ReadRecoveryConfirmResult.recovered({
                     receiptId: receipt.value.receipt_id,
-                    disposition: "new_run_only_no_replay" as const,
-                  }
+                    disposition: "new_run_only_no_replay",
+                  })
                 : blocked("confirmation_conflict");
             const result = assess(yield* read(sessionId, runId));
-            switch (result.type) {
-              case "blocked":
-                return result;
-              case "eligible": {
-                if (result.assessmentId !== validated.assessmentId)
-                  return blocked("assessment_changed");
-                yield* sql`INSERT INTO owner_read_recoveries ${sql.insert({
-                  receipt_id: receiptId,
-                  run_id: runId,
-                  session_id: sessionId,
-                  goal_instance_id: result.row.goal_instance_id,
-                  workflow_revision_id: result.row.workflow_revision_id,
-                  operation_id: result.operation.operation_id,
-                  operation_fingerprint: result.operation.fingerprint,
-                  authorization_fingerprint: result.authorization.fingerprint,
-                  run_key: result.operation.run_key,
-                  finished_at: result.row.finished_at,
-                  execution_id: result.execution.execution_id,
-                  execution_result_json: result.execution.result_json,
-                  execution_payload_json: result.execution.payload_json,
-                  assessment_id: result.assessmentId,
-                  policy,
-                  confirmation: validated.confirmation,
-                  backup_reference: validated.backup.reference,
-                  created_at: now,
-                })}`;
-                return {
-                  type: "recovered" as const,
-                  receiptId,
-                  disposition: "new_run_only_no_replay" as const,
-                };
-              }
-            }
+            if (Assessment.$is("blocked")(result)) return result;
+            if (result.assessmentId !== validated.assessmentId)
+              return blocked("assessment_changed");
+            yield* sql`INSERT INTO owner_read_recoveries ${sql.insert({
+              receipt_id: receiptId,
+              run_id: runId,
+              session_id: sessionId,
+              goal_instance_id: result.row.goal_instance_id,
+              workflow_revision_id: result.row.workflow_revision_id,
+              operation_id: result.operation.operation_id,
+              operation_fingerprint: result.operation.fingerprint,
+              authorization_fingerprint: result.authorization.fingerprint,
+              run_key: result.operation.run_key,
+              finished_at: result.row.finished_at,
+              execution_id: result.execution.execution_id,
+              execution_result_json: result.execution.result_json,
+              execution_payload_json: result.execution.payload_json,
+              assessment_id: result.assessmentId,
+              policy,
+              confirmation: validated.confirmation,
+              backup_reference: validated.backup.reference,
+              created_at: now,
+            })}`;
+            return ReadRecoveryConfirmResult.recovered({
+              receiptId,
+              disposition: "new_run_only_no_replay",
+            });
           }),
         ).pipe(storage("write"));
       }),

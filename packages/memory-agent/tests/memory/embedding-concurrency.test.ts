@@ -1,6 +1,7 @@
 import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import * as nativeClient from "../../src/memory/native-search/client.ts";
+import { OwnerCommand } from "../../src/memory/native-search/worker-protocol.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
@@ -20,7 +21,7 @@ vi.spyOn(nativeClient, "makeNativeOwner").mockImplementation((...args) =>
     Effect.map((owner) => ({
       ...owner,
       execute: (command) =>
-        command.kind === "save"
+        OwnerCommand.guards.save(command)
           ? Ref.get(beforeSave).pipe(
               Effect.flatMap((hook) => hook),
               Effect.andThen(owner.execute(command)),

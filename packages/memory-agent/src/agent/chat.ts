@@ -41,6 +41,7 @@ import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import dayjs from "dayjs";
 import {
   Context,
+  Data,
   Effect,
   FileSystem,
   Layer,
@@ -166,6 +167,10 @@ import {
 import { uncertainRuns, type UncertainContinueRequest } from "../workflow/uncertain-runs.ts";
 import {
   OwnerReadRecovery,
+  ReadRecoveryAdmission,
+  ReadRecoveryConfirmResult,
+  ReadRecoveryPreview,
+  ReadRecoveryRevokeResult,
   type ReadRecoveryConfirmation,
   type ReadRecoveryRevocation,
 } from "./owner-read-recovery.ts";
@@ -513,13 +518,15 @@ const workflowReadToolNames = HashSet.fromIterable([
 /** Verify can execute checks, but cannot mutate source files or install dependencies. */
 const verificationToolNames = HashSet.fromIterable(["save_shell_skill", "run_skill"]);
 
-type InternalFollowup =
-  | { readonly kind: "notification" }
-  | { readonly kind: "workflow"; readonly afterRunId: string }
+type InternalFollowup = Data.TaggedEnum<{
+  notification: {};
+  workflow: { readonly afterRunId: string };
   /** The next turn is the steered message at the head of the queue, sent with no page needed. */
-  | { readonly kind: "steered" }
+  steered: {};
   /** The kanban loop needs the model's judgement on the board. */
-  | { readonly kind: "kanban"; readonly reasons: readonly KanbanAttentionReason[] };
+  kanban: { readonly reasons: readonly KanbanAttentionReason[] };
+}>;
+const InternalFollowup = Data.taggedEnum<InternalFollowup>();
 
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
@@ -1463,8 +1470,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       sessionId: string,
       internalFollowup: InternalFollowup | null = null,
     ) => {
-      const notificationFollowup = internalFollowup?.kind === "notification";
-      const kanbanFollowup = internalFollowup?.kind === "kanban" ? internalFollowup : null;
+      const notificationFollowup = InternalFollowup.$is("notification")(internalFollowup);
+      const kanbanFollowup = InternalFollowup.$is("kanban")(internalFollowup)
+        ? internalFollowup
+        : null;
       let claimedNext: string | null = null;
       let runAdapterToRelease: RunTextAdapter | null = null;
       let cancellationToRelease: Effect.Effect<void> = Effect.void;
@@ -1608,7 +1617,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
         // placeholder turn altogether, including its text and attachments.
         const queuedNext =
-          internalFollowup?.kind === "steered" || Option.isSome(decodeQueuedNext(forwardedProps));
+          InternalFollowup.$is("steered")(internalFollowup) ||
+          Option.isSome(decodeQueuedNext(forwardedProps));
         if (Option.isSome(decodeUnsupportedQueuedId(forwardedProps)))
           return json(400, { error: "invalid_chat_request" });
         const next = queuedNext ? yield* queue.claimNext(sessionId) : null;
@@ -1631,7 +1641,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn =
-          internalFollowup !== null && internalFollowup.kind !== "steered"
+          internalFollowup !== null && !InternalFollowup.$is("steered")(internalFollowup)
             ? null
             : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
         const lastMessage = messages.at(-1);
@@ -1773,22 +1783,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? null
             : (Option.getOrUndefined(yield* latestRevision(sessionId))?.goal_instance_id ?? null);
         if (implementationGoal !== null) {
-          const loaded = yield* ownerNativeArtifacts.acquire(implementationGoal).pipe(
-            Effect.provideService(Scope.Scope, scope),
-            Effect.map((factories) => ({ status: "ready" as const, factories })),
-            fallbackLogged("Goal native generation unavailable", () => ({
-              status: "rejected" as const,
-            })),
-          );
-          switch (loaded.status) {
-            case "rejected":
-              return json(409, { error: "goal_native_generation_unavailable" });
-            case "ready":
-              if (!MutableHashSet.has(adoptedNativeGoals, implementationGoal)) {
-                goalNativeImplementations.adopt(implementationGoal, loaded.factories);
-                MutableHashSet.add(adoptedNativeGoals, implementationGoal);
-              }
-              break;
+          const loaded = yield* ownerNativeArtifacts
+            .acquire(implementationGoal)
+            .pipe(
+              Effect.provideService(Scope.Scope, scope),
+              Effect.asSome,
+              fallbackLogged("Goal native generation unavailable", Option.none),
+            );
+          if (Option.isNone(loaded))
+            return json(409, { error: "goal_native_generation_unavailable" });
+          if (!MutableHashSet.has(adoptedNativeGoals, implementationGoal)) {
+            goalNativeImplementations.adopt(implementationGoal, loaded.value);
+            MutableHashSet.add(adoptedNativeGoals, implementationGoal);
           }
         }
         const nativeGoal =
@@ -1913,7 +1919,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return json(409, { error: "notification_followup_deferred" });
         }
-        if (internalFollowup?.kind === "workflow") {
+        if (InternalFollowup.$is("workflow")(internalFollowup)) {
           const current = yield* sessions.get(sessionId);
           const last = yield* chatState.lastRun(sessionId);
           const state = yield* workflows.get(sessionId);
@@ -2107,7 +2113,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ]),
           ...(!(reportSource !== null) && isTruthy(workflowPrompt) ? [workflowPrompt] : []),
           ...(isTruthy(parentNotificationPrompt) ? [parentNotificationPrompt] : []),
-          ...(internalFollowup?.kind === "workflow"
+          ...(InternalFollowup.$is("workflow")(internalFollowup)
             ? [
                 "This is an automatic continuation of the already approved Plan, not a new user request or approval. Continue the first unfinished step, performing the investigation, preparation, implementation and review yourself. Persist new progress evidence. If all implementation steps are complete, perform verification and persist its result. Do not repeat a promise to work later; record_workflow_blocker only when a confirmed dependency prevents all useful independent work.",
               ]
@@ -2781,32 +2787,26 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const result = yield* readRecovery.assess(sessionId, runId);
-        switch (result.type) {
-          case "blocked":
-          case "eligible":
-            return json(200, result);
-          case "recovered": {
-            const latest = yield* latestRevisionId(sessionId);
-            if (Option.isNone(latest))
-              return json(200, {
-                ...result,
-                admission: { status: "blocked", reason: "workflow_changed" },
-              });
-            const admission = yield* runBindings.preview(
-              sessionId,
-              `operator-preview:${randomUUID()}`,
-              latest.value.id,
-            );
-            switch (admission.status) {
-              case "bound":
-                return json(200, { ...result, admission: { status: "ready" } });
-              case "refused":
-                return json(200, {
-                  ...result,
-                  admission: { status: "blocked", reason: admission.reason },
-                });
-            }
-          }
+        if (!ReadRecoveryPreview.$is("recovered")(result)) return json(200, result);
+        const latest = yield* latestRevisionId(sessionId);
+        if (Option.isNone(latest))
+          return json(200, {
+            ...result,
+            admission: ReadRecoveryAdmission.blocked({ reason: "workflow_changed" }),
+          });
+        const admission = yield* runBindings.preview(
+          sessionId,
+          `operator-preview:${randomUUID()}`,
+          latest.value.id,
+        );
+        switch (admission.status) {
+          case "bound":
+            return json(200, { ...result, admission: ReadRecoveryAdmission.ready() });
+          case "refused":
+            return json(200, {
+              ...result,
+              admission: ReadRecoveryAdmission.blocked({ reason: admission.reason }),
+            });
         }
       }).pipe(
         Effect.catchTags({
@@ -2828,13 +2828,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
           return json(409, { error: "run_in_progress" });
         const result = yield* readRecovery.revoke(sessionId, runId, input);
-        switch (result.type) {
-          case "blocked":
-            return json(409, result);
-          case "revoked":
-            yield* events.publishSession(sessionId, "run-state");
-            return json(200, result);
-        }
+        return yield* ReadRecoveryRevokeResult.$match(result, {
+          blocked: (blocked) => Effect.succeed(json(409, blocked)),
+          revoked: (revoked) =>
+            Effect.as(events.publishSession(sessionId, "run-state"), json(200, revoked)),
+        });
       }).pipe(
         Effect.catchTags({
           SessionNotFound: sessionNotFound,
@@ -2857,13 +2855,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
           return json(409, { error: "run_in_progress" });
         const result = yield* readRecovery.confirm(sessionId, runId, input);
-        switch (result.type) {
-          case "blocked":
-            return json(409, result);
-          case "recovered":
-            yield* events.publishSession(sessionId, "run-state");
-            return json(200, result);
-        }
+        return yield* ReadRecoveryConfirmResult.$match(result, {
+          blocked: (blocked) => Effect.succeed(json(409, blocked)),
+          recovered: (recovered) =>
+            Effect.as(events.publishSession(sessionId, "run-state"), json(200, recovered)),
+        });
       }).pipe(
         Effect.catchTags({
           SessionNotFound: sessionNotFound,
@@ -3254,7 +3250,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Effect.andThen(events.publishSession(sessionId, "queue")),
           Effect.catch(logFailure("Unsent steered message was not held")),
         );
-      const steered = send({ kind: "steered" }).pipe(
+      const steered = send(InternalFollowup.steered()).pipe(
         Effect.onError(() => unsent),
         Effect.filterOrElse(
           (response) => response.ok,
@@ -3280,7 +3276,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return;
           yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
-          return yield* drain(yield* send({ kind: "kanban", reasons }));
+          return yield* drain(yield* send(InternalFollowup.kanban({ reasons })));
         }
         const continuing = restarted
           ? yield* execution.canResume(sessionId, last.runId, workflow)
@@ -3302,7 +3298,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         if (pendingApprovals.length > 0) return;
         const response = yield* send(
-          continuing ? { kind: "workflow", afterRunId: last.runId } : { kind: "notification" },
+          continuing
+            ? InternalFollowup.workflow({ afterRunId: last.runId })
+            : InternalFollowup.notification(),
         );
         if (!response.ok && continuing) {
           yield* execution.blockPending(sessionId, last.runId, {

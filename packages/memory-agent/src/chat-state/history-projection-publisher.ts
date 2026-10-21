@@ -12,10 +12,10 @@ export const HistoryProjectionPublication = Schema.Struct({
   ),
 });
 export type HistoryProjectionPublication = typeof HistoryProjectionPublication.Type;
-export const HistoryProjectionPublicationResult = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("published"), groupCount: Schema.Natural }),
-  Schema.Struct({ type: Schema.Literal("source-changed") }),
-]);
+export const HistoryProjectionPublicationResult = Schema.TaggedUnion({
+  published: { groupCount: Schema.Natural },
+  "source-changed": {},
+});
 export type HistoryProjectionPublicationResult = typeof HistoryProjectionPublicationResult.Type;
 
 export const HistoryProjectionPublishReason = Schema.TaggedUnion({
@@ -109,10 +109,9 @@ export class HistoryProjectionPublisher extends Context.Service<
                 return yield* HistoryProjectionPublishFailed.make({
                   reason: publishReason.SourceChanged.make({}),
                 });
-              return {
-                type: "published",
+              return HistoryProjectionPublicationResult.cases.published.make({
                 groupCount: publication.groups.length,
-              } satisfies HistoryProjectionPublicationResult;
+              });
             }),
           )
           .pipe(
@@ -124,7 +123,7 @@ export class HistoryProjectionPublisher extends Context.Service<
               ),
             ),
             Effect.catchReason("HistoryProjectionPublishFailed", "SourceChanged", () =>
-              Effect.succeed({ type: "source-changed" } as const),
+              Effect.succeed(HistoryProjectionPublicationResult.cases["source-changed"].make({})),
             ),
           );
       });

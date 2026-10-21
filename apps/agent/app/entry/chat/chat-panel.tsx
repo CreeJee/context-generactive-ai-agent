@@ -1,4 +1,4 @@
-import { Effect, Fiber } from "effect";
+import { Data, Effect, Fiber } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
@@ -22,7 +22,7 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { RunFailureText } from "./run-failure";
 import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
-import { renumberReferences, useDraftImages } from "./draft-images";
+import { DraftImage, renumberReferences, useDraftImages } from "./draft-images";
 import { missingDeliveredMessages } from "./delivered-messages";
 import { interruptContinuationState } from "../session/interrupt-recovery";
 import {
@@ -43,9 +43,15 @@ import { UncertainRuns } from "./uncertain-runs";
 import { ChatComposer, type ChatComposerHandle } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
 import { ContextMeter } from "./context-meter";
-import { type ComposerMode } from "./composer-status";
-import { DeliveredMessageView, MessageView } from "./message";
-import { isTakenIn, useMessageQueue } from "../session/message-queue";
+import { ComposerMode } from "./composer-status";
+import {
+  ArchiveActionResult,
+  DeleteActionResult,
+  DeliveredMessageView,
+  MessageView,
+  ResumeActionResult,
+} from "./message";
+import { AddOutcome, isTakenIn, useMessageQueue } from "../session/message-queue";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
 import { toPendingApproval, type ApprovalInterrupts, type ApprovalTools } from "./pending-approval";
@@ -72,15 +78,21 @@ import {
   goalStatusLabels,
   planStatusLabels,
 } from "./workflow-panel";
-import { parseSlash, promptOf, type SlashCommand, type SlashContext } from "./slash-commands";
+import {
+  parseSlash,
+  promptOf,
+  SlashCommand,
+  SlashParse,
+  type SlashContext,
+} from "./slash-commands";
 
 /** Slash commands: what they can offer, and how the app runs the ones outside this panel. */
 export interface SlashSupport {
   readonly context: SlashContext;
   readonly run: (
-    command: Extract<
+    command: Data.TaggedEnum.Value<
       SlashCommand,
-      { kind: "new" | "agent" | "mode" | "model" | "settings" | "report" }
+      "new" | "agent" | "mode" | "model" | "settings" | "report"
     >,
   ) => Promise<void>;
 }
@@ -92,9 +104,11 @@ const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
 /** The input box either writes a new message or edits one that is waiting in the queue. */
-type Composer =
-  | { readonly kind: "compose" }
-  | { readonly kind: "editing"; readonly id: string; readonly draft: string };
+type Composer = Data.TaggedEnum<{
+  compose: {};
+  editing: { readonly id: string; readonly draft: string };
+}>;
+const Composer = Data.taggedEnum<Composer>();
 
 /**
  * Where a message the running answer took in shows, next to a message of the conversation, until
@@ -248,14 +262,14 @@ function ChatPanel({
   const backendRestartRequired = useBackendRestartRequired();
   const mutationBlocked = readOnly || backendRestartRequired || !sendingEnabled;
   const workTrace = useWorkTrace(sessionId);
-  const [composer, setComposer] = useState<Composer>({ kind: "compose" });
+  const [composer, setComposer] = useState<Composer>(Composer.compose());
   const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
   const composeDraft = sessionDrafts[sessionId] ?? "";
-  const draft = composer.kind === "editing" ? composer.draft : composeDraft;
+  const draft = Composer.$is("editing")(composer) ? composer.draft : composeDraft;
   const setDraft = (next: string) => {
-    if (composer.kind === "editing") {
+    if (Composer.$is("editing")(composer)) {
       setComposer((current) =>
-        current.kind === "editing" ? { ...current, draft: next } : current,
+        Composer.$is("editing")(current) ? Composer.editing({ ...current, draft: next }) : current,
       );
       return;
     }
@@ -480,7 +494,7 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         const attemptId = task.latestAttemptId;
-        if (!isTruthy(attemptId)) return { status: "failed" as const };
+        if (!isTruthy(attemptId)) return ResumeActionResult.failed();
         return yield* Effect.gen(function* () {
           const result = yield* uiPromise(() =>
             resumeTraceMutation.mutateAsync({
@@ -491,7 +505,7 @@ function ChatPanel({
           );
           if (result.status === "queued") {
             setNotice(done("다시 시도 요청을 저장했어요. 다음 실행에서 새 attempt로 시작해요."));
-            return { status: "queued" as const };
+            return ResumeActionResult.queued();
           }
           if (result.reason !== "uncertain_side_effect")
             setNotice(
@@ -503,12 +517,12 @@ function ChatPanel({
                     : "이 작업은 지금 다시 시도할 수 없어요.",
               ),
             );
-          return result;
+          return ResumeActionResult.blocked({ reason: result.reason });
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
               setNotice(problem("다시 시도 요청을 저장하지 못했어요."));
-              return { status: "failed" as const };
+              return ResumeActionResult.failed();
             }),
           ),
         );
@@ -522,17 +536,17 @@ function ChatPanel({
         const result = yield* uiPromise(() => archiveTraceMutation.mutateAsync(task.id));
         if (result.status === "completed") {
           setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
-          return { status: "archived" as const };
+          return ArchiveActionResult.archived();
         }
         setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
         return result.status === "blocked"
-          ? { status: "blocked" as const, reason: result.blocker }
-          : { status: "failed" as const };
+          ? ArchiveActionResult.blocked({ reason: result.blocker })
+          : ArchiveActionResult.failed();
       }).pipe(
         Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("작업을 보관하지 못했어요."));
-            return { status: "failed" as const };
+            return ArchiveActionResult.failed();
           }),
         ),
       ),
@@ -545,36 +559,36 @@ function ChatPanel({
         const result = yield* uiPromise(() => deleteTraceMutation.mutateAsync(task.id));
         if (result.status === "completed") {
           setNotice(done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."));
-          return { status: "deleted" as const };
+          return DeleteActionResult.deleted();
         }
         setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
         return result.status === "blocked"
-          ? { status: "blocked" as const, reason: result.blocker }
-          : { status: "failed" as const };
+          ? DeleteActionResult.blocked({ reason: result.blocker })
+          : DeleteActionResult.failed();
       }).pipe(
         Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
             setNotice(problem("작업 원본을 삭제하지 못했어요."));
-            return { status: "failed" as const };
+            return DeleteActionResult.failed();
           }),
         ),
       ),
     );
 
-  const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
-  const uploading = draftImages.images.some((image) => image.status === "uploading");
-  const failed = draftImages.images.some((image) => image.status === "failed");
+  const ready = draftImages.images.filter(DraftImage.$is("ready"));
+  const uploading = draftImages.images.some(DraftImage.$is("uploading"));
+  const failed = draftImages.images.some(DraftImage.$is("failed"));
   const shownNotice =
     notice ?? (failed ? problem("올리지 못한 이미지가 있어요. 빼고 보내 주세요.") : null);
-  const editing = composer.kind === "editing" ? composer : null;
+  const editing = Composer.$is("editing")(composer) ? composer : null;
   const composerMode: ComposerMode =
     editing !== null
-      ? { kind: "editing" }
+      ? ComposerMode.editing()
       : waitingForApproval
-        ? { kind: "approval" }
+        ? ComposerMode.approval()
         : generating
-          ? { kind: "generating" }
-          : { kind: "idle" };
+          ? ComposerMode.generating()
+          : ComposerMode.idle();
   const canSend =
     (draft.trim().length > 0 || ready.length > 0) &&
     !uploading &&
@@ -672,7 +686,7 @@ function ChatPanel({
         : message.state.kind === "held" && message.state.draft !== null
           ? message.state.draft
           : message.text;
-    setComposer({ kind: "editing", id: message.id, draft: text });
+    setComposer(Composer.editing({ id: message.id, draft: text }));
     setNotice(null);
     void queue.change(message.id, { action: "edit", draft: text });
   };
@@ -682,7 +696,7 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         if (!(editing !== null)) return;
-        setComposer({ kind: "compose" });
+        setComposer(Composer.compose());
         const text = draft.trim();
         const snapshot = yield* uiPromise(() =>
           queue.change(
@@ -749,77 +763,91 @@ function ChatPanel({
           return;
         }
         if (!canSend) return;
-        let text = renumberReferences(
+        const written = renumberReferences(
           draft.trim(),
           ready.map((image) => image.number),
         );
-        // A slash command runs instead of being sent; `skill` and `recall` become a message.
-        const parsed =
-          ready.length === 0 ? parseSlash(text, slash.context) : { kind: "not_command" as const };
-        switch (parsed.kind) {
-          case "not_command":
-            break;
-          case "incomplete":
-            return setNotice(problem(parsed.reason));
-          case "command": {
-            const command = parsed.command;
-            switch (command.kind) {
-              case "skill":
-              case "recall":
-                text = promptOf(command);
-                break;
-              case "workflow_status":
+        const outsidePanel = (command: Parameters<SlashSupport["run"]>[0]) =>
+          Effect.sync(() => {
+            setDraft("");
+            setNotice(null);
+          }).pipe(
+            Effect.andThen(uiPromise(() => slash.run(command))),
+            Effect.catchTag("UnknownError", () =>
+              Effect.sync(() => setNotice(problem("명령을 실행하지 못했어요."))),
+            ),
+            Effect.as(Option.none<string>()),
+          );
+        // What a command leaves to send; none when it ran instead of being sent.
+        const runCommand = SlashCommand.$match({
+          skill: (command) => Effect.succeedSome(promptOf(command)),
+          recall: (command) => Effect.succeedSome(promptOf(command)),
+          workflow_status: () =>
+            Effect.sync(() => {
+              setDraft("");
+              setNotice(workflowStatus(run.workflow));
+              return Option.none<string>();
+            }),
+          workflow: (command) =>
+            Effect.gen(function* () {
+              const state = yield* uiPromise(() => changeWorkflowPhase(command.phase));
+              if (!isTruthy(state)) return Option.none<string>();
+              const request =
+                command.request ||
+                (command.phase === "plan"
+                  ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
+                  : command.phase === "execute"
+                    ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
+                    : "");
+              if (!(request.length > 0)) {
                 setDraft("");
-                return setNotice(workflowStatus(run.workflow));
-              case "workflow": {
-                const state = yield* uiPromise(() => changeWorkflowPhase(command.phase));
-                if (!isTruthy(state)) return;
-                const request =
-                  command.request ||
-                  (command.phase === "plan"
-                    ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
-                    : command.phase === "execute"
-                      ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
-                      : "");
-                if (!(request.length > 0)) {
-                  setDraft("");
-                  return;
-                }
-                text = request;
-                break;
+                return Option.none<string>();
               }
-              case "cancel":
-                setDraft("");
-                setNotice(null);
-                void cancel();
-                return;
-              case "compact":
-                setDraft("");
-                setNotice(null);
-                return yield* uiPromise(() => compactMutation.mutateAsync()).pipe(
-                  Effect.map((result) => setNotice(compacted(result))),
-                  Effect.catchTag("UnknownError", (failure) =>
-                    Effect.sync(() => {
-                      setNotice(problem(compactErrorMessage(refusalOf(failure.cause))));
-                    }),
-                  ),
-                );
-              case "new":
-              case "agent":
-              case "mode":
-              case "model":
-              case "settings":
-              case "report":
-                setDraft("");
-                setNotice(null);
-                return yield* uiPromise(() => slash.run(command)).pipe(
-                  Effect.catchTag("UnknownError", () =>
-                    Effect.sync(() => setNotice(problem("명령을 실행하지 못했어요."))),
-                  ),
-                );
-            }
-          }
-        }
+              return Option.some(request);
+            }),
+          cancel: () =>
+            Effect.sync(() => {
+              setDraft("");
+              setNotice(null);
+              void cancel();
+              return Option.none<string>();
+            }),
+          compact: () =>
+            Effect.sync(() => {
+              setDraft("");
+              setNotice(null);
+            }).pipe(
+              Effect.andThen(uiPromise(() => compactMutation.mutateAsync())),
+              Effect.map((result) => setNotice(compacted(result))),
+              Effect.catchTag("UnknownError", (failure) =>
+                Effect.sync(() => {
+                  setNotice(problem(compactErrorMessage(refusalOf(failure.cause))));
+                }),
+              ),
+              Effect.as(Option.none<string>()),
+            ),
+          new: outsidePanel,
+          agent: outsidePanel,
+          mode: outsidePanel,
+          model: outsidePanel,
+          settings: outsidePanel,
+          report: outsidePanel,
+        });
+        // A slash command runs instead of being sent; `skill` and `recall` become a message.
+        const message = yield* SlashParse.$match(
+          ready.length === 0 ? parseSlash(written, slash.context) : SlashParse.not_command(),
+          {
+            not_command: () => Effect.succeedSome(written),
+            incomplete: ({ reason }) =>
+              Effect.sync(() => {
+                setNotice(problem(reason));
+                return Option.none<string>();
+              }),
+            command: ({ command }) => runCommand(command),
+          },
+        );
+        if (Option.isNone(message)) return;
+        const text = message.value;
         const attachmentIds = ready.map((image) => image.attachment.id);
         const clearDraft = () => {
           setDraft("");
@@ -848,14 +876,11 @@ function ChatPanel({
         const outcome = yield* uiPromise(() =>
           trackSubmission(queue.add(text, attachmentIds, mode)),
         );
-        switch (outcome.kind) {
-          case "queued":
-            return clearDraft();
-          case "not-running":
-            return sendTurn();
-          case "failed":
-            return setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요."));
-        }
+        AddOutcome.$match(outcome, {
+          queued: clearDraft,
+          "not-running": sendTurn,
+          failed: () => setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요.")),
+        });
       }),
     );
 

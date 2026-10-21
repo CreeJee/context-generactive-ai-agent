@@ -6,7 +6,7 @@ import { describe, expect } from "vite-plus/test";
 import "../../app.css";
 import { AccountModelPanel } from "./account-model-panel";
 import { AccountManagerList } from "./account-profiles";
-import { AccountSwitcherMenu } from "./account-switcher";
+import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
 import type { CompatibleAccountChange } from "./compatible-client";
 import { ModelSection, ProjectSection } from "./sidebar";
@@ -242,8 +242,7 @@ describe("sidebar disclosures", () => {
             <div className="w-72">
               <AccountSwitcherMenu
                 entries={[
-                  {
-                    kind: "profile",
+                  AccountEntry.profile({
                     provider: "openai",
                     profile: {
                       id: "a",
@@ -254,9 +253,8 @@ describe("sidebar disclosures", () => {
                     },
                     quota: { status: "unavailable", reason: "lookup_failed" },
                     current: true,
-                  },
-                  {
-                    kind: "profile",
+                  }),
+                  AccountEntry.profile({
                     provider: "anthropic",
                     profile: {
                       id: "c",
@@ -278,9 +276,8 @@ describe("sidebar disclosures", () => {
                       observedAt: "2026-10-12T00:00:00.000Z",
                     },
                     current: false,
-                  },
-                  {
-                    kind: "compatible",
+                  }),
+                  AccountEntry.compatible({
                     account: {
                       id: "e",
                       label: "로컬 서버",
@@ -290,7 +287,7 @@ describe("sidebar disclosures", () => {
                       selected: true,
                     },
                     current: false,
-                  },
+                  }),
                 ]}
                 busy={false}
                 error={null}

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import { ChatComposer } from "./chat-composer";
+import { ComposerMode } from "./composer-status";
 import { allowedWorkflowActions, workflowFixture } from "../session/workflow-test-fixtures";
 import type { useDraftImages } from "./draft-images";
 
@@ -30,7 +31,7 @@ function renderPlanComposer() {
       generating
       waitingForApproval={false}
       canSend={false}
-      composerMode={{ kind: "generating" }}
+      composerMode={ComposerMode.generating()}
       run={{
         workflow: workflowFixture,
         actions: allowedWorkflowActions,

@@ -1,4 +1,4 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import {
   CrossProviderMediaConsent,
   CrossProviderMediaConsentMode,
@@ -8,13 +8,10 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.image";
 
-const ImageSettingsAction = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("image_generation"), enabled: Schema.Boolean }),
-  Schema.Struct({
-    action: Schema.Literal("cross_provider_media"),
-    mode: CrossProviderMediaConsentMode,
-  }),
-]);
+const ImageSettingsAction = Schema.TaggedUnion({
+  image_generation: { enabled: Schema.Boolean },
+  cross_provider_media: { mode: CrossProviderMediaConsentMode },
+});
 
 const imageSettingsView = Effect.gen(function* () {
   const feature = yield* ImageFeature;
@@ -45,22 +42,18 @@ export function action({ request }: Route.ActionArgs) {
       const response = Effect.gen(function* () {
         const feature = yield* ImageFeature;
         const crossProviderMediaConsent = yield* CrossProviderMediaConsent;
-        const command = body.success;
-        switch (command.action) {
-          case "image_generation":
-            yield* feature.setImageGenerationEnabled(command.enabled);
-            break;
-          case "cross_provider_media":
-            yield* crossProviderMediaConsent.set(
+        yield* Match.valueTags(body.success, {
+          image_generation: ({ enabled }) => feature.setImageGenerationEnabled(enabled),
+          cross_provider_media: ({ mode }) =>
+            crossProviderMediaConsent.set(
               {
                 initiatorProvider: "anthropic",
                 executorProvider: "openai",
                 capability: "media.image.generate",
               },
-              command.mode,
-            );
-            break;
-        }
+              mode,
+            ),
+        });
         return Response.json(yield* imageSettingsView);
       });
       return yield* response;

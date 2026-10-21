@@ -8,6 +8,7 @@ import {
 } from "../../../../packages/memory-agent/tests/support/test-env.ts";
 import { makeReadRecoveryHandlers } from "../../app/.server/read-recovery-handlers.ts";
 import { sqlGet } from "../../../../packages/memory-agent/tests/support/sql.ts";
+import { ReadRecoveryPreview } from "../../../../packages/memory-agent/src/agent/owner-read-recovery.ts";
 
 testAgent({ testProvider: {} })("read recovery HTTP boundary", (it) => {
   it.effect(
@@ -64,10 +65,9 @@ testAgent({ testProvider: {} })("read recovery HTTP boundary", (it) => {
           handlers.loader({ request: new Request("http://localhost"), params }),
         );
         expect(preview.status).toBe(200);
-        expect(yield* Effect.promise(() => preview.json())).toEqual({
-          type: "blocked",
-          reason: "run_not_found",
-        });
+        expect(yield* Effect.promise(() => preview.json())).toEqual(
+          ReadRecoveryPreview.blocked({ reason: "run_not_found" }),
+        );
         expect(yield* sqlGet("SELECT total_changes() AS n")).toEqual(before);
         expect(context.provider!.adapter.invocations).toHaveLength(0);
       }),

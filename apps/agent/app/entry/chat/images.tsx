@@ -1,3 +1,4 @@
+import { Data } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { AlertCircleIcon, XIcon } from "lucide-react";
 import { useState } from "react";
@@ -15,7 +16,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "~/components/ui/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "~/components/ui/hover-card";
 import { Spinner } from "~/components/ui/spinner";
-import type { DraftImage } from "./draft-images";
+import { DraftImage } from "./draft-images";
 
 /** An image shown in a sent message: its `#N` position and where to load it from. */
 export interface MessageImage {
@@ -75,9 +76,11 @@ export function DrawingPicture({ url, path }: { url: string; path: string }) {
 }
 
 /** Text of a user message split into plain runs and `#N` references to its images. */
-type TextRun =
-  | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "reference"; readonly token: string; readonly image: MessageImage };
+type TextRun = Data.TaggedEnum<{
+  text: { readonly text: string };
+  reference: { readonly token: string; readonly image: MessageImage };
+}>;
+const TextRun = Data.taggedEnum<TextRun>();
 
 function splitReferences(text: string, images: readonly MessageImage[]): TextRun[] {
   const runs: TextRun[] = [];
@@ -85,11 +88,11 @@ function splitReferences(text: string, images: readonly MessageImage[]): TextRun
   for (const match of text.matchAll(/#(\d+)/g)) {
     const image = images.find((candidate) => candidate.number === Number(match[1]));
     if (!isTruthy(image)) continue;
-    if (match.index > last) runs.push({ kind: "text", text: text.slice(last, match.index) });
-    runs.push({ kind: "reference", token: match[0], image });
+    if (match.index > last) runs.push(TextRun.text({ text: text.slice(last, match.index) }));
+    runs.push(TextRun.reference({ token: match[0], image }));
     last = match.index + match[0].length;
   }
-  if (last < text.length) runs.push({ kind: "text", text: text.slice(last) });
+  if (last < text.length) runs.push(TextRun.text({ text: text.slice(last) }));
   return runs;
 }
 
@@ -109,35 +112,33 @@ export function UserMessageBody({
     <div className="flex flex-col items-end gap-1.5">
       {text.length > 0 && (
         <p className="max-w-[85%] rounded-2xl bg-primary px-3.5 py-2 text-sm/relaxed whitespace-pre-wrap text-primary-foreground">
-          {splitReferences(text, images).map((run, index) => {
-            switch (run.kind) {
-              case "text":
-                return <span key={index}>{run.text}</span>;
-              case "reference":
-                return (
-                  <HoverCard key={index}>
-                    <HoverCardTrigger
-                      render={
-                        <button
-                          type="button"
-                          onClick={() => setOpen(run.image)}
-                          className="mx-0.5 rounded bg-primary-foreground/20 px-1 font-medium underline-offset-2 hover:underline"
-                        />
-                      }
-                    >
-                      {run.token}
-                    </HoverCardTrigger>
-                    <HoverCardContent className="w-56">
-                      <img
-                        src={run.image.url}
-                        alt={`첨부 이미지 #${run.image.number}`}
-                        className="max-h-48 w-full rounded object-contain"
+          {splitReferences(text, images).map((run, index) =>
+            TextRun.$match(run, {
+              text: (part) => <span key={index}>{part.text}</span>,
+              reference: ({ token, image }) => (
+                <HoverCard key={index}>
+                  <HoverCardTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => setOpen(image)}
+                        className="mx-0.5 rounded bg-primary-foreground/20 px-1 font-medium underline-offset-2 hover:underline"
                       />
-                    </HoverCardContent>
-                  </HoverCard>
-                );
-            }
-          })}
+                    }
+                  >
+                    {token}
+                  </HoverCardTrigger>
+                  <HoverCardContent className="w-56">
+                    <img
+                      src={image.url}
+                      alt={`첨부 이미지 #${image.number}`}
+                      className="max-h-48 w-full rounded object-contain"
+                    />
+                  </HoverCardContent>
+                </HoverCard>
+              ),
+            }),
+          )}
         </p>
       )}
       {images.length > 0 && (
@@ -167,16 +168,11 @@ export function UserMessageBody({
 }
 
 /** What the attachment card shows for each draft state. */
-function draftCard(image: DraftImage) {
-  switch (image.status) {
-    case "uploading":
-      return { state: "uploading", description: "올리는 중…" } as const;
-    case "ready":
-      return { state: "done", description: "누르면 본문에 넣어요" } as const;
-    case "failed":
-      return { state: "error", description: image.reason } as const;
-  }
-}
+const draftCard = DraftImage.$match({
+  uploading: () => ({ state: "uploading", description: "올리는 중…" }) as const,
+  ready: () => ({ state: "done", description: "누르면 본문에 넣어요" }) as const,
+  failed: ({ reason }) => ({ state: "error", description: reason }) as const,
+});
 
 /**
  * Images attached to the draft, above the input, as shadcn attachment cards. Clicking a card
@@ -200,8 +196,8 @@ export function DraftImageTray({
           <Attachment key={image.key} orientation="vertical" state={card.state}>
             <AttachmentMedia variant="image">
               <img src={image.previewUrl} alt={image.name} />
-              {image.status === "uploading" && <Spinner className="absolute" />}
-              {image.status === "failed" && <AlertCircleIcon className="absolute" />}
+              {DraftImage.$is("uploading")(image) && <Spinner className="absolute" />}
+              {DraftImage.$is("failed")(image) && <AlertCircleIcon className="absolute" />}
             </AttachmentMedia>
             <AttachmentContent>
               <AttachmentTitle>#{image.number}</AttachmentTitle>
@@ -209,7 +205,7 @@ export function DraftImageTray({
                 {card.description}
               </AttachmentDescription>
             </AttachmentContent>
-            {image.status === "ready" && (
+            {DraftImage.$is("ready")(image) && (
               <AttachmentTrigger
                 aria-label={`#${image.number} 본문에 넣기`}
                 onClick={() => onReference(image.number)}

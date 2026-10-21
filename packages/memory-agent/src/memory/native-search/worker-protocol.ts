@@ -23,22 +23,20 @@ export const OwnerSetup = Schema.Struct({
 });
 export type OwnerSetup = typeof OwnerSetup.Type;
 
-export const OwnerCommand = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("add"), ...correlation, vectors: vector, ids }),
+export const OwnerCommand = Schema.TaggedUnion({
+  add: { ...correlation, vectors: vector, ids },
   /** One owner step for the whole batch, like add: no other command interleaves inside it. */
-  Schema.Struct({ kind: Schema.Literal("remove"), ...correlation, ids }),
-  Schema.Struct({ kind: Schema.Literal("save"), ...correlation }),
-  Schema.Struct({ kind: Schema.Literal("reset"), ...correlation }),
-  Schema.Struct({ kind: Schema.Literal("validate"), ...correlation, ids }),
-  Schema.Struct({
-    kind: Schema.Literal("vector-search"),
+  remove: { ...correlation, ids },
+  save: { ...correlation },
+  reset: { ...correlation },
+  validate: { ...correlation, ids },
+  "vector-search": {
     ...correlation,
     query: vector,
     k: Schema.Int,
     allowedIds: Schema.optional(ids),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("vector-search-controlled"),
+  },
+  "vector-search-controlled": {
     ...correlation,
     query: vector,
     k: Schema.Int,
@@ -46,28 +44,25 @@ export const OwnerCommand = Schema.Union([
     /** Set only by host dispatch; user values are never adopted. */
     controlToken: Schema.optional(Schema.String),
     budgetMs: Schema.Finite.check(Schema.makeFilter((value) => value >= 0 && value <= 2_000)),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("memory-search"),
+  },
+  "memory-search": {
     ...correlation,
     input: NativeReadInput,
     /** Set only by host dispatch; user values are never adopted. */
     controlToken: Schema.optional(Schema.String),
-  }),
-]);
+  },
+});
 export type OwnerCommand = typeof OwnerCommand.Type;
 
-export const OwnerReply = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("ack"), ...correlation, size: Schema.Int }),
-  Schema.Struct({
-    kind: Schema.Literal("removed"),
+export const OwnerReply = Schema.TaggedUnion({
+  ack: { ...correlation, size: Schema.Int },
+  removed: {
     ...correlation,
     /** How many of the requested ids were present. */
     removed: Schema.Int,
     size: Schema.Int,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("vector-hits"),
+  },
+  "vector-hits": {
     ...correlation,
     ids,
     scores: Schema.Array(Schema.Finite),
@@ -75,9 +70,8 @@ export const OwnerReply = Schema.Union([
     /** Monotonic worker window around the synchronous native call, no user data. */
     workerCpuUs: Schema.optional(Schema.Finite),
     nativeWindow: Schema.optional(Schema.Struct({ startNs: Schema.String, endNs: Schema.String })),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("controlled-result"),
+  },
+  "controlled-result": {
     ...correlation,
     outcome: Schema.Literals([
       "success",
@@ -90,14 +84,13 @@ export const OwnerReply = Schema.Union([
     scores: Schema.Array(Schema.Finite),
     size: Schema.Int,
     nativeMs: Schema.Finite,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("memory-result"),
+  },
+  "memory-result": {
     ...correlation,
     result: NativeReadOutput,
     workerCpuUs: Schema.optional(Schema.Finite),
-  }),
-]);
+  },
+});
 export type OwnerReply = typeof OwnerReply.Type;
 
 export class NativeOwnerFailed extends Schema.TaggedError<NativeOwnerFailed>()(

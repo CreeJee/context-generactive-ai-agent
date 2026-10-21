@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import {
@@ -338,10 +338,12 @@ const sessionPlace = (session: Session) =>
   session.branch ?? session.worktreePath?.split(/[\\/]/u).at(-1) ?? null;
 
 /** The place filter: every conversation, those in the checkout itself, or one branch or worktree. */
-type PlaceFilter =
-  | { readonly kind: "all" }
-  | { readonly kind: "checkout" }
-  | { readonly kind: "place"; readonly place: string };
+type PlaceFilter = Data.TaggedEnum<{
+  all: {};
+  checkout: {};
+  place: { readonly place: string };
+}>;
+const PlaceFilter = Data.taggedEnum<PlaceFilter>();
 
 // Git branch names cannot contain ":", so these never collide with a place.
 const everyPlace = ":all";
@@ -350,25 +352,21 @@ const checkoutPlace = ":checkout";
 const placeFilterOf = (value: string, places: readonly string[]): PlaceFilter => {
   switch (value) {
     case checkoutPlace:
-      return { kind: "checkout" };
+      return PlaceFilter.checkout();
     case everyPlace:
-      return { kind: "all" };
+      return PlaceFilter.all();
     default:
       // A place whose last conversation left the list falls back to showing everything.
-      return places.includes(value) ? { kind: "place", place: value } : { kind: "all" };
+      return places.includes(value) ? PlaceFilter.place({ place: value }) : PlaceFilter.all();
   }
 };
 
-const shownIn = (filter: PlaceFilter) => (session: Session) => {
-  switch (filter.kind) {
-    case "all":
-      return true;
-    case "checkout":
-      return sessionPlace(session) === null;
-    case "place":
-      return sessionPlace(session) === filter.place;
-  }
-};
+const shownIn = (filter: PlaceFilter) => (session: Session) =>
+  PlaceFilter.$match(filter, {
+    all: () => true,
+    checkout: () => sessionPlace(session) === null,
+    place: ({ place }) => sessionPlace(session) === place,
+  });
 
 export function SessionSection({
   sessions,

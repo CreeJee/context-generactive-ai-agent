@@ -9,7 +9,7 @@ import { makeNativeOwner } from "../native-search/client.ts";
 // eslint-disable-next-line anti-slop-effect/no-service-constructor-imports -- This owner-specific gate must be created alongside, not independently from, its worker.
 import { makePublication } from "../native-search/publication.ts";
 import type { NativeReadInput } from "../native-search/read-protocol.ts";
-import { NativeOwnerFailed, type OwnerCommand } from "../native-search/worker-protocol.ts";
+import { NativeOwnerFailed, OwnerCommand, OwnerReply } from "../native-search/worker-protocol.ts";
 import { chunkVectorIdFloor } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
 import { VectorIndexError, type VectorHit, type VectorIndexApi } from "./vector-index.ts";
@@ -74,7 +74,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const command = (input: OwnerCommand, operation: VectorIndexError["operation"]) =>
     owner.execute(input).pipe(Effect.mapError(failure(operation)));
   const identity = () => ({ epoch: owner.epoch, requestId: randomUUID() });
-  const save = Effect.suspend(() => command({ kind: "save", ...identity() }, "save")).pipe(
+  const save = Effect.suspend(() => command(OwnerCommand.cases.save.make(identity()), "save")).pipe(
     Effect.asVoid,
   );
   const ChunkMapping = Schema.Array(
@@ -127,7 +127,10 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     ids.length === 0
       ? Effect.void
       : Effect.suspend(() =>
-          command({ kind: "remove", ...identity(), ids: ids.map(String) }, "remove"),
+          command(
+            OwnerCommand.cases.remove.make({ ...identity(), ids: ids.map(String) }),
+            "remove",
+          ),
         ).pipe(Effect.asVoid);
   const remove = Effect.fnUntraced(function* (seqs: readonly number[]) {
     // Read every node's chunk ids in one transaction before the native await, not one node
@@ -213,7 +216,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     if (owner.size() === indexed) yield* save;
   }
   if (owner.initialNeedsReset || owner.size() !== indexed) {
-    yield* command({ kind: "reset", ...identity() }, "open");
+    yield* command(OwnerCommand.cases.reset.make(identity()), "open");
     yield* sql
       .withTransaction(
         Effect.all([
@@ -235,7 +238,11 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       return result;
     });
     yield* command(
-      { kind: "add", ...identity(), vectors: new Float32Array(batch), ids: seqs.map(String) },
+      OwnerCommand.cases.add.make({
+        ...identity(),
+        vectors: new Float32Array(batch),
+        ids: seqs.map(String),
+      }),
       "add",
     );
   });
@@ -284,16 +291,15 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       const widen = (take: number): Effect.Effect<VectorHit[], VectorIndexError> =>
         Effect.gen(function* () {
           const reply = yield* command(
-            {
-              kind: "vector-search",
+            OwnerCommand.cases["vector-search"].make({
               ...identity(),
               query: new Float32Array(query),
               k: take,
               allowedIds,
-            },
+            }),
             "search",
           );
-          if (reply.kind !== "vector-hits") return yield* publicationError(reply);
+          if (!OwnerReply.guards["vector-hits"](reply)) return yield* publicationError(reply);
           const hits = yield* nodeHits(reply.ids, reply.scores).pipe(
             Effect.mapError(failure("search")),
           );
@@ -310,14 +316,12 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
         if (input.embedder !== embedder.identity)
           return yield* publicationError(NativeOwnerFailed.make({ reason: "invalid-input" }));
         const { publication: current, result } = yield* publication
-          .read(() => owner.startRead({ kind: "memory-search", ...identity(), input }))
+          .read(() =>
+            owner.startRead(OwnerCommand.cases["memory-search"].make({ ...identity(), input })),
+          )
           .pipe(Effect.mapError(publicationError));
-        switch (result.kind) {
-          case "memory-result":
-            return { publication: current, result: result.result };
-          default:
-            return yield* publicationError(result);
-        }
+        if (!OwnerReply.guards["memory-result"](result)) return yield* publicationError(result);
+        return { publication: current, result: result.result };
       }),
     },
   };

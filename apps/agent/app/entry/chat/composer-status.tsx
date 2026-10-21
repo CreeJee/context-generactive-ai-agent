@@ -1,13 +1,16 @@
+import { Data } from "effect";
 import { useEffect, useState } from "react";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { cn } from "~/lib/utils";
 
 /** What the input box is doing, which decides the status and the keys it offers. */
-export type ComposerMode =
-  | { readonly kind: "idle" }
-  | { readonly kind: "generating" }
-  | { readonly kind: "editing" }
-  | { readonly kind: "approval" };
+export type ComposerMode = Data.TaggedEnum<{
+  idle: {};
+  generating: {};
+  editing: {};
+  approval: {};
+}>;
+export const ComposerMode = Data.taggedEnum<ComposerMode>();
 
 /** macOS shows ⌘ for the steer shortcut; elsewhere Ctrl. Decided after hydration. */
 function useModifierKey() {
@@ -33,24 +36,20 @@ function Shortcut({ keys, label }: { keys: readonly string[]; label: string }) {
 
 /** The left side of the composer toolbar: a short state line with a live dot while answering. */
 export function ComposerStatus({ mode }: { mode: ComposerMode }) {
-  switch (mode.kind) {
-    case "idle":
-      return null;
-    case "generating":
-      return (
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="relative flex size-1.5">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
-            <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
-          </span>
-          답변 중
+  return ComposerMode.$match(mode, {
+    idle: () => null,
+    generating: () => (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="relative flex size-1.5">
+          <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
+          <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
         </span>
-      );
-    case "editing":
-      return <span className="text-xs font-medium text-primary">대기 메시지 편집 중</span>;
-    case "approval":
-      return <span className="text-xs text-warning">승인을 기다리는 중</span>;
-  }
+        답변 중
+      </span>
+    ),
+    editing: () => <span className="text-xs font-medium text-primary">대기 메시지 편집 중</span>,
+    approval: () => <span className="text-xs text-warning">승인을 기다리는 중</span>,
+  });
 }
 
 /**
@@ -59,23 +58,18 @@ export function ComposerStatus({ mode }: { mode: ComposerMode }) {
  */
 export function ComposerShortcuts({ mode, className }: { mode: ComposerMode; className?: string }) {
   const modifier = useModifierKey();
-  const shortcuts = (() => {
-    switch (mode.kind) {
-      case "idle":
-      case "approval":
-        return [];
-      case "generating":
-        return [
-          { keys: ["⏎"], label: "대기열" },
-          { keys: [modifier, "⇧", "⏎"], label: "끼어들기" },
-        ];
-      case "editing":
-        return [
-          { keys: ["⏎"], label: "저장" },
-          { keys: ["Esc"], label: "지우기" },
-        ];
-    }
-  })();
+  const shortcuts = ComposerMode.$match(mode, {
+    idle: () => [],
+    approval: () => [],
+    generating: () => [
+      { keys: ["⏎"], label: "대기열" },
+      { keys: [modifier, "⇧", "⏎"], label: "끼어들기" },
+    ],
+    editing: () => [
+      { keys: ["⏎"], label: "저장" },
+      { keys: ["Esc"], label: "지우기" },
+    ],
+  });
   if (shortcuts.length === 0) return null;
   return (
     <span

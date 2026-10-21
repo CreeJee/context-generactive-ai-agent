@@ -5,7 +5,7 @@ import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
-import { ExternalAgents } from "../../src/external-agents/agents.ts";
+import { ExternalAgents, ExternalPromptOutcome } from "../../src/external-agents/agents.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -104,10 +104,9 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           () => Effect.sync(() => vi.unstubAllEnvs()),
         );
         const { project, starts, prompt, trust } = yield* fakeAgentProject();
-        expect(yield* prompt("hi")).toEqual({
-          status: "unavailable",
-          failure: { code: "not_trusted", detail: null },
-        });
+        expect(yield* prompt("hi")).toEqual(
+          ExternalPromptOutcome.unavailable({ failure: { code: "not_trusted", detail: null } }),
+        );
         expect(yield* starts).toEqual([]);
 
         const trusted = yield* trust;
@@ -118,10 +117,9 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         });
         expect(yield* starts).toEqual([]);
 
-        expect(yield* prompt("hi")).toMatchObject({
-          status: "completed",
-          answer: "external: hi (turn 1)",
-        });
+        const first = yield* prompt("hi");
+        expect(ExternalPromptOutcome.$is("completed")(first)).toBe(true);
+        expect(first).toMatchObject({ answer: "external: hi (turn 1)" });
         // The same conversation continues the agent's session.
         expect(yield* prompt("again")).toMatchObject({ answer: "external: again (turn 2)" });
         expect(yield* starts).toEqual([
@@ -139,8 +137,11 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       );
       yield* agents.setTrusted(project, "project", "fake", true);
       const outcome = yield* prompt("hi");
-      const failure = { code: "spawn_failed", detail: expect.stringContaining("API_KEY=") };
-      expect(outcome).toEqual({ status: "unavailable", failure });
+      const failure = {
+        code: "spawn_failed" as const,
+        detail: expect.stringContaining("API_KEY="),
+      };
+      expect(outcome).toEqual(ExternalPromptOutcome.unavailable({ failure }));
       expect(yield* link).toEqual({ status: "retrying", failures: 1, failure });
       // The settings page's command line hides the same value.
       const listed = yield* agents.overview(project);
@@ -153,7 +154,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
     Effect.gen(function* () {
       const { project, agents, config, starts, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
-      expect(yield* prompt("hi")).toMatchObject({ status: "completed" });
+      expect(ExternalPromptOutcome.$is("completed")(yield* prompt("hi"))).toBe(true);
       const pid = Number((yield* starts)[0]?.pid);
       yield* (yield* FileSystem.FileSystem).writeFileString(
         config,
@@ -161,10 +162,9 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       );
       expect((yield* agents.overview(project)).agents).toEqual([]);
       yield* until(() => !processAlive(pid), "the removed agent to stop");
-      expect(yield* prompt("again")).toEqual({
-        status: "unavailable",
-        failure: { code: "not_trusted", detail: null },
-      });
+      expect(yield* prompt("again")).toEqual(
+        ExternalPromptOutcome.unavailable({ failure: { code: "not_trusted", detail: null } }),
+      );
     }),
   );
 
@@ -199,10 +199,9 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       });
       yield* eventually(fs.exists(`${log}.slow`), "the slow prompt to reach the agent");
       controller.abort();
-      expect(yield* Fiber.join(pending)).toMatchObject({
-        status: "cancelled",
-        stopReason: "cancelled",
-      });
+      const cancelled = yield* Fiber.join(pending);
+      expect(ExternalPromptOutcome.$is("cancelled")(cancelled)).toBe(true);
+      expect(cancelled).toMatchObject({ stopReason: "cancelled" });
     }),
   );
 
@@ -225,7 +224,9 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         status: "trusted",
         link: { status: "connected" },
       });
-      expect(yield* prompt("after cancellation")).toMatchObject({ status: "completed" });
+      expect(ExternalPromptOutcome.$is("completed")(yield* prompt("after cancellation"))).toBe(
+        true,
+      );
     }),
   );
 
@@ -236,11 +237,9 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const { project, agents, refuse, starts, link, prompt, trust } = yield* fakeAgentProject();
         yield* trust;
-        expect(yield* prompt("crash now")).toEqual({
-          status: "disconnected",
-          answer: "partial before crash",
-          toolCalls: [],
-        });
+        expect(yield* prompt("crash now")).toEqual(
+          ExternalPromptOutcome.disconnected({ answer: "partial before crash", toolCalls: [] }),
+        );
         yield* eventually(
           Effect.map(starts, (rows) => rows.length === 2),
           "the automatic reconnect",
@@ -261,17 +260,18 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           "ACP reconnect limit",
         );
         expect(yield* link).toMatchObject({ status: "stopped", failures: 2 });
-        expect(yield* prompt("while stopped")).toEqual({
-          status: "unavailable",
-          failure: { code: "stopped_after_failures", detail: null },
-        });
+        expect(yield* prompt("while stopped")).toEqual(
+          ExternalPromptOutcome.unavailable({
+            failure: { code: "stopped_after_failures", detail: null },
+          }),
+        );
 
         yield* fs.remove(refuse);
         expect((yield* agents.reconnect(project, "fake")).agents[0]?.state).toMatchObject({
           status: "trusted",
           link: { status: "connected" },
         });
-        expect(yield* prompt("back")).toMatchObject({ status: "completed" });
+        expect(ExternalPromptOutcome.$is("completed")(yield* prompt("back"))).toBe(true);
       }),
     30_000,
   );

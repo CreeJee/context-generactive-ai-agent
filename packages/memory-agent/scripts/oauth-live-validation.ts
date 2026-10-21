@@ -3,7 +3,7 @@ import { OAuthCheckFailed, OAuthCheckReason } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
 import { OAuthHarnessError, OAuthValidationHarness } from "../src/oauth/validation-harness.ts";
-import { providerProtocols } from "../src/oauth/protocol.ts";
+import { NormalizedStreamEvent, providerProtocols } from "../src/oauth/protocol.ts";
 
 const openBrowser = (command: string, args: string[]) => runProcess({ command, args });
 // Native host/SDK configuration boundary reads or forwards the host environment.
@@ -76,7 +76,7 @@ try {
 
   let textSeen = false;
   for await (const event of harness.stream(textRequest))
-    if (event.type === "text" && event.text.length > 0) textSeen = true;
+    if (NormalizedStreamEvent.$is("text")(event) && event.text.length > 0) textSeen = true;
   if (!textSeen)
     throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.stream_text_missing.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
@@ -84,7 +84,8 @@ try {
 
   let toolSeen = false;
   for await (const event of harness.stream(toolRequest))
-    if (event.type === "tool-call" && event.name === "echo_probe") toolSeen = true;
+    if (NormalizedStreamEvent.$is("tool-call")(event) && event.name === "echo_probe")
+      toolSeen = true;
   if (!toolSeen)
     throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.tool_call_missing.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.

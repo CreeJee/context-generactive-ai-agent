@@ -1,16 +1,15 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import { Kagi } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.kagi";
 
-const KagiAction = Schema.Union([
-  Schema.Struct({
-    action: Schema.Literal("register"),
-    key: Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())),
-  }),
-  Schema.Struct({ action: Schema.Literals(["remove", "enable", "disable"]) }),
-]);
+const KagiAction = Schema.TaggedUnion({
+  register: { key: Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())) },
+  remove: {},
+  enable: {},
+  disable: {},
+});
 
 const keychainFailed = (operation: string) =>
   Response.json({ error: "keychain_failed", reason: operation }, { status: 500 });
@@ -46,18 +45,14 @@ export function action({ request }: Route.ActionArgs) {
 
       const response = Effect.gen(function* () {
         const kagi = yield* Kagi;
-        const command = body.success;
-        switch (command.action) {
-          case "register":
-            yield* kagi.registerKey(command.key);
-            return Response.json(yield* kagi.status);
-          case "remove":
-            yield* kagi.removeKey;
-            return Response.json(yield* kagi.status);
-          case "enable":
-          case "disable":
-            return Response.json(yield* kagi.setEnabled(command.action === "enable"));
-        }
+        return Response.json(
+          yield* Match.valueTags(body.success, {
+            register: ({ key }) => kagi.registerKey(key).pipe(Effect.andThen(kagi.status)),
+            remove: () => kagi.removeKey.pipe(Effect.andThen(kagi.status)),
+            enable: () => kagi.setEnabled(true),
+            disable: () => kagi.setEnabled(false),
+          }),
+        );
       }).pipe(
         Effect.catchTags({
           SecretStoreFailed: (failure) => Effect.succeed(keychainFailed(failure.operation)),

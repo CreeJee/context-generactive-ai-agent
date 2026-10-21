@@ -3,19 +3,10 @@ import { SqlClient } from "effect/sql";
 import { historyProjectionSnapshots } from "./history-projection-sql.ts";
 
 const PageSize = Schema.Int.check(Schema.isGreaterThan(0));
-export const HistoryPageRequest = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("initial"),
-    threadId: Schema.NonEmptyString,
-    limit: PageSize,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("older"),
-    threadId: Schema.NonEmptyString,
-    limit: PageSize,
-    before: Schema.NonEmptyString,
-  }),
-]);
+export const HistoryPageRequest = Schema.TaggedUnion({
+  initial: { threadId: Schema.NonEmptyString, limit: PageSize },
+  older: { threadId: Schema.NonEmptyString, limit: PageSize, before: Schema.NonEmptyString },
+});
 export type HistoryPageRequest = typeof HistoryPageRequest.Type;
 
 const stateFields = {
@@ -46,20 +37,17 @@ const Group = Schema.Struct({
   messages: Schema.NonEmptyString,
 });
 
-export const HistoryPageSnapshot = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("not-ready"),
-    reason: Schema.Literals(["unprepared", "stale", "unsupported-format"]),
-  }),
-  Schema.Struct({ type: Schema.Literal("unknown-cursor") }),
-  Schema.Struct({
-    type: Schema.Literal("page"),
+export const HistoryPageSnapshot = Schema.TaggedUnion({
+  "not-ready": { reason: Schema.Literals(["unprepared", "stale", "unsupported-format"]) },
+  "unknown-cursor": {},
+  page: {
     groups: Schema.Array(Group),
     truncated: Schema.Boolean,
     nextCursor: Schema.NullOr(Schema.NonEmptyString),
-  }),
-]);
+  },
+});
 export type HistoryPageSnapshot = typeof HistoryPageSnapshot.Type;
+const snapshot = HistoryPageSnapshot.cases;
 
 export const HistoryProjectionReadReason = Schema.TaggedUnion({
   InvalidRequest: {},
@@ -97,21 +85,16 @@ export class HistoryProjectionReader extends Context.Service<
             HistoryProjectionReadFailed.make({ reason: readReason.InvalidRequest.make({}) }),
           ),
         );
-        const raw = yield* (() => {
-          switch (request.type) {
-            case "initial":
-              return sql.unsafe(historyProjectionSnapshots.initial, [
-                request.threadId,
-                request.limit,
-              ]);
-            case "older":
-              return sql.unsafe(historyProjectionSnapshots.older, [
-                request.threadId,
-                request.before,
-                request.limit,
-              ]);
-          }
-        })().pipe(
+        const raw = yield* HistoryPageRequest.match(request, {
+          initial: (initial) =>
+            sql.unsafe(historyProjectionSnapshots.initial, [initial.threadId, initial.limit]),
+          older: (older) =>
+            sql.unsafe(historyProjectionSnapshots.older, [
+              older.threadId,
+              older.before,
+              older.limit,
+            ]),
+        }).pipe(
           Effect.mapError(() =>
             HistoryProjectionReadFailed.make({
               reason: readReason.SqliteRead.make({ phase: "query" }),
@@ -128,10 +111,11 @@ export class HistoryProjectionReader extends Context.Service<
           return yield* HistoryProjectionReadFailed.make({
             reason: readReason.InvalidSnapshot.make({}),
           });
-        if (state.format_version === 0) return { type: "not-ready", reason: "unprepared" };
-        if (state.format_version !== 1) return { type: "not-ready", reason: "unsupported-format" };
-        if (state.ready === 0) return { type: "not-ready", reason: "stale" };
-        if (state.cursor_valid === 0) return { type: "unknown-cursor" };
+        if (state.format_version === 0) return snapshot["not-ready"].make({ reason: "unprepared" });
+        if (state.format_version !== 1)
+          return snapshot["not-ready"].make({ reason: "unsupported-format" });
+        if (state.ready === 0) return snapshot["not-ready"].make({ reason: "stale" });
+        if (state.cursor_valid === 0) return snapshot["unknown-cursor"].make({});
         // Do not parse arbitrary model-message JSON here. The SDK codec/adapter must
         // validate and decode these selected groups, never the authoritative transcript.
         const groups: Array<typeof Group.Type> = [];
@@ -141,12 +125,11 @@ export class HistoryProjectionReader extends Context.Service<
         }
         groups.sort((a, b) => a.ordinal - b.ordinal);
         const truncated = state.has_earlier === 1;
-        return {
-          type: "page",
+        return snapshot.page.make({
           groups,
           truncated,
           nextCursor: truncated ? (groups[0]?.uiId ?? null) : null,
-        };
+        });
       });
       return HistoryProjectionReader.of({ read });
     }),

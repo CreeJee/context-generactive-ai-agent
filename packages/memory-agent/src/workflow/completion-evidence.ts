@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Effect, MutableHashMap, MutableHashSet, Option, Schema } from "effect";
+import { Data, Effect, MutableHashMap, MutableHashSet, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import type { WorkflowState } from "./workflow.ts";
 
@@ -72,10 +72,12 @@ const Revision = Schema.Struct({
 });
 const Source = Schema.Struct({ source_generation: Schema.String, manifest_hash: Schema.String });
 
-type Derived =
-  | { readonly status: "accepted"; readonly snapshot: CompletionSnapshot }
-  | { readonly status: "refused" };
-const refused: Derived = { status: "refused" };
+export type Derived = Data.TaggedEnum<{
+  accepted: { readonly snapshot: CompletionSnapshot };
+  refused: {};
+}>;
+export const Derived = Data.taggedEnum<Derived>();
+const refused: Derived = Derived.refused();
 
 /** Owner-side DB boundary; no code, credentials or artifact bytes enter the snapshot. */
 export const completionEvidence = Effect.gen(function* () {
@@ -289,8 +291,7 @@ export const completionEvidence = Effect.gen(function* () {
     }
     if (MutableHashSet.size(coverage) !== goal.outcomes.length) return refused;
     const registration = Option.getOrNull(yield* registrationOf(goalId));
-    const accepted: Derived = {
-      status: "accepted",
+    const accepted: Derived = Derived.accepted({
       snapshot: {
         sessionId,
         projectId,
@@ -305,7 +306,7 @@ export const completionEvidence = Effect.gen(function* () {
         mappings,
         runs: [...MutableHashMap.values(runs)],
       },
-    };
+    });
     return accepted;
   });
   const running = (runId: string) =>

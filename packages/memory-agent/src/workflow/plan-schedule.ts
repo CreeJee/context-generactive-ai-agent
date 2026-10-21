@@ -1,4 +1,4 @@
-import { Array as EffectArray, Effect, Schema } from "effect";
+import { Array as EffectArray, Data, Effect, Schema } from "effect";
 import { stepProgressStatus, type StepProgressStatus } from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
@@ -96,19 +96,19 @@ export interface WaitingStep {
   readonly unmet: EffectArray.NonEmptyReadonlyArray<UnmetDependency>;
 }
 
-export type PlanSchedule =
-  | { readonly kind: "finished" }
-  | {
-      readonly kind: "runnable";
-      readonly ready: ReadonlyArray<string>;
-      readonly inProgress: ReadonlyArray<string>;
-      readonly waiting: ReadonlyArray<WaitingStep>;
-    }
-  | {
-      readonly kind: "stalled";
-      readonly blocked: ReadonlyArray<string>;
-      readonly waiting: ReadonlyArray<WaitingStep>;
-    };
+export type PlanSchedule = Data.TaggedEnum<{
+  finished: {};
+  runnable: {
+    readonly ready: ReadonlyArray<string>;
+    readonly inProgress: ReadonlyArray<string>;
+    readonly waiting: ReadonlyArray<WaitingStep>;
+  };
+  stalled: {
+    readonly blocked: ReadonlyArray<string>;
+    readonly waiting: ReadonlyArray<WaitingStep>;
+  };
+}>;
+export const PlanSchedule = Data.taggedEnum<PlanSchedule>();
 
 /**
  * Ready steps have not started and every dependency is done; backlog and ready cards are both
@@ -146,10 +146,10 @@ export function planSchedule(steps: readonly PlanStep[]): PlanSchedule {
       }
     }
   if (ready.length > 0 || inProgress.length > 0)
-    return { kind: "runnable", ready, inProgress, waiting };
+    return PlanSchedule.runnable({ ready, inProgress, waiting });
   return blocked.length === 0 && waiting.length === 0
-    ? { kind: "finished" }
-    : { kind: "stalled", blocked, waiting };
+    ? PlanSchedule.finished()
+    : PlanSchedule.stalled({ blocked, waiting });
 }
 
 export const unmetDependencyText = (step: WaitingStep) =>
@@ -157,7 +157,7 @@ export const unmetDependencyText = (step: WaitingStep) =>
 
 /** Deterministic chain of why no remaining step can start. */
 export const stalledEvidence = (
-  schedule: Extract<PlanSchedule, { kind: "stalled" }>,
+  schedule: Data.TaggedEnum.Value<PlanSchedule, "stalled">,
 ): EffectArray.NonEmptyReadonlyArray<string> => {
   const lines = [
     ...schedule.blocked.map((id) => `${id} [blocked]`),

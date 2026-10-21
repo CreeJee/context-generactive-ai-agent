@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import { browserCrypto } from "../shared/browser-crypto";
 import { Function as EffectFunction } from "effect";
 import { useEffect, useRef, useState } from "react";
@@ -18,10 +18,12 @@ interface DraftImageBase {
 }
 
 /** An image attached to the message being written. */
-export type DraftImage =
-  | (DraftImageBase & { readonly status: "uploading" })
-  | (DraftImageBase & { readonly status: "ready"; readonly attachment: Attachment })
-  | (DraftImageBase & { readonly status: "failed"; readonly reason: string });
+export type DraftImage = Data.TaggedEnum<{
+  uploading: DraftImageBase;
+  ready: DraftImageBase & { readonly attachment: Attachment };
+  failed: DraftImageBase & { readonly reason: string };
+}>;
+export const DraftImage = Data.taggedEnum<DraftImage>();
 
 /**
  * Images for the message being written: upload on attach, `#N` numbers that stay put until the
@@ -66,19 +68,17 @@ export function useDraftImages() {
       if (!acceptedTypes.some((type) => type === file.type)) {
         setImages((current) => [
           ...current,
-          { ...base, status: "failed", reason: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요." },
+          DraftImage.failed({ ...base, reason: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요." }),
         ]);
         continue;
       }
-      setImages((current) => [...current, { ...base, status: "uploading" }]);
+      setImages((current) => [...current, DraftImage.uploading(base)]);
       api.uploadAttachment(file).then(
-        (attachment) => settle(base.key, (image) => ({ ...image, status: "ready", attachment })),
+        (attachment) => settle(base.key, (image) => DraftImage.ready({ ...image, attachment })),
         (error: Error) =>
-          settle(base.key, (image) => ({
-            ...image,
-            status: "failed",
-            reason: attachmentErrorMessage(refusalOf(error)),
-          })),
+          settle(base.key, (image) =>
+            DraftImage.failed({ ...image, reason: attachmentErrorMessage(refusalOf(error)) }),
+          ),
       );
     }
   };

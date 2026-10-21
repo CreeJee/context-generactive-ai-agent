@@ -4,9 +4,13 @@ import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
 import { isApiError, type WorkflowAction, type WorkflowPhase } from "../api";
 import { useProjectScope } from "../events/context";
-import { noticeOf, type PageView } from "./run-notice";
+import { noticeOf, RunNotice, type PageView } from "./run-notice";
 import { useRunStateQuery } from "../queries/session";
-import { useCancelRunMutation, useWorkflowMutation } from "../queries/mutations/session";
+import {
+  useCancelRunMutation,
+  useWorkflowMutation,
+  WorkflowChange,
+} from "../queries/mutations/session";
 
 /** The authoritative durable run/workflow snapshot, refreshed by session SSE invalidations. */
 export const useRunState: {
@@ -57,10 +61,10 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     );
 
   const setWorkflowPhase = (phase: WorkflowPhase) =>
-    workflowMutation.mutateAsync({ kind: "phase", phase });
+    workflowMutation.mutateAsync(WorkflowChange.phase({ phase }));
 
   const controlWorkflow = (action: WorkflowAction) =>
-    workflowMutation.mutateAsync({ kind: "control", action });
+    workflowMutation.mutateAsync(WorkflowChange.control({ action }));
 
   return {
     cancelling: cancelMutation.isPending,
@@ -76,7 +80,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     uncertainRuns: state?.uncertainRuns ?? [],
     setWorkflowPhase,
     notice: cancelPending
-      ? ({ kind: "cancel-pending" } as const)
+      ? RunNotice["cancel-pending"]()
       : generating
         ? null
         : noticeOf(state, page),

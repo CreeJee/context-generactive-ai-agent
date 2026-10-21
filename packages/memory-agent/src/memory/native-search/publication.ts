@@ -1,4 +1,4 @@
-import { Effect, Exit, Ref, Schema, Scope, Semaphore } from "effect";
+import { Data, Effect, Exit, Ref, Schema, Scope, Semaphore } from "effect";
 import type { ReadAdmission } from "./client.ts";
 
 export class PublicationFailed extends Schema.TaggedError<PublicationFailed>()(
@@ -8,9 +8,11 @@ export class PublicationFailed extends Schema.TaggedError<PublicationFailed>()(
   },
 ) {}
 
-type PublicationState =
-  | { readonly kind: "ready"; readonly generation: number }
-  | { readonly kind: "poisoned"; readonly generation: number };
+export type PublicationState = Data.TaggedEnum<{
+  ready: { readonly generation: number };
+  poisoned: { readonly generation: number };
+}>;
+export const PublicationState = Data.taggedEnum<PublicationState>();
 
 /**
  * One ephemeral gate per actual index owner; no additional writer or durable format.
@@ -23,17 +25,15 @@ type PublicationState =
  */
 export const makePublication = Effect.fn("NativePublication.make")(function* (epoch: string) {
   const gate = yield* Semaphore.make(1);
-  const state = yield* Ref.make<PublicationState>({ kind: "ready", generation: 0 });
+  const state = yield* Ref.make<PublicationState>(PublicationState.ready({ generation: 0 }));
 
-  const current = Effect.gen(function* () {
-    const value = yield* Ref.get(state);
-    switch (value.kind) {
-      case "ready":
-        return { epoch, generation: value.generation };
-      case "poisoned":
-        return yield* PublicationFailed.make({ reason: "poisoned" });
-    }
-  });
+  const current = Effect.flatMap(
+    Ref.get(state),
+    PublicationState.$match({
+      ready: ({ generation }) => Effect.succeed({ epoch, generation }),
+      poisoned: () => Effect.fail(PublicationFailed.make({ reason: "poisoned" })),
+    }),
+  );
 
   function withMutation<A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -58,15 +58,15 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
           const result = yield* Effect.exit(mutation);
           return yield* Exit.match(result, {
             onFailure: (cause) =>
-              Ref.set<PublicationState>(state, {
-                kind: "poisoned",
-                generation: before.generation,
-              }).pipe(Effect.andThen(Effect.failCause(cause))),
+              Ref.set<PublicationState>(
+                state,
+                PublicationState.poisoned({ generation: before.generation }),
+              ).pipe(Effect.andThen(Effect.failCause(cause))),
             onSuccess: (value) =>
-              Ref.set<PublicationState>(state, {
-                kind: "ready",
-                generation: before.generation + 1,
-              }).pipe(Effect.as(value)),
+              Ref.set<PublicationState>(
+                state,
+                PublicationState.ready({ generation: before.generation + 1 }),
+              ).pipe(Effect.as(value)),
           });
         }),
       ),

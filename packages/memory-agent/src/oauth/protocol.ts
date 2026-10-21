@@ -1,4 +1,4 @@
-import { Effect, Function as EffectFunction } from "effect";
+import { Data, Effect, Function as EffectFunction } from "effect";
 import { oauthProtocolCrypto } from "./node-runtime.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { Option, Schema } from "effect";
@@ -153,73 +153,105 @@ export const createOAuthState = () =>
 export const ToolArguments = Schema.Record(Schema.String, JsonValue);
 export type ToolArguments = typeof ToolArguments.Type;
 
-export interface StreamTextEvent {
-  readonly type: "text";
-  readonly text: string;
-}
+/** The provider-neutral stream contract that both providers' SSE events are decoded into. */
+export type NormalizedStreamEvent = Data.TaggedEnum<{
+  text: { readonly text: string };
+  "tool-call": {
+    readonly id: string;
+    readonly name: string;
+    readonly arguments: ToolArguments;
+  };
+  "tool-call-start": {
+    readonly index: number;
+    readonly id: string;
+    readonly name: string;
+  };
+  "tool-call-arguments": {
+    readonly index: number;
+    readonly delta: string;
+  };
+  "content-block-end": { readonly index: number };
+  "reasoning-start": { readonly index: number };
+  "reasoning-delta": {
+    readonly index: number;
+    readonly delta: string;
+  };
+  "reasoning-signature": {
+    readonly index: number;
+    readonly signature: string;
+  };
+  reasoning: {
+    readonly id: string;
+    readonly encryptedContent: string;
+  };
+  "reasoning-summary-start": {
+    readonly id: string;
+    readonly summaryIndex: number;
+    readonly text: string;
+  };
+  "reasoning-summary-delta": {
+    readonly id: string;
+    readonly summaryIndex: number;
+    readonly delta: string;
+  };
+  "reasoning-summary-end": {
+    readonly id: string;
+    readonly summaryIndex: number;
+    readonly text: string;
+  };
+  usage: {
+    readonly promptTokens?: number;
+    readonly completionTokens?: number;
+    readonly cachedPromptTokens?: number;
+  };
+  error: {
+    readonly code: string;
+    readonly message: string;
+  };
+}>;
+export const NormalizedStreamEvent = Data.taggedEnum<NormalizedStreamEvent>();
 
-export interface StreamToolCallEvent {
-  readonly type: "tool-call";
-  readonly id: string;
-  readonly name: string;
-  readonly arguments: ToolArguments;
-}
-
-export interface StreamToolCallStartEvent {
-  readonly type: "tool-call-start";
-  readonly index: number;
-  readonly id: string;
-  readonly name: string;
-}
-
-export interface StreamToolCallArgumentsEvent {
-  readonly type: "tool-call-arguments";
-  readonly index: number;
-  readonly delta: string;
-}
-
-export interface StreamContentBlockEndEvent {
-  readonly type: "content-block-end";
-  readonly index: number;
-}
-
-export interface StreamReasoningStartEvent {
-  readonly type: "reasoning-start";
-  readonly index: number;
-}
-
-export interface StreamReasoningDeltaEvent {
-  readonly type: "reasoning-delta";
-  readonly index: number;
-  readonly delta: string;
-}
-
-export interface StreamReasoningSignatureEvent {
-  readonly type: "reasoning-signature";
-  readonly index: number;
-  readonly signature: string;
-}
-
-export interface StreamReasoningSummaryStartEvent {
-  readonly type: "reasoning-summary-start";
-  readonly id: string;
-  readonly summaryIndex: number;
-  readonly text: string;
-}
-
-export interface StreamReasoningSummaryDeltaEvent {
-  readonly type: "reasoning-summary-delta";
-  readonly id: string;
-  readonly summaryIndex: number;
-  readonly delta: string;
-}
-
-export interface StreamReasoningSummaryEndEvent {
-  readonly type: "reasoning-summary-end";
-  readonly id: string;
-  readonly summaryIndex: number;
-  readonly text: string;
-}
+export type StreamTextEvent = Data.TaggedEnum.Value<NormalizedStreamEvent, "text">;
+export type StreamToolCallEvent = Data.TaggedEnum.Value<NormalizedStreamEvent, "tool-call">;
+export type StreamToolCallStartEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "tool-call-start"
+>;
+export type StreamToolCallArgumentsEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "tool-call-arguments"
+>;
+export type StreamContentBlockEndEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "content-block-end"
+>;
+export type StreamReasoningStartEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "reasoning-start"
+>;
+export type StreamReasoningDeltaEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "reasoning-delta"
+>;
+export type StreamReasoningSignatureEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "reasoning-signature"
+>;
+export type StreamReasoningSummaryStartEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "reasoning-summary-start"
+>;
+export type StreamReasoningSummaryDeltaEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "reasoning-summary-delta"
+>;
+export type StreamReasoningSummaryEndEvent = Data.TaggedEnum.Value<
+  NormalizedStreamEvent,
+  "reasoning-summary-end"
+>;
+export type StreamReasoningEvent = Data.TaggedEnum.Value<NormalizedStreamEvent, "reasoning">;
+export type StreamUsageEvent = Data.TaggedEnum.Value<NormalizedStreamEvent, "usage">;
+export type StreamErrorEvent = Data.TaggedEnum.Value<NormalizedStreamEvent, "error">;
 
 export const ReasoningSummaryProtocolFailedReason = Schema.TaggedUnion({
   InterleavedItems: {},
@@ -242,41 +274,6 @@ export interface StreamReasoningItemEndEvent {
   readonly type: "reasoning-item-end";
   readonly id: string;
 }
-
-export interface StreamReasoningEvent {
-  readonly type: "reasoning";
-  readonly id: string;
-  readonly encryptedContent: string;
-}
-
-export interface StreamUsageEvent {
-  readonly type: "usage";
-  readonly promptTokens?: number;
-  readonly completionTokens?: number;
-  readonly cachedPromptTokens?: number;
-}
-
-export interface StreamErrorEvent {
-  readonly type: "error";
-  readonly code: string;
-  readonly message: string;
-}
-
-export type NormalizedStreamEvent =
-  | StreamTextEvent
-  | StreamToolCallEvent
-  | StreamToolCallStartEvent
-  | StreamToolCallArgumentsEvent
-  | StreamContentBlockEndEvent
-  | StreamReasoningStartEvent
-  | StreamReasoningDeltaEvent
-  | StreamReasoningSignatureEvent
-  | StreamReasoningEvent
-  | StreamReasoningSummaryStartEvent
-  | StreamReasoningSummaryDeltaEvent
-  | StreamReasoningSummaryEndEvent
-  | StreamUsageEvent
-  | StreamErrorEvent;
 
 const SummaryIndex = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const OpenAiWireEvent = Schema.Union([
@@ -440,68 +437,61 @@ function decodeProviderEventBody(
         onSome: (event): NormalizedStreamEvent | null => {
           switch (event.type) {
             case "response.reasoning_summary_part.added":
-              return {
-                type: "reasoning-summary-start",
+              return NormalizedStreamEvent["reasoning-summary-start"]({
                 id: event.item_id,
                 summaryIndex: event.summary_index,
                 text: event.part.text,
-              };
+              });
             case "response.reasoning_summary_text.delta":
-              return {
-                type: "reasoning-summary-delta",
+              return NormalizedStreamEvent["reasoning-summary-delta"]({
                 id: event.item_id,
                 summaryIndex: event.summary_index,
                 delta: event.delta,
-              };
+              });
             case "response.reasoning_summary_part.done":
-              return {
-                type: "reasoning-summary-end",
+              return NormalizedStreamEvent["reasoning-summary-end"]({
                 id: event.item_id,
                 summaryIndex: event.summary_index,
                 text: event.part.text,
-              };
+              });
             default:
               break;
           }
           if (event.type === "response.output_text.delta")
-            return { type: "text", text: event.delta };
+            return NormalizedStreamEvent.text({ text: event.delta });
           if (event.type === "response.completed")
-            return {
-              type: "usage",
+            return NormalizedStreamEvent.usage({
               promptTokens: event.response.usage.input_tokens,
               completionTokens: event.response.usage.output_tokens,
               ...optionalProperty(
                 "cachedPromptTokens",
                 event.response.usage.input_tokens_details?.cached_tokens,
               ),
-            };
+            });
           if (event.type === "response.failed")
-            return {
-              type: "error",
+            return NormalizedStreamEvent.error({
               code: event.response.error.code ?? "response_failed",
               message: event.response.error.message,
-            };
+            });
           if (event.type === "error")
-            return {
-              type: "error",
+            return NormalizedStreamEvent.error({
               code: event.code ?? "provider_error",
               message: event.message,
-            };
+            });
           if (event.item.type === "reasoning")
-            return {
-              type: "reasoning",
+            return NormalizedStreamEvent.reasoning({
               id: event.item.id,
               encryptedContent: event.item.encrypted_content,
-            };
+            });
           const item = event.item;
           return Option.match(decodeToolArguments(item.arguments), {
             onNone: () => null,
-            onSome: (argumentsValue) => ({
-              type: "tool-call",
-              id: item.call_id,
-              name: item.name,
-              arguments: argumentsValue,
-            }),
+            onSome: (argumentsValue) =>
+              NormalizedStreamEvent["tool-call"]({
+                id: item.call_id,
+                name: item.name,
+                arguments: argumentsValue,
+              }),
           });
         },
       });
@@ -510,50 +500,44 @@ function decodeProviderEventBody(
       onNone: () => null,
       onSome: (event): NormalizedStreamEvent | null => {
         if (event.type === "content_block_delta" && event.delta.type === "text_delta")
-          return { type: "text", text: event.delta.text };
+          return NormalizedStreamEvent.text({ text: event.delta.text });
         if (event.type === "message_start")
-          return {
-            type: "usage",
+          return NormalizedStreamEvent.usage({
             promptTokens: event.message.usage.input_tokens,
             ...optionalProperty("cachedPromptTokens", event.message.usage.cache_read_input_tokens),
-          };
+          });
         if (event.type === "message_delta")
-          return { type: "usage", completionTokens: event.usage.output_tokens };
+          return NormalizedStreamEvent.usage({ completionTokens: event.usage.output_tokens });
         if (event.type === "error")
-          return {
-            type: "error",
+          return NormalizedStreamEvent.error({
             code: event.error.type,
             message: event.error.message,
-          };
+          });
         if (event.type === "content_block_start" && event.content_block.type === "tool_use")
-          return {
-            type: "tool-call-start",
+          return NormalizedStreamEvent["tool-call-start"]({
             index: event.index,
             id: event.content_block.id,
             name: event.content_block.name,
-          };
+          });
         if (event.type === "content_block_start" && event.content_block.type === "thinking")
-          return { type: "reasoning-start", index: event.index };
+          return NormalizedStreamEvent["reasoning-start"]({ index: event.index });
         if (event.type === "content_block_delta" && event.delta.type === "input_json_delta")
-          return {
-            type: "tool-call-arguments",
+          return NormalizedStreamEvent["tool-call-arguments"]({
             index: event.index,
             delta: event.delta.partial_json,
-          };
+          });
         if (event.type === "content_block_delta" && event.delta.type === "thinking_delta")
-          return {
-            type: "reasoning-delta",
+          return NormalizedStreamEvent["reasoning-delta"]({
             index: event.index,
             delta: event.delta.thinking,
-          };
+          });
         if (event.type === "content_block_delta" && event.delta.type === "signature_delta")
-          return {
-            type: "reasoning-signature",
+          return NormalizedStreamEvent["reasoning-signature"]({
             index: event.index,
             signature: event.delta.signature,
-          };
+          });
         if (event.type === "content_block_stop")
-          return { type: "content-block-end", index: event.index };
+          return NormalizedStreamEvent["content-block-end"]({ index: event.index });
         return null;
       },
     });

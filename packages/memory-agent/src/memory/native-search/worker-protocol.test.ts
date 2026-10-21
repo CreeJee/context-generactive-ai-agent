@@ -3,15 +3,14 @@ import { expect, it } from "vite-plus/test";
 import { OwnerCommand } from "./worker-protocol.ts";
 
 it("admits a bounded budget without exposing a shared backing-store control", () => {
-  const request = {
-    kind: "vector-search-controlled",
+  const request = OwnerCommand.cases["vector-search-controlled"].make({
     epoch: "schema",
     requestId: "one",
     query: new Float32Array(8),
     k: 1,
     allowedIds: [],
     budgetMs: 2_000,
-  };
+  });
   const valid = Schema.is(OwnerCommand);
   expect(valid(request)).toBe(true);
   expect(valid({ ...request, controlToken: 42 })).toBe(false);

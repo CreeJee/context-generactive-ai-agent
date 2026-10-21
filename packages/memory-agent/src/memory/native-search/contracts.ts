@@ -1,3 +1,5 @@
+import { Data } from "effect";
+
 /** Internal transport contracts, not the public MemorySearch result or authorization API.
  * The host validates/copies inputs at the worker boundary. Native code never owns policy.
  */
@@ -7,23 +9,28 @@ export interface PublishedGeneration {
   readonly generation: string;
 }
 
-export type QueryVectorChannel =
-  | { readonly kind: "ready"; readonly vector: Float32Array }
-  | { readonly kind: "empty" }
-  | { readonly kind: "unavailable" };
+export type QueryVectorChannel = Data.TaggedEnum<{
+  ready: { readonly vector: Float32Array };
+  empty: {};
+  unavailable: {};
+}>;
+export const QueryVectorChannel = Data.taggedEnum<QueryVectorChannel>();
 
-export type MorphTermsChannel =
-  | { readonly kind: "ready"; readonly terms: readonly string[] }
-  | { readonly kind: "disabled" }
-  | { readonly kind: "unavailable" };
+export type MorphTermsChannel = Data.TaggedEnum<{
+  ready: { readonly terms: readonly string[] };
+  disabled: {};
+  unavailable: {};
+}>;
+export const MorphTermsChannel = Data.taggedEnum<MorphTermsChannel>();
 
-export type TextTermsChannel =
-  | {
-      readonly kind: "enabled";
-      readonly trigram: readonly string[];
-      readonly short: readonly string[];
-    }
-  | { readonly kind: "disabled" };
+export type TextTermsChannel = Data.TaggedEnum<{
+  enabled: {
+    readonly trigram: readonly string[];
+    readonly short: readonly string[];
+  };
+  disabled: {};
+}>;
+export const TextTermsChannel = Data.taggedEnum<TextTermsChannel>();
 
 export interface ChannelBudgets {
   readonly vectorK: number;
@@ -100,22 +107,19 @@ export type NativeSearchFailureCode =
   | "read-failed"
   | "index-failed";
 
-export type NativeSearchOutcome =
-  | (SearchData & { readonly kind: "success" })
-  | (SearchData & {
-      readonly kind: "degraded";
-      readonly unavailable: readonly ("vector" | "morph")[];
-    })
-  | (Completion & { readonly kind: "cancelled"; readonly phase: "terminated" })
-  | (Completion & {
-      readonly kind: "budget-exceeded";
-      readonly category: "queue" | "execution" | "input" | "output";
-    })
-  | (Completion & {
-      readonly kind: "stale-generation";
-      readonly reason: "epoch" | "generation" | "unpublished" | "poisoned";
-    })
-  | (Completion & { readonly kind: "error"; readonly code: NativeSearchFailureCode });
+export type NativeSearchOutcome = Data.TaggedEnum<{
+  success: SearchData;
+  degraded: SearchData & { readonly unavailable: readonly ("vector" | "morph")[] };
+  cancelled: Completion & { readonly phase: "terminated" };
+  "budget-exceeded": Completion & {
+    readonly category: "queue" | "execution" | "input" | "output";
+  };
+  "stale-generation": Completion & {
+    readonly reason: "epoch" | "generation" | "unpublished" | "poisoned";
+  };
+  error: Completion & { readonly code: NativeSearchFailureCode };
+}>;
+export const NativeSearchOutcome = Data.taggedEnum<NativeSearchOutcome>();
 
 /** Framework-neutral async transport boundary; the Effect adapter submits lazily in its Scope.
  * No implementation may invoke heavy synchronous native search on the caller thread.

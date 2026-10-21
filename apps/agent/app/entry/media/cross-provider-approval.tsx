@@ -1,3 +1,4 @@
+import { Data } from "effect";
 import { overlay } from "overlay-kit";
 import { Button } from "~/components/ui/button";
 import {
@@ -9,10 +10,12 @@ import {
 } from "~/components/ui/dialog";
 import type { CrossProviderMediaRunApproval } from "../api";
 
-export type ApprovalChoice =
-  | { readonly kind: "cancel" }
-  | { readonly kind: "once"; readonly approval: CrossProviderMediaRunApproval }
-  | { readonly kind: "always" };
+export type ApprovalChoice = Data.TaggedEnum<{
+  cancel: {};
+  once: { readonly approval: CrossProviderMediaRunApproval };
+  always: {};
+}>;
+export const ApprovalChoice = Data.taggedEnum<ApprovalChoice>();
 
 /** The server's cross-provider disclosure has three explicit outcomes. */
 export function chooseCrossProviderApproval(approval: CrossProviderMediaRunApproval) {
@@ -25,7 +28,7 @@ export function chooseCrossProviderApproval(approval: CrossProviderMediaRunAppro
       <Dialog
         open={isOpen}
         onOpenChange={(open) => {
-          if (!open) choose({ kind: "cancel" });
+          if (!open) choose(ApprovalChoice.cancel());
         }}
       >
         <DialogContent>
@@ -37,13 +40,13 @@ export function chooseCrossProviderApproval(approval: CrossProviderMediaRunAppro
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => choose({ kind: "cancel" })}>
+            <Button variant="outline" onClick={() => choose(ApprovalChoice.cancel())}>
               취소
             </Button>
-            <Button variant="outline" onClick={() => choose({ kind: "once", approval })}>
+            <Button variant="outline" onClick={() => choose(ApprovalChoice.once({ approval }))}>
               이번만 허용
             </Button>
-            <Button onClick={() => choose({ kind: "always" })}>항상 허용</Button>
+            <Button onClick={() => choose(ApprovalChoice.always())}>항상 허용</Button>
           </div>
         </DialogContent>
       </Dialog>

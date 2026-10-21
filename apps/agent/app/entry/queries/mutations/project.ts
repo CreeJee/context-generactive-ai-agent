@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Data, Function as EffectFunction } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ExternalAgentView, type McpScope } from "../../api";
 import { projectQueries } from "../project";
@@ -22,26 +22,23 @@ export function useProtectedBranchesMutation(projectId: string) {
   });
 }
 
-type AgentChange =
-  | {
-      readonly kind: "trust";
-      readonly scope: ExternalAgentView["scope"];
-      readonly name: string;
-      readonly trusted: boolean;
-    }
-  | { readonly kind: "reconnect"; readonly name: string };
+export type AgentChange = Data.TaggedEnum<{
+  trust: {
+    readonly scope: ExternalAgentView["scope"];
+    readonly name: string;
+    readonly trusted: boolean;
+  };
+  reconnect: { readonly name: string };
+}>;
+export const AgentChange = Data.taggedEnum<AgentChange>();
 
 export function useExternalAgentMutation(projectId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (change: AgentChange) => {
-      switch (change.kind) {
-        case "trust":
-          return api.trustExternalAgent(projectId, change.scope, change.name, change.trusted);
-        case "reconnect":
-          return api.reconnectExternalAgent(projectId, change.name);
-      }
-    },
+    mutationFn: AgentChange.$match({
+      trust: ({ scope, name, trusted }) => api.trustExternalAgent(projectId, scope, name, trusted),
+      reconnect: ({ name }) => api.reconnectExternalAgent(projectId, name),
+    }),
     onSuccess: () =>
       client.invalidateQueries({ queryKey: projectQueries.agents(projectId).queryKey }),
   });
@@ -81,6 +78,14 @@ export function useCreateSessionMutation(projectId: string) {
   });
 }
 
+/** What the sidebar asks of one conversation. */
+export type SessionLifecycleChange = Data.TaggedEnum<{
+  archive: { readonly sessionId: string };
+  restore: { readonly sessionId: string };
+  delete: { readonly sessionId: string };
+}>;
+export const SessionLifecycleChange = Data.taggedEnum<SessionLifecycleChange>();
+
 export const useSessionLifecycleMutation: {
   (holder: () => string): (projectId: string) => ReturnType<typeof useSessionLifecycleMutationBody>;
 } & typeof useSessionLifecycleMutationBody = EffectFunction.dual(
@@ -92,19 +97,14 @@ function useSessionLifecycleMutationBody(projectId: string, holder: () => string
   return useMutation<
     Awaited<ReturnType<typeof api.setArchived>> | Awaited<ReturnType<typeof api.deleteSession>>,
     Error,
-    { kind: "archive" | "restore" | "delete"; sessionId: string }
+    SessionLifecycleChange
   >({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    mutationFn: (request) => {
-      switch (request.kind) {
-        case "archive":
-          return api.setArchived(request.sessionId, holder(), true);
-        case "restore":
-          return api.setArchived(request.sessionId, holder(), false);
-        case "delete":
-          return api.deleteSession(request.sessionId, holder());
-      }
-    },
+    mutationFn: SessionLifecycleChange.$match({
+      archive: ({ sessionId }) => api.setArchived(sessionId, holder(), true),
+      restore: ({ sessionId }) => api.setArchived(sessionId, holder(), false),
+      delete: ({ sessionId }) => api.deleteSession(sessionId, holder()),
+    }),
     onSuccess: () =>
       client.invalidateQueries({ queryKey: projectQueries.sessions(projectId).queryKey }),
   });

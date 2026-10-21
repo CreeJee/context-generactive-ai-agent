@@ -2,7 +2,7 @@ import { isTruthy } from "../../truthy.ts";
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
 import { allowedWorkflowActions } from "./workflow-test-fixtures";
-import { noticeOf } from "./run-notice";
+import { noticeOf, RunNotice } from "./run-notice";
 
 const record = (
   lastRun: SessionRunState["lastRun"],
@@ -41,18 +41,18 @@ describe("run notices", () => {
   });
 
   test("tells apart a run still going elsewhere, one that stopped, and one that never answered", () => {
-    expect(noticeOf(record(null, { runId: "run-2" }), page)).toEqual({ kind: "detached" });
-    expect(noticeOf(ended("interrupted"), page)).toEqual({ kind: "stopped" });
-    expect(noticeOf(ended("completed"), { ...page, answered: false })).toEqual({
-      kind: "no-answer",
-    });
+    expect(noticeOf(record(null, { runId: "run-2" }), page)).toEqual(RunNotice.detached());
+    expect(noticeOf(ended("interrupted"), page)).toEqual(RunNotice.stopped());
+    expect(noticeOf(ended("completed"), { ...page, answered: false })).toEqual(
+      RunNotice["no-answer"](),
+    );
   });
 
   test("reports cancels, failures and restarts, a restart whatever status it was left with", () => {
-    expect(noticeOf(ended("aborted"), page)).toEqual({ kind: "cancelled" });
-    expect(noticeOf(ended("failed"), page)).toEqual({ kind: "failed", message: "boom" });
-    expect(noticeOf(ended("failed", serverRestartedCode), page)).toEqual({ kind: "restarted" });
-    expect(noticeOf(ended("completed", serverRestartedCode), page)).toEqual({ kind: "restarted" });
+    expect(noticeOf(ended("aborted"), page)).toEqual(RunNotice.cancelled());
+    expect(noticeOf(ended("failed"), page)).toEqual(RunNotice.failed({ message: "boom" }));
+    expect(noticeOf(ended("failed", serverRestartedCode), page)).toEqual(RunNotice.restarted());
+    expect(noticeOf(ended("completed", serverRestartedCode), page)).toEqual(RunNotice.restarted());
   });
 
   test("a restart that the server continues by itself says when", () => {
@@ -68,6 +68,6 @@ describe("run notices", () => {
         retryAt: 9_000,
       },
     };
-    expect(noticeOf(resuming, page)).toEqual({ kind: "resuming", at: 9_000 });
+    expect(noticeOf(resuming, page)).toEqual(RunNotice.resuming({ at: 9_000 }));
   });
 });

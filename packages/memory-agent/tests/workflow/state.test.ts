@@ -5,7 +5,11 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
 import { AppEvents } from "../../src/events/app-events.ts";
 import { isTruthy } from "../../src/truthy.ts";
-import { evaluateWorkflowAction, workflowActions } from "../../src/workflow/actions.ts";
+import {
+  evaluateWorkflowAction,
+  WorkflowActionRequest,
+  workflowActions,
+} from "../../src/workflow/actions.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { PlanDependencyIssue } from "../../src/workflow/plan-schedule.ts";
 import {
@@ -773,11 +777,9 @@ testAgent()("server workflow action policy", (it) => {
       for (const decision of [...Object.values(held.phases), ...Object.values(held.controls)])
         expect(decision).toEqual({ allowed: false, reason: "session_in_use" });
       expect(
-        evaluateWorkflowAction(
-          state,
-          { kind: "phase", phase: "execute" },
-          { lease: { state: "free" } },
-        ).allowed,
+        evaluateWorkflowAction(state, WorkflowActionRequest.phase({ phase: "execute" }), {
+          lease: { state: "free" },
+        }).allowed,
       ).toBe(true);
     }),
   );

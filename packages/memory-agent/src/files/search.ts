@@ -2,6 +2,7 @@ import { Result, Function as EffectFunction } from "effect";
 import {
   Array as EffectArray,
   Cache,
+  Data,
   Effect,
   HashSet,
   MutableHashSet,
@@ -59,10 +60,12 @@ function snippet(line: string, index: number) {
   return `${start > 0 ? "…" : ""}${line.slice(start, start + snippetCharacters)}…`;
 }
 
-type FileRead =
-  | { readonly kind: "bytes"; readonly bytes: Uint8Array }
-  | { readonly kind: "skipped"; readonly reason: string }
-  | { readonly kind: "gone" };
+type FileRead = Data.TaggedEnum<{
+  bytes: { readonly bytes: Uint8Array };
+  skipped: { readonly reason: string };
+  gone: {};
+}>;
+const FileRead = Data.taggedEnum<FileRead>();
 
 export interface SearchOptions {
   /**
@@ -217,30 +220,29 @@ export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
     capacity: readAhead + 1,
     lookup: (file: number) =>
       readBytes(paths[file]!).pipe(
-        Effect.map((bytes): FileRead => ({ kind: "bytes", bytes })),
+        Effect.map((bytes): FileRead => FileRead.bytes({ bytes })),
         Effect.catchTags({
           PathRejected: (error) =>
             Effect.succeed<FileRead>(
               error.reason === "not_found"
-                ? { kind: "gone" }
-                : { kind: "skipped", reason: error.reason },
+                ? FileRead.gone()
+                : FileRead.skipped({ reason: error.reason }),
             ),
           TextFileRejected: (error) =>
-            Effect.succeed<FileRead>({
-              kind: "skipped",
-              reason: textFileRejectedReasonName(error.reason),
-            }),
+            Effect.succeed<FileRead>(
+              FileRead.skipped({ reason: textFileRejectedReasonName(error.reason) }),
+            ),
           PlatformError: (error) =>
             Effect.succeed<FileRead>(
               Predicate.isTagged(error.reason, "NotFound")
-                ? { kind: "gone" }
-                : { kind: "skipped", reason: "unreadable" },
+                ? FileRead.gone()
+                : FileRead.skipped({ reason: "unreadable" }),
             ),
           TextFileIoFailed: (error) =>
             Effect.succeed<FileRead>(
               error.reason.code === "ENOENT"
-                ? { kind: "gone" }
-                : { kind: "skipped", reason: "unreadable" },
+                ? FileRead.gone()
+                : FileRead.skipped({ reason: "unreadable" }),
             ),
         }),
       ),
@@ -264,14 +266,10 @@ export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
     const path = paths[file]!;
     const result = yield* Cache.get(reads, file);
     yield* Cache.invalidate(reads, file);
-    switch (result.kind) {
-      case "gone":
-        continue;
-      case "skipped":
-        skipped.push({ path, reason: result.reason });
-        continue;
-      case "bytes":
-        break;
+    if (FileRead.$is("gone")(result)) continue;
+    if (FileRead.$is("skipped")(result)) {
+      skipped.push({ path, reason: result.reason });
+      continue;
     }
     if (
       caseSensitive &&

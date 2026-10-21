@@ -2,17 +2,18 @@ import { modelMessagesToUIMessages, type ModelMessage } from "@tanstack/ai";
 import { describe, expect, it } from "vite-plus/test";
 import {
   groupHistoryMessages as computeHistoryGroups,
+  HistoryGroupingResult,
+  HistoryMessagesResult,
   historyProjectionMessages,
 } from "./history-groups.ts";
 
 function groupHistoryMessages(threadId: string, messages: readonly ModelMessage[]) {
-  const result = computeHistoryGroups(threadId, messages);
-  switch (result.type) {
-    case "ready":
-      return result.groups;
-    case "id-collision":
-      throw new Error(`Unexpected fixture ID collision: ${result.id}`);
-  }
+  return HistoryGroupingResult.$match(computeHistoryGroups(threadId, messages), {
+    ready: ({ groups }) => groups,
+    "id-collision": ({ id }) => {
+      throw new Error(`Unexpected fixture ID collision: ${id}`);
+    },
+  });
 }
 
 const linkedMessages: ModelMessage[] = [
@@ -45,27 +46,29 @@ describe("history storage UI groups", () => {
     ];
     const original = JSON.stringify(messages);
     const normalized = historyProjectionMessages("thread", messages, []);
-    expect(normalized).toMatchObject({ type: "ready" });
-    switch (normalized.type) {
-      case "id-collision":
+    expect(HistoryMessagesResult.$is("ready")(normalized)).toBe(true);
+    HistoryMessagesResult.$match(normalized, {
+      "id-collision": () => {
         throw new Error("Unexpected fallback collision");
-      case "ready": {
-        expect(normalized.messages[0]!.id).toBe("stored:thread:0:fallback:1");
-        expect(normalized.messages.slice(1)).toEqual(messages.slice(1));
+      },
+      ready: (ready) => {
+        expect(ready.messages[0]!.id).toBe("stored:thread:0:fallback:1");
+        expect(ready.messages.slice(1)).toEqual(messages.slice(1));
         expect(historyProjectionMessages("thread", messages, [])).toEqual(normalized);
-        const retained = [normalized.messages[0]!.id!];
+        const retained = [ready.messages[0]!.id!];
         const changed = historyProjectionMessages("thread", messages.slice(0, 2), retained);
-        expect(changed).toMatchObject({
-          type: "ready",
-          messages: [expect.objectContaining({ id: retained[0] }), messages[1]],
-        });
+        expect(changed).toMatchObject(
+          HistoryMessagesResult.ready({
+            messages: [expect.objectContaining({ id: retained[0] }), messages[1]!],
+          }),
+        );
         expect(
           historyProjectionMessages(
             "thread",
             [...messages, { id: retained[0], role: "user", content: "Conflict" }],
             retained,
           ),
-        ).toEqual({ type: "id-collision", id: retained[0] });
+        ).toEqual(HistoryMessagesResult["id-collision"]({ id: retained[0]! }));
         expect(
           historyProjectionMessages(
             "thread",
@@ -75,10 +78,9 @@ describe("history storage UI groups", () => {
             ],
             ["stored:thread:0"],
           ),
-        ).toEqual({ type: "id-collision", id: "stored:thread:0" });
-        break;
-      }
-    }
+        ).toEqual(HistoryMessagesResult["id-collision"]({ id: "stored:thread:0" }));
+      },
+    });
     expect(JSON.stringify(messages)).toBe(original);
   });
   it("folds reused assistant IDs into stable SDK segments without changing the transcript", () => {
@@ -120,13 +122,13 @@ describe("history storage UI groups", () => {
         ...messages,
         { id: "answer-segment-history-3", role: "user", content: "Collision" },
       ]),
-    ).toEqual({ type: "id-collision", id: "answer-segment-history-3" });
+    ).toEqual(HistoryGroupingResult["id-collision"]({ id: "answer-segment-history-3" }));
     expect(
       computeHistoryGroups("thread", [
         ...messages,
         { id: "answer", role: "assistant", content: "Unrelated answer" },
       ]),
-    ).toEqual({ type: "id-collision", id: "answer" });
+    ).toEqual(HistoryGroupingResult["id-collision"]({ id: "answer" }));
   });
   it("reports an appended ID collision instead of silently changing a legacy cursor", () => {
     const messages: ModelMessage[] = [{ role: "user", content: "Old" }];
@@ -137,7 +139,7 @@ describe("history storage UI groups", () => {
         ...messages,
         { id: previousId, role: "user", content: "New" },
       ]),
-    ).toEqual({ type: "id-collision", id: previousId });
+    ).toEqual(HistoryGroupingResult["id-collision"]({ id: previousId }));
     expect(groupHistoryMessages("thread", messages)[0]!.id).toBe(previousId);
     expect(JSON.stringify(messages)).toBe(before);
     expect(
@@ -145,7 +147,7 @@ describe("history storage UI groups", () => {
         { id: "duplicate", role: "user", content: "One" },
         { id: "duplicate", role: "user", content: "Two" },
       ]),
-    ).toEqual({ type: "id-collision", id: "duplicate" });
+    ).toEqual(HistoryGroupingResult["id-collision"]({ id: "duplicate" }));
   });
   it("matches the full SDK conversion including noncontiguous results and segments", () => {
     const groups = groupHistoryMessages("thread", linkedMessages);

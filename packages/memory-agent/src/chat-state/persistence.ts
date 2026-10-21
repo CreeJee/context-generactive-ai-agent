@@ -19,6 +19,7 @@ import {
   type HistoryProjection,
   type MaybeHistoryProjection,
 } from "./history-projection-native.ts";
+import { HistoryPageRequest } from "./history-projection-reader.ts";
 type Json = string | number | boolean | null | Json[] | { readonly [key: string]: Json };
 
 const RunRow = Schema.Struct({
@@ -239,15 +240,17 @@ const makeChatPersistence = Effect.fn("ChatPersistence.make")(function* (
     options: { limit: number; before: string | undefined },
     projected: Option.Option<HistoryProjection>,
   ) {
+    // `load` decodes the request, so an SDK-supplied limit fails there as a typed error.
+    const unchecked = { disableChecks: true };
     if (Option.isSome(projected))
-      return yield* options.before === undefined
-        ? projected.value.load({ type: "initial", threadId, limit: options.limit })
-        : projected.value.load({
-            type: "older",
-            threadId,
-            limit: options.limit,
-            before: options.before,
-          });
+      return yield* projected.value.load(
+        options.before === undefined
+          ? HistoryPageRequest.cases.initial.make({ threadId, limit: options.limit }, unchecked)
+          : HistoryPageRequest.cases.older.make(
+              { threadId, limit: options.limit, before: options.before },
+              unchecked,
+            ),
+      );
     // Old imported transcripts may lack ids. Paging needs a cursor that survives each GET.
     const messages = (yield* storedThread(threadId)).map((message, index) =>
       message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,

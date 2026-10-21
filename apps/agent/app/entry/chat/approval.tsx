@@ -16,7 +16,7 @@ import {
   CardHeader,
   CardTitle,
 } from "~/components/ui/card";
-import type { PendingApproval } from "./pending-approval";
+import { PendingApproval } from "./pending-approval";
 
 /** A gated call's arguments, decoded once by tool name into a union the card can switch on. */
 type GatedCall =
@@ -219,10 +219,10 @@ export function ApprovalCard({
   onAnswer?: (approved: boolean) => void;
 }) {
   const view = describe(decodeCall(approval.toolName, approval.argumentsJson));
-  const reviewReason =
-    approval.kind === "permission-review" && approval.askedBy === "review"
-      ? approval.reviewReason
-      : null;
+  const reviewReason = PendingApproval.$match(approval, {
+    "tool-approval": () => null,
+    "permission-review": (review) => (review.askedBy === "review" ? review.reviewReason : null),
+  });
   const Icon = isTruthy(reviewReason)
     ? ShieldQuestionIcon
     : view.shell

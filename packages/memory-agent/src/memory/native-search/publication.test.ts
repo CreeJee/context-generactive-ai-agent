@@ -1,7 +1,7 @@
 import { Deferred, Effect, Fiber, Option, Schema } from "effect";
 import { expect, it } from "vite-plus/test";
-import { makePublication, PublicationFailed } from "./publication.ts";
-import type { ReadAdmission } from "./client.ts";
+import { makePublication, PublicationFailed, PublicationState } from "./publication.ts";
+import { ReadAdmission } from "./client.ts";
 
 class SaveFailed extends Schema.TaggedError<SaveFailed>()("SaveFailed", {}) {}
 
@@ -49,23 +49,23 @@ it("releases admission permit before full result and binds owner/generation", ()
         );
         yield* Deferred.await(attempted);
         expect(Option.isNone(yield* Deferred.poll(mutated))).toBe(true);
-        yield* Deferred.succeed(pin, { kind: "pinned" });
+        yield* Deferred.succeed(pin, ReadAdmission.pinned());
         yield* Deferred.await(mutated);
         expect(Option.isNone(yield* Deferred.poll(result))).toBe(true);
         yield* Fiber.join(writing);
         yield* Deferred.succeed(result, 42);
         expect(yield* Fiber.join(reading)).toEqual({
           publication: { epoch: "one", generation: 0 },
-          admission: { kind: "pinned" },
+          admission: ReadAdmission.pinned(),
           result: 42,
         });
-        expect(yield* publication.inspect).toEqual({ kind: "ready", generation: 1 });
+        expect(yield* publication.inspect).toEqual(PublicationState.ready({ generation: 1 }));
         expect(
           yield* Effect.flip(
             publication.read(() =>
               Effect.succeed({
                 epoch: "other",
-                admission: Effect.succeed<ReadAdmission>({ kind: "pinned" }),
+                admission: Effect.succeed(ReadAdmission.pinned()),
                 result: Effect.succeed(0),
               }),
             ),
@@ -115,7 +115,7 @@ it("holds mutation until actual snapshot pin ack, advances generation and poison
         expect(
           yield* Effect.flip(publication.withMutation(Effect.fail(SaveFailed.make()))),
         ).toBeInstanceOf(SaveFailed);
-        expect(yield* publication.inspect).toEqual({ kind: "poisoned", generation: 1 });
+        expect(yield* publication.inspect).toEqual(PublicationState.poisoned({ generation: 1 }));
         expect(yield* Effect.flip(publication.admitSnapshot(Effect.succeed))).toMatchObject({
           reason: "poisoned",
         });

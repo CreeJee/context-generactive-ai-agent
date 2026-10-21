@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Match } from "effect";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
@@ -13,6 +13,7 @@ import {
   useCrossRecallMutation,
   useHideProjectMutation,
   usePermissionModeMutation,
+  SessionLifecycleChange,
   useSessionLifecycleMutation,
 } from "./queries/mutations/project";
 import {
@@ -201,7 +202,7 @@ export function App() {
         if (!isTruthy(projectId)) return;
         return yield* Effect.gen(function* () {
           const result = yield* uiPromise(() =>
-            lifecycleMutation.mutateAsync({ kind: "archive", sessionId: id }),
+            lifecycleMutation.mutateAsync(SessionLifecycleChange.archive({ sessionId: id })),
           );
           if (result.status !== "completed") return refreshPendingLifecycle(result.status);
           setArchiveError(null);
@@ -222,7 +223,7 @@ export function App() {
         if (!isTruthy(projectId)) return;
         return yield* Effect.gen(function* () {
           const result = yield* uiPromise(() =>
-            lifecycleMutation.mutateAsync({ kind: "delete", sessionId: id }),
+            lifecycleMutation.mutateAsync(SessionLifecycleChange.delete({ sessionId: id })),
           );
           if (result.status !== "completed") return refreshPendingLifecycle(result.status);
           setArchiveError(null);
@@ -243,7 +244,7 @@ export function App() {
         if (!isTruthy(projectId)) return;
         return yield* Effect.gen(function* () {
           const result = yield* uiPromise(() =>
-            lifecycleMutation.mutateAsync({ kind: "restore", sessionId: id }),
+            lifecycleMutation.mutateAsync(SessionLifecycleChange.restore({ sessionId: id })),
           );
           if (result.status !== "completed") return refreshPendingLifecycle(result.status);
           setArchiveError(null);
@@ -322,25 +323,17 @@ export function App() {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     run: (command) =>
       runUiEffect(
-        Effect.gen(function* () {
-          switch (command.kind) {
-            case "new":
-              return yield* uiPromise(() => createSession());
-            case "agent":
-              return yield* uiPromise(() => createSession(command.agent));
-            case "settings":
-              return openSettings();
-            case "report":
-              window.location.assign(reportHref(projectId, sessionId));
-              return;
-            case "mode":
-              if (isTruthy(projectId))
-                yield* uiPromise(() => permissionMutation.mutateAsync(command.mode));
-              return;
-            case "model":
-              yield* uiPromise(() => selectModel(command.model));
-              return;
-          }
+        Match.valueTags(command, {
+          new: () => uiPromise(() => createSession()),
+          agent: ({ agent }) => uiPromise(() => createSession(agent)),
+          settings: () => Effect.sync(openSettings),
+          report: () => Effect.sync(() => window.location.assign(reportHref(projectId, sessionId))),
+          mode: ({ mode }) =>
+            uiPromise(() => permissionMutation.mutateAsync(mode)).pipe(
+              Effect.when(Effect.sync(() => isTruthy(projectId))),
+              Effect.asVoid,
+            ),
+          model: ({ model }) => uiPromise(() => selectModel(model)),
         }),
       ),
   };

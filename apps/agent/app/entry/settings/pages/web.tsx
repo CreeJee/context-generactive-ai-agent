@@ -16,7 +16,7 @@ import {
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
-import { type KagiStatus, refusalOf } from "../../api";
+import { KagiCommand, type KagiStatus, refusalOf } from "../../api";
 import { useKagiQuery } from "../../queries/global";
 import { useKagiMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError } from "../shared";
@@ -36,16 +36,14 @@ export function KagiSettings() {
   const [error, setError] = useState<string | null>(null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = (
-    command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
-  ) =>
+  const apply = (command: KagiCommand) =>
     runUiEffect(
       Effect.gen(function* () {
         setError(null);
         yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
-              if (command.action === "register") setKey("");
+              if (KagiCommand.$is("register")(command)) setKey("");
             }),
           ),
           Effect.catchTag("UnknownError", (failure) =>
@@ -79,7 +77,9 @@ export function KagiSettings() {
               id="kagi-enabled"
               checked={status.enabled}
               disabled={busy}
-              onCheckedChange={(checked) => void apply({ action: checked ? "enable" : "disable" })}
+              onCheckedChange={(checked) =>
+                void apply(checked ? KagiCommand.enable() : KagiCommand.disable())
+              }
             />
           </Field>
           <Field orientation="horizontal">
@@ -93,7 +93,7 @@ export function KagiSettings() {
               variant="ghost"
               size="sm"
               disabled={busy}
-              onClick={() => void apply({ action: "remove" })}
+              onClick={() => void apply(KagiCommand.remove())}
             >
               <Trash2Icon /> 키 삭제
             </Button>
@@ -103,7 +103,7 @@ export function KagiSettings() {
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (isTruthy(key.trim())) void apply({ action: "register", key });
+            if (isTruthy(key.trim())) void apply(KagiCommand.register({ key }));
           }}
         >
           <Field>

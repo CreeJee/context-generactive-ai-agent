@@ -3,7 +3,7 @@ import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { useMutation } from "@tanstack/react-query";
 import { useBooleanState } from "react-simplikit";
 import { api, isApiError } from "../api";
-import { chooseCrossProviderApproval } from "./cross-provider-approval";
+import { ApprovalChoice, chooseCrossProviderApproval } from "./cross-provider-approval";
 import { useImageSettingsQuery } from "../queries/global";
 import { useCrossProviderConsentMutation } from "../queries/mutations/global";
 
@@ -29,16 +29,15 @@ export function useImageGeneration(onProblem: (message: string) => void) {
                   ? yield* uiPromise(() => chooseCrossProviderApproval(approval))
                   : null;
               if (choice === null) return yield* rejected;
-              switch (choice.kind) {
-                case "cancel":
-                  return null;
-                case "once":
-                  return yield* uiPromise(() => api.generateImage(prompt, true, choice.approval));
-                case "always": {
-                  yield* uiPromise(() => consentMutation.mutateAsync("always"));
-                  return yield* uiPromise(() => api.generateImage(prompt, true));
-                }
-              }
+              return yield* ApprovalChoice.$match(choice, {
+                cancel: () => Effect.succeed(null),
+                once: ({ approval: chosen }) =>
+                  uiPromise(() => api.generateImage(prompt, true, chosen)),
+                always: () =>
+                  uiPromise(() => consentMutation.mutateAsync("always")).pipe(
+                    Effect.andThen(uiPromise(() => api.generateImage(prompt, true))),
+                  ),
+              });
             }),
           ),
         ),

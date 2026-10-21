@@ -1,16 +1,18 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
-import { Effect, Function as EffectFunction } from "effect";
+import { Data, Effect, Function as EffectFunction } from "effect";
 import { isApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
 import { useProjectScope } from "../events/context";
 import { useQueueQuery } from "../queries/session";
 import { useEditQueueMutation, useEnqueueMutation } from "../queries/mutations/session";
 
 /** What became of a message written while a run was answering. */
-export type AddOutcome =
-  | { readonly kind: "queued" }
+export type AddOutcome = Data.TaggedEnum<{
+  queued: {};
   /** Nothing is answering any more: send it as a normal turn. */
-  | { readonly kind: "not-running" }
-  | { readonly kind: "failed" };
+  "not-running": {};
+  failed: {};
+}>;
+export const AddOutcome = Data.taggedEnum<AddOutcome>();
 
 /** Messages a page can still change: everything that has not reached the agent. */
 export const isPending = (message: QueuedMessage) => message.state.kind !== "delivered";
@@ -42,12 +44,12 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
   ): Promise<AddOutcome> =>
     runUiEffect(
       uiPromise(() => enqueue.mutateAsync({ text, attachmentIds, mode })).pipe(
-        Effect.as<AddOutcome>({ kind: "queued" }),
+        Effect.as<AddOutcome>(AddOutcome.queued()),
         Effect.catchTag("UnknownError", (failure) =>
           Effect.sync((): AddOutcome => {
             if (isApiError(failure.cause) && failure.cause.code === "not_running")
-              return { kind: "not-running" };
-            return { kind: "failed" };
+              return AddOutcome["not-running"]();
+            return AddOutcome.failed();
           }),
         ),
       ),

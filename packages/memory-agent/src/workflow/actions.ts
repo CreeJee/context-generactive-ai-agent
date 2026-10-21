@@ -1,4 +1,4 @@
-import { Function as EffectFunction, Schema } from "effect";
+import { Data, Function as EffectFunction, Predicate, Schema } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
@@ -24,9 +24,11 @@ export interface WorkflowActions {
   readonly controls: Record<WorkflowAction, WorkflowActionDecision>;
 }
 
-export type WorkflowActionRequest =
-  | { readonly kind: "phase"; readonly phase: WorkflowPhase }
-  | { readonly kind: "control"; readonly action: WorkflowAction };
+export type WorkflowActionRequest = Data.TaggedEnum<{
+  phase: { readonly phase: WorkflowPhase };
+  control: { readonly action: WorkflowAction };
+}>;
+export const WorkflowActionRequest = Data.taggedEnum<WorkflowActionRequest>();
 
 export interface WorkflowActionContext {
   readonly running?: boolean;
@@ -34,7 +36,10 @@ export interface WorkflowActionContext {
 }
 
 /** Shared by snapshots and serialized mutations against the latest durable state. */
-const isActionRequest = Schema.is(Schema.Struct({ kind: Schema.Literals(["phase", "control"]) }));
+const isActionRequest = Predicate.or(
+  WorkflowActionRequest.$is("phase"),
+  WorkflowActionRequest.$is("control"),
+);
 export const evaluateWorkflowAction: {
   (request: WorkflowActionRequest): (state: WorkflowState) => WorkflowActionDecision;
   (
@@ -54,15 +59,18 @@ function evaluateWorkflowActionBody(
   context: WorkflowActionContext = {},
 ): WorkflowActionDecision {
   if (context.lease?.state === "other") return { allowed: false, reason: "session_in_use" };
-  if (context.running === true && (request.kind === "phase" || request.action === "resume"))
+  if (
+    context.running === true &&
+    (WorkflowActionRequest.$is("phase")(request) || request.action === "resume")
+  )
     return { allowed: false, reason: "run_in_progress" };
   const { goal, plan } = state;
-  switch (request.kind) {
-    case "phase": {
+  return WorkflowActionRequest.$match(request, {
+    phase: ({ phase }): WorkflowActionDecision => {
       // Completion is a server-owned terminal phase, never a user navigation target.
-      if (request.phase === "completed") return { allowed: false, reason: "goal_terminal" };
+      if (phase === "completed") return { allowed: false, reason: "goal_terminal" };
       // Non-execution phase navigation does not approve or mutate artifacts.
-      if (request.phase !== "execute") return { allowed: true };
+      if (phase !== "execute") return { allowed: true };
       if (isTruthy(goal) && isTruthy(plan) && plan.goalVersion !== goal.version)
         return { allowed: false, reason: "plan_outdated" };
       if (
@@ -72,18 +80,18 @@ function evaluateWorkflowActionBody(
       )
         return { allowed: false, reason: "plan_not_ready" };
       return { allowed: true, intent: plan.status === "executing" ? "continue" : "start" };
-    }
-    case "control": {
+    },
+    control: ({ action }): WorkflowActionDecision => {
       if (!isTruthy(goal)) return { allowed: false, reason: "goal_missing" };
       if (goal.status === "completed" || goal.status === "failed")
         return { allowed: false, reason: "goal_terminal" };
-      if (request.action === "pause" && goal.status === "paused")
+      if (action === "pause" && goal.status === "paused")
         return { allowed: false, reason: "goal_not_active" };
-      if (request.action === "resume" && goal.status !== "paused")
+      if (action === "resume" && goal.status !== "paused")
         return { allowed: false, reason: "goal_not_paused" };
       return { allowed: true };
-    }
-  }
+    },
+  });
 }
 
 const isStateInput = Schema.is(Schema.Struct({ phase: Schema.String }));
@@ -98,9 +106,9 @@ function workflowActionsBody(
   context: WorkflowActionContext = {},
 ): WorkflowActions {
   const phase = (value: WorkflowPhase) =>
-    evaluateWorkflowAction(state, { kind: "phase", phase: value }, context);
+    evaluateWorkflowAction(state, WorkflowActionRequest.phase({ phase: value }), context);
   const control = (value: WorkflowAction) =>
-    evaluateWorkflowAction(state, { kind: "control", action: value }, context);
+    evaluateWorkflowAction(state, WorkflowActionRequest.control({ action: value }), context);
   return {
     phases: {
       chat: phase("chat"),

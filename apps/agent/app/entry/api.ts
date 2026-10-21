@@ -93,6 +93,46 @@ export const BoardIntent = Data.taggedEnum<BoardIntent>();
 export type DecisionAnswer = DecisionAnswerCase;
 export const DecisionAnswer = Data.taggedEnum<DecisionAnswer>();
 
+/** The commands `/api/settings/kagi` reads. */
+export type KagiCommand = Data.TaggedEnum<{
+  register: { readonly key: string };
+  remove: {};
+  enable: {};
+  disable: {};
+}>;
+export const KagiCommand = Data.taggedEnum<KagiCommand>();
+/** The commands `/api/settings/imports` reads. */
+export type ImportCommand = Data.TaggedEnum<{
+  run: {};
+  restart_watch: {};
+  enable: {};
+  disable: {};
+  interpret: { readonly interpret: boolean };
+}>;
+export const ImportCommand = Data.taggedEnum<ImportCommand>();
+/** The commands `/api/settings/embedding` reads. */
+export type EmbeddingCommand = Data.TaggedEnum<{
+  choose: { readonly choice: EmbeddingChoice };
+  check: {};
+}>;
+export const EmbeddingCommand = Data.taggedEnum<EmbeddingCommand>();
+/** The commands `/api/settings/image` reads. */
+type ImageSettingsCommand = Data.TaggedEnum<{
+  image_generation: { readonly enabled: boolean };
+  cross_provider_media: { readonly mode: CrossProviderMediaConsentMode };
+}>;
+const ImageSettingsCommand = Data.taggedEnum<ImageSettingsCommand>();
+/** The commands `/api/projects/:project/agents` reads. */
+type ExternalAgentCommand = Data.TaggedEnum<{
+  trust: {
+    readonly scope: ExternalAgentView["scope"];
+    readonly name: string;
+    readonly trusted: boolean;
+  };
+  reconnect: { readonly name: string };
+}>;
+const ExternalAgentCommand = Data.taggedEnum<ExternalAgentCommand>();
+
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
 export type ImageSettingsView = ImageFeatureStatus & {
   readonly crossProviderMediaConsent: CrossProviderMediaConsentSettings;
@@ -772,15 +812,17 @@ export const api = {
 
   imageSettings: () => call<ImageSettingsView>("GET", "/api/settings/image"),
   setImageGenerationEnabled: (enabled: boolean) =>
-    call<ImageSettingsView>("POST", "/api/settings/image", {
-      action: "image_generation",
-      enabled,
-    }),
+    call<ImageSettingsView>(
+      "POST",
+      "/api/settings/image",
+      ImageSettingsCommand.image_generation({ enabled }),
+    ),
   setCrossProviderMediaConsent: (mode: CrossProviderMediaConsentMode) =>
-    call<ImageSettingsView>("POST", "/api/settings/image", {
-      action: "cross_provider_media",
-      mode,
-    }),
+    call<ImageSettingsView>(
+      "POST",
+      "/api/settings/image",
+      ImageSettingsCommand.cross_provider_media({ mode }),
+    ),
   generateImage: (
     prompt: string,
     approved: boolean,
@@ -802,9 +844,7 @@ export const api = {
   },
 
   kagi: () => call<KagiStatus>("GET", "/api/settings/kagi"),
-  kagiAction: (
-    command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
-  ) => call<KagiStatus>("POST", "/api/settings/kagi", command),
+  kagiAction: (command: KagiCommand) => call<KagiStatus>("POST", "/api/settings/kagi", command),
 
   conversationSettings: () => call<ConversationSettings>("GET", "/api/settings/conversation"),
   recallSettings: () => call<RecallSettings>("GET", "/api/settings/recall"),
@@ -824,14 +864,11 @@ export const api = {
     }),
 
   imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
-  importAction: (
-    command:
-      | { action: "run" | "restart_watch" | "enable" | "disable" }
-      | { action: "interpret"; interpret: boolean },
-  ) => call<ImportOverview>("POST", "/api/settings/imports", command),
+  importAction: (command: ImportCommand) =>
+    call<ImportOverview>("POST", "/api/settings/imports", command),
 
   embedding: () => call<EmbeddingOverview>("GET", "/api/settings/embedding"),
-  embeddingAction: (command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" }) =>
+  embeddingAction: (command: EmbeddingCommand) =>
     call<EmbeddingOverview>("POST", "/api/settings/embedding", command),
 
   mcpServers: (projectId: string) =>
@@ -851,17 +888,17 @@ export const api = {
     name: string,
     trusted: boolean,
   ) =>
-    call<ExternalAgentsOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/agents`, {
-      action: "trust",
-      scope,
-      name,
-      trusted,
-    }),
+    call<ExternalAgentsOverview>(
+      "POST",
+      `/api/projects/${encodeURIComponent(projectId)}/agents`,
+      ExternalAgentCommand.trust({ scope, name, trusted }),
+    ),
   reconnectExternalAgent: (projectId: string, name: string) =>
-    call<ExternalAgentsOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/agents`, {
-      action: "reconnect",
-      name,
-    }),
+    call<ExternalAgentsOverview>(
+      "POST",
+      `/api/projects/${encodeURIComponent(projectId)}/agents`,
+      ExternalAgentCommand.reconnect({ name }),
+    ),
 
   skills: (projectId: string) =>
     call<SkillCatalog>("GET", `/api/projects/${encodeURIComponent(projectId)}/skills`),

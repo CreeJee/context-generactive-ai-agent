@@ -10,7 +10,7 @@ import { expect, test, vi } from "vite-plus/test";
 import {
   ReasoningSummaryProtocolFailed,
   ReasoningSummaryProtocolFailedReason,
-  type NormalizedStreamEvent,
+  NormalizedStreamEvent,
 } from "../src/oauth/protocol.ts";
 import {
   SubscriptionTextAdapter,
@@ -33,18 +33,16 @@ const logger = new InternalLogger(
     sandbox: false,
   },
 );
-const start: NormalizedStreamEvent = {
-  type: "reasoning-summary-start",
+const start = NormalizedStreamEvent["reasoning-summary-start"]({
   id: "summary",
   summaryIndex: 0,
   text: "",
-};
-const end: NormalizedStreamEvent = {
-  type: "reasoning-summary-end",
+});
+const end = NormalizedStreamEvent["reasoning-summary-end"]({
   id: "summary",
   summaryIndex: 0,
   text: "",
-};
+});
 const summaryFailed = (reason: ReasoningSummaryProtocolFailed["reason"]) =>
   ReasoningSummaryProtocolFailed.make({ reason });
 const resourceLimit = summaryFailed(
@@ -94,12 +92,11 @@ test("public summaries fail explicitly at text/part/id limits rather than retain
         expect(
           collect([
             start,
-            {
-              type: "reasoning-summary-delta",
+            NormalizedStreamEvent["reasoning-summary-delta"]({
               id: "summary",
               summaryIndex: 0,
               delta: "x".repeat(publicReasoningLimits.characters + 1),
-            },
+            }),
           ]),
         ).rejects.toBeInstanceOf(ReasoningSummaryProtocolFailed),
       );
@@ -128,7 +125,11 @@ test("conflicting, duplicate and post-end summaries preserve safe typed failures
         [
           start,
           { ...end, text: "ok" },
-          { type: "reasoning-summary-delta", id: "summary", summaryIndex: 0, delta: "late" },
+          NormalizedStreamEvent["reasoning-summary-delta"]({
+            id: "summary",
+            summaryIndex: 0,
+            delta: "late",
+          }),
         ],
         [
           { ...start, text: "prefix" },
@@ -150,8 +151,8 @@ test("clean exhaustion with open summary/tool/reasoning cannot report RUN_FINISH
         ),
       );
       for (const event of [
-        { type: "tool-call-start", index: 0, id: "call", name: "fixture" },
-        { type: "reasoning-start", index: 0 },
+        NormalizedStreamEvent["tool-call-start"]({ index: 0, id: "call", name: "fixture" }),
+        NormalizedStreamEvent["reasoning-start"]({ index: 0 }),
       ] satisfies NormalizedStreamEvent[])
         yield* nativePromise(() =>
           expect(collect([event])).rejects.toEqual(
@@ -167,7 +168,9 @@ test("provider-controlled error contents never become thrown error or error log 
     Effect.gen(function* () {
       yield* nativePromise(() =>
         expect(
-          collect([{ type: "error", code: "secret-code", message: "secret-response" }]),
+          collect([
+            NormalizedStreamEvent.error({ code: "secret-code", message: "secret-response" }),
+          ]),
         ).rejects.toBeInstanceOf(SubscriptionStreamFailed),
       );
       expect(
@@ -225,8 +228,8 @@ test("overlapping native blocks cannot overwrite another tool's pending result a
     nativePromise(() =>
       expect(
         collect([
-          { type: "tool-call-start", index: 0, id: "first", name: "fixture" },
-          { type: "tool-call-start", index: 0, id: "second", name: "fixture" },
+          NormalizedStreamEvent["tool-call-start"]({ index: 0, id: "first", name: "fixture" }),
+          NormalizedStreamEvent["tool-call-start"]({ index: 0, id: "second", name: "fixture" }),
         ]),
       ).rejects.toEqual(
         streamFailed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({})),

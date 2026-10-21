@@ -4,7 +4,12 @@ import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import { makeOwnerNativeArtifacts } from "../../src/agent/owner-native-artifacts.ts";
-import { OwnerReadRecovery } from "../../src/agent/owner-read-recovery.ts";
+import {
+  OwnerReadRecovery,
+  ReadRecoveryConfirmResult,
+  ReadRecoveryPreview,
+  ReadRecoveryRevokeResult,
+} from "../../src/agent/owner-read-recovery.ts";
 import { migrateOwnerRpcFingerprintBatch } from "../../src/agent/owner-rpc-fingerprint-migration.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { OwnerRpcAdmission, OwnerRpcReply } from "../../src/agent/owner-rpc.ts";
@@ -106,8 +111,9 @@ const failedRead = Effect.fnUntraced(function* (
   );
   const recovery = yield* OwnerReadRecovery;
   const preview = yield* recovery.assess(session, runId);
-  expect(preview.type).toBe("eligible");
-  if (preview.type !== "eligible") return yield* Effect.die("eligible fixture expected");
+  expect(ReadRecoveryPreview.$is("eligible")(preview)).toBe(true);
+  if (!ReadRecoveryPreview.$is("eligible")(preview))
+    return yield* Effect.die("eligible fixture expected");
   const tables = [
     "chat_runs",
     "owner_rpc_operations",
@@ -174,9 +180,11 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         }
         const f = yield* failedRead({ name, args });
         const before = yield* f.history;
-        expect((yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).type).toBe(
-          "recovered",
-        );
+        expect(
+          ReadRecoveryConfirmResult.$is("recovered")(
+            yield* f.recovery.confirm(f.session, f.runId, f.confirmation),
+          ),
+        ).toBe(true);
         expect(yield* f.history).toEqual(before);
         expect(
           (yield* f.owner.preview(f.session, `${f.session}:next-report`, f.revision.id)).status,
@@ -272,7 +280,11 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
             break;
         }
         const before = yield* f.history;
-        expect((yield* f.recovery.confirm(session, f.runId, f.confirmation)).type).toBe("blocked");
+        expect(
+          ReadRecoveryConfirmResult.$is("blocked")(
+            yield* f.recovery.confirm(session, f.runId, f.confirmation),
+          ),
+        ).toBe(true);
         expect(yield* f.history).toEqual(before);
         expect(yield* f.receipts).toEqual({ n: 0 });
         expect(f.modelCalls()).toHaveLength(0);
@@ -292,7 +304,9 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
           f.session,
           status,
         );
-        expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("eligible");
+        expect(
+          ReadRecoveryPreview.$is("eligible")(yield* f.recovery.assess(f.session, f.runId)),
+        ).toBe(true);
         expect(
           yield* sqlGet("SELECT status,active_attempt_id FROM work_tasks WHERE id=?", task),
         ).toEqual({ status, active_attempt_id: null });
@@ -306,13 +320,14 @@ testAgent({ testProvider: {} })("explicit owner read recovery", (it) => {
         const f = yield* failedRead();
         const before = yield* f.history;
         const receipt = yield* f.recovery.confirm(f.session, f.runId, f.confirmation);
-        if (receipt.type !== "recovered") return yield* Effect.die("recovery expected");
+        if (!ReadRecoveryConfirmResult.$is("recovered")(receipt))
+          return yield* Effect.die("recovery expected");
         const input = {
           confirmation: "revoke_read_recovery_without_replay" as const,
           receiptId: receipt.receiptId,
         };
         const result = yield* f.recovery.revoke(f.session, f.runId, input);
-        expect(result.type).toBe("revoked");
+        expect(ReadRecoveryRevokeResult.$is("revoked")(result)).toBe(true);
         expect(yield* f.recovery.revoke(f.session, f.runId, input)).toEqual(result);
         expect(yield* f.history).toEqual(before);
         expect(yield* f.owner.bind(f.session, `${f.session}:new-run`, f.revision.id)).toEqual(
@@ -380,9 +395,11 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
   it.effect("fingerprint maintenance preserves immutable receipt-linked request originals", () =>
     Effect.gen(function* () {
       const f = yield* failedRead();
-      expect((yield* f.recovery.confirm(f.session, f.runId, f.confirmation)).type).toBe(
-        "recovered",
-      );
+      expect(
+        ReadRecoveryConfirmResult.$is("recovered")(
+          yield* f.recovery.confirm(f.session, f.runId, f.confirmation),
+        ),
+      ).toBe(true);
       const before = yield* f.history;
       expect(yield* migrateOwnerRpcFingerprintBatch(0, 4)).toMatchObject({
         migrated: 0,
@@ -390,7 +407,9 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
         done: true,
       });
       expect(yield* f.history).toEqual(before);
-      expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("recovered");
+      expect(
+        ReadRecoveryPreview.$is("recovered")(yield* f.recovery.assess(f.session, f.runId)),
+      ).toBe(true);
       expect((yield* f.owner.preview(f.session, `${f.session}:fresh`, f.revision.id)).status).toBe(
         "bound",
       );
@@ -425,7 +444,7 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         );
         expect(yield* f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
         const result = yield* f.recovery.confirm(f.session, f.runId, f.confirmation);
-        expect(result.type).toBe("recovered");
+        expect(ReadRecoveryConfirmResult.$is("recovered")(result)).toBe(true);
         expect(yield* f.history).toEqual(before);
         expect(
           (yield* f.owner.preview(f.session, `${f.session}:probe`, f.revision.id)).status,
@@ -469,14 +488,18 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
           ),
         );
         yield* f.updateOperation(1, "fingerprint='{}'");
-        expect((yield* f.recovery.assess(f.session, f.runId)).type).toBe("blocked");
+        expect(
+          ReadRecoveryPreview.$is("blocked")(yield* f.recovery.assess(f.session, f.runId)),
+        ).toBe(true);
         expect(yield* f.owner.bind(f.session, next, f.revision.id)).toEqual(refused);
         yield* f.updateOperation(1, "fingerprint=?", authorization.fingerprint);
         expect(yield* f.history).toEqual(before);
         yield* env.reopen;
-        expect((yield* (yield* env.use(OwnerReadRecovery)).assess(f.session, f.runId)).type).toBe(
-          "recovered",
-        );
+        expect(
+          ReadRecoveryPreview.$is("recovered")(
+            yield* (yield* env.use(OwnerReadRecovery)).assess(f.session, f.runId),
+          ),
+        ).toBe(true);
         const reopened = Effect.provideService(
           SqlClient.SqlClient,
           yield* env.use(SqlClient.SqlClient),

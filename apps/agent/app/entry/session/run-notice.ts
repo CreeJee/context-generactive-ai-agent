@@ -1,20 +1,22 @@
-import { Function as EffectFunction } from "effect";
+import { Data, Function as EffectFunction } from "effect";
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
-export type RunNotice =
-  | { readonly kind: "cancelled" }
-  | { readonly kind: "cancel-pending" }
-  | { readonly kind: "restarted" }
+export type RunNotice = Data.TaggedEnum<{
+  cancelled: {};
+  "cancel-pending": {};
+  restarted: {};
   /** Cut off by a restart before it ran any tool; a new run continues the Plan at `at`. */
-  | { readonly kind: "resuming"; readonly at: number }
-  | { readonly kind: "failed"; readonly message: string }
+  resuming: { readonly at: number };
+  failed: { readonly message: string };
   /** The server is still answering, but this page is no longer receiving it. */
-  | { readonly kind: "detached" }
+  detached: {};
   /** Stopped partway without an approval to answer. */
-  | { readonly kind: "stopped" }
+  stopped: {};
   /** Finished, but the last thing it produced was not an answer (e.g. only tool calls). */
-  | { readonly kind: "no-answer" };
+  "no-answer": {};
+}>;
+export const RunNotice = Data.taggedEnum<RunNotice>();
 
 /** What the page knows besides the run record. */
 export interface PageView {
@@ -29,23 +31,23 @@ export const noticeOf: {
 } & typeof noticeOfBody = EffectFunction.dual(2, noticeOfBody);
 function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice | null {
   if (!(state !== null)) return null;
-  if (state.running !== null) return { kind: "detached" };
+  if (state.running !== null) return RunNotice.detached();
   const lastRun = state.lastRun;
   if (!(lastRun !== null)) return null;
   // A restart is recorded as an error; the status may have been rewritten since.
   if (lastRun.error?.code === serverRestartedCode)
     return state.execution?.kind === "retrying"
-      ? { kind: "resuming", at: state.execution.retryAt }
-      : { kind: "restarted" };
+      ? RunNotice.resuming({ at: state.execution.retryAt })
+      : RunNotice.restarted();
   switch (lastRun.status) {
     case "aborted":
-      return { kind: "cancelled" };
+      return RunNotice.cancelled();
     case "failed":
-      return { kind: "failed", message: lastRun.error?.message ?? "알 수 없는 오류" };
+      return RunNotice.failed({ message: lastRun.error?.message ?? "알 수 없는 오류" });
     case "interrupted":
-      return page.waitingForApproval ? null : { kind: "stopped" };
+      return page.waitingForApproval ? null : RunNotice.stopped();
     case "completed":
-      return page.answered ? null : { kind: "no-answer" };
+      return page.answered ? null : RunNotice["no-answer"]();
     case "running":
       return null;
   }

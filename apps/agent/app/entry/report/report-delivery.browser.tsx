@@ -4,7 +4,10 @@ import { render } from "vitest-browser-react";
 import { describe, expect, vi } from "vite-plus/test";
 import "../../app.css";
 import { ReportDelivery } from "./report-delivery";
-import { ReportDiagnosisReview, type DiagnosisState } from "./report-diagnosis";
+import { DeliveryCommand } from "./report-client";
+
+const DeliveryCommandJson = Schema.fromJsonString(DeliveryCommand);
+import { DiagnosisState, ReportDiagnosisReview } from "./report-diagnosis";
 
 describe("report review and delivery", () => {
   it.live("sends the reviewed text to the server's webhook and falls back on failure", () =>
@@ -38,8 +41,8 @@ describe("report review and delivery", () => {
       yield* sdkCall(() =>
         expect.element(screen.getByRole("button", { name: "그래도 다시 보내기" })).toBeVisible(),
       );
-      expect(bodies.at(-1)).toBe(
-        '{"action":"send","text":"# 제보 문안","evidence":null,"resend":false}',
+      expect(yield* Schema.decodeEffect(DeliveryCommandJson)(bodies.at(-1) ?? "null")).toEqual(
+        DeliveryCommand.cases.send.make({ text: "# 제보 문안", evidence: null, resend: false }),
       );
     }).pipe(Effect.scoped),
   );
@@ -50,15 +53,14 @@ describe("report review and delivery", () => {
       const screen = yield* sdkCall(() =>
         render(
           <ReportDiagnosisReview
-            state={{
-              status: "ready",
+            state={DiagnosisState.ready({
               included: true,
               diagnosis: {
                 summary: "승인 응답이 저장되지 않았다.",
                 observations: [{ text: "승인 요청 3회", evidenceIds: ["run-2"] }],
                 hypotheses: [{ text: "응답 저장 누락 가능성" }],
               },
-            }}
+            })}
             onRequest={() => {}}
             onChange={(next) => states.push(next)}
           />,

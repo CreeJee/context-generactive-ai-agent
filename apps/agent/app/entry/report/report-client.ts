@@ -18,6 +18,17 @@ export class ReportRequestFailed extends Schema.TaggedError<ReportRequestFailed>
   },
 ) {}
 
+/** What `/api/reports/delivery` accepts: a reviewed report to send, or the defect-report switch. */
+export const DeliveryCommand = Schema.TaggedUnion({
+  send: {
+    text: Schema.String,
+    evidence: Schema.NullOr(ReportBundle),
+    resend: Schema.Boolean,
+  },
+  defect_reports: { enabled: Schema.Boolean },
+});
+const encodeDeliveryCommand = Schema.encodeEffect(Schema.fromJsonString(DeliveryCommand));
+
 export function makeReportClient(fetcher: typeof fetch) {
   const request = <S extends Schema.Constraint>(input: {
     readonly schema: S;
@@ -81,19 +92,8 @@ export function makeReportClient(fetcher: typeof fetch) {
     });
   });
 
-  const DeliveryCommand = Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({
-        action: Schema.Literal("send"),
-        text: Schema.String,
-        evidence: Schema.NullOr(ReportBundle),
-        resend: Schema.Boolean,
-      }),
-      Schema.Struct({ action: Schema.Literal("defect_reports"), enabled: Schema.Boolean }),
-    ]),
-  );
   const deliver = <S extends Schema.Constraint>(schema: S, command: typeof DeliveryCommand.Type) =>
-    Effect.flatMap(Schema.encodeEffect(DeliveryCommand)(command), (body) =>
+    Effect.flatMap(encodeDeliveryCommand(command), (body) =>
       request({
         schema,
         operation: "delivery",
@@ -111,11 +111,11 @@ export function makeReportClient(fetcher: typeof fetch) {
   const sendReport = (
     report: { readonly text: string; readonly evidence: ReportBundle | null },
     resend: boolean,
-  ) => deliver(ReportDeliveryResult, { action: "send", ...report, resend });
+  ) => deliver(ReportDeliveryResult, DeliveryCommand.cases.send.make({ ...report, resend }));
 
   /** Turns sending defects to the developer webhook on or off; answers the new status. */
   const setDefectReports = (enabled: boolean) =>
-    deliver(ReportDeliveryStatus, { action: "defect_reports", enabled });
+    deliver(ReportDeliveryStatus, DeliveryCommand.cases.defect_reports.make({ enabled }));
 
   return {
     setDefectReports,

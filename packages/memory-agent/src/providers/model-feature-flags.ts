@@ -1,5 +1,5 @@
 import { Function as EffectFunction } from "effect";
-import { Context, Effect, HashSet, Layer, Schema } from "effect";
+import { Context, Data, Effect, HashSet, Layer, Schema } from "effect";
 import {
   GlobalConfig,
   GlobalConfigFailed,
@@ -8,17 +8,18 @@ import {
 } from "../config/global-config.ts";
 import type { ProviderId } from "./contracts.ts";
 
-export type ModelFeatureFlagScope =
-  | { readonly type: "global" }
-  | { readonly type: "provider"; readonly provider: ProviderId }
-  | { readonly type: "capability"; readonly capability: string }
-  | {
-      readonly type: "model";
-      readonly provider: ProviderId;
-      readonly model: string;
-      readonly capability: string;
-    }
-  | { readonly type: "route"; readonly route: string };
+export type ModelFeatureFlagScope = Data.TaggedEnum<{
+  global: {};
+  provider: { readonly provider: ProviderId };
+  capability: { readonly capability: string };
+  model: {
+    readonly provider: ProviderId;
+    readonly model: string;
+    readonly capability: string;
+  };
+  route: { readonly route: string };
+}>;
+export const ModelFeatureFlagScope = Data.taggedEnum<ModelFeatureFlagScope>();
 export interface ModelFeatureFlagQuery {
   readonly provider: ProviderId;
   readonly capability: string;
@@ -135,31 +136,31 @@ function makeModelFeatureFlagsBody(
           ),
     set: (scope, enabled) =>
       Effect.flatMap(read, (current) => {
-        const next: ModelFeatureFlagSettings = (() => {
-          switch (scope.type) {
-            case "global":
-              return { ...current, global: enabled };
-            case "provider":
-              return { ...current, providers: { ...current.providers, [scope.provider]: enabled } };
-            case "capability":
-              return {
-                ...current,
-                capabilities: { ...current.capabilities, [scope.capability]: enabled },
-              };
-            case "model": {
-              const key = modelKey(scope.provider, scope.model);
-              return {
-                ...current,
-                models: {
-                  ...current.models,
-                  [key]: { ...current.models[key], [scope.capability]: enabled },
-                },
-              };
-            }
-            case "route":
-              return { ...current, routes: { ...current.routes, [scope.route]: enabled } };
-          }
-        })();
+        const next = ModelFeatureFlagScope.$match(scope, {
+          global: (): ModelFeatureFlagSettings => ({ ...current, global: enabled }),
+          provider: (scope): ModelFeatureFlagSettings => ({
+            ...current,
+            providers: { ...current.providers, [scope.provider]: enabled },
+          }),
+          capability: (scope): ModelFeatureFlagSettings => ({
+            ...current,
+            capabilities: { ...current.capabilities, [scope.capability]: enabled },
+          }),
+          model: (scope): ModelFeatureFlagSettings => {
+            const key = modelKey(scope.provider, scope.model);
+            return {
+              ...current,
+              models: {
+                ...current.models,
+                [key]: { ...current.models[key], [scope.capability]: enabled },
+              },
+            };
+          },
+          route: (scope): ModelFeatureFlagSettings => ({
+            ...current,
+            routes: { ...current.routes, [scope.route]: enabled },
+          }),
+        });
         return config
           .update({ modelFeatureFlags: next })
           .pipe(Effect.as(next), Effect.mapError(storeFailure("write")));

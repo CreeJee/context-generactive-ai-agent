@@ -7,6 +7,7 @@ import {
   FileSystem,
   Layer,
   ManagedRuntime,
+  Match,
   Path,
   Schema,
   Stream,
@@ -15,7 +16,7 @@ import { defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { readStructuredEvidence } from "../src/memory/evidence.ts";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
-import { providerProtocols } from "../src/oauth/protocol.ts";
+import { NormalizedStreamEvent, providerProtocols } from "../src/oauth/protocol.ts";
 import {
   createKeychainProfileCredentialStore,
   createSubscriptionOAuthClient,
@@ -347,22 +348,24 @@ const program = Effect.gen(function* () {
             yield* Stream.fromAsyncIterable(client.stream(arm.body, signal), () =>
               BenchmarkFailed.make({ reason: "provider" }),
             ).pipe(
-              Stream.runForEach((event) => {
-                switch (event.type) {
-                  case "text":
+              Stream.runForEach(
+                Match.type<NormalizedStreamEvent>().pipe(
+                  Match.tag("text", (event) => {
                     rawAnswer += event.text;
                     return Effect.void;
-                  case "usage":
+                  }),
+                  Match.tag("usage", (event) => {
                     usage.promptTokens = event.promptTokens ?? usage.promptTokens;
                     usage.completionTokens = event.completionTokens ?? usage.completionTokens;
                     usage.cachedPromptTokens = event.cachedPromptTokens ?? usage.cachedPromptTokens;
                     return Effect.void;
-                  case "error":
-                    return Effect.fail(BenchmarkFailed.make({ reason: "provider" }));
-                  default:
-                    return Effect.void;
-                }
-              }),
+                  }),
+                  Match.tag("error", () =>
+                    Effect.fail(BenchmarkFailed.make({ reason: "provider" })),
+                  ),
+                  Match.orElse(() => Effect.void),
+                ),
+              ),
             );
             return { rawAnswer, usage };
           }),

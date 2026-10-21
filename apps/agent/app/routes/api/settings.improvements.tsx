@@ -1,9 +1,9 @@
-import { Effect, Match, Option, Result, Schema } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
 import { ProjectImprovement } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 
-const ScanCommand = Schema.Struct({ action: Schema.Literals(["start", "stop"]) });
+const ScanCommand = Schema.TaggedUnion({ start: {}, stop: {} });
 
 /**
  * GET /api/settings/improvements: where the background scan stands and the last recorded scan of
@@ -23,7 +23,7 @@ export function loader() {
   );
 }
 
-/** POST /api/settings/improvements `{ action: "start" | "stop" }`: answers the scan state. */
+/** POST /api/settings/improvements, a `start` or `stop` command: answers the scan state. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export function action({ request }: { request: Request }) {
   const rejected = rejectCrossSite(request);
@@ -38,12 +38,10 @@ export function action({ request }: { request: Request }) {
       if (Option.isNone(decoded))
         return Response.json({ error: "invalid_command" }, { status: 400 });
       const improvement = yield* ProjectImprovement;
-      const state = yield* Match.value(decoded.value).pipe(
-        Match.discriminatorsExhaustive("action")({
-          start: () => improvement.start,
-          stop: () => improvement.stop,
-        }),
-      );
+      const state = yield* ScanCommand.match(decoded.value, {
+        start: () => improvement.start,
+        stop: () => improvement.stop,
+      });
       return Response.json({ state });
     }),
   );

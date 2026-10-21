@@ -33,7 +33,7 @@ const decodeHistory = EffectFunction.flow(
   Result.getOrThrow,
 );
 import { SubscriptionTextAdapter } from "../src/providers/subscription-adapter.ts";
-import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
+import { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 
 it.live(
   "public OpenAI summary survives real SDK transcript persistence and history reconstruction without exposing opaque reasoning",
@@ -54,16 +54,26 @@ it.live(
         },
       });
       const events: NormalizedStreamEvent[] = [
-        { type: "reasoning-summary-start", id: "rs-fixture", summaryIndex: 0, text: "Checking" },
-        { type: "reasoning-summary-delta", id: "rs-fixture", summaryIndex: 0, delta: " details" },
-        {
-          type: "reasoning-summary-end",
+        NormalizedStreamEvent["reasoning-summary-start"]({
+          id: "rs-fixture",
+          summaryIndex: 0,
+          text: "Checking",
+        }),
+        NormalizedStreamEvent["reasoning-summary-delta"]({
+          id: "rs-fixture",
+          summaryIndex: 0,
+          delta: " details",
+        }),
+        NormalizedStreamEvent["reasoning-summary-end"]({
           id: "rs-fixture",
           summaryIndex: 0,
           text: "Checking details",
-        },
-        { type: "reasoning", id: "rs-fixture", encryptedContent: "opaque-fixture-do-not-display" },
-        { type: "text", text: "Answer." },
+        }),
+        NormalizedStreamEvent.reasoning({
+          id: "rs-fixture",
+          encryptedContent: "opaque-fixture-do-not-display",
+        }),
+        NormalizedStreamEvent.text({ text: "Answer." }),
       ];
       const adapter = new SubscriptionTextAdapter(
         {

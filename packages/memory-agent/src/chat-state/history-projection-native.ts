@@ -2,7 +2,12 @@ import type { ModelMessage } from "@tanstack/ai";
 import type { MessagePage } from "@tanstack/ai-persistence";
 import { Effect, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { groupHistoryMessages, historyProjectionMessages } from "./history-groups.ts";
+import {
+  groupHistoryMessages,
+  HistoryGroupingResult,
+  HistoryMessagesResult,
+  historyProjectionMessages,
+} from "./history-groups.ts";
 import { HistoryPageRequest, HistorySnapshotRows } from "./history-projection-reader.ts";
 import {
   historyProjectionSchema,
@@ -60,13 +65,16 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
   });
   const snapshotRows = (request: HistoryPageRequest) =>
     Effect.flatMap(
-      request.type === "initial"
-        ? client.unsafe(historyProjectionSnapshots.initial, [request.threadId, request.limit])
-        : client.unsafe(historyProjectionSnapshots.older, [
-            request.threadId,
-            request.before,
-            request.limit,
+      HistoryPageRequest.match(request, {
+        initial: (initial) =>
+          client.unsafe(historyProjectionSnapshots.initial, [initial.threadId, initial.limit]),
+        older: (older) =>
+          client.unsafe(historyProjectionSnapshots.older, [
+            older.threadId,
+            older.before,
+            older.limit,
           ]),
+      }),
       Schema.decodeUnknownEffect(HistorySnapshotRows),
     );
   const threadExists = SqlSchema.findOne({
@@ -107,13 +115,10 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
       snapshot.models ?? decodeMessages(snapshot.sourceJSON),
       retained.map((row) => row.ui_id),
     );
-    switch (normalized.type) {
-      case "id-collision":
-        return yield* unavailable("id-collision");
-      case "ready":
-        break;
-    }
-    const models = normalized.messages;
+    const models = yield* HistoryMessagesResult.$match(normalized, {
+      "id-collision": () => unavailable("id-collision"),
+      ready: ({ messages }) => Effect.succeed(messages),
+    });
     for (const message of models) {
       switch (message.role) {
         case "user":
@@ -124,13 +129,10 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
           return yield* unavailable("invalid-transcript");
       }
     }
-    const grouping = groupHistoryMessages(snapshot.threadId, models);
-    switch (grouping.type) {
-      case "id-collision":
-        return yield* unavailable("id-collision");
-      case "ready":
-        return grouping.groups;
-    }
+    return yield* HistoryGroupingResult.$match(groupHistoryMessages(snapshot.threadId, models), {
+      "id-collision": () => unavailable("id-collision"),
+      ready: ({ groups }) => Effect.succeed(groups),
+    });
   });
 
   /** Replaces a thread's groups; joins the caller's transaction, or opens one. */

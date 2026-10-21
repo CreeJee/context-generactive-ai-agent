@@ -1,4 +1,4 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import {
   GlobalConfig,
   ReportBundle,
@@ -9,15 +9,14 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/reports.delivery";
 
-const DeliveryAction = Schema.Union([
-  Schema.Struct({
-    action: Schema.Literal("send"),
+const DeliveryAction = Schema.TaggedUnion({
+  send: {
     text: Schema.String,
     evidence: Schema.NullOr(ReportBundle),
     resend: Schema.Boolean,
-  }),
-  Schema.Struct({ action: Schema.Literal("defect_reports"), enabled: Schema.Boolean }),
-]);
+  },
+  defect_reports: { enabled: Schema.Boolean },
+});
 
 /** One status code per reason, so the browser never needs to read a rejected body. */
 const failureStatus = {
@@ -72,20 +71,22 @@ export function action({ request }: Route.ActionArgs) {
       if (rejected !== null) return rejected;
       const decoded = yield* Effect.tryPromise(() => readJson(request, DeliveryAction));
       if (Result.isFailure(decoded)) return reply({ error: "invalid_report_delivery" }, 400);
-      const command = decoded.success;
-      switch (command.action) {
-        case "send": {
-          // The bundle the user previewed goes as the report's JSON attachment.
-          const evidence =
-            command.evidence === null ? null : yield* encodeEvidence(command.evidence);
-          return reply(
-            yield* (yield* ReportDelivery).send({ text: command.text, evidence }, command.resend),
-          );
-        }
-        case "defect_reports":
-          yield* (yield* GlobalConfig).update({ defectReports: command.enabled });
-          return reply(yield* deliveryStatus);
-      }
+      return yield* Match.valueTags(decoded.success, {
+        send: (command) =>
+          Effect.gen(function* () {
+            // The bundle the user previewed goes as the report's JSON attachment.
+            const evidence =
+              command.evidence === null ? null : yield* encodeEvidence(command.evidence);
+            return reply(
+              yield* (yield* ReportDelivery).send({ text: command.text, evidence }, command.resend),
+            );
+          }),
+        defect_reports: ({ enabled }) =>
+          Effect.gen(function* () {
+            yield* (yield* GlobalConfig).update({ defectReports: enabled });
+            return reply(yield* deliveryStatus);
+          }),
+      });
     }).pipe(
       Effect.catchTags({
         ReportDeliveryError: (error) =>

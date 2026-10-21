@@ -4,9 +4,14 @@ import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
 import type { ModelMessage } from "@tanstack/ai";
 import { Database } from "../db/database.ts";
-import { groupHistoryMessages } from "./history-groups.ts";
-import { HistoryProjectionReader } from "./history-projection-reader.ts";
+import { groupHistoryMessages, HistoryGroupingResult } from "./history-groups.ts";
 import {
+  HistoryPageRequest,
+  HistoryPageSnapshot,
+  HistoryProjectionReader,
+} from "./history-projection-reader.ts";
+import {
+  HistoryProjectionPublicationResult,
   HistoryProjectionPublisher,
   HistoryProjectionPublishReason,
   type HistoryProjectionPublication,
@@ -17,6 +22,8 @@ const encodeJson = EffectFunction.flow(
   Result.getOrThrow,
 );
 const publishReason = HistoryProjectionPublishReason.cases;
+const publicationResult = HistoryProjectionPublicationResult.cases;
+const initialPage = HistoryPageRequest.cases.initial.make({ threadId: "a", limit: 50 });
 
 const ownedDatabase = Database.layer(":memory:");
 const publisher = HistoryProjectionPublisher.layer.pipe(Layer.provideMerge(ownedDatabase));
@@ -31,20 +38,19 @@ function run<A, E>(
   return program.pipe(provideFixture(layer));
 }
 function publication(messages: ModelMessage[]): HistoryProjectionPublication {
-  const grouping = groupHistoryMessages("a", messages);
-  switch (grouping.type) {
-    case "id-collision":
+  return HistoryGroupingResult.$match(groupHistoryMessages("a", messages), {
+    "id-collision": () => {
       throw new Error("Unexpected fixture ID collision");
-    case "ready":
-      return {
-        threadId: "a",
-        sourceJSON: encodeJson(messages),
-        groups: grouping.groups.map((group) => ({
-          id: group.id,
-          messages: encodeJson(group.messages),
-        })),
-      };
-  }
+    },
+    ready: ({ groups }) => ({
+      threadId: "a",
+      sourceJSON: encodeJson(messages),
+      groups: groups.map((group) => ({
+        id: group.id,
+        messages: encodeJson(group.messages),
+      })),
+    }),
+  });
 }
 const first = publication([{ id: "old", role: "user", content: "Original preserved" }]);
 const latest = publication([
@@ -99,19 +105,23 @@ describe("Effect history projection publication", () => {
           const reader = yield* HistoryProjectionReader;
           const before = yield* sqlGet("PRAGMA user_version");
           yield* writeOriginal(first.sourceJSON);
-          expect(yield* service.publish(first)).toEqual({ type: "published", groupCount: 1 });
-          expect(yield* service.publish(first)).toEqual({ type: "published", groupCount: 1 });
-          const page = yield* reader.read({ type: "initial", threadId: "a", limit: 50 });
-          switch (page.type) {
-            case "page":
-              expect(page.groups.map((group) => group.messages)).toEqual(
-                first.groups.map((group) => group.messages),
-              );
-              break;
-            case "not-ready":
-            case "unknown-cursor":
-              expect.fail("publication should be ready");
-          }
+          expect(yield* service.publish(first)).toEqual(
+            publicationResult.published.make({ groupCount: 1 }),
+          );
+          expect(yield* service.publish(first)).toEqual(
+            publicationResult.published.make({ groupCount: 1 }),
+          );
+          const page = yield* reader.read(initialPage);
+          HistoryPageSnapshot.matchOrElse(
+            page,
+            {
+              page: (page) =>
+                expect(page.groups.map((group) => group.messages)).toEqual(
+                  first.groups.map((group) => group.messages),
+                ),
+            },
+            () => expect.fail("publication should be ready"),
+          );
           expect(yield* sqlGet("SELECT messages FROM chat_threads WHERE thread_id=?", "a")).toEqual(
             { messages: first.sourceJSON },
           );
@@ -127,15 +137,16 @@ describe("Effect history projection publication", () => {
         const reader = yield* HistoryProjectionReader;
         yield* writeOriginal(latest.sourceJSON);
         yield* service.publish(latest);
-        const current = yield* reader.read({ type: "initial", threadId: "a", limit: 50 });
-        expect(yield* service.publish(first)).toEqual({ type: "source-changed" });
-        expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(current);
+        const current = yield* reader.read(initialPage);
+        expect(yield* service.publish(first)).toEqual(publicationResult["source-changed"].make({}));
+        expect(yield* reader.read(initialPage)).toEqual(current);
         yield* sqlRun("DELETE FROM chat_threads WHERE thread_id=?", "a");
-        expect(yield* service.publish(latest)).toEqual({ type: "source-changed" });
-        expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual({
-          type: "not-ready",
-          reason: "unprepared",
-        });
+        expect(yield* service.publish(latest)).toEqual(
+          publicationResult["source-changed"].make({}),
+        );
+        expect(yield* reader.read(initialPage)).toEqual(
+          HistoryPageSnapshot.cases["not-ready"].make({ reason: "unprepared" }),
+        );
         expect(
           yield* sqlGet("SELECT COUNT(*) AS count FROM chat_history_groups WHERE thread_id=?", "a"),
         ).toEqual({ count: 0 });
@@ -150,32 +161,28 @@ describe("Effect history projection publication", () => {
         const reader = yield* HistoryProjectionReader;
         yield* writeOriginal(first.sourceJSON);
         yield* service.publish(first);
-        const current = yield* reader.read({ type: "initial", threadId: "a", limit: 50 });
+        const current = yield* reader.read(initialPage);
         for (const input of [
           { ...first, threadId: "" },
           { ...first, groups: [{ id: "", messages: first.sourceJSON }] },
         ]) {
           const failed = yield* service.publish(input).pipe(Effect.flip);
           expect(failed.reason).toEqual(publishReason.InvalidPublication.make({}));
-          expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(
-            current,
-          );
+          expect(yield* reader.read(initialPage)).toEqual(current);
         }
         for (const messages of ["not JSON", "{}", "[]"]) {
           const failed = yield* service
             .publish({ ...first, groups: [{ id: "old", messages }] })
             .pipe(Effect.flip);
           expect(failed.reason).toEqual(publishReason.InvalidPreparedJson.make({}));
-          expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(
-            current,
-          );
+          expect(yield* reader.read(initialPage)).toEqual(current);
         }
         const failed = yield* service
           .publish({ ...first, groups: [...first.groups, ...first.groups] })
           .pipe(Effect.flip);
         expect(failed.reason).toEqual(publishReason.SqliteWrite.make({ phase: "publish" }));
         expect(encodeJson(failed)).not.toContain("Original preserved");
-        expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(current);
+        expect(yield* reader.read(initialPage)).toEqual(current);
       }),
     ),
   );
@@ -186,20 +193,16 @@ describe("Effect history projection publication", () => {
         const service = yield* HistoryProjectionPublisher;
         const reader = yield* HistoryProjectionReader;
         yield* writeOriginal("[]");
-        expect(yield* service.publish({ threadId: "a", sourceJSON: "[]", groups: [] })).toEqual({
-          type: "published",
-          groupCount: 0,
-        });
+        expect(yield* service.publish({ threadId: "a", sourceJSON: "[]", groups: [] })).toEqual(
+          publicationResult.published.make({ groupCount: 0 }),
+        );
         const invalid = yield* service
           .publish({ threadId: "a", sourceJSON: "{}", groups: [] })
           .pipe(Effect.flip);
         expect(invalid.reason).toEqual(publishReason.InvalidPreparedJson.make({}));
-        expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual({
-          type: "page",
-          groups: [],
-          truncated: false,
-          nextCursor: null,
-        });
+        expect(yield* reader.read(initialPage)).toEqual(
+          HistoryPageSnapshot.cases.page.make({ groups: [], truncated: false, nextCursor: null }),
+        );
       }),
     ),
   );

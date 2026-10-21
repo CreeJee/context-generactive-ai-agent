@@ -2,7 +2,8 @@ import { gatedTransport } from "../../../tests/support/native-owner.ts";
 import { withTestPlatform } from "../../../tests/support/platform.ts";
 import { Crypto, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { expect, it } from "vite-plus/test";
-import { makeNativeOwner, type OwnerTransport } from "./client.ts";
+import { makeNativeOwner, OwnerInspection, type OwnerTransport } from "./client.ts";
+import { OwnerCommand } from "./worker-protocol.ts";
 import { loadTurbovec } from "../../../../turbovec/index.js";
 
 it("binds one-shot native control, rejects snapshot duplicates, and never recycles issued tokens", () =>
@@ -90,29 +91,26 @@ it("closes native controls on rejected input, queued/active interruption, worker
                   },
                   new URL("./worker.ts", import.meta.url),
                   // Gate transport, not native CPU. Lifetime/cleanup assertion only.
-                  gatedTransport((command, transport) => {
-                    switch (command.kind) {
-                      case "vector-search-controlled":
-                        return command.requestId === "bad"
-                          ? transport.send(command)
-                          : Deferred.succeed(posted, transport).pipe(Effect.andThen(Effect.never));
-                      default:
-                        return transport.send(command);
-                    }
-                  }),
+                  gatedTransport((command, transport) =>
+                    OwnerCommand.guards["vector-search-controlled"](command) &&
+                    command.requestId !== "bad"
+                      ? Deferred.succeed(posted, transport).pipe(Effect.andThen(Effect.never))
+                      : transport.send(command),
+                  ),
                 );
                 const query = new Float32Array(384);
                 query[0] = 1;
                 const request = (id: string, allowedIds = ["1"]) =>
-                  owner.execute({
-                    kind: "vector-search-controlled",
-                    epoch: owner.epoch,
-                    requestId: id,
-                    query,
-                    k: 1,
-                    allowedIds,
-                    budgetMs: 2_000,
-                  });
+                  owner.execute(
+                    OwnerCommand.cases["vector-search-controlled"].make({
+                      epoch: owner.epoch,
+                      requestId: id,
+                      query,
+                      k: 1,
+                      allowedIds,
+                      budgetMs: 2_000,
+                    }),
+                  );
                 expect(yield* Effect.flip(request("bad", ["01"]))).toMatchObject({
                   reason: "invalid-input",
                 });
@@ -121,17 +119,23 @@ it("closes native controls on rejected input, queued/active interruption, worker
                 const transport = yield* Deferred.await(posted);
                 const queued = yield* Effect.forkScoped(request("queued"));
                 yield* owner.inspect.pipe(
-                  Effect.repeat({ until: (state) => state.kind === "open" && state.queued === 1 }),
+                  Effect.repeat({
+                    until: (state) => OwnerInspection.$is("open")(state) && state.queued === 1,
+                  }),
                 );
                 expect(SearchControl.count()).toBe(baseline + 2);
                 yield* Fiber.interrupt(queued);
                 expect(SearchControl.count()).toBe(baseline + 1);
                 yield* Fiber.interrupt(active);
                 expect(SearchControl.count()).toBe(baseline);
-                expect(yield* owner.inspect).toMatchObject({ kind: "open", active: 1, queued: 0 });
+                expect(yield* owner.inspect).toEqual(
+                  OwnerInspection.open({ active: 1, queued: 0 }),
+                );
                 const pending = yield* Effect.forkScoped(request("pending"));
                 yield* owner.inspect.pipe(
-                  Effect.repeat({ until: (state) => state.kind === "open" && state.queued === 1 }),
+                  Effect.repeat({
+                    until: (state) => OwnerInspection.$is("open")(state) && state.queued === 1,
+                  }),
                 );
                 expect(SearchControl.count()).toBe(baseline + 1);
                 switch (mode) {

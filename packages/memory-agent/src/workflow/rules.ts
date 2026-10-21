@@ -14,26 +14,23 @@ import {
 import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
 import { WorkflowPhase } from "./workflow.ts";
 
-export const RuleSource = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("builtin"), name: Schema.String }),
-  Schema.Struct({
-    kind: Schema.Literal("project"),
-    path: Schema.String,
-    contentHash: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("skill"),
+const mcpRuleSourceFields = {
+  serverId: Schema.String,
+  name: Schema.String,
+  contentHash: Schema.String,
+};
+
+export const RuleSource = Schema.TaggedUnion({
+  builtin: { name: Schema.String },
+  project: { path: Schema.String, contentHash: Schema.String },
+  skill: {
     name: Schema.String,
     scope: Schema.Literals(["builtin", "global", "project"]),
     contentHash: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literals(["mcp-resource", "mcp-prompt"]),
-    serverId: Schema.String,
-    name: Schema.String,
-    contentHash: Schema.String,
-  }),
-]);
+  },
+  "mcp-resource": mcpRuleSourceFields,
+  "mcp-prompt": mcpRuleSourceFields,
+});
 export type RuleSource = typeof RuleSource.Type;
 
 export const WorkflowRule = Schema.Struct({
@@ -168,7 +165,7 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
 
 export const builtInWorkflowRules: readonly WorkflowRule[] = builtInRuleInputs.map((rule) => ({
   ...rule,
-  source: { kind: "builtin", name: rule.id },
+  source: RuleSource.cases.builtin.make({ name: rule.id }),
 }));
 
 const normalizedTerms = (text: string) =>

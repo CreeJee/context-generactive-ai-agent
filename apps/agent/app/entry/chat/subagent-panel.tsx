@@ -14,14 +14,13 @@ import { ApprovalCard } from "./approval";
 import { requesterLabel, useDelegatedWork } from "../session/delegated-work";
 import { useProjectScope } from "../events/context";
 import { useRelayedApprovalMutation } from "../queries/mutations/session";
-import type { PendingApproval } from "./pending-approval";
+import { PendingApproval } from "./pending-approval";
 
 function toPending(
   approval: RelayedApprovalView,
   answer: (approved: boolean) => void,
 ): PendingApproval {
-  return {
-    kind: "permission-review",
+  return PendingApproval["permission-review"]({
     id: approval.id,
     toolCallId: approval.id,
     toolName: approval.toolName,
@@ -29,7 +28,7 @@ function toPending(
     reviewReason: approval.reason,
     askedBy: approval.askedBy === "review" ? "review" : "every_call",
     answer,
-  };
+  });
 }
 
 /** Active delegated work and permission calls relayed from it. */

@@ -1,4 +1,4 @@
-import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
+import { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 import { nativeStream } from "../src/runtime/native-stream.ts";
 import { Stream } from "effect";
 import { it } from "@effect/vitest";
@@ -170,7 +170,7 @@ it.live(
                         Stream.suspend(() =>
                           Stream.fromIterable(
                             (function* (): Generator<NormalizedStreamEvent> {
-                              yield { type: "text" as const, text: "unused" };
+                              yield NormalizedStreamEvent.text({ text: "unused" });
                             })(),
                           ),
                         ),

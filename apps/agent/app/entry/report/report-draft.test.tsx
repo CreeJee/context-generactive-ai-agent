@@ -4,7 +4,8 @@ import { describe, expect, test, vi } from "vite-plus/test";
 import ReportPage from "../../routes/report";
 import { ReportLink, reportHref } from "./report-link";
 import { BundleEvent, type ReportBundle } from "memory-agent/definitions";
-import { reportText, shareableText } from "./report-draft";
+import { DiagnosisText } from "./report-diagnosis";
+import { DraftEvidence, reportText, shareableText } from "./report-draft";
 
 describe("independent report entry", () => {
   test("report link does not require a session or a working composer", () => {
@@ -93,7 +94,7 @@ describe("independent report entry", () => {
         ],
       },
     };
-    const evidence = { status: "collected", bundle } as const;
+    const evidence = DraftEvidence.collected({ bundle });
     const draft = reportText({
       fields: { symptom: "파일을 못 읽어요", expected: "", actual: "" },
       createdAt: "2026-10-18",
@@ -105,7 +106,7 @@ describe("independent report entry", () => {
     expect(draft).toContain("세션 타임라인: 오래된 항목은 상한 때문에 빠졌음");
     expect(draft).not.toContain("ENOENT x");
     expect(shareableText(draft, evidence)).toContain('"text": "ENOENT x"');
-    expect(shareableText(draft, { status: "failed" })).toBe(draft);
+    expect(shareableText(draft, DraftEvidence.failed())).toBe(draft);
   });
 
   test("labels model observations and hypotheses apart, and survives a failed diagnosis", () => {
@@ -113,14 +114,13 @@ describe("independent report entry", () => {
     const included = reportText({
       fields,
       createdAt: "2026-10-12",
-      diagnosis: {
-        status: "included",
+      diagnosis: DiagnosisText.included({
         diagnosis: {
           summary: "승인 응답이 저장되지 않아 같은 요청이 반복된다.",
           observations: [{ text: "승인 요청 3회", evidenceIds: ["run-2"] }],
           hypotheses: [{ text: "응답 저장 누락 가능성" }],
         },
-      },
+      }),
     });
     expect(included).toContain(
       "## AI 진단 요약 (사용자가 검토함)\n승인 응답이 저장되지 않아 같은 요청이 반복된다.",
@@ -131,7 +131,7 @@ describe("independent report entry", () => {
     const failed = reportText({
       fields,
       createdAt: "2026-10-12",
-      diagnosis: { status: "failed", reason: "model_unavailable" },
+      diagnosis: DiagnosisText.failed({ reason: "model_unavailable" }),
     });
     expect(failed).toContain("승인이 반복돼요");
     expect(failed).toContain("AI 진단: 실패");

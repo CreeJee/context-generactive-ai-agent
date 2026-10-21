@@ -1,5 +1,6 @@
 import { HashSet } from "effect";
 import { GlobalConfigFailed, GlobalConfigFailedReason } from "../src/config/global-config.ts";
+import { ModelFeatureFlagScope } from "../src/providers/model-feature-flags.ts";
 import { it as effectTest } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import {
@@ -75,14 +76,14 @@ describe("ModelFeatureFlags service", () => {
   effectTest.effect("persists versioned global/provider/capability/model/route scopes", () =>
     Effect.gen(function* () {
       const { service, settings } = fixture();
-      yield* service.set({ type: "global" }, true);
-      yield* service.set({ type: "provider", provider: "openai" }, true);
-      yield* service.set({ type: "capability", capability }, true);
+      yield* service.set(ModelFeatureFlagScope.global(), true);
+      yield* service.set(ModelFeatureFlagScope.provider({ provider: "openai" }), true);
+      yield* service.set(ModelFeatureFlagScope.capability({ capability }), true);
       yield* service.set(
-        { type: "model", provider: "openai", model: "gpt-test", capability },
+        ModelFeatureFlagScope.model({ provider: "openai", model: "gpt-test", capability }),
         true,
       );
-      yield* service.set({ type: "route", route: "chat:openai:gpt-test" }, true);
+      yield* service.set(ModelFeatureFlagScope.route({ route: "chat:openai:gpt-test" }), true);
       expect(settings().modelFeatureFlags).toMatchObject({ version: 1, global: true });
       expect((yield* service.decide(query)).allowed).toBe(true);
     }),

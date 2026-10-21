@@ -1,5 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
-import { PlanDependencyIssue, planDependencyIssues, planSchedule } from "./plan-schedule.ts";
+import {
+  PlanDependencyIssue,
+  planDependencyIssues,
+  PlanSchedule,
+  planSchedule,
+} from "./plan-schedule.ts";
 import type { PlanStep } from "./workflow.ts";
 
 const step = (
@@ -47,46 +52,49 @@ describe("planSchedule", () => {
         step("c", ["a", "b"]),
         step("d", [], "in_progress"),
       ]),
-    ).toEqual({
-      kind: "runnable",
-      ready: ["b"],
-      inProgress: ["d"],
-      waiting: [{ stepId: "c", unmet: [{ id: "b", status: "pending" }] }],
-    });
+    ).toEqual(
+      PlanSchedule.runnable({
+        ready: ["b"],
+        inProgress: ["d"],
+        waiting: [{ stepId: "c", unmet: [{ id: "b", status: "pending" }] }],
+      }),
+    );
   });
 
   it("keeps independent steps runnable beside a blocked step", () => {
-    expect(planSchedule([step("a", [], "blocked"), step("b", ["a"]), step("c")])).toMatchObject({
-      kind: "runnable",
-      ready: ["c"],
-      waiting: [{ stepId: "b", unmet: [{ id: "a", status: "blocked" }] }],
-    });
+    expect(planSchedule([step("a", [], "blocked"), step("b", ["a"]), step("c")])).toEqual(
+      PlanSchedule.runnable({
+        ready: ["c"],
+        inProgress: [],
+        waiting: [{ stepId: "b", unmet: [{ id: "a", status: "blocked" }] }],
+      }),
+    );
   });
 
   it("stalls when every remaining step is blocked or waits on one", () => {
-    expect(planSchedule([step("a", [], "blocked"), step("b", ["a"]), step("c", ["b"])])).toEqual({
-      kind: "stalled",
-      blocked: ["a"],
-      waiting: [
-        { stepId: "b", unmet: [{ id: "a", status: "blocked" }] },
-        { stepId: "c", unmet: [{ id: "b", status: "pending" }] },
-      ],
-    });
+    expect(planSchedule([step("a", [], "blocked"), step("b", ["a"]), step("c", ["b"])])).toEqual(
+      PlanSchedule.stalled({
+        blocked: ["a"],
+        waiting: [
+          { stepId: "b", unmet: [{ id: "a", status: "blocked" }] },
+          { stepId: "c", unmet: [{ id: "b", status: "pending" }] },
+        ],
+      }),
+    );
   });
 
   it("reads Plans saved before validation without breaking", () => {
     // Unknown and self dependencies carry no ordering; a saved cycle never becomes ready.
     expect(planSchedule([step("a", ["missing", "a"]), step("b", ["c"]), step("c", ["b"])])).toEqual(
-      {
-        kind: "runnable",
+      PlanSchedule.runnable({
         ready: ["a"],
         inProgress: [],
         waiting: [
           { stepId: "b", unmet: [{ id: "c", status: "pending" }] },
           { stepId: "c", unmet: [{ id: "b", status: "pending" }] },
         ],
-      },
+      }),
     );
-    expect(planSchedule([step("a", [], "done")])).toEqual({ kind: "finished" });
+    expect(planSchedule([step("a", [], "done")])).toEqual(PlanSchedule.finished());
   });
 });

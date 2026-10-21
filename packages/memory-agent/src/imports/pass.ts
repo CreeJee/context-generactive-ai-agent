@@ -14,7 +14,7 @@ import { Projects } from "../projects/projects.ts";
 import { SecretRedactor, type SecretRedactionFailed } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
-import type { ImportSourceName, TranscriptItem, TranscriptStart } from "./items.ts";
+import { TranscriptItem, type ImportSourceName, type TranscriptStart } from "./items.ts";
 import { Checkouts, type Placement } from "./checkouts.ts";
 import { readLinesFrom } from "./lines.ts";
 import { findTranscripts, importSources, type Transcript } from "./sources.ts";
@@ -113,21 +113,20 @@ const make = (home: string) =>
     /** An item as memory may keep it: its text and the files or URLs it names, secrets hidden. */
     const hideSecrets = (
       item: TranscriptItem,
-    ): Effect.Effect<TranscriptItem, SecretRedactionFailed> => {
-      switch (item.kind) {
-        case "session":
-        case "ignored":
-          return Effect.succeed(item);
-        case "message":
-        case "tool_result":
-          return Effect.map(hideText(item.text), (text) => ({ ...item, text }));
-        case "tool_call":
-          return Effect.map(
+    ): Effect.Effect<TranscriptItem, SecretRedactionFailed> =>
+      TranscriptItem.$match(item, {
+        session: (item) => Effect.succeed(item),
+        ignored: (item) => Effect.succeed(item),
+        message: (item) =>
+          Effect.map(hideText(item.text), (text) => TranscriptItem.message({ ...item, text })),
+        tool_result: (item) =>
+          Effect.map(hideText(item.text), (text) => TranscriptItem.tool_result({ ...item, text })),
+        tool_call: (item) =>
+          Effect.map(
             Effect.all([hideText(item.text), Effect.forEach(item.refs, hideText)]),
-            ([text, refs]) => ({ ...item, text, refs }),
-          );
-      }
-    };
+            ([text, refs]) => TranscriptItem.tool_call({ ...item, text, refs }),
+          ),
+      });
 
     const readCursor = SqlSchema.findOneOption({
       Request: Schema.Struct({ source: Schema.String, path: Schema.String }),
@@ -360,7 +359,7 @@ const make = (home: string) =>
         // Another agent's transcript holds whatever its shell printed; memory keeps none of it.
         const items = yield* Effect.forEach(lines, hideSecrets);
 
-        const start = items.find((item) => item.kind === "session");
+        const start = items.find(TranscriptItem.$is("session"));
         const { sessionId, skipped } = yield* sessionFor(transcript, start, placement);
         const now = yield* nowIso;
         if (!isTruthy(sessionId)) {
@@ -402,8 +401,10 @@ const make = (home: string) =>
         }
         // A conversation is named by what the person opened it with.
         if (session.title === null) {
-          const opening = items.find((item) => item.kind === "message" && item.role === "user");
-          if (opening?.kind === "message")
+          const opening = items.find(
+            (item) => TranscriptItem.$is("message")(item) && item.role === "user",
+          );
+          if (TranscriptItem.$is("message")(opening))
             yield* stored(
               "Title",
               sql`UPDATE sessions SET title = ${firstLine(opening.text)}

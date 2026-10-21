@@ -4,7 +4,7 @@ import { EventType } from "@tanstack/ai";
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
 import { expect } from "vite-plus/test";
 import { ExternalAgentAdapter } from "../src/external-agents/adapter.ts";
-import type { ExternalPromptOutcome } from "../src/external-agents/agents.ts";
+import { ExternalPromptOutcome } from "../src/external-agents/agents.ts";
 import { sdkCancellation } from "./support/sdk-cancellation.ts";
 
 it.effect("cancellation releases an empty queue even when the native agent has not settled", () =>
@@ -33,12 +33,10 @@ it.effect("cancellation releases an empty queue even when the native agent has n
     abortController.abort();
     expect(yield* Effect.promise(() => pending)).toEqual({ done: true, value: undefined });
     // A late completion cannot enqueue another event into the closed iterator.
-    yield* Deferred.succeed(completion, {
-      status: "cancelled",
-      stopReason: "cancelled",
-      answer: "",
-      toolCalls: [],
-    });
+    yield* Deferred.succeed(
+      completion,
+      ExternalPromptOutcome.cancelled({ stopReason: "cancelled", answer: "", toolCalls: [] }),
+    );
     expect(yield* Effect.promise(() => iterator.next())).toEqual({ done: true, value: undefined });
   }),
 );

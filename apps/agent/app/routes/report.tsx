@@ -1,11 +1,12 @@
-import { DateTime, Effect, Fiber } from "effect";
+import { Data, DateTime, Effect, Fiber } from "effect";
 import { isTruthy } from "../truthy.ts";
+import type { ReportBundle } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
 import {
   ReportDraft,
   reportText,
   shareableText,
-  type DraftEvidence,
+  DraftEvidence,
   type ReportFields,
 } from "../entry/report/report-draft";
 import { ReportBundlePreview } from "../entry/report/report-bundle";
@@ -20,22 +21,24 @@ import {
   ReportDiagnosisReview,
   diagnosisFailure,
   diagnosisText,
-  type DiagnosisState,
+  DiagnosisState,
 } from "../entry/report/report-diagnosis";
 
 /** The evidence bundle on the page: collected on open when the report names a session. */
-type EvidenceState = DraftEvidence | { readonly status: "loading" };
+type EvidenceState = Data.TaggedEnum<{
+  none: {};
+  failed: {};
+  collected: { readonly bundle: ReportBundle };
+  loading: {};
+}>;
+const EvidenceState = Data.taggedEnum<EvidenceState>();
 
-const draftEvidence = (state: EvidenceState): DraftEvidence => {
-  switch (state.status) {
-    case "loading":
-      return { status: "none" };
-    case "none":
-    case "failed":
-    case "collected":
-      return state;
-  }
-};
+const draftEvidence = EvidenceState.$match({
+  loading: () => DraftEvidence.none(),
+  none: () => DraftEvidence.none(),
+  failed: () => DraftEvidence.failed(),
+  collected: ({ bundle }) => DraftEvidence.collected({ bundle }),
+});
 
 const reportSource = () => {
   const params = new URLSearchParams(window.location.search);
@@ -66,14 +69,14 @@ export default function ReportPage() {
       ),
     [],
   );
-  const [evidence, setEvidence] = useState<EvidenceState>({ status: "none" });
+  const [evidence, setEvidence] = useState<EvidenceState>(EvidenceState.none());
   const [evidenceRetry, setEvidenceRetry] = useState(0);
   const [status, setStatus] = useState("세션 없이 열면 증상 설명만으로 제보합니다.");
   const [analysisSession, setAnalysisSession] = useState<{
     projectId: string;
     reportSessionId: string;
   } | null>(null);
-  const [diagnosis, setDiagnosis] = useState<DiagnosisState>({ status: "idle" });
+  const [diagnosis, setDiagnosis] = useState<DiagnosisState>(DiagnosisState.idle());
   const [sessionRetry, setSessionRetry] = useState(0);
   const [sessionFailed, setSessionFailed] = useState(false);
   useEffect(() => {
@@ -97,7 +100,7 @@ export default function ReportPage() {
       Effect.runFork(Fiber.interrupt(task));
     };
   }, [sessionRetry]);
-  const bundle = evidence.status === "collected" ? evidence.bundle : null;
+  const bundle = EvidenceState.$is("collected")(evidence) ? evidence.bundle : null;
   const generatedText = reportText({
     fields,
     createdAt,
@@ -110,17 +113,17 @@ export default function ReportPage() {
   useEffect(() => {
     const source = reportSource();
     if (source === null) return;
-    setEvidence({ status: "loading" });
+    setEvidence(EvidenceState.loading());
     setStatus("세션의 증거 묶음을 모으는 중입니다. 증상은 계속 작성할 수 있습니다.");
     const task = Effect.runFork(
       readReportEvidence(source).pipe(
         Effect.match({
           onSuccess: (collected) => {
-            setEvidence({ status: "collected", bundle: collected });
+            setEvidence(EvidenceState.collected({ bundle: collected }));
             setStatus("증거 묶음을 모았습니다. 아래에서 보낼 내용을 확인하세요.");
           },
           onFailure: () => {
-            setEvidence({ status: "failed" });
+            setEvidence(EvidenceState.failed());
             setStatus("증거 묶음을 모으지 못했습니다. 증상만으로도 제보할 수 있습니다.");
           },
         }),
@@ -140,7 +143,7 @@ export default function ReportPage() {
   );
   const runDiagnosis = () => {
     if (diagnosisTask.current !== null) Effect.runFork(Fiber.interrupt(diagnosisTask.current));
-    setDiagnosis({ status: "running" });
+    setDiagnosis(DiagnosisState.running());
     diagnosisTask.current = Effect.runFork(
       requestDiagnosis({
         sourceSessionId: new URLSearchParams(window.location.search).get("session"),
@@ -151,8 +154,9 @@ export default function ReportPage() {
       }).pipe(
         Effect.match({
           onSuccess: (result) =>
-            setDiagnosis({ status: "ready", diagnosis: result, included: true }),
-          onFailure: (error) => setDiagnosis({ status: "failed", reason: diagnosisFailure(error) }),
+            setDiagnosis(DiagnosisState.ready({ diagnosis: result, included: true })),
+          onFailure: (error) =>
+            setDiagnosis(DiagnosisState.failed({ reason: diagnosisFailure(error) })),
         }),
       ),
     );
@@ -235,7 +239,7 @@ export default function ReportPage() {
         <p role="status" className="text-sm text-muted-foreground">
           {status}
         </p>
-        {evidence.status === "failed" && (
+        {EvidenceState.$is("failed")(evidence) && (
           <button
             type="button"
             className="text-sm text-primary underline"

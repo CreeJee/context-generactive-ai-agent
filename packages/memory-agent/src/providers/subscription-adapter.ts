@@ -15,7 +15,7 @@ import {
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import { Effect, Stream, Match, MutableHashMap, DateTime, Option, Schema } from "effect";
+import { Data, Effect, Stream, Match, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
@@ -24,7 +24,7 @@ import {
   ReasoningSummaryProtocolFailedReason,
   RequestNotSent,
   ToolArguments,
-  type NormalizedStreamEvent,
+  NormalizedStreamEvent,
   type OAuthProvider,
 } from "../oauth/protocol.ts";
 import type { ModelSelection, SubscriptionModelSelection } from "./contracts.ts";
@@ -364,11 +364,36 @@ function subscriptionRequestBody(
 }
 
 const isPromptCacheRejection = (event: NormalizedStreamEvent) =>
-  event.type === "error" &&
+  NormalizedStreamEvent.$is("error")(event) &&
   /cache[_ -]?control|prompt[_ -]?cach/i.test(`${event.code} ${event.message}`) &&
   /invalid|unsupported|unknown|not (?:allowed|supported)|unrecognized/i.test(
     `${event.code} ${event.message}`,
   );
+
+/** The event's tag, which is all the stream log says about the event. */
+const streamEventType = NormalizedStreamEvent.$match({
+  text: () => "text",
+  "tool-call": () => "tool-call",
+  "tool-call-start": () => "tool-call-start",
+  "tool-call-arguments": () => "tool-call-arguments",
+  "content-block-end": () => "content-block-end",
+  "reasoning-start": () => "reasoning-start",
+  "reasoning-delta": () => "reasoning-delta",
+  "reasoning-signature": () => "reasoning-signature",
+  reasoning: () => "reasoning",
+  "reasoning-summary-start": () => "reasoning-summary-start",
+  "reasoning-summary-delta": () => "reasoning-summary-delta",
+  "reasoning-summary-end": () => "reasoning-summary-end",
+  usage: () => "usage",
+  error: () => "error",
+});
+
+/** A public reasoning summary part: still receiving text, or ended. */
+type SummaryState = Data.TaggedEnum<{
+  open: { readonly text: string };
+  closed: {};
+}>;
+const SummaryState = Data.taggedEnum<SummaryState>();
 
 // A thrown value from the native client is classified only by its type and stream position.
 const streamFailure = (
@@ -497,10 +522,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         let summaryCharacters = 0;
         let summaryCount = 0;
         let openSummaries = 0;
-        const summaries = MutableHashMap.empty<
-          string,
-          { readonly type: "open"; readonly text: string } | { readonly type: "closed" }
-        >();
+        const summaries = MutableHashMap.empty<string, SummaryState>();
 
         const translate = function* (
           event: NormalizedStreamEvent,
@@ -508,124 +530,113 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           if (signal?.aborted === true) return;
           options.logger.provider("subscription stream event", {
             provider: providerName,
-            eventType: event.type,
+            eventType: streamEventType(event),
           });
-          if (event.type === "usage") {
+          if (NormalizedStreamEvent.$is("usage")(event)) {
             promptTokens = event.promptTokens ?? promptTokens;
             completionTokens = event.completionTokens ?? completionTokens;
             cachedPromptTokens = event.cachedPromptTokens ?? cachedPromptTokens;
             return;
           }
-          if (event.type === "error")
+          if (NormalizedStreamEvent.$is("error")(event))
             throw SubscriptionStreamFailed.make({
               provider: providerName,
               reason: SubscriptionStreamFailedReason.cases.ProviderRejected.make({}),
             });
           // Public OpenAI summary parts are SDK reasoning messages, not Anthropic block ends.
-          switch (event.type) {
-            case "reasoning-summary-start": {
-              const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
-              if (MutableHashMap.has(summaries, summaryId))
-                throw ReasoningSummaryProtocolFailed.make({
-                  reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
-                });
-              if (
-                summaryCount >= publicReasoningLimits.parts ||
-                event.id.length > publicReasoningLimits.idCharacters ||
-                summaryCharacters + event.text.length > publicReasoningLimits.characters
-              )
+          if (NormalizedStreamEvent.$is("reasoning-summary-start")(event)) {
+            const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
+            if (MutableHashMap.has(summaries, summaryId))
+              throw ReasoningSummaryProtocolFailed.make({
+                reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
+              });
+            if (
+              summaryCount >= publicReasoningLimits.parts ||
+              event.id.length > publicReasoningLimits.idCharacters ||
+              summaryCharacters + event.text.length > publicReasoningLimits.characters
+            )
+              throw ReasoningSummaryProtocolFailed.make({
+                reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
+              });
+            summaryCount++;
+            openSummaries++;
+            summaryCharacters += event.text.length;
+            MutableHashMap.set(summaries, summaryId, SummaryState.open({ text: event.text }));
+            yield {
+              ...stamp(),
+              type: EventType.REASONING_MESSAGE_START,
+              messageId: summaryId,
+              role: "reasoning",
+            };
+            if (event.text.length > 0)
+              yield {
+                ...stamp(),
+                type: EventType.REASONING_MESSAGE_CONTENT,
+                messageId: summaryId,
+                delta: event.text,
+              };
+            return;
+          }
+          if (
+            NormalizedStreamEvent.$is("reasoning-summary-delta")(event) ||
+            NormalizedStreamEvent.$is("reasoning-summary-end")(event)
+          ) {
+            const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
+            const summary = Option.getOrUndefined(MutableHashMap.get(summaries, summaryId));
+            if (summary === undefined)
+              throw ReasoningSummaryProtocolFailed.make({
+                reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
+              });
+            if (SummaryState.$is("closed")(summary))
+              throw ReasoningSummaryProtocolFailed.make({
+                reason: ReasoningSummaryProtocolFailedReason.cases.AlreadyEnded.make({}),
+              });
+            if (NormalizedStreamEvent.$is("reasoning-summary-delta")(event)) {
+              if (summaryCharacters + event.delta.length > publicReasoningLimits.characters)
                 throw ReasoningSummaryProtocolFailed.make({
                   reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
                 });
-              summaryCount++;
-              openSummaries++;
-              summaryCharacters += event.text.length;
-              MutableHashMap.set(summaries, summaryId, { type: "open", text: event.text });
+              summaryCharacters += event.delta.length;
+              MutableHashMap.set(
+                summaries,
+                summaryId,
+                SummaryState.open({ text: summary.text + event.delta }),
+              );
               yield {
                 ...stamp(),
-                type: EventType.REASONING_MESSAGE_START,
+                type: EventType.REASONING_MESSAGE_CONTENT,
                 messageId: summaryId,
-                role: "reasoning",
+                delta: event.delta,
               };
-              if (event.text.length > 0)
-                yield {
-                  ...stamp(),
-                  type: EventType.REASONING_MESSAGE_CONTENT,
-                  messageId: summaryId,
-                  delta: event.text,
-                };
               return;
             }
-            case "reasoning-summary-delta":
-            case "reasoning-summary-end": {
-              const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
-              const summary = Option.getOrUndefined(MutableHashMap.get(summaries, summaryId));
-              if (summary === undefined)
-                throw ReasoningSummaryProtocolFailed.make({
-                  reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
-                });
-              switch (summary.type) {
-                case "closed":
-                  throw ReasoningSummaryProtocolFailed.make({
-                    reason: ReasoningSummaryProtocolFailedReason.cases.AlreadyEnded.make({}),
-                  });
-                case "open": {
-                  switch (event.type) {
-                    case "reasoning-summary-delta":
-                      if (summaryCharacters + event.delta.length > publicReasoningLimits.characters)
-                        throw ReasoningSummaryProtocolFailed.make({
-                          reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
-                        });
-                      summaryCharacters += event.delta.length;
-                      MutableHashMap.set(summaries, summaryId, {
-                        type: "open",
-                        text: summary.text + event.delta,
-                      });
-                      yield {
-                        ...stamp(),
-                        type: EventType.REASONING_MESSAGE_CONTENT,
-                        messageId: summaryId,
-                        delta: event.delta,
-                      };
-                      break;
-                    case "reasoning-summary-end": {
-                      if (!event.text.startsWith(summary.text))
-                        throw ReasoningSummaryProtocolFailed.make({
-                          reason:
-                            ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
-                        });
-                      const remaining = event.text.slice(summary.text.length);
-                      if (summaryCharacters + remaining.length > publicReasoningLimits.characters)
-                        throw ReasoningSummaryProtocolFailed.make({
-                          reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
-                        });
-                      summaryCharacters += remaining.length;
-                      openSummaries--;
-                      if (remaining.length > 0)
-                        yield {
-                          ...stamp(),
-                          type: EventType.REASONING_MESSAGE_CONTENT,
-                          messageId: summaryId,
-                          delta: remaining,
-                        };
-                      MutableHashMap.set(summaries, summaryId, { type: "closed" });
-                      yield {
-                        ...stamp(),
-                        type: EventType.REASONING_MESSAGE_END,
-                        messageId: summaryId,
-                      };
-                      break;
-                    }
-                  }
-                  break;
-                }
-              }
-              return;
-            }
-            default:
-              break;
+            if (!event.text.startsWith(summary.text))
+              throw ReasoningSummaryProtocolFailed.make({
+                reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
+              });
+            const remaining = event.text.slice(summary.text.length);
+            if (summaryCharacters + remaining.length > publicReasoningLimits.characters)
+              throw ReasoningSummaryProtocolFailed.make({
+                reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
+              });
+            summaryCharacters += remaining.length;
+            openSummaries--;
+            if (remaining.length > 0)
+              yield {
+                ...stamp(),
+                type: EventType.REASONING_MESSAGE_CONTENT,
+                messageId: summaryId,
+                delta: remaining,
+              };
+            MutableHashMap.set(summaries, summaryId, SummaryState.closed());
+            yield {
+              ...stamp(),
+              type: EventType.REASONING_MESSAGE_END,
+              messageId: summaryId,
+            };
+            return;
           }
-          if (event.type === "reasoning") {
+          if (NormalizedStreamEvent.$is("reasoning")(event)) {
             if (event.encryptedContent.length > maxEncryptedReasoningCharacters)
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
@@ -640,7 +651,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "text") {
+          if (NormalizedStreamEvent.$is("text")(event)) {
             if (!textOpen) {
               textOpen = true;
               yield {
@@ -658,7 +669,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "content-block-end" && textOpen) {
+          if (NormalizedStreamEvent.$is("content-block-end")(event) && textOpen) {
             textOpen = false;
             yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
             return;
@@ -667,7 +678,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             textOpen = false;
             yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
           }
-          if (event.type === "tool-call") {
+          if (NormalizedStreamEvent.$is("tool-call")(event)) {
             const index = toolCalls++;
             yield {
               ...stamp(),
@@ -691,7 +702,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "tool-call-start") {
+          if (NormalizedStreamEvent.$is("tool-call-start")(event)) {
             if (
               MutableHashMap.has(streamingCalls, event.index) ||
               MutableHashMap.has(streamingReasoning, event.index)
@@ -712,7 +723,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "reasoning-start") {
+          if (NormalizedStreamEvent.$is("reasoning-start")(event)) {
             if (
               MutableHashMap.has(streamingReasoning, event.index) ||
               MutableHashMap.has(streamingCalls, event.index)
@@ -731,7 +742,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "reasoning-delta") {
+          if (NormalizedStreamEvent.$is("reasoning-delta")(event)) {
             const reasoningId = Option.getOrUndefined(
               MutableHashMap.get(streamingReasoning, event.index),
             );
@@ -748,7 +759,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "reasoning-signature") {
+          if (NormalizedStreamEvent.$is("reasoning-signature")(event)) {
             const reasoningId = Option.getOrUndefined(
               MutableHashMap.get(streamingReasoning, event.index),
             );
@@ -766,7 +777,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             };
             return;
           }
-          if (event.type === "tool-call-arguments") {
+          if (NormalizedStreamEvent.$is("tool-call-arguments")(event)) {
             const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
             if (!isTruthy(call))
               throw SubscriptionStreamFailed.make({

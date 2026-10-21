@@ -32,7 +32,7 @@ import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
-import type { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
+import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { nativeStream } from "../../src/runtime/native-stream.ts";
 import { runtimeArtifact } from "../../src/runtime/resources.ts";
@@ -245,7 +245,11 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
           clients++;
           return {
             stream: () =>
-              nativeStream(Stream.make<NormalizedStreamEvent[]>({ type: "text", text: "unused" })),
+              nativeStream(
+                Stream.make<NormalizedStreamEvent[]>(
+                  NormalizedStreamEvent.text({ text: "unused" }),
+                ),
+              ),
           };
         },
       });

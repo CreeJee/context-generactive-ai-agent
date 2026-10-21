@@ -1,5 +1,5 @@
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
-import { Effect, Match, Option, Schema } from "effect";
+import { Data, Effect, Match, Option, Schema } from "effect";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
@@ -59,19 +59,23 @@ const itemRule = (item: ReportedItem) =>
 const requestFailure = (failure: Error) =>
   Schema.is(ImprovementRequestFailed)(failure) ? failure.message : "요청을 처리하지 못했어요.";
 
+/** The commands `/api/settings/improvements` reads. */
+type ScanCommand = Data.TaggedEnum<{ start: {}; stop: {} }>;
+const ScanCommand = Data.taggedEnum<ScanCommand>();
+
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-function request<A>(action?: "start" | "stop"): Promise<A> {
+function request<A>(command?: ScanCommand): Promise<A> {
   return runUiEffect(
     Effect.gen(function* () {
       const response = yield* uiPromise(() =>
         appFetch(
           "/api/settings/improvements",
-          action === undefined
+          command === undefined
             ? undefined
             : {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action }),
+                body: JSON.stringify(command),
               },
         ),
       );
@@ -169,7 +173,7 @@ export function ImprovementSettings() {
     retry: false,
   });
   const command = useMutation({
-    mutationFn: (action: "start" | "stop") => request<Pick<Status, "state">>(action),
+    mutationFn: (scan: ScanCommand) => request<Pick<Status, "state">>(scan),
     onSuccess: ({ state }) => {
       setError(null);
       cache.setQueryData<Status>(queryKey, (current) =>
@@ -192,7 +196,7 @@ export function ImprovementSettings() {
               size="sm"
               variant="outline"
               disabled={command.isPending}
-              onClick={() => command.mutate("stop")}
+              onClick={() => command.mutate(ScanCommand.stop())}
             >
               중지
             </Button>
@@ -200,7 +204,7 @@ export function ImprovementSettings() {
             <Button
               size="sm"
               disabled={command.isPending || data === undefined}
-              onClick={() => command.mutate("start")}
+              onClick={() => command.mutate(ScanCommand.start())}
             >
               {latest === null ? "개선 항목 찾기" : "다시 찾기"}
             </Button>

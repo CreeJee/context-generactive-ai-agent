@@ -1,6 +1,6 @@
 import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { planSchedule, stalledEvidence } from "./plan-schedule.ts";
+import { PlanSchedule, planSchedule, stalledEvidence } from "./plan-schedule.ts";
 import { endedWithKnownEffectsSql } from "./run-bindings.ts";
 import type { WorkflowState } from "./workflow.ts";
 
@@ -148,7 +148,7 @@ const make = Effect.gen(function* () {
       executable(state) &&
       execution.goalVersion === state.goal?.version &&
       execution.planVersion === state.plan?.version &&
-      planSchedule(state.plan.steps).kind !== "stalled"
+      !PlanSchedule.$is("stalled")(planSchedule(state.plan.steps))
     );
   });
 
@@ -294,7 +294,7 @@ const make = Effect.gen(function* () {
             const schedule = planSchedule(state.plan?.steps ?? []);
             yield* save(
               sessionId,
-              schedule.kind === "stalled"
+              PlanSchedule.$is("stalled")(schedule)
                 ? {
                     kind: "blocked",
                     runId,

@@ -9,7 +9,7 @@ import { ItemGroup } from "~/components/ui/item";
 import { externalAgentFailureText } from "memory-agent/definitions";
 import { type ExternalAgentView, type Project } from "../../api";
 import { useSuspenseAgentsQuery } from "../../queries/project";
-import { useExternalAgentMutation } from "../../queries/mutations/project";
+import { AgentChange, useExternalAgentMutation } from "../../queries/mutations/project";
 import {
   PageHeader,
   PageError,
@@ -148,7 +148,7 @@ function AgentSettingsContent({ project }: { project: Project }) {
                           size="sm"
                           variant="outline"
                           disabled={busy}
-                          onClick={() => void apply({ kind: "reconnect", name: agent.name })}
+                          onClick={() => void apply(AgentChange.reconnect({ name: agent.name }))}
                         >
                           <RefreshCwIcon /> 다시 연결
                         </Button>
@@ -158,12 +158,13 @@ function AgentSettingsContent({ project }: { project: Project }) {
                         changed={agent.state.status === "changed"}
                         busy={busy}
                         onClick={() =>
-                          void apply({
-                            kind: "trust",
-                            scope: agent.scope,
-                            name: agent.name,
-                            trusted: !trusted,
-                          })
+                          void apply(
+                            AgentChange.trust({
+                              scope: agent.scope,
+                              name: agent.name,
+                              trusted: !trusted,
+                            }),
+                          )
                         }
                       />
                     </>

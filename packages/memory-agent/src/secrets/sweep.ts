@@ -3,7 +3,7 @@ import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { DateTime, Semaphore } from "effect";
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { RpcClient } from "effect/rpc";
 import { Nodes } from "../memory/nodes.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -62,26 +62,24 @@ const columnTables = {
 } as const satisfies Record<ColumnTable, readonly Column[]>;
 
 /** What one sweep covers; nodes and their references need more than a column update. */
-type Target =
-  | { readonly kind: "nodes" }
-  | { readonly kind: "refs" }
-  | { readonly kind: "columns"; readonly table: ColumnTable };
+type Target = Data.TaggedEnum<{
+  nodes: {};
+  refs: {};
+  columns: { readonly table: ColumnTable };
+}>;
+const Target = Data.taggedEnum<Target>();
 
 const targets: readonly Target[] = [
-  { kind: "nodes" },
-  { kind: "refs" },
-  ...ColumnTable.literals.map((table): Target => ({ kind: "columns", table })),
+  Target.nodes(),
+  Target.refs(),
+  ...ColumnTable.literals.map((table) => Target.columns({ table })),
 ];
 
-const targetName = (target: Target) => {
-  switch (target.kind) {
-    case "nodes":
-    case "refs":
-      return target.kind;
-    case "columns":
-      return target.table;
-  }
-};
+const targetName = Target.$match({
+  nodes: () => "nodes" as const,
+  refs: () => "refs" as const,
+  columns: ({ table }) => table,
+});
 
 const Progress = Schema.Struct({
   version: Schema.Finite,
@@ -341,16 +339,12 @@ const make = (running: boolean) =>
         return { rows: rows.length, last: rowKeys.at(-1) ?? after, hidden: updates.length };
       });
 
-    const batchOf = (redact: Redact, target: Target, after: number) => {
-      switch (target.kind) {
-        case "nodes":
-          return sweepNodes(redact, after);
-        case "refs":
-          return sweepRefs(redact, after);
-        case "columns":
-          return sweepColumns(redact, target.table, after);
-      }
-    };
+    const batchOf = (redact: Redact, target: Target, after: number) =>
+      Target.$match(target, {
+        nodes: () => sweepNodes(redact, after),
+        refs: () => sweepRefs(redact, after),
+        columns: ({ table }) => sweepColumns(redact, table, after),
+      });
 
     /**
      * Where a table's sweep starts this time.
@@ -363,15 +357,12 @@ const make = (running: boolean) =>
      * all hidden on the way in, so a position means nothing for them: they are read in full on every
      * start. They are small next to the nodes.
      */
-    const resumesFrom = (target: Target, saved: number) => {
-      switch (target.kind) {
-        case "nodes":
-        case "refs":
-          return saved;
-        case "columns":
-          return 0;
-      }
-    };
+    const resumesFrom = (target: Target, saved: number) =>
+      Target.$match(target, {
+        nodes: () => saved,
+        refs: () => saved,
+        columns: () => 0,
+      });
 
     /** Sweeps one table to the end, recording where it got after every batch. */
     const sweep = (redact: Redact, target: Target) =>
@@ -402,7 +393,7 @@ const make = (running: boolean) =>
           const redact = yield* redactionWorker;
           for (const target of targets) {
             const hidden = yield* sweep(redact, target);
-            if (target.kind === "nodes") changedNodes = hidden;
+            if (Target.$is("nodes")(target)) changedNodes = hidden;
           }
         }),
       );

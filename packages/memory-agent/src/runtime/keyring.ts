@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   Config,
+  Data,
   Effect,
   FileSystem,
   Function as EffectFunction,
@@ -38,14 +39,15 @@ type FailureReason = SecretFileStoreFailed["reason"];
  * containers. Only `CONTEXT_AGENT_SECRET_DIRECTORY` selects it, and its key comes from outside that
  * directory: `CONTEXT_AGENT_SECRET_KEY`, or the file named by `CONTEXT_AGENT_SECRET_KEY_FILE`.
  */
-export type SecretBackend =
-  | { readonly kind: "keychain" }
-  | {
-      readonly kind: "file";
-      readonly directory: string;
-      readonly key: Option.Option<string>;
-      readonly keyFile: Option.Option<string>;
-    };
+export type SecretBackend = Data.TaggedEnum<{
+  keychain: {};
+  file: {
+    readonly directory: string;
+    readonly key: Option.Option<string>;
+    readonly keyFile: Option.Option<string>;
+  };
+}>;
+export const SecretBackend = Data.taggedEnum<SecretBackend>();
 
 // NodeServices' file system and path services own no resources; entries run their Effects through it.
 const runtime = ManagedRuntime.make(NodeServices.layer);
@@ -65,8 +67,8 @@ const configuredBackend: Config.Config<SecretBackend> = Config.all({
 }).pipe(
   Config.map(({ directory, key, keyFile }) =>
     Option.match(directory, {
-      onNone: (): SecretBackend => ({ kind: "keychain" }),
-      onSome: (directory): SecretBackend => ({ kind: "file", directory, key, keyFile }),
+      onNone: (): SecretBackend => SecretBackend.keychain(),
+      onSome: (directory): SecretBackend => SecretBackend.file({ directory, key, keyFile }),
     }),
   ),
 );
@@ -81,7 +83,7 @@ const base64 = (
     onFailure: () => fail(reason),
   });
 
-type FileBackend = Extract<SecretBackend, { kind: "file" }>;
+type FileBackend = Data.TaggedEnum.Value<SecretBackend, "file">;
 
 /** 32 random bytes in Base64, e.g. `openssl rand -base64 32`. Read on use, so a rotated key file applies. */
 const fileKey = Effect.fn("keyring.fileKey")(function* ({ key, keyFile }: FileBackend) {
@@ -176,12 +178,11 @@ export const keyringEntry: {
   (account: string, backend: SecretBackend): (service: string) => KeyringEntry;
 } & typeof keyringEntryBody = EffectFunction.dual(3, keyringEntryBody);
 function keyringEntryBody(service: string, account: string, backend: SecretBackend): KeyringEntry {
-  switch (backend.kind) {
-    case "keychain":
-      return new (requireRuntime("@napi-rs/keyring").AsyncEntry)(service, account);
-    case "file":
-      return fileEntry(backend, service, account);
-  }
+  return SecretBackend.$match(backend, {
+    keychain: (): KeyringEntry =>
+      new (requireRuntime("@napi-rs/keyring").AsyncEntry)(service, account),
+    file: (file) => fileEntry(file, service, account),
+  });
 }
 
 /** Opens one secret entry in the backend this process was started with. */

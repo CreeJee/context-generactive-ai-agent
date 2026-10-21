@@ -7,6 +7,7 @@ import {
   DateTime,
   Clock,
   Context,
+  Data,
   Deferred,
   Effect,
   Exit,
@@ -341,9 +342,11 @@ export const modelWorker = Effect.fnUntraced(function* (
 });
 
 /** What a local embedder is for: the app (run as settings say) or evaluating a model file. */
-type LocalPurpose =
-  | { readonly kind: "app"; readonly mode: EmbeddingMode }
-  | { readonly kind: "evaluation" };
+type LocalPurpose = Data.TaggedEnum<{
+  app: { readonly mode: EmbeddingMode };
+  evaluation: {};
+}>;
+const LocalPurpose = Data.taggedEnum<LocalPurpose>();
 
 const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
   Effect.gen(function* () {
@@ -353,14 +356,11 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
     return {
       identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}/chunks-v${chunkPolicy.version}-${chunkPolicy.tokens}-${chunkPolicy.overlap}`,
       dimensions: localModel.dimensions,
-      runtime: (): EmbedderRuntime => {
-        switch (purpose.kind) {
-          case "app":
-            return { kind: "local", mode: purpose.mode, device: model.device() };
-          case "evaluation":
-            return { kind: "other" };
-        }
-      },
+      runtime: () =>
+        LocalPurpose.$match(purpose, {
+          app: ({ mode }): EmbedderRuntime => ({ kind: "local", mode, device: model.device() }),
+          evaluation: (): EmbedderRuntime => ({ kind: "other" }),
+        }),
       embed: model.embed,
       chunks: model.chunks,
     } satisfies EmbedderApi;
@@ -421,12 +421,13 @@ export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
     Embedder,
     Effect.gen(function* () {
       const mode = embeddingModeFor(yield* (yield* GlobalConfig).read, yield* totalMemory);
-      return yield* makeLocal(modes[mode], { kind: "app", mode });
+      return yield* makeLocal(modes[mode], LocalPurpose.app({ mode }));
     }),
   ).pipe(Layer.provide(NodePath.layer));
   /** Another published file on the CPU, to compare quality and memory. */
   static readonly localVariant = (variant: ModelVariant) =>
-    Layer.effect(Embedder, makeLocal({ variant, devices: ["cpu"] }, { kind: "evaluation" })).pipe(
-      Layer.provide(NodePath.layer),
-    );
+    Layer.effect(
+      Embedder,
+      makeLocal({ variant, devices: ["cpu"] }, LocalPurpose.evaluation()),
+    ).pipe(Layer.provide(NodePath.layer));
 }

@@ -31,6 +31,7 @@ import {
   type StoredCredential,
 } from "../src/oauth/validation-harness.ts";
 import {
+  NormalizedStreamEvent,
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
   ProviderStreamFailed,
@@ -783,28 +784,25 @@ for (const provider of ["openai", "anthropic"] as const) {
           expect(events).toEqual(
             provider === "openai"
               ? [
-                  { type: "text", text: "hello" },
-                  {
-                    type: "tool-call",
+                  NormalizedStreamEvent.text({ text: "hello" }),
+                  NormalizedStreamEvent["tool-call"]({
                     id: "call-1",
                     name: "lookup",
                     arguments: { q: "x" },
-                  },
+                  }),
                 ]
               : [
-                  { type: "text", text: "hello" },
-                  {
-                    type: "tool-call-start",
+                  NormalizedStreamEvent.text({ text: "hello" }),
+                  NormalizedStreamEvent["tool-call-start"]({
                     index: 1,
                     id: "call-1",
                     name: "lookup",
-                  },
-                  {
-                    type: "tool-call-arguments",
+                  }),
+                  NormalizedStreamEvent["tool-call-arguments"]({
                     index: 1,
                     delta: '{"q":"x"}',
-                  },
-                  { type: "content-block-end", index: 1 },
+                  }),
+                  NormalizedStreamEvent["content-block-end"]({ index: 1 }),
                 ],
           );
           expect(fake.modelHeaders[0]?.authorization).toBe("Bearer access-secret-1");

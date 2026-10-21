@@ -1,6 +1,16 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
-import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime, Schema } from "effect";
+import {
+  MutableHashMap,
+  Option,
+  Cause,
+  Data,
+  Effect,
+  Stream,
+  Queue,
+  DateTime,
+  Schema,
+} from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   EventType,
@@ -16,7 +26,7 @@ import {
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { messageText } from "../messages/text.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
-import type { ExternalPromptOutcome } from "./agents.ts";
+import { ExternalPromptOutcome } from "./agents.ts";
 
 /** Sends one user turn to the external agent; updates arrive through `onUpdate`. */
 export type ExternalTurn = (
@@ -25,10 +35,12 @@ export type ExternalTurn = (
   onUpdate: (update: SessionUpdate) => void,
 ) => Promise<ExternalPromptOutcome>;
 
-type Item =
-  | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "done"; readonly outcome: ExternalPromptOutcome }
-  | { readonly kind: "error"; readonly error: Error };
+type Item = Data.TaggedEnum<{
+  text: { readonly text: string };
+  done: { readonly outcome: ExternalPromptOutcome };
+  error: { readonly error: Error };
+}>;
+const Item = Data.taggedEnum<Item>();
 
 /**
  * A turn that ended without an answer. The SDK sends `code` and `message` as the run's
@@ -45,18 +57,13 @@ export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTur
 }
 
 /** Why a turn did not produce an answer, or null when it did. */
-function failureOf(outcome: ExternalPromptOutcome): ExternalAgentTurnFailed | null {
-  switch (outcome.status) {
-    case "completed":
-    case "cancelled":
-      return null;
-    case "unavailable":
-    case "failed":
-      return new ExternalAgentTurnFailed(outcome.failure);
-    case "disconnected":
-      return new ExternalAgentTurnFailed({ code: "disconnected", detail: null });
-  }
-}
+const failureOf = ExternalPromptOutcome.$match({
+  completed: (): ExternalAgentTurnFailed | null => null,
+  cancelled: () => null,
+  unavailable: ({ failure }) => new ExternalAgentTurnFailed(failure),
+  failed: ({ failure }) => new ExternalAgentTurnFailed(failure),
+  disconnected: () => new ExternalAgentTurnFailed({ code: "disconnected", detail: null }),
+});
 
 /**
  * TanStack text adapter for a conversation held directly with an external ACP agent. The agent
@@ -123,7 +130,7 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
                       switch (update.sessionUpdate) {
                         case "agent_message_chunk":
                           if (update.content.type === "text")
-                            push({ kind: "text", text: update.content.text });
+                            push(Item.text({ text: update.content.text }));
                           return;
                         case "tool_call":
                           MutableHashMap.set(toolTitles, update.toolCallId, {
@@ -147,16 +154,17 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
                     }),
                   catch: (cause) => new Cause.UnknownError(cause),
                 });
-                push({ kind: "done", outcome });
+                push(Item.done({ outcome }));
               }).pipe(
                 // The preamble or the turn rejected; the SDK receives the rejection as thrown.
                 Effect.catchTag("UnknownError", ({ cause }) =>
                   Effect.sync(() => {
                     if (signal?.aborted !== true)
-                      push({
-                        kind: "error",
-                        error: cause instanceof Error ? cause : new Error(String(cause)),
-                      });
+                      push(
+                        Item.error({
+                          error: cause instanceof Error ? cause : new Error(String(cause)),
+                        }),
+                      );
                   }),
                 ),
                 Effect.onInterrupt(() =>
@@ -170,63 +178,66 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
         );
         const messageId = randomUUID();
         let open = false;
-        const translate = function* (item: Item): Generator<AdapterYieldChunk, void, unknown> {
-          switch (item.kind) {
-            case "text":
-              if (!open) {
-                open = true;
-                yield {
-                  ...stamp(),
-                  type: EventType.TEXT_MESSAGE_START,
-                  messageId,
-                  role: "assistant",
-                };
-              }
-              yield {
-                ...stamp(),
-                type: EventType.TEXT_MESSAGE_CONTENT,
-                messageId,
-                delta: item.text,
-              };
-              break;
-            case "error":
-              throw item.error;
-            case "done": {
-              if (signal?.aborted === true) return;
-              const failure = failureOf(item.outcome);
-              // Synchronous SDK iterator: a failed turn is thrown as its typed error.
-              if (failure !== null) throw failure;
-              if (MutableHashMap.size(toolTitles) > 0) {
-                const list = [...MutableHashMap.values(toolTitles)]
-                  .map((call) => `- ${call.title} (${call.status})`)
-                  .join("\n");
-                if (!open) {
-                  open = true;
-                  yield {
-                    ...stamp(),
-                    type: EventType.TEXT_MESSAGE_START,
-                    messageId,
-                    role: "assistant",
-                  };
-                }
-                yield {
-                  ...stamp(),
-                  type: EventType.TEXT_MESSAGE_CONTENT,
-                  messageId,
-                  delta: `\n\n외부 에이전트가 알린 도구 호출:\n${list}`,
-                };
-              }
-              if (open) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-              yield {
-                ...stamp(),
-                type: EventType.RUN_FINISHED,
-                runId,
-                threadId,
-                finishReason: "stop",
-              };
-              return;
-            }
+        type Chunks = Generator<AdapterYieldChunk, void, unknown>;
+        const textChunks = function* (text: string): Chunks {
+          if (!open) {
+            open = true;
+            yield {
+              ...stamp(),
+              type: EventType.TEXT_MESSAGE_START,
+              messageId,
+              role: "assistant",
+            };
           }
+          yield {
+            ...stamp(),
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId,
+            delta: text,
+          };
+        };
+        const doneChunks = function* (outcome: ExternalPromptOutcome): Chunks {
+          if (signal?.aborted === true) return;
+          const failure = failureOf(outcome);
+          // Synchronous SDK iterator: a failed turn is thrown as its typed error.
+          if (failure !== null) throw failure;
+          if (MutableHashMap.size(toolTitles) > 0) {
+            const list = [...MutableHashMap.values(toolTitles)]
+              .map((call) => `- ${call.title} (${call.status})`)
+              .join("\n");
+            if (!open) {
+              open = true;
+              yield {
+                ...stamp(),
+                type: EventType.TEXT_MESSAGE_START,
+                messageId,
+                role: "assistant",
+              };
+            }
+            yield {
+              ...stamp(),
+              type: EventType.TEXT_MESSAGE_CONTENT,
+              messageId,
+              delta: `\n\n외부 에이전트가 알린 도구 호출:\n${list}`,
+            };
+          }
+          if (open) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
+          yield {
+            ...stamp(),
+            type: EventType.RUN_FINISHED,
+            runId,
+            threadId,
+            finishReason: "stop",
+          };
+        };
+        const translate = function* (item: Item): Chunks {
+          yield* Item.$match(item, {
+            text: ({ text }) => textChunks(text),
+            error: ({ error }) => {
+              throw error;
+            },
+            done: ({ outcome }) => doneChunks(outcome),
+          });
         };
         return Stream.concat(
           Stream.make({ ...stamp(), type: EventType.RUN_STARTED, runId, threadId }),

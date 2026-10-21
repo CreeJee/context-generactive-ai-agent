@@ -1,14 +1,16 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import { Importer } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.imports";
 
-const ImportAction = Schema.Union([
-  Schema.Struct({ action: Schema.Literals(["run", "restart_watch"]) }),
-  Schema.Struct({ action: Schema.Literals(["enable", "disable"]) }),
-  Schema.Struct({ action: Schema.Literal("interpret"), interpret: Schema.Boolean }),
-]);
+const ImportAction = Schema.TaggedUnion({
+  run: {},
+  restart_watch: {},
+  enable: {},
+  disable: {},
+  interpret: { interpret: Schema.Boolean },
+});
 
 /**
  * GET /api/settings/imports: what can be migrated from other coding agents' local transcripts —
@@ -44,22 +46,14 @@ export function action({ request }: Route.ActionArgs) {
 
       {
         const importer = yield* Importer;
-        const command = body.success;
-        switch (command.action) {
-          case "run":
-            // Answered at once; the page follows the pass through `activity`.
-            yield* importer.start;
-            break;
-          case "restart_watch":
-            yield* importer.restartWatch;
-            break;
-          case "enable":
-          case "disable":
-            yield* importer.setEnabled(command.action === "enable");
-            break;
-          case "interpret":
-            yield* importer.setInterpret(command.interpret);
-        }
+        yield* Match.valueTags(body.success, {
+          // Answered at once; the page follows the pass through `activity`.
+          run: () => importer.start,
+          restart_watch: () => importer.restartWatch,
+          enable: () => importer.setEnabled(true),
+          disable: () => importer.setEnabled(false),
+          interpret: ({ interpret }) => importer.setInterpret(interpret),
+        });
         return Response.json(yield* importer.overview);
       }
     }),

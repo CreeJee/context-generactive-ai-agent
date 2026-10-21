@@ -1,18 +1,13 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import { AgentScope, ExternalAgents, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/projects.$project.agents";
 
-const AgentChange = Schema.Union([
-  Schema.Struct({
-    action: Schema.Literal("trust"),
-    scope: AgentScope,
-    name: Schema.NonEmptyString,
-    trusted: Schema.Boolean,
-  }),
-  Schema.Struct({ action: Schema.Literal("reconnect"), name: Schema.NonEmptyString }),
-]);
+const AgentChange = Schema.TaggedUnion({
+  trust: { scope: AgentScope, name: Schema.NonEmptyString, trusted: Schema.Boolean },
+  reconnect: { name: Schema.NonEmptyString },
+});
 
 const projectNotFound = () =>
   Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 }));
@@ -49,14 +44,12 @@ export function action({ request, params }: Route.ActionArgs) {
       return yield* Effect.gen(function* () {
         const project = yield* (yield* Projects).get(params.project);
         const agents = yield* ExternalAgents;
-        switch (change.action) {
-          case "trust":
-            return Response.json(
-              yield* agents.setTrusted(project, change.scope, change.name, change.trusted),
-            );
-          case "reconnect":
-            return Response.json(yield* agents.reconnect(project, change.name));
-        }
+        return Response.json(
+          yield* Match.valueTags(change, {
+            trust: ({ scope, name, trusted }) => agents.setTrusted(project, scope, name, trusted),
+            reconnect: ({ name }) => agents.reconnect(project, name),
+          }),
+        );
       }).pipe(Effect.catchTag("ProjectNotFound", projectNotFound));
     }),
   );

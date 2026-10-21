@@ -9,7 +9,7 @@ import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Recorder } from "../../src/memory/record.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
-import type { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
+import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import { PermissionClassifier } from "../../src/permissions/classifier.ts";
 import { PermissionGate } from "../../src/permissions/gate.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
@@ -207,10 +207,9 @@ const accountClients = (registry: ProviderRegistry["Service"]) => {
             releaseRun: () => released.push(account),
             stream: (): AsyncGenerator<NormalizedStreamEvent> =>
               nativeStream(
-                Stream.succeed<NormalizedStreamEvent>({
-                  type: "text",
-                  text: `native-answer-${account}`,
-                }),
+                Stream.succeed<NormalizedStreamEvent>(
+                  NormalizedStreamEvent.text({ text: `native-answer-${account}` }),
+                ),
               ),
           }),
         };

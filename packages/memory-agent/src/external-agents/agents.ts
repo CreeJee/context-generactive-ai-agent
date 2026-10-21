@@ -18,6 +18,7 @@ import {
   DateTime,
   Clock,
   Context,
+  Data,
   Effect,
   FiberMap,
   FileSystem,
@@ -116,27 +117,30 @@ export interface ReportedToolCall {
   readonly status: string | null;
 }
 
-export type ExternalPromptOutcome =
-  | {
-      readonly status: "completed" | "cancelled";
-      readonly stopReason: StopReason;
-      readonly answer: string;
-      readonly toolCalls: readonly ReportedToolCall[];
-    }
+/** The agent ended its answer, on its own or because the prompt was cancelled. */
+type AnsweredPrompt = {
+  readonly stopReason: StopReason;
+  readonly answer: string;
+  readonly toolCalls: readonly ReportedToolCall[];
+};
+
+export type ExternalPromptOutcome = Data.TaggedEnum<{
+  completed: AnsweredPrompt;
+  cancelled: AnsweredPrompt;
   /** The connection dropped mid-answer. What arrived is kept; the prompt is not sent again. */
-  | {
-      readonly status: "disconnected";
-      readonly answer: string;
-      readonly toolCalls: readonly ReportedToolCall[];
-    }
+  disconnected: {
+    readonly answer: string;
+    readonly toolCalls: readonly ReportedToolCall[];
+  };
   /** The agent answered the prompt with an error; the connection is still up. */
-  | {
-      readonly status: "failed";
-      readonly failure: ShownFailure<ExternalAgentFailureCode>;
-      readonly answer: string;
-      readonly toolCalls: readonly ReportedToolCall[];
-    }
-  | { readonly status: "unavailable"; readonly failure: ShownFailure<ExternalAgentFailureCode> };
+  failed: {
+    readonly failure: ShownFailure<ExternalAgentFailureCode>;
+    readonly answer: string;
+    readonly toolCalls: readonly ReportedToolCall[];
+  };
+  unavailable: { readonly failure: ShownFailure<ExternalAgentFailureCode> };
+}>;
+export const ExternalPromptOutcome = Data.taggedEnum<ExternalPromptOutcome>();
 
 export interface PromptHooks {
   readonly signal: AbortSignal;
@@ -689,32 +693,29 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const agent = yield* usable(project, name);
           if (!isTruthy(agent))
-            return {
-              status: "unavailable" as const,
-              failure: { code: "not_trusted" as const, detail: null },
-            };
+            return ExternalPromptOutcome.unavailable({
+              failure: { code: "not_trusted", detail: null },
+            });
           const link = linkFor(project, agent);
           if (
             link.failures >= maxConsecutiveFailures &&
             !isTruthy(link.live) &&
             !isTruthy(link.attempt)
           )
-            return {
-              status: "unavailable" as const,
-              failure: { code: "stopped_after_failures" as const, detail: null },
-            };
+            return ExternalPromptOutcome.unavailable({
+              failure: { code: "stopped_after_failures", detail: null },
+            });
           const connected = yield* Effect.result(
             nativePromise(() =>
               link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
             ),
           );
           if (Result.isFailure(connected))
-            return {
-              status: "unavailable" as const,
+            return ExternalPromptOutcome.unavailable({
               failure: yield* redactor.hideDetail(
                 connectFailure(rejectionError(connected.failure)),
               ),
-            };
+            });
           const live = connected.success;
 
           let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
@@ -729,13 +730,12 @@ const make = Effect.gen(function* () {
             );
             if (Result.isFailure(created)) {
               const error = rejectionError(created.failure);
-              return {
-                status: "unavailable" as const,
+              return ExternalPromptOutcome.unavailable({
                 failure: yield* redactor.hideDetail({
                   code: "session_failed" as const,
                   detail: rejectionText(error),
                 }),
-              };
+              });
             }
             sessionId = created.success.sessionId;
             MutableHashMap.set(live.sessions, sessionKey, sessionId);
@@ -795,32 +795,30 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
-            if (Result.isSuccess(outcome))
-              return {
-                status:
-                  outcome.success.stopReason === "cancelled"
-                    ? ("cancelled" as const)
-                    : ("completed" as const),
+            if (Result.isSuccess(outcome)) {
+              const answered = {
                 stopReason: outcome.success.stopReason,
                 answer,
                 toolCalls: [...MutableHashMap.values(toolCalls)],
               };
+              return outcome.success.stopReason === "cancelled"
+                ? ExternalPromptOutcome.cancelled(answered)
+                : ExternalPromptOutcome.completed(answered);
+            }
             if (live.connection.signal.aborted || link.live !== live)
-              return {
-                status: "disconnected" as const,
+              return ExternalPromptOutcome.disconnected({
                 answer,
                 toolCalls: [...MutableHashMap.values(toolCalls)],
-              };
+              });
             const error = rejectionError(outcome.failure);
-            return {
-              status: "failed" as const,
+            return ExternalPromptOutcome.failed({
               failure: yield* redactor.hideDetail({
                 code: "agent_error" as const,
                 detail: rejectionText(error),
               }),
               answer,
               toolCalls: [...MutableHashMap.values(toolCalls)],
-            };
+            });
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {

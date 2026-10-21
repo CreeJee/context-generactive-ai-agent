@@ -8,7 +8,8 @@ import {
   HistoryProjectionReadFailed,
   HistoryProjectionReader,
   HistoryProjectionReadReason,
-  type HistoryPageRequest,
+  HistoryPageRequest,
+  HistoryPageSnapshot,
 } from "./history-projection-reader.ts";
 import { historyProjectionSchema, historyProjectionSql as sql } from "./history-projection-sql.ts";
 import { sqlRun, sqlExec } from "../../tests/support/sql.ts";
@@ -17,6 +18,8 @@ const encodeJson = EffectFunction.flow(
   Result.getOrThrow,
 );
 const readReason = HistoryProjectionReadReason.cases;
+const request = HistoryPageRequest.cases;
+const snapshot = HistoryPageSnapshot.cases;
 
 const database = Database.over(
   Effect.acquireRelease(
@@ -53,7 +56,7 @@ describe("Effect history projection reader boundary", () => {
     Effect.gen(function* () {
       const reader = yield* HistoryProjectionReader.pipe(provideFixture(layer));
       const failure = yield* reader
-        .read({ type: "initial", threadId: "a", limit: 3 })
+        .read(request.initial.make({ threadId: "a", limit: 3 }))
         .pipe(Effect.flip);
       expect(failure.reason).toEqual(readReason.SqliteRead.make({ phase: "query" }));
     }),
@@ -69,15 +72,14 @@ describe("Effect history projection reader boundary", () => {
           yield* sqlExec(
             "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET format_version = 2 WHERE thread_id = 'a';",
           );
-          expect(yield* reader.read({ type: "initial", threadId: "a", limit: 3 })).toEqual({
-            type: "not-ready",
-            reason: "unsupported-format",
-          });
+          expect(yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
+            snapshot["not-ready"].make({ reason: "unsupported-format" }),
+          );
           yield* sqlExec(
             "UPDATE chat_history_projection SET format_version = 1 WHERE thread_id = 'a'; UPDATE chat_history_groups SET ui_id = '' WHERE thread_id = 'a' AND ordinal = 0;",
           );
           const failure = yield* reader
-            .read({ type: "initial", threadId: "a", limit: 3 })
+            .read(request.initial.make({ threadId: "a", limit: 3 }))
             .pipe(Effect.flip);
           expect(failure.reason).toEqual(readReason.InvalidSnapshot.make({}));
         }),
@@ -91,37 +93,36 @@ describe("Effect history projection reader boundary", () => {
         Effect.gen(function* () {
           yield* seed(5);
           const reader = yield* HistoryProjectionReader;
-          const page = yield* reader.read({ type: "initial", threadId: "a", limit: 3 });
-          expect(page.type).toBe("page");
-          switch (page.type) {
-            case "page":
-              expect(page.groups.map((group) => group.uiId)).toEqual(["m-2", "m-3", "m-4"]);
-              expect(page.truncated).toBe(true);
-              expect(page.nextCursor).toBe("m-2");
-              expect(page.groups[0]?.messages).toBe(
-                encodeJson([{ id: "m-2", role: "user", content: "Message 2" }]),
-              );
-              break;
-            case "not-ready":
-            case "unknown-cursor":
-              expect.fail("fixture should be ready");
-          }
-          const older = yield* reader.read({
-            type: "older",
-            threadId: "a",
-            before: "m-2",
-            limit: 3,
-          });
-          switch (older.type) {
-            case "page":
-              expect(older.groups.map((group) => group.uiId)).toEqual(["m-0", "m-1"]);
-              expect(older.truncated).toBe(false);
-              expect(older.nextCursor).toBeNull();
-              break;
-            case "not-ready":
-            case "unknown-cursor":
-              expect.fail("fixture should be ready");
-          }
+          const page = yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }));
+          expect(HistoryPageSnapshot.guards.page(page)).toBe(true);
+          HistoryPageSnapshot.matchOrElse(
+            page,
+            {
+              page: (page) => {
+                expect(page.groups.map((group) => group.uiId)).toEqual(["m-2", "m-3", "m-4"]);
+                expect(page.truncated).toBe(true);
+                expect(page.nextCursor).toBe("m-2");
+                expect(page.groups[0]?.messages).toBe(
+                  encodeJson([{ id: "m-2", role: "user", content: "Message 2" }]),
+                );
+              },
+            },
+            () => expect.fail("fixture should be ready"),
+          );
+          const older = yield* reader.read(
+            request.older.make({ threadId: "a", before: "m-2", limit: 3 }),
+          );
+          HistoryPageSnapshot.matchOrElse(
+            older,
+            {
+              page: (older) => {
+                expect(older.groups.map((group) => group.uiId)).toEqual(["m-0", "m-1"]);
+                expect(older.truncated).toBe(false);
+                expect(older.nextCursor).toBeNull();
+              },
+            },
+            () => expect.fail("fixture should be ready"),
+          );
         }),
       ),
   );
@@ -132,30 +133,25 @@ describe("Effect history projection reader boundary", () => {
       run(
         Effect.gen(function* () {
           const reader = yield* HistoryProjectionReader;
-          expect(yield* reader.read({ type: "initial", threadId: "missing", limit: 3 })).toEqual({
-            type: "not-ready",
-            reason: "unprepared",
-          });
+          expect(
+            yield* reader.read(request.initial.make({ threadId: "missing", limit: 3 })),
+          ).toEqual(snapshot["not-ready"].make({ reason: "unprepared" }));
           yield* seed(2);
           expect(
-            yield* reader.read({ type: "older", threadId: "a", before: "unknown", limit: 3 }),
-          ).toEqual({ type: "unknown-cursor" });
+            yield* reader.read(request.older.make({ threadId: "a", before: "unknown", limit: 3 })),
+          ).toEqual(snapshot["unknown-cursor"].make({}));
           expect(
-            yield* reader.read({ type: "older", threadId: "a", before: "m-0", limit: 3 }),
-          ).toEqual({ type: "page", groups: [], truncated: false, nextCursor: null });
+            yield* reader.read(request.older.make({ threadId: "a", before: "m-0", limit: 3 })),
+          ).toEqual(snapshot.page.make({ groups: [], truncated: false, nextCursor: null }));
           yield* sqlRun("UPDATE chat_threads SET messages = ? WHERE thread_id = ?", "[]", "a");
-          expect(yield* reader.read({ type: "initial", threadId: "a", limit: 3 })).toEqual({
-            type: "not-ready",
-            reason: "stale",
-          });
+          expect(yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
+            snapshot["not-ready"].make({ reason: "stale" }),
+          );
           yield* sqlRun(sql.removeGroups, "a");
           yield* sqlRun(sql.publish, "a");
-          expect(yield* reader.read({ type: "initial", threadId: "a", limit: 3 })).toEqual({
-            type: "page",
-            groups: [],
-            truncated: false,
-            nextCursor: null,
-          });
+          expect(yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
+            snapshot.page.make({ groups: [], truncated: false, nextCursor: null }),
+          );
         }),
       ),
   );
@@ -166,12 +162,13 @@ describe("Effect history projection reader boundary", () => {
       run(
         Effect.gen(function* () {
           const reader = yield* HistoryProjectionReader;
+          const unchecked = { disableChecks: true };
           const inputs: HistoryPageRequest[] = [
-            { type: "initial", threadId: "a", limit: -1 },
-            { type: "initial", threadId: "a", limit: 0 },
-            { type: "initial", threadId: "a", limit: 1.5 },
-            { type: "initial", threadId: "a", limit: Infinity },
-            { type: "older", threadId: "a", limit: 3, before: "" },
+            request.initial.make({ threadId: "a", limit: -1 }, unchecked),
+            request.initial.make({ threadId: "a", limit: 0 }, unchecked),
+            request.initial.make({ threadId: "a", limit: 1.5 }, unchecked),
+            request.initial.make({ threadId: "a", limit: Infinity }, unchecked),
+            request.older.make({ threadId: "a", limit: 3, before: "" }, unchecked),
           ];
           for (const input of inputs) {
             const failure = yield* reader.read(input).pipe(Effect.flip);
@@ -193,12 +190,12 @@ describe("Effect history projection reader boundary", () => {
             "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET ready = 2 WHERE thread_id = 'a';",
           );
           const invalid = yield* reader
-            .read({ type: "initial", threadId: "a", limit: 3 })
+            .read(request.initial.make({ threadId: "a", limit: 3 }))
             .pipe(Effect.flip);
           expect(invalid.reason).toEqual(readReason.InvalidSnapshot.make({}));
           yield* sqlExec("DROP TABLE chat_history_groups");
           const failed = yield* reader
-            .read({ type: "initial", threadId: "a", limit: 3 })
+            .read(request.initial.make({ threadId: "a", limit: 3 }))
             .pipe(Effect.flip);
           expect(failed.reason).toEqual(readReason.SqliteRead.make({ phase: "query" }));
           expect(encodeJson(failed)).not.toContain("Message 0");

@@ -1,33 +1,31 @@
-import { Match, Schema } from "effect";
+import { Data, Match, Schema } from "effect";
 import type { ReportDiagnosis, ReportDiagnosisFailure } from "memory-agent/definitions";
 import type { ReportRequestFailed } from "./report-client";
 
 /** The diagnosis lifecycle on the report page. Every state still allows sending the plain report. */
-export type DiagnosisState =
-  | { readonly status: "idle" }
-  | { readonly status: "running" }
-  | { readonly status: "ready"; readonly diagnosis: ReportDiagnosis; readonly included: boolean }
-  | { readonly status: "failed"; readonly reason: ReportDiagnosisFailure | "request_failed" };
+export type DiagnosisState = Data.TaggedEnum<{
+  idle: {};
+  running: {};
+  ready: { readonly diagnosis: ReportDiagnosis; readonly included: boolean };
+  failed: { readonly reason: ReportDiagnosisFailure | "request_failed" };
+}>;
+export const DiagnosisState = Data.taggedEnum<DiagnosisState>();
 
 /** What the final report says about the diagnosis. */
-export type DiagnosisText =
-  | { readonly status: "none" }
-  | { readonly status: "failed"; readonly reason: ReportDiagnosisFailure | "request_failed" }
-  | { readonly status: "included"; readonly diagnosis: ReportDiagnosis };
+export type DiagnosisText = Data.TaggedEnum<{
+  none: {};
+  failed: { readonly reason: ReportDiagnosisFailure | "request_failed" };
+  included: { readonly diagnosis: ReportDiagnosis };
+}>;
+export const DiagnosisText = Data.taggedEnum<DiagnosisText>();
 
-export function diagnosisText(state: DiagnosisState): DiagnosisText {
-  switch (state.status) {
-    case "idle":
-    case "running":
-      return { status: "none" };
-    case "failed":
-      return { status: "failed", reason: state.reason };
-    case "ready":
-      return state.included
-        ? { status: "included", diagnosis: state.diagnosis }
-        : { status: "none" };
-  }
-}
+export const diagnosisText = DiagnosisState.$match({
+  idle: (): DiagnosisText => DiagnosisText.none(),
+  running: (): DiagnosisText => DiagnosisText.none(),
+  failed: ({ reason }): DiagnosisText => DiagnosisText.failed({ reason }),
+  ready: ({ included, diagnosis }): DiagnosisText =>
+    included ? DiagnosisText.included({ diagnosis }) : DiagnosisText.none(),
+});
 
 export const diagnosisFailureText = {
   model_unavailable: "선택한 모델을 쓸 수 없어요(로그인·모델 선택을 확인하세요)",
@@ -103,47 +101,47 @@ export function ReportDiagnosisReview({
   onRequest: () => void;
   onChange: (state: DiagnosisState) => void;
 }) {
-  switch (state.status) {
-    case "idle":
-      return (
-        <div className="space-y-1">
-          <button type="button" onClick={onRequest} className="rounded-md border px-3 py-2 text-sm">
-            내 모델로 오류 진단·초안 만들기
-          </button>
-          <p className="text-xs text-muted-foreground">
-            작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다.
-            진단 없이도 제보할 수 있습니다.
-          </p>
-        </div>
-      );
-    case "running":
-      return (
-        <p role="status" className="text-sm text-muted-foreground">
-          진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다.
+  return DiagnosisState.$match(state, {
+    idle: () => (
+      <div className="space-y-1">
+        <button type="button" onClick={onRequest} className="rounded-md border px-3 py-2 text-sm">
+          내 모델로 오류 진단·초안 만들기
+        </button>
+        <p className="text-xs text-muted-foreground">
+          작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다.
+          진단 없이도 제보할 수 있습니다.
         </p>
-      );
-    case "failed":
-      return (
-        <div className="space-y-1 text-sm">
-          <p role="status">
-            진단 실패: {diagnosisFailureText[state.reason]}. 제보문에는 사용자 설명과 증거 묶음만
-            들어갑니다.
-          </p>
-          <button type="button" onClick={onRequest} className="text-primary underline">
-            다시 진단 받기
-          </button>
-        </div>
-      );
-    case "ready": {
-      const { diagnosis } = state;
-      const edit = (next: ReportDiagnosis) => onChange({ ...state, diagnosis: next });
+      </div>
+    ),
+    running: () => (
+      <p role="status" className="text-sm text-muted-foreground">
+        진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다.
+      </p>
+    ),
+    failed: ({ reason }) => (
+      <div className="space-y-1 text-sm">
+        <p role="status">
+          진단 실패: {diagnosisFailureText[reason]}. 제보문에는 사용자 설명과 증거 묶음만
+          들어갑니다.
+        </p>
+        <button type="button" onClick={onRequest} className="text-primary underline">
+          다시 진단 받기
+        </button>
+      </div>
+    ),
+    ready: (ready) => {
+      const { diagnosis } = ready;
+      const edit = (next: ReportDiagnosis) =>
+        onChange(DiagnosisState.ready({ ...ready, diagnosis: next }));
       return (
         <div className="space-y-3 rounded-md border p-3">
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
-              checked={state.included}
-              onChange={(event) => onChange({ ...state, included: event.target.checked })}
+              checked={ready.included}
+              onChange={(event) =>
+                onChange(DiagnosisState.ready({ ...ready, included: event.target.checked }))
+              }
             />
             제보문에 AI 진단 포함
           </label>
@@ -190,6 +188,6 @@ export function ReportDiagnosisReview({
           </button>
         </div>
       );
-    }
-  }
+    },
+  });
 }

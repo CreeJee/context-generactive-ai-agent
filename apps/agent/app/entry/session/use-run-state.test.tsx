@@ -10,6 +10,7 @@ import { api, ApiError } from "../api";
 import { SessionEventScopeContext } from "../events/context";
 import { createEventInvalidator } from "../events/invalidation";
 import { appQueryKeys } from "../events/query-keys";
+import { RunNotice } from "./run-notice";
 import { useRunState } from "./use-run-state";
 
 const sdkCall = Effect.fn("sessionHook.sdkCall")(function* <A>(
@@ -73,11 +74,7 @@ function Probe({ generating, onRun }: { generating: boolean; onRun?: (run: Run) 
     answered: false,
   });
   onRun?.(run);
-  return (
-    <span>
-      {run.workflow?.goal?.version}:{run.notice?.kind ?? "none"}
-    </span>
-  );
+  return <span>{run.workflow?.goal?.version}</span>;
 }
 
 function render(client: QueryClient, generating: boolean, onRun?: (run: Run) => void) {
@@ -231,8 +228,10 @@ describe("durable workflow refresh", () => {
     const client = new QueryClient();
     try {
       client.setQueryData(queryKey, snapshot(2));
-      expect(render(client, true)).toContain("none");
-      expect(render(client, false)).toContain("detached");
+      const notices: Run["notice"][] = [];
+      render(client, true, (run) => notices.push(run.notice));
+      render(client, false, (run) => notices.push(run.notice));
+      expect(notices).toEqual([null, RunNotice.detached()]);
     } finally {
       client.clear();
     }

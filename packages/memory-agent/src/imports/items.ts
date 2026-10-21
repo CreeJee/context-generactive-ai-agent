@@ -1,4 +1,4 @@
-import { HashSet } from "effect";
+import { Data, HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 import type { RepositoryEvidence } from "./checkouts.ts";
@@ -10,61 +10,53 @@ import type { RepositoryEvidence } from "./checkouts.ts";
 export const ImportSourceName = Schema.Literals(["claude-code", "codex"]);
 export type ImportSourceName = typeof ImportSourceName.Type;
 
-/** Which conversation a transcript holds and where it was held. */
-export interface TranscriptStart {
-  readonly kind: "session";
-  /** The other tool's own conversation id. */
-  readonly externalId: string;
-  /** The working directory the conversation ran in; this is what picks the project. */
-  readonly cwd: string;
-  readonly startedAt: string;
-  /** The repository the tool recorded, which places a conversation whose worktree is gone. */
-  readonly repository: RepositoryEvidence | null;
-  /** The branch the tool recorded; null when none was, or HEAD was detached. */
-  readonly branch: string | null;
-}
+export type TranscriptItem = Data.TaggedEnum<{
+  /** Which conversation a transcript holds and where it was held. */
+  session: {
+    /** The other tool's own conversation id. */
+    readonly externalId: string;
+    /** The working directory the conversation ran in; this is what picks the project. */
+    readonly cwd: string;
+    readonly startedAt: string;
+    /** The repository the tool recorded, which places a conversation whose worktree is gone. */
+    readonly repository: RepositoryEvidence | null;
+    /** The branch the tool recorded; null when none was, or HEAD was detached. */
+    readonly branch: string | null;
+  };
+  /** Something a person or an assistant said, verbatim. */
+  message: {
+    readonly role: "user" | "assistant";
+    /** Unique within the source; the same line read twice must produce the same id. */
+    readonly externalId: string;
+    readonly at: string;
+    readonly text: string;
+  };
+  tool_call: {
+    readonly externalId: string;
+    readonly at: string;
+    readonly toolName: string;
+    readonly toolCallId: string;
+    /** The text a `tool_call` node holds: the name followed by the arguments, as `record.ts` writes it. */
+    readonly text: string;
+    readonly refs: readonly string[];
+  };
+  tool_result: {
+    readonly externalId: string;
+    readonly at: string;
+    readonly toolCallId: string;
+    readonly ok: boolean;
+    readonly text: string;
+  };
+  /** A line that carries no memory: reasoning, telemetry, the other tool's own bookkeeping. */
+  ignored: {};
+}>;
+export const TranscriptItem = Data.taggedEnum<TranscriptItem>();
 
-/** Something a person or an assistant said, verbatim. */
-export interface TranscriptMessage {
-  readonly kind: "message";
-  readonly role: "user" | "assistant";
-  /** Unique within the source; the same line read twice must produce the same id. */
-  readonly externalId: string;
-  readonly at: string;
-  readonly text: string;
-}
-
-export interface TranscriptToolCall {
-  readonly kind: "tool_call";
-  readonly externalId: string;
-  readonly at: string;
-  readonly toolName: string;
-  readonly toolCallId: string;
-  /** The text a `tool_call` node holds: the name followed by the arguments, as `record.ts` writes it. */
-  readonly text: string;
-  readonly refs: readonly string[];
-}
-
-export interface TranscriptToolResult {
-  readonly kind: "tool_result";
-  readonly externalId: string;
-  readonly at: string;
-  readonly toolCallId: string;
-  readonly ok: boolean;
-  readonly text: string;
-}
-
-/** A line that carries no memory: reasoning, telemetry, the other tool's own bookkeeping. */
-export interface TranscriptNoise {
-  readonly kind: "ignored";
-}
-
-export type TranscriptItem =
-  | TranscriptStart
-  | TranscriptMessage
-  | TranscriptToolCall
-  | TranscriptToolResult
-  | TranscriptNoise;
+export type TranscriptStart = Data.TaggedEnum.Value<TranscriptItem, "session">;
+export type TranscriptMessage = Data.TaggedEnum.Value<TranscriptItem, "message">;
+export type TranscriptToolCall = Data.TaggedEnum.Value<TranscriptItem, "tool_call">;
+export type TranscriptToolResult = Data.TaggedEnum.Value<TranscriptItem, "tool_result">;
+export type TranscriptNoise = Data.TaggedEnum.Value<TranscriptItem, "ignored">;
 
 /**
  * Reads one JSONL line of a transcript. A line can hold several items (an assistant turn with

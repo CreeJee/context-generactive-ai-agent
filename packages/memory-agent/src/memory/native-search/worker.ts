@@ -13,8 +13,8 @@ import { assertDatabaseSchema } from "../../db/database.ts";
 import {
   NativeOwnerFailed,
   NativeOwnerRpcs,
-  type OwnerCommand,
-  type OwnerReply,
+  OwnerCommand,
+  OwnerReply,
   OwnerSetup,
 } from "./worker-protocol.ts";
 
@@ -113,138 +113,144 @@ const owner = Effect.gen(function* () {
     // The single owner loop is the only reader and writer of indexRef, so `index` stays current
     // for this command; only reset replaces it, and ack then reads the replacement.
     const index = yield* ScopedRef.get(indexRef);
-    const ack = (): OwnerReply => ({
-      kind: "ack",
-      requestId: command.requestId,
-      epoch: setup.epoch,
-      size: ScopedRef.getUnsafe(indexRef).size(),
-    });
+    const ack = () =>
+      OwnerReply.cases.ack.make({
+        requestId: command.requestId,
+        epoch: setup.epoch,
+        size: ScopedRef.getUnsafe(indexRef).size(),
+      });
     const ids = (values: readonly string[]) =>
       decodeIds(values).pipe(Effect.mapError(() => fail("invalid-input")));
-    switch (command.kind) {
-      case "add":
-        yield* ids(command.ids);
-        if (
-          command.vectors.length !== command.ids.length * setup.dimensions ||
-          !command.vectors.every(Number.isFinite)
-        )
-          return yield* fail("invalid-input");
-        yield* native(() => index.add(command.vectors, [...command.ids]));
-        return yield* native(ack);
-      case "remove": {
-        yield* ids(command.ids);
-        const removed = yield* native(() =>
-          command.ids.reduce((count, id) => (index.remove(id) ? count + 1 : count), 0),
-        );
-        return yield* native((): OwnerReply => ({
-          kind: "removed",
-          requestId: command.requestId,
-          epoch: setup.epoch,
-          removed,
-          size: index.size(),
-        }));
-      }
-      case "reset":
-        yield* ScopedRef.set(indexRef, empty);
-        return yield* native(ack);
-      case "save":
-        yield* native(() => index.save(`${file}.tmp`));
-        yield* files(fs.rename(`${file}.tmp`, file));
-        return yield* native(ack);
-      case "validate":
-        yield* ids(command.ids);
-        yield* native(() => index.validateIds([...command.ids]));
-        return yield* native(ack);
-      case "vector-search": {
-        if (command.allowedIds !== undefined) yield* ids(command.allowedIds);
-        if (
-          command.query.length !== setup.dimensions ||
-          !command.query.every(Number.isFinite) ||
-          command.k <= 0 ||
-          command.k > 4294967295
-        )
-          return yield* fail("invalid-input");
-        return yield* native((): OwnerReply => {
-          const allowed = command.allowedIds === undefined ? undefined : [...command.allowedIds];
-          const k = Math.min(command.k, index.size());
-          const beforeCpu = process.threadCpuUsage();
-          const startNs = process.hrtime.bigint();
-          const hits = index.search(command.query, k, allowed);
-          const endNs = process.hrtime.bigint();
-          const cpu = process.threadCpuUsage(beforeCpu);
-          return {
-            workerCpuUs: cpu.user + cpu.system,
-            kind: "vector-hits",
-            requestId: command.requestId,
-            epoch: setup.epoch,
-            ...hits,
-            size: index.size(),
-            nativeWindow: { startNs: String(startNs), endNs: String(endNs) },
-          };
-        });
-      }
-      case "vector-search-controlled": {
-        if (command.controlToken === undefined || setup.ownerKey === undefined)
-          return yield* fail("invalid-input");
-        yield* ids(command.allowedIds);
-        if (
-          command.query.length !== setup.dimensions ||
-          !command.query.every(Number.isFinite) ||
-          command.k <= 0 ||
-          command.k > 4294967295
-        )
-          return yield* fail("invalid-input");
-        return yield* native((): OwnerReply => {
-          const allowed = [...command.allowedIds];
-          const result = index.searchControlled(
-            command.query,
-            command.k,
-            command.controlToken!,
-            setup.ownerKey!,
-            setup.epoch,
-            command.requestId,
-            allowed,
+    return yield* OwnerCommand.match<Effect.Effect<OwnerReply, NativeOwnerFailed>>(command, {
+      add: (command) =>
+        Effect.gen(function* () {
+          yield* ids(command.ids);
+          if (
+            command.vectors.length !== command.ids.length * setup.dimensions ||
+            !command.vectors.every(Number.isFinite)
+          )
+            return yield* fail("invalid-input");
+          yield* native(() => index.add(command.vectors, [...command.ids]));
+          return yield* native(ack);
+        }),
+      remove: (command) =>
+        Effect.gen(function* () {
+          yield* ids(command.ids);
+          const removed = yield* native(() =>
+            command.ids.reduce((count, id) => (index.remove(id) ? count + 1 : count), 0),
           );
-          return {
-            kind: "controlled-result",
-            requestId: command.requestId,
-            epoch: setup.epoch,
-            outcome: result.kind,
-            ids: result.ids,
-            scores: result.scores,
-            nativeMs: result.nativeMs,
-            size: index.size(),
-          };
-        });
-      }
-      case "memory-search": {
-        if (Option.isNone(reader)) return yield* fail("read-failed");
-        if (command.controlToken === undefined || setup.ownerKey === undefined)
-          return yield* fail("invalid-input");
-        const beforeCpu = process.threadCpuUsage();
-        const result = yield* native(
-          () =>
-            reader.value.search(
-              index,
-              command.input,
+          return yield* native(() =>
+            OwnerReply.cases.removed.make({
+              requestId: command.requestId,
+              epoch: setup.epoch,
+              removed,
+              size: index.size(),
+            }),
+          );
+        }),
+      reset: () => ScopedRef.set(indexRef, empty).pipe(Effect.andThen(native(ack))),
+      save: () =>
+        Effect.gen(function* () {
+          yield* native(() => index.save(`${file}.tmp`));
+          yield* files(fs.rename(`${file}.tmp`, file));
+          return yield* native(ack);
+        }),
+      validate: (command) =>
+        Effect.gen(function* () {
+          yield* ids(command.ids);
+          yield* native(() => index.validateIds([...command.ids]));
+          return yield* native(ack);
+        }),
+      "vector-search": (command) =>
+        Effect.gen(function* () {
+          if (command.allowedIds !== undefined) yield* ids(command.allowedIds);
+          if (
+            command.query.length !== setup.dimensions ||
+            !command.query.every(Number.isFinite) ||
+            command.k <= 0 ||
+            command.k > 4294967295
+          )
+            return yield* fail("invalid-input");
+          return yield* native(() => {
+            const allowed = command.allowedIds === undefined ? undefined : [...command.allowedIds];
+            const k = Math.min(command.k, index.size());
+            const beforeCpu = process.threadCpuUsage();
+            const startNs = process.hrtime.bigint();
+            const hits = index.search(command.query, k, allowed);
+            const endNs = process.hrtime.bigint();
+            const cpu = process.threadCpuUsage(beforeCpu);
+            return OwnerReply.cases["vector-hits"].make({
+              workerCpuUs: cpu.user + cpu.system,
+              requestId: command.requestId,
+              epoch: setup.epoch,
+              ...hits,
+              size: index.size(),
+              nativeWindow: { startNs: String(startNs), endNs: String(endNs) },
+            });
+          });
+        }),
+      "vector-search-controlled": (command) =>
+        Effect.gen(function* () {
+          if (command.controlToken === undefined || setup.ownerKey === undefined)
+            return yield* fail("invalid-input");
+          yield* ids(command.allowedIds);
+          if (
+            command.query.length !== setup.dimensions ||
+            !command.query.every(Number.isFinite) ||
+            command.k <= 0 ||
+            command.k > 4294967295
+          )
+            return yield* fail("invalid-input");
+          return yield* native(() => {
+            const allowed = [...command.allowedIds];
+            const result = index.searchControlled(
+              command.query,
+              command.k,
               command.controlToken!,
               setup.ownerKey!,
               setup.epoch,
               command.requestId,
-            ),
-          "read-failed",
-        );
-        if (result.kind === "read-failed") return yield* fail("read-failed");
-        const cpu = process.threadCpuUsage(beforeCpu);
-        return {
-          workerCpuUs: cpu.user + cpu.system,
-          kind: "memory-result" as const,
-          requestId: command.requestId,
-          epoch: setup.epoch,
-          result,
-        };
-      }
-    }
+              allowed,
+            );
+            return OwnerReply.cases["controlled-result"].make({
+              requestId: command.requestId,
+              epoch: setup.epoch,
+              outcome: result.kind,
+              ids: result.ids,
+              scores: result.scores,
+              nativeMs: result.nativeMs,
+              size: index.size(),
+            });
+          });
+        }),
+      "memory-search": (command) =>
+        Effect.gen(function* () {
+          if (Option.isNone(reader)) return yield* fail("read-failed");
+          if (command.controlToken === undefined || setup.ownerKey === undefined)
+            return yield* fail("invalid-input");
+          const beforeCpu = process.threadCpuUsage();
+          const result = yield* native(
+            () =>
+              reader.value.search(
+                index,
+                command.input,
+                command.controlToken!,
+                setup.ownerKey!,
+                setup.epoch,
+                command.requestId,
+              ),
+            "read-failed",
+          );
+          if (result.kind === "read-failed") return yield* fail("read-failed");
+          const cpu = process.threadCpuUsage(beforeCpu);
+          return OwnerReply.cases["memory-result"].make({
+            workerCpuUs: cpu.user + cpu.system,
+            requestId: command.requestId,
+            epoch: setup.epoch,
+            result,
+          });
+        }),
+    });
   });
 
   return { ready: { threadId, size, needsReset }, execute };

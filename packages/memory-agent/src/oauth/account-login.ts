@@ -1,6 +1,6 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
-import { Context, Effect, Layer, MutableHashMap, Option } from "effect";
+import { Context, Data, Effect, Layer, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Crypto } from "effect";
 import {
@@ -48,43 +48,42 @@ function createOAuthAccountLoginManagerBody(
       store: createKeychainProfileCredentialStore(id),
     }).startLogin(),
 ) {
-  type LoginEntry =
-    | { readonly status: "running"; readonly attempt: Attempt; result: AccountLoginState }
-    | { readonly status: "settled"; readonly result: AccountLoginState };
+  type LoginEntry = Data.TaggedEnum<{
+    running: { readonly attempt: Attempt; readonly result: AccountLoginState };
+    settled: { readonly result: AccountLoginState };
+  }>;
+  const LoginEntry = Data.taggedEnum<LoginEntry>();
   const entries = MutableHashMap.empty<OAuthProvider, LoginEntry>();
-  const activeAttempt = (provider: OAuthProvider) => {
-    const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
-    switch (entry?.status) {
-      case "running":
-        return entry.attempt;
-      default:
-        return undefined;
-    }
-  };
-  const recordResult = (provider: OAuthProvider, value: AccountLoginState) => {
-    const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
-    switch (entry?.status) {
-      case "running":
-        entry.result = value;
-        break;
-      default:
-        MutableHashMap.set(entries, provider, { status: "settled", result: value });
-        break;
-    }
-  };
-  const state = (provider: OAuthProvider): AccountLoginState => {
-    const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
-    switch (entry?.status) {
-      case "running":
-        return isTruthy(entry.attempt.login)
-          ? { status: "pending", authorizationUrl: entry.attempt.login.authorizationUrl }
-          : entry.result;
-      case "settled":
-        return entry.result;
-      case undefined:
-        return { status: "idle" };
-    }
-  };
+  const activeAttempt = (provider: OAuthProvider) =>
+    Option.getOrUndefined(
+      Option.map(
+        Option.filter(MutableHashMap.get(entries, provider), LoginEntry.$is("running")),
+        (entry) => entry.attempt,
+      ),
+    );
+  const recordResult = (provider: OAuthProvider, value: AccountLoginState) =>
+    MutableHashMap.set(
+      entries,
+      provider,
+      Option.match(
+        Option.filter(MutableHashMap.get(entries, provider), LoginEntry.$is("running")),
+        {
+          onNone: () => LoginEntry.settled({ result: value }),
+          onSome: (entry) => LoginEntry.running({ attempt: entry.attempt, result: value }),
+        },
+      ),
+    );
+  const state = (provider: OAuthProvider): AccountLoginState =>
+    Option.match(MutableHashMap.get(entries, provider), {
+      onNone: (): AccountLoginState => ({ status: "idle" }),
+      onSome: LoginEntry.$match({
+        running: (entry): AccountLoginState =>
+          isTruthy(entry.attempt.login)
+            ? { status: "pending", authorizationUrl: entry.attempt.login.authorizationUrl }
+            : entry.result,
+        settled: (entry) => entry.result,
+      }),
+    });
   const profiles = (provider: OAuthProvider) =>
     Effect.map(store.list(provider), (listed) => ({ profiles: listed, login: state(provider) }));
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -100,11 +99,11 @@ function createOAuthAccountLoginManagerBody(
           label: label.trim(),
           cancelled: false,
         };
-        MutableHashMap.set(entries, provider, {
-          status: "running",
-          attempt,
-          result: { status: "idle" },
-        });
+        MutableHashMap.set(
+          entries,
+          provider,
+          LoginEntry.running({ attempt, result: { status: "idle" } }),
+        );
         return yield* Effect.gen(function* () {
           const login = yield* nativePromise(() => startLogin(provider, attempt.id));
           attempt.login = login;
@@ -143,11 +142,12 @@ function createOAuthAccountLoginManagerBody(
               Effect.ensuring(
                 Effect.sync(() => {
                   const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
-                  if (entry?.status === "running" && entry.attempt === attempt)
-                    MutableHashMap.set(entries, provider, {
-                      status: "settled",
-                      result: entry.result,
-                    });
+                  if (LoginEntry.$is("running")(entry) && entry.attempt === attempt)
+                    MutableHashMap.set(
+                      entries,
+                      provider,
+                      LoginEntry.settled({ result: entry.result }),
+                    );
                 }),
               ),
             ),
@@ -157,10 +157,13 @@ function createOAuthAccountLoginManagerBody(
           // A login that cannot start leaves the provider's accounts as they were.
           Effect.catch(() =>
             Effect.sync(() =>
-              MutableHashMap.set(entries, provider, {
-                status: "settled",
-                result: { status: "error", error: "credential_unavailable" },
-              }),
+              MutableHashMap.set(
+                entries,
+                provider,
+                LoginEntry.settled({
+                  result: { status: "error", error: "credential_unavailable" },
+                }),
+              ),
             ).pipe(Effect.andThen(profiles(provider))),
           ),
         );

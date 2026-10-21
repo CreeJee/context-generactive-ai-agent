@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
-import { parseSlash, promptOf, suggest, type SlashContext } from "./slash-commands";
+import {
+  parseSlash,
+  promptOf,
+  SlashCommand,
+  SlashParse,
+  suggest,
+  type SlashContext,
+} from "./slash-commands";
 
 const context: SlashContext = {
   agents: ["codex"],
@@ -55,65 +62,59 @@ describe("slash command suggestions", () => {
 
 describe("slash command parsing", () => {
   test("reads complete commands and explains incomplete ones", () => {
-    expect(parseSlash("그냥 메시지", context)).toEqual({ kind: "not_command" });
-    expect(parseSlash("/report", context)).toEqual({
-      kind: "command",
-      command: { kind: "report" },
-    });
+    expect(parseSlash("그냥 메시지", context)).toEqual(SlashParse.not_command());
+    expect(parseSlash("/report", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.report() }),
+    );
     expect(suggest("/report", context)[0]).toMatchObject({ runnable: true, label: "/report" });
-    expect(parseSlash("/mode auto", context)).toEqual({
-      kind: "command",
-      command: { kind: "mode", mode: "auto" },
-    });
-    expect(parseSlash("/agent codex", context)).toEqual({
-      kind: "command",
-      command: { kind: "agent", agent: "codex" },
-    });
-    expect(parseSlash("/agent claude", context)).toMatchObject({ kind: "incomplete" });
-    expect(parseSlash("/mode", context)).toMatchObject({ kind: "incomplete" });
-    expect(parseSlash("/recall", context)).toMatchObject({ kind: "incomplete" });
-    expect(parseSlash("/goal 결제 실패를 줄이고 싶어", context)).toEqual({
-      kind: "command",
-      command: {
-        kind: "workflow",
-        phase: "goal",
-        request: "결제 실패를 줄이고 싶어",
-      },
-    });
-    expect(parseSlash("/plan", context)).toEqual({
-      kind: "command",
-      command: { kind: "workflow", phase: "plan", request: "" },
-    });
-    expect(parseSlash("/execute", context)).toEqual({
-      kind: "command",
-      command: { kind: "workflow", phase: "execute", request: "" },
-    });
-    expect(parseSlash("/status", context)).toEqual({
-      kind: "command",
-      command: { kind: "workflow_status" },
-    });
+    expect(parseSlash("/mode auto", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.mode({ mode: "auto" }) }),
+    );
+    expect(parseSlash("/agent codex", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.agent({ agent: "codex" }) }),
+    );
+    expect(SlashParse.$is("incomplete")(parseSlash("/agent claude", context))).toBe(true);
+    expect(SlashParse.$is("incomplete")(parseSlash("/mode", context))).toBe(true);
+    expect(SlashParse.$is("incomplete")(parseSlash("/recall", context))).toBe(true);
+    expect(parseSlash("/goal 결제 실패를 줄이고 싶어", context)).toEqual(
+      SlashParse.command({
+        command: SlashCommand.workflow({ phase: "goal", request: "결제 실패를 줄이고 싶어" }),
+      }),
+    );
+    expect(parseSlash("/plan", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.workflow({ phase: "plan", request: "" }) }),
+    );
+    expect(parseSlash("/execute", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.workflow({ phase: "execute", request: "" }) }),
+    );
+    expect(parseSlash("/status", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.workflow_status() }),
+    );
     // A path is a message, not an unknown command.
-    expect(parseSlash("/usr/local/bin 에 뭐가 있어?", context)).toEqual({ kind: "not_command" });
+    expect(parseSlash("/usr/local/bin 에 뭐가 있어?", context)).toEqual(SlashParse.not_command());
 
     const skill = parseSlash("/skill review  이 변경을 봐 줘", context);
-    expect(skill).toEqual({
-      kind: "command",
-      command: { kind: "skill", skill: "review", request: "이 변경을 봐 줘" },
-    });
+    expect(skill).toEqual(
+      SlashParse.command({
+        command: SlashCommand.skill({ skill: "review", request: "이 변경을 봐 줘" }),
+      }),
+    );
     expect(parseSlash("/review 이 변경을 봐 줘", context)).toEqual(skill);
-    expect(parseSlash("/Review", context)).toEqual({
-      kind: "command",
-      command: { kind: "skill", skill: "review", request: "" },
-    });
+    expect(parseSlash("/Review", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.skill({ skill: "review", request: "" }) }),
+    );
     // The app's command wins over a skill of the same name.
-    expect(parseSlash("/new", context)).toEqual({ kind: "command", command: { kind: "new" } });
-    expect(parseSlash("/skill new", context)).toEqual({
-      kind: "command",
-      command: { kind: "skill", skill: "new", request: "" },
-    });
+    expect(parseSlash("/new", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.new() }),
+    );
+    expect(parseSlash("/skill new", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.skill({ skill: "new", request: "" }) }),
+    );
     const recall = parseSlash("/recall 로그 포맷", context);
     expect(
-      recall.kind === "command" && recall.command.kind === "recall" && promptOf(recall.command),
+      SlashParse.$is("command")(recall) &&
+        SlashCommand.$is("recall")(recall.command) &&
+        promptOf(recall.command),
     ).toContain("로그 포맷");
   });
 });

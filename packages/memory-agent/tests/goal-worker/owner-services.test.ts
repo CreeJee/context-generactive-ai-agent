@@ -25,7 +25,7 @@ import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { createOAuthAccountLoginManager } from "../../src/oauth/account-login.ts";
 import { createProfileCredentialStore, OAuthProfiles } from "../../src/oauth/accounts.ts";
-import { providerProtocols, type NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
+import { NormalizedStreamEvent, providerProtocols } from "../../src/oauth/protocol.ts";
 import {
   OAuthValidationHarness,
   type CredentialStore,
@@ -425,8 +425,8 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
             Stream.suspend(() => {
               streamed.push(owner);
               return Stream.make<NormalizedStreamEvent[]>(
-                { type: "text", text: answer },
-                { type: "usage", promptTokens: 10, completionTokens: 5 },
+                NormalizedStreamEvent.text({ text: answer }),
+                NormalizedStreamEvent.usage({ promptTokens: 10, completionTokens: 5 }),
               );
             }),
           ),

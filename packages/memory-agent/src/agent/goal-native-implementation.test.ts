@@ -1,6 +1,6 @@
 import { Stream } from "effect";
 import { expect, test } from "vite-plus/test";
-import type { NormalizedStreamEvent } from "../oauth/protocol.ts";
+import { NormalizedStreamEvent } from "../oauth/protocol.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
 
@@ -17,7 +17,9 @@ test("owner-local native references are retained by identity, never runtime or a
       return {
         stream: (): AsyncGenerator<NormalizedStreamEvent> =>
           nativeStream(
-            Stream.succeed<NormalizedStreamEvent>({ type: "text", text: String(account) }),
+            Stream.succeed<NormalizedStreamEvent>(
+              NormalizedStreamEvent.text({ text: String(account) }),
+            ),
           ),
       };
     },

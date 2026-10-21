@@ -8,7 +8,7 @@ import { expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ownedChatPersistence } from "../src/chat-state/persistence.ts";
 import { SubscriptionTextAdapter } from "../src/providers/subscription-adapter.ts";
-import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
+import { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 
 const decodePage = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -38,16 +38,26 @@ it.effect(
       }));
       yield* Effect.tryPromise(() => store.stores.messages.saveThread(threadId, previous));
       const events: NormalizedStreamEvent[] = [
-        { type: "reasoning-summary-start", id: "rs-sqlite", summaryIndex: 0, text: "Checking" },
-        { type: "reasoning-summary-delta", id: "rs-sqlite", summaryIndex: 0, delta: " details" },
-        {
-          type: "reasoning-summary-end",
+        NormalizedStreamEvent["reasoning-summary-start"]({
+          id: "rs-sqlite",
+          summaryIndex: 0,
+          text: "Checking",
+        }),
+        NormalizedStreamEvent["reasoning-summary-delta"]({
+          id: "rs-sqlite",
+          summaryIndex: 0,
+          delta: " details",
+        }),
+        NormalizedStreamEvent["reasoning-summary-end"]({
           id: "rs-sqlite",
           summaryIndex: 0,
           text: "Checking details",
-        },
-        { type: "reasoning", id: "rs-sqlite", encryptedContent: "opaque-sqlite-do-not-display" },
-        { type: "text", text: "SQLite answer." },
+        }),
+        NormalizedStreamEvent.reasoning({
+          id: "rs-sqlite",
+          encryptedContent: "opaque-sqlite-do-not-display",
+        }),
+        NormalizedStreamEvent.text({ text: "SQLite answer." }),
       ];
       const adapter = new SubscriptionTextAdapter(
         {

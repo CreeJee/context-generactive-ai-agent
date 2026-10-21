@@ -7,6 +7,7 @@ import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { Cause, Deferred, Effect, Schema, Stream } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
+  NormalizedStreamEvent,
   ProviderFeatureRejectedError,
   ProviderStreamFailed,
   RequestNotSent,
@@ -275,11 +276,7 @@ describe("subscription model adapters", () => {
           },
         }),
       ),
-    ).toEqual({
-      type: "reasoning",
-      id: "rs-1",
-      encryptedContent: "encrypted",
-    });
+    ).toEqual(NormalizedStreamEvent.reasoning({ id: "rs-1", encryptedContent: "encrypted" }));
     expect(
       decodeProviderEvent(
         "openai",
@@ -294,12 +291,9 @@ describe("subscription model adapters", () => {
           },
         }),
       ),
-    ).toEqual({
-      type: "usage",
-      promptTokens: 9,
-      completionTokens: 4,
-      cachedPromptTokens: 3,
-    });
+    ).toEqual(
+      NormalizedStreamEvent.usage({ promptTokens: 9, completionTokens: 4, cachedPromptTokens: 3 }),
+    );
     expect(
       decodeProviderEvent(
         "anthropic",
@@ -309,11 +303,7 @@ describe("subscription model adapters", () => {
           delta: { type: "signature_delta", signature: "signed" },
         }),
       ),
-    ).toEqual({
-      type: "reasoning-signature",
-      index: 0,
-      signature: "signed",
-    });
+    ).toEqual(NormalizedStreamEvent["reasoning-signature"]({ index: 0, signature: "signed" }));
     expect(
       decodeProviderEvent(
         "anthropic",
@@ -322,11 +312,7 @@ describe("subscription model adapters", () => {
           error: { type: "overloaded_error", message: "busy" },
         }),
       ),
-    ).toEqual({
-      type: "error",
-      code: "overloaded_error",
-      message: "busy",
-    });
+    ).toEqual(NormalizedStreamEvent.error({ code: "overloaded_error", message: "busy" }));
   });
 
   it.live("continues every tool boundary and refuses cross-provider adapter selection", () =>
@@ -375,20 +361,18 @@ describe("subscription model adapters", () => {
               (function* () {
                 bodies.push(body);
                 if (bodies.length === 1) {
-                  yield {
-                    type: "reasoning" as const,
+                  yield NormalizedStreamEvent.reasoning({
                     id: "rs-1",
                     encryptedContent: "encrypted-reasoning",
-                  };
-                  yield {
-                    type: "tool-call" as const,
+                  });
+                  yield NormalizedStreamEvent["tool-call"]({
                     id: "call-1",
                     name: "lookup",
                     arguments: { query: "x" },
-                  };
+                  });
                   return;
                 }
-                yield { type: "text" as const, text: "done" };
+                yield NormalizedStreamEvent.text({ text: "done" });
               })(),
               { chunkSize: 1 },
             ),
@@ -449,33 +433,29 @@ describe("subscription model adapters", () => {
               (function* () {
                 bodies.push(body);
                 if (bodies.length === 1) {
-                  yield { type: "reasoning-start" as const, index: 0 };
-                  yield {
-                    type: "reasoning-delta" as const,
+                  yield NormalizedStreamEvent["reasoning-start"]({ index: 0 });
+                  yield NormalizedStreamEvent["reasoning-delta"]({
                     index: 0,
                     delta: "private reasoning",
-                  };
-                  yield {
-                    type: "reasoning-signature" as const,
+                  });
+                  yield NormalizedStreamEvent["reasoning-signature"]({
                     index: 0,
                     signature: "signed-reasoning",
-                  };
-                  yield { type: "content-block-end" as const, index: 0 };
-                  yield {
-                    type: "tool-call-start" as const,
+                  });
+                  yield NormalizedStreamEvent["content-block-end"]({ index: 0 });
+                  yield NormalizedStreamEvent["tool-call-start"]({
                     index: 1,
                     id: "call-1",
                     name: "lookup",
-                  };
-                  yield {
-                    type: "tool-call-arguments" as const,
+                  });
+                  yield NormalizedStreamEvent["tool-call-arguments"]({
                     index: 1,
                     delta: '{"query":"x"}',
-                  };
-                  yield { type: "content-block-end" as const, index: 1 };
+                  });
+                  yield NormalizedStreamEvent["content-block-end"]({ index: 1 });
                   return;
                 }
-                yield { type: "text" as const, text: "done" };
+                yield NormalizedStreamEvent.text({ text: "done" });
               })(),
               { chunkSize: 1 },
             ),
@@ -606,7 +586,7 @@ describe("subscription model adapters", () => {
                     feature: "prompt-cache",
                     status: 400,
                   });
-                yield { type: "text" as const, text: "fallback worked" };
+                yield NormalizedStreamEvent.text({ text: "fallback worked" });
               })(),
               { chunkSize: 1 },
             ),
@@ -734,7 +714,7 @@ describe("subscription model adapters", () => {
             Stream.fromIterable(
               (function* () {
                 attempts += 1;
-                yield { type: "error" as const, code: "overloaded_error", message: "busy" };
+                yield NormalizedStreamEvent.error({ code: "overloaded_error", message: "busy" });
               })(),
               { chunkSize: 1 },
             ),
@@ -764,10 +744,7 @@ describe("subscription model adapters", () => {
 
   it.live("classifies transport failures by delivery and stream position", () =>
     Effect.gen(function* () {
-      const failingAfter = (
-        events: ReadonlyArray<{ readonly type: "text"; readonly text: string }>,
-        failure: Error,
-      ) => ({
+      const failingAfter = (events: ReadonlyArray<NormalizedStreamEvent>, failure: Error) => ({
         stream() {
           return nativeStream(
             Stream.fromIterable(
@@ -809,7 +786,9 @@ describe("subscription model adapters", () => {
         SubscriptionStreamFailedReason.cases.RequestNotSent.make({ stage: "connect" }),
       );
       expect(
-        yield* reasonOf(failingAfter([{ type: "text", text: "partial" }], new Error())),
+        yield* reasonOf(
+          failingAfter([NormalizedStreamEvent.text({ text: "partial" })], new Error()),
+        ),
       ).toEqual(SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}));
       expect(yield* reasonOf(failingAfter([], new Error("socket hang up")))).toEqual(
         SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({}),
@@ -824,8 +803,8 @@ describe("subscription model adapters", () => {
           return nativeStream(
             Stream.fromIterable(
               (function* () {
-                yield { type: "text" as const, text: "Which option?" };
-                yield { type: "content-block-end" as const, index: 0 };
+                yield NormalizedStreamEvent.text({ text: "Which option?" });
+                yield NormalizedStreamEvent["content-block-end"]({ index: 0 });
               })(),
               { chunkSize: 1 },
             ),
@@ -885,7 +864,7 @@ describe("subscription model adapters", () => {
                 }),
               ).pipe(
                 Stream.flatMap(() =>
-                  Stream.succeed({ type: "text" as const, text: "unreachable" }),
+                  Stream.succeed(NormalizedStreamEvent.text({ text: "unreachable" })),
                 ),
               );
             }),
@@ -929,10 +908,10 @@ describe("subscription model adapters", () => {
           return nativeStream(
             Stream.suspend(() => {
               receivedSignal = signal;
-              return Stream.succeed({ type: "text" as const, text: "before abort" }).pipe(
+              return Stream.succeed(NormalizedStreamEvent.text({ text: "before abort" })).pipe(
                 Stream.concat(
                   Stream.fromEffect(nativePromise(() => providerReady)).pipe(
-                    Stream.map(() => ({ type: "text" as const, text: "after abort" })),
+                    Stream.map(() => NormalizedStreamEvent.text({ text: "after abort" })),
                   ),
                 ),
               );
@@ -975,21 +954,19 @@ describe("subscription model adapters", () => {
           return nativeStream(
             Stream.fromIterable(
               (function* () {
-                yield { type: "usage" as const, promptTokens: 10, cachedPromptTokens: 4 };
-                yield { type: "text" as const, text: "hello" };
-                yield {
-                  type: "tool-call-start" as const,
+                yield NormalizedStreamEvent.usage({ promptTokens: 10, cachedPromptTokens: 4 });
+                yield NormalizedStreamEvent.text({ text: "hello" });
+                yield NormalizedStreamEvent["tool-call-start"]({
                   index: 1,
                   id: "call-2",
                   name: "nested",
-                };
-                yield {
-                  type: "tool-call-arguments" as const,
+                });
+                yield NormalizedStreamEvent["tool-call-arguments"]({
                   index: 1,
                   delta: '{"value":{"nested":true}}',
-                };
-                yield { type: "content-block-end" as const, index: 1 };
-                yield { type: "usage" as const, completionTokens: 3 };
+                });
+                yield NormalizedStreamEvent["content-block-end"]({ index: 1 });
+                yield NormalizedStreamEvent.usage({ completionTokens: 3 });
               })(),
               { chunkSize: 1 },
             ),

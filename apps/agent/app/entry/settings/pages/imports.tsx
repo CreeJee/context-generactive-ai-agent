@@ -25,7 +25,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { timeOfDay } from "~/lib/dates";
-import { type ImportActivity, refusalOf } from "../../api";
+import { ImportCommand, type ImportActivity, refusalOf } from "../../api";
 import { useImportsQuery } from "../../queries/global";
 import { useImportMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError, shortPath } from "../shared";
@@ -153,11 +153,7 @@ export function ImportSettings() {
   const reading = overview.activity?.status === "running";
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = (
-    command:
-      | { action: "run" | "restart_watch" | "enable" | "disable" }
-      | { action: "interpret"; interpret: boolean },
-  ) =>
+  const apply = (command: ImportCommand) =>
     runUiEffect(
       Effect.gen(function* () {
         setError(null);
@@ -178,7 +174,7 @@ export function ImportSettings() {
           variant="outline"
           size="sm"
           disabled={busy || reading}
-          onClick={() => void apply({ action: "run" })}
+          onClick={() => void apply(ImportCommand.run())}
         >
           {busy || reading ? <Spinner /> : <RefreshCwIcon />}
           {reading ? "읽는 중" : "지금 가져오기"}
@@ -201,7 +197,9 @@ export function ImportSettings() {
           id="imports-enabled"
           checked={overview.enabled}
           disabled={busy}
-          onCheckedChange={(checked) => void apply({ action: checked ? "enable" : "disable" })}
+          onCheckedChange={(checked) =>
+            void apply(checked ? ImportCommand.enable() : ImportCommand.disable())
+          }
         />
       </Field>
       {overview.enabled && overview.watch !== null && (
@@ -209,7 +207,7 @@ export function ImportSettings() {
           label="감시"
           health={overview.watch}
           disabled={busy}
-          onRestart={() => void apply({ action: "restart_watch" })}
+          onRestart={() => void apply(ImportCommand.restart_watch())}
         />
       )}
 
@@ -225,7 +223,7 @@ export function ImportSettings() {
           id="imports-interpret"
           checked={overview.interpret}
           disabled={busy}
-          onCheckedChange={(checked) => void apply({ action: "interpret", interpret: checked })}
+          onCheckedChange={(checked) => void apply(ImportCommand.interpret({ interpret: checked }))}
         />
       </Field>
 

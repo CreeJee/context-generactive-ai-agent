@@ -3,10 +3,11 @@ import { Result, Function as EffectFunction } from "effect";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { Effect, FileSystem, HashSet, Path, Schema, Struct } from "effect";
+import { Data, Effect, FileSystem, HashSet, Path, Schema, Struct } from "effect";
 import type { Project } from "../projects/projects.ts";
 import type { Skill } from "../skills/skills.ts";
 import {
+  RuleSource,
   WorkflowRule,
   builtInWorkflowRules,
   type WorkflowRule as WorkflowRuleValue,
@@ -33,18 +34,31 @@ export interface LoadedRuleSources {
   readonly problems: readonly RuleSourceProblem[];
 }
 
-export type StructuredRuleOrigin =
-  | { readonly kind: "project"; readonly path: string }
-  | {
-      readonly kind: "mcp-resource" | "mcp-prompt";
-      readonly serverId: string;
-      readonly name: string;
-    };
+type McpRuleOrigin = { readonly serverId: string; readonly name: string };
+
+export type StructuredRuleOrigin = Data.TaggedEnum<{
+  project: { readonly path: string };
+  "mcp-resource": McpRuleOrigin;
+  "mcp-prompt": McpRuleOrigin;
+}>;
+export const StructuredRuleOrigin = Data.taggedEnum<StructuredRuleOrigin>();
 
 const digest = (text: string) => sha256(text);
 const ruleName = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-");
-const sourceName = (origin: StructuredRuleOrigin) =>
-  origin.kind === "project" ? origin.path : `${origin.serverId}/${origin.name}`;
+const mcpSourceName = ({ serverId, name }: McpRuleOrigin) => `${serverId}/${name}`;
+const sourceName = StructuredRuleOrigin.$match({
+  project: ({ path }) => path,
+  "mcp-resource": mcpSourceName,
+  "mcp-prompt": mcpSourceName,
+});
+const ruleSource = (origin: StructuredRuleOrigin, contentHash: string): RuleSource =>
+  StructuredRuleOrigin.$match(origin, {
+    project: ({ path }) => RuleSource.cases.project.make({ path, contentHash }),
+    "mcp-resource": ({ serverId, name }) =>
+      RuleSource.cases["mcp-resource"].make({ serverId, name, contentHash }),
+    "mcp-prompt": ({ serverId, name }) =>
+      RuleSource.cases["mcp-prompt"].make({ serverId, name, contentHash }),
+  });
 
 /** Decode the structured rule resource format shared by project files and selected MCP content. */
 export const structuredWorkflowRules: {
@@ -68,8 +82,10 @@ function structuredWorkflowRulesBody(
       rules: decoded.rules.map((rule) => ({
         ...rule,
         // Remote content can guide retrieval but cannot declare itself mandatory.
-        priority: origin.kind === "project" ? rule.priority : ("recommended" as const),
-        source: { ...origin, contentHash },
+        priority: StructuredRuleOrigin.$is("project")(origin)
+          ? rule.priority
+          : ("recommended" as const),
+        source: ruleSource(origin, contentHash),
       })),
       problems: [],
     };
@@ -99,10 +115,10 @@ export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* 
     if (stats.type !== "File") return problem("unreadable");
     if (stats.size > BigInt(maxProjectRuleBytes)) return problem("too_large");
     const text = yield* fs.readFileString(absolute);
-    const loaded = structuredWorkflowRules(text, {
-      kind: "project",
-      path: projectWorkflowRulesPath,
-    });
+    const loaded = structuredWorkflowRules(
+      text,
+      StructuredRuleOrigin.project({ path: projectWorkflowRulesPath }),
+    );
     return loaded.problems.length === 0 ? loaded : problem("invalid");
   });
   return yield* read.pipe(
@@ -124,12 +140,11 @@ export function skillWorkflowRules(skills: readonly Skill[]): readonly WorkflowR
     terms: [skill.name, skill.description],
     instruction: `If this task matches the skill description, call read_skill with name ${JSON.stringify(skill.name)} before following its guidance. Skill description: ${skill.description}`,
     requiredEvidence: [`The ${skill.name} skill was read before its guidance was applied`],
-    source: {
-      kind: "skill",
+    source: RuleSource.cases.skill.make({
       name: skill.name,
       scope: skill.scope,
       contentHash: skill.contentHash,
-    },
+    }),
   }));
 }
 

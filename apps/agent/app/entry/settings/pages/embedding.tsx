@@ -24,7 +24,13 @@ import {
 } from "~/components/ui/select";
 import { Spinner } from "~/components/ui/spinner";
 import { dayAndTime } from "~/lib/dates";
-import { type EmbeddingChoice, type EmbeddingOverview, type GpuState, refusalOf } from "../../api";
+import {
+  EmbeddingCommand,
+  type EmbeddingChoice,
+  type EmbeddingOverview,
+  type GpuState,
+  refusalOf,
+} from "../../api";
 import { useEmbeddingQuery } from "../../queries/global";
 import { useEmbeddingMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError } from "../shared";
@@ -125,7 +131,7 @@ export function EmbeddingSettings() {
   const indexing = overview.unindexed > 0;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = (command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" }) =>
+  const apply = (command: EmbeddingCommand) =>
     runUiEffect(
       Effect.gen(function* () {
         setError(null);
@@ -160,7 +166,7 @@ export function EmbeddingSettings() {
           disabled={busy}
           onValueChange={(value) => {
             const choice = embeddingChoices.find((option) => option.value === value);
-            if (isTruthy(choice)) void apply({ action: "choose", choice: choice.value });
+            if (isTruthy(choice)) void apply(EmbeddingCommand.choose({ choice: choice.value }));
           }}
         >
           <SelectTrigger id="embedding-device" className="w-full">
@@ -201,7 +207,7 @@ export function EmbeddingSettings() {
           variant="outline"
           size="sm"
           disabled={busy || checking}
-          onClick={() => void apply({ action: "check" })}
+          onClick={() => void apply(EmbeddingCommand.check())}
         >
           {busy || checking ? <Spinner /> : <RefreshCwIcon />} 다시 확인
         </Button>

@@ -2,7 +2,7 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
-import { branchOf, isInjectedText, type InjectedText, type TranscriptItem } from "./items.ts";
+import { branchOf, isInjectedText, TranscriptItem, type InjectedText } from "./items.ts";
 
 /**
  * Claude Code writes one JSONL file per conversation under `~/.claude/projects/<encoded cwd>`.
@@ -83,15 +83,16 @@ export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
 
   const items: TranscriptItem[] = [];
   if (decoded.cwd !== undefined && decoded.sessionId !== undefined)
-    items.push({
-      kind: "session",
-      externalId: decoded.sessionId,
-      cwd: decoded.cwd,
-      startedAt: decoded.timestamp,
-      // Claude Code records the branch only, and a merged worktree's branch is usually deleted.
-      repository: null,
-      branch: branchOf(decoded.gitBranch),
-    });
+    items.push(
+      TranscriptItem.session({
+        externalId: decoded.sessionId,
+        cwd: decoded.cwd,
+        startedAt: decoded.timestamp,
+        // Claude Code records the branch only, and a merged worktree's branch is usually deleted.
+        repository: null,
+        branch: branchOf(decoded.gitBranch),
+      }),
+    );
 
   const content = decoded.message.content;
   const parts = isText(content) ? [{ type: "text", text: content }] : content;
@@ -106,37 +107,40 @@ export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
       case "text": {
         const text = stripReminders(decodedPart.text);
         if (text.length === 0 || isInjectedText(text, injected)) return;
-        items.push({
-          kind: "message",
-          role: decoded.message.role,
-          externalId: idOf(index),
-          at,
-          text,
-        });
+        items.push(
+          TranscriptItem.message({
+            role: decoded.message.role,
+            externalId: idOf(index),
+            at,
+            text,
+          }),
+        );
         return;
       }
       case "tool_use": {
         const args = JSON.stringify(decodedPart.input ?? {});
-        items.push({
-          kind: "tool_call",
-          externalId: idOf(index),
-          at,
-          toolName: decodedPart.name,
-          toolCallId: decodedPart.id,
-          text: `${decodedPart.name} ${args}`,
-          refs: refsInArguments(args),
-        });
+        items.push(
+          TranscriptItem.tool_call({
+            externalId: idOf(index),
+            at,
+            toolName: decodedPart.name,
+            toolCallId: decodedPart.id,
+            text: `${decodedPart.name} ${args}`,
+            refs: refsInArguments(args),
+          }),
+        );
         return;
       }
       case "tool_result":
-        items.push({
-          kind: "tool_result",
-          externalId: idOf(index),
-          at,
-          toolCallId: decodedPart.tool_use_id,
-          ok: decodedPart.is_error !== true,
-          text: bodyText(decodedPart.content),
-        });
+        items.push(
+          TranscriptItem.tool_result({
+            externalId: idOf(index),
+            at,
+            toolCallId: decodedPart.tool_use_id,
+            ok: decodedPart.is_error !== true,
+            text: bodyText(decodedPart.content),
+          }),
+        );
     }
   });
   return items;

@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect, FileSystem, Option } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { keyringEntry, SecretFileStoreFailed } from "../src/runtime/keyring.ts";
+import { keyringEntry, SecretBackend, SecretFileStoreFailed } from "../src/runtime/keyring.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
 const key = (fill: number) => Option.some(Buffer.alloc(32, fill).toString("base64"));
@@ -13,12 +13,11 @@ const secretDirectory = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-keyring-" });
   const entry = (account: string, encodedKey: Option.Option<string>) =>
-    keyringEntry("service", account, {
-      kind: "file",
-      directory,
-      key: encodedKey,
-      keyFile: Option.none(),
-    });
+    keyringEntry(
+      "service",
+      account,
+      SecretBackend.file({ directory, key: encodedKey, keyFile: Option.none() }),
+    );
   return { directory, entry };
 });
 

@@ -1,12 +1,12 @@
 import { Array as EffectArray, HashSet, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Effect, Layer, Match, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { edgeWeights, type EdgeKind } from "../memory/edges.ts";
 import { hasStatementText } from "../memory/quality.ts";
 import { NodeDetail, type NodeKind } from "../memory/nodes.ts";
-import type { ImportSourceName, TranscriptItem } from "./items.ts";
+import { TranscriptItem, type ImportSourceName } from "./items.ts";
 
 /** Statements worth interpreting, the same rule live nodes follow (`interpretedKinds` in nodes.ts). */
 const interpretedKinds = HashSet.fromIterable<NodeKind>(["user"]);
@@ -155,49 +155,50 @@ const make = Effect.gen(function* () {
       });
 
       for (const item of migration.items) {
-        if (item.kind === "session" || item.kind === "ignored") continue;
+        if (TranscriptItem.$is("session")(item) || TranscriptItem.$is("ignored")(item)) continue;
         if (Option.isSome(yield* alreadyImported({ source, externalId: item.externalId }))) {
           repeated += 1;
           continue;
         }
-        switch (item.kind) {
-          case "message": {
-            const id = yield* append(item.role, item.text, item.at, item.externalId, {});
-            if (item.role === "user") {
-              userNodeId = id;
-              assistantNodeId = null;
-              continue;
-            }
-            if (isTruthy(userNodeId)) yield* link(id, userNodeId, "reply", item.at);
-            assistantNodeId = id;
-            continue;
-          }
-          case "tool_call": {
-            const calledBy = yield* assistantFor(item.at);
-            const id = yield* append("tool_call", item.text, item.at, item.externalId, {
-              toolName: item.toolName,
-              toolCallId: item.toolCallId,
-            });
-            yield* link(calledBy, id, "calls", item.at);
-            for (const ref of EffectArray.dedupe(item.refs)) {
-              const earlier = yield* idOf(latestWithRef({ ref, projectId }));
-              yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
-              if (isTruthy(earlier)) yield* link(id, earlier, "touches", item.at);
-            }
-            continue;
-          }
-          case "tool_result": {
-            const called = Option.getOrNull(
-              yield* callNode({ sessionId, toolCallId: item.toolCallId }),
-            );
-            const id = yield* append("tool_result", item.text, item.at, item.externalId, {
-              toolName: called?.tool_name ?? undefined,
-              toolCallId: item.toolCallId,
-              ok: item.ok,
-            });
-            if (isTruthy(called)) yield* link(called.id, id, "returns", item.at);
-          }
-        }
+        yield* Match.valueTags(item, {
+          message: (item) =>
+            Effect.gen(function* () {
+              const id = yield* append(item.role, item.text, item.at, item.externalId, {});
+              if (item.role === "user") {
+                userNodeId = id;
+                assistantNodeId = null;
+                return;
+              }
+              if (isTruthy(userNodeId)) yield* link(id, userNodeId, "reply", item.at);
+              assistantNodeId = id;
+            }),
+          tool_call: (item) =>
+            Effect.gen(function* () {
+              const calledBy = yield* assistantFor(item.at);
+              const id = yield* append("tool_call", item.text, item.at, item.externalId, {
+                toolName: item.toolName,
+                toolCallId: item.toolCallId,
+              });
+              yield* link(calledBy, id, "calls", item.at);
+              for (const ref of EffectArray.dedupe(item.refs)) {
+                const earlier = yield* idOf(latestWithRef({ ref, projectId }));
+                yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
+                if (isTruthy(earlier)) yield* link(id, earlier, "touches", item.at);
+              }
+            }),
+          tool_result: (item) =>
+            Effect.gen(function* () {
+              const called = Option.getOrNull(
+                yield* callNode({ sessionId, toolCallId: item.toolCallId }),
+              );
+              const id = yield* append("tool_result", item.text, item.at, item.externalId, {
+                toolName: called?.tool_name ?? undefined,
+                toolCallId: item.toolCallId,
+                ok: item.ok,
+              });
+              if (isTruthy(called)) yield* link(called.id, id, "returns", item.at);
+            }),
+        });
       }
       return { written, repeated } satisfies MigrationCount;
     }).pipe(
