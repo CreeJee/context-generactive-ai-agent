@@ -1,6 +1,7 @@
 import {
   Config,
   Context,
+  Data,
   Duration,
   Effect,
   Layer,
@@ -84,9 +85,11 @@ const saturatedRetry = Schedule.min([
  * A wait for capacity. Work already running waits as long as it lives (`forever`); a request
  * starting new work gives up after `upTo` so its caller hears it is busy.
  */
-export type AdmissionWait =
-  | { readonly _tag: "forever" }
-  | { readonly _tag: "upTo"; readonly duration: Duration.Input };
+export type AdmissionWait = Data.TaggedEnum<{
+  forever: {};
+  upTo: { readonly duration: Duration.Input };
+}>;
+export const AdmissionWait = Data.taggedEnum<AdmissionWait>();
 
 const tagged = <Input, State>(metric: Metric.Metric<Input, State>, kind: ExecutionAdmissionKind) =>
   Metric.withAttributes(metric, { kind });
@@ -229,16 +232,12 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
    * Takes a permit, waiting in the queue behind active work. When the queue is full too, the
    * caller tries again until `wait` runs out; saturation is not a failure of the work itself.
    */
-  const acquire = (kind: ExecutionAdmissionKind, wait: AdmissionWait = { _tag: "forever" }) => {
+  const acquire = (kind: ExecutionAdmissionKind, wait: AdmissionWait = AdmissionWait.forever()) => {
     const gate = gates[kind];
-    const schedule = (() => {
-      switch (wait._tag) {
-        case "forever":
-          return saturatedRetry;
-        case "upTo":
-          return saturatedRetry.pipe(Schedule.upTo({ duration: wait.duration }));
-      }
-    })();
+    const schedule = AdmissionWait.$match(wait, {
+      forever: () => saturatedRetry,
+      upTo: ({ duration }) => saturatedRetry.pipe(Schedule.upTo({ duration })),
+    });
     return Effect.gen(function* () {
       yield* admit(kind, yield* Ref.make(false)).pipe(Effect.retry(schedule));
 

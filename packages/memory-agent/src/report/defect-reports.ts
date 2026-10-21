@@ -5,6 +5,7 @@ import {
   Duration,
   Effect,
   Layer,
+  Match,
   Option,
   Queue,
   Ref,
@@ -50,16 +51,13 @@ interface DefectFacts {
 }
 
 const factsOf = (event: DefectEvent, span: Option.Option<string>): DefectFacts => {
-  const defect = event.cause.reasons.flatMap((reason) => {
-    switch (reason._tag) {
-      case "Die":
-        return [reason.defect];
-      case "Fail":
-        return [reason.error];
-      case "Interrupt":
-        return [];
-    }
-  })[0];
+  const defect = event.cause.reasons.flatMap(
+    Match.valueTags({
+      Die: ({ defect }): unknown[] => [defect],
+      Fail: ({ error }) => [error],
+      Interrupt: () => [],
+    }),
+  )[0];
   const parts = decodeErrorParts(defect);
   const tag = Option.match(decodeDefectName(defect), {
     onSome: ({ _tag }) => _tag,

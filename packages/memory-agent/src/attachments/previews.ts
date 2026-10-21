@@ -2,6 +2,7 @@ import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts"
 import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { errorTag } from "../tools/failure.ts";
 import type { AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
@@ -51,7 +52,7 @@ const make = Effect.gen(function* () {
       // The preview is extra: the tool's own result stands without it.
       Effect.catch((error) =>
         Effect.as(
-          Effect.logDebug("drawing_preview_unavailable", { error: error._tag }),
+          Effect.logDebug("drawing_preview_unavailable", { error: errorTag(error) }),
           Option.none<DrawingPreview>(),
         ),
       ),

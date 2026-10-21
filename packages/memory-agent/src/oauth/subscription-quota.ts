@@ -141,6 +141,11 @@ export class SubscriptionQuota extends Context.Service<
         provider: SubscriptionAccountProvider,
         accountId: string,
       ) {
+        const lookupFailed = (error: string) =>
+          Effect.logWarning("subscription usage lookup failed").pipe(
+            Effect.annotateLogs({ error }),
+            Effect.as(Result.fail("lookup_failed" as const)),
+          );
         const windows = yield* usage.read(provider, accountId).pipe(
           Effect.map((windows) =>
             windows.length > 0 ? Result.succeed(windows) : Result.fail("lookup_failed" as const),
@@ -148,12 +153,10 @@ export class SubscriptionQuota extends Context.Service<
           Effect.catchTag("SubscriptionUsageCredentialExpired", () =>
             Effect.succeed(Result.fail("credential_expired" as const)),
           ),
-          Effect.catch((error) =>
-            Effect.logWarning("subscription usage lookup failed").pipe(
-              Effect.annotateLogs({ error: error._tag }),
-              Effect.as(Result.fail("lookup_failed" as const)),
-            ),
-          ),
+          Effect.catchTags({
+            OAuthHarnessError: () => lookupFailed("OAuthHarnessError"),
+            UnknownError: () => lookupFailed("UnknownError"),
+          }),
         );
         const at = DateTime.formatIso(yield* DateTime.now);
         if (Result.isSuccess(windows)) {

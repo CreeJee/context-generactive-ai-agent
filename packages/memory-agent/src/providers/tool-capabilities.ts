@@ -402,16 +402,15 @@ export class UnknownProviderToolModel extends Schema.TaggedError<UnknownProvider
   { provider: ProviderVendor, model: Schema.String },
 ) {}
 /** The descriptor or model tables contradict themselves; a programming error in the tables. */
+export const ProviderToolMetadataFailureReason = Schema.TaggedUnion({
+  /** A descriptor id is not `<provider>:<kind>`. */
+  InvalidId: { id: Schema.String },
+  DuplicateTool: { id: Schema.String },
+  DuplicateModel: { provider: ProviderVendor, model: Schema.String },
+});
 export class ProviderToolMetadataFailure extends Schema.TaggedError<ProviderToolMetadataFailure>()(
   "ProviderToolMetadataFailure",
-  {
-    reason: Schema.Union([
-      /** A descriptor id is not `<provider>:<kind>`. */
-      Schema.TaggedStruct("InvalidId", { id: Schema.String }),
-      Schema.TaggedStruct("DuplicateTool", { id: Schema.String }),
-      Schema.TaggedStruct("DuplicateModel", { provider: ProviderVendor, model: Schema.String }),
-    ]),
-  },
+  { reason: ProviderToolMetadataFailureReason },
 ) {}
 export interface ProviderToolModelMetadata {
   readonly provider: ProviderToolVendor;
@@ -501,11 +500,11 @@ function makeProviderToolCapabilityRegistryBody(
     for (const entry of descriptors) {
       if (entry.id !== `${entry.provider}:${entry.kind}`)
         return yield* new ProviderToolMetadataFailure({
-          reason: { _tag: "InvalidId", id: entry.id },
+          reason: ProviderToolMetadataFailureReason.cases.InvalidId.make({ id: entry.id }),
         });
       if (MutableHashMap.has(byId, entry.id))
         return yield* new ProviderToolMetadataFailure({
-          reason: { _tag: "DuplicateTool", id: entry.id },
+          reason: ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id: entry.id }),
         });
       MutableHashMap.set(byId, entry.id, entry);
     }
@@ -514,7 +513,10 @@ function makeProviderToolCapabilityRegistryBody(
       const key = `${model.provider}:${model.model}`;
       if (MutableHashMap.has(byModel, key))
         return yield* new ProviderToolMetadataFailure({
-          reason: { _tag: "DuplicateModel", provider: model.provider, model: model.model },
+          reason: ProviderToolMetadataFailureReason.cases.DuplicateModel.make({
+            provider: model.provider,
+            model: model.model,
+          }),
         });
       MutableHashMap.set(byModel, key, HashSet.fromIterable(model.tools));
     }

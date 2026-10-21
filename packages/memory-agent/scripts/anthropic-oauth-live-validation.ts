@@ -1,5 +1,5 @@
 import { Config, Console, Effect } from "effect";
-import { OAuthCheckFailed } from "./oauth-check-failure.ts";
+import { OAuthCheckFailed, OAuthCheckReason } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
 import { OAuthHarnessError, OAuthValidationHarness } from "../src/oauth/validation-harness.ts";
@@ -55,27 +55,30 @@ try {
   attempt = await harness.startLogin({ timeoutMs: 10 * 60_000 });
   await openBrowser("open", [attempt.authorizationUrl]);
   const login = await attempt.completed;
-  if (!login.connected) throw OAuthCheckFailed.make({ reason: { _tag: "login_not_connected" } });
+  if (!login.connected)
+    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.login_not_connected.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("ANTHROPIC_VALIDATION login_passed"));
 
   const refreshed = await harness.refreshForValidation();
   if (!refreshed.connected)
-    throw OAuthCheckFailed.make({ reason: { _tag: "refresh_not_connected" } });
+    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.refresh_not_connected.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("ANTHROPIC_VALIDATION refresh_passed"));
 
   let textSeen = false;
   for await (const event of harness.stream(textRequest))
     if (event.type === "text" && event.text.length > 0) textSeen = true;
-  if (!textSeen) throw OAuthCheckFailed.make({ reason: { _tag: "stream_text_missing" } });
+  if (!textSeen)
+    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.stream_text_missing.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("ANTHROPIC_VALIDATION streaming_passed"));
 
   let toolSeen = false;
   for await (const event of harness.stream(toolRequest))
     if (event.type === "tool-call" && event.name === "echo_probe") toolSeen = true;
-  if (!toolSeen) throw OAuthCheckFailed.make({ reason: { _tag: "tool_call_missing" } });
+  if (!toolSeen)
+    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.tool_call_missing.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("ANTHROPIC_VALIDATION tool_call_passed"));
 } catch (error) {

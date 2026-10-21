@@ -36,6 +36,7 @@ import { PermissionClassifier } from "../permissions/classifier.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
+import { errorTag } from "../tools/failure.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { AttemptFailureReason } from "../work-trace/contracts.ts";
@@ -938,7 +939,9 @@ const make = Effect.gen(function* () {
                     // and the page still learn the child settled.
                     yield* finish("cancelled", "", null, row.id).pipe(
                       Effect.catch((error) =>
-                        Effect.logWarning("subagent_cancel_not_recorded", { error: error._tag }),
+                        Effect.logWarning("subagent_cancel_not_recorded", {
+                          error: errorTag(error),
+                        }),
                       ),
                     );
                 }).pipe(
@@ -948,7 +951,9 @@ const make = Effect.gen(function* () {
                 ),
               ),
               Effect.catch((error) =>
-                Effect.logWarning("subagent_settlement_not_recorded", { error: error._tag }),
+                Effect.logWarning("subagent_settlement_not_recorded", {
+                  error: errorTag(error),
+                }),
               ),
             ),
           ),
@@ -1437,7 +1442,7 @@ const make = Effect.gen(function* () {
                 catch: (cause) => SubagentOperationFailed.make({ operation: "recover", cause }),
               }).pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning("Subagent retry deferred", { error: error._tag }),
+                  Effect.logWarning("Subagent retry deferred", { error: errorTag(error) }),
                 ),
               ),
               scope,

@@ -17,13 +17,13 @@ import type { BoardAuthor } from "../workflow/card.ts";
 import { Workflows } from "../workflow/workflow.ts";
 import { CardVerifier, GoalVerifier } from "./card-agent.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
-import type { CardHoldReason } from "./failures.ts";
+import { CardHoldReason } from "./failures.ts";
 import { GoalMergeState, GoalSchedules, mergeSettled } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
+  DecisionKind,
   goalDecisionCardId,
   HumanDecisions,
-  type DecisionKind,
 } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 import { CardWorktrees, goalBranchName, type GoalRef } from "./worktree.ts";
@@ -50,6 +50,8 @@ const queueAuthor = (goalInstanceId: string): BoardAuthor => ({
 
 /** How many times the user's branch may move under one merge before the next look tries again. */
 const mergeRounds = 3;
+
+const merge = GoalMergeState.cases;
 
 const make = Effect.gen(function* () {
   const schedules = yield* GoalSchedules;
@@ -86,7 +88,7 @@ const make = Effect.gen(function* () {
       kind,
       author: queueAuthor(goal.goalInstanceId),
     });
-    yield* setMerge(goal, { _tag: "AwaitingDecision", requestId: request.requestId });
+    yield* setMerge(goal, merge.AwaitingDecision.make({ requestId: request.requestId }));
   });
 
   /** Runs a command once and returns its exit code and output; nothing here repeats it. */
@@ -115,11 +117,11 @@ const make = Effect.gen(function* () {
    * pending state is written first: an owner that stops in between finds it and never retries.
    */
   const createPullRequest = Effect.fnUntraced(function* (goal: KanbanGoal, target: string) {
-    yield* setMerge(goal, { _tag: "PullRequestPending" });
+    yield* setMerge(goal, merge.PullRequestPending.make({}));
     const pushed = yield* worktrees
       .pushGoalBranch(goalRef(goal))
       .pipe(Effect.catchTag("CardWorktreeFailed", () => Effect.succeed(false)));
-    if (!pushed) return yield* setMerge(goal, { _tag: "PullRequestFailed", stage: "push" });
+    if (!pushed) return yield* setMerge(goal, merge.PullRequestFailed.make({ stage: "push" }));
     const gh = yield* findExecutable("gh").pipe(Effect.provideService(FileSystem.FileSystem, fs));
     const statement = (yield* workflows.get(goal.sessionId)).goal?.statement ?? "Kanban Goal";
     const created =
@@ -147,8 +149,8 @@ const make = Effect.gen(function* () {
     yield* setMerge(
       goal,
       Option.match(created, {
-        onNone: (): GoalMergeState => ({ _tag: "PullRequestFailed", stage: "create" }),
-        onSome: (url): GoalMergeState => ({ _tag: "PullRequestCreated", url }),
+        onNone: (): GoalMergeState => merge.PullRequestFailed.make({ stage: "create" }),
+        onSome: (url): GoalMergeState => merge.PullRequestCreated.make({ url }),
       }),
     );
   });
@@ -166,7 +168,8 @@ const make = Effect.gen(function* () {
     if (Option.isNone(request)) return yield* Effect.as(setMerge(goal, null), true);
     return yield* Match.valueTags(request.value.state, {
       Pending: () => Effect.succeed(false),
-      Closed: () => Effect.as(setMerge(goal, { _tag: "Stopped", reason: "goal_replaced" }), false),
+      Closed: () =>
+        Effect.as(setMerge(goal, merge.Stopped.make({ reason: "goal_replaced" })), false),
       Answered: ({ answer }) =>
         DecisionAnswer.matchOrElse(
           answer,
@@ -174,12 +177,15 @@ const make = Effect.gen(function* () {
             MergeConflict: ({ choice }) =>
               choice === "resolved"
                 ? Effect.as(setMerge(goal, null), true)
-                : Effect.as(setMerge(goal, { _tag: "Stopped", reason: "conflict_stopped" }), false),
+                : Effect.as(
+                    setMerge(goal, merge.Stopped.make({ reason: "conflict_stopped" })),
+                    false,
+                  ),
             ProtectedBranchMerge: ({ choice }) =>
               choice === "manual_merge"
                 ? Effect.as(
                     Effect.andThen(
-                      setMerge(goal, { _tag: "ManualMerge" }),
+                      setMerge(goal, merge.ManualMerge.make({})),
                       scheduler.pokeProject(goal.projectId),
                     ),
                     false,
@@ -223,7 +229,8 @@ const make = Effect.gen(function* () {
     let schedule = found.value;
     const target = schedule.targetBranch;
     if (target === null) {
-      if (schedule.merge === null) yield* setMerge(goal, { _tag: "Stopped", reason: "no_target" });
+      if (schedule.merge === null)
+        yield* setMerge(goal, merge.Stopped.make({ reason: "no_target" }));
       return;
     }
     const ref = goalRef(goal);
@@ -231,15 +238,14 @@ const make = Effect.gen(function* () {
     const resumes =
       state === null
         ? true
-        : yield* GoalMergeState.matchOrElse(
-            state,
-            {
+        : yield* Match.value(state).pipe(
+            Match.tags({
               // Only a new Goal branch commit, from cards added after the failure, is checked again.
               VerifyFailed: ({ head }) =>
                 Effect.map(worktrees.goalHead(ref), (current) => current !== head),
               AwaitingDecision: ({ requestId }) => followDecision(goal, requestId, target),
-            },
-            (other) => Effect.succeed(!mergeSettled(other)),
+            }),
+            Match.orElse((other) => Effect.succeed(!mergeSettled(other))),
           );
     if (!resumes) return;
     for (let round = 0; round < mergeRounds; round++) {
@@ -247,11 +253,14 @@ const make = Effect.gen(function* () {
         Effect.asSome,
         Effect.catchTag("GoalMergeConflict", (conflict) =>
           Effect.as(
-            askGoal(goal, `merge_conflict:${conflict.goalHead}:${conflict.targetHead}`, {
-              _tag: "MergeConflict",
-              targetBranch: target,
-              files: conflict.files,
-            }),
+            askGoal(
+              goal,
+              `merge_conflict:${conflict.goalHead}:${conflict.targetHead}`,
+              DecisionKind.cases.MergeConflict.make({
+                targetBranch: target,
+                files: conflict.files,
+              }),
+            ),
             Option.none(),
           ),
         ),
@@ -259,7 +268,7 @@ const make = Effect.gen(function* () {
       if (Option.isNone(sync)) return;
       const head = sync.value.head;
       if (schedule.verifiedHead !== head) {
-        yield* setMerge(goal, { _tag: "Verifying", head });
+        yield* setMerge(goal, merge.Verifying.make({ head }));
         const workflow = yield* workflows.get(goal.sessionId);
         const artifact = workflow.goal;
         if (artifact === null) return;
@@ -279,7 +288,7 @@ const make = Effect.gen(function* () {
           Failed: ({ failure }) =>
             Effect.as(
               Effect.andThen(
-                setMerge(goal, { _tag: "VerifyFailed", head, verdict: failure }),
+                setMerge(goal, merge.VerifyFailed.make({ head, verdict: failure })),
                 scheduler.poke(goal.goalInstanceId),
               ),
               false,
@@ -293,26 +302,32 @@ const make = Effect.gen(function* () {
         const gh = yield* findExecutable("gh").pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
         );
-        return yield* askGoal(goal, `protected_branch:${head}`, {
-          _tag: "ProtectedBranchMerge",
-          targetBranch: target,
-          prAvailable: gh !== null,
-        });
+        return yield* askGoal(
+          goal,
+          `protected_branch:${head}`,
+          DecisionKind.cases.ProtectedBranchMerge.make({
+            targetBranch: target,
+            prAvailable: gh !== null,
+          }),
+        );
       }
       const advanced = yield* worktrees.advanceTarget(ref, target, head);
       const settled = yield* Match.valueTags(advanced, {
         Advanced: ({ commit }) =>
           Effect.as(
-            Effect.andThen(setMerge(goal, { _tag: "Merged", commit }), announceMerge(goal, target)),
+            Effect.andThen(
+              setMerge(goal, merge.Merged.make({ commit })),
+              announceMerge(goal, target),
+            ),
             true,
           ),
         WorktreeBusy: ({ worktree }) =>
-          Effect.as(setMerge(goal, { _tag: "WaitingWorktree", head, worktree }), true),
+          Effect.as(setMerge(goal, merge.WaitingWorktree.make({ head, worktree })), true),
         TargetMoved: () => Effect.succeed(false),
       });
       if (settled) return;
     }
-    yield* setMerge(goal, { _tag: "TargetMoving" });
+    yield* setMerge(goal, merge.TargetMoving.make({}));
   });
 
   /**
@@ -359,10 +374,8 @@ const make = Effect.gen(function* () {
                 yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
                   ...current,
                   reason: Match.valueTags(verdict, {
-                    Failed: ({ failure }): CardHoldReason | null => ({
-                      _tag: "UpstreamRegressed",
-                      verdict: failure,
-                    }),
+                    Failed: ({ failure }): CardHoldReason | null =>
+                      CardHoldReason.cases.UpstreamRegressed.make({ verdict: failure }),
                     Passed: (): CardHoldReason | null =>
                       Predicate.isTagged(current.reason, "UpstreamRegressed")
                         ? null
@@ -406,7 +419,7 @@ const make = Effect.gen(function* () {
     yield* schedules.all,
     (schedule) =>
       Predicate.isTagged(schedule.merge, "PullRequestPending")
-        ? schedules.setMerge(schedule.goalInstanceId, { _tag: "PullRequestUncertain" })
+        ? schedules.setMerge(schedule.goalInstanceId, merge.PullRequestUncertain.make({}))
         : Effect.void,
     { discard: true },
   );

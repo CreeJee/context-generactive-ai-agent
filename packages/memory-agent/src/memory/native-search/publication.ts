@@ -1,4 +1,4 @@
-import { Effect, Ref, Schema, Scope, Semaphore } from "effect";
+import { Effect, Exit, Ref, Schema, Scope, Semaphore } from "effect";
 import type { ReadAdmission } from "./client.ts";
 
 export class PublicationFailed extends Schema.TaggedError<PublicationFailed>()(
@@ -56,20 +56,18 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
             ),
           );
           const result = yield* Effect.exit(mutation);
-          switch (result._tag) {
-            case "Failure":
-              yield* Ref.set<PublicationState>(state, {
+          return yield* Exit.match(result, {
+            onFailure: (cause) =>
+              Ref.set<PublicationState>(state, {
                 kind: "poisoned",
                 generation: before.generation,
-              });
-              return yield* Effect.failCause(result.cause);
-            case "Success":
-              yield* Ref.set<PublicationState>(state, {
+              }).pipe(Effect.andThen(Effect.failCause(cause))),
+            onSuccess: (value) =>
+              Ref.set<PublicationState>(state, {
                 kind: "ready",
                 generation: before.generation + 1,
-              });
-              return result.value;
-          }
+              }).pipe(Effect.as(value)),
+          });
         }),
       ),
     );

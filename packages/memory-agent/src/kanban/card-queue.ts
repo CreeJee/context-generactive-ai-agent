@@ -22,10 +22,11 @@ import {
   CardAttemptOutcome,
   CardAttempts,
   KanbanStorageFailed,
+  KanbanStorageReason,
   type CardAttemptKey,
 } from "./card-attempts.ts";
 import { CardWorktrees, type CardWorktree } from "./worktree.ts";
-import { worktreeFailure, type CardFailure } from "./failures.ts";
+import { CardFailure, worktreeFailure } from "./failures.ts";
 
 /**
  * Kanban card assignment on DurableQueue (docs/kanban-orchestration.md "큐: DurableQueue"). One
@@ -156,7 +157,8 @@ export class CardRuns extends Context.Service<
   );
 }
 
-const failedWith = (failure: CardFailure): CardAttemptOutcome => ({ _tag: "Failed", failure });
+const failedWith = (failure: CardFailure): CardAttemptOutcome =>
+  CardAttemptOutcome.cases.Failed.make({ failure });
 
 /** Runs one delivery after the checks that keep it from replaying or running a stale card. */
 const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
@@ -169,16 +171,15 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
 
   // A new Goal instance took over the session: an earlier instance's card never runs.
   if ((yield* workflows.goalInstanceId(payload.sessionId)) !== payload.goalInstanceId)
-    return { _tag: "Superseded" } satisfies CardAttemptOutcome;
+    return CardAttemptOutcome.cases.Superseded.make({});
   const goal = yield* attempts.goal(payload.goalInstanceId);
   const card = (yield* workflows.get(payload.sessionId)).plan?.steps.find(
     (step) => step.id === payload.cardId,
   );
   if (Option.isNone(goal) || !goal.value.active || card?.status !== "in_progress")
-    return { _tag: "Stopped", cardStatus: card?.status ?? null } satisfies CardAttemptOutcome;
+    return CardAttemptOutcome.cases.Stopped.make({ cardStatus: card?.status ?? null });
   const fenced = yield* attempts.fencedRun(payload.goalInstanceId, payload.cardId);
-  if (Option.isSome(fenced))
-    return { _tag: "Fenced", runId: fenced.value } satisfies CardAttemptOutcome;
+  if (Option.isSome(fenced)) return CardAttemptOutcome.cases.Fenced.make({ runId: fenced.value });
   const continuation = yield* attempts.hasRuns(payload.goalInstanceId, payload.cardId);
   const { generation } = yield* attempts.ladder(payload.goalInstanceId, payload.cardId);
   const cardRef = {
@@ -222,8 +223,8 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
       // The orchestrator stopping the agent interrupts it; anything else that ends it is a failure.
       if (Exit.isFailure(exit))
         return Cause.hasInterruptsOnly(exit.cause)
-          ? ({ _tag: "Stopped", cardStatus: "in_progress" } satisfies CardAttemptOutcome)
-          : failedWith({ _tag: "Defect" });
+          ? CardAttemptOutcome.cases.Stopped.make({ cardStatus: "in_progress" })
+          : failedWith(CardFailure.cases.Defect.make({}));
       return yield* Match.valueTags(exit.value, {
         Failed: ({ failure }) => Effect.succeed(failedWith(failure)),
         // The card's agent cannot write the repository's git metadata from its sandbox; the owner
@@ -234,11 +235,10 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
               ? Effect.succeed(Option.none<string>())
               : worktrees.commitWork(cardRef, `${card.title}\n\nattempt ${payload.attemptNo}`),
             (commit) =>
-              ({
-                _tag: "Completed",
+              CardAttemptOutcome.cases.Completed.make({
                 report,
                 commit: Option.getOrNull(commit),
-              }) satisfies CardAttemptOutcome,
+              }),
           ),
       });
     }),
@@ -260,7 +260,11 @@ export const handleCardRun = Effect.fn("CardQueue.handle")(function* (payload: C
   const outcome = yield* deliver(payload).pipe(
     Effect.catchTag("WorkflowStorageError", (cause) =>
       Effect.fail(
-        KanbanStorageFailed.make({ operation: "card", reason: { _tag: "Storage" }, cause }),
+        KanbanStorageFailed.make({
+          operation: "card",
+          reason: KanbanStorageReason.cases.Storage.make({}),
+          cause,
+        }),
       ),
     ),
   );

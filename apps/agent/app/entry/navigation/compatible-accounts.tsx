@@ -16,31 +16,33 @@ import { ProviderHeader } from "./account-profiles";
 import {
   compatibleClient,
   CompatibleRequestFailed,
+  CompatibleRequestFailedReason,
   type CompatibleAccountChange,
   type CompatibleAccountStatus,
   type CompatibleModelInput,
 } from "./compatible-client";
 
+const rejectedStatuses = Schema.Literals([400, 404, 502]);
+/** What a rejected endpoint request means, by the status codes the server answers with. */
+const rejectedStatusText: Readonly<Record<typeof rejectedStatuses.Type, string>> = {
+  400: "주소, 키 또는 모델 한도를 확인하세요. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 해요.",
+  404: "엔드포인트나 모델을 찾지 못했어요. 목록을 새로고침하세요.",
+  502: "엔드포인트가 응답하지 않았어요. 주소와 서버 상태를 확인하세요.",
+};
+
 /** Safe text for a failed endpoint request; upstream bodies are never shown. */
 export const compatibleErrorMessage = (failure: Error) => {
   if (!Schema.is(CompatibleRequestFailed)(failure)) return "호환 공급자 요청에 실패했어요.";
-  switch (failure.reason._tag) {
-    case "PartialWrite":
-    case "TransportFailed":
-    case "InvalidResponse":
-      return failure.message;
-    case "RequestRejected":
-      switch (failure.status) {
-        case 400:
-          return "주소, 키 또는 모델 한도를 확인하세요. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 해요.";
-        case 404:
-          return "엔드포인트나 모델을 찾지 못했어요. 목록을 새로고침하세요.";
-        case 502:
-          return "엔드포인트가 응답하지 않았어요. 주소와 서버 상태를 확인하세요.";
-        default:
-          return failure.message;
-      }
-  }
+  return CompatibleRequestFailedReason.matchOrElse(
+    failure.reason,
+    {
+      RequestRejected: () =>
+        Schema.is(rejectedStatuses)(failure.status)
+          ? rejectedStatusText[failure.status]
+          : failure.message,
+    },
+    () => failure.message,
+  );
 };
 
 export type CompatibleHandlers = {

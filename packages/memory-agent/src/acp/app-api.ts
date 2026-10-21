@@ -27,19 +27,30 @@ export type ProjectSummary = typeof ProjectSummary.Type;
 export type SessionSummary = typeof SessionSummary.Type;
 
 /** The app answered with an error, or could not be reached (`unreachable`). */
+export const AppRequestReason = Schema.TaggedUnion({
+  TransportFailed: {},
+  RequestRejected: {},
+  InvalidResponse: {},
+});
+
 export class AppRequestFailed extends Schema.TaggedError<AppRequestFailed>()("AppRequestFailed", {
   status: Schema.Finite,
   code: Schema.String,
   message: Schema.String,
-  reason: Schema.Union([
-    Schema.TaggedStruct("TransportFailed", {}),
-    Schema.TaggedStruct("RequestRejected", {}),
-    Schema.TaggedStruct("InvalidResponse", {}),
-  ]),
+  reason: AppRequestReason,
 }) {}
 
-const requestFailure = (status: number, code: string, reason: AppRequestFailed["reason"]["_tag"]) =>
-  AppRequestFailed.make({ status, code, message: `${code} (${status})`, reason: { _tag: reason } });
+const requestFailure = (
+  status: number,
+  code: string,
+  reason: keyof typeof AppRequestReason.cases,
+) =>
+  AppRequestFailed.make({
+    status,
+    code,
+    message: `${code} (${status})`,
+    reason: AppRequestReason.cases[reason].make({}),
+  });
 
 /**
  * The app's HTTP API as the ACP bridge uses it. The bridge owns no storage: the app process

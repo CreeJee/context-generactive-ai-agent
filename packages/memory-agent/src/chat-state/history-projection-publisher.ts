@@ -18,18 +18,17 @@ export const HistoryProjectionPublicationResult = Schema.Union([
 ]);
 export type HistoryProjectionPublicationResult = typeof HistoryProjectionPublicationResult.Type;
 
+export const HistoryProjectionPublishReason = Schema.TaggedUnion({
+  InvalidPublication: {},
+  InvalidPreparedJson: {},
+  SqliteWrite: { phase: Schema.Literals(["install", "publish"]) },
+  SourceChanged: {},
+});
+const publishReason = HistoryProjectionPublishReason.cases;
+
 export class HistoryProjectionPublishFailed extends Schema.TaggedError<HistoryProjectionPublishFailed>()(
   "HistoryProjectionPublishFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("InvalidPublication", {}),
-      Schema.TaggedStruct("InvalidPreparedJson", {}),
-      Schema.TaggedStruct("SqliteWrite", {
-        phase: Schema.Literals(["install", "publish"]),
-      }),
-      Schema.TaggedStruct("SourceChanged", {}),
-    ]),
-  },
+  { reason: HistoryProjectionPublishReason },
 ) {}
 
 const decodePublication = Schema.decodeUnknownEffect(HistoryProjectionPublication);
@@ -54,7 +53,7 @@ export class HistoryProjectionPublisher extends Context.Service<
       yield* client.withTransaction(client.unsafe(historyProjectionSchema).unprepared).pipe(
         Effect.mapError(() =>
           HistoryProjectionPublishFailed.make({
-            reason: { _tag: "SqliteWrite", phase: "install" },
+            reason: publishReason.SqliteWrite.make({ phase: "install" }),
           }),
         ),
       );
@@ -63,12 +62,16 @@ export class HistoryProjectionPublisher extends Context.Service<
       ): Effect.fn.Return<HistoryProjectionPublicationResult, HistoryProjectionPublishFailed> {
         const publication = yield* decodePublication(input).pipe(
           Effect.mapError(() =>
-            HistoryProjectionPublishFailed.make({ reason: { _tag: "InvalidPublication" } }),
+            HistoryProjectionPublishFailed.make({
+              reason: publishReason.InvalidPublication.make({}),
+            }),
           ),
         );
         yield* validateSource(publication.sourceJSON).pipe(
           Effect.mapError(() =>
-            HistoryProjectionPublishFailed.make({ reason: { _tag: "InvalidPreparedJson" } }),
+            HistoryProjectionPublishFailed.make({
+              reason: publishReason.InvalidPreparedJson.make({}),
+            }),
           ),
         );
         yield* Effect.forEach(
@@ -76,7 +79,9 @@ export class HistoryProjectionPublisher extends Context.Service<
           (group) =>
             validateGroup(group.messages).pipe(
               Effect.mapError(() =>
-                HistoryProjectionPublishFailed.make({ reason: { _tag: "InvalidPreparedJson" } }),
+                HistoryProjectionPublishFailed.make({
+                  reason: publishReason.InvalidPreparedJson.make({}),
+                }),
               ),
             ),
           { discard: true },
@@ -102,7 +107,7 @@ export class HistoryProjectionPublisher extends Context.Service<
               );
               if (published.length === 0)
                 return yield* HistoryProjectionPublishFailed.make({
-                  reason: { _tag: "SourceChanged" },
+                  reason: publishReason.SourceChanged.make({}),
                 });
               return {
                 type: "published",
@@ -114,7 +119,7 @@ export class HistoryProjectionPublisher extends Context.Service<
             Effect.catchTag("SqlError", () =>
               Effect.fail(
                 HistoryProjectionPublishFailed.make({
-                  reason: { _tag: "SqliteWrite", phase: "publish" },
+                  reason: publishReason.SqliteWrite.make({ phase: "publish" }),
                 }),
               ),
             ),

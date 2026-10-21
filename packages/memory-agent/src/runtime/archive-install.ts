@@ -6,28 +6,28 @@ export interface PinnedArchive {
   readonly digest: string;
 }
 
+export const ArchiveInstallFailedReason = Schema.TaggedUnion({
+  DownloadFailed: { cause: Schema.Defect() },
+  HttpStatus: { status: Schema.Int },
+  ChecksumMismatch: { algorithm: Schema.Literals(["sha256", "sha512"]) },
+  UnsafeEntry: { entry: Schema.String },
+  HostOperationFailed: {
+    operation: Schema.Literals([
+      "checksum",
+      "stage",
+      "write",
+      "list",
+      "extract",
+      "publish",
+      "cleanup",
+    ]),
+    cause: Schema.Defect(),
+  },
+});
+
 export class ArchiveInstallFailed extends Schema.TaggedError<ArchiveInstallFailed>()(
   "ArchiveInstallFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("DownloadFailed", { cause: Schema.Defect() }),
-      Schema.TaggedStruct("HttpStatus", { status: Schema.Int }),
-      Schema.TaggedStruct("ChecksumMismatch", { algorithm: Schema.Literals(["sha256", "sha512"]) }),
-      Schema.TaggedStruct("UnsafeEntry", { entry: Schema.String }),
-      Schema.TaggedStruct("HostOperationFailed", {
-        operation: Schema.Literals([
-          "checksum",
-          "stage",
-          "write",
-          "list",
-          "extract",
-          "publish",
-          "cleanup",
-        ]),
-        cause: Schema.Defect(),
-      }),
-    ]),
-  },
+  { reason: ArchiveInstallFailedReason },
 ) {}
 
 export interface ArchiveStaging {
@@ -81,7 +81,9 @@ export class ArchiveInstaller extends Context.Service<
         const digest = yield* host.checksum({ bytes, algorithm: archive.algorithm });
         if (digest !== archive.digest) {
           return yield* ArchiveInstallFailed.make({
-            reason: { _tag: "ChecksumMismatch", algorithm: archive.algorithm },
+            reason: ArchiveInstallFailedReason.cases.ChecksumMismatch.make({
+              algorithm: archive.algorithm,
+            }),
           });
         }
         yield* Effect.acquireUseRelease(
@@ -96,7 +98,7 @@ export class ArchiveInstaller extends Context.Service<
                 .find((entry) => entry.startsWith("/") || entry.split("/").includes(".."));
               if (unsafe !== undefined) {
                 return yield* ArchiveInstallFailed.make({
-                  reason: { _tag: "UnsafeEntry", entry: unsafe },
+                  reason: ArchiveInstallFailedReason.cases.UnsafeEntry.make({ entry: unsafe }),
                 });
               }
               yield* host.extract(staging);

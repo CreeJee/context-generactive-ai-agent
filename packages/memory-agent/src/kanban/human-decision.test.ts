@@ -1,5 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Effect, FileSystem, Option, Path } from "effect";
+import { Effect, FileSystem, Option, Path, Result } from "effect";
 import { expect } from "vite-plus/test";
 import { freshSession, TestEnv, testAgent } from "../../tests/support/test-env.ts";
 import { sqlGet, sqlRun } from "../../tests/support/sql.ts";
@@ -7,7 +7,14 @@ import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Boards } from "../workflow/board.ts";
 import { Workflows } from "../workflow/workflow.ts";
-import { HumanDecisions, type DecisionKind } from "./human-decision.ts";
+import {
+  DecisionAnswer,
+  DecisionCloseScope,
+  DecisionKind,
+  DecisionState,
+  HumanDecisionRefused,
+  HumanDecisions,
+} from "./human-decision.ts";
 
 const goal = {
   statement: "Run a Goal as a board",
@@ -29,11 +36,10 @@ const step = (id: string) => ({
 });
 
 const orchestrator = { _tag: "Orchestrator", runId: "run-1" } as const;
-const uncertain: DecisionKind = {
-  _tag: "UncertainSideEffect",
+const uncertain: DecisionKind = DecisionKind.cases.UncertainSideEffect.make({
   runId: "card-run-1",
   toolNames: ["write_file"],
-};
+});
 
 /** A session whose Goal has cards `a` and `b`, both ready. */
 const boardSession = (sessionId?: string) =>
@@ -79,7 +85,7 @@ testAgent()("human decisions", (it) => {
         kind: uncertain,
         author: orchestrator,
       });
-      expect(request.state).toEqual({ _tag: "Pending" });
+      expect(request.state).toEqual(DecisionState.Pending());
       expect(yield* cardStatus(sessionId, "a")).toBe("human_decision");
       // The same key is the same request; the card is not moved again.
       const again = yield* decisions.request({
@@ -100,12 +106,13 @@ testAgent()("human decisions", (it) => {
         goalInstanceId,
         cardId: "a",
         requestId: request.requestId,
-        answer: { _tag: "UncertainSideEffect", choice: "stop" },
+        answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "stop" }),
       });
-      expect(answered.state).toEqual({
-        _tag: "Answered",
-        answer: { _tag: "UncertainSideEffect", choice: "stop" },
-      });
+      expect(answered.state).toEqual(
+        DecisionState.Answered({
+          answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "stop" }),
+        }),
+      );
       expect(yield* cardStatus(sessionId, "a")).toBe("blocked");
       const board = yield* (yield* Boards).view(sessionId);
       expect(board.cards.find(({ card }) => card.id === "a")?.lastChange?.author).toEqual({
@@ -126,7 +133,7 @@ testAgent()("human decisions", (it) => {
         goalInstanceId,
         cardId: "a",
         key: "k",
-        kind: { _tag: "RetryExhausted", attempts: 3 },
+        kind: DecisionKind.cases.RetryExhausted.make({ attempts: 3 }),
         author: orchestrator,
       });
       const answer = (
@@ -138,7 +145,7 @@ testAgent()("human decisions", (it) => {
           goalInstanceId,
           cardId: "a",
           requestId: request.requestId,
-          answer: { _tag: "RetryExhausted", choice },
+          answer: DecisionAnswer.cases.RetryExhausted.make({ choice }),
           ...fields,
         });
 
@@ -148,19 +155,19 @@ testAgent()("human decisions", (it) => {
           answer({ goalInstanceId: other.goalInstanceId }),
           answer({ cardId: "b" }),
           answer({ requestId: "missing" }),
-          answer({ answer: { _tag: "UncertainSideEffect", choice: "continue" } }),
+          answer({ answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "continue" }) }),
         ],
         Effect.flip,
       );
-      expect(misdirected).toMatchObject(
-        [
-          "request_mismatch",
-          "request_mismatch",
-          "request_mismatch",
-          "request_missing",
-          "answer_invalid",
-        ].map((reason) => ({ _tag: "HumanDecisionRefused", reason })),
-      );
+      expect(
+        misdirected.map((error) => (error instanceof HumanDecisionRefused ? error.reason : error)),
+      ).toEqual([
+        "request_mismatch",
+        "request_mismatch",
+        "request_mismatch",
+        "request_missing",
+        "answer_invalid",
+      ]);
       expect(yield* cardStatus(sessionId, "a")).toBe("human_decision");
 
       // Two different answers race: the stored one wins and the other is a conflict.
@@ -168,15 +175,14 @@ testAgent()("human decisions", (it) => {
         concurrency: "unbounded",
         mode: "result",
       });
-      const winner = raced.findIndex((result) => result._tag === "Success");
-      expect(raced.filter((result) => result._tag === "Failure")).toMatchObject([
+      const winner = raced.findIndex(Result.isSuccess);
+      expect(raced.filter(Result.isFailure)).toMatchObject([
         { failure: { reason: "answer_conflict" } },
       ]);
       const choice = winner === 0 ? "requeue" : "stop";
-      expect((yield* answer({}, choice)).state).toEqual({
-        _tag: "Answered",
-        answer: { _tag: "RetryExhausted", choice },
-      });
+      expect((yield* answer({}, choice)).state).toEqual(
+        DecisionState.Answered({ answer: DecisionAnswer.cases.RetryExhausted.make({ choice }) }),
+      );
       expect(yield* cardStatus(sessionId, "a")).toBe(choice === "requeue" ? "ready" : "blocked");
     }),
   );
@@ -199,22 +205,22 @@ testAgent()("human decisions", (it) => {
 
       expect(
         yield* decisions.close(
-          { _tag: "Card", sessionId, goalInstanceId, cardId: "a" },
+          DecisionCloseScope.Card({ sessionId, goalInstanceId, cardId: "a" }),
           "card_stopped",
         ),
       ).toBe(1);
       expect(
         yield* decisions.close(
-          { _tag: "Goal", sessionId, goalInstanceId },
+          DecisionCloseScope.Goal({ sessionId, goalInstanceId }),
           "orchestrator_cancelled",
         ),
       ).toBe(1);
       expect(yield* decisions.pending(sessionId)).toEqual([]);
       expect(
         (yield* decisions.forCard(sessionId, goalInstanceId, "a")).map((entry) => entry.state),
-      ).toEqual([{ _tag: "Closed", reason: "card_stopped" }]);
+      ).toEqual([DecisionState.Closed({ reason: "card_stopped" })]);
       expect(Option.map(yield* decisions.get(cancelled.requestId), (entry) => entry.state)).toEqual(
-        Option.some({ _tag: "Closed", reason: "orchestrator_cancelled" }),
+        Option.some(DecisionState.Closed({ reason: "orchestrator_cancelled" })),
       );
       expect(yield* executionStatus(stopped.requestId)).toEqual({ status: "interrupted" });
       // The card keeps waiting for whoever stopped it; no answer moved it.
@@ -225,10 +231,11 @@ testAgent()("human decisions", (it) => {
           goalInstanceId,
           cardId: "a",
           requestId: stopped.requestId,
-          answer: { _tag: "UncertainSideEffect", choice: "continue" },
+          answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "continue" }),
         }),
       );
-      expect(late).toMatchObject({ _tag: "HumanDecisionRefused", reason: "request_closed" });
+      expect(late).toBeInstanceOf(HumanDecisionRefused);
+      expect(late).toMatchObject({ reason: "request_closed" });
     }),
   );
 
@@ -241,7 +248,7 @@ testAgent()("human decisions", (it) => {
         goalInstanceId,
         cardId: "a",
         key: "k",
-        kind: { _tag: "ImpactUnclear", fromGoalVersion: 1, toGoalVersion: 2 },
+        kind: DecisionKind.cases.ImpactUnclear.make({ fromGoalVersion: 1, toGoalVersion: 2 }),
         author: orchestrator,
       });
       yield* sqlRun(
@@ -260,12 +267,13 @@ testAgent()("human decisions", (it) => {
           goalInstanceId,
           cardId: "a",
           requestId: request.requestId,
-          answer: { _tag: "ImpactUnclear", choice: "continue" },
+          answer: DecisionAnswer.cases.ImpactUnclear.make({ choice: "continue" }),
         }),
       );
-      expect(refused).toMatchObject({ _tag: "HumanDecisionRefused", reason: "goal_superseded" });
+      expect(refused).toBeInstanceOf(HumanDecisionRefused);
+      expect(refused).toMatchObject({ reason: "goal_superseded" });
       expect(Option.map(yield* decisions.get(request.requestId), (entry) => entry.state)).toEqual(
-        Option.some({ _tag: "Closed", reason: "goal_replaced" }),
+        Option.some(DecisionState.Closed({ reason: "goal_replaced" })),
       );
     }),
   );
@@ -293,7 +301,7 @@ testAgent()("human decisions", (it) => {
         ...first,
         cardId: "b",
         requestId: answered.requestId,
-        answer: { _tag: "UncertainSideEffect", choice: "retry" },
+        answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "retry" }),
       });
 
       const inbox = yield* decisions.inbox(project.id);
@@ -318,7 +326,7 @@ testAgent()("human decisions across a restart", (it) => {
         goalInstanceId,
         cardId: "a",
         key: "k",
-        kind: { _tag: "IntegrationConflict", files: ["src/a.ts"] },
+        kind: DecisionKind.cases.IntegrationConflict.make({ files: ["src/a.ts"] }),
         author: orchestrator,
       });
       yield* env.reopen;
@@ -332,11 +340,11 @@ testAgent()("human decisions across a restart", (it) => {
             goalInstanceId,
             cardId: "a",
             requestId: request.requestId,
-            answer: { _tag: "IntegrationConflict", choice: "resolved" },
+            answer: DecisionAnswer.cases.IntegrationConflict.make({ choice: "resolved" }),
           });
           return {
             pending: pending.map((entry) => entry.requestId),
-            state: answered.state._tag,
+            answered: DecisionState.$is("Answered")(answered.state),
             card: yield* cardStatus(sessionId, "a"),
             execution: yield* executionStatus(request.requestId),
           };
@@ -344,7 +352,7 @@ testAgent()("human decisions across a restart", (it) => {
       );
       expect(reopened).toEqual({
         pending: [request.requestId],
-        state: "Answered",
+        answered: true,
         card: "verify",
         execution: { status: "completed" },
       });

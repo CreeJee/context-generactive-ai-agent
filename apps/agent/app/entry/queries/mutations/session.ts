@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Data, Function as EffectFunction } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
@@ -66,12 +66,14 @@ function useAnswerDecisionMutationBody(projectId: string, holder: string) {
 }
 
 /** A kanban board action: start, a person's intent for a card, or the Goal's schedule. */
-export type KanbanAction =
-  | { readonly _tag: "Start" }
-  | { readonly _tag: "RestartLoop" }
-  | { readonly _tag: "Intent"; readonly intent: BoardIntent }
-  | { readonly _tag: "SetPriority"; readonly priority: GoalPriority }
-  | { readonly _tag: "SetDependencies"; readonly dependsOn: readonly string[] };
+export type KanbanAction = Data.TaggedEnum<{
+  Start: {};
+  RestartLoop: {};
+  Intent: { readonly intent: BoardIntent };
+  SetPriority: { readonly priority: GoalPriority };
+  SetDependencies: { readonly dependsOn: readonly string[] };
+}>;
+export const KanbanAction = Data.taggedEnum<KanbanAction>();
 
 /** Starts the executing Plan as a kanban board, carries out an intent, or changes the schedule. */
 export const useKanbanMutation: {
@@ -83,20 +85,14 @@ export const useKanbanMutation: {
 function useKanbanMutationBody(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (action: KanbanAction) => {
-      switch (action._tag) {
-        case "Start":
-          return api.startKanban(sessionId, holder);
-        case "RestartLoop":
-          return api.restartKanbanLoop(sessionId, holder);
-        case "Intent":
-          return api.boardIntent(sessionId, holder, action.intent);
-        case "SetPriority":
-          return api.setGoalPriority(sessionId, holder, action.priority);
-        case "SetDependencies":
-          return api.setGoalDependencies(sessionId, holder, action.dependsOn);
-      }
-    },
+    mutationFn: (action: KanbanAction) =>
+      KanbanAction.$match(action, {
+        Start: () => api.startKanban(sessionId, holder),
+        RestartLoop: () => api.restartKanbanLoop(sessionId, holder),
+        Intent: ({ intent }) => api.boardIntent(sessionId, holder, intent),
+        SetPriority: ({ priority }) => api.setGoalPriority(sessionId, holder, priority),
+        SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, holder, dependsOn),
+      }),
     onSettled: () =>
       Promise.all([
         client.invalidateQueries({

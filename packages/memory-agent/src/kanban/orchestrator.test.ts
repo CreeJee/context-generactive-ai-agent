@@ -32,17 +32,22 @@ import {
 import type { BoardIntent } from "../workflow/board-edit.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import { Workflows } from "../workflow/workflow.ts";
-import { KanbanBoardActions } from "./board-actions.ts";
+import { ChangeDecision, GoalChangeVerdict, KanbanBoardActions } from "./board-actions.ts";
 import {
+  CardAgentOutcome,
+  CardVerdict,
   CardVerifier,
-  type CardAgentOutcome,
   type CardAgentRun,
   type CardVerification,
 } from "./card-agent.ts";
 import { CardAttempts } from "./card-attempts.ts";
+import { CardFailure, CardHoldReason } from "./failures.ts";
 import {
+  DecisionAnswer,
+  DecisionKind,
+  DecisionState,
+  HumanDecisionRefused,
   HumanDecisions,
-  type DecisionAnswer,
   type HumanDecisionRequest,
 } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
@@ -51,7 +56,7 @@ type Owner = Layer.Success<ReturnType<typeof kanbanBoardOwner>>;
 
 const orchestrator = { _tag: "Orchestrator", runId: "test-model" } as const;
 const user = { _tag: "User" } as const;
-const finished: CardAgentOutcome = { _tag: "Finished", report: "done" };
+const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
 
 /** Opens an owner with the orchestrator loop over the fixture; closing the scope stops it. */
 const openOwner = (
@@ -72,10 +77,10 @@ const openOwner = (
           CardVerifier,
           CardVerifier.of({
             verify: (input) =>
-              Effect.as(options.verify?.(input) ?? Effect.void, {
-                _tag: "Passed",
-                evidence: [`verified ${input.card.id}`],
-              }),
+              Effect.as(
+                options.verify?.(input) ?? Effect.void,
+                CardVerdict.Passed({ evidence: [`verified ${input.card.id}`] }),
+              ),
           }),
         ),
         cores: options.cores ?? 2,
@@ -279,11 +284,13 @@ it.live(
           );
           const ladder = yield* (yield* CardAttempts).ladder(board.goalInstanceId, resolution);
           expect(ladder).toMatchObject({ resolutionOf: "b" });
-          expect(ladder.reason).toEqual({ _tag: "MergeConflict", files: ["a.txt"] });
+          expect(ladder.reason).toEqual(
+            CardHoldReason.cases.MergeConflict.make({ files: ["a.txt"] }),
+          );
           const [request] = yield* (yield* HumanDecisions).pending(board.sessionId);
           expect(request).toMatchObject({
             cardId: resolution,
-            kind: { _tag: "IntegrationConflict", files: ["a.txt"] },
+            kind: DecisionKind.cases.IntegrationConflict.make({ files: ["a.txt"] }),
           });
           expect(cards.map((step) => [step.title, step.status])).toEqual([
             ["Card a", "done"],
@@ -298,7 +305,10 @@ it.live(
           );
           yield* fs.writeFileString(path.join(worktree, "a.txt"), "resolved\n");
           yield* git(worktree, "commit", "--quiet", "--no-edit", "-a");
-          yield* answer(request!, { _tag: "IntegrationConflict", choice: "resolved" });
+          yield* answer(
+            request!,
+            DecisionAnswer.cases.IntegrationConflict.make({ choice: "resolved" }),
+          );
           yield* waitForCards(board.sessionId, allDone);
           return { goalInstanceId: board.goalInstanceId };
         }),
@@ -342,11 +352,14 @@ it.live(
             {
               cardId: "a",
               cardTitle: "Card a",
-              kind: { _tag: "UncertainSideEffect", runId: "run-0" },
-              state: { _tag: "Pending" },
+              kind: DecisionKind.cases.UncertainSideEffect.make({ runId: "run-0", toolNames: [] }),
+              state: DecisionState.Pending(),
             },
           ]);
-          yield* answer(inbox[0]!, { _tag: "UncertainSideEffect", choice: "continue" });
+          yield* answer(
+            inbox[0]!,
+            DecisionAnswer.cases.UncertainSideEffect.make({ choice: "continue" }),
+          );
           yield* waitForCards(board.sessionId, allDone);
           // The answer cleared the fence; the card continued its earlier conversation, told why.
           const continued = (yield* Ref.get(ran)).find((agent) => agent.card.id === "a");
@@ -363,7 +376,7 @@ it.live(
   gitTimeout,
 );
 
-const boom = { _tag: "Agent", code: "failed" } as const;
+const boom = CardFailure.cases.Agent.make({ code: "failed" });
 
 it.live(
   "retries a failing card, backs off, asks for a replan, and sends it to a person after replanning",
@@ -378,7 +391,7 @@ it.live(
           Effect.gen(function* () {
             yield* Ref.update(calls, (count) => count + 1);
             return (yield* Ref.get(failing))
-              ? ({ _tag: "Failed", failure: boom } as const)
+              ? CardAgentOutcome.Failed({ failure: boom })
               : finished;
           }),
         yield* Effect.scope,
@@ -389,10 +402,9 @@ it.live(
           const attempts = yield* CardAttempts;
           yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "blocked");
           expect(yield* Ref.get(calls)).toBe(3);
-          expect((yield* attempts.ladder(board.goalInstanceId, "a")).reason).toEqual({
-            _tag: "ReplanRequested",
-            failure: boom,
-          });
+          expect((yield* attempts.ladder(board.goalInstanceId, "a")).reason).toEqual(
+            CardHoldReason.cases.ReplanRequested.make({ failure: boom }),
+          );
 
           yield* (yield* KanbanBoardActions).moveCard(
             board.sessionId,
@@ -403,7 +415,7 @@ it.live(
           expect(yield* Ref.get(calls)).toBe(6);
           expect(yield* attempts.ladder(board.goalInstanceId, "a")).toMatchObject({
             replans: 1,
-            reason: { _tag: "RepeatedFailure", failure: boom },
+            reason: CardHoldReason.cases.RepeatedFailure.make({ failure: boom }),
           });
           const decisions = yield* HumanDecisions;
           // The request moves the card before its wait is stored.
@@ -411,7 +423,7 @@ it.live(
             decisions.pending(board.sessionId),
             (pending) => pending.length > 0,
           );
-          expect(request?.kind).toEqual({ _tag: "RetryExhausted", attempts: 6 });
+          expect(request?.kind).toEqual(DecisionKind.cases.RetryExhausted.make({ attempts: 6 }));
 
           // The loop takes the same failure up again, as after a crash before it was marked
           // handled: it is the same occasion, so nobody is asked twice.
@@ -428,7 +440,7 @@ it.live(
 
           // "다시 큐에 넣기": the card is ready again with a fresh streak, and the loop runs it.
           yield* Ref.set(failing, false);
-          yield* answer(request!, { _tag: "RetryExhausted", choice: "requeue" });
+          yield* answer(request!, DecisionAnswer.cases.RetryExhausted.make({ choice: "requeue" }));
           yield* waitForCards(board.sessionId, allDone);
           expect(yield* Ref.get(calls)).toBe(7);
           expect(yield* attempts.ladder(board.goalInstanceId, "a")).toMatchObject({
@@ -475,9 +487,9 @@ it.live(
       yield* second(
         Effect.gen(function* () {
           yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "blocked");
-          expect((yield* (yield* CardAttempts).ladder(board.goalInstanceId, "a")).reason).toEqual({
-            _tag: "DeadLettered",
-          });
+          expect((yield* (yield* CardAttempts).ladder(board.goalInstanceId, "a")).reason).toEqual(
+            CardHoldReason.cases.DeadLettered.make({}),
+          );
           // Dragging the blocked card to ready puts the same item back on the queue.
           yield* (yield* KanbanBoardActions).applyIntent(
             board.sessionId,
@@ -657,7 +669,7 @@ it.live(
             yield* actions.settleChangeRequest(
               board.sessionId,
               rejected,
-              { _tag: "Reject", reason: "out of scope" },
+              ChangeDecision.cases.Reject.make({ reason: "out of scope" }),
               orchestrator,
             ),
           ).toEqual({ status: "rejected" });
@@ -670,7 +682,7 @@ it.live(
           yield* actions.settleChangeRequest(
             board.sessionId,
             applied,
-            { _tag: "Apply" },
+            ChangeDecision.cases.Apply.make({}),
             orchestrator,
           );
           const second = yield* Queue.take(runs);
@@ -687,7 +699,7 @@ it.live(
           yield* actions.settleChangeRequest(
             board.sessionId,
             reassigned,
-            { _tag: "Reassign" },
+            ChangeDecision.cases.Reassign.make({}),
             orchestrator,
           );
           expect(yield* Queue.take(runs)).toMatchObject({
@@ -739,9 +751,7 @@ it.live(
           });
           yield* attempts
             .goal(board.goalInstanceId)
-            .pipe(
-              Effect.repeat({ until: (goal) => goal._tag === "Some" && goal.value.hold !== null }),
-            );
+            .pipe(Effect.repeat({ until: Option.exists((goal) => goal.hold !== null) }));
           // a finishes against the earlier Goal; it waits for the verdicts, and nothing else starts.
           yield* Deferred.succeed(releaseA, undefined);
           yield* attempts.awaitOutcome({
@@ -755,10 +765,9 @@ it.live(
           yield* (yield* KanbanBoardActions).applyGoalChange(
             board.sessionId,
             [
-              { _tag: "Continue", cardId: "a" },
-              { _tag: "Stop", cardId: "b", reason: "no longer wanted" },
-              {
-                _tag: "Replace",
+              GoalChangeVerdict.cases.Continue.make({ cardId: "a" }),
+              GoalChangeVerdict.cases.Stop.make({ cardId: "b", reason: "no longer wanted" }),
+              GoalChangeVerdict.cases.Replace.make({
                 cardId: "c",
                 card: {
                   title: "Card d",
@@ -766,7 +775,7 @@ it.live(
                   dependsOn: [],
                   acceptanceCriteria: ["d works"],
                 },
-              },
+              }),
             ],
             orchestrator,
           );
@@ -834,11 +843,12 @@ it.live(
           yield* changeGoal("Run other cards");
           yield* actions.applyGoalChange(
             board.sessionId,
-            ["a", "b", "c"].map((cardId) => ({
-              _tag: "NeedsDecision" as const,
-              cardId,
-              question: "Does the new Goal still need this?",
-            })),
+            ["a", "b", "c"].map((cardId) =>
+              GoalChangeVerdict.cases.NeedsDecision.make({
+                cardId,
+                question: "Does the new Goal still need this?",
+              }),
+            ),
             orchestrator,
           );
           const cards = yield* waitForCards(board.sessionId, () => true);
@@ -850,36 +860,42 @@ it.live(
           expect(yield* decisions.pending(board.sessionId)).toMatchObject(
             ["a", "b", "c"].map((cardId) => ({
               cardId,
-              kind: { _tag: "ImpactUnclear", fromGoalVersion: 1, toGoalVersion: 2 },
+              kind: DecisionKind.cases.ImpactUnclear.make({ fromGoalVersion: 1, toGoalVersion: 2 }),
             })),
           );
 
           // "그대로 진행": the stopped attempt's card runs again and finishes.
           yield* Deferred.succeed(release, undefined);
-          yield* answer(yield* requestOf("a"), { _tag: "ImpactUnclear", choice: "continue" });
+          yield* answer(
+            yield* requestOf("a"),
+            DecisionAnswer.cases.ImpactUnclear.make({ choice: "continue" }),
+          );
           yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "done");
 
           // The model stops b after another Goal change: its wait closes without an answer.
           yield* changeGoal("Run fewer cards");
           yield* actions.applyGoalChange(
             board.sessionId,
-            [{ _tag: "Stop", cardId: "b", reason: "no longer wanted" }],
+            [GoalChangeVerdict.cases.Stop.make({ cardId: "b", reason: "no longer wanted" })],
             orchestrator,
           );
           const b = yield* requestOf("b");
-          expect(b.state).toEqual({ _tag: "Closed", reason: "card_stopped" });
+          expect(b.state).toEqual(DecisionState.Closed({ reason: "card_stopped" }));
           expect(status(yield* waitForCards(board.sessionId, () => true), "b")).toBe("blocked");
-          const late = yield* Effect.flip(answer(b, { _tag: "ImpactUnclear", choice: "continue" }));
-          expect(late).toMatchObject({ _tag: "HumanDecisionRefused", reason: "request_closed" });
+          const late = yield* Effect.flip(
+            answer(b, DecisionAnswer.cases.ImpactUnclear.make({ choice: "continue" })),
+          );
+          expect(late).toBeInstanceOf(HumanDecisionRefused);
+          expect(late).toMatchObject({ reason: "request_closed" });
 
           // A new Goal takes over the session: the loop stops and closes c's wait.
           yield* switchGoalInstance(board.sessionId);
           yield* (yield* KanbanOrchestrator).poke(board.goalInstanceId);
           const c = yield* eventually(
             requestOf("c"),
-            (request) => request.state._tag !== "Pending",
+            (request) => !DecisionState.$is("Pending")(request.state),
           );
-          expect(c.state).toEqual({ _tag: "Closed", reason: "goal_replaced" });
+          expect(c.state).toEqual(DecisionState.Closed({ reason: "goal_replaced" }));
           expect(yield* decisions.inbox(board.projectId)).toEqual([]);
         }),
       );

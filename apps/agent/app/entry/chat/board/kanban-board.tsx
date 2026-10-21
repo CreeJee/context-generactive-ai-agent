@@ -34,9 +34,9 @@ import type { BoardView, CardStatus } from "../../api";
 import {
   boardColumns,
   cardStatusLabels,
+  DropOutcome,
   dropOutcome,
   type DropContext,
-  type DropOutcome,
 } from "./board-moves";
 import { CardFace, StatusIcon, type CardSignals } from "./card-face";
 
@@ -187,22 +187,18 @@ export function KanbanBoard({
   const outcomeOn = (status: CardStatus): DropOutcome | null =>
     active === null ? null : dropOutcome(active.card, status, context);
   const overOutcome = overStatus === null ? null : outcomeOn(overStatus);
+  const overRefused = DropOutcome.$is("Refused")(overOutcome);
 
   const describe = (id: UniqueIdentifier, over: UniqueIdentifier | null) => {
     const card = entryOf(id)?.card;
     const status = over === null ? null : statusOf(over);
     if (card === undefined || status === null) return `${titleOf(id)} 카드가 놓을 곳 밖에 있어요.`;
-    const outcome = dropOutcome(card, status, context);
-    switch (outcome._tag) {
-      case "Reorder":
-        return `${card.title} 카드가 ${cardStatusLabels[status]} 열 안에 있어요.`;
-      case "Send":
-        return `${card.title} 카드를 ${sendLabels[outcome.intent]}.`;
-      case "AskChange":
-        return `${card.title} 카드는 진행 중이라 옮기지 않고 수정 요청을 남길 수 있어요.`;
-      case "Refused":
-        return `${cardStatusLabels[status]} 열에는 놓을 수 없어요. ${outcome.reason}`;
-    }
+    return DropOutcome.$match(dropOutcome(card, status, context), {
+      Reorder: () => `${card.title} 카드가 ${cardStatusLabels[status]} 열 안에 있어요.`,
+      Send: ({ intent }) => `${card.title} 카드를 ${sendLabels[intent]}.`,
+      AskChange: () => `${card.title} 카드는 진행 중이라 옮기지 않고 수정 요청을 남길 수 있어요.`,
+      Refused: ({ reason }) => `${cardStatusLabels[status]} 열에는 놓을 수 없어요. ${reason}`,
+    });
   };
   const announcements: Announcements = {
     onDragStart: ({ active: picked }) => `${titleOf(picked.id)} 카드를 집었어요.`,
@@ -222,21 +218,17 @@ export function KanbanBoard({
     const to = over === null ? null : statusOf(over.id);
     if (entry === null || over === null || to === null) return;
     const { card } = entry;
-    const outcome = dropOutcome(card, to, context);
-    switch (outcome._tag) {
-      case "Reorder": {
+    return DropOutcome.$match(dropOutcome(card, to, context), {
+      Reorder: () => {
         const column = byStatus(to);
         const target = over.id === columnId(to) ? column.at(-1)?.card.id : String(over.id);
         if (target === undefined || target === card.id) return;
         return onReorder(card.id, target);
-      }
-      case "Send":
-        return onSend(card.id, outcome.intent, outcome.lands);
-      case "AskChange":
-        return onAskChange(card.id);
-      case "Refused":
-        return onRefused(outcome.reason);
-    }
+      },
+      Send: ({ intent, lands }) => onSend(card.id, intent, lands),
+      AskChange: () => onAskChange(card.id),
+      Refused: ({ reason }) => onRefused(reason),
+    });
   };
 
   const columnIds = boardColumns.map((status) => byStatus(status).map(({ card }) => card.id));
@@ -286,10 +278,8 @@ export function KanbanBoard({
         onKeyDown={moveFocus}
         className={cn(
           "flex h-full min-h-0 snap-x snap-mandatory gap-2 overflow-x-auto px-4 pb-4 sm:snap-none",
-          overOutcome?._tag === "Refused" && "cursor-not-allowed **:cursor-not-allowed",
-          active !== null &&
-            overOutcome?._tag !== "Refused" &&
-            "cursor-grabbing **:cursor-grabbing",
+          overRefused && "cursor-not-allowed **:cursor-not-allowed",
+          active !== null && !overRefused && "cursor-grabbing **:cursor-grabbing",
         )}
       >
         {boardColumns.map((status) => {
@@ -332,7 +322,7 @@ export function KanbanBoard({
         {active !== null && (
           <div className="w-64 rotate-1 rounded-md border bg-card p-2.5 shadow-lg ring-1 ring-foreground/10">
             <CardFace entry={active} signals={signalsOf(active.card.id)} />
-            {overOutcome?._tag === "Refused" && (
+            {overRefused && (
               <p className="mt-2 rounded-sm bg-destructive/10 px-2 py-1 text-2xs text-destructive">
                 {overOutcome.reason}
               </p>
@@ -363,8 +353,18 @@ function BoardColumn({
   readonly children: ReactNode;
 }) {
   const { setNodeRef } = useDroppable({ id: columnId(status) });
-  const refused = outcome?._tag === "Refused";
+  const refused = DropOutcome.$is("Refused")(outcome);
   const label = cardStatusLabels[status];
+  /** What dropping here would do, in words; nothing for a reorder inside the column. */
+  const hint =
+    outcome === null
+      ? null
+      : DropOutcome.$match(outcome, {
+          Reorder: () => null,
+          Send: ({ intent }) => `놓으면 ${sendLabels[intent]}.`,
+          AskChange: () => "놓으면 수정 요청을 남길지 물어봐요.",
+          Refused: ({ reason }) => reason,
+        });
   if (folded)
     return (
       <section
@@ -415,18 +415,14 @@ function BoardColumn({
           <ChevronsRightLeftIcon />
         </Button>
       </header>
-      {over && outcome !== null && outcome._tag !== "Reorder" && (
+      {over && hint !== null && (
         <p
           className={cn(
             "mx-2 mb-1.5 rounded-md px-2 py-1 text-2xs",
             refused ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary",
           )}
         >
-          {outcome._tag === "Refused"
-            ? outcome.reason
-            : outcome._tag === "AskChange"
-              ? "놓으면 수정 요청을 남길지 물어봐요."
-              : `놓으면 ${sendLabels[outcome.intent]}.`}
+          {hint}
         </p>
       )}
       <div className="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">

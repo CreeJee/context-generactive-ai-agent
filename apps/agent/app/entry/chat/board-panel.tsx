@@ -51,15 +51,15 @@ import {
 import { useBoardQuery, useDecisionsQuery, useKanbanQuery } from "../queries/session";
 import { DecisionPrompt } from "./decision-prompt";
 import {
+  KanbanAction,
   useEditBoardMutation,
   useKanbanMutation,
-  type KanbanAction,
 } from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
 import { LoopHealthStatus } from "../shared/loop-health";
-import { boardColumns, cardStatusLabels, withPending, type PendingMove } from "./board/board-moves";
+import { boardColumns, cardStatusLabels, PendingMove, withPending } from "./board/board-moves";
 import { authorLabel, StatusIcon, type CardSignals } from "./board/card-face";
-import { CardPeek, type Peek } from "./board/card-peek";
+import { CardPeek, Peek } from "./board/card-peek";
 import { KanbanBoard } from "./board/kanban-board";
 import { holdReasonText, verdictText } from "./board/hold-reason";
 
@@ -167,17 +167,15 @@ export function WorkflowBoard({
   const open = location.board === true || location.card !== null;
   const start = () => {
     setStartError(null);
-    kanbanAction.mutate(
-      { _tag: "Start" },
-      { onError: (error) => setStartError(editErrorText(error)) },
-    );
+    kanbanAction.mutate(KanbanAction.Start(), {
+      onError: (error) => setStartError(editErrorText(error)),
+    });
   };
   const restart = () => {
     setStartError(null);
-    kanbanAction.mutate(
-      { _tag: "RestartLoop" },
-      { onError: (error) => setStartError(editErrorText(error)) },
-    );
+    kanbanAction.mutate(KanbanAction.RestartLoop(), {
+      onError: (error) => setStartError(editErrorText(error)),
+    });
   };
 
   return (
@@ -286,20 +284,19 @@ const pendingOf = (
   landing: Landing | null,
   cards: BoardView["cards"],
 ): PendingMove | null => {
-  if (!request.isPending || request.variables?._tag !== "Intent") return null;
+  if (!request.isPending || !KanbanAction.$is("Intent")(request.variables)) return null;
   const intent = request.variables.intent;
   switch (intent._tag) {
     case "Reorder":
-      return {
-        _tag: "Order",
+      return PendingMove.Order({
         cardId: intent.cardId,
         index: cards.findIndex(({ card }) => card.id === intent.at),
-      };
+      });
     case "Hold":
     case "Release":
     case "Requeue":
       return landing?.cardId === intent.cardId
-        ? { _tag: "Status", cardId: intent.cardId, to: landing.lands }
+        ? PendingMove.Status({ cardId: intent.cardId, to: landing.lands })
         : null;
     case "ChangeRequest":
     case "Cancel":
@@ -373,7 +370,7 @@ function BoardSheet({
   /** A change to an executing card is a request, and cancelling stops the card: both intents. */
   const save = (change: BoardEdit): Promise<null> => {
     const intent = (sent: BoardIntent) =>
-      kanbanAction.mutateAsync({ _tag: "Intent", intent: sent }).then(() => null);
+      kanbanAction.mutateAsync(KanbanAction.Intent({ intent: sent })).then(() => null);
     switch (change._tag) {
       case "EditCard":
         return cards.find(({ card }) => card.id === change.cardId)?.card.status === "in_progress"
@@ -387,10 +384,13 @@ function BoardSheet({
     }
   };
   const peek: Peek | null = adding
-    ? { _tag: "New" }
+    ? Peek.New()
     : peekCardId === null
       ? null
-      : { _tag: "Card", cardId: peekCardId, editing: editingCardId === peekCardId };
+      : Peek.Card({ cardId: peekCardId, editing: editingCardId === peekCardId });
+  /** The card the peek panel shows; null for a new card's form. */
+  const peekedCardId =
+    peek === null ? null : Peek.$match(peek, { New: () => null, Card: ({ cardId }) => cardId });
   const goalDecisions = decisionsOf(goalDecisionCardId);
 
   return (
@@ -415,7 +415,7 @@ function BoardSheet({
                   health={loop.loop}
                   disabled={disabled || kanbanAction.isPending}
                   onRestart={() =>
-                    kanbanAction.mutate({ _tag: "RestartLoop" }, { onError: refused })
+                    kanbanAction.mutate(KanbanAction.RestartLoop(), { onError: refused })
                   }
                 />
               )}
@@ -434,7 +434,7 @@ function BoardSheet({
                 type="button"
                 size="sm"
                 disabled={disabled || kanbanAction.isPending}
-                onClick={() => kanbanAction.mutate({ _tag: "Start" }, { onError: refused })}
+                onClick={() => kanbanAction.mutate(KanbanAction.Start(), { onError: refused })}
               >
                 칸반으로 실행
               </Button>
@@ -522,17 +522,15 @@ function BoardSheet({
             busy={request.isPending}
             onOpen={(cardId) => onPeek(cardId)}
             onReorder={(cardId, at) =>
-              request.mutate(
-                { _tag: "Intent", intent: { _tag: "Reorder", cardId, at } },
-                { onError: refused },
-              )
+              request.mutate(KanbanAction.Intent({ intent: { _tag: "Reorder", cardId, at } }), {
+                onError: refused,
+              })
             }
             onSend={(cardId, intent, lands) => {
               setLanding({ cardId, lands });
-              request.mutate(
-                { _tag: "Intent", intent: { _tag: intent, cardId } },
-                { onError: refused },
-              );
+              request.mutate(KanbanAction.Intent({ intent: { _tag: intent, cardId } }), {
+                onError: refused,
+              });
             }}
             onAskChange={setAskChange}
             onRefused={setNotice}
@@ -549,17 +547,17 @@ function BoardSheet({
         )}
         {peek !== null && (
           <CardPeek
-            key={peek._tag === "Card" ? peek.cardId : "new"}
+            key={peekedCardId ?? "new"}
             peek={peek}
             entry={
-              peek._tag === "Card"
-                ? (cards.find(({ card }) => card.id === peek.cardId) ?? null)
-                : null
+              peekedCardId === null
+                ? null
+                : (cards.find(({ card }) => card.id === peekedCardId) ?? null)
             }
-            loopCard={peek._tag === "Card" ? loopCard(peek.cardId) : null}
-            decisions={peek._tag === "Card" ? decisionsOf(peek.cardId) : []}
+            loopCard={peekedCardId === null ? null : loopCard(peekedCardId)}
+            decisions={peekedCardId === null ? [] : decisionsOf(peekedCardId)}
             titleOf={titleOf}
-            changePending={peek._tag === "Card" && changePending(peek.cardId)}
+            changePending={peekedCardId !== null && changePending(peekedCardId)}
             projectId={projectId}
             holder={holder}
             disabled={disabled}
@@ -571,10 +569,9 @@ function BoardSheet({
             kanbanActive={loop !== null}
             onEdit={(editing) => setEditingCardId(editing ? peekCardId : null)}
             onIntent={(intent, cardId) =>
-              kanbanAction.mutate(
-                { _tag: "Intent", intent: { _tag: intent, cardId } },
-                { onError: refused },
-              )
+              kanbanAction.mutate(KanbanAction.Intent({ intent: { _tag: intent, cardId } }), {
+                onError: refused,
+              })
             }
             onClose={() => {
               setAdding(false);
@@ -703,7 +700,7 @@ function GoalSchedulePanel({
             disabled={disabled}
             onValueChange={(value) => {
               const item = priorityItems.find((option) => option.value === value);
-              if (isTruthy(item)) onChange({ _tag: "SetPriority", priority: item.value });
+              if (isTruthy(item)) onChange(KanbanAction.SetPriority({ priority: item.value }));
             }}
           >
             <SelectTrigger id="goal-priority" size="sm" className="w-24">
@@ -743,12 +740,13 @@ function GoalSchedulePanel({
                     disabled={disabled}
                     aria-label={`${goalName(other.goalInstanceId)} 먼저`}
                     onCheckedChange={(next) =>
-                      onChange({
-                        _tag: "SetDependencies",
-                        dependsOn: next
-                          ? [...schedule.dependsOn, other.goalInstanceId]
-                          : schedule.dependsOn.filter((id) => id !== other.goalInstanceId),
-                      })
+                      onChange(
+                        KanbanAction.SetDependencies({
+                          dependsOn: next
+                            ? [...schedule.dependsOn, other.goalInstanceId]
+                            : schedule.dependsOn.filter((id) => id !== other.goalInstanceId),
+                        }),
+                      )
                     }
                   />
                   <span className="text-foreground">{goalName(other.goalInstanceId)}</span>

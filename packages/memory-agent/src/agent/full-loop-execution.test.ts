@@ -3,6 +3,10 @@ import type { AnyServerTool } from "@tanstack/ai";
 import { webSearchTool } from "@tanstack/ai-openai/tools";
 import { vi } from "vite-plus/test";
 import { ScriptedTextAdapter } from "../testing/scripted-adapter.ts";
+import {
+  FullLoopAdmissionReason,
+  FullLoopAdmissionRejected,
+} from "./full-loop-admission-preflight.ts";
 import { preflightFullLoopExecution } from "./full-loop-execution.ts";
 
 describe("full-loop preflight", () => {
@@ -13,7 +17,7 @@ describe("full-loop preflight", () => {
     // Meta API injects the official provider-native tool into an invalid server
     // inventory to prove rejection; this is not asserted to be a valid server tool.
     Reflect.set(invalidInventory, 0, webSearchTool({ type: "web_search" }));
-    expect(() =>
+    const preflight = () =>
       preflightFullLoopExecution(
         { messages: [], runId: "r", threadId: "s" },
         {
@@ -22,11 +26,11 @@ describe("full-loop preflight", () => {
           middleware: [],
           stream: { abortController: new AbortController() },
         },
-      ),
-    ).toThrow(
+      );
+    expect(preflight).toThrow(FullLoopAdmissionRejected);
+    expect(preflight).toThrow(
       expect.objectContaining({
-        _tag: "FullLoopAdmissionRejected",
-        reason: { _tag: "UnsupportedTool" },
+        reason: FullLoopAdmissionReason.cases.UnsupportedTool.make({}),
       }),
     );
     expect(modelCall).not.toHaveBeenCalled();

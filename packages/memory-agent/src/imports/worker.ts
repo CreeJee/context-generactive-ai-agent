@@ -18,12 +18,7 @@ import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
 import { Checkouts } from "./checkouts.ts";
 import { TranscriptPass } from "./pass.ts";
-import {
-  ImportRpcs,
-  ImportWorkerFailed,
-  ImportWorkerSetup,
-  type PassEvent,
-} from "./worker-protocol.ts";
+import { ImportRpcs, ImportWorkerFailed, ImportWorkerSetup, PassEvent } from "./worker-protocol.ts";
 
 /** Progress is sent at most this often; the last count of a pass always goes out. */
 const progressEveryMs = 100;
@@ -51,7 +46,7 @@ const handlers = ImportRpcs.toLayer(
             const sentAt = yield* Ref.make(0);
             const { progress, counts } = yield* pass
               .run((progress) =>
-                Queue.offer(queue, { _tag: "Progress", ...progress }).pipe(
+                Queue.offer(queue, PassEvent.cases.Progress.make(progress)).pipe(
                   Effect.when(
                     Effect.flatMap(Clock.currentTimeMillis, (now) =>
                       Ref.modify(sentAt, (last): [boolean, number] =>
@@ -63,7 +58,7 @@ const handlers = ImportRpcs.toLayer(
                 ),
               )
               .pipe(failed("pass", "Import pass failed"));
-            yield* Queue.offer(queue, { _tag: "Finished", ...progress, counts });
+            yield* Queue.offer(queue, PassEvent.cases.Finished.make({ ...progress, counts }));
             yield* Queue.end(queue);
           }),
         ),

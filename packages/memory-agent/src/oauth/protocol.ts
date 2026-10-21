@@ -22,29 +22,26 @@ export class ProviderFeatureRejectedError extends Schema.TaggedError<ProviderFea
   }
 }
 
-/** Only this reason proves the request never reached the provider (connection, DNS or TLS setup). */
-export const RequestNotSent = Schema.TaggedStruct("RequestNotSent", {
-  stage: Schema.Literals(["dns", "connect", "tls"]),
+export const ProviderStreamFailedReason = Schema.TaggedUnion({
+  /** Only this reason proves the request never reached the provider (connection, DNS or TLS setup). */
+  RequestNotSent: { stage: Schema.Literals(["dns", "connect", "tls"]) },
+  /** The provider answered with an error status; only the status class is kept, never the body. */
+  ProviderStatusRejected: { statusClass: Schema.Literals(["client_error", "server_error"]) },
+  /** The response or its event stream had started when the connection broke. */
+  ResponseInterrupted: {},
+  /** The request may have reached the provider; treated as sent. */
+  RequestOutcomeUnknown: {},
 });
-/** The provider answered with an error status; only the status class is kept, never the body. */
-export const ProviderStatusRejected = Schema.TaggedStruct("ProviderStatusRejected", {
-  statusClass: Schema.Literals(["client_error", "server_error"]),
-});
-/** The response or its event stream had started when the connection broke. */
-export const ResponseInterrupted = Schema.TaggedStruct("ResponseInterrupted", {});
-/** The request may have reached the provider; treated as sent. */
-export const RequestOutcomeUnknown = Schema.TaggedStruct("RequestOutcomeUnknown", {});
+export const RequestNotSent = ProviderStreamFailedReason.cases.RequestNotSent;
+export const ProviderStatusRejected = ProviderStreamFailedReason.cases.ProviderStatusRejected;
+export const ResponseInterrupted = ProviderStreamFailedReason.cases.ResponseInterrupted;
+export const RequestOutcomeUnknown = ProviderStreamFailedReason.cases.RequestOutcomeUnknown;
 
 export class ProviderStreamFailed extends Schema.TaggedError<ProviderStreamFailed>()(
   "ProviderStreamFailed",
   {
     provider: Schema.Literals(["openai", "anthropic"]),
-    reason: Schema.Union([
-      RequestNotSent,
-      ProviderStatusRejected,
-      ResponseInterrupted,
-      RequestOutcomeUnknown,
-    ]),
+    reason: ProviderStreamFailedReason,
   },
 ) {
   override get message() {
@@ -224,17 +221,17 @@ export interface StreamReasoningSummaryEndEvent {
   readonly text: string;
 }
 
+export const ReasoningSummaryProtocolFailedReason = Schema.TaggedUnion({
+  InterleavedItems: {},
+  ConflictingSummary: {},
+  AlreadyEnded: {},
+  ResourceLimit: {},
+  IncompleteSummary: {},
+});
+
 export class ReasoningSummaryProtocolFailed extends Schema.TaggedError<ReasoningSummaryProtocolFailed>()(
   "ReasoningSummaryProtocolFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("InterleavedItems", {}),
-      Schema.TaggedStruct("ConflictingSummary", {}),
-      Schema.TaggedStruct("AlreadyEnded", {}),
-      Schema.TaggedStruct("ResourceLimit", {}),
-      Schema.TaggedStruct("IncompleteSummary", {}),
-    ]),
-  },
+  { reason: ReasoningSummaryProtocolFailedReason },
 ) {
   override get message() {
     return "Public reasoning summary protocol failed.";

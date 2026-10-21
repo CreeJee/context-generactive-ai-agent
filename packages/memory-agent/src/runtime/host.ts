@@ -114,13 +114,15 @@ const busyCodes = HashSet.make("EPERM", "EACCES", "EBUSY");
  * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
  * antivirus may scan freshly written executables or native libraries before releasing their folder.
  */
+const RenameFailed = Schema.TaggedStruct("RenameFailed", { code: Schema.String });
+
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export class DirectoryRenameFailed extends Schema.TaggedError<DirectoryRenameFailed>()(
   "DirectoryRenameFailed",
   {
     from: Schema.String,
     to: Schema.String,
-    reason: Schema.TaggedStruct("RenameFailed", { code: Schema.String }),
+    reason: RenameFailed,
     cause: Schema.Defect(),
   },
 ) {
@@ -154,7 +156,7 @@ export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function
     return DirectoryRenameFailed.make({
       from,
       to,
-      reason: { _tag: "RenameFailed", code: decoded.value.code },
+      reason: RenameFailed.make({ code: decoded.value.code }),
       cause,
     });
   };

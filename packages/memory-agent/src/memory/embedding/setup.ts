@@ -1,5 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { Context, Effect, Layer } from "effect";
+import { logFailure } from "../../runtime/logged-failures.ts";
 import {
   GlobalConfig,
   type EmbeddingChoice,
@@ -82,9 +83,7 @@ const make = Effect.gen(function* () {
         checkGpu(storage.path).pipe(
           Effect.flatMap((result) => config.update({ gpuCheck: result })),
           // Unchecked stays unchecked; the next start or a changed setting checks again.
-          Effect.catch((error) =>
-            Effect.logWarning("embedding_gpu_check_failed", { error: error._tag }),
-          ),
+          Effect.catch(logFailure("embedding_gpu_check_failed")),
           Effect.ensuring(
             Effect.sync(() => {
               checking = false;

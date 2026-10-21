@@ -1,5 +1,5 @@
 import { Console, Effect } from "effect";
-import { OAuthCheckFailed } from "./oauth-check-failure.ts";
+import { OAuthCheckFailed, OAuthCheckReason } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
 import {
@@ -46,10 +46,11 @@ try {
     await openBrowser("open", [attempt.authorizationUrl]);
   } catch {
     attempt.cancel();
-    throw OAuthCheckFailed.make({ reason: { _tag: "browser_open_failed" } });
+    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.browser_open_failed.make({}) });
   }
   const result = await attempt.completed;
-  if (!result.connected) throw OAuthCheckFailed.make({ reason: { _tag: "login_not_connected" } });
+  if (!result.connected)
+    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.login_not_connected.make({}) });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("OPENAI_LOGIN_CHECK passed"));
 } catch (error) {

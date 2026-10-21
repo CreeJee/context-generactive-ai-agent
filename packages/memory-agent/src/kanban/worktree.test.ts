@@ -9,7 +9,17 @@ import {
   resolveFencedOutsidePath,
   resolveProjectPath,
 } from "../files/paths.ts";
-import { cardToolProject, CardWorktrees } from "./worktree.ts";
+import {
+  CardIntegration,
+  CardIntegrationConflict,
+  cardToolProject,
+  CardWorktreeFailedReason,
+  cardWorktreeFailedReasonName,
+  CardWorktrees,
+  GoalSync,
+  WorktreeDisposition,
+  WorktreeSettlement,
+} from "./worktree.ts";
 
 /** Builds a layer in the test's scope and provides what it made. */
 const provideLayer =
@@ -42,6 +52,13 @@ const fixture = Effect.gen(function* () {
   return { fs, path, home, project, layer };
 });
 
+/** The integration's tag, beside the failure reason's tag, in one list. */
+const integrationName = CardIntegration.$match({
+  Integrated: () => "Integrated" as const,
+  AlreadyIntegrated: () => "AlreadyIntegrated" as const,
+  NoChanges: () => "NoChanges" as const,
+});
+
 const run = <A, E>(
   program: (
     setup: Effect.Success<typeof fixture>,
@@ -61,7 +78,9 @@ it.live("asks for sequential execution when the project is not a git repository"
       const failure = yield* Effect.flip(
         worktrees.prepareGoal({ projectRoot: plain, goalInstanceId: "g1" }),
       );
-      expect(failure.reason).toEqual({ _tag: "SequentialRequired", cause: "not_git_repository" });
+      expect(failure.reason).toEqual(
+        CardWorktreeFailedReason.cases.SequentialRequired.make({ cause: "not_git_repository" }),
+      );
     }),
   ),
 );
@@ -89,38 +108,40 @@ it.live(
             expect(worktree.path).toBe(path.join(home, "worktrees", "g1", "c1"));
             expect(yield* git(worktree.path, "branch", "--show-current")).toBe("ctx/card/g1/c1");
             expect(yield* fs.readFileString(path.join(worktree.path, "a.txt"))).toBe("one\n");
-            expect((yield* Effect.flip(worktrees.lease(card))).reason).toEqual({ _tag: "InUse" });
-            expect((yield* Effect.flip(worktrees.settle(card, { _tag: "Done" }))).reason).toEqual({
-              _tag: "InUse",
-            });
+            expect((yield* Effect.flip(worktrees.lease(card))).reason).toEqual(
+              CardWorktreeFailedReason.cases.InUse.make({}),
+            );
+            expect(
+              (yield* Effect.flip(worktrees.settle(card, WorktreeDisposition.Done()))).reason,
+            ).toEqual(CardWorktreeFailedReason.cases.InUse.make({}));
             yield* fs.writeFileString(path.join(worktree.path, "progress.txt"), "half\n");
             return worktree;
           }),
         );
 
         // Blocked keeps the worktree; the next attempt continues in it with the earlier files.
-        expect(yield* worktrees.settle(card, { _tag: "Blocked" })).toEqual({ _tag: "Retained" });
+        expect(yield* worktrees.settle(card, WorktreeDisposition.Blocked())).toEqual(
+          WorktreeSettlement.Retained(),
+        );
         const again = yield* Effect.scoped(worktrees.lease(card));
         expect(again.path).toBe(leased.path);
         expect(yield* fs.readFileString(path.join(again.path, "progress.txt"))).toBe("half\n");
-        expect((yield* Effect.flip(worktrees.settle(card, { _tag: "Done" }))).reason).toEqual({
-          _tag: "WorktreeDirty",
-        });
+        expect(
+          (yield* Effect.flip(worktrees.settle(card, WorktreeDisposition.Done()))).reason,
+        ).toEqual(CardWorktreeFailedReason.cases.WorktreeDirty.make({}));
         yield* worktrees.commitWork(card, "progress");
-        expect(yield* worktrees.settle(card, { _tag: "Done" })).toEqual({
-          _tag: "Removed",
-          branchKept: false,
-        });
+        expect(yield* worktrees.settle(card, WorktreeDisposition.Done())).toEqual(
+          WorktreeSettlement.Removed({ branchKept: false }),
+        );
         expect(yield* fs.exists(leased.path)).toBe(false);
         expect(yield* git(project, "branch", "--list", "ctx/card/g1/c1")).toBe("");
 
         // Cancelled work stays recoverable on the card branch.
         const other = yield* Effect.scoped(worktrees.lease(cancelled));
         yield* fs.writeFileString(path.join(other.path, "draft.txt"), "draft\n");
-        expect(yield* worktrees.settle(cancelled, { _tag: "Cancelled" })).toEqual({
-          _tag: "Removed",
-          branchKept: true,
-        });
+        expect(yield* worktrees.settle(cancelled, WorktreeDisposition.Cancelled())).toEqual(
+          WorktreeSettlement.Removed({ branchKept: true }),
+        );
         expect(yield* fs.exists(other.path)).toBe(false);
         expect(yield* git(project, "show", "ctx/card/g1/c2:draft.txt")).toBe("draft");
         expect(yield* worktrees.find(cancelled)).toEqual(Option.none());
@@ -157,9 +178,9 @@ it.live(
           ["a", "b"],
           (id) =>
             worktrees.squashIntoGoal(card(id), `Card ${id}`).pipe(
-              Effect.map((integration) => ({ id, integration: integration._tag })),
+              Effect.map((integration) => ({ id, integration: integrationName(integration) })),
               Effect.catchTag("CardWorktreeFailed", (failure) =>
-                Effect.succeed({ id, integration: failure.reason._tag }),
+                Effect.succeed({ id, integration: cardWorktreeFailedReasonName(failure.reason) }),
               ),
             ),
           { concurrency: "unbounded" },
@@ -169,13 +190,17 @@ it.live(
           "Integrated",
         ]);
         const behind = results.find(({ integration }) => integration === "GoalAdvanced")?.id ?? "";
-        expect((yield* worktrees.syncWithGoal(card(behind)))._tag).toBe("Merged");
-        expect((yield* worktrees.squashIntoGoal(card(behind), `Card ${behind}`))._tag).toBe(
-          "Integrated",
-        );
-        expect((yield* worktrees.squashIntoGoal(card("a"), "Card a"))._tag).toBe(
-          "AlreadyIntegrated",
-        );
+        expect(GoalSync.$is("Merged")(yield* worktrees.syncWithGoal(card(behind)))).toBe(true);
+        expect(
+          CardIntegration.$is("Integrated")(
+            yield* worktrees.squashIntoGoal(card(behind), `Card ${behind}`),
+          ),
+        ).toBe(true);
+        expect(
+          CardIntegration.$is("AlreadyIntegrated")(
+            yield* worktrees.squashIntoGoal(card("a"), "Card a"),
+          ),
+        ).toBe(true);
 
         // One squash commit per card, each with its own parent, ending in both cards' files.
         const history = yield* git(
@@ -194,7 +219,8 @@ it.live(
         expect(yield* git(project, "show", "ctx/goal/g2:b.txt")).toBe("from b");
 
         const conflict = yield* Effect.flip(worktrees.syncWithGoal(card("c")));
-        expect(conflict).toMatchObject({ _tag: "CardIntegrationConflict", files: ["a.txt"] });
+        expect(conflict).toBeInstanceOf(CardIntegrationConflict);
+        expect(conflict).toMatchObject({ files: ["a.txt"] });
         const cWorktree = yield* worktrees.find(card("c"));
         expect(yield* git(Option.getOrThrow(cWorktree).path, "status", "--porcelain")).toBe("");
         expect(yield* git(project, "branch", "--show-current")).toBe("main");

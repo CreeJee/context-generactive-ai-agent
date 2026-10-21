@@ -10,7 +10,17 @@ import {
 } from "effect";
 import { isTruthy } from "../truthy.ts";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { MutableHashMap, Option, Context, Effect, FileSystem, Crypto, Layer, Schema } from "effect";
+import {
+  MutableHashMap,
+  Option,
+  Context,
+  Data,
+  Effect,
+  FileSystem,
+  Crypto,
+  Layer,
+  Schema,
+} from "effect";
 import type { Project } from "../projects/projects.ts";
 import { homeDirectory } from "../runtime/host-system.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
@@ -124,10 +134,12 @@ export function parseFrontMatter(text: string): FrontMatter {
 
 const skillFileOf = (directory: string) => join(directory, "SKILL.md");
 
-type SkillRead =
-  | { readonly _tag: "none" }
-  | { readonly _tag: "skill"; readonly skill: Skill; readonly body: string }
-  | { readonly _tag: "problem"; readonly problem: SkillProblem };
+type SkillRead = Data.TaggedEnum<{
+  none: {};
+  skill: { readonly skill: Skill; readonly body: string };
+  problem: { readonly problem: SkillProblem };
+}>;
+const SkillRead = Data.taggedEnum<SkillRead>();
 
 export interface SkillsOptions {
   /** Where global skills live; tests use a temporary home. */
@@ -149,10 +161,8 @@ const make = (options: SkillsOptions) =>
       folder: string,
     ): Effect.fn.Return<SkillRead> {
       const file = skillFileOf(directory);
-      const problem = (kind: SkillProblem["problem"]): SkillRead => ({
-        _tag: "problem",
-        problem: { scope, directory, problem: kind },
-      });
+      const problem = (kind: SkillProblem["problem"]): SkillRead =>
+        SkillRead.problem({ problem: { scope, directory, problem: kind } });
       return yield* Effect.gen(function* (): Effect.fn.Return<
         SkillRead,
         | import("../files/text.ts").TextFileIoFailed
@@ -160,9 +170,9 @@ const make = (options: SkillsOptions) =>
         | import("../files/paths.ts").PathRejected
         | import("effect/PlatformError").PlatformError
       > {
-        if (!(yield* fs.exists(file))) return { _tag: "none" };
+        if (!(yield* fs.exists(file))) return SkillRead.none();
         const entry = yield* fs.lstat(file);
-        if (entry.type !== "File") return { _tag: "none" };
+        if (entry.type !== "File") return SkillRead.none();
         if (Number(entry.size) > maxSkillBytes) return problem("too_large");
         // Open the same leaf without following a link swapped in after discovery.
         const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file });
@@ -171,8 +181,7 @@ const make = (options: SkillsOptions) =>
         const { fields, body } = parseFrontMatter(text);
         const description = Option.getOrUndefined(MutableHashMap.get(fields, "description")) ?? "";
         if (description.length === 0) return problem("no_description");
-        return {
-          _tag: "skill",
+        return SkillRead.skill({
           body,
           skill: {
             scope,
@@ -183,7 +192,7 @@ const make = (options: SkillsOptions) =>
               yield* crypto.digest("SHA-256", new TextEncoder().encode(text)),
             ),
           },
-        };
+        });
       }).pipe(
         // A skill that cannot be read is listed as a problem, not dropped silently.
         Effect.catchTags({
@@ -209,16 +218,15 @@ const make = (options: SkillsOptions) =>
         );
         if (!plain) continue;
         const read = yield* readSkill(scope, directory, folder);
-        switch (read._tag) {
-          case "none":
-            break;
-          case "skill":
-            skills.push(read);
-            break;
-          case "problem":
-            problems.push(read.problem);
-            break;
-        }
+        SkillRead.$match(read, {
+          none: () => {},
+          skill: (entry) => {
+            skills.push(entry);
+          },
+          problem: (entry) => {
+            problems.push(entry.problem);
+          },
+        });
       }
       return { skills, problems };
     });

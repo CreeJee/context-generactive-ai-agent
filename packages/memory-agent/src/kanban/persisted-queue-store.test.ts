@@ -16,7 +16,11 @@ import { PersistedQueue } from "effect/persistence";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../db/database.ts";
-import { PersistedQueueItems, persistedQueueStoreLayer } from "./persisted-queue-store.ts";
+import {
+  PersistedQueueItems,
+  PersistedQueueItemsReason,
+  persistedQueueStoreLayer,
+} from "./persisted-queue-store.ts";
 
 class CardRunFailed extends Schema.TaggedError<CardRunFailed>()("CardRunFailed", {}) {}
 
@@ -141,8 +145,8 @@ it.live("dead-letters a card after its attempts, keeps it across restart and req
       ),
     );
     expect(refused.map(({ reason }) => reason)).toEqual([
-      { _tag: "NotDeadLettered", state: "completed" },
-      { _tag: "NotFound" },
+      PersistedQueueItemsReason.cases.NotDeadLettered.make({ state: "completed" }),
+      PersistedQueueItemsReason.cases.NotFound.make({}),
     ]);
   }).pipe(Effect.scoped),
 );

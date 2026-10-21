@@ -1,6 +1,7 @@
 import {
   Clock,
   Context,
+  Data,
   DateTime,
   Effect,
   Layer,
@@ -13,55 +14,66 @@ import {
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Activity, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { AppEvents } from "../events/app-events.ts";
-import { KanbanStorageFailed } from "./card-attempts.ts";
+import { KanbanStorageFailed, KanbanStorageReason } from "./card-attempts.ts";
 import type { BoardAuthor, CardStatus } from "../workflow/card.ts";
 import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowStorage, type StoredExecution } from "../workflow/owner-workflow-storage.ts";
 import { Workflows, WorkflowStorageError } from "../workflow/workflow.ts";
 
 /** What a card waits on a person for. The metadata is safe to show: no provider text or paths. */
-export const DecisionKind = Schema.Union([
+export const DecisionKind = Schema.TaggedUnion({
   /**
    * An attempt's run left a tool whose effect is unknown; the person says what really happened.
    * `toolNames` is empty when the run's records do not name the tools.
    */
-  Schema.TaggedStruct("UncertainSideEffect", {
+  UncertainSideEffect: {
     runId: Schema.String,
     toolNames: Schema.Array(Schema.String),
-  }),
+  },
   /** Integrating the card into the Goal branch conflicted in these files. */
-  Schema.TaggedStruct("IntegrationConflict", { files: Schema.Array(Schema.String) }),
+  IntegrationConflict: { files: Schema.Array(Schema.String) },
   /** A Goal change whose effect on the card the orchestrator could not judge (NeedsDecision). */
-  Schema.TaggedStruct("ImpactUnclear", {
+  ImpactUnclear: {
     fromGoalVersion: Schema.Int,
     toGoalVersion: Schema.Int,
-  }),
+  },
   /** Every attempt of the card failed. */
-  Schema.TaggedStruct("RetryExhausted", { attempts: Schema.Int }),
+  RetryExhausted: { attempts: Schema.Int },
   /**
    * The Goal would merge into a protected branch, which is never automatic. A pull request is
    * offered only when the GitHub CLI was found when the Goal asked.
    */
-  Schema.TaggedStruct("ProtectedBranchMerge", {
+  ProtectedBranchMerge: {
     targetBranch: Schema.String,
     prAvailable: Schema.Boolean,
-  }),
+  },
   /** Merging the user's branch into the Goal branch conflicted in these files. */
-  Schema.TaggedStruct("MergeConflict", {
+  MergeConflict: {
     targetBranch: Schema.String,
     files: Schema.Array(Schema.String),
-  }),
+  },
   /**
    * The card's expected files overlap a card another Goal finished but has not merged yet; the
    * scheduler cannot tell which Goal should go first.
    */
-  Schema.TaggedStruct("FileOverlap", {
+  FileOverlap: {
     otherGoalInstanceId: Schema.String,
     otherCardId: Schema.String,
     files: Schema.Array(Schema.String),
-  }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  },
+});
 export type DecisionKind = typeof DecisionKind.Type;
+
+/** The kind's tag, as the card's history and pages name it. */
+export const decisionKindName = DecisionKind.match({
+  UncertainSideEffect: () => "UncertainSideEffect" as const,
+  IntegrationConflict: () => "IntegrationConflict" as const,
+  ImpactUnclear: () => "ImpactUnclear" as const,
+  RetryExhausted: () => "RetryExhausted" as const,
+  ProtectedBranchMerge: () => "ProtectedBranchMerge" as const,
+  MergeConflict: () => "MergeConflict" as const,
+  FileOverlap: () => "FileOverlap" as const,
+});
 
 /**
  * The card id of Goal-level requests. They are about the Goal's merge into the user's branch, not
@@ -81,24 +93,27 @@ export const decisionSubject: (kind: DecisionKind) => "card" | "goal" = Decision
 });
 
 /** A person's answer; its tag must be the request's kind. */
-export const DecisionAnswer = Schema.Union([
-  Schema.TaggedStruct("UncertainSideEffect", {
-    choice: Schema.Literals(["continue", "retry", "stop"]),
-  }),
-  Schema.TaggedStruct("IntegrationConflict", {
-    choice: Schema.Literals(["resolved", "rework", "stop"]),
-  }),
-  Schema.TaggedStruct("ImpactUnclear", {
-    choice: Schema.Literals(["continue", "replace", "stop"]),
-  }),
-  Schema.TaggedStruct("RetryExhausted", { choice: Schema.Literals(["requeue", "stop"]) }),
-  Schema.TaggedStruct("ProtectedBranchMerge", {
-    choice: Schema.Literals(["create_pr", "manual_merge"]),
-  }),
-  Schema.TaggedStruct("MergeConflict", { choice: Schema.Literals(["resolved", "stop"]) }),
-  Schema.TaggedStruct("FileOverlap", { choice: Schema.Literals(["wait", "proceed"]) }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+export const DecisionAnswer = Schema.TaggedUnion({
+  UncertainSideEffect: { choice: Schema.Literals(["continue", "retry", "stop"]) },
+  IntegrationConflict: { choice: Schema.Literals(["resolved", "rework", "stop"]) },
+  ImpactUnclear: { choice: Schema.Literals(["continue", "replace", "stop"]) },
+  RetryExhausted: { choice: Schema.Literals(["requeue", "stop"]) },
+  ProtectedBranchMerge: { choice: Schema.Literals(["create_pr", "manual_merge"]) },
+  MergeConflict: { choice: Schema.Literals(["resolved", "stop"]) },
+  FileOverlap: { choice: Schema.Literals(["wait", "proceed"]) },
+});
 export type DecisionAnswer = typeof DecisionAnswer.Type;
+
+/** The answer's tag; it names the request kind the answer is for. */
+const decisionAnswerName = DecisionAnswer.match({
+  UncertainSideEffect: () => "UncertainSideEffect" as const,
+  IntegrationConflict: () => "IntegrationConflict" as const,
+  ImpactUnclear: () => "ImpactUnclear" as const,
+  RetryExhausted: () => "RetryExhausted" as const,
+  ProtectedBranchMerge: () => "ProtectedBranchMerge" as const,
+  MergeConflict: () => "MergeConflict" as const,
+  FileOverlap: () => "FileOverlap" as const,
+});
 
 /**
  * Each choice and the card status it leads to; Goal-level choices move no card. The orchestrator
@@ -114,8 +129,8 @@ export const decisionChoices = {
   MergeConflict: { resolved: null, stop: null },
   FileOverlap: { wait: "ready", proceed: "ready" },
 } as const satisfies {
-  readonly [Tag in DecisionAnswer["_tag"]]: Record<
-    Extract<DecisionAnswer, { readonly _tag: Tag }>["choice"],
+  readonly [Tag in keyof typeof DecisionAnswer.cases]: Record<
+    (typeof DecisionAnswer.cases)[Tag]["fields"]["choice"]["Type"],
     CardStatus | null
   >;
 };
@@ -139,10 +154,12 @@ export const DecisionCloseReason = Schema.Literals([
 ]);
 export type DecisionCloseReason = typeof DecisionCloseReason.Type;
 
-export type DecisionState =
-  | { readonly _tag: "Pending" }
-  | { readonly _tag: "Answered"; readonly answer: DecisionAnswer }
-  | { readonly _tag: "Closed"; readonly reason: DecisionCloseReason | null };
+export type DecisionState = Data.TaggedEnum<{
+  Pending: {};
+  Answered: { readonly answer: DecisionAnswer };
+  Closed: { readonly reason: DecisionCloseReason | null };
+}>;
+export const DecisionState = Data.taggedEnum<DecisionState>();
 
 export interface HumanDecisionRequest {
   readonly requestId: string;
@@ -181,15 +198,16 @@ export interface DecisionAnswerInput {
 }
 
 /** Which open waits a close ends. */
-export type DecisionCloseScope =
-  | { readonly _tag: "Request"; readonly requestId: string }
-  | {
-      readonly _tag: "Card";
-      readonly sessionId: string;
-      readonly goalInstanceId: string;
-      readonly cardId: string;
-    }
-  | { readonly _tag: "Goal"; readonly sessionId: string; readonly goalInstanceId: string };
+export type DecisionCloseScope = Data.TaggedEnum<{
+  Request: { readonly requestId: string };
+  Card: {
+    readonly sessionId: string;
+    readonly goalInstanceId: string;
+    readonly cardId: string;
+  };
+  Goal: { readonly sessionId: string; readonly goalInstanceId: string };
+}>;
+export const DecisionCloseScope = Data.taggedEnum<DecisionCloseScope>();
 
 export class HumanDecisionRefused extends Schema.TaggedError<HumanDecisionRefused>()(
   "HumanDecisionRefused",
@@ -216,7 +234,9 @@ const HumanDecisionPayload = Schema.Struct({
 });
 type HumanDecisionPayload = typeof HumanDecisionPayload.Type;
 
-const HumanDecisionExecution = Workflow.make("HumanDecisionExecution", {
+const humanDecisionWorkflow = "HumanDecisionExecution";
+
+const HumanDecisionExecution = Workflow.make(humanDecisionWorkflow, {
   payload: HumanDecisionPayload,
   success: Schema.Struct({ answer: DecisionAnswer, applied: Schema.Boolean }),
   error: WorkflowStorageError,
@@ -281,11 +301,11 @@ const answerFits = (kind: DecisionKind, answer: DecisionAnswer) =>
         DecisionAnswer.guards.ProtectedBranchMerge(answer) &&
         (answer.choice !== "create_pr" || prAvailable),
     },
-    (other) => Predicate.isTagged(answer, other._tag),
+    (other) => DecisionAnswer.guards[decisionKindName(other)](answer),
   );
 
 const sameAnswer = (left: DecisionAnswer, right: DecisionAnswer) =>
-  Predicate.isTagged(right, left._tag) && left.choice === right.choice;
+  DecisionAnswer.guards[decisionAnswerName(left)](right) && left.choice === right.choice;
 
 const make = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -298,10 +318,17 @@ const make = Effect.gen(function* () {
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
   const stored = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.mapError(effect, (cause) =>
-      KanbanStorageFailed.make({ operation: "decision", reason: { _tag: "Storage" }, cause }),
+      KanbanStorageFailed.make({
+        operation: "decision",
+        reason: KanbanStorageReason.cases.Storage.make({}),
+        cause,
+      }),
     );
   /** A request or answer this owner just stored is not there to read back. */
-  const missing = KanbanStorageFailed.make({ operation: "decision", reason: { _tag: "Missing" } });
+  const missing = KanbanStorageFailed.make({
+    operation: "decision",
+    reason: KanbanStorageReason.cases.Missing.make({}),
+  });
 
   const closureRow = SqlSchema.findOneOption({
     Request: Schema.String,
@@ -320,7 +347,7 @@ const make = Effect.gen(function* () {
   });
 
   const decoded = (execution: StoredExecution) =>
-    execution.workflowName === HumanDecisionExecution._tag
+    execution.workflowName === humanDecisionWorkflow
       ? Result.getSuccess(Schema.decodeUnknownResult(HumanDecisionPayload)(execution.payload))
       : Option.none();
 
@@ -337,13 +364,13 @@ const make = Effect.gen(function* () {
   const stateOf = (execution: StoredExecution) =>
     Effect.gen(function* () {
       const answer = yield* storedAnswer(execution.executionId);
-      if (Option.isSome(answer))
-        return { _tag: "Answered", answer: answer.value } satisfies DecisionState;
+      if (Option.isSome(answer)) return DecisionState.Answered({ answer: answer.value });
       const closed = yield* closure(execution.executionId);
-      if (Option.isSome(closed))
-        return { _tag: "Closed", reason: closed.value.reason } satisfies DecisionState;
+      if (Option.isSome(closed)) return DecisionState.Closed({ reason: closed.value.reason });
       const state: DecisionState =
-        execution.status === "interrupted" ? { _tag: "Closed", reason: null } : { _tag: "Pending" };
+        execution.status === "interrupted"
+          ? DecisionState.Closed({ reason: null })
+          : DecisionState.Pending();
       return state;
     });
 
@@ -379,14 +406,14 @@ const make = Effect.gen(function* () {
 
   /** Waits that are still open: not answered and not closed. */
   const open = () =>
-    stored(storage.pendingExecutions(HumanDecisionExecution._tag)).pipe(
+    stored(storage.pendingExecutions(humanDecisionWorkflow)).pipe(
       Effect.flatMap(requests),
       Effect.map((all) => all.filter((request) => Predicate.isTagged(request.state, "Pending"))),
     );
 
   /** A Goal instance's requests in any state, newest first. */
   const ofGoal = (sessionId: string, goalInstanceId: string) =>
-    stored(storage.workflowExecutions(HumanDecisionExecution._tag)).pipe(
+    stored(storage.workflowExecutions(humanDecisionWorkflow)).pipe(
       Effect.map((executions) =>
         executions.filter((execution) =>
           Option.exists(
@@ -449,7 +476,7 @@ const make = Effect.gen(function* () {
 
   // Finish closes that a crash interrupted, and close waits whose Goal was replaced meanwhile.
   yield* Effect.forEach(
-    yield* stored(storage.pendingExecutions(HumanDecisionExecution._tag)),
+    yield* stored(storage.pendingExecutions(humanDecisionWorkflow)),
     (execution) =>
       Effect.flatMap(closure(execution.executionId), (closed) =>
         Option.isNone(closed)
@@ -504,7 +531,7 @@ const make = Effect.gen(function* () {
                   cardId: input.cardId,
                   from: card.status,
                   to: "human_decision",
-                  detail: `card ${input.cardId} waits for a decision: ${input.kind._tag}`,
+                  detail: `card ${input.cardId} waits for a decision: ${decisionKindName(input.kind)}`,
                 },
                 input.author,
               );

@@ -3,7 +3,7 @@ import { Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { KanbanStorageFailed } from "../kanban/card-attempts.ts";
 import { DefectReporter } from "./defect-reporter.ts";
-import { superviseLoopStep, type LoopHealth } from "./loop-health.ts";
+import { LoopHealth, LoopStep, superviseLoopStep } from "./loop-health.ts";
 
 const storageFailed = KanbanStorageFailed.make({ operation: "card", reason: { _tag: "Missing" } });
 
@@ -36,19 +36,12 @@ describe("superviseLoopStep", () => {
       expect(yield* Ref.get(runs)).toBe(6);
       const outcome = yield* Fiber.join(fiber);
       expect(yield* Ref.get(runs)).toBe(6);
-      expect(outcome).toEqual({
-        _tag: "Stopped",
-        health: { _tag: "Exhausted", error: "KanbanStorageFailed" },
-      });
-      expect((yield* Ref.get(seen)).map((health) => health._tag)).toEqual([
-        "Retrying",
-        "Retrying",
-        "Retrying",
-        "Retrying",
-        "Retrying",
-        "Exhausted",
+      const exhausted = LoopHealth.cases.Exhausted.make({ error: "KanbanStorageFailed" });
+      expect(outcome).toEqual(LoopStep.Stopped({ health: exhausted }));
+      expect(yield* Ref.get(seen)).toEqual([
+        ...[1, 2, 3, 4, 5].map((attempt) => LoopHealth.cases.Retrying.make({ attempt, of: 5 })),
+        exhausted,
       ]);
-      expect((yield* Ref.get(seen))[4]).toEqual({ _tag: "Retrying", attempt: 5, of: 5 });
     }),
   );
 
@@ -66,8 +59,8 @@ describe("superviseLoopStep", () => {
         ),
       );
       yield* TestClock.adjust("1 minute");
-      expect(yield* Fiber.join(fiber)).toEqual({ _tag: "Continued", value: 3 });
-      expect((yield* Ref.get(seen)).at(-1)).toEqual({ _tag: "Healthy" });
+      expect(yield* Fiber.join(fiber)).toEqual(LoopStep.Continued({ value: 3 }));
+      expect((yield* Ref.get(seen)).at(-1)).toEqual(LoopHealth.cases.Healthy.make({}));
     }),
   );
 
@@ -86,9 +79,10 @@ describe("superviseLoopStep", () => {
           recent: Effect.succeed([]),
         }),
       );
-      expect(outcome).toEqual({ _tag: "Stopped", health: { _tag: "Defected" } });
+      const defected = LoopHealth.cases.Defected.make({});
+      expect(outcome).toEqual(LoopStep.Stopped({ health: defected }));
       expect(yield* Ref.get(runs)).toBe(1);
-      expect(yield* Ref.get(seen)).toEqual([{ _tag: "Defected" }]);
+      expect(yield* Ref.get(seen)).toEqual([defected]);
       expect(yield* Ref.get(reported)).toEqual(["loop step failed"]);
     }),
   );

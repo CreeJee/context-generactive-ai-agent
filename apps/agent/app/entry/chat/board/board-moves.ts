@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Data, Function as EffectFunction } from "effect";
 import type { BoardView, CardStatus } from "../../api";
 
 type BoardCard = BoardView["cards"][number];
@@ -26,21 +26,19 @@ export const boardColumns: readonly CardStatus[] = [
 ];
 
 /** What dropping a card on a column means. The server decides the card's status from it. */
-export type DropOutcome =
+export type DropOutcome = Data.TaggedEnum<{
   /** Same column: the card takes the place of the card it was dropped on. */
-  | { readonly _tag: "Reorder" }
+  Reorder: {};
   /**
    * Another column the person can ask for: hold, release or requeue. `lands` is where the card is
    * expected to go, shown as a request until the server's board arrives.
    */
-  | {
-      readonly _tag: "Send";
-      readonly intent: "Hold" | "Release" | "Requeue";
-      readonly lands: CardStatus;
-    }
+  Send: { readonly intent: "Hold" | "Release" | "Requeue"; readonly lands: CardStatus };
   /** An executing card is the orchestrator's; the person may leave a change request instead. */
-  | { readonly _tag: "AskChange" }
-  | { readonly _tag: "Refused"; readonly reason: string };
+  AskChange: {};
+  Refused: { readonly reason: string };
+}>;
+export const DropOutcome = Data.taggedEnum<DropOutcome>();
 
 export interface DropContext {
   /** The Plan's cards in Plan order, as the board shows them. */
@@ -50,7 +48,7 @@ export interface DropContext {
   readonly closed: boolean;
 }
 
-const refused = (reason: string): DropOutcome => ({ _tag: "Refused", reason });
+const refused = (reason: string): DropOutcome => DropOutcome.Refused({ reason });
 
 /** Whether the card's known dependencies are all done; unknown ids do not hold it back. */
 const dependenciesDone = (cards: readonly PlanStep[], card: PlanStep) => {
@@ -83,7 +81,7 @@ const send = (
   context: DropContext,
 ): DropOutcome =>
   context.kanbanActive
-    ? { _tag: "Send", intent, lands }
+    ? DropOutcome.Send({ intent, lands })
     : refused("칸반으로 실행할 때만 보류하거나 다시 대기열에 넣을 수 있어요.");
 
 /**
@@ -93,10 +91,10 @@ const send = (
  */
 function dropOutcomeBody(card: PlanStep, to: CardStatus, context: DropContext): DropOutcome {
   if (context.closed) return refused("완료된 계획은 바꿀 수 없어요.");
-  if (card.status === to) return { _tag: "Reorder" };
+  if (card.status === to) return DropOutcome.Reorder();
   switch (card.status) {
     case "in_progress":
-      return { _tag: "AskChange" };
+      return DropOutcome.AskChange();
     case "human_decision":
       return refused("판단 필요 카드는 판단에 답하면 옮겨져요.");
     case "verify":
@@ -124,10 +122,12 @@ export const dropOutcome: {
  * A request sent to the server and not answered yet. The board shows the card where it is expected
  * to land, marked as requested; the server's board then draws it where it really is.
  */
-export type PendingMove =
-  | { readonly _tag: "Status"; readonly cardId: string; readonly to: CardStatus }
+export type PendingMove = Data.TaggedEnum<{
+  Status: { readonly cardId: string; readonly to: CardStatus };
   /** `index` is the card's new place in the Plan. */
-  | { readonly _tag: "Order"; readonly cardId: string; readonly index: number };
+  Order: { readonly cardId: string; readonly index: number };
+}>;
+export const PendingMove = Data.taggedEnum<PendingMove>();
 
 /**
  * The cards the board shows: the server's, with the pending request applied. A refused request is
@@ -138,22 +138,20 @@ function withPendingBody(
   pending: PendingMove | null,
 ): readonly BoardCard[] {
   if (pending === null) return cards;
-  switch (pending._tag) {
-    case "Status":
-      return cards.map((entry) =>
-        entry.card.id === pending.cardId
-          ? { ...entry, card: { ...entry.card, status: pending.to } }
-          : entry,
-      );
-    case "Order": {
-      const from = cards.findIndex((entry) => entry.card.id === pending.cardId);
+  return PendingMove.$match(pending, {
+    Status: ({ cardId, to }) =>
+      cards.map((entry) =>
+        entry.card.id === cardId ? { ...entry, card: { ...entry.card, status: to } } : entry,
+      ),
+    Order: ({ cardId, index }) => {
+      const from = cards.findIndex((entry) => entry.card.id === cardId);
       if (from < 0) return cards;
       const next = [...cards];
       const [moved] = next.splice(from, 1);
-      if (moved !== undefined) next.splice(Math.min(pending.index, next.length), 0, moved);
+      if (moved !== undefined) next.splice(Math.min(index, next.length), 0, moved);
       return next;
-    }
-  }
+    },
+  });
 }
 export const withPending: {
   (pending: PendingMove | null): (cards: readonly BoardCard[]) => readonly BoardCard[];

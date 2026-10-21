@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import { Base64, Hex } from "effect/encoding";
 import { describe, expect, test } from "vite-plus/test";
 import {
@@ -7,12 +7,16 @@ import {
   canonicalJson,
   compareVersions,
   releaseAssetName,
+  ReleaseRejectedReason,
+  ReleaseSigningFailedReason,
   signReleaseManifest,
   verifyManifestSignature,
   type ReleaseManifest,
   type ReleaseRejected,
   type ReleaseSigningFailed,
 } from "./release-contract";
+
+const rejected = ReleaseRejectedReason.cases;
 
 const pem = (label: "PUBLIC KEY" | "PRIVATE KEY", der: Uint8Array) =>
   `-----BEGIN ${label}-----\n${Base64.encode(der).replace(/.{64}/g, "$&\n")}\n-----END ${label}-----\n`;
@@ -81,19 +85,18 @@ const options = {
 
 const trusted = { "release-2026": keys.publicKey };
 
+/** Why the step failed: the rejection or signing reason, or the schema error itself. */
 const rejection = <A>(
   effect: Effect.Effect<A, ReleaseRejected | ReleaseSigningFailed | Schema.SchemaError>,
 ) =>
   Effect.flip(effect).pipe(
-    Effect.map((error) => {
-      switch (error._tag) {
-        case "SchemaError":
-          return error._tag;
-        case "ReleaseRejected":
-        case "ReleaseSigningFailed":
-          return error.reason._tag;
-      }
-    }),
+    Effect.map((error) =>
+      Match.valueTags(error, {
+        SchemaError: (error) => error,
+        ReleaseRejected: ({ reason }) => reason,
+        ReleaseSigningFailed: ({ reason }) => reason,
+      }),
+    ),
   );
 
 describe("release contract", () => {
@@ -143,20 +146,24 @@ describe("release contract", () => {
           yield* rejection(
             verifyManifestSignature(value, { ...signature, signature: encoded }, trusted),
           ),
-        ).toBe("InvalidSignature");
+        ).toEqual(rejected.InvalidSignature.make({}));
     }),
   );
 
   it.effect("rejects malformed PEM keys without accepting a release", () =>
     Effect.gen(function* () {
-      expect(yield* rejection(signReleaseManifest(manifest(), "release-2026", "invalid PEM"))).toBe(
-        "InvalidKey",
-      );
       expect(
-        yield* rejection(
-          acceptRelease(yield* signed(manifest()), { "release-2026": "invalid PEM" }, options),
+        ReleaseSigningFailedReason.guards.InvalidKey(
+          yield* rejection(signReleaseManifest(manifest(), "release-2026", "invalid PEM")),
         ),
-      ).toBe("InvalidKey");
+      ).toBe(true);
+      expect(
+        ReleaseRejectedReason.guards.InvalidKey(
+          yield* rejection(
+            acceptRelease(yield* signed(manifest()), { "release-2026": "invalid PEM" }, options),
+          ),
+        ),
+      ).toBe(true);
     }),
   );
 
@@ -171,8 +178,10 @@ describe("release contract", () => {
             options,
           ),
         ),
-      ).toBe("InvalidSignature");
-      expect(yield* rejection(acceptRelease(envelope, {}, options))).toBe("UntrustedKey");
+      ).toEqual(rejected.InvalidSignature.make({}));
+      expect(yield* rejection(acceptRelease(envelope, {}, options))).toEqual(
+        rejected.UntrustedKey.make({ keyId: "release-2026" }),
+      );
     }),
   );
 
@@ -180,7 +189,7 @@ describe("release contract", () => {
     Effect.gen(function* () {
       expect(
         yield* rejection(acceptRelease(yield* signed(manifest("1.0.0")), trusted, options)),
-      ).toBe("NotNewer");
+      ).toEqual(rejected.NotNewer.make({}));
       expect(
         yield* rejection(
           acceptRelease(
@@ -189,12 +198,12 @@ describe("release contract", () => {
             options,
           ),
         ),
-      ).toBe("UpdaterTooOld");
+      ).toEqual(rejected.UpdaterTooOld.make({ minimum: "2.0.0" }));
       expect(
         yield* rejection(
           acceptRelease(yield* signed({ ...manifest(), channel: "prerelease" }), trusted, options),
         ),
-      ).toBe("PrereleaseDisabled");
+      ).toEqual(rejected.PrereleaseDisabled.make({}));
       const base = manifest();
       expect(
         yield* rejection(
@@ -207,7 +216,7 @@ describe("release contract", () => {
             options,
           ),
         ),
-      ).toBe("AssetNameMismatch");
+      ).toEqual(rejected.AssetNameMismatch.make({ target: "darwin-arm64" }));
     }),
   );
 

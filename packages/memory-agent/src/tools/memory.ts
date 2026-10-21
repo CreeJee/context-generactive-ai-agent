@@ -73,10 +73,12 @@ const UsePromotedMemoryInput = Schema.Struct({
   }),
 });
 
+const NotRetrieved = Schema.TaggedStruct("NotRetrieved", {});
+
 export class PromotedMemoryUseRejected extends Schema.TaggedError<PromotedMemoryUseRejected>()(
   "PromotedMemoryUseRejected",
   {
-    reason: Schema.TaggedStruct("NotRetrieved", {}),
+    reason: NotRetrieved,
     message: Schema.Literal("Only promoted memories retrieved in this run can be used"),
   },
 ) {}
@@ -255,7 +257,7 @@ function createMemoryToolsBody(
         const { memoryNodeIds: ids } = yield* Schema.decodeEffect(UsePromotedMemoryInput)(input);
         if (ids.some((id) => !MutableHashSet.has(retrieved, id)))
           return yield* PromotedMemoryUseRejected.make({
-            reason: { _tag: "NotRetrieved" },
+            reason: NotRetrieved.make({}),
             message: "Only promoted memories retrieved in this run can be used",
           });
         usedDraft = EffectArray.dedupe(ids);

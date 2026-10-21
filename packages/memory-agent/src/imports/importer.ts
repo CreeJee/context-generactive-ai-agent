@@ -40,7 +40,7 @@ import {
   ImportRpcs,
   ImportWorkerFailed,
   type ImportWorkerSetup,
-  type PassEvent,
+  PassEvent,
 } from "./worker-protocol.ts";
 
 export { ImportWorkerFailed } from "./worker-protocol.ts";
@@ -280,25 +280,24 @@ const make = (watching: boolean, home: string) =>
         current.run.pipe(
           Stream.runFoldEffect(
             () => Option.none<PassProgress>(),
-            (outcome, event) => {
-              switch (event._tag) {
-                case "Progress":
-                  return Effect.as(
+            (outcome, event) =>
+              PassEvent.match(event, {
+                Progress: (progress) =>
+                  Effect.as(
                     Effect.sync(() => {
-                      activity = { status: "running", startedAt, ...progressOf(event) };
+                      activity = { status: "running", startedAt, ...progressOf(progress) };
                       events.publishGlobal("imports");
                     }),
                     outcome,
-                  );
-                case "Finished":
-                  return Effect.as(
+                  ),
+                Finished: (finished) =>
+                  Effect.as(
                     Effect.sync(() => {
-                      latestCounts = event.counts;
+                      latestCounts = finished.counts;
                     }),
-                    Option.some(progressOf(event)),
-                  );
-              }
-            },
+                    Option.some(progressOf(finished)),
+                  ),
+              }),
           ),
           // The worker ends every pass it answers with `Finished`; a stream without one was cut off.
           Effect.flatMap(

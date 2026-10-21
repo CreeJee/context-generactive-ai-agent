@@ -2,14 +2,14 @@ import { Effect, MutableHashMap, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { EvidencePage } from "./nodes.ts";
 
+const ResultPageReadReason = Schema.TaggedUnion({
+  ReadFailed: { cause: Schema.Defect() },
+  Changed: {},
+});
+
 export class ResultPageReadFailed extends Schema.TaggedError<ResultPageReadFailed>()(
   "ResultPageReadFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("ReadFailed", { cause: Schema.Defect() }),
-      Schema.TaggedStruct("Changed", {}),
-    ]),
-  },
+  { reason: ResultPageReadReason },
 ) {}
 
 const Metadata = Schema.Struct({ size: Schema.Finite });
@@ -32,7 +32,7 @@ interface TextIndex {
 export const createResultPageReader = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const failed = (cause: unknown) =>
-    ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } });
+    ResultPageReadFailed.make({ reason: ResultPageReadReason.cases.ReadFailed.make({ cause }) });
   const metadata = (id: string, projectId: string, sessionId: string) =>
     sql`SELECT length(CAST(text AS BLOB)) AS size FROM nodes
       WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
@@ -60,7 +60,9 @@ export const createResultPageReader = Effect.gen(function* () {
     if (row === undefined) return null;
     const { bytes } = yield* Schema.decodeUnknownEffect(Block)(row).pipe(
       Effect.mapError((cause) =>
-        ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } }),
+        ResultPageReadFailed.make({
+          reason: ResultPageReadReason.cases.ReadFailed.make({ cause }),
+        }),
       ),
     );
     let end = Math.min(blockBytes, bytes.length);
@@ -69,7 +71,10 @@ export const createResultPageReader = Effect.gen(function* () {
     const text = yield* Effect.try({
       try: () =>
         new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, end)),
-      catch: (cause) => ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } }),
+      catch: (cause) =>
+        ResultPageReadFailed.make({
+          reason: ResultPageReadReason.cases.ReadFailed.make({ cause }),
+        }),
     });
     return { text, bytes: end };
   });
@@ -85,7 +90,9 @@ export const createResultPageReader = Effect.gen(function* () {
     if (row === undefined) return null;
     const { size } = yield* Schema.decodeUnknownEffect(Metadata)(row).pipe(
       Effect.mapError((cause) =>
-        ResultPageReadFailed.make({ reason: { _tag: "ReadFailed", cause } }),
+        ResultPageReadFailed.make({
+          reason: ResultPageReadReason.cases.ReadFailed.make({ cause }),
+        }),
       ),
     );
     let index = Option.getOrUndefined(MutableHashMap.get(cache, id));
@@ -102,7 +109,9 @@ export const createResultPageReader = Effect.gen(function* () {
         yield* Effect.yieldNow;
       }
       if (generation !== started)
-        return yield* ResultPageReadFailed.make({ reason: { _tag: "Changed" } });
+        return yield* ResultPageReadFailed.make({
+          reason: ResultPageReadReason.cases.Changed.make({}),
+        });
       index = { size, length, points };
       MutableHashMap.set(cache, id, index);
       for (const old of MutableHashMap.keys(cache)) {
@@ -130,7 +139,9 @@ export const createResultPageReader = Effect.gen(function* () {
     if (start + end - begin < index.length && end - begin > 1 && last >= 0xd800 && last <= 0xdbff)
       end--;
     if (generation !== started)
-      return yield* ResultPageReadFailed.make({ reason: { _tag: "Changed" } });
+      return yield* ResultPageReadFailed.make({
+        reason: ResultPageReadReason.cases.Changed.make({}),
+      });
     return {
       id,
       kind: "tool_result",

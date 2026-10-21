@@ -11,15 +11,15 @@ import { ActiveProvider } from "../providers/active-provider.ts";
 import { DefectReporter } from "../runtime/defect-reporter.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
-import type { LoopHealth } from "../runtime/loop-health.ts";
+import { LoopHealth } from "../runtime/loop-health.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
-import type {
+import {
   BundleEvent,
-  BundleRun,
-  BundleSectionStatus,
-  BundleText,
-  ReportBundle,
+  type BundleRun,
+  type BundleSectionStatus,
+  type BundleText,
+  type ReportBundle,
 } from "./bundle-contract.ts";
 
 /** How much of a session a bundle holds (decided 2026-10-18). */
@@ -81,18 +81,12 @@ const CardRow = Schema.Struct({
 
 const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
 
-export const loopHealthText = (health: LoopHealth) => {
-  switch (health._tag) {
-    case "Healthy":
-      return "Healthy";
-    case "Retrying":
-      return `Retrying ${health.attempt}/${health.of}`;
-    case "Exhausted":
-      return `Exhausted (${health.error})`;
-    case "Defected":
-      return "Defected";
-  }
-};
+export const loopHealthText = LoopHealth.match({
+  Healthy: () => "Healthy",
+  Retrying: ({ attempt, of }) => `Retrying ${attempt}/${of}`,
+  Exhausted: ({ error }) => `Exhausted (${error})`,
+  Defected: () => "Defected",
+});
 
 /** A text as read from storage: its excerpt and how long the whole was. */
 interface Excerpt {
@@ -347,38 +341,40 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       switch (row.kind) {
         case "user":
         case "assistant":
-          events.push({ _tag: "Message", role: row.kind, at: row.created_at, text });
+          events.push(BundleEvent.cases.Message.make({ role: row.kind, at: row.created_at, text }));
           return;
         case "tool_call":
           callSeq += 1;
           if (row.tool_call_id !== null) calls.set(row.tool_call_id, events.length);
-          events.push({
-            _tag: "ToolCall",
-            seq: callSeq,
-            name: row.tool_name,
-            at: row.created_at,
-            input: text,
-            result: null,
-          });
+          events.push(
+            BundleEvent.cases.ToolCall.make({
+              seq: callSeq,
+              name: row.tool_name,
+              at: row.created_at,
+              input: text,
+              result: null,
+            }),
+          );
           return;
         case "tool_result": {
           const result = { ok: row.ok === null ? null : row.ok !== 0, at: row.created_at, text };
           const at = row.tool_call_id === null ? undefined : calls.get(row.tool_call_id);
           const call = at === undefined ? undefined : events[at];
-          if (call?._tag === "ToolCall") {
+          if (BundleEvent.guards.ToolCall(call)) {
             events[at ?? 0] = { ...call, result };
             return;
           }
           // The call itself fell outside the bundle.
           callSeq += 1;
-          events.push({
-            _tag: "ToolCall",
-            seq: callSeq,
-            name: row.tool_name,
-            at: row.created_at,
-            input: { text: "", cut: true },
-            result,
-          });
+          events.push(
+            BundleEvent.cases.ToolCall.make({
+              seq: callSeq,
+              name: row.tool_name,
+              at: row.created_at,
+              input: { text: "", cut: true },
+              result,
+            }),
+          );
           return;
         }
       }
@@ -416,27 +412,27 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
             const extra: BundleEvent[] = [
               ...approvals
                 .filter((approval) => approval.run_id === run.run_id)
-                .map((approval): BundleEvent => ({
-                  _tag: "Approval",
-                  status: approval.status,
-                  tool: approval.tool,
-                  approved: approval.approved === null ? null : approval.approved !== 0,
-                  requestedAt: iso(approval.requested_at),
-                  resolvedAt: approval.resolved_at === null ? null : iso(approval.resolved_at),
-                })),
+                .map((approval): BundleEvent =>
+                  BundleEvent.cases.Approval.make({
+                    status: approval.status,
+                    tool: approval.tool,
+                    approved: approval.approved === null ? null : approval.approved !== 0,
+                    requestedAt: iso(approval.requested_at),
+                    resolvedAt: approval.resolved_at === null ? null : iso(approval.resolved_at),
+                  }),
+                ),
               ...(yield* Effect.forEach(
                 tasks.filter((task) => task.parentRunId === run.run_id),
                 (task) =>
                   Effect.map(ref(task.id), (taskRef): BundleEvent => {
                     const call = events[calls.get(task.parentToolCallId) ?? -1];
-                    return {
-                      _tag: "Trace",
+                    return BundleEvent.cases.Trace.make({
                       ref: taskRef,
                       status: task.status,
-                      parentToolSeq: call?._tag === "ToolCall" ? call.seq : null,
+                      parentToolSeq: BundleEvent.guards.ToolCall(call) ? call.seq : null,
                       failure: task.latestFailure?.reason._tag ?? null,
                       updatedAt: iso(task.updatedAt),
-                    };
+                    });
                   }),
               )),
             ];
@@ -510,14 +506,9 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
   } satisfies ReportBundle;
 });
 
-const timeOf = (event: BundleEvent) => {
-  switch (event._tag) {
-    case "Message":
-    case "ToolCall":
-      return event.at;
-    case "Approval":
-      return event.requestedAt;
-    case "Trace":
-      return event.updatedAt;
-  }
-};
+const timeOf = BundleEvent.match({
+  Message: ({ at }) => at,
+  ToolCall: ({ at }) => at,
+  Approval: ({ requestedAt }) => requestedAt,
+  Trace: ({ updatedAt }) => updatedAt,
+});

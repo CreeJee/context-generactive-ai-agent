@@ -79,36 +79,33 @@ export class OpenAICompatibleFailed extends Schema.TaggedError<OpenAICompatibleF
  * Why this app refused or failed a request the compatible SDK sent through its fetch or stream.
  * It is thrown back to the SDK, so its message is fixed text without URLs, headers or payloads.
  */
+export const CompatibleRunRequestFailedReason = Schema.TaggedUnion({
+  /** The run was released before the request went out. */
+  Cancelled: {},
+  KeychainUnavailable: {},
+  ContextLimitExceeded: {},
+  ToolCallingDisabled: {},
+  /** fetch failed; `codes` are the Node/undici transport codes along its cause chain. */
+  Transport: { codes: Schema.Array(Schema.String) },
+});
 export class CompatibleRunRequestFailed extends Schema.TaggedError<CompatibleRunRequestFailed>()(
   "CompatibleRunRequestFailed",
   {
-    reason: Schema.Union([
-      /** The run was released before the request went out. */
-      Schema.TaggedStruct("Cancelled", {}),
-      Schema.TaggedStruct("KeychainUnavailable", {}),
-      Schema.TaggedStruct("ContextLimitExceeded", {}),
-      Schema.TaggedStruct("ToolCallingDisabled", {}),
-      /** fetch failed; `codes` are the Node/undici transport codes along its cause chain. */
-      Schema.TaggedStruct("Transport", { codes: Schema.Array(Schema.String) }),
-    ]),
+    reason: CompatibleRunRequestFailedReason,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
-    switch (this.reason._tag) {
-      case "Cancelled":
-        return "Compatible run cancelled";
-      case "KeychainUnavailable":
-        return "Compatible keychain unavailable";
-      case "ContextLimitExceeded":
-        return "Compatible context limit exceeded";
-      case "ToolCallingDisabled":
-        return "Compatible tool calling is disabled";
-      case "Transport":
-        return `Compatible API request failed: ${
-          this.reason.codes.length > 0 ? this.reason.codes.join(" <- ") : "transport failure"
-        }`;
-    }
+    return CompatibleRunRequestFailedReason.match(this.reason, {
+      Cancelled: () => "Compatible run cancelled",
+      KeychainUnavailable: () => "Compatible keychain unavailable",
+      ContextLimitExceeded: () => "Compatible context limit exceeded",
+      ToolCallingDisabled: () => "Compatible tool calling is disabled",
+      Transport: (reason) =>
+        `Compatible API request failed: ${
+          reason.codes.length > 0 ? reason.codes.join(" <- ") : "transport failure"
+        }`,
+    });
   }
 }
 export interface CompatibleKeyStore {
@@ -485,7 +482,7 @@ function makeOpenAICompatibleSettingsBody(
       Effect.scoped,
       Effect.timeout(15_000),
       Effect.mapError((failure) =>
-        failure._tag === "OpenAICompatibleFailed" && failure.operation === "missing"
+        Schema.is(OpenAICompatibleFailed)(failure) && failure.operation === "missing"
           ? failure
           : new OpenAICompatibleFailed({ operation }),
       ),
@@ -727,10 +724,12 @@ function makeOpenAICompatibleSettingsBody(
             Effect.gen(function* () {
               const credential = yield* nativePromise(() => pinnedKey);
               if (runAbort.signal.aborted)
-                return yield* new CompatibleRunRequestFailed({ reason: { _tag: "Cancelled" } });
+                return yield* new CompatibleRunRequestFailed({
+                  reason: CompatibleRunRequestFailedReason.cases.Cancelled.make({}),
+                });
               if (credential.failed)
                 return yield* new CompatibleRunRequestFailed({
-                  reason: { _tag: "KeychainUnavailable" },
+                  reason: CompatibleRunRequestFailedReason.cases.KeychainUnavailable.make({}),
                 });
               const key = credential.value;
               const headers = new Headers(init?.headers);
@@ -784,7 +783,7 @@ function makeOpenAICompatibleSettingsBody(
                 settings.contextWindow
               )
                 return yield* new CompatibleRunRequestFailed({
-                  reason: { _tag: "ContextLimitExceeded" },
+                  reason: CompatibleRunRequestFailedReason.cases.ContextLimitExceeded.make({}),
                 });
               return yield* Effect.gen(function* () {
                 const signal = isTruthy(init?.signal)
@@ -821,7 +820,7 @@ function makeOpenAICompatibleSettingsBody(
                       current = current.cause;
                     }
                     const error = new CompatibleRunRequestFailed({
-                      reason: { _tag: "Transport", codes },
+                      reason: CompatibleRunRequestFailedReason.cases.Transport.make({ codes }),
                       cause,
                     });
                     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
@@ -880,7 +879,7 @@ function makeOpenAICompatibleSettingsBody(
                   const chunk = next.value;
                   if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
                     return yield* new CompatibleRunRequestFailed({
-                      reason: { _tag: "ToolCallingDisabled" },
+                      reason: CompatibleRunRequestFailedReason.cases.ToolCallingDisabled.make({}),
                     });
                   yield* observe(chunk);
                   const output: typeof chunk =

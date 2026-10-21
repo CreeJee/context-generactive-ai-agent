@@ -24,7 +24,7 @@ import {
   OwnerWorkflowStorage,
   OwnerWorkflowStorageError,
   ownerWorkflowStorageLayer,
-  type StoredWorkflowResult,
+  StoredWorkflowResult,
 } from "./owner-workflow-storage.ts";
 
 export class OwnerWorkflowEngineError extends Schema.TaggedError<OwnerWorkflowEngineError>()(
@@ -112,11 +112,9 @@ const encodeResult = (
   result: Workflow.Result<unknown, unknown>,
 ): StoredWorkflowResult =>
   Match.valueTags(result, {
-    Suspended: (): StoredWorkflowResult => ({ _tag: "Suspended" }),
-    Complete: ({ exit }): StoredWorkflowResult => ({
-      _tag: "Complete",
-      exit: encodeExit(owner, exit),
-    }),
+    Suspended: (): StoredWorkflowResult => StoredWorkflowResult.cases.Suspended.make({}),
+    Complete: ({ exit }): StoredWorkflowResult =>
+      StoredWorkflowResult.cases.Complete.make({ exit: encodeExit(owner, exit) }),
   });
 
 const decodeResult = (
@@ -418,7 +416,7 @@ const makeEngine = Effect.gen(function* () {
             attempt,
             // executeEncoded already applies the Activity's concrete success/error codecs.
             // Persist its Exit shape; makeUnsafe performs the single typed decode on return/replay.
-            { _tag: "Complete", exit: encodeEncodedExit(result.exit) },
+            StoredWorkflowResult.cases.Complete.make({ exit: encodeEncodedExit(result.exit) }),
           ),
         );
       }

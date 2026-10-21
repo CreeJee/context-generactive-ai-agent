@@ -15,8 +15,8 @@ import {
   uncertainCardRun,
   type KanbanFixture,
 } from "../testing/kanban.ts";
-import type { CardAgentOutcome, CardAgentRun } from "./card-agent.ts";
-import { CardAttempts } from "./card-attempts.ts";
+import { CardAgentOutcome, type CardAgentRun } from "./card-agent.ts";
+import { CardAttemptOutcome, CardAttempts } from "./card-attempts.ts";
 
 type Owner = Layer.Success<ReturnType<typeof kanbanOwner>>;
 
@@ -33,7 +33,7 @@ const openOwner = (
         Effect.provideContext(effect, context),
   );
 
-const finished: CardAgentOutcome = { _tag: "Finished", report: "done" };
+const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
 
 /** Node services for a test, built in its scope. */
 const withNode = <A, E, R>(program: Effect.Effect<A, E, R>) =>
@@ -81,8 +81,8 @@ it.live(
 
           yield* Deferred.succeed(release, undefined);
           const attempts = yield* CardAttempts;
-          expect((yield* attempts.awaitOutcome(a))._tag).toBe("Completed");
-          expect((yield* attempts.awaitOutcome(b))._tag).toBe("Completed");
+          expect(CardAttemptOutcome.guards.Completed(yield* attempts.awaitOutcome(a))).toBe(true);
+          expect(CardAttemptOutcome.guards.Completed(yield* attempts.awaitOutcome(b))).toBe(true);
         }),
       );
     }).pipe(withNode),
@@ -154,7 +154,8 @@ it.live(
 
       expect(yield* Deferred.await(continued)).toBe(true);
       expect(yield* Ref.get(writes)).toBe(1);
-      expect(outcome).toMatchObject({ _tag: "Completed", report: "done" });
+      expect(CardAttemptOutcome.guards.Completed(outcome)).toBe(true);
+      expect(outcome).toMatchObject({ report: "done" });
       expect(board.goalInstanceId.length).toBeGreaterThan(0);
     }).pipe(withNode),
 );
@@ -179,7 +180,7 @@ it.live("does not continue past an earlier run with an uncertain tool", () =>
         return yield* (yield* CardAttempts).awaitOutcome(yield* assignCard(board, "a"));
       }),
     );
-    expect(outcome).toEqual({ _tag: "Fenced", runId: "run-0" });
+    expect(outcome).toEqual(CardAttemptOutcome.cases.Fenced.make({ runId: "run-0" }));
     expect(yield* Ref.get(calls)).toBe(0);
   }).pipe(withNode),
 );
@@ -215,7 +216,7 @@ it.live("completes an earlier Goal instance's card as Superseded without running
         return yield* (yield* CardAttempts).awaitOutcome(b);
       }),
     );
-    expect(outcome).toEqual({ _tag: "Superseded" });
+    expect(outcome).toEqual(CardAttemptOutcome.cases.Superseded.make({}));
     expect(yield* Ref.get(ran)).toEqual(["a"]);
   }).pipe(withNode),
 );

@@ -3,12 +3,12 @@ import { stepProgressStatus, type StepProgressStatus } from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
 /** A dependency defect the model can fix by revising the Plan's step ids or dependsOn. */
-export const PlanDependencyIssue = Schema.Union([
-  Schema.TaggedStruct("DuplicateStepId", { stepId: Schema.String }),
-  Schema.TaggedStruct("UnknownDependency", { stepId: Schema.String, dependsOn: Schema.String }),
-  Schema.TaggedStruct("SelfDependency", { stepId: Schema.String }),
-  Schema.TaggedStruct("DependencyCycle", { cycle: Schema.Array(Schema.String) }),
-]);
+export const PlanDependencyIssue = Schema.TaggedUnion({
+  DuplicateStepId: { stepId: Schema.String },
+  UnknownDependency: { stepId: Schema.String, dependsOn: Schema.String },
+  SelfDependency: { stepId: Schema.String },
+  DependencyCycle: { cycle: Schema.Array(Schema.String) },
+});
 export type PlanDependencyIssue = typeof PlanDependencyIssue.Type;
 
 export class PlanDependenciesRejected extends Schema.TaggedError<PlanDependenciesRejected>()(
@@ -31,14 +31,18 @@ export function planDependencyIssues(
   const issues: PlanDependencyIssue[] = [];
   const seen = new Set<string>();
   for (const step of steps) {
-    if (seen.has(step.id)) issues.push({ _tag: "DuplicateStepId", stepId: step.id });
+    if (seen.has(step.id))
+      issues.push(PlanDependencyIssue.cases.DuplicateStepId.make({ stepId: step.id }));
     seen.add(step.id);
   }
   for (const step of steps)
     for (const dependsOn of EffectArray.dedupe(step.dependsOn)) {
-      if (dependsOn === step.id) issues.push({ _tag: "SelfDependency", stepId: step.id });
+      if (dependsOn === step.id)
+        issues.push(PlanDependencyIssue.cases.SelfDependency.make({ stepId: step.id }));
       else if (!seen.has(dependsOn))
-        issues.push({ _tag: "UnknownDependency", stepId: step.id, dependsOn });
+        issues.push(
+          PlanDependencyIssue.cases.UnknownDependency.make({ stepId: step.id, dependsOn }),
+        );
     }
 
   const edges = knownDependencies(steps);
@@ -50,7 +54,10 @@ export function planDependencyIssues(
     path.push(id);
     for (const next of dependencies.get(id) ?? []) {
       const index = path.indexOf(next);
-      if (index >= 0) issues.push({ _tag: "DependencyCycle", cycle: [...path.slice(index), next] });
+      if (index >= 0)
+        issues.push(
+          PlanDependencyIssue.cases.DependencyCycle.make({ cycle: [...path.slice(index), next] }),
+        );
       else if (!finished.has(next)) visit(next);
     }
     path.pop();

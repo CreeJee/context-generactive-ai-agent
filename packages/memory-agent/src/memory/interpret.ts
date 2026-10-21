@@ -4,8 +4,9 @@ import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Semaphore } fr
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { chat } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -174,9 +175,12 @@ const make = Effect.gen(function* () {
         .pipe(
           // Matches are only extra context for the model; without them it sees recent statements.
           Effect.catch((error) =>
-            Effect.as(Effect.logDebug("interpret_candidates_unavailable", { error: error._tag }), {
-              matches: [],
-            }),
+            Effect.as(
+              Effect.logDebug("interpret_candidates_unavailable", {
+                error: failureTags(Cause.fail(error)),
+              }),
+              { matches: [] },
+            ),
           ),
         );
       const matched = (yield* Effect.forEach(found.matches, (match) => nodes.get(match.id))).filter(
@@ -369,8 +373,10 @@ const make = Effect.gen(function* () {
         interpreted += yield* interpretBatch(batch, selection).pipe(
           Effect.catch((error) =>
             Effect.gen(function* () {
-              const reason =
-                error._tag === "InterpretationFailed" ? error.reason : "interpret_failed";
+              const reason = Match.value(error).pipe(
+                Match.tag("InterpretationFailed", (failure) => failure.reason),
+                Match.orElse(() => "interpret_failed"),
+              );
               const failedAt = yield* nowIso;
               yield* Effect.forEach(
                 batch,

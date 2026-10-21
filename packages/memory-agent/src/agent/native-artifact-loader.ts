@@ -4,6 +4,7 @@ const { join } = platformPath;
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { Effect, FileSystem, ManagedRuntime, Option, Predicate, Schema } from "effect";
 import type * as NativeArtifact from "./native-artifact-entry.ts";
+import { errorTag } from "../tools/failure.ts";
 
 // Stateless official host service; acquisitions below attach cleanup to caller Scope.
 const filesystemRuntime = ManagedRuntime.make(NodeFileSystem.layer);
@@ -113,13 +114,13 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
       .pipe(Effect.mapError(stagingError)),
     // Best effort: a staging directory left behind holds only verified bytes.
     (directory) =>
-      fs
-        .remove(directory, { recursive: true, force: true })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Native artifact staging cleanup failed", { error: error._tag }),
-          ),
+      fs.remove(directory, { recursive: true, force: true }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Native artifact staging cleanup failed", {
+            error: errorTag(error),
+          }),
         ),
+      ),
   );
   const file = join(directory, "artifact.mjs");
   yield* fs.writeFile(file, bytes, { flag: "wx", mode: 0o400 }).pipe(Effect.mapError(stagingError));

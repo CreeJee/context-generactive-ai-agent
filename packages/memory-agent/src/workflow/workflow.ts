@@ -31,6 +31,7 @@ import {
 } from "./card.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import {
+  BoardEditResult,
   planBoardEdit,
   planCardHold,
   planCardTransition,
@@ -1287,7 +1288,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   plan: { ...plan, updatedAt: now },
                   ledger: [...current.ledger, event(current, "board_updated", detail)],
                 };
-                return { _tag: "Applied" as const, state: yield* save(sessionId, next, author) };
+                return BoardEditResult.Applied({ state: yield* save(sessionId, next, author) });
               }),
               Request: Effect.fnUntraced(function* ({ cardId, change }) {
                 const changeJson = yield* encodeChange(change);
@@ -1308,7 +1309,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   reason: null,
                   createdAt: now,
                 };
-                return { _tag: "Requested" as const, request };
+                return BoardEditResult.Requested({ request });
               }),
             });
           }),

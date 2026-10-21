@@ -18,24 +18,25 @@ export class DatabaseOpenError extends Schema.TaggedError<DatabaseOpenError>()(
  * reader checks, which run before any Effect owns the connection; `make` carries it as the cause of
  * `DatabaseOpenError`. A failing SQL step keeps SQLite's own error.
  */
+export const DatabaseSchemaRejectedReason = Schema.TaggedUnion({
+  /** Migration was asked to run inside a transaction it cannot own. */
+  InsideTransaction: {},
+  /** The file was written by a newer build. */
+  NewerThanBuild: { actual: Schema.Finite, supported: Schema.Finite },
+  /** A reader found a schema the owning app has not migrated yet. */
+  MigrationPending: { actual: Schema.Finite, supported: Schema.Finite },
+  MetadataMismatch: {},
+  /** The goal history rebuild changed rows it must preserve. */
+  PreservedRowsChanged: {},
+  InvalidForeignKeys: {},
+});
+
 export class DatabaseSchemaRejected extends Schema.TaggedError<DatabaseSchemaRejected>()(
   "DatabaseSchemaRejected",
-  {
-    reason: Schema.Union([
-      /** Migration was asked to run inside a transaction it cannot own. */
-      Schema.TaggedStruct("InsideTransaction", {}),
-      /** The file was written by a newer build. */
-      Schema.TaggedStruct("NewerThanBuild", { actual: Schema.Finite, supported: Schema.Finite }),
-      /** A reader found a schema the owning app has not migrated yet. */
-      Schema.TaggedStruct("MigrationPending", { actual: Schema.Finite, supported: Schema.Finite }),
-      Schema.TaggedStruct("MetadataMismatch", {}),
-      /** The goal history rebuild changed rows it must preserve. */
-      Schema.TaggedStruct("PreservedRowsChanged", {}),
-      Schema.TaggedStruct("InvalidForeignKeys", {}),
-    ]),
-  },
+  { reason: DatabaseSchemaRejectedReason },
 ) {}
 
+const schemaRejection = DatabaseSchemaRejectedReason.cases;
 const rejected = (reason: DatabaseSchemaRejected["reason"]) =>
   DatabaseSchemaRejected.make({ reason });
 
@@ -43,7 +44,7 @@ const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 
 /** Startup-only: call before handing this connection to any service or writer. */
 export function migrateDatabase(sqlite: DatabaseSync) {
-  if (sqlite.isTransaction) throw rejected({ _tag: "InsideTransaction" });
+  if (sqlite.isTransaction) throw rejected(schemaRejection.InsideTransaction.make({}));
   const foreignKeys = EffectFunction.flow(
     Schema.decodeUnknownResult(Schema.Struct({ foreign_keys: Schema.Finite })),
     Result.getOrThrow,
@@ -58,7 +59,9 @@ export function migrateDatabase(sqlite: DatabaseSync) {
     // Read the authority only after taking the migration lock: another starter may have completed it.
     const applied = databaseSchemaVersion(sqlite);
     if (applied > migrations.length)
-      throw rejected({ _tag: "NewerThanBuild", actual: applied, supported: migrations.length });
+      throw rejected(
+        schemaRejection.NewerThanBuild.make({ actual: applied, supported: migrations.length }),
+      );
     const snapshot = () =>
       goalHistoryMigration.preservedTables.map((table) =>
         JSON.stringify(
@@ -91,7 +94,7 @@ export function migrateDatabase(sqlite: DatabaseSync) {
       recorded.length !== applied ||
       recorded.some((row, index) => row.migration_id !== index + 1)
     )
-      throw rejected({ _tag: "MetadataMismatch" });
+      throw rejected(schemaRejection.MetadataMismatch.make({}));
     const loader = Effect.succeed(
       migrations.map(
         (step, index) =>
@@ -108,9 +111,9 @@ export function migrateDatabase(sqlite: DatabaseSync) {
                 if (rebuild) {
                   const after = snapshot();
                   if (before.some((rows, table) => rows !== after[table]))
-                    throw rejected({ _tag: "PreservedRowsChanged" });
+                    throw rejected(schemaRejection.PreservedRowsChanged.make({}));
                   if (sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0)
-                    throw rejected({ _tag: "InvalidForeignKeys" });
+                    throw rejected(schemaRejection.InvalidForeignKeys.make({}));
                 }
                 sqlite.exec(`PRAGMA user_version = ${index + 1}`);
               }),
@@ -127,7 +130,7 @@ export function migrateDatabase(sqlite: DatabaseSync) {
       applied < migrations.length &&
       sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0
     )
-      throw rejected({ _tag: "InvalidForeignKeys" });
+      throw rejected(schemaRejection.InvalidForeignKeys.make({}));
     assertDatabaseSchema(sqlite);
     sqlite.exec("COMMIT");
     started = false;
@@ -149,9 +152,9 @@ export const databaseSchemaVersion = (sqlite: DatabaseSync) =>
 export function assertDatabaseSchema(sqlite: DatabaseSync) {
   const actual = databaseSchemaVersion(sqlite);
   if (actual > migrations.length)
-    throw rejected({ _tag: "NewerThanBuild", actual, supported: migrations.length });
+    throw rejected(schemaRejection.NewerThanBuild.make({ actual, supported: migrations.length }));
   if (actual < migrations.length)
-    throw rejected({ _tag: "MigrationPending", actual, supported: migrations.length });
+    throw rejected(schemaRejection.MigrationPending.make({ actual, supported: migrations.length }));
   // A version cursor cannot make a missing runtime contract safe; detect damage before execution.
   sqlite.prepare("SELECT run_id,thread_id,status FROM chat_runs LIMIT 0");
   sqlite.prepare(

@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Array as EffectArray } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
   Cause,
@@ -24,7 +25,7 @@ import {
   ArtifactKind,
   ArtifactLocator,
   AttemptFailure,
-  type AttemptFailureReason,
+  AttemptFailureReason,
   type AttemptFailureStage,
   AttemptStatus,
   EvidenceVerification,
@@ -42,11 +43,13 @@ import {
 export const heartbeatIntervalMs = 10_000;
 export const heartbeatLostMs = 60_000;
 
+const ReadFailed = Schema.TaggedStruct("ReadFailed", {});
+
 export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>()(
   "WorkTraceReadFailed",
   {
     operation: Schema.Literals(["latest_cursor", "snapshot"]),
-    reason: Schema.TaggedStruct("ReadFailed", {}),
+    reason: ReadFailed,
     cause: Schema.Defect(),
   },
 ) {}
@@ -737,7 +740,10 @@ const make = Effect.gen(function* () {
         FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
         WHERE a.status IN ('queued', 'running', 'waiting', 'blocked')`,
     );
-    const failure: AttemptFailure = { reason: { _tag: "ServerRestarted" }, stage: "restart" };
+    const failure: AttemptFailure = {
+      reason: AttemptFailureReason.cases.ServerRestarted.make({}),
+      stage: "restart",
+    };
     const encodedFailure = yield* encodeFailure(failure);
     for (const row of attempts) {
       const uncertain = (yield* pendingToolsOf(row.id)).length > 0;
@@ -857,9 +863,7 @@ const make = Effect.gen(function* () {
             SET heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
             WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
         ),
-        Effect.catch((error) =>
-          Effect.logWarning("work_trace_heartbeat_not_recorded", { error: error._tag }),
-        ),
+        Effect.catch(logFailure("work_trace_heartbeat_not_recorded")),
       ),
     );
 
@@ -2003,7 +2007,7 @@ const make = Effect.gen(function* () {
       Effect.mapError((cause) =>
         WorkTraceReadFailed.make({
           operation: "latest_cursor",
-          reason: { _tag: "ReadFailed" },
+          reason: ReadFailed.make({}),
           cause,
         }),
       ),
@@ -2012,7 +2016,7 @@ const make = Effect.gen(function* () {
   const snapshotEffect = (options: { readonly sessionId: string; readonly afterCursor: number }) =>
     snapshot(options.sessionId, options.afterCursor).pipe(
       Effect.mapError((cause) =>
-        WorkTraceReadFailed.make({ operation: "snapshot", reason: { _tag: "ReadFailed" }, cause }),
+        WorkTraceReadFailed.make({ operation: "snapshot", reason: ReadFailed.make({}), cause }),
       ),
     );
 
@@ -2101,20 +2105,14 @@ const make = Effect.gen(function* () {
         "failed",
         "attempt_failed",
         "Stopped responding",
-        { reason: { _tag: "HeartbeatLost" } },
+        { reason: AttemptFailureReason.cases.HeartbeatLost.make({}) },
         false,
-      ).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("work_trace_lost_attempt_not_recorded", { error: error._tag }),
-        ),
-      );
+      ).pipe(Effect.catch(logFailure("work_trace_lost_attempt_not_recorded")));
   });
   yield* Effect.forever(
     Effect.sleep(heartbeatIntervalMs).pipe(
       Effect.andThen(failLostAttempts),
-      Effect.catch((error) =>
-        Effect.logWarning("work_trace_watchdog_failed", { error: error._tag }),
-      ),
+      Effect.catch(logFailure("work_trace_watchdog_failed")),
     ),
   ).pipe(Effect.forkScoped);
 

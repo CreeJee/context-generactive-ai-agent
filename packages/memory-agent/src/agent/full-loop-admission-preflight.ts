@@ -8,26 +8,47 @@ const TransportObject = Schema.declare<object>(
   (value): value is object => value !== null && typeof value === "object",
 );
 
-const FullLoopAdmissionReason = Schema.Union([
-  Schema.TaggedStruct("NonFinite", {}),
-  Schema.TaggedStruct("NonPortable", {}),
-  Schema.TaggedStruct("Cyclic", {}),
-  Schema.TaggedStruct("UnsupportedPrototype", {}),
-  Schema.TaggedStruct("SymbolMember", {}),
-  Schema.TaggedStruct("Accessor", {}),
-  Schema.TaggedStruct("NonEnumerable", {}),
-  Schema.TaggedStruct("MissingMember", {}),
-  Schema.TaggedStruct("NotCallable", {}),
-  Schema.TaggedStruct("UnsupportedTool", {}),
+export const FullLoopAdmissionReason = Schema.TaggedUnion({
+  NonFinite: {},
+  NonPortable: {},
+  Cyclic: {},
+  UnsupportedPrototype: {},
+  SymbolMember: {},
+  Accessor: {},
+  NonEnumerable: {},
+  MissingMember: {},
+  NotCallable: {},
+  UnsupportedTool: {},
   /** A resumed turn without owner persistence to validate the resumed responses. */
-  Schema.TaggedStruct("ContinuationWithoutPersistence", {}),
+  ContinuationWithoutPersistence: {},
   /** A middleware requires a capability no other middleware provides. */
-  Schema.TaggedStruct("UnprovidedCapability", {}),
+  UnprovidedCapability: {},
   /** A middleware member is not a hook the worker can relay. */
-  Schema.TaggedStruct("UnsupportedMiddlewareMember", {}),
+  UnsupportedMiddlewareMember: {},
   /** The turn, an interrupt definition or a tool description did not clone for the worker. */
-  Schema.TaggedStruct("NotCloneable", {}),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  NotCloneable: {},
+});
+export type FullLoopAdmissionReasonName = keyof typeof FullLoopAdmissionReason.cases;
+
+/** The reason's name, as a response `detail` or a message shows it. */
+export const fullLoopAdmissionReasonName: (
+  reason: typeof FullLoopAdmissionReason.Type,
+) => FullLoopAdmissionReasonName = FullLoopAdmissionReason.match({
+  NonFinite: () => "NonFinite",
+  NonPortable: () => "NonPortable",
+  Cyclic: () => "Cyclic",
+  UnsupportedPrototype: () => "UnsupportedPrototype",
+  SymbolMember: () => "SymbolMember",
+  Accessor: () => "Accessor",
+  NonEnumerable: () => "NonEnumerable",
+  MissingMember: () => "MissingMember",
+  NotCallable: () => "NotCallable",
+  UnsupportedTool: () => "UnsupportedTool",
+  ContinuationWithoutPersistence: () => "ContinuationWithoutPersistence",
+  UnprovidedCapability: () => "UnprovidedCapability",
+  UnsupportedMiddlewareMember: () => "UnsupportedMiddlewareMember",
+  NotCloneable: () => "NotCloneable",
+});
 
 export class FullLoopAdmissionRejected extends Schema.TaggedError<FullLoopAdmissionRejected>()(
   "FullLoopAdmissionRejected",
@@ -48,13 +69,17 @@ export class FullLoopAdmissionRejected extends Schema.TaggedError<FullLoopAdmiss
         UnprovidedCapability: () => `Unprovided owner middleware capability: ${this.member}`,
         UnsupportedMiddlewareMember: () => `Unsupported worker middleware member: ${this.member}`,
       },
-      (other) => `Unsupported worker member: ${this.member} (${other._tag})`,
+      (other) =>
+        `Unsupported worker member: ${this.member} (${fullLoopAdmissionReasonName(other)})`,
     );
   }
 }
 
-export function reject(member: string, reason: FullLoopAdmissionRejected["reason"]["_tag"]): never {
-  throw FullLoopAdmissionRejected.make({ member, reason: { _tag: reason } });
+export function reject(member: string, reason: FullLoopAdmissionReasonName): never {
+  throw FullLoopAdmissionRejected.make({
+    member,
+    reason: FullLoopAdmissionReason.cases[reason].make({}),
+  });
 }
 
 /** Stricter than structuredClone: the RPC codec must not silently erase

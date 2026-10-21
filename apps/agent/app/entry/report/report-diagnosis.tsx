@@ -1,4 +1,4 @@
-import type { Schema } from "effect";
+import { Match, Schema } from "effect";
 import type { ReportDiagnosis, ReportDiagnosisFailure } from "memory-agent/definitions";
 import type { ReportRequestFailed } from "./report-client";
 
@@ -36,25 +36,22 @@ export const diagnosisFailureText = {
   request_failed: "진단 요청이 실패했어요",
 } satisfies Record<ReportDiagnosisFailure | "request_failed", string>;
 
+const diagnosisStatuses = Schema.Literals([503, 502, 422]);
+// The diagnosis route assigns one status code per reason; the rejected body is never read.
+const diagnosisStatusFailure: Readonly<
+  Record<typeof diagnosisStatuses.Type, ReportDiagnosisFailure>
+> = { 503: "model_unavailable", 502: "model_failed", 422: "invalid_answer" };
+
 export function diagnosisFailure(
   error: ReportRequestFailed | Schema.SchemaError,
 ): ReportDiagnosisFailure | "request_failed" {
-  switch (error._tag) {
-    case "SchemaError":
-      return "invalid_answer";
-    case "ReportRequestFailed":
-      // The diagnosis route assigns one status code per reason; the rejected body is never read.
-      switch (error.httpStatus) {
-        case 503:
-          return "model_unavailable";
-        case 502:
-          return "model_failed";
-        case 422:
-          return "invalid_answer";
-        default:
-          return "request_failed";
-      }
-  }
+  return Match.valueTags(error, {
+    SchemaError: (): ReportDiagnosisFailure => "invalid_answer",
+    ReportRequestFailed: ({ httpStatus }) =>
+      Schema.is(diagnosisStatuses)(httpStatus)
+        ? diagnosisStatusFailure[httpStatus]
+        : "request_failed",
+  });
 }
 
 function EditableList({

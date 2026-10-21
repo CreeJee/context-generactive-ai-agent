@@ -1,17 +1,16 @@
-import { Cause, Context, Effect, Exit, Function as EffectFunction } from "effect";
+import { Cause, Context, Data, Effect, Exit, Function as EffectFunction } from "effect";
 
-export interface NativeRejection {
-  readonly _tag: "NativeRejection";
-  readonly cause: unknown;
-}
+export type NativeRejection = Data.TaggedEnum<{
+  NativeRejection: { readonly cause: unknown };
+}>;
+const NativeRejection = Data.taggedEnum<NativeRejection>();
 
 /** Native SDK callbacks keep their original rejection values at the Promise boundary. */
 export const nativeFailure = <E>(cause: Cause.Cause<E>): NativeRejection => {
   const failure = Cause.squash(cause);
-  return {
-    _tag: "NativeRejection",
+  return NativeRejection.NativeRejection({
     cause: failure instanceof Cause.UnknownError ? failure.cause : failure,
-  };
+  });
 };
 
 /** Only wrap operations that actually belong to a Promise-based host or SDK. */

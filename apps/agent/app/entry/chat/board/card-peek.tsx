@@ -1,6 +1,6 @@
 import { isTruthy } from "../../../truthy.ts";
 import { useState, type ReactNode } from "react";
-import type { Types } from "effect";
+import { Data, type Types } from "effect";
 import type { CardDraft, CardRisk } from "memory-agent";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -35,9 +35,11 @@ type PlanStep = BoardCard["card"];
 type LoopCard = Extract<KanbanView, { readonly active: true }>["cards"][number];
 
 /** What the peek panel shows: a new card's form, or one card. */
-export type Peek =
-  | { readonly _tag: "New" }
-  | { readonly _tag: "Card"; readonly cardId: string; readonly editing: boolean };
+export type Peek = Data.TaggedEnum<{
+  New: {};
+  Card: { readonly cardId: string; readonly editing: boolean };
+}>;
+export const Peek = Data.taggedEnum<Peek>();
 
 const riskItems = [
   { value: "none", label: "지정 안 함" },
@@ -138,25 +140,24 @@ export function CardPeek({
 }) {
   const hold = loopCard?.reason ?? null;
   const holdNote = hold === null ? null : holdReasonNote(hold);
-  const content = (): ReactNode => {
-    switch (peek._tag) {
-      case "New":
-        return (
-          <CardEditor
-            card={null}
-            planVersion={planVersion}
-            cardCount={cardCount}
-            pending={editPending}
-            onCancel={onClose}
-            onSubmit={(edit) =>
-              onSubmit(edit).then((error) => {
-                if (error === null) onClose();
-                return error;
-              })
-            }
-          />
-        );
-      case "Card": {
+  const content = (): ReactNode =>
+    Peek.$match(peek, {
+      New: () => (
+        <CardEditor
+          card={null}
+          planVersion={planVersion}
+          cardCount={cardCount}
+          pending={editPending}
+          onCancel={onClose}
+          onSubmit={(edit) =>
+            onSubmit(edit).then((error) => {
+              if (error === null) onClose();
+              return error;
+            })
+          }
+        />
+      ),
+      Card: ({ editing }) => {
         if (entry === null)
           return (
             <SheetHeader>
@@ -210,7 +211,7 @@ export function CardPeek({
                   )}
                 </div>
               )}
-              {peek.editing ? (
+              {editing ? (
                 <CardEditor
                   card={card}
                   planVersion={planVersion}
@@ -228,7 +229,7 @@ export function CardPeek({
                 <CardDetails card={card} titleOf={titleOf} lastChange={lastChange} />
               )}
             </div>
-            {!peek.editing && (
+            {!editing && (
               <SheetFooter className="flex-row justify-end">
                 {kanbanActive &&
                   (card.hold !== undefined ||
@@ -260,9 +261,8 @@ export function CardPeek({
             )}
           </>
         );
-      }
-    }
-  };
+      },
+    });
   return (
     <Sheet
       open

@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import { requireRuntime, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import {
+  Cause,
   Context,
   Crypto,
   Deferred,
@@ -280,7 +281,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                   onFailure: (cause) =>
                     Effect.forEach(
                       cause.reasons.flatMap((reason) =>
-                        reason._tag === "Fail" && fatal(reason.error) ? [reason.error] : [],
+                        Cause.isFailReason(reason) && fatal(reason.error) ? [reason.error] : [],
                       ),
                       failAll,
                       { discard: true },
@@ -388,17 +389,12 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                     const terminal = yield* Deferred.poll(result);
                     if (Option.isSome(terminal)) {
                       const outcome = yield* Effect.exit(terminal.value);
-                      switch (outcome._tag) {
-                        case "Success":
-                          yield* Deferred.succeed(admission, {
-                            kind: "completed",
-                            reply: outcome.value,
-                          });
-                          return;
-                        case "Failure":
-                          yield* Deferred.failCause(admission, outcome.cause);
-                          return;
-                      }
+                      yield* Exit.match(outcome, {
+                        onSuccess: (reply) =>
+                          Deferred.succeed(admission, { kind: "completed", reply }),
+                        onFailure: (cause) => Deferred.failCause(admission, cause),
+                      });
+                      return;
                     }
                     if (yield* Effect.sync(() => observed.snapshotWasPinned())) {
                       yield* Deferred.succeed(admission, { kind: "pinned" });

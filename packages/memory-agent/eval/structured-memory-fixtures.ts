@@ -16,9 +16,11 @@ export interface EvidenceCase {
   readonly revoked: readonly string[];
 }
 
+const Storage = Schema.TaggedStruct("Storage", { cause: Schema.Defect() });
+
 class EvidenceFixtureFailed extends Schema.TaggedError<EvidenceFixtureFailed>()(
   "EvidenceFixtureFailed",
-  { reason: Schema.TaggedStruct("Storage", { cause: Schema.Defect() }) },
+  { reason: Storage },
 ) {}
 
 /** Fixed candidates and explicit interpretations isolate reading from retrieval/model extraction. */
@@ -208,7 +210,7 @@ export const seedEvidenceCases = Effect.fn("eval.seedEvidenceCases")(function* (
 
     return { cases, env };
   }).pipe(
-    Effect.mapError((cause) => EvidenceFixtureFailed.make({ reason: { _tag: "Storage", cause } })),
+    Effect.mapError((cause) => EvidenceFixtureFailed.make({ reason: Storage.make({ cause }) })),
   );
 });
 
@@ -311,6 +313,6 @@ export const seedChainCases = Effect.fn("eval.seedChainCases")(function* (projec
 
     return cases;
   }).pipe(
-    Effect.mapError((cause) => EvidenceFixtureFailed.make({ reason: { _tag: "Storage", cause } })),
+    Effect.mapError((cause) => EvidenceFixtureFailed.make({ reason: Storage.make({ cause }) })),
   );
 });

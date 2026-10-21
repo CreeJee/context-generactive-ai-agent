@@ -54,14 +54,13 @@ export const contextView = ({
   compactAtTokens: budgetFor(windowTokens).compactAt,
 });
 
+export const ContextUsageReason = Schema.TaggedUnion({ ReadFailed: {}, WriteFailed: {} });
+
 export class ContextUsageFailed extends Schema.TaggedError<ContextUsageFailed>()(
   "ContextUsageFailed",
   {
     operation: Schema.Literals(["read-usage", "read-consumed", "write-usage", "consume"]),
-    reason: Schema.Union([
-      Schema.TaggedStruct("ReadFailed", {}),
-      Schema.TaggedStruct("WriteFailed", {}),
-    ]),
+    reason: ContextUsageReason,
     cause: Schema.Defect(),
   },
 ) {}
@@ -75,12 +74,10 @@ const metadataOperation = <A>(
     catch: (cause) =>
       ContextUsageFailed.make({
         operation,
-        reason: {
-          _tag:
-            operation === "read-usage" || operation === "read-consumed"
-              ? "ReadFailed"
-              : "WriteFailed",
-        },
+        reason:
+          operation === "read-usage" || operation === "read-consumed"
+            ? ContextUsageReason.cases.ReadFailed.make({})
+            : ContextUsageReason.cases.WriteFailed.make({}),
         cause,
       }),
   });

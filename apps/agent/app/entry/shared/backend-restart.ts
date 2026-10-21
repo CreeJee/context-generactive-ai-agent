@@ -156,7 +156,7 @@ const sdkHttpTransport: typeof fetch = (input, init) => {
           referrer: request.referrer,
           referrerPolicy: request.referrerPolicy,
         }),
-        Effect.onExit((exit) => (exit._tag === "Failure" ? release : Effect.void)),
+        Effect.onExit((exit) => (Exit.isFailure(exit) ? release : Effect.void)),
       ),
       { signal: request.signal },
     )
@@ -166,7 +166,8 @@ const sdkHttpTransport: typeof fetch = (input, init) => {
         onFailure: (cause) => {
           const error = Cause.squash(cause);
           return Promise.reject(
-            HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError"
+            HttpClientError.isHttpClientError(error) &&
+              error.reason instanceof HttpClientError.TransportError
               ? error.reason.cause
               : error,
           );

@@ -17,6 +17,8 @@ import {
   type SubscriptionOAuthClient,
 } from "./validation-harness.ts";
 
+const cleanupFailed = (error: string) => Effect.logWarning("OAuth login cleanup failed", { error });
+
 /** Synchronous selection at request/run creation; each profile owns its client and refresh lock. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function createAccountBoundSubscriptionClients(options: {
@@ -137,9 +139,10 @@ function createAccountBoundSubscriptionClientsBody(
                     }
                   }).pipe(
                     // Cleanup only: the login's own failure stands, so this one is logged by tag.
-                    Effect.catch((failure) =>
-                      Effect.logWarning("OAuth login cleanup failed", { error: failure._tag }),
-                    ),
+                    Effect.catchTags({
+                      OAuthProfileStoreFailed: () => cleanupFailed("OAuthProfileStoreFailed"),
+                      UnknownError: () => cleanupFailed("UnknownError"),
+                    }),
                   ),
                 ),
               ),

@@ -57,28 +57,29 @@ type Cursor = typeof Cursor.Type;
  * The import records could not be read or written. The reason names the step, so a log shows where
  * a pass stopped without the SQL or a path; the cause stays with the error.
  */
+export const ImportStoreReason = Schema.TaggedUnion({
+  // Folders a repository makes worktrees in, read at the start and kept at the end.
+  WorktreeParents: {},
+  // Moving a worktree project's sessions and nodes into its repository's project.
+  Fold: {},
+  // Which session a transcript writes into.
+  Mapping: {},
+  // How far a transcript was read.
+  Cursor: {},
+  // A conversation's title from its opening message.
+  Title: {},
+  // Why a transcript failed, kept for the next pass.
+  FailureRecord: {},
+});
+
 export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
   "ImportStoreFailed",
-  {
-    reason: Schema.Union([
-      // Folders a repository makes worktrees in, read at the start and kept at the end.
-      Schema.TaggedStruct("WorktreeParents", {}),
-      // Moving a worktree project's sessions and nodes into its repository's project.
-      Schema.TaggedStruct("Fold", {}),
-      // Which session a transcript writes into.
-      Schema.TaggedStruct("Mapping", {}),
-      // How far a transcript was read.
-      Schema.TaggedStruct("Cursor", {}),
-      // A conversation's title from its opening message.
-      Schema.TaggedStruct("Title", {}),
-      // Why a transcript failed, kept for the next pass.
-      Schema.TaggedStruct("FailureRecord", {}),
-    ]),
-    cause: Schema.Defect(),
-  },
+  { reason: ImportStoreReason, cause: Schema.Defect() },
 ) {}
-const stored = <A, E>(step: ImportStoreFailed["reason"]["_tag"], effect: Effect.Effect<A, E>) =>
-  Effect.mapError(effect, (cause) => ImportStoreFailed.make({ reason: { _tag: step }, cause }));
+const stored = <A, E>(step: keyof typeof ImportStoreReason.cases, effect: Effect.Effect<A, E>) =>
+  Effect.mapError(effect, (cause) =>
+    ImportStoreFailed.make({ reason: ImportStoreReason.cases[step].make({}), cause }),
+  );
 
 /** What settings says went wrong: the failures' tags, never the transcript's content. */
 const failureOf = (cause: Cause.Cause<unknown>) => failureTags(cause).slice(0, failureLength);

@@ -24,11 +24,12 @@ export interface CrossProviderMediaConsentDecision extends CrossProviderMediaCon
   readonly settingsVersion: 1 | null;
 }
 
+const SettingsFailed = Schema.TaggedStruct("SettingsFailed", {});
 export class CrossProviderMediaConsentStoreFailed extends Schema.TaggedError<CrossProviderMediaConsentStoreFailed>()(
   "CrossProviderMediaConsentStoreFailed",
   {
     operation: Schema.Literals(["read", "write"]),
-    reason: Schema.TaggedStruct("SettingsFailed", {}),
+    reason: SettingsFailed,
     cause: GlobalConfigFailed,
   },
 ) {}
@@ -84,7 +85,7 @@ function decideCrossProviderMediaConsentBody(
 const storeFailure = (operation: "read" | "write") => (cause: GlobalConfigFailed) =>
   CrossProviderMediaConsentStoreFailed.make({
     operation,
-    reason: { _tag: "SettingsFailed" },
+    reason: SettingsFailed.make({}),
     cause,
   });
 

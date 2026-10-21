@@ -1,7 +1,7 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Cause, Effect, FileSystem, HashSet, Layer, Path, Schema } from "effect";
+import { Cause, Effect, FileSystem, HashSet, Layer, Path, Result, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { KiwiRpcs, KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
@@ -56,7 +56,7 @@ const load = Effect.fn("KiwiWorker.load")(function* (modelDirectory: string) {
     const path = paths.join(modelDirectory, name);
     // readdir's previous isFile contract excluded symbolic links, including dangling links.
     const link = yield* fs.readLink(path).pipe(Effect.result);
-    if (link._tag === "Success") continue;
+    if (Result.isSuccess(link)) continue;
     const info = yield* fs.stat(path);
     if (info.type === "File") modelFiles[name] = yield* fs.readFile(path);
   }

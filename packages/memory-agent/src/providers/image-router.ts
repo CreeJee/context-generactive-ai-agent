@@ -109,17 +109,19 @@ export class ImageRouteUnavailable extends Schema.TaggedError<ImageRouteUnavaila
   { ranking: Schema.Array(ImageRouteScore) },
 ) {}
 
+export const FixedImageRouteRejectedReason = Schema.TaggedUnion({
+  /** Fixed mode was asked for without naming a route. */
+  RouteIdMissing: {},
+  RouteAbsent: {},
+  /** The route is in the catalog but its score is not eligible; `reasons` are the score's. */
+  Ineligible: { reasons: Schema.Array(Schema.String) },
+});
+
 export class FixedImageRouteRejected extends Schema.TaggedError<FixedImageRouteRejected>()(
   "FixedImageRouteRejected",
   {
     routeId: Schema.optionalKey(Schema.String),
-    reason: Schema.Union([
-      /** Fixed mode was asked for without naming a route. */
-      Schema.TaggedStruct("RouteIdMissing", {}),
-      Schema.TaggedStruct("RouteAbsent", {}),
-      /** The route is in the catalog but its score is not eligible; `reasons` are the score's. */
-      Schema.TaggedStruct("Ineligible", { reasons: Schema.Array(Schema.String) }),
-    ]),
+    reason: FixedImageRouteRejectedReason,
   },
 ) {}
 
@@ -399,16 +401,20 @@ function makeImageRouterBody(
           : result.ranking.find((score) => score.eligible);
       if (request.policy.mode === "fixed") {
         if (request.policy.fixedRouteId === undefined)
-          return yield* new FixedImageRouteRejected({ reason: { _tag: "RouteIdMissing" } });
+          return yield* new FixedImageRouteRejected({
+            reason: FixedImageRouteRejectedReason.cases.RouteIdMissing.make({}),
+          });
         if (selectedScore === undefined)
           return yield* new FixedImageRouteRejected({
             routeId: request.policy.fixedRouteId,
-            reason: { _tag: "RouteAbsent" },
+            reason: FixedImageRouteRejectedReason.cases.RouteAbsent.make({}),
           });
         if (!selectedScore.eligible)
           return yield* new FixedImageRouteRejected({
             routeId: request.policy.fixedRouteId,
-            reason: { _tag: "Ineligible", reasons: selectedScore.reasons },
+            reason: FixedImageRouteRejectedReason.cases.Ineligible.make({
+              reasons: selectedScore.reasons,
+            }),
           });
       }
       if (selectedScore === undefined)

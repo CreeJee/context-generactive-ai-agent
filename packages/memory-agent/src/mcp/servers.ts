@@ -18,6 +18,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Match,
   Schema,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -30,13 +31,13 @@ import type {
 } from "../runtime/shown-failure.ts";
 import {
   McpScope,
+  McpServerConfig,
   MissingVariable,
   expandVariables,
   globalMcpFile,
   projectMcpFile,
   readMcpFile,
   type ConfiguredServer,
-  type McpServerConfig,
 } from "./config.ts";
 
 /** What the settings page shows for one server. Environment and header values are never included. */
@@ -52,7 +53,7 @@ export type McpServerState =
 export interface McpServerView {
   readonly scope: McpScope;
   readonly name: string;
-  readonly transport: McpServerConfig["_tag"];
+  readonly transport: keyof typeof McpServerConfig.cases;
   /**
    * `command args…` or the URL, as configured (variables not expanded), with secrets hidden;
    * `null` when they could not be checked.
@@ -161,6 +162,34 @@ const withTimeout = <A>(promise: Promise<A>, ms: number, step: McpStepTimedOut["
 
 const isText = Schema.is(Schema.String);
 
+/** The server state settings show for a step that did not finish in time. */
+const stepTimedOutCode = {
+  connect: "connect_timed_out",
+  "tools/list": "tools_list_timed_out",
+} as const satisfies Record<McpStepTimedOut["step"], McpFailureCode>;
+
+/** What settings show of one configuration, before the target has its secrets hidden. */
+interface ConfigSummary {
+  readonly transport: McpServerView["transport"];
+  readonly target: string;
+  readonly envNames: readonly string[];
+  readonly headerNames: readonly string[];
+}
+const summarize = McpServerConfig.match<ConfigSummary>({
+  stdio: (stdio) => ({
+    transport: "stdio",
+    target: [stdio.command, ...stdio.args].join(" "),
+    envNames: Object.keys(stdio.env),
+    headerNames: [],
+  }),
+  http: (http) => ({
+    transport: "http",
+    target: http.url,
+    envNames: [],
+    headerNames: Object.keys(http.headers),
+  }),
+});
+
 /** Cuts a long result, which is otherwise passed on as the server returned it. */
 const truncated = (text: string) =>
   text.length <= maxMcpResultCharacters
@@ -175,30 +204,21 @@ const make = Effect.gen(function* () {
   const connections = MutableHashMap.empty<string, Connection>();
 
   /** Why discovery failed, with the server's own text as the hidden detail. */
-  const failureOf = (
-    failure: McpStepTimedOut | Cause.UnknownError | Schema.SchemaError,
-  ): Effect.Effect<ShownFailure<McpFailureCode>> => {
-    switch (failure._tag) {
-      case "McpStepTimedOut":
-        switch (failure.step) {
-          case "connect":
-            return Effect.succeed({ code: "connect_timed_out", detail: null });
-          case "tools/list":
-            return Effect.succeed({ code: "tools_list_timed_out", detail: null });
-        }
-      case "UnknownError": {
-        const error = failure.cause;
-        return isMissingVariable(error)
-          ? Effect.succeed({ code: "missing_env", detail: error.variable })
-          : redactor.hideDetail({
-              code: "start_failed",
-              detail: describeFailure(error instanceof Error ? error : new Error(String(error))),
-            });
-      }
-      case "SchemaError":
-        return Effect.succeed({ code: "start_failed", detail: null });
-    }
-  };
+  const failureOf = Match.typeTags<
+    McpStepTimedOut | Cause.UnknownError | Schema.SchemaError,
+    Effect.Effect<ShownFailure<McpFailureCode>>
+  >()({
+    McpStepTimedOut: (timedOut) =>
+      Effect.succeed({ code: stepTimedOutCode[timedOut.step], detail: null }),
+    UnknownError: ({ cause: error }) =>
+      isMissingVariable(error)
+        ? Effect.succeed({ code: "missing_env", detail: error.variable })
+        : redactor.hideDetail({
+            code: "start_failed",
+            detail: describeFailure(error instanceof Error ? error : new Error(String(error))),
+          }),
+    SchemaError: () => Effect.succeed({ code: "start_failed", detail: null }),
+  });
 
   const selectTrust = SqlSchema.findAll({
     Request: Schema.String,
@@ -262,38 +282,34 @@ const make = Effect.gen(function* () {
     void connection.client.then((client) => client.close()).catch(() => undefined);
   };
 
-  const transportFor = (project: Project, config: McpServerConfig) => {
-    switch (config._tag) {
-      case "stdio":
-        return new StdioClientTransport({
-          command: expandVariables(config.command, process.env),
-          args: config.args.map((arg) => expandVariables(arg, process.env)),
+  const transportFor = (project: Project, config: McpServerConfig) =>
+    McpServerConfig.match<StdioClientTransport | StreamableHTTPClientTransport>(config, {
+      stdio: (stdio) =>
+        new StdioClientTransport({
+          command: expandVariables(stdio.command, process.env),
+          args: stdio.args.map((arg) => expandVariables(arg, process.env)),
           // Only what the SDK passes by default (HOME, PATH, USER, …) plus what the file names.
           env: Object.fromEntries(
-            Object.entries(config.env).map(([name, value]) => [
+            Object.entries(stdio.env).map(([name, value]) => [
               name,
               expandVariables(value, process.env),
             ]),
           ),
           cwd: project.root,
           stderr: "ignore",
-        });
-      case "http":
-        return new StreamableHTTPClientTransport(
-          new URL(expandVariables(config.url, process.env)),
-          {
-            requestInit: {
-              headers: Object.fromEntries(
-                Object.entries(config.headers).map(([name, value]) => [
-                  name,
-                  expandVariables(value, process.env),
-                ]),
-              ),
-            },
+        }),
+      http: (http) =>
+        new StreamableHTTPClientTransport(new URL(expandVariables(http.url, process.env)), {
+          requestInit: {
+            headers: Object.fromEntries(
+              Object.entries(http.headers).map(([name, value]) => [
+                name,
+                expandVariables(value, process.env),
+              ]),
+            ),
           },
-        );
-    }
-  };
+        }),
+    });
 
   /** The live connection for a trusted server, started on first use or after a failure. */
   const connect = (project: Project, server: ConfiguredServer): Connection => {
@@ -403,28 +419,23 @@ const make = Effect.gen(function* () {
 
   const overview = Effect.fn("mcp.overview")(function* (project: Project) {
     const { files, servers } = yield* configured(project);
-    const views = yield* Effect.forEach(servers, (entry) =>
-      Effect.map(
+    const views = yield* Effect.forEach(servers, (entry) => {
+      const summary = summarize(entry.server.config);
+      return Effect.map(
         // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
-        redactor.shownDetail(
-          entry.server.config._tag === "stdio"
-            ? [entry.server.config.command, ...entry.server.config.args].join(" ")
-            : entry.server.config.url,
-        ),
+        redactor.shownDetail(summary.target),
         (target): McpServerView => ({
           scope: entry.server.scope,
           name: entry.server.name,
-          transport: entry.server.config._tag,
+          transport: summary.transport,
           target,
-          envNames:
-            entry.server.config._tag === "stdio" ? Object.keys(entry.server.config.env) : [],
-          headerNames:
-            entry.server.config._tag === "http" ? Object.keys(entry.server.config.headers) : [],
+          envNames: summary.envNames,
+          headerNames: summary.headerNames,
           shadowed: entry.shadowed,
           state: stateOf(project, entry),
         }),
-      ),
-    );
+      );
+    });
     return { files, servers: views } satisfies McpOverview;
   });
 

@@ -1,4 +1,4 @@
-import { Effect, Option, Result, Schema } from "effect";
+import { Effect, Match, Option, Result, Schema } from "effect";
 import {
   AppEvents,
   BoardIntent,
@@ -14,13 +14,14 @@ import { readJson, rejectCrossSite } from "~/.server/http";
 import { answerKanbanFailures } from "~/.server/kanban-failures";
 import type { Route } from "./+types/sessions.$session.kanban";
 
-const KanbanAction = Schema.Union([
-  Schema.TaggedStruct("Start", {}),
-  Schema.TaggedStruct("RestartLoop", {}),
-  Schema.TaggedStruct("SetPriority", { priority: GoalPriority }),
-  Schema.TaggedStruct("SetDependencies", { dependsOn: Schema.Array(Schema.String) }),
-  BoardIntent,
-]);
+/** The board's own commands; a `BoardIntent` is what a person meant by dragging a card. */
+const KanbanCommand = Schema.TaggedUnion({
+  Start: {},
+  RestartLoop: {},
+  SetPriority: { priority: GoalPriority },
+  SetDependencies: { dependsOn: Schema.Array(Schema.String) },
+});
+const KanbanAction = Schema.Union([KanbanCommand, BoardIntent]);
 
 /** GET /api/sessions/:session/kanban — whether the Goal runs as a board, and why cards stopped. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -60,27 +61,10 @@ export function action({ request, params }: Route.ActionArgs) {
         return Response.json({ error: "session_in_use" }, { status: 423 });
       yield* (yield* Sessions).get(params.session);
       const events = yield* AppEvents;
-      switch (body.success._tag) {
-        case "Start": {
-          const started = yield* (yield* KanbanOrchestrator).start(params.session);
-          yield* events.publishSession(params.session, "run-state");
-          return Response.json(started);
-        }
-        case "RestartLoop": {
-          yield* (yield* KanbanBoardActions).restartLoop(params.session);
-          return Response.json({ restarted: true });
-        }
-        case "Reorder":
-        case "Requeue":
-        case "Hold":
-        case "Release":
-        case "ChangeRequest":
-        case "Cancel": {
-          const result = yield* (yield* KanbanBoardActions).applyIntent(
-            params.session,
-            body.success,
-            { _tag: "User" },
-          );
+      const actions = yield* KanbanBoardActions;
+      const applyIntent = (intent: BoardIntent) =>
+        Effect.gen(function* () {
+          const result = yield* actions.applyIntent(params.session, intent, { _tag: "User" });
           yield* events.publishSession(params.session, "run-state");
           switch (result._tag) {
             case "Applied":
@@ -88,21 +72,37 @@ export function action({ request, params }: Route.ActionArgs) {
             case "Requested":
               return Response.json(result, { status: 202 });
           }
-        }
-        case "SetPriority": {
-          yield* (yield* KanbanBoardActions).setPriority(params.session, body.success.priority);
-          yield* events.publishSession(params.session, "run-state");
-          return Response.json({ priority: body.success.priority });
-        }
-        case "SetDependencies": {
-          const dependsOn = yield* (yield* KanbanBoardActions).setDependencies(
-            params.session,
-            body.success.dependsOn,
-          );
-          yield* events.publishSession(params.session, "run-state");
-          return Response.json({ dependsOn });
-        }
-      }
+        });
+      return yield* Match.valueTags(body.success, {
+        Start: () =>
+          Effect.gen(function* () {
+            const started = yield* (yield* KanbanOrchestrator).start(params.session);
+            yield* events.publishSession(params.session, "run-state");
+            return Response.json(started);
+          }),
+        RestartLoop: () =>
+          actions
+            .restartLoop(params.session)
+            .pipe(Effect.map(() => Response.json({ restarted: true }))),
+        Reorder: applyIntent,
+        Requeue: applyIntent,
+        Hold: applyIntent,
+        Release: applyIntent,
+        ChangeRequest: applyIntent,
+        Cancel: applyIntent,
+        SetPriority: ({ priority }) =>
+          Effect.gen(function* () {
+            yield* actions.setPriority(params.session, priority);
+            yield* events.publishSession(params.session, "run-state");
+            return Response.json({ priority });
+          }),
+        SetDependencies: (command) =>
+          Effect.gen(function* () {
+            const dependsOn = yield* actions.setDependencies(params.session, command.dependsOn);
+            yield* events.publishSession(params.session, "run-state");
+            return Response.json({ dependsOn });
+          }),
+      });
     }).pipe(answerKanbanFailures),
   );
 }

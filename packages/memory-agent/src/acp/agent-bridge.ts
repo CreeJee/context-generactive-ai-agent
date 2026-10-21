@@ -32,7 +32,7 @@ import {
   approvalToolDefinitions,
   permissionReviewInterrupt,
 } from "../tools/definitions.ts";
-import { AppRequestFailed, type AppApi, type ProjectSummary } from "./app-api.ts";
+import { AppRequestFailed, AppRequestReason, type AppApi, type ProjectSummary } from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import {
@@ -85,38 +85,32 @@ const failureMessages = HashMap.fromIterable([
 ]);
 
 /** Why the bridge refused an editor's request itself, before or after asking the app. */
+const EditorRefusal = Schema.TaggedUnion({
+  FolderNotFound: { cwd: Schema.String },
+  /** Registering a project widens what the file tools may touch, so only the page does it. */
+  ProjectNotRegistered: { root: Schema.String },
+  SessionNotOpen: {},
+  TurnInProgress: {},
+  /** The app's run ended with an error; `detail` is the run's own error text, redacted. */
+  RunFailed: {
+    code: RunFailureCode,
+    detail: Schema.NullOr(Schema.String),
+  },
+});
+
 class EditorRequestRefused extends Schema.TaggedError<EditorRequestRefused>()(
   "EditorRequestRefused",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("FolderNotFound", { cwd: Schema.String }),
-      /** Registering a project widens what the file tools may touch, so only the page does it. */
-      Schema.TaggedStruct("ProjectNotRegistered", { root: Schema.String }),
-      Schema.TaggedStruct("SessionNotOpen", {}),
-      Schema.TaggedStruct("TurnInProgress", {}),
-      /** The app's run ended with an error; `detail` is the run's own error text, redacted. */
-      Schema.TaggedStruct("RunFailed", {
-        code: RunFailureCode,
-        detail: Schema.NullOr(Schema.String),
-      }),
-    ]),
-  },
+  { reason: EditorRefusal },
 ) {}
 
-const refusalMessage = (reason: EditorRequestRefused["reason"]) => {
-  switch (reason._tag) {
-    case "FolderNotFound":
-      return `폴더를 찾을 수 없어요: ${reason.cwd}`;
-    case "ProjectNotRegistered":
-      return `등록된 프로젝트가 아니에요. 앱에서 ${reason.root}를 먼저 추가하세요.`;
-    case "SessionNotOpen":
-      return "그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.";
-    case "TurnInProgress":
-      return "이미 답하는 중이에요.";
-    case "RunFailed":
-      return runFailureText[reason.code];
-  }
-};
+const refusalMessage = EditorRefusal.match({
+  FolderNotFound: ({ cwd }) => `폴더를 찾을 수 없어요: ${cwd}`,
+  ProjectNotRegistered: ({ root }) =>
+    `등록된 프로젝트가 아니에요. 앱에서 ${root}를 먼저 추가하세요.`,
+  SessionNotOpen: () => "그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.",
+  TurnInProgress: () => "이미 답하는 중이에요.",
+  RunFailed: ({ code }) => runFailureText[code],
+});
 
 /** A failed run as the editor receives it: the code's wording, and `{ code, detail }` as data. */
 const runFailedError = (failure: ShownFailure<RunFailureCode>) =>
@@ -141,9 +135,9 @@ const explain = (
         )
       : Schema.is(EditorRequestRefused)(error)
         ? Effect.succeed(
-            error.reason._tag === "RunFailed"
-              ? runFailedError(error.reason)
-              : requestError(refusalMessage(error.reason)),
+            EditorRefusal.matchOrElse(error.reason, { RunFailed: runFailedError }, (reason) =>
+              requestError(refusalMessage(reason)),
+            ),
           )
         : // Anything else can quote a URL or a credential; its text goes out redacted.
           Effect.map(redactor.shownDetail(error.message), (detail) =>
@@ -319,7 +313,7 @@ export function startAcpAgent(options: {
         status: 423,
         code: "session_in_use",
         message: "session_in_use (423)",
-        reason: { _tag: "RequestRejected" },
+        reason: AppRequestReason.cases.RequestRejected.make({}),
       });
     // A failed renewal is retried with backoff. When the retries run out, or on a defect, renewal
     // stops: the app drops the lease and shows the session read-only (decided 2026-10-18).
@@ -360,7 +354,8 @@ export function startAcpAgent(options: {
       .realPath(cwd)
       .pipe(
         Effect.mapError(
-          () => new EditorRequestRefused({ reason: { _tag: "FolderNotFound", cwd } }),
+          () =>
+            new EditorRequestRefused({ reason: EditorRefusal.cases.FolderNotFound.make({ cwd }) }),
         ),
       );
     const project = (yield* nativePromise(() => api.projects())).find(
@@ -368,7 +363,9 @@ export function startAcpAgent(options: {
     );
     // Registering a project widens what the file tools may touch, so only the app's page does it.
     if (!isTruthy(project))
-      return yield* new EditorRequestRefused({ reason: { _tag: "ProjectNotRegistered", root } });
+      return yield* new EditorRequestRefused({
+        reason: EditorRefusal.cases.ProjectNotRegistered.make({ root }),
+      });
     return project;
   });
 
@@ -474,7 +471,7 @@ export function startAcpAgent(options: {
               status: 401,
               code: "login_required",
               message: "login_required (401)",
-              reason: { _tag: "RequestRejected" },
+              reason: AppRequestReason.cases.RequestRejected.make({}),
             });
           const project = yield* projectFor(ctx.params.cwd);
           // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
@@ -540,9 +537,13 @@ export function startAcpAgent(options: {
         Effect.gen(function* () {
           const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
           if (!isTruthy(session))
-            return yield* new EditorRequestRefused({ reason: { _tag: "SessionNotOpen" } });
+            return yield* new EditorRequestRefused({
+              reason: EditorRefusal.cases.SessionNotOpen.make({}),
+            });
           if (isTruthy(session.turn))
-            return yield* new EditorRequestRefused({ reason: { _tag: "TurnInProgress" } });
+            return yield* new EditorRequestRefused({
+              reason: EditorRefusal.cases.TurnInProgress.make({}),
+            });
           const turn: PromptTurn = {
             client: ctx.client,
             args: MutableHashMap.empty(),
@@ -611,7 +612,7 @@ export function startAcpAgent(options: {
             const failure = turn.failure ?? (isTruthy(error) ? chatFailure(error) : null);
             if (isTruthy(failure))
               return yield* new EditorRequestRefused({
-                reason: { _tag: "RunFailed", ...failure },
+                reason: EditorRefusal.cases.RunFailed.make(failure),
               });
             return { stopReason: "end_turn" as const satisfies StopReason };
           }).pipe(

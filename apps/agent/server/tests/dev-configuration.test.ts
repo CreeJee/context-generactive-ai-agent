@@ -1,5 +1,5 @@
 import { NodeServices } from "@effect/platform-node";
-import { Effect, ManagedRuntime } from "effect";
+import { Effect, ManagedRuntime, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { readDevConfiguration } from "../../scripts/dev-configuration.ts";
 
@@ -53,7 +53,7 @@ describe("development configuration", () => {
       ["--unknown"],
     ]) {
       const result = runtime.runSync(Effect.result(readDevConfiguration(args, {}, "/tmp/app")));
-      expect(result._tag).toBe("Failure");
+      expect(Result.isFailure(result)).toBe(true);
     }
     const help = runtime.runSync(readDevConfiguration(["--help"], {}, "/tmp/app"));
     expect(help.help).toBe(true);

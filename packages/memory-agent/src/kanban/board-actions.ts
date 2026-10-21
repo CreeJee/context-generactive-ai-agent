@@ -1,10 +1,10 @@
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, Layer, Match, Option, Predicate, Schema } from "effect";
 import {
-  BoardIntent,
   CardDraft,
   CardPatch,
   UserChange,
   type BoardEditResult,
+  type BoardIntent,
 } from "../workflow/board-edit.ts";
 import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
@@ -16,10 +16,15 @@ import {
   type KanbanMode,
 } from "./card-attempts.ts";
 import { cardQueueName } from "./card-queue.ts";
-import type { CardHoldReason } from "./failures.ts";
-import { HumanDecisions, type DecisionCloseReason } from "./human-decision.ts";
+import { CardHoldReason } from "./failures.ts";
+import {
+  DecisionCloseScope,
+  DecisionKind,
+  HumanDecisions,
+  type DecisionCloseReason,
+} from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
-import { CardWorktrees } from "./worktree.ts";
+import { CardWorktrees, WorktreeDisposition } from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { GoalSchedules, type GoalMergeState, type GoalPriority } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
@@ -53,27 +58,27 @@ export class KanbanActionRefused extends Schema.TaggedError<KanbanActionRefused>
 ) {}
 
 /** How the orchestrator settles a user's change to an executing card. */
-export const ChangeDecision = Schema.Union([
+export const ChangeDecision = Schema.TaggedUnion({
   /** Apply it now; a running attempt stops and the card continues with the change at once. */
-  Schema.TaggedStruct("Apply", {}),
+  Apply: {},
   /** Stop the attempt, apply the change, and reschedule the card in a fresh agent conversation. */
-  Schema.TaggedStruct("Reassign", {}),
-  Schema.TaggedStruct("Reject", { reason: Schema.NonEmptyString }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  Reassign: {},
+  Reject: { reason: Schema.NonEmptyString },
+});
 export type ChangeDecision = typeof ChangeDecision.Type;
 
 /** The orchestrator's judgement of one card against a changed Goal. */
-export const GoalChangeVerdict = Schema.Union([
-  Schema.TaggedStruct("Continue", { cardId: Schema.String }),
-  Schema.TaggedStruct("Amend", {
+export const GoalChangeVerdict = Schema.TaggedUnion({
+  Continue: { cardId: Schema.String },
+  Amend: {
     cardId: Schema.String,
     patch: CardPatch,
     note: Schema.NonEmptyString,
-  }),
-  Schema.TaggedStruct("Stop", { cardId: Schema.String, reason: Schema.NonEmptyString }),
-  Schema.TaggedStruct("Replace", { cardId: Schema.String, card: CardDraft }),
-  Schema.TaggedStruct("NeedsDecision", { cardId: Schema.String, question: Schema.NonEmptyString }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  },
+  Stop: { cardId: Schema.String, reason: Schema.NonEmptyString },
+  Replace: { cardId: Schema.String, card: CardDraft },
+  NeedsDecision: { cardId: Schema.String, question: Schema.NonEmptyString },
+});
 export type GoalChangeVerdict = typeof GoalChangeVerdict.Type;
 
 /** What the loop knows about a card beyond the Plan. */
@@ -220,7 +225,11 @@ const make = Effect.gen(function* () {
       cardIds,
       (cardId) =>
         decisions.close(
-          { _tag: "Card", sessionId: goal.sessionId, goalInstanceId: goal.goalInstanceId, cardId },
+          DecisionCloseScope.Card({
+            sessionId: goal.sessionId,
+            goalInstanceId: goal.goalInstanceId,
+            cardId,
+          }),
           reason,
         ),
       { discard: true },
@@ -234,7 +243,7 @@ const make = Effect.gen(function* () {
         goal.mode === "worktree"
           ? worktrees.settle(
               { projectRoot: goal.projectRoot, goalInstanceId: goal.goalInstanceId, cardId },
-              { _tag: "Cancelled" },
+              WorktreeDisposition.Cancelled(),
             )
           : Effect.void,
       { discard: true },
@@ -406,7 +415,7 @@ const make = Effect.gen(function* () {
         yield* poke;
         return yield* applied;
       });
-      return yield* BoardIntent.match(intent, {
+      return yield* Match.valueTags(intent, {
         Reorder: Effect.fnUntraced(function* ({ at }) {
           const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
           const index = steps.findIndex((step) => step.id === at);
@@ -498,7 +507,7 @@ const make = Effect.gen(function* () {
         yield* orchestrator.poke(goal.goalInstanceId);
         return { status: fresh ? ("reassigned" as const) : ("applied" as const) };
       });
-      return yield* ChangeDecision.match(decision, {
+      return yield* Match.valueTags(decision, {
         Reject: ({ reason }) =>
           Effect.as(settle("rejected", reason), { status: "rejected" as const }),
         Apply: () => apply(false),
@@ -522,14 +531,14 @@ const make = Effect.gen(function* () {
         verdicts,
         Effect.fnUntraced(function* (verdict) {
           const card = yield* cardOf(sessionId, verdict.cardId);
-          yield* GoalChangeVerdict.match(verdict, {
+          yield* Match.valueTags(verdict, {
             Continue: () => Effect.void,
             Amend: ({ patch, note }) => amend(goal, card, patch, note, author, false),
             Stop: ({ reason }) =>
               Effect.gen(function* () {
                 yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
                   ...current,
-                  reason: { _tag: "GoalChanged", note: reason },
+                  reason: CardHoldReason.cases.GoalChanged.make({ note: reason }),
                 }));
                 yield* closeDecisions(goal, [card.id], "card_stopped");
                 if (running(card))
@@ -571,7 +580,7 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
                   ...current,
-                  reason: { _tag: "GoalChanged", note: question },
+                  reason: CardHoldReason.cases.GoalChanged.make({ note: question }),
                 }));
                 if (card.status === "done") return;
                 // The request moves the card first, so a running attempt then ends as Stopped. One
@@ -581,11 +590,10 @@ const make = Effect.gen(function* () {
                   goalInstanceId: goal.goalInstanceId,
                   cardId: card.id,
                   key: `impact_unclear:${hold.fromVersion}:${hold.toVersion}`,
-                  kind: {
-                    _tag: "ImpactUnclear",
+                  kind: DecisionKind.cases.ImpactUnclear.make({
                     fromGoalVersion: hold.fromVersion,
                     toGoalVersion: hold.toVersion,
-                  },
+                  }),
                   author,
                 });
                 if (running(card))

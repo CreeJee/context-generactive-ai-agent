@@ -1,4 +1,4 @@
-import { Crypto, Effect, Result, Schema } from "effect";
+import { Crypto, Effect, Match, Result, Schema } from "effect";
 import {
   AgentChat,
   AppEvents,
@@ -60,38 +60,37 @@ export function action({ request, params }: Route.ActionArgs) {
         const events = yield* AppEvents;
         const sessions = yield* Sessions;
         const session = yield* sessions.get(params.session);
-        const change = body.success;
-        switch (change._tag) {
-          case "Archive": {
-            const result = yield* chat.archive(
-              params.session,
-              holder,
-              change.archived,
-              change.idempotencyKey ?? (yield* (yield* Crypto.Crypto).randomUUIDv4()),
-            );
-            events.publishProject(session.projectId, "sessions");
-            return result;
-          }
-          case "Delete": {
-            const result = yield* chat.deleteSession(params.session, holder, change.idempotencyKey);
-            events.publishProject(session.projectId, "sessions");
-            return result;
-          }
-          case "Phase": {
-            const workflow = yield* chat.setWorkflowPhase(params.session, holder, change.phase);
-            yield* events.publishSession(params.session, "run-state");
-            return workflow;
-          }
-          case "Control": {
-            const workflow = yield* chat.controlWorkflow(
-              params.session,
-              holder,
-              change.workflowAction,
-            );
-            yield* events.publishSession(params.session, "run-state");
-            return workflow;
-          }
-        }
+        return yield* Match.valueTags(body.success, {
+          Archive: ({ archived, idempotencyKey }) =>
+            Effect.gen(function* () {
+              const result = yield* chat.archive(
+                params.session,
+                holder,
+                archived,
+                idempotencyKey ?? (yield* (yield* Crypto.Crypto).randomUUIDv4()),
+              );
+              events.publishProject(session.projectId, "sessions");
+              return result;
+            }),
+          Delete: ({ idempotencyKey }) =>
+            Effect.gen(function* () {
+              const result = yield* chat.deleteSession(params.session, holder, idempotencyKey);
+              events.publishProject(session.projectId, "sessions");
+              return result;
+            }),
+          Phase: ({ phase }) =>
+            Effect.gen(function* () {
+              const workflow = yield* chat.setWorkflowPhase(params.session, holder, phase);
+              yield* events.publishSession(params.session, "run-state");
+              return workflow;
+            }),
+          Control: ({ workflowAction }) =>
+            Effect.gen(function* () {
+              const workflow = yield* chat.controlWorkflow(params.session, holder, workflowAction);
+              yield* events.publishSession(params.session, "run-state");
+              return workflow;
+            }),
+        });
       }
     }),
   );

@@ -19,12 +19,12 @@ import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
-import { stepProgressStatus, type BoardAuthor } from "./card.ts";
+import { BoardAuthor, stepProgressStatus } from "./card.ts";
 import {
+  PlanDependencyIssue,
   planDependencyIssues,
   planSchedule,
   unmetDependencyText,
-  type PlanDependencyIssue,
 } from "./plan-schedule.ts";
 
 const exposeProgressRefusal = <A, R>(
@@ -50,7 +50,7 @@ const make = Effect.gen(function* () {
         const run = Effect.runPromiseWith(onRun(runtime, caller));
         // A run's own Plan and progress saves are board changes made by that run.
         const author: BoardAuthor | undefined =
-          runId.length > 0 ? { _tag: "Orchestrator", runId } : undefined;
+          runId.length > 0 ? BoardAuthor.cases.Orchestrator.make({ runId }) : undefined;
         const recordBlocker = toolDefinition({
           name: "record_workflow_blocker",
           description:
@@ -212,18 +212,13 @@ const compactList = (items: readonly string[], limit = 6) =>
         .map((item) => `- ${item}`)
         .join("\n");
 
-const dependencyIssueText = (issue: PlanDependencyIssue) => {
-  switch (issue._tag) {
-    case "DuplicateStepId":
-      return `step id ${issue.stepId} is used more than once`;
-    case "UnknownDependency":
-      return `step ${issue.stepId} depends on ${issue.dependsOn}, which is not a step in this Plan`;
-    case "SelfDependency":
-      return `step ${issue.stepId} depends on itself`;
-    case "DependencyCycle":
-      return `dependency cycle ${issue.cycle.join(" -> ")}`;
-  }
-};
+const dependencyIssueText = PlanDependencyIssue.match({
+  DuplicateStepId: ({ stepId }) => `step id ${stepId} is used more than once`,
+  UnknownDependency: ({ stepId, dependsOn }) =>
+    `step ${stepId} depends on ${dependsOn}, which is not a step in this Plan`,
+  SelfDependency: ({ stepId }) => `step ${stepId} depends on itself`,
+  DependencyCycle: ({ cycle }) => `dependency cycle ${cycle.join(" -> ")}`,
+});
 
 const scheduleText = (steps: readonly PlanStep[]) => {
   const issues = planDependencyIssues(steps).map(dependencyIssueText);

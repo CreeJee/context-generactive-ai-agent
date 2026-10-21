@@ -1,4 +1,4 @@
-import { Effect, Schema, Struct, type Types } from "effect";
+import { Data, Effect, Schema, Struct, type Types } from "effect";
 import { BoardAuthor, CardRisk, cardContractKeys, type CardStatus } from "./card.ts";
 import {
   notStartedStatus,
@@ -40,27 +40,27 @@ export type CardPatch = typeof CardPatch.Type;
 const Index = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)));
 
 /** A user's board change. `planVersion` is the Plan the user saw; a newer one refuses it. */
-export const BoardEdit = Schema.Union([
-  Schema.TaggedStruct("AddCard", {
+export const BoardEdit = Schema.TaggedUnion({
+  AddCard: {
     planVersion: Schema.Int,
     card: CardDraft,
     index: Schema.optionalKey(Index),
-  }),
-  Schema.TaggedStruct("EditCard", {
+  },
+  EditCard: {
     planVersion: Schema.Int,
     cardId: Schema.String,
     patch: CardPatch,
-  }),
-  Schema.TaggedStruct("MoveCard", { planVersion: Schema.Int, cardId: Schema.String, index: Index }),
-  Schema.TaggedStruct("CancelCard", { planVersion: Schema.Int, cardId: Schema.String }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  },
+  MoveCard: { planVersion: Schema.Int, cardId: Schema.String, index: Index },
+  CancelCard: { planVersion: Schema.Int, cardId: Schema.String },
+});
 export type BoardEdit = typeof BoardEdit.Type;
 
 /** What a user asked of an executing card; the orchestrator settles it. */
-export const UserChange = Schema.Union([
-  Schema.TaggedStruct("Edit", { patch: CardPatch }),
-  Schema.TaggedStruct("Cancel", {}),
-]).pipe(Schema.toTaggedUnion("_tag"));
+export const UserChange = Schema.TaggedUnion({
+  Edit: { patch: CardPatch },
+  Cancel: {},
+});
 export type UserChange = typeof UserChange.Type;
 
 export const UserChangeRequestStatus = Schema.Literals([
@@ -82,9 +82,11 @@ export const UserChangeRequest = Schema.Struct({
 export type UserChangeRequest = typeof UserChangeRequest.Type;
 
 /** Answer to a board change: the saved state, or the request stored for an executing card. */
-export type BoardEditResult =
-  | { readonly _tag: "Applied"; readonly state: WorkflowState }
-  | { readonly _tag: "Requested"; readonly request: UserChangeRequest };
+export type BoardEditResult = Data.TaggedEnum<{
+  Applied: { readonly state: WorkflowState };
+  Requested: { readonly request: UserChangeRequest };
+}>;
+export const BoardEditResult = Data.taggedEnum<BoardEditResult>();
 
 export class BoardEditRefused extends Schema.TaggedError<BoardEditRefused>()("BoardEditRefused", {
   reason: Schema.Literals([
@@ -102,9 +104,11 @@ export class BoardEditRefused extends Schema.TaggedError<BoardEditRefused>()("Bo
 }) {}
 
 /** A change the owner saves on the Plan, or a request it stores for an executing card. */
-export type BoardEditPlan =
-  | { readonly _tag: "Apply"; readonly plan: PlanArtifact; readonly detail: string }
-  | { readonly _tag: "Request"; readonly cardId: string; readonly change: UserChange };
+export type BoardEditPlan = Data.TaggedEnum<{
+  Apply: { readonly plan: PlanArtifact; readonly detail: string };
+  Request: { readonly cardId: string; readonly change: UserChange };
+}>;
+export const BoardEditPlan = Data.taggedEnum<BoardEditPlan>();
 
 /** Executing cards are the orchestrator's; a user change to one waits as a request. */
 const waitsForOrchestrator = (author: BoardAuthor, status: CardStatus) =>
@@ -178,7 +182,7 @@ export const planBoardEdit = Effect.fnUntraced(function* (
     return yield* BoardEditRefused.make({ reason: "plan_version_conflict" });
   const applied = Effect.fnUntraced(function* (steps: readonly PlanStep[], detail: string) {
     yield* validatePlanDependencies(steps);
-    return { _tag: "Apply" as const, plan: { ...plan, steps, version: plan.version + 1 }, detail };
+    return BoardEditPlan.Apply({ plan: { ...plan, steps, version: plan.version + 1 }, detail });
   });
   const changeCard = Effect.fnUntraced(function* (cardId: string, change: UserChange) {
     const card = plan.steps.find((step) => step.id === cardId);
@@ -190,7 +194,7 @@ export const planBoardEdit = Effect.fnUntraced(function* (
         Edit: ({ patch }) => validatePlanDependencies(replace(plan.steps, patched(card, patch))),
         Cancel: () => Effect.void,
       });
-      return { _tag: "Request" as const, cardId: card.id, change };
+      return BoardEditPlan.Request({ cardId: card.id, change });
     }
     return yield* UserChange.match(change, {
       Edit: ({ patch }) =>
@@ -220,8 +224,8 @@ export const planBoardEdit = Effect.fnUntraced(function* (
       if (from < 0) return yield* BoardEditRefused.make({ reason: "card_missing" });
       return yield* applied(moved(plan.steps, from, index), `card ${cardId} moved to ${index + 1}`);
     }),
-    EditCard: ({ cardId, patch }) => changeCard(cardId, { _tag: "Edit", patch }),
-    CancelCard: ({ cardId }) => changeCard(cardId, { _tag: "Cancel" }),
+    EditCard: ({ cardId, patch }) => changeCard(cardId, UserChange.cases.Edit.make({ patch })),
+    CancelCard: ({ cardId }) => changeCard(cardId, UserChange.cases.Cancel.make({})),
   });
 });
 
@@ -312,15 +316,15 @@ export const planCardHold = Effect.fnUntraced(function* (
  * What a person means by dragging a card on the board. The board turns a drop into one of these;
  * the owner decides the card's status from it.
  */
-export const BoardIntent = Schema.Union([
+export const BoardIntent = Schema.TaggedUnion({
   /** Same column: the card takes the place of `at`, which ranks it in the Goal's queue. */
-  Schema.TaggedStruct("Reorder", { cardId: Schema.String, at: Schema.String }),
+  Reorder: { cardId: Schema.String, at: Schema.String },
   /** A blocked card goes back on the queue with a fresh attempt record. */
-  Schema.TaggedStruct("Requeue", { cardId: Schema.String }),
-  Schema.TaggedStruct("Hold", { cardId: Schema.String }),
-  Schema.TaggedStruct("Release", { cardId: Schema.String }),
+  Requeue: { cardId: Schema.String },
+  Hold: { cardId: Schema.String },
+  Release: { cardId: Schema.String },
   /** A change to an executing card, which the orchestrator settles. */
-  Schema.TaggedStruct("ChangeRequest", { cardId: Schema.String, patch: CardPatch }),
-  Schema.TaggedStruct("Cancel", { cardId: Schema.String }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  ChangeRequest: { cardId: Schema.String, patch: CardPatch },
+  Cancel: { cardId: Schema.String },
+});
 export type BoardIntent = typeof BoardIntent.Type;

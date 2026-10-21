@@ -66,10 +66,10 @@ export const cardContract = <S extends Schema.Struct.Type<typeof cardContractFie
   Struct.pick(card, cardContractKeys);
 
 /** Who changed the board; recorded with every board revision. */
-export const BoardAuthor = Schema.Union([
-  Schema.TaggedStruct("User", {}),
-  Schema.TaggedStruct("Orchestrator", { runId: Schema.String }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+export const BoardAuthor = Schema.TaggedUnion({
+  User: {},
+  Orchestrator: { runId: Schema.String },
+});
 export type BoardAuthor = typeof BoardAuthor.Type;
 
 /**

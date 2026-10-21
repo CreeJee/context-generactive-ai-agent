@@ -1,4 +1,9 @@
-import type { BundleEvent, BundleRun, BundleText, ReportBundle } from "./bundle-contract.ts";
+import {
+  BundleEvent,
+  type BundleRun,
+  type BundleText,
+  type ReportBundle,
+} from "./bundle-contract.ts";
 
 /** One part of the bundle as the diagnosis model reads it, named by its place in the bundle. */
 export interface DigestItem {
@@ -40,18 +45,14 @@ const callOutcome = (ok: boolean | null | undefined) => {
   }
 };
 
-const eventLine = (event: BundleEvent): string => {
-  switch (event._tag) {
-    case "Message":
-      return `${event.role}: ${clip(event.text.text.replace(/\s+/g, " "), 120)}`;
-    case "ToolCall":
-      return `call-${event.seq} ${event.name ?? "?"} → ${callOutcome(event.result?.ok)}`;
-    case "Approval":
-      return `approval ${event.tool ?? "?"} ${event.status}${event.approved === null ? "" : event.approved ? " approved" : " denied"}`;
-    case "Trace":
-      return `work trace ${event.status}${event.failure === null ? "" : ` failure=${event.failure}`}`;
-  }
-};
+const eventLine = BundleEvent.match({
+  Message: (event) => `${event.role}: ${clip(event.text.text.replace(/\s+/g, " "), 120)}`,
+  ToolCall: (event) => `call-${event.seq} ${event.name ?? "?"} → ${callOutcome(event.result?.ok)}`,
+  Approval: (event) =>
+    `approval ${event.tool ?? "?"} ${event.status}${event.approved === null ? "" : event.approved ? " approved" : " denied"}`,
+  Trace: (event) =>
+    `work trace ${event.status}${event.failure === null ? "" : ` failure=${event.failure}`}`,
+});
 
 const runHead = (run: BundleRun) =>
   `${runPlace(run)} ${run.status} ${run.startedAt}${run.error === null ? "" : ` error=${run.error.code ?? "unknown"}`}`;
@@ -59,18 +60,14 @@ const runHead = (run: BundleRun) =>
 /** A run failed, or something in it did. */
 export const runHasFailure = (run: BundleRun) =>
   run.error !== null ||
-  run.events.some((event) => {
-    switch (event._tag) {
-      case "ToolCall":
-        return event.result?.ok === false;
-      case "Approval":
-        return event.approved === false;
-      case "Trace":
-        return event.failure !== null;
-      case "Message":
-        return false;
-    }
-  });
+  run.events.some(
+    BundleEvent.match({
+      ToolCall: (event) => event.result?.ok === false,
+      Approval: (event) => event.approved === false,
+      Trace: (event) => event.failure !== null,
+      Message: () => false,
+    }),
+  );
 
 const environmentText = (bundle: ReportBundle) => {
   const { environment } = bundle;
@@ -97,27 +94,27 @@ const environmentText = (bundle: ReportBundle) => {
 
 /** A failing run's error, the message that asked for it, and each failed call or refusal. */
 const failureText = (run: BundleRun) => {
-  const lastAsk = run.events.findLast((event) => event._tag === "Message" && event.role === "user");
+  const lastAsk = run.events
+    .filter(BundleEvent.guards.Message)
+    .findLast((event) => event.role === "user");
   const parts = [
     runHead(run),
     ...(run.error === null ? [] : [`error detail: ${shown(run.error.detail)}`]),
-    ...(lastAsk?._tag === "Message" ? [`user asked: ${shown(lastAsk.text)}`] : []),
-    ...run.events.flatMap((event) => {
-      switch (event._tag) {
-        case "ToolCall":
-          return event.result?.ok === false
+    ...(lastAsk === undefined ? [] : [`user asked: ${shown(lastAsk.text)}`]),
+    ...run.events.flatMap(
+      BundleEvent.match({
+        ToolCall: (event): string[] =>
+          event.result?.ok === false
             ? [
                 `call-${event.seq} ${event.name ?? "?"} input: ${shown(event.input)}`,
                 `call-${event.seq} result: ${shown(event.result.text)}`,
               ]
-            : [];
-        case "Approval":
-          return event.approved === false ? [eventLine(event)] : [];
-        case "Message":
-        case "Trace":
-          return [];
-      }
-    }),
+            : [],
+        Approval: (event) => (event.approved === false ? [eventLine(event)] : []),
+        Message: () => [],
+        Trace: () => [],
+      }),
+    ),
   ];
   return parts.join("\n");
 };
@@ -129,9 +126,9 @@ export function bundlePlaces(bundle: ReportBundle): Set<string> {
     "timeline",
     ...bundle.timeline.items.flatMap((run) => [
       runPlace(run),
-      ...run.events.flatMap((event) =>
-        event._tag === "ToolCall" ? [`${runPlace(run)}/call-${event.seq}`] : [],
-      ),
+      ...run.events
+        .filter(BundleEvent.guards.ToolCall)
+        .map((event) => `${runPlace(run)}/call-${event.seq}`),
     ]),
   ]);
 }

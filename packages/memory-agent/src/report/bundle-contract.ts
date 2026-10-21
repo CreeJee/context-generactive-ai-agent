@@ -24,53 +24,45 @@ const section = <S extends Schema.Constraint>(item: S) =>
     truncated: Schema.Boolean,
   });
 
-export const BundleMessage = Schema.TaggedStruct("Message", {
-  role: Schema.Literals(["user", "assistant"]),
-  at: Schema.String,
-  text: BundleText,
+export const BundleEvent = Schema.TaggedUnion({
+  Message: {
+    role: Schema.Literals(["user", "assistant"]),
+    at: Schema.String,
+    text: BundleText,
+  },
+  ToolCall: {
+    /** Order of the call within its run, from 1. */
+    seq: Schema.Int,
+    name: Schema.NullOr(Schema.String),
+    at: Schema.String,
+    input: BundleText,
+    result: Schema.NullOr(
+      Schema.Struct({
+        /** `null` when the record does not say. */
+        ok: Schema.NullOr(Schema.Boolean),
+        at: Schema.String,
+        text: BundleText,
+      }),
+    ),
+  },
+  Approval: {
+    status: Schema.String,
+    tool: Schema.NullOr(Schema.String),
+    /** `null` when not answered or the answer is not an approval. */
+    approved: Schema.NullOr(Schema.Boolean),
+    requestedAt: Schema.String,
+    resolvedAt: Schema.NullOr(Schema.String),
+  },
+  Trace: {
+    ref: Schema.String,
+    status: Schema.String,
+    /** The tool call of the run that started the task, by its order; `null` when not in the bundle. */
+    parentToolSeq: Schema.NullOr(Schema.Int),
+    /** Why the task's latest attempt ended abnormally, as its failure tag; `null` when it did not. */
+    failure: Schema.NullOr(Schema.String),
+    updatedAt: Schema.String,
+  },
 });
-
-export const BundleToolCall = Schema.TaggedStruct("ToolCall", {
-  /** Order of the call within its run, from 1. */
-  seq: Schema.Int,
-  name: Schema.NullOr(Schema.String),
-  at: Schema.String,
-  input: BundleText,
-  result: Schema.NullOr(
-    Schema.Struct({
-      /** `null` when the record does not say. */
-      ok: Schema.NullOr(Schema.Boolean),
-      at: Schema.String,
-      text: BundleText,
-    }),
-  ),
-});
-
-export const BundleApproval = Schema.TaggedStruct("Approval", {
-  status: Schema.String,
-  tool: Schema.NullOr(Schema.String),
-  /** `null` when not answered or the answer is not an approval. */
-  approved: Schema.NullOr(Schema.Boolean),
-  requestedAt: Schema.String,
-  resolvedAt: Schema.NullOr(Schema.String),
-});
-
-export const BundleTrace = Schema.TaggedStruct("Trace", {
-  ref: Schema.String,
-  status: Schema.String,
-  /** The tool call of the run that started the task, by its order; `null` when not in the bundle. */
-  parentToolSeq: Schema.NullOr(Schema.Int),
-  /** Why the task's latest attempt ended abnormally, as its failure tag; `null` when it did not. */
-  failure: Schema.NullOr(Schema.String),
-  updatedAt: Schema.String,
-});
-
-export const BundleEvent = Schema.Union([
-  BundleMessage,
-  BundleToolCall,
-  BundleApproval,
-  BundleTrace,
-]);
 export type BundleEvent = typeof BundleEvent.Type;
 
 export const BundleRun = Schema.Struct({

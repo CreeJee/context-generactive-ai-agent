@@ -1,6 +1,7 @@
 import { chatParamsFromRequestBody, toServerSentEventsResponse } from "@tanstack/ai";
 import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
-import { Context, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Context, Effect, Layer, Option, Stream } from "effect";
+import { failureTags } from "../runtime/logged-failures.ts";
 import { incomingUserTurn } from "../agent/chat.ts";
 import { createChatExecution } from "../agent/chat-execution.ts";
 import { withShownRunErrors } from "../agent/run-errors.ts";
@@ -86,7 +87,9 @@ const make = Effect.gen(function* () {
         // Unknown model capabilities are answered as no images, as for a model without them.
         Effect.catch((error) =>
           Effect.as(
-            Effect.logDebug("btw_model_capabilities_unavailable", { error: error._tag }),
+            Effect.logDebug("btw_model_capabilities_unavailable", {
+              error: failureTags(Cause.fail(error)),
+            }),
             false,
           ),
         ),

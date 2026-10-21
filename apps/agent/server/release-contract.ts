@@ -81,27 +81,33 @@ const encoder = new TextEncoder();
 const unsigned = (manifest: ReleaseManifest) => encoder.encode(canonicalJson(manifest));
 
 /** Why a release was not accepted: its signature, its trust anchor, or the update policy. */
+export const ReleaseRejectedReason = Schema.TaggedUnion({
+  UntrustedKey: { keyId: Schema.String },
+  InvalidKey: { keyId: Schema.String, cause: Schema.Defect() },
+  InvalidSignature: {},
+  PrereleaseDisabled: {},
+  NotNewer: {},
+  UpdaterTooOld: { minimum: Schema.String },
+  MissingAsset: { target: Schema.String },
+  AssetNameMismatch: { target: Schema.String },
+});
+export type ReleaseRejectedReason = typeof ReleaseRejectedReason.Type;
+const rejected = ReleaseRejectedReason.cases;
+
 export class ReleaseRejected extends Schema.TaggedError<ReleaseRejected>()("ReleaseRejected", {
-  reason: Schema.Union([
-    Schema.TaggedStruct("UntrustedKey", { keyId: Schema.String }),
-    Schema.TaggedStruct("InvalidKey", { keyId: Schema.String, cause: Schema.Defect() }),
-    Schema.TaggedStruct("InvalidSignature", {}),
-    Schema.TaggedStruct("PrereleaseDisabled", {}),
-    Schema.TaggedStruct("NotNewer", {}),
-    Schema.TaggedStruct("UpdaterTooOld", { minimum: Schema.String }),
-    Schema.TaggedStruct("MissingAsset", { target: Schema.String }),
-    Schema.TaggedStruct("AssetNameMismatch", { target: Schema.String }),
-  ]),
+  reason: ReleaseRejectedReason,
 }) {}
+
+export const ReleaseSigningFailedReason = Schema.TaggedUnion({
+  InvalidKey: { cause: Schema.Defect() },
+  SignFailed: { cause: Schema.Defect() },
+});
+export type ReleaseSigningFailedReason = typeof ReleaseSigningFailedReason.Type;
+const signing = ReleaseSigningFailedReason.cases;
 
 export class ReleaseSigningFailed extends Schema.TaggedError<ReleaseSigningFailed>()(
   "ReleaseSigningFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("InvalidKey", { cause: Schema.Defect() }),
-      Schema.TaggedStruct("SignFailed", { cause: Schema.Defect() }),
-    ]),
-  },
+  { reason: ReleaseSigningFailedReason },
 ) {}
 
 const ed25519 = { name: "Ed25519" } as const;
@@ -147,12 +153,12 @@ function signReleaseManifestBody(
   return Effect.gen(function* () {
     const key = yield* importPemKey(privateKey, privatePem).pipe(
       Effect.mapError(({ cause }) =>
-        ReleaseSigningFailed.make({ reason: { _tag: "InvalidKey", cause } }),
+        ReleaseSigningFailed.make({ reason: signing.InvalidKey.make({ cause }) }),
       ),
     );
     const signature = yield* Effect.tryPromise({
       try: () => crypto.subtle.sign(ed25519, key, unsigned(manifest)),
-      catch: (cause) => ReleaseSigningFailed.make({ reason: { _tag: "SignFailed", cause } }),
+      catch: (cause) => ReleaseSigningFailed.make({ reason: signing.SignFailed.make({ cause }) }),
     });
     return { keyId, signature: Base64.encode(new Uint8Array(signature)) };
   });
@@ -173,19 +179,19 @@ function verifyManifestSignatureBody(
     const { keyId } = signature;
     const publicKey = trustedKeys[keyId];
     if (!isTruthy(publicKey))
-      return yield* ReleaseRejected.make({ reason: { _tag: "UntrustedKey", keyId } });
+      return yield* ReleaseRejected.make({ reason: rejected.UntrustedKey.make({ keyId }) });
     const key = yield* importPemKey(publicKey, publicPem).pipe(
       Effect.mapError(({ cause }) =>
-        ReleaseRejected.make({ reason: { _tag: "InvalidKey", keyId, cause } }),
+        ReleaseRejected.make({ reason: rejected.InvalidKey.make({ keyId, cause }) }),
       ),
     );
     // Preserve Node's accepted unpadded/base64url/whitespace input; Base64.decode is stricter.
     const bytes = Buffer.from(signature.signature, "base64");
     const valid = yield* Effect.tryPromise({
       try: () => crypto.subtle.verify(ed25519, key, bytes, unsigned(manifest)),
-      catch: () => ReleaseRejected.make({ reason: { _tag: "InvalidSignature" } }),
+      catch: () => ReleaseRejected.make({ reason: rejected.InvalidSignature.make({}) }),
     });
-    if (!valid) return yield* ReleaseRejected.make({ reason: { _tag: "InvalidSignature" } });
+    if (!valid) return yield* ReleaseRejected.make({ reason: rejected.InvalidSignature.make({}) });
   });
 }
 
@@ -272,25 +278,25 @@ function acceptReleaseBody(
     const signature = yield* Schema.decodeEffect(ManifestSignature)(envelope.signature);
     yield* verifyManifestSignature(manifest, signature, trustedKeys);
     if (manifest.channel === "prerelease" && !(options.allowPrerelease === true))
-      return yield* ReleaseRejected.make({ reason: { _tag: "PrereleaseDisabled" } });
+      return yield* ReleaseRejected.make({ reason: rejected.PrereleaseDisabled.make({}) });
     const decodeVersion = Schema.decodeEffect(SemVer);
     if (
       !(options.allowDowngrade === true) &&
       compareVersions(manifest.version, yield* decodeVersion(options.currentVersion)) <= 0
     )
-      return yield* ReleaseRejected.make({ reason: { _tag: "NotNewer" } });
+      return yield* ReleaseRejected.make({ reason: rejected.NotNewer.make({}) });
     if (
       compareVersions(yield* decodeVersion(options.updaterVersion), manifest.minUpdaterVersion) < 0
     )
       return yield* ReleaseRejected.make({
-        reason: { _tag: "UpdaterTooOld", minimum: manifest.minUpdaterVersion },
+        reason: rejected.UpdaterTooOld.make({ minimum: manifest.minUpdaterVersion }),
       });
     const { target } = options;
     const asset = manifest.assets[target];
     if (!Predicate.isNotNullish(asset))
-      return yield* ReleaseRejected.make({ reason: { _tag: "MissingAsset", target } });
+      return yield* ReleaseRejected.make({ reason: rejected.MissingAsset.make({ target }) });
     if (asset.name !== releaseAssetName(manifest.version, target))
-      return yield* ReleaseRejected.make({ reason: { _tag: "AssetNameMismatch", target } });
+      return yield* ReleaseRejected.make({ reason: rejected.AssetNameMismatch.make({ target }) });
     return asset;
   });
 }

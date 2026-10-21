@@ -1,4 +1,4 @@
-import { toolFailedOf, toolResultKey } from "../tools/failure.ts";
+import { errorTag, toolFailedOf, toolResultKey } from "../tools/failure.ts";
 import { NodeWorker } from "@effect/platform-node";
 import { referenceIds } from "../runtime/reference-ids.ts";
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
@@ -57,6 +57,7 @@ import {
 } from "./full-loop-provider-retry.ts";
 import {
   assertFullLoopPortable,
+  FullLoopAdmissionReason,
   FullLoopAdmissionRejected,
   reject,
 } from "./full-loop-admission-preflight.ts";
@@ -66,27 +67,28 @@ import {
  * worker named a stream, tool, hook or decision the owner never issued. The worker sees it as the
  * rejection of its owner call; nothing here carries model, tool or provider text.
  */
+export const FullLoopOwnerRefusal = Schema.TaggedUnion({
+  /** The owner capability was revoked or the run is finalizing. */
+  Inactive: { stage: Schema.Literals(["run", "tool", "chunk"]) },
+  UnknownModelStream: {},
+  UnsupportedApprovalTool: {},
+  UnsupportedToolDecision: {},
+  UnknownTool: {},
+  InvalidRoutedPersistence: {},
+  UnknownMiddlewareHook: {},
+  UnobservedToolPhaseCall: {},
+  /** A middleware's setup did not provide a capability it declares. */
+  SetupCapabilityMissing: {},
+  /** A middleware result tried to replace the owner's tools. */
+  ToolReplacement: {},
+});
+
 export class FullLoopOwnerRefused extends Schema.TaggedError<FullLoopOwnerRefused>()(
   "FullLoopOwnerRefused",
-  {
-    reason: Schema.Union([
-      /** The owner capability was revoked or the run is finalizing. */
-      Schema.TaggedStruct("Inactive", { stage: Schema.Literals(["run", "tool", "chunk"]) }),
-      Schema.TaggedStruct("UnknownModelStream", {}),
-      Schema.TaggedStruct("UnsupportedApprovalTool", {}),
-      Schema.TaggedStruct("UnsupportedToolDecision", {}),
-      Schema.TaggedStruct("UnknownTool", {}),
-      Schema.TaggedStruct("InvalidRoutedPersistence", {}),
-      Schema.TaggedStruct("UnknownMiddlewareHook", {}),
-      Schema.TaggedStruct("UnobservedToolPhaseCall", {}),
-      /** A middleware's setup did not provide a capability it declares. */
-      Schema.TaggedStruct("SetupCapabilityMissing", {}),
-      /** A middleware result tried to replace the owner's tools. */
-      Schema.TaggedStruct("ToolReplacement", {}),
-    ]),
-  },
+  { reason: FullLoopOwnerRefusal },
 ) {}
 const refused = (reason: FullLoopOwnerRefused["reason"]) => FullLoopOwnerRefused.make({ reason });
+const { cases: refusal } = FullLoopOwnerRefusal;
 
 // Descriptor inspection rejects accessors without invoking owner-supplied getters.
 function ownerData<T extends object>(value: T): T {
@@ -95,7 +97,7 @@ function ownerData<T extends object>(value: T): T {
     if (!isTruthy(descriptor) || descriptor.get !== undefined || descriptor.set !== undefined)
       throw FullLoopAdmissionRejected.make({
         member: "owner snapshot",
-        reason: { _tag: "Accessor" },
+        reason: FullLoopAdmissionReason.cases.Accessor.make({}),
       });
   }
   // All own string/symbol accessors were rejected above. Object.assign retains the
@@ -106,7 +108,7 @@ function ownerData<T extends object>(value: T): T {
     if (!isTruthy(descriptor) || descriptor.get !== undefined || descriptor.set !== undefined)
       throw FullLoopAdmissionRejected.make({
         member: "owner snapshot",
-        reason: { _tag: "Accessor" },
+        reason: FullLoopAdmissionReason.cases.Accessor.make({}),
       });
     Object.defineProperty(snapshot, key, { ...descriptor, writable: true, configurable: true });
   }
@@ -128,10 +130,16 @@ function ownerMember(receiver: object, key: string): any {
     const descriptor = Object.getOwnPropertyDescriptor(current, key);
     if (!isTruthy(descriptor)) continue;
     if (descriptor.get !== undefined || descriptor.set !== undefined)
-      throw FullLoopAdmissionRejected.make({ member: key, reason: { _tag: "Accessor" } });
+      throw FullLoopAdmissionRejected.make({
+        member: key,
+        reason: FullLoopAdmissionReason.cases.Accessor.make({}),
+      });
     return descriptor.value;
   }
-  throw FullLoopAdmissionRejected.make({ member: key, reason: { _tag: "MissingMember" } });
+  throw FullLoopAdmissionRejected.make({
+    member: key,
+    reason: FullLoopAdmissionReason.cases.MissingMember.make({}),
+  });
 }
 
 // Same descriptor-reflection boundary; bind the captured callable to its original
@@ -140,7 +148,10 @@ function ownerMember(receiver: object, key: string): any {
 function ownerMethod(receiver: object, key: string): any {
   const method = ownerMember(receiver, key);
   if (!(method instanceof Function))
-    throw FullLoopAdmissionRejected.make({ member: key, reason: { _tag: "NotCallable" } });
+    throw FullLoopAdmissionRejected.make({
+      member: key,
+      reason: FullLoopAdmissionReason.cases.NotCallable.make({}),
+    });
   return method.bind(receiver);
 }
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
@@ -168,7 +179,7 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
     if (!isTruthy(tool.execute) || MutableHashSet.has(names, tool.name))
       throw FullLoopAdmissionRejected.make({
         member: tool.name,
-        reason: { _tag: "UnsupportedTool" },
+        reason: FullLoopAdmissionReason.cases.UnsupportedTool.make({}),
       });
     MutableHashSet.add(names, tool.name);
   }
@@ -248,7 +259,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             const releaseWorkerAdmission = yield* owner.admission.acquire("worker");
             yield* Effect.addFinalizer(() => releaseWorkerAdmission);
             if (!(yield* owner.permits(owner.capability)))
-              return yield* refused({ _tag: "Inactive", stage: "run" });
+              return yield* refused(refusal.Inactive.make({ stage: "run" }));
             if (controller.signal.aborted) return { pull: Cause.done() };
             // Pin callable references and inventory before the first await. Bind to the
             // original receivers (private fields/WeakMaps), never freeze shared owners.
@@ -435,7 +446,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                             // Best effort: the Worker's own exit still releases the lease.
                             Effect.catch((error) =>
                               Effect.logWarning("Goal worker termination failed", {
-                                error: error._tag,
+                                error: errorTag(error),
                                 operation: error.operation,
                               }),
                             ),
@@ -511,7 +522,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       controller.signal.aborted ||
                       !(yield* owner.permits(owner.capability))
                     )
-                      return yield* refused({ _tag: "Inactive", stage: "tool" });
+                      return yield* refused(refusal.Inactive.make({ stage: "tool" }));
                     grants.start({ name: tool.name, toolCallId: context?.toolCallId, args });
                     return yield* owner.admission.run(
                       "tool",
@@ -696,7 +707,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       Effect.gen(function* () {
                         input = decodeFullLoopValue(input);
                         const model = Option.getOrUndefined(MutableHashMap.get(models, input.id));
-                        if (!isTruthy(model)) return yield* refused({ _tag: "UnknownModelStream" });
+                        if (!isTruthy(model))
+                          return yield* refused(refusal.UnknownModelStream.make({}));
                         const next = yield* pullModelChunk(
                           model,
                           owner.providerRetry,
@@ -778,7 +790,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           !isTruthy(tool?.execute) ||
                           (isTruthy(tool.needsApproval) && !resumedApproval(invocation.toolCallId))
                         )
-                          return yield* refused({ _tag: "UnsupportedApprovalTool" });
+                          return yield* refused(refusal.UnsupportedApprovalTool.make({}));
                         const events: any[] = [];
                         ownerContext.emitCustomEvent = (name: string, value: any, options: any) =>
                           events.push({ name, value, options });
@@ -808,7 +820,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                             !isTruthy(definition?.execute) ||
                             (isTruthy(definition.needsApproval) && !resumedApproval(call.id))
                           )
-                            return yield* refused({ _tag: "UnsupportedApprovalTool" });
+                            return yield* refused(refusal.UnsupportedApprovalTool.make({}));
                           const input = toolInput(definition, call);
                           if (Result.isFailure(input)) {
                             answerInvalid(call, input.failure);
@@ -860,7 +872,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                             case "abort":
                               break;
                             default:
-                              return yield* refused({ _tag: "UnsupportedToolDecision" });
+                              return yield* refused(refusal.UnsupportedToolDecision.make({}));
                           }
                           MutableHashMap.set(decisions, call.id, decision);
                         }
@@ -926,7 +938,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         input = grants.consume(decodeFullLoopValue(input));
                         const tool = ownerTools.find((tool) => tool.name === input.name);
                         if (!isTruthy(tool?.execute))
-                          return yield* refused({ _tag: "UnknownTool" });
+                          return yield* refused(refusal.UnknownTool.make({}));
                         const args = input.args;
                         const events: any[] = [];
                         const outcome = yield* nativePromise(() =>
@@ -994,12 +1006,12 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           !isTruthy(mw?.routedSubagentPersistence) ||
                           !middleware[input.index]?.routedPersistence.includes(input.method)
                         )
-                          return yield* refused({ _tag: "InvalidRoutedPersistence" });
+                          return yield* refused(refusal.InvalidRoutedPersistence.make({}));
                         const method = Object.entries(mw.routedSubagentPersistence).find(
                           ([key]) => key === input.method,
                         )?.[1];
                         if (!(method instanceof Function))
-                          return yield* refused({ _tag: "InvalidRoutedPersistence" });
+                          return yield* refused(refusal.InvalidRoutedPersistence.make({}));
                         yield* nativePromise(() =>
                           Promise.resolve(method.call(mw.routedSubagentPersistence, input.value)),
                         );
@@ -1041,7 +1053,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         )
                           finalizing = true;
                         if (!isTruthy(mw) || !middleware[input.index]?.hooks.includes(input.hook))
-                          return yield* refused({ _tag: "UnknownMiddlewareHook" });
+                          return yield* refused(refusal.UnknownMiddlewareHook.make({}));
                         const phases = HashMap.fromIterable<string, ChatMiddlewareContext["phase"]>(
                           Object.entries({
                             setup: "init",
@@ -1102,7 +1114,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           const toolCalls = input.info.toolCalls.map(phaseCall);
                           for (const call of toolCalls) {
                             if (!isTruthy(call))
-                              return yield* refused({ _tag: "UnobservedToolPhaseCall" });
+                              return yield* refused(refusal.UnobservedToolPhaseCall.make({}));
                             if (MutableHashMap.has(completedTools, call.id)) continue;
                             if (
                               !isTruthy(
@@ -1161,17 +1173,17 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           };
                         const hook = Object.entries(mw).find(([key]) => key === input.hook)?.[1];
                         if (!(hook instanceof Function))
-                          return yield* refused({ _tag: "UnknownMiddlewareHook" });
+                          return yield* refused(refusal.UnknownMiddlewareHook.make({}));
                         const result = yield* nativePromise(() =>
                           Promise.resolve(hook.call(mw, ctx, info)),
                         );
                         if (input.hook === "setup")
                           for (const handle of mw.provides ?? []) {
                             if (!handle.has(ctx))
-                              return yield* refused({ _tag: "SetupCapabilityMissing" });
+                              return yield* refused(refusal.SetupCapabilityMissing.make({}));
                           }
                         if (isTruthy(result?.tools))
-                          return yield* refused({ _tag: "ToolReplacement" });
+                          return yield* refused(refusal.ToolReplacement.make({}));
                         if (input.hook === "onConfig" && isTruthy(result)) {
                           Object.assign(ownerConfig, result);
                           if (isTruthy(result.messages)) ownerContext.messages = result.messages;
@@ -1265,7 +1277,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   : nativePromise(() => termination).pipe(
                       Effect.catch((error) =>
                         Effect.logWarning("Orphaned Goal worker termination failed", {
-                          error: error._tag,
+                          error: errorTag(error),
                         }),
                       ),
                     );
@@ -1320,7 +1332,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     // envelope has already passed schema decoding.
                     const chunk = value as StreamChunk;
                     if (finalizing || !(yield* owner.permits(owner.capability)))
-                      return yield* refused({ _tag: "Inactive", stage: "chunk" });
+                      return yield* refused(refusal.Inactive.make({ stage: "chunk" }));
                     if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR")
                       terminalObserved = true;
                     return chunk;

@@ -2,6 +2,7 @@ import {
   Cause,
   Clock,
   Context,
+  Data,
   Duration,
   Effect,
   Exit,
@@ -65,17 +66,18 @@ export interface PersistedQueueItemStatus {
   readonly updatedAt: number;
 }
 
+export const PersistedQueueItemsReason = Schema.TaggedUnion({
+  NotFound: {},
+  NotDeadLettered: { state: Schema.Literals(["pending", "completed"]) },
+  StorageFailed: {},
+});
+export type PersistedQueueItemsReason = typeof PersistedQueueItemsReason.Type;
+
 export class PersistedQueueItemsFailed extends Schema.TaggedError<PersistedQueueItemsFailed>()(
   "PersistedQueueItemsFailed",
   {
     operation: Schema.Literals(["status", "dead_letters", "requeue"]),
-    reason: Schema.Union([
-      Schema.TaggedStruct("NotFound", {}),
-      Schema.TaggedStruct("NotDeadLettered", {
-        state: Schema.Literals(["pending", "completed"]),
-      }),
-      Schema.TaggedStruct("StorageFailed", {}),
-    ]),
+    reason: PersistedQueueItemsReason,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -106,11 +108,13 @@ const failureSummary = (cause: Cause.Cause<unknown>) => {
  * interruption hands it back without counting the attempt, an undecodable payload or the last
  * allowed attempt dead-letters it, and any other failure retries it after the queue's delay.
  */
-type Settlement =
-  | { readonly _tag: "Complete" }
-  | { readonly _tag: "Release" }
-  | { readonly _tag: "DeadLetter"; readonly cause: Cause.Cause<unknown> }
-  | { readonly _tag: "Retry"; readonly cause: Cause.Cause<unknown> };
+type Settlement = Data.TaggedEnum<{
+  Complete: {};
+  Release: {};
+  DeadLetter: { readonly cause: Cause.Cause<unknown> };
+  Retry: { readonly cause: Cause.Cause<unknown> };
+}>;
+const Settlement = Data.taggedEnum<Settlement>();
 
 const settlementOf = (
   exit: Exit.Exit<unknown, unknown>,
@@ -118,16 +122,16 @@ const settlementOf = (
   maxAttempts: number,
 ): Settlement =>
   Exit.match(exit, {
-    onSuccess: (): Settlement => ({ _tag: "Complete" }),
+    onSuccess: (): Settlement => Settlement.Complete(),
     onFailure: (cause): Settlement =>
       cause.reasons.some(
         (reason) => Cause.isFailReason(reason) && isDeadLetterSignal(reason.error),
       ) ||
       (attempts >= maxAttempts && !Cause.hasInterruptsOnly(cause))
-        ? { _tag: "DeadLetter", cause }
+        ? Settlement.DeadLetter({ cause })
         : Cause.hasInterruptsOnly(cause)
-          ? { _tag: "Release" }
-          : { _tag: "Retry", cause },
+          ? Settlement.Release()
+          : Settlement.Retry({ cause }),
   });
 
 const make = Effect.fnUntraced(function* (options?: {
@@ -315,7 +319,11 @@ const make = Effect.fnUntraced(function* (options?: {
   const itemsError =
     (operation: PersistedQueueItemsFailed["operation"]) =>
     (cause: SqlError.SqlError | Schema.SchemaError) =>
-      PersistedQueueItemsFailed.make({ operation, reason: { _tag: "StorageFailed" }, cause });
+      PersistedQueueItemsFailed.make({
+        operation,
+        reason: PersistedQueueItemsReason.cases.StorageFailed.make({}),
+        cause,
+      });
 
   const status = Effect.fn("PersistedQueueItems.status")(function* (name: string, id: string) {
     const rows = yield* sql`SELECT state, attempts, acquired_by, last_failure, updated_at
@@ -367,12 +375,13 @@ const make = Effect.fnUntraced(function* (options?: {
       );
       const refuse = (reason: PersistedQueueItemsFailed["reason"]) =>
         PersistedQueueItemsFailed.make({ operation: "requeue", reason });
-      if (Option.isNone(current)) return yield* refuse({ _tag: "NotFound" });
+      if (Option.isNone(current))
+        return yield* refuse(PersistedQueueItemsReason.cases.NotFound.make({}));
       const state = current.value.state;
       switch (state) {
         case "pending":
         case "completed":
-          return yield* refuse({ _tag: "NotDeadLettered", state });
+          return yield* refuse(PersistedQueueItemsReason.cases.NotDeadLettered.make({ state }));
         case "failed": {
           // Status and update run back to back on the single owner connection.
           const at = now();

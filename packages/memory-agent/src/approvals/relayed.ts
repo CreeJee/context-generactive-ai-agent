@@ -28,10 +28,10 @@ const RelayedApprovalPayload = Schema.Struct({
 });
 type RelayedApprovalPayload = typeof RelayedApprovalPayload.Type;
 
-const RelayedApprovalOutcome = Schema.Union([
-  Schema.TaggedStruct("Answered", { approved: Schema.Boolean }),
-  Schema.TaggedStruct("TimedOut", {}),
-]);
+const RelayedApprovalOutcome = Schema.TaggedUnion({
+  Answered: { approved: Schema.Boolean },
+  TimedOut: {},
+});
 type RelayedApprovalOutcome = typeof RelayedApprovalOutcome.Type;
 
 const RelayedApprovalExecution = Workflow.make("RelayedApprovalExecution", {
@@ -52,13 +52,13 @@ const approvalHandler = (payload: RelayedApprovalPayload) =>
     error: Schema.Never,
     effects: [
       DurableDeferred.await(RelayedApprovalDecision).pipe(
-        Effect.map((approved) => ({ _tag: "Answered" as const, approved })),
+        Effect.map((approved) => RelayedApprovalOutcome.cases.Answered.make({ approved })),
       ),
       DurableClock.sleep({
         name: "RelayedApproval/Timeout",
         duration: Duration.millis(payload.timeoutMs),
         inMemoryThreshold: Duration.zero,
-      }).pipe(Effect.as({ _tag: "TimedOut" as const })),
+      }).pipe(Effect.as(RelayedApprovalOutcome.cases.TimedOut.make({}))),
     ],
   });
 
@@ -121,7 +121,12 @@ const make = (timeoutMs: number) =>
             };
             const executionId = yield* RelayedApprovalExecution.executionId(payload);
             const execute = provideEngine(RelayedApprovalExecution.execute(payload)).pipe(
-              Effect.map((outcome) => outcome._tag === "Answered" && outcome.approved),
+              Effect.map(
+                RelayedApprovalOutcome.match({
+                  Answered: ({ approved }) => approved,
+                  TimedOut: () => false,
+                }),
+              ),
               Effect.catchCauseIf(Cause.hasInterrupts, () => Effect.succeed(false)),
             );
             const cancel = Effect.callback<void>((resume) => {

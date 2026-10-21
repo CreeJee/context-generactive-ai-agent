@@ -12,6 +12,7 @@ import { Array as EffectArray } from "effect";
 // Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { NetAddress } from "effect/net";
 import { AgentChat, Sessions, Workflows } from "memory-agent";
 import { createServer } from "vite-plus";
 import { expect } from "vite-plus/test";
@@ -131,7 +132,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                   backendServices,
                 );
                 const backendAddress = backend.address;
-                if (backendAddress._tag === "UnixPathAddress")
+                if (NetAddress.isUnixPathAddress(backendAddress))
                   return yield* Effect.die(new Error("HTTP fixture requires TCP"));
                 const backendUrl = `http://127.0.0.1:${backendAddress.port}`;
                 const frontend = yield* Effect.acquireRelease(

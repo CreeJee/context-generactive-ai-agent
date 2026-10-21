@@ -2,6 +2,7 @@ import {
   Cause,
   Clock,
   Context,
+  Data,
   Duration,
   Effect,
   Function as EffectFunction,
@@ -92,12 +93,14 @@ const waitHandler = (payload: ProviderRetryWaitPayload) =>
 export const providerRetryDelay = (retry: number) =>
   Math.min(providerRetryLimits.initialDelayMs * 2 ** (retry - 1), providerRetryLimits.maxDelayMs);
 
-export type ProviderRetryOutcome =
-  | { readonly _tag: "Retry" }
+export type ProviderRetryOutcome = Data.TaggedEnum<{
+  Retry: {};
   /** Limits reached; the run's continuation is blocked with the reason. */
-  | { readonly _tag: "Exhausted" }
+  Exhausted: {};
   /** The owner cancelled the run while it waited. */
-  | { readonly _tag: "Cancelled" };
+  Cancelled: {};
+}>;
+export const ProviderRetryOutcome = Data.taggedEnum<ProviderRetryOutcome>();
 
 export interface ProviderRetryRequest {
   readonly sessionId: string;
@@ -138,9 +141,9 @@ const make = Effect.gen(function* () {
   /** Joins a wait; an interrupted wait reports cancellation instead of a durable failure. */
   const join = (payload: ProviderRetryWaitPayload) =>
     provideEngine(ProviderRetryWait.execute(payload)).pipe(
-      Effect.as<ProviderRetryOutcome>({ _tag: "Retry" }),
+      Effect.as<ProviderRetryOutcome>(ProviderRetryOutcome.Retry()),
       Effect.catchCauseIf(Cause.hasInterrupts, () =>
-        Effect.succeed<ProviderRetryOutcome>({ _tag: "Cancelled" }),
+        Effect.succeed<ProviderRetryOutcome>(ProviderRetryOutcome.Cancelled()),
       ),
     );
 
@@ -161,7 +164,7 @@ const make = Effect.gen(function* () {
       changed: Effect.Effect<void> = Effect.void,
     ) =>
       Effect.gen(function* () {
-        if (signal.aborted) return { _tag: "Cancelled" } as const;
+        if (signal.aborted) return ProviderRetryOutcome.Cancelled();
         const now = yield* Clock.currentTimeMillis;
         const factor = 1 + ((yield* Random.next) * 2 - 1) * providerRetryLimits.jitter;
         const retryAt =
@@ -181,7 +184,7 @@ const make = Effect.gen(function* () {
             ],
           });
           yield* changed;
-          return { _tag: "Exhausted" } as const;
+          return ProviderRetryOutcome.Exhausted();
         }
         const runWaits = (yield* stored(false)).filter((entry) => entry.runId === request.runId);
         const payload: ProviderRetryWaitPayload = {
@@ -205,7 +208,7 @@ const make = Effect.gen(function* () {
           return Effect.sync(() => signal.removeEventListener("abort", onAbort));
         }).pipe(
           Effect.andThen(interrupt(payload)),
-          Effect.as<ProviderRetryOutcome>({ _tag: "Cancelled" }),
+          Effect.as<ProviderRetryOutcome>(ProviderRetryOutcome.Cancelled()),
         );
         return yield* Effect.raceFirst(join(payload), cancel).pipe(Effect.ensuring(changed));
       }),
@@ -236,7 +239,7 @@ const make = Effect.gen(function* () {
           const outcome = yield* join(payload);
           if (Predicate.isTagged(outcome, "Cancelled")) return outcome;
         }
-        return { _tag: "Retry" } as const;
+        return ProviderRetryOutcome.Retry();
       }),
 
     /** Owner cancellation of every pending wait in the session; never a durable failure. */

@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 import { Indexer } from "./embedding/indexer.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { meaningfulNodeFilter, memoryGraphRepairVersion, nonBlankTextSql } from "./quality.ts";
@@ -215,21 +216,12 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  const failed = (error: string) =>
-    Effect.gen(function* () {
-      yield* setStatus(
-        "failed",
-        "그래프 정리를 완료하지 못했어요. 다음 시작 시 다시 시도해요.",
-      ).pipe(
-        Effect.catch((statusError) =>
-          Effect.logWarning("Memory graph maintenance status not saved", {
-            error: statusError._tag,
-          }),
-        ),
-      );
-      events.publishGlobal("embedding");
-      yield* Effect.logWarning("Memory graph maintenance failed", { error });
-    });
+  const failed = Effect.gen(function* () {
+    yield* setStatus("failed", "그래프 정리를 완료하지 못했어요. 다음 시작 시 다시 시도해요.").pipe(
+      Effect.catch(logFailure("Memory graph maintenance status not saved")),
+    );
+    events.publishGlobal("embedding");
+  });
 
   const run = Effect.gen(function* () {
     yield* restoreCrossSession;
@@ -246,8 +238,15 @@ const make = Effect.gen(function* () {
   }).pipe(
     // The next start retries a failed or broken run. Logs carry the tag only: causes hold SQL.
     // A defect stays in the run's exit after the status is saved.
-    Effect.catch((error) => failed(error._tag)),
-    Effect.tapDefect(() => failed("Defect")),
+    Effect.catch((error) =>
+      Effect.andThen(failed, logFailure("Memory graph maintenance failed")(error)),
+    ),
+    Effect.tapDefect(() =>
+      Effect.andThen(
+        failed,
+        Effect.logWarning("Memory graph maintenance failed", { error: "Defect" }),
+      ),
+    ),
     permit.withPermits(1),
   );
 

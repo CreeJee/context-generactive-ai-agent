@@ -9,6 +9,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Match,
   Path,
   Schema,
   Schedule,
@@ -65,13 +66,12 @@ const program = Effect.gen(function* () {
   // Reserve and release a loopback port.
   const freePort = Effect.fn("smoke.freePort")(function* () {
     const { address } = yield* NodeSocketServer.make({ port: 0, host: "127.0.0.1" });
-    switch (address._tag) {
-      case "InetAddressV4":
-      case "InetAddressV6":
-        return address.port;
-      case "UnixPathAddress":
-        return yield* new Cause.UnknownError(new Error("loopback listener has no TCP port"));
-    }
+    return yield* Match.valueTags(address, {
+      InetAddressV4: ({ port }) => Effect.succeed(port),
+      InetAddressV6: ({ port }) => Effect.succeed(port),
+      UnixPathAddress: () =>
+        Effect.fail(new Cause.UnknownError(new Error("loopback listener has no TCP port"))),
+    });
   }, Effect.scoped);
   const until = Effect.fn("smoke.until")(function* <T, E, R>(
     what: string,

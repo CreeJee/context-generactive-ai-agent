@@ -53,38 +53,55 @@ export const FileReadPlatform = PlatformContext.Reference<"windows" | "posix">(
 /** Largest text file the file tools read, search or rewrite. */
 export const maxTextBytes = 2 * 1024 * 1024;
 
+/** Why a file is not editable text; see {@link TextFileRejected}. */
+export const TextFileRejectedReason = Schema.TaggedUnion({
+  too_large: {},
+  binary: {},
+  invalid_utf8: {},
+  changed: {},
+  exists: {},
+});
+const rejection = TextFileRejectedReason.cases;
+
+/** The reason's name, for a skip label or a log. */
+export const textFileRejectedReasonName = (reason: TextFileRejected["reason"]): string =>
+  TextFileRejectedReason.match(reason, {
+    too_large: () => "too_large",
+    binary: () => "binary",
+    invalid_utf8: () => "invalid_utf8",
+    changed: () => "changed",
+    exists: () => "exists",
+  });
+
 /**
  * A file that is not editable text: over {@link maxTextBytes}, containing NUL bytes, or not UTF-8.
  * `changed` means its content no longer matches the version the caller last read.
  */
 export class TextFileRejected extends Schema.TaggedError<TextFileRejected>()("TextFileRejected", {
   path: Schema.String,
-  reason: Schema.Union([
-    Schema.TaggedStruct("too_large", {}),
-    Schema.TaggedStruct("binary", {}),
-    Schema.TaggedStruct("invalid_utf8", {}),
-    Schema.TaggedStruct("changed", {}),
-    Schema.TaggedStruct("exists", {}),
-  ]),
+  reason: TextFileRejectedReason,
 }) {}
+
+/** The file operation that failed and its system code; see {@link TextFileIoFailed}. */
+export const TextFileIoReason = Schema.TaggedStruct("IoFailed", {
+  operation: Schema.Literals([
+    "open",
+    "stat",
+    "read",
+    "mkdir",
+    "write",
+    "sync",
+    "close",
+    "rename",
+    "remove",
+  ]),
+  code: Schema.String,
+  cause: Schema.Defect(),
+});
 
 export class TextFileIoFailed extends Schema.TaggedError<TextFileIoFailed>()("TextFileIoFailed", {
   path: Schema.String,
-  reason: Schema.TaggedStruct("IoFailed", {
-    operation: Schema.Literals([
-      "open",
-      "stat",
-      "read",
-      "mkdir",
-      "write",
-      "sync",
-      "close",
-      "rename",
-      "remove",
-    ]),
-    code: Schema.String,
-    cause: Schema.Defect(),
-  }),
+  reason: TextFileIoReason,
 }) {}
 
 const systemCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
@@ -99,12 +116,11 @@ const fileIo = <A, R>(
       const cause = error.reason.cause ?? error;
       return TextFileIoFailed.make({
         path,
-        reason: {
-          _tag: "IoFailed",
+        reason: TextFileIoReason.make({
           operation,
           code: Option.getOrUndefined(systemCode(cause))?.code ?? "unknown",
           cause,
-        },
+        }),
       });
     }),
   );
@@ -151,7 +167,7 @@ const readOpenedFile = Effect.fnUntraced(function* (
   if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
     return yield* PathRejected.make({ path, reason: "hard_link" });
   if (stats.size > BigInt(maxTextBytes))
-    return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+    return yield* TextFileRejected.make({ path, reason: rejection.too_large.make({}) });
   const chunks: Buffer[] = [];
   let size = 0;
   while (true) {
@@ -162,7 +178,7 @@ const readOpenedFile = Effect.fnUntraced(function* (
     if (read === 0) break;
     size += read;
     if (size > maxTextBytes)
-      return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+      return yield* TextFileRejected.make({ path, reason: rejection.too_large.make({}) });
     chunks.push(buffer.subarray(0, read));
     yield* Effect.yieldNow;
   }
@@ -224,10 +240,11 @@ export const decodeTextEffect = Effect.fnUntraced(function* (options: {
   readonly path: string;
 }) {
   const { bytes, path } = options;
-  if (bytes.includes(0)) return yield* TextFileRejected.make({ path, reason: { _tag: "binary" } });
+  if (bytes.includes(0))
+    return yield* TextFileRejected.make({ path, reason: rejection.binary.make({}) });
   return yield* Effect.try({
     try: () => decoder.decode(bytes),
-    catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+    catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
   });
 });
 
@@ -275,7 +292,7 @@ export const createTextFileEffect = Effect.fn("createTextFile")(function* (optio
     Effect.gen(function* () {
       const handle = yield* fileSystem.open(absolute, { flag: "wx", mode: 0o644, noFollow }).pipe(
         Effect.catchReason("PlatformError", "AlreadyExists", () =>
-          Effect.fail(TextFileRejected.make({ path, reason: { _tag: "exists" } })),
+          Effect.fail(TextFileRejected.make({ path, reason: rejection.exists.make({}) })),
         ),
         Effect.catchTag("PlatformError", (error) => fileIo(path, "open", Effect.fail(error))),
       );
@@ -311,7 +328,7 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
   const { absolute, path, expectedSha256, text } = options;
   const current = yield* readTextFileEffect({ absolute, path });
   if (current.sha256 !== expectedSha256)
-    return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+    return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
   const bytes = Buffer.from(text, "utf8");
   const temporary = join(
     dirname(absolute),
@@ -335,7 +352,7 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
       yield* Scope.close(scope, Exit.void);
       const latest = yield* readTextFileEffect({ absolute, path });
       if (latest.sha256 !== expectedSha256)
-        return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+        return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
       // A committed swap must complete before interruption releases its temporary file.
       yield* Effect.uninterruptible(fileIo(path, "rename", fileSystem.rename(temporary, absolute)));
     }),
@@ -367,7 +384,7 @@ export const deleteTextFileEffect = Effect.fn("deleteTextFile")(function* (optio
   const { absolute, path, expectedSha256 } = options;
   const current = yield* readTextFileEffect({ absolute, path });
   if (current.sha256 !== expectedSha256)
-    return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+    return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
   yield* fileIo(path, "remove", fileSystem.remove(absolute));
   return { bytes: current.bytes };
 });
@@ -470,7 +487,7 @@ export const createTextPageReader = () => {
         if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
           return yield* PathRejected.make({ path, reason: "hard_link" });
         if (stats.size > BigInt(maxTextBytes))
-          return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+          return yield* TextFileRejected.make({ path, reason: rejection.too_large.make({}) });
         const stampOf = (stat: FileSystem.File.Info) =>
           `${stat.dev}:${Option.getOrNull(stat.ino)}:${stat.size}:${Option.getOrNull(stat.ctimeNs)}:${Option.getOrNull(stat.mtimeNs)}`;
         const stamp = stampOf(stats);
@@ -494,13 +511,13 @@ export const createTextPageReader = () => {
               ),
             );
             if (read === 0)
-              return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+              return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
             const bytes = contents.subarray(position, position + read);
             if (bytes.includes(0))
-              return yield* TextFileRejected.make({ path, reason: { _tag: "binary" } });
+              return yield* TextFileRejected.make({ path, reason: rejection.binary.make({}) });
             yield* Effect.try({
               try: () => utf8.decode(bytes, { stream: true }),
-              catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+              catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
             });
             for (let i = 0; i < bytes.length; i++)
               if (bytes[i] === 10 && position + i + 1 < size) offsets.push(position + i + 1);
@@ -509,7 +526,7 @@ export const createTextPageReader = () => {
           }
           yield* Effect.try({
             try: () => utf8.decode(),
-            catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+            catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
           });
           // NodeCrypto digest only fails as a defect, as createHash did.
           const digest = yield* Effect.orDie(hostCrypto.digest("SHA-256", contents));
@@ -531,7 +548,7 @@ export const createTextPageReader = () => {
             ),
           );
           if (read === 0)
-            return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+            return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
           consumed += read;
         }
         const text = yield* Effect.try({
@@ -539,11 +556,11 @@ export const createTextPageReader = () => {
             new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer, {
               stream: begin + buffer.length < end,
             }),
-          catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+          catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
         });
         const latest = yield* fileIo(path, "stat", handle.stat);
         if (stampOf(latest) !== stamp)
-          return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+          return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
         MutableHashMap.remove(cache, absolute);
         MutableHashMap.set(cache, absolute, index);
         for (const old of MutableHashMap.keys(cache)) {

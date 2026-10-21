@@ -13,13 +13,18 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
-import type { CardAgentOutcome, CardAgentRun, CardVerdict } from "./card-agent.ts";
-import { GoalSchedules, type GoalMergeState } from "./goal-schedules.ts";
-import { goalDecisionCardId, HumanDecisions } from "./human-decision.ts";
+import { CardAgentOutcome, CardVerdict, type CardAgentRun } from "./card-agent.ts";
+import { GoalMergeState, GoalSchedules } from "./goal-schedules.ts";
+import {
+  DecisionAnswer,
+  DecisionKind,
+  goalDecisionCardId,
+  HumanDecisions,
+} from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
 
-const finished: CardAgentOutcome = { _tag: "Finished", report: "done" };
-const passed: CardVerdict = { _tag: "Passed", evidence: ["checked"] };
+const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
+const passed: CardVerdict = CardVerdict.Passed({ evidence: ["checked"] });
 
 // These tests run real git repositories and worktrees; beside other test files they pass 5s.
 const gitTimeout = { timeout: 30_000 };
@@ -72,9 +77,9 @@ const mergeOf = (goalInstanceId: string) =>
   );
 
 const mergeIs =
-  (tag: GoalMergeState["_tag"]) =>
+  (tag: keyof typeof GoalMergeState.cases) =>
   (state: GoalMergeState | null): boolean =>
-    state?._tag === tag;
+    GoalMergeState.guards[tag](state);
 
 it.live(
   "merges a finished Goal into the user's checked-out branch",
@@ -182,9 +187,11 @@ it.live(
           );
           expect(request).toMatchObject({
             cardId: goalDecisionCardId,
-            kind: { _tag: "MergeConflict", targetBranch: "main", files: ["a.txt"] },
+            kind: DecisionKind.cases.MergeConflict.make({ targetBranch: "main", files: ["a.txt"] }),
           });
-          expect(yield* mergeOf(board.goalInstanceId)).toMatchObject({ _tag: "AwaitingDecision" });
+          expect(GoalMergeState.guards.AwaitingDecision(yield* mergeOf(board.goalInstanceId))).toBe(
+            true,
+          );
           expect(yield* git(fixture.project, "rev-parse", "main")).toBe(user);
         }),
       );
@@ -212,14 +219,12 @@ it.live(
             decisions.pending(board.sessionId),
             (pending) => pending.length > 0,
           );
-          expect(request?.kind).toMatchObject({
-            _tag: "ProtectedBranchMerge",
-            targetBranch: "main",
-          });
+          expect(DecisionKind.guards.ProtectedBranchMerge(request?.kind)).toBe(true);
+          expect(request?.kind).toMatchObject({ targetBranch: "main" });
           if (request === undefined) return;
           yield* decisions.answer({
             ...request,
-            answer: { _tag: "ProtectedBranchMerge", choice: "manual_merge" },
+            answer: DecisionAnswer.cases.ProtectedBranchMerge.make({ choice: "manual_merge" }),
           });
           yield* (yield* KanbanOrchestrator).poke(board.goalInstanceId);
           yield* eventually(mergeOf(board.goalInstanceId), mergeIs("ManualMerge"));
@@ -321,7 +326,7 @@ it.live(
           expect(yield* Ref.get(checks)).toHaveLength(1);
           yield* Deferred.succeed(release, undefined);
           yield* eventually(mergeOf(other), mergeIs("Merged"));
-          expect(yield* mergeOf(first?.goal ?? "")).toMatchObject({ _tag: "Merged" });
+          expect(GoalMergeState.guards.Merged(yield* mergeOf(first?.goal ?? ""))).toBe(true);
         }),
       );
       const [first, second] = yield* Ref.get(checks);

@@ -75,16 +75,16 @@ export class ProjectNotFound extends Schema.TaggedError<ProjectNotFound>()("Proj
   id: Schema.String,
 }) {}
 
+export const ProjectHostReason = Schema.TaggedUnion({
+  RealPathFailed: { cause: Schema.Defect() },
+  StatFailed: { cause: Schema.Defect() },
+  IdentityFailed: { cause: Schema.Defect() },
+});
+const hostFailure = ProjectHostReason.cases;
+
 export class ProjectHostFailed extends Schema.TaggedError<ProjectHostFailed>()(
   "ProjectHostFailed",
-  {
-    root: Schema.String,
-    reason: Schema.Union([
-      Schema.TaggedStruct("RealPathFailed", { cause: Schema.Defect() }),
-      Schema.TaggedStruct("StatFailed", { cause: Schema.Defect() }),
-      Schema.TaggedStruct("IdentityFailed", { cause: Schema.Defect() }),
-    ]),
-  },
+  { root: Schema.String, reason: ProjectHostReason },
 ) {}
 
 const make = Effect.gen(function* () {
@@ -95,25 +95,25 @@ const make = Effect.gen(function* () {
     requested: string,
   ): Effect.fn.Return<string, ProjectHostFailed> {
     return yield* fs.realPath(requested).pipe(
-      Effect.catchTag("PlatformError", (error) => {
-        switch (error.reason._tag) {
-          case "NotFound": {
-            const parent = path.dirname(requested);
-            return parent === requested
-              ? Effect.succeed(requested)
-              : canonical(parent).pipe(
-                  Effect.map((resolved) => path.join(resolved, path.basename(requested))),
-                );
-          }
-          default:
-            return Effect.fail(
-              ProjectHostFailed.make({
-                root: requested,
-                reason: { _tag: "RealPathFailed", cause: error },
-              }),
-            );
-        }
-      }),
+      Effect.catchReason(
+        "PlatformError",
+        "NotFound",
+        () => {
+          const parent = path.dirname(requested);
+          return parent === requested
+            ? Effect.succeed(requested)
+            : canonical(parent).pipe(
+                Effect.map((resolved) => path.join(resolved, path.basename(requested))),
+              );
+        },
+        (_, error) =>
+          Effect.fail(
+            ProjectHostFailed.make({
+              root: requested,
+              reason: hostFailure.RealPathFailed.make({ cause: error }),
+            }),
+          ),
+      ),
     );
   });
 
@@ -220,30 +220,24 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const absolute = path.resolve(requestedRoot);
         const root = yield* fs.realPath(absolute).pipe(
-          Effect.catchTag(
+          Effect.catchReason(
             "PlatformError",
-            (error): Effect.Effect<never, ProjectRootRejected | ProjectHostFailed> => {
-              switch (error.reason._tag) {
-                case "NotFound":
-                  return Effect.fail(
-                    ProjectRootRejected.make({ root: absolute, reason: "not_found" }),
-                  );
-                default:
-                  return Effect.fail(
-                    ProjectHostFailed.make({
-                      root: absolute,
-                      reason: { _tag: "RealPathFailed", cause: error },
-                    }),
-                  );
-              }
-            },
+            "NotFound",
+            () => Effect.fail(ProjectRootRejected.make({ root: absolute, reason: "not_found" })),
+            (_, error) =>
+              Effect.fail(
+                ProjectHostFailed.make({
+                  root: absolute,
+                  reason: hostFailure.RealPathFailed.make({ cause: error }),
+                }),
+              ),
           ),
         );
         const info = yield* fs
           .stat(root)
           .pipe(
             Effect.mapError((cause) =>
-              ProjectHostFailed.make({ root, reason: { _tag: "StatFailed", cause } }),
+              ProjectHostFailed.make({ root, reason: hostFailure.StatFailed.make({ cause }) }),
             ),
           );
         if (info.type !== "Directory")
@@ -261,13 +255,14 @@ const make = Effect.gen(function* () {
           return yield* ProjectRootRejected.make({ root, reason: "overlaps_storage" });
 
         const project: Project = {
-          id: yield* crypto
-            .randomUUIDv4()
-            .pipe(
-              Effect.mapError((cause) =>
-                ProjectHostFailed.make({ root, reason: { _tag: "IdentityFailed", cause } }),
-              ),
+          id: yield* crypto.randomUUIDv4().pipe(
+            Effect.mapError((cause) =>
+              ProjectHostFailed.make({
+                root,
+                reason: hostFailure.IdentityFailed.make({ cause }),
+              }),
             ),
+          ),
           root,
           name: path.basename(root) || root,
           crossRecallExcluded: false,

@@ -6,6 +6,7 @@ import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { basename, dirname, join, resolve } = platformPath;
 import { Effect, FileSystem, MutableHashMap, Option, Schema, Semaphore } from "effect";
 import { runtimeArtifact } from "../runtime/resources.ts";
+import { errorTag } from "../tools/failure.ts";
 
 const sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 const buildManifest = Schema.Struct({
@@ -52,47 +53,63 @@ export interface GoalExecutionAssets extends SavedGoalExecutionAssets {
  * Each Goal receives a durable immutable pin of the same content-addressed worker bytes; no source
  * tree, SDK dependency tree or TypeScript entry is captured at first request.
  */
+export const GoalWorkerAssetsReason = Schema.TaggedUnion({
+  /** The registry was disposed or the Goal ID is empty. */
+  Inactive: {},
+  /** Reading, copying or writing worker files failed; `cause` has the platform error. */
+  FileSystem: {},
+  /** A build or snapshot manifest did not decode or encode. */
+  Manifest: {},
+  /** Worker bytes, paths or a saved pin do not match what the manifest names. */
+  Integrity: {
+    check: Schema.Literals([
+      "escaped_build_root",
+      "worker_hash",
+      "copy_hash",
+      "manifest_hash",
+      "noncanonical_url",
+      "snapshot_identity",
+    ]),
+  },
+  /** A saved pin differs from the one already registered for the Goal. */
+  PinConflict: {},
+  Unregistered: {},
+  /** Disposal was asked while Workers still hold leases. */
+  LeasesActive: {},
+});
+
+/** The reason's name, as a response `detail` or a log label shows it. */
+export const goalWorkerAssetsReasonName: (
+  reason: typeof GoalWorkerAssetsReason.Type,
+) => keyof typeof GoalWorkerAssetsReason.cases = GoalWorkerAssetsReason.match({
+  Inactive: () => "Inactive",
+  FileSystem: () => "FileSystem",
+  Manifest: () => "Manifest",
+  Integrity: () => "Integrity",
+  PinConflict: () => "PinConflict",
+  Unregistered: () => "Unregistered",
+  LeasesActive: () => "LeasesActive",
+});
+
 export class GoalWorkerAssetsFailed extends Schema.TaggedError<GoalWorkerAssetsFailed>()(
   "GoalWorkerAssetsFailed",
   {
-    reason: Schema.Union([
-      /** The registry was disposed or the Goal ID is empty. */
-      Schema.TaggedStruct("Inactive", {}),
-      /** Reading, copying or writing worker files failed; `cause` has the platform error. */
-      Schema.TaggedStruct("FileSystem", {}),
-      /** A build or snapshot manifest did not decode or encode. */
-      Schema.TaggedStruct("Manifest", {}),
-      /** Worker bytes, paths or a saved pin do not match what the manifest names. */
-      Schema.TaggedStruct("Integrity", {
-        check: Schema.Literals([
-          "escaped_build_root",
-          "worker_hash",
-          "copy_hash",
-          "manifest_hash",
-          "noncanonical_url",
-          "snapshot_identity",
-        ]),
-      }),
-      /** A saved pin differs from the one already registered for the Goal. */
-      Schema.TaggedStruct("PinConflict", {}),
-      Schema.TaggedStruct("Unregistered", {}),
-      /** Disposal was asked while Workers still hold leases. */
-      Schema.TaggedStruct("LeasesActive", {}),
-    ]),
+    reason: GoalWorkerAssetsReason,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 type GoalWorkerAssetsFailure = GoalWorkerAssetsFailed["reason"];
-type IntegrityCheck = Extract<GoalWorkerAssetsFailure, { readonly _tag: "Integrity" }>["check"];
+type IntegrityCheck = (typeof GoalWorkerAssetsReason.cases.Integrity.Type)["check"];
 const refused = (reason: GoalWorkerAssetsFailure) => GoalWorkerAssetsFailed.make({ reason });
-const integrity = (check: IntegrityCheck) => refused({ _tag: "Integrity", check });
-const inactive = refused({ _tag: "Inactive" });
+const integrity = (check: IntegrityCheck) =>
+  refused(GoalWorkerAssetsReason.cases.Integrity.make({ check }));
+const inactive = refused(GoalWorkerAssetsReason.cases.Inactive.make({}));
 const failure = (cause: import("effect/PlatformError").PlatformError) =>
-  GoalWorkerAssetsFailed.make({ reason: { _tag: "FileSystem" }, cause });
+  GoalWorkerAssetsFailed.make({ reason: GoalWorkerAssetsReason.cases.FileSystem.make({}), cause });
 const invalidPath = (cause: import("effect/PlatformError").BadArgument) =>
-  GoalWorkerAssetsFailed.make({ reason: { _tag: "FileSystem" }, cause });
+  GoalWorkerAssetsFailed.make({ reason: GoalWorkerAssetsReason.cases.FileSystem.make({}), cause });
 const manifestFailure = (cause: Schema.SchemaError) =>
-  GoalWorkerAssetsFailed.make({ reason: { _tag: "Manifest" }, cause });
+  GoalWorkerAssetsFailed.make({ reason: GoalWorkerAssetsReason.cases.Manifest.make({}), cause });
 /** Fails with `error` unless `holds`; the registry's checks read as the conditions they keep. */
 const ensure = (holds: boolean, error: GoalWorkerAssetsFailed) =>
   Effect.asVoid(Effect.when(Effect.fail(error), Effect.succeed(!holds)));
@@ -121,7 +138,10 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
           Effect.try({
             try: () => customRead(path),
             catch: (cause) =>
-              GoalWorkerAssetsFailed.make({ reason: { _tag: "FileSystem" }, cause }),
+              GoalWorkerAssetsFailed.make({
+                reason: GoalWorkerAssetsReason.cases.FileSystem.make({}),
+                cause,
+              }),
           });
   const decodeText = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
   const active = (goalInstanceId: string) =>
@@ -260,7 +280,9 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
             Effect.sync(() => MutableHashMap.remove(goals, goalInstanceId)).pipe(
               Effect.andThen(fs.remove(destination, { recursive: true, force: true })),
               Effect.catch((error) =>
-                Effect.logWarning("Goal worker snapshot cleanup failed", { error: error._tag }),
+                Effect.logWarning("Goal worker snapshot cleanup failed", {
+                  error: errorTag(error),
+                }),
               ),
             ),
           ),
@@ -279,7 +301,7 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
             existing.manifestHash === verified.manifestHash &&
               existing.canonicalWorkerUrl === verified.canonicalWorkerUrl &&
               existing.sourceGeneration === verified.sourceGeneration,
-            refused({ _tag: "PinConflict" }),
+            refused(GoalWorkerAssetsReason.cases.PinConflict.make({})),
           );
           return existing;
         }
@@ -298,7 +320,7 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
           ensure(
             !disposed &&
               Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) === assets,
-            refused({ _tag: "Unregistered" }),
+            refused(GoalWorkerAssetsReason.cases.Unregistered.make({})),
           ),
         );
         yield* verify(assets);
@@ -318,7 +340,9 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
     /** Refuses disposal until every owner-tracked Worker lease has been released. */
     dispose: Effect.fn("GoalWorkerAssets.dispose")(
       function* (options: { readonly remove?: boolean } = {}) {
-        yield* Effect.suspend(() => ensure(activeLeases === 0, refused({ _tag: "LeasesActive" })));
+        yield* Effect.suspend(() =>
+          ensure(activeLeases === 0, refused(GoalWorkerAssetsReason.cases.LeasesActive.make({}))),
+        );
         disposed = true;
         MutableHashMap.clear(goals);
         if (options.remove === true)

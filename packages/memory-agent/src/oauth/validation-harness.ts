@@ -7,6 +7,7 @@ import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
 import {
   Cause,
+  Data,
   Deferred,
   Fiber,
   Effect,
@@ -21,6 +22,7 @@ import {
   Scope,
   Exit,
 } from "effect";
+import { NetAddress } from "effect/net";
 import { openKeyringEntry } from "../runtime/keyring.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { oauthProtocolCrypto } from "./node-runtime.ts";
@@ -36,11 +38,14 @@ import {
   createPkce,
   decodeProviderEvent,
   ProviderFeatureRejectedError,
+  ProviderStatusRejected,
   ProviderStreamFailed,
+  RequestNotSent,
+  RequestOutcomeUnknown,
+  ResponseInterrupted,
   type NormalizedStreamEvent,
   type OAuthProvider,
   type ProviderProtocol,
-  type RequestNotSent,
 } from "./protocol.ts";
 
 export const StoredCredentialSchema = Schema.Struct({
@@ -291,8 +296,8 @@ const modelRequestFailed = (provider: OAuthProvider, transportCode: string) =>
   ProviderStreamFailed.make({
     provider,
     reason: isRequestNotSentCode(transportCode)
-      ? { _tag: "RequestNotSent", stage: requestNotSentStages[transportCode] }
-      : { _tag: "RequestOutcomeUnknown" },
+      ? RequestNotSent.make({ stage: requestNotSentStages[transportCode] })
+      : RequestOutcomeUnknown.make({}),
   });
 
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
@@ -484,17 +489,21 @@ const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedToken
   return { body: JSON.stringify(values), contentType: "application/json" };
 };
 
+/** One SSE frame of a provider stream: a decoded event, or the `[DONE]` marker. */
+type Frame = Data.TaggedEnum<{
+  Event: { readonly event: NormalizedStreamEvent };
+  Done: {};
+}>;
+const Frame = Data.taggedEnum<Frame>();
+
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function sseEvents(provider: OAuthProvider, response: Response) {
   // The provider accepted the request once headers arrived; any later loss is an interrupted response.
   const interrupted = () =>
-    ProviderStreamFailed.make({ provider, reason: { _tag: "ResponseInterrupted" } });
+    ProviderStreamFailed.make({ provider, reason: ResponseInterrupted.make({}) });
   return Stream.suspend<NormalizedStreamEvent, ProviderStreamFailed, never>(() => {
     if (response.body === null) return Stream.fail(interrupted());
     let buffer = "";
-    type Frame =
-      | { readonly _tag: "Event"; readonly event: NormalizedStreamEvent }
-      | { readonly _tag: "Done" };
     const frames = function* (part: string): Generator<Frame, void, unknown> {
       buffer += part.replaceAll("\r\n", "\n");
       for (;;) {
@@ -506,11 +515,11 @@ function sseEvents(provider: OAuthProvider, response: Response) {
           if (!line.startsWith("data:")) continue;
           const data = line.slice(5).trim();
           if (data === "[DONE]") {
-            yield { _tag: "Done" };
+            yield Frame.Done();
             return;
           }
           const event = decodeProviderEvent(provider, data);
-          if (event !== null) yield { _tag: "Event", event };
+          if (event !== null) yield Frame.Event({ event });
         }
       }
     };
@@ -520,9 +529,7 @@ function sseEvents(provider: OAuthProvider, response: Response) {
       onError: interrupted,
     }).pipe(
       Stream.flatMap((part) => Stream.fromIterable(frames(part))),
-      Stream.takeWhile(
-        (frame): frame is Extract<Frame, { _tag: "Event" }> => frame._tag === "Event",
-      ),
+      Stream.takeWhile(Frame.$is("Event")),
       Stream.map((frame) => frame.event),
     );
   });
@@ -550,7 +557,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       credential = yield* refreshEffect(credential).pipe(
         Effect.catchIf(
           (failure) => {
-            const error = failure._tag === "UnknownError" ? failure.cause : failure;
+            const error = Cause.isUnknownError(failure) ? failure.cause : failure;
             return (
               Schema.is(OAuthHarnessError)(error) &&
               (invalidatesStoredCredential(error) || error.code === "not_connected")
@@ -609,17 +616,12 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       Effect.mapError(() => OAuthHarnessError.fromCode("transport_unavailable")),
     );
     const server = yield* Effect.provideContext(HttpServer.HttpServer, serverServices);
-    let port: number;
-    switch (server.address._tag) {
-      case "InetAddressV4":
-      case "InetAddressV6":
-        port = server.address.port;
-        break;
-      case "UnixPathAddress":
-        yield* closeListener;
-        loginActive = false;
-        return yield* OAuthHarnessError.fromCode("transport_unavailable");
+    if (!NetAddress.isInetAddress(server.address)) {
+      yield* closeListener;
+      loginActive = false;
+      return yield* OAuthHarnessError.fromCode("transport_unavailable");
     }
+    const port = server.address.port;
     const redirectAuthority = `${protocol.callbackRedirectHost}:${port}`;
     const redirectUri = `http://${redirectAuthority}${protocol.callbackPath}`;
     const authorize = new URL(protocol.authorizeUrl);
@@ -739,7 +741,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         Effect.catch((failure) =>
           Effect.gen(function* () {
             // Store callbacks reject through Promises; their typed errors arrive wrapped.
-            const cause = failure._tag === "UnknownError" ? failure.cause : failure;
+            const cause = Cause.isUnknownError(failure) ? failure.cause : failure;
             const error = Schema.is(OAuthHarnessError)(cause)
               ? cause
               : OAuthHarnessError.fromCode("provider_rejected", null, {
@@ -906,7 +908,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           }).pipe(
             Effect.catch((failure) =>
               Effect.gen(function* () {
-                const error = failure._tag === "UnknownError" ? failure.cause : failure;
+                const error = Cause.isUnknownError(failure) ? failure.cause : failure;
                 if (Schema.is(OAuthHarnessError)(error) && invalidatesStoredCredential(error))
                   yield* nativePromise(() => store.remove(protocol.provider));
                 return yield* failure;
@@ -1114,10 +1116,9 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       // Only the status class leaves this boundary; the body may echo the prompt or account data.
       return yield* ProviderStreamFailed.make({
         provider: protocol.provider,
-        reason: {
-          _tag: "ProviderStatusRejected",
+        reason: ProviderStatusRejected.make({
           statusClass: response.status >= 500 ? "server_error" : "client_error",
-        },
+        }),
       });
     }
     return response;

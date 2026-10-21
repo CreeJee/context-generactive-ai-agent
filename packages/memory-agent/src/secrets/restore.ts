@@ -1,4 +1,4 @@
-import { Result } from "effect";
+import { Data, Result } from "effect";
 
 /** A hidden value, and where its placeholder sits in the redacted text. */
 export interface HiddenSpan {
@@ -14,11 +14,13 @@ export interface RedactedView {
   readonly hidden: readonly HiddenSpan[];
 }
 
-export type HiddenReplaceFailure =
-  | { readonly _tag: "no_match" }
-  | { readonly _tag: "ambiguous"; readonly occurrences: number }
+export type HiddenReplaceFailure = Data.TaggedEnum<{
+  no_match: {};
+  ambiguous: { readonly occurrences: number };
   /** The text to replace starts or ends inside a placeholder. */
-  | { readonly _tag: "cuts_hidden" };
+  cuts_hidden: {};
+}>;
+export const HiddenReplaceFailure = Data.taggedEnum<HiddenReplaceFailure>();
 
 /** What a hidden value reads as; the same text the redactor writes. */
 export const placeholderOf = (kind: string) => `[redacted:${kind}]`;
@@ -59,9 +61,9 @@ export function replaceKeepingHidden(options: {
   const starts: number[] = [];
   for (let at = view.text.indexOf(find); at >= 0; at = view.text.indexOf(find, at + find.length))
     starts.push(at);
-  if (starts.length === 0) return Result.fail({ _tag: "no_match" });
+  if (starts.length === 0) return Result.fail(HiddenReplaceFailure.no_match());
   if (starts.length > 1 && !replaceAll)
-    return Result.fail({ _tag: "ambiguous", occurrences: starts.length });
+    return Result.fail(HiddenReplaceFailure.ambiguous({ occurrences: starts.length }));
 
   let out = "";
   let cursor = 0;
@@ -80,7 +82,7 @@ export function replaceKeepingHidden(options: {
     const end = start + find.length;
     const replaced = view.hidden.filter((span) => span.end > start && span.start < end);
     if (replaced.some((span) => span.start < start || span.end > end))
-      return Result.fail({ _tag: "cuts_hidden" });
+      return Result.fail(HiddenReplaceFailure.cuts_hidden());
     copyUntil(start);
     out += restore(replacement, replaced);
     cursor = end;

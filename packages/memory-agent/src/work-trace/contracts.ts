@@ -134,30 +134,30 @@ export type AttemptFailureStage = typeof AttemptFailureStage.Type;
  * Why an attempt failed. Only these codes and safe fields are stored and shown; provider bodies,
  * command output and paths never are.
  */
-export const AttemptFailureReason = Schema.Union([
+export const AttemptFailureReason = Schema.TaggedUnion({
   /** The model stream reported an error. */
-  Schema.TaggedStruct("ModelRunError", {}),
+  ModelRunError: {},
   /** The model stream itself failed. */
-  Schema.TaggedStruct("ModelStreamFailed", {}),
+  ModelStreamFailed: {},
   /** The child's own runtime died: a defect, or a store write it could not finish. */
-  Schema.TaggedStruct("AgentCrashed", {}),
+  AgentCrashed: {},
   /** The attempt stopped beating without settling. */
-  Schema.TaggedStruct("HeartbeatLost", {}),
+  HeartbeatLost: {},
   /** The server stopped while the attempt was live. */
-  Schema.TaggedStruct("ServerRestarted", {}),
+  ServerRestarted: {},
   /** An external ACP agent ended without an answer. */
-  Schema.TaggedStruct("ExternalAgentFailed", { code: ExternalAgentFailureCode }),
+  ExternalAgentFailed: { code: ExternalAgentFailureCode },
   /** A background command exited unsuccessfully or was killed. */
-  Schema.TaggedStruct("ProcessExited", {
+  ProcessExited: {
     exitCode: Schema.NullOr(Schema.Finite),
     signal: Schema.NullOr(Schema.String),
-  }),
-  Schema.TaggedStruct("ProcessTimedOut", {}),
+  },
+  ProcessTimedOut: {},
   /** A background operation failed before it produced a result. */
-  Schema.TaggedStruct("OperationFailed", {}),
+  OperationFailed: {},
   /** The operation ended but its result could not be stored. */
-  Schema.TaggedStruct("ResultStorageFailed", {}),
-]);
+  ResultStorageFailed: {},
+});
 export type AttemptFailureReason = typeof AttemptFailureReason.Type;
 
 export const AttemptFailure = Schema.Struct({

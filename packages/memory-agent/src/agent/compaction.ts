@@ -16,6 +16,14 @@ import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import type { NodeStoreFailed } from "../memory/nodes.ts";
 
+export const CompactionReason = Schema.TaggedUnion({
+  MetadataFailed: {},
+  EvictionFailed: {},
+  RetrievalFailed: {},
+  HistoryFailed: {},
+  MemoryFailed: {},
+});
+
 export class CompactionFailed extends Schema.TaggedError<CompactionFailed>()("CompactionFailed", {
   operation: Schema.Literals([
     "prepare-before",
@@ -27,19 +35,13 @@ export class CompactionFailed extends Schema.TaggedError<CompactionFailed>()("Co
     "consume-cold",
     "read-memory",
   ]),
-  reason: Schema.Union([
-    Schema.TaggedStruct("MetadataFailed", {}),
-    Schema.TaggedStruct("EvictionFailed", {}),
-    Schema.TaggedStruct("RetrievalFailed", {}),
-    Schema.TaggedStruct("HistoryFailed", {}),
-    Schema.TaggedStruct("MemoryFailed", {}),
-  ]),
+  reason: CompactionReason,
   cause: Schema.Defect(),
 }) {}
 
 const compactionPromise = <A>(options: {
   readonly operation: CompactionFailed["operation"];
-  readonly reason: CompactionFailed["reason"]["_tag"];
+  readonly reason: keyof typeof CompactionReason.cases;
   readonly evaluate: () => PromiseLike<A>;
 }) =>
   Effect.tryPromise({
@@ -47,7 +49,7 @@ const compactionPromise = <A>(options: {
     catch: (cause) =>
       CompactionFailed.make({
         operation: options.operation,
-        reason: { _tag: options.reason },
+        reason: CompactionReason.cases[options.reason].make({}),
         cause,
       }),
   });
@@ -334,7 +336,11 @@ export const memoryLookups = Effect.fnUntraced(function* (
     sources.nodeTexts(EffectArray.dedupe(blocks.map((block) => block.nextTurnNodeId))),
   ]).pipe(
     Effect.mapError((cause) =>
-      CompactionFailed.make({ operation: "read-memory", reason: { _tag: "MemoryFailed" }, cause }),
+      CompactionFailed.make({
+        operation: "read-memory",
+        reason: CompactionReason.cases.MemoryFailed.make({}),
+        cause,
+      }),
     ),
   );
   return {
@@ -731,7 +737,7 @@ function compactionBody(
             Effect.mapError((failure) =>
               CompactionFailed.make({
                 operation: "read-cold",
-                reason: { _tag: "MetadataFailed" },
+                reason: CompactionReason.cases.MetadataFailed.make({}),
                 cause: failure.cause,
               }),
             ),
@@ -776,7 +782,7 @@ function compactionBody(
               Effect.mapError((failure) =>
                 CompactionFailed.make({
                   operation: "consume-cold",
-                  reason: { _tag: "MetadataFailed" },
+                  reason: CompactionReason.cases.MetadataFailed.make({}),
                   cause: failure.cause,
                 }),
               ),

@@ -1,7 +1,7 @@
 import { browserCrypto } from "./shared/browser-crypto";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
-import { Effect, Function as EffectFunction } from "effect";
+import { Data, Effect, Function as EffectFunction } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   Attachment,
@@ -72,6 +72,15 @@ import {
   type UncertainRun,
   type UncertainTool,
 } from "memory-agent/definitions";
+
+/** The kanban route's commands besides a `BoardIntent`, as `/api/sessions/:session/kanban` reads them. */
+type KanbanCommand = Data.TaggedEnum<{
+  Start: {};
+  RestartLoop: {};
+  SetPriority: { readonly priority: GoalPriority };
+  SetDependencies: { readonly dependsOn: readonly string[] };
+}>;
+const KanbanCommand = Data.taggedEnum<KanbanCommand>();
 
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
 export type ImageSettingsView = ImageFeatureStatus & {
@@ -635,7 +644,7 @@ export const api = {
     call<unknown>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      { _tag: "Start" },
+      KanbanCommand.Start(),
       { [sessionHolderHeader]: holder },
     ),
   /** What a person meant by dragging a card; the server decides the card's status. */
@@ -648,7 +657,7 @@ export const api = {
     call<{ readonly restarted: true }>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      { _tag: "RestartLoop" },
+      KanbanCommand.RestartLoop(),
       { [sessionHolderHeader]: holder },
     ),
   /** How the Goal shares card slots with the project's other Goals. */
@@ -656,7 +665,7 @@ export const api = {
     call<{ readonly priority: GoalPriority }>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      { _tag: "SetPriority", priority },
+      KanbanCommand.SetPriority({ priority }),
       { [sessionHolderHeader]: holder },
     ),
   /** The Goals this Goal waits for; an empty list lifts the wait. */
@@ -664,7 +673,7 @@ export const api = {
     call<{ readonly dependsOn: readonly string[] }>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      { _tag: "SetDependencies", dependsOn },
+      KanbanCommand.SetDependencies({ dependsOn }),
       { [sessionHolderHeader]: holder },
     ),
   controlWorkflow: (sessionId: string, holder: string, workflowAction: WorkflowAction) =>

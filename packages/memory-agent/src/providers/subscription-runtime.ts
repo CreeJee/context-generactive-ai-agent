@@ -36,15 +36,14 @@ export interface SubscriptionRuntimeDependencies {
   readonly catalogWindow?: (model: string) => number | null;
 }
 
+const ProviderMismatch = Schema.TaggedStruct("ProviderMismatch", {
+  expected: Schema.String,
+  actual: Schema.String,
+  model: Schema.String,
+});
 export class SubscriptionRuntimeRejected extends Schema.TaggedError<SubscriptionRuntimeRejected>()(
   "SubscriptionRuntimeRejected",
-  {
-    reason: Schema.TaggedStruct("ProviderMismatch", {
-      expected: Schema.String,
-      actual: Schema.String,
-      model: Schema.String,
-    }),
-  },
+  { reason: ProviderMismatch },
 ) {
   override get message(): string {
     return `Provider mismatch: ${this.reason.expected} runtime cannot run ${this.reason.actual}/${this.reason.model}.`;
@@ -71,12 +70,11 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
         adapter: (selection: ModelSelection) => {
           if (!Schema.is(SubscriptionModelSelection)(selection) || selection.provider !== provider)
             throw SubscriptionRuntimeRejected.make({
-              reason: {
-                _tag: "ProviderMismatch",
+              reason: ProviderMismatch.make({
                 expected: provider,
                 actual: selection.provider,
                 model: selection.model,
-              },
+              }),
             });
           const pinned = Predicate.isFunction(client) ? client() : client;
           const adapter = new Adapter(pinned, selection);

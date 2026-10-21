@@ -1,7 +1,7 @@
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { NodePath, NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
-import { Cause, Clock, Config, Console, Effect, FileSystem, Layer } from "effect";
+import { Cause, Clock, Config, Console, Effect, Exit, FileSystem, Layer } from "effect";
 import { DateTime, Ref, Sink, Stdio, Stream } from "effect";
 import { nativePromise } from "memory-agent/native-effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -374,7 +374,7 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
 const developmentExit = await developmentRuntime.runPromiseExit(
   mode === "web" ? Effect.scoped(runWebOnly()) : runWithBackend(mode === "all"),
 );
-if (developmentExit._tag === "Failure") {
+if (Exit.isFailure(developmentExit)) {
   Effect.runSync(Console.error(Cause.pretty(developmentExit.cause)));
   process.exitCode = 1;
 }

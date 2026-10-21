@@ -1,10 +1,12 @@
 import { Function as EffectFunction } from "effect";
 import {
   Clock,
+  Data,
   Deferred,
   Duration,
   Effect,
   Fiber,
+  Match,
   MutableHashSet,
   Option,
   Schema,
@@ -153,13 +155,19 @@ export interface CommandOptions {
 export const runCommand: {
   (options: CommandOptions): (command: string) => ReturnType<typeof runCommandBody>;
 } & typeof runCommandBody = EffectFunction.dual(2, runCommandBody);
+const SpawnFailed = Schema.TaggedStruct("SpawnFailed", {});
+
 export class CommandStartFailed extends Schema.TaggedError<CommandStartFailed>()(
   "CommandStartFailed",
-  {
-    reason: Schema.TaggedStruct("SpawnFailed", {}),
-    cause: Schema.Defect(),
-  },
+  { reason: SpawnFailed, cause: Schema.Defect() },
 ) {}
+
+/** How a running command ended: the process exited and its pipes closed, or it was stopped. */
+type CommandOutcome = Data.TaggedEnum<{
+  Finished: { readonly status: ChildProcessSpawner.ExitStatus };
+  Stopped: { readonly reason: "timed_out" | "cancelled" };
+}>;
+const CommandOutcome = Data.taggedEnum<CommandOutcome>();
 
 function runCommandBody(command: string, options: CommandOptions): Promise<CommandResult> {
   // Register the request before asynchronous runtime/host-shell resolution so shutdown cannot miss it.
@@ -227,7 +235,7 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
         )
         .pipe(
           Effect.mapError((cause) =>
-            CommandStartFailed.make({ reason: { _tag: "SpawnFailed" }, cause }),
+            CommandStartFailed.make({ reason: SpawnFailed.make({}), cause }),
           ),
         );
 
@@ -266,13 +274,13 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
       const outcome = yield* Effect.raceAll([
         // Done once the process exited and every pipe it shared closed.
         Effect.all([handle.exitStatus, drained]).pipe(
-          Effect.map(([status]) => ({ _tag: "Finished" as const, status })),
+          Effect.map(([status]) => CommandOutcome.Finished({ status })),
         ),
         Effect.sleep(Duration.seconds(options.timeoutSeconds)).pipe(
-          Effect.as({ _tag: "Stopped" as const, reason: "timed_out" as const }),
+          Effect.as(CommandOutcome.Stopped({ reason: "timed_out" })),
         ),
         Deferred.await(stopRequested).pipe(
-          Effect.as({ _tag: "Stopped" as const, reason: "cancelled" as const }),
+          Effect.as(CommandOutcome.Stopped({ reason: "cancelled" })),
         ),
       ]);
       const stop = Effect.fnUntraced(function* (reason: "timed_out" | "cancelled") {
@@ -296,19 +304,16 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
         );
         return { status, reason };
       });
-      const ended = yield* outcome._tag === "Finished"
-        ? Effect.succeed({ status: Option.some(outcome.status), reason: null })
-        : stop(outcome.reason);
+      const ended = yield* CommandOutcome.$match(outcome, {
+        Finished: ({ status }) => Effect.succeed({ status: Option.some(status), reason: null }),
+        Stopped: ({ reason }) => stop(reason),
+      });
       const exit = Option.match(ended.status, {
         onNone: () => ({ exitCode: null, signal: null }),
-        onSome: (status) => {
-          switch (status._tag) {
-            case "Exited":
-              return { exitCode: Number(status.code), signal: null };
-            case "Signaled":
-              return { exitCode: null, signal: status.signal };
-          }
-        },
+        onSome: Match.valueTags({
+          Exited: (status) => ({ exitCode: Number(status.code), signal: null }),
+          Signaled: (status) => ({ exitCode: null, signal: status.signal }),
+        }),
       });
       return result(
         ended.reason ?? (exit.exitCode === 0 ? "succeeded" : "failed"),

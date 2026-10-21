@@ -1,4 +1,4 @@
-import { Context, type Effect } from "effect";
+import { Context, Data, type Effect } from "effect";
 import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
 import type { KanbanStorageFailed } from "./card-attempts.ts";
 import type { CardFailure, VerdictFailure } from "./failures.ts";
@@ -38,9 +38,11 @@ export interface CardAgentRun {
   }) => Effect.Effect<void, KanbanStorageFailed>;
 }
 
-export type CardAgentOutcome =
-  | { readonly _tag: "Finished"; readonly report: string }
-  | { readonly _tag: "Failed"; readonly failure: CardFailure };
+export type CardAgentOutcome = Data.TaggedEnum<{
+  Finished: { readonly report: string };
+  Failed: { readonly failure: CardFailure };
+}>;
+export const CardAgentOutcome = Data.taggedEnum<CardAgentOutcome>();
 
 /**
  * Runs one delivery of a card. Interrupting it stops the agent; the run's checkpoint settles
@@ -61,9 +63,11 @@ export interface CardVerification {
   readonly report: string;
 }
 
-export type CardVerdict =
-  | { readonly _tag: "Passed"; readonly evidence: readonly string[] }
-  | { readonly _tag: "Failed"; readonly failure: VerdictFailure };
+export type CardVerdict = Data.TaggedEnum<{
+  Passed: { readonly evidence: readonly string[] };
+  Failed: { readonly failure: VerdictFailure };
+}>;
+export const CardVerdict = Data.taggedEnum<CardVerdict>();
 
 /** Checks a finished card against its acceptance criteria and required evidence. */
 export class CardVerifier extends Context.Service<

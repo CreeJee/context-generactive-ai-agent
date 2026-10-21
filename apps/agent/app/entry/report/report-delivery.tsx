@@ -1,4 +1,4 @@
-import { Effect, Fiber, type Schema } from "effect";
+import { Effect, Fiber, Match, Schema } from "effect";
 import type {
   ReportBundle,
   ReportDeliveryFailure,
@@ -20,37 +20,31 @@ export type DeliveryOutcome =
   | ReportDeliveryResult
   | { readonly status: "failed"; readonly reason: ReportDeliveryFailure | "request_failed" };
 
+const deliveryStatuses = Schema.Literals([409, 503, 413, 423, 429, 410, 422, 502, 504]);
 /** The delivery route assigns one status code per reason; the rejected body is never read. */
+const deliveryStatusFailure: Readonly<Record<typeof deliveryStatuses.Type, ReportDeliveryFailure>> =
+  {
+    409: "not_configured",
+    503: "invalid_webhook_url",
+    413: "too_large",
+    423: "in_progress",
+    429: "rate_limited",
+    410: "webhook_rejected",
+    422: "payload_rejected",
+    502: "discord_unavailable",
+    504: "uncertain",
+  };
+
 export function deliveryFailure(
   error: ReportRequestFailed | Schema.SchemaError,
 ): ReportDeliveryFailure | "request_failed" {
-  switch (error._tag) {
-    case "SchemaError":
-      return "request_failed";
-    case "ReportRequestFailed":
-      switch (error.httpStatus) {
-        case 409:
-          return "not_configured";
-        case 503:
-          return "invalid_webhook_url";
-        case 413:
-          return "too_large";
-        case 423:
-          return "in_progress";
-        case 429:
-          return "rate_limited";
-        case 410:
-          return "webhook_rejected";
-        case 422:
-          return "payload_rejected";
-        case 502:
-          return "discord_unavailable";
-        case 504:
-          return "uncertain";
-        default:
-          return "request_failed";
-      }
-  }
+  return Match.valueTags(error, {
+    SchemaError: (): ReportDeliveryFailure | "request_failed" => "request_failed",
+    ReportRequestFailed: ({ httpStatus }) =>
+      Schema.is(deliveryStatuses)(httpStatus)
+        ? deliveryStatusFailure[httpStatus]
+        : "request_failed",
+  });
 }
 
 export const deliveryFailureText = {

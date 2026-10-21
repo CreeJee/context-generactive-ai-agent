@@ -29,11 +29,17 @@ import {
   type KanbanFixture,
 } from "../testing/kanban.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
-import { KanbanBoardActions } from "./board-actions.ts";
-import type { CardAgentOutcome, CardAgentRun, CardVerdict } from "./card-agent.ts";
+import { GoalChangeVerdict, KanbanBoardActions } from "./board-actions.ts";
+import { CardAgentOutcome, CardVerdict, type CardAgentRun } from "./card-agent.ts";
 import { CardAttempts } from "./card-attempts.ts";
-import { GoalSchedules, type GoalMergeState } from "./goal-schedules.ts";
-import { goalDecisionCardId, HumanDecisions } from "./human-decision.ts";
+import { GoalMergeState, GoalSchedules } from "./goal-schedules.ts";
+import {
+  DecisionAnswer,
+  DecisionKind,
+  decisionKindName,
+  goalDecisionCardId,
+  HumanDecisions,
+} from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
 import { ProjectScheduler } from "./scheduler.ts";
 
@@ -43,8 +49,8 @@ import { ProjectScheduler } from "./scheduler.ts";
  * Closing an owner's scope and opening another over the same files stands for a restart.
  */
 
-const finished: CardAgentOutcome = { _tag: "Finished", report: "done" };
-const passed: CardVerdict = { _tag: "Passed", evidence: ["checked"] };
+const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
+const passed: CardVerdict = CardVerdict.Passed({ evidence: ["checked"] });
 const orchestrator = { _tag: "Orchestrator", runId: "test-model" } as const;
 
 // These tests run real git repositories and worktrees; beside other test files they pass 5s.
@@ -80,9 +86,9 @@ const mergeOf = (goalInstanceId: string) =>
     (found): GoalMergeState | null => Option.getOrNull(Option.map(found, (s) => s.merge)),
   );
 const mergeIs =
-  (tag: GoalMergeState["_tag"]) =>
+  (tag: keyof typeof GoalMergeState.cases) =>
   (state: GoalMergeState | null): boolean =>
-    state?._tag === tag;
+    GoalMergeState.guards[tag](state);
 
 const goalFile = (fixture: KanbanFixture, goalInstanceId: string, file: string) =>
   git(fixture.project, "show", `ctx/goal/${goalInstanceId}:${file}`);
@@ -243,7 +249,7 @@ it.live(
           );
           expect(request).toMatchObject({
             cardId: "b",
-            kind: { _tag: "UncertainSideEffect", runId: "run-b" },
+            kind: DecisionKind.cases.UncertainSideEffect.make({ runId: "run-b", toolNames: [] }),
           });
         }),
       );
@@ -311,7 +317,11 @@ it.live(
           const decisions = yield* HumanDecisions;
           const inbox = yield* decisions.inbox(goalU.projectId);
           expect(
-            inbox.map((request) => [request.goalInstanceId, request.cardId, request.kind._tag]),
+            inbox.map((request) => [
+              request.goalInstanceId,
+              request.cardId,
+              decisionKindName(request.kind),
+            ]),
           ).toEqual([
             [goalU.goalInstanceId, "u", "UncertainSideEffect"],
             [goalM.goalInstanceId, goalDecisionCardId, "ProtectedBranchMerge"],
@@ -323,7 +333,7 @@ it.live(
           const [uncertain, protectedMerge] = inbox;
           yield* decisions.answer({
             ...uncertain!,
-            answer: { _tag: "UncertainSideEffect", choice: "continue" },
+            answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "continue" }),
           });
           yield* orchestrator.poke(goalU.goalInstanceId);
           yield* waitForCards(goalU.sessionId, allDone);
@@ -332,7 +342,7 @@ it.live(
 
           yield* decisions.answer({
             ...protectedMerge!,
-            answer: { _tag: "ProtectedBranchMerge", choice: "manual_merge" },
+            answer: DecisionAnswer.cases.ProtectedBranchMerge.make({ choice: "manual_merge" }),
           });
           yield* orchestrator.poke(goalM.goalInstanceId);
           yield* eventually(mergeOf(goalM.goalInstanceId), mergeIs("ManualMerge"));
@@ -378,12 +388,11 @@ it.live(
           yield* (yield* KanbanBoardActions).applyGoalChange(
             board.sessionId,
             [
-              {
-                _tag: "Amend",
+              GoalChangeVerdict.cases.Amend.make({
                 cardId: "a",
                 patch: { title: "Card a v2" },
                 note: "The Goal now wants v2.",
-              },
+              }),
             ],
             orchestrator,
           );
@@ -437,12 +446,11 @@ it.live(
           yield* actions.applyGoalChange(
             board.sessionId,
             [
-              {
-                _tag: "Amend",
+              GoalChangeVerdict.cases.Amend.make({
                 cardId: "a",
                 patch: { title: "Card a v2" },
                 note: "The Goal now wants v2.",
-              },
+              }),
             ],
             orchestrator,
           );

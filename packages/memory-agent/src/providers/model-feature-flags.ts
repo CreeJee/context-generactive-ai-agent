@@ -30,18 +30,20 @@ export interface ModelFeatureFlagDecision {
   readonly reasons: readonly string[];
   readonly settingsVersion: 1 | null;
 }
+const UnknownCapability = Schema.TaggedStruct("UnknownCapability", {});
 export class UnknownModelFeatureCapability extends Schema.TaggedError<UnknownModelFeatureCapability>()(
   "UnknownModelFeatureCapability",
   {
     capability: Schema.String,
-    reason: Schema.TaggedStruct("UnknownCapability", {}),
+    reason: UnknownCapability,
   },
 ) {}
+const SettingsFailed = Schema.TaggedStruct("SettingsFailed", {});
 export class ModelFeatureFlagStoreFailed extends Schema.TaggedError<ModelFeatureFlagStoreFailed>()(
   "ModelFeatureFlagStoreFailed",
   {
     operation: Schema.Literals(["read", "write"]),
-    reason: Schema.TaggedStruct("SettingsFailed", {}),
+    reason: SettingsFailed,
     cause: GlobalConfigFailed,
   },
 ) {}
@@ -92,7 +94,7 @@ function decideModelFeatureFlagBody(
 }
 
 const storeFailure = (operation: "read" | "write") => (cause: GlobalConfigFailed) =>
-  ModelFeatureFlagStoreFailed.make({ operation, reason: { _tag: "SettingsFailed" }, cause });
+  ModelFeatureFlagStoreFailed.make({ operation, reason: SettingsFailed.make({}), cause });
 export interface ModelFeatureFlagsApi {
   readonly read: Effect.Effect<ModelFeatureFlagSettings, ModelFeatureFlagStoreFailed>;
   readonly decide: (
@@ -128,7 +130,7 @@ function makeModelFeatureFlagsBody(
         : Effect.fail(
             UnknownModelFeatureCapability.make({
               capability: query.capability,
-              reason: { _tag: "UnknownCapability" },
+              reason: UnknownCapability.make({}),
             }),
           ),
     set: (scope, enabled) =>

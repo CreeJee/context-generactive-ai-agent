@@ -9,13 +9,13 @@ import {
   kanbanFixture,
   openKanbanOwner,
 } from "../testing/kanban.ts";
-import type { CardAgentOutcome, CardAgentRun } from "./card-agent.ts";
-import { GoalSchedules } from "./goal-schedules.ts";
-import { HumanDecisions } from "./human-decision.ts";
+import { CardAgentOutcome, type CardAgentRun } from "./card-agent.ts";
+import { GoalMergeState, GoalScheduleRefused, GoalSchedules } from "./goal-schedules.ts";
+import { DecisionAnswer, DecisionKind, HumanDecisions } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
 import { ProjectScheduler } from "./scheduler.ts";
 
-const finished: CardAgentOutcome = { _tag: "Finished", report: "done" };
+const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
 
 const withNode = <A, E, R>(program: Effect.Effect<A, E, R>) =>
   Effect.flatMap(Layer.build(NodeServices.layer), (context) =>
@@ -103,9 +103,9 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
   Effect.gen(function* () {
     const fixture = yield* kanbanFixture;
     const gate = yield* gates(["a1", "b1"]);
-    const seen = yield* Ref.make<ReadonlyMap<string, string | null>>(new Map());
+    const seen = yield* Ref.make<ReadonlyMap<string, GoalMergeState | null>>(new Map());
     // Where Goal A's merge stands; set once Goal A exists.
-    let mergeOfA: Effect.Effect<string | null> = Effect.succeed(null);
+    let mergeOfA: Effect.Effect<GoalMergeState | null> = Effect.succeed(null);
     const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
       cores: 4,
       agent: (agent) =>
@@ -125,7 +125,7 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
         mergeOfA = schedules
           .get(goalA.goalInstanceId)
           .pipe(
-            Effect.map(Option.flatMap((schedule) => Option.fromNullishOr(schedule.merge?._tag))),
+            Effect.map(Option.flatMap((schedule) => Option.fromNullishOr(schedule.merge))),
             Effect.map(Option.getOrNull),
             Effect.orDie,
           );
@@ -148,7 +148,8 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
         const cycle = yield* scheduler
           .setDependencies(goalA.goalInstanceId, [goalC.goalInstanceId])
           .pipe(Effect.flip);
-        expect(cycle).toMatchObject({ _tag: "GoalScheduleRefused", reason: "dependency_cycle" });
+        expect(cycle).toBeInstanceOf(GoalScheduleRefused);
+        expect(cycle).toMatchObject({ reason: "dependency_cycle" });
 
         // A person lifts B's wait: B runs while A has not merged.
         yield* scheduler.setDependencies(goalB.goalInstanceId, []);
@@ -159,7 +160,7 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
         // A merges into main and C continues on its own.
         yield* gate.open("a1");
         yield* eventually(Ref.get(seen), (known) => known.has("c1"));
-        expect((yield* Ref.get(seen)).get("c1")).toBe("Merged");
+        expect(GoalMergeState.guards.Merged((yield* Ref.get(seen)).get("c1"))).toBe(true);
         yield* gate.open("b1");
       }),
     );
@@ -206,18 +207,19 @@ it.live(
           // A's card is done but main is protected, so A stays unmerged: a person picks the order.
           yield* gate.open("a1");
           const [request] = yield* eventually(decisions.pending(goalB.sessionId), (pending) =>
-            pending.some((item) => item.kind._tag === "FileOverlap"),
+            pending.some((item) => DecisionKind.guards.FileOverlap(item.kind)),
           );
-          expect(request?.kind).toEqual({
-            _tag: "FileOverlap",
-            otherGoalInstanceId: goalA.goalInstanceId,
-            otherCardId: "a1",
-            files: ["src/shared.ts"],
-          });
+          expect(request?.kind).toEqual(
+            DecisionKind.cases.FileOverlap.make({
+              otherGoalInstanceId: goalA.goalInstanceId,
+              otherCardId: "a1",
+              files: ["src/shared.ts"],
+            }),
+          );
           if (request === undefined) return;
           yield* decisions.answer({
             ...request,
-            answer: { _tag: "FileOverlap", choice: "proceed" },
+            answer: DecisionAnswer.cases.FileOverlap.make({ choice: "proceed" }),
           });
           yield* orchestrator.poke(goalB.goalInstanceId);
           yield* eventually(Ref.get(started), (list) => list.includes("b1"));

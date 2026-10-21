@@ -16,21 +16,22 @@ export const globalMcpFile = (storageRoot: string) => join(storageRoot, "mcp.jso
 /** The same file name Claude Code and other agents read, so a project's servers are shared. */
 export const projectMcpFile = (projectRoot: string) => join(projectRoot, ".mcp.json");
 
-/** A server the app starts itself and talks to over stdin/stdout. */
-const StdioServer = Schema.TaggedStruct("stdio", {
-  command: Schema.NonEmptyString,
-  args: Schema.Array(Schema.String),
-  env: Schema.Record(Schema.String, Schema.String),
+export const McpServerConfig = Schema.TaggedUnion({
+  /** A server the app starts itself and talks to over stdin/stdout. */
+  stdio: {
+    command: Schema.NonEmptyString,
+    args: Schema.Array(Schema.String),
+    env: Schema.Record(Schema.String, Schema.String),
+  },
+  /** A server already running somewhere, reached over Streamable HTTP. */
+  http: {
+    url: Schema.NonEmptyString,
+    headers: Schema.Record(Schema.String, Schema.String),
+  },
 });
-
-/** A server already running somewhere, reached over Streamable HTTP. */
-const HttpServer = Schema.TaggedStruct("http", {
-  url: Schema.NonEmptyString,
-  headers: Schema.Record(Schema.String, Schema.String),
-});
-
-export const McpServerConfig = Schema.Union([StdioServer, HttpServer]);
 export type McpServerConfig = typeof McpServerConfig.Type;
+const StdioServer = McpServerConfig.cases.stdio;
+const HttpServer = McpServerConfig.cases.http;
 
 const StringMap = Schema.Record(Schema.String, Schema.String);
 
@@ -45,12 +46,12 @@ const FileEntry = Schema.Union([
     Schema.decodeTo(
       StdioServer,
       SchemaTransformation.transform({
-        decode: (entry) => ({
-          _tag: "stdio" as const,
-          command: entry.command,
-          args: entry.args ?? [],
-          env: entry.env ?? {},
-        }),
+        decode: (entry) =>
+          StdioServer.make({
+            command: entry.command,
+            args: entry.args ?? [],
+            env: entry.env ?? {},
+          }),
         encode: (server) => ({ command: server.command, args: server.args, env: server.env }),
       }),
     ),
@@ -63,11 +64,7 @@ const FileEntry = Schema.Union([
     Schema.decodeTo(
       HttpServer,
       SchemaTransformation.transform({
-        decode: (entry) => ({
-          _tag: "http" as const,
-          url: entry.url,
-          headers: entry.headers ?? {},
-        }),
+        decode: (entry) => HttpServer.make({ url: entry.url, headers: entry.headers ?? {} }),
         encode: (server) => ({ type: "http" as const, url: server.url, headers: server.headers }),
       }),
     ),

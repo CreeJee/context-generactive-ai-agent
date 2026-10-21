@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { planDependencyIssues, planSchedule } from "./plan-schedule.ts";
+import { PlanDependencyIssue, planDependencyIssues, planSchedule } from "./plan-schedule.ts";
 import type { PlanStep } from "./workflow.ts";
 
 const step = (
@@ -27,9 +27,9 @@ describe("planDependencyIssues", () => {
         step("d", ["a"]),
       ]),
     ).toEqual([
-      { _tag: "SelfDependency", stepId: "b" },
-      { _tag: "UnknownDependency", stepId: "b", dependsOn: "missing" },
-      { _tag: "DependencyCycle", cycle: ["a", "c", "b", "a"] },
+      PlanDependencyIssue.cases.SelfDependency.make({ stepId: "b" }),
+      PlanDependencyIssue.cases.UnknownDependency.make({ stepId: "b", dependsOn: "missing" }),
+      PlanDependencyIssue.cases.DependencyCycle.make({ cycle: ["a", "c", "b", "a"] }),
     ]);
   });
 

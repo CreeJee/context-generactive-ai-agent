@@ -1,6 +1,10 @@
 import { Context, Effect, Exit, Layer, Schema } from "effect";
 import { DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
-import { ExecutionAdmission, type ExecutionSaturated } from "../runtime/execution-admission.ts";
+import {
+  AdmissionWait,
+  ExecutionAdmission,
+  type ExecutionSaturated,
+} from "../runtime/execution-admission.ts";
 import type { Admission, RunBinding } from "./run-bindings.ts";
 import {
   GoalExecutionError,
@@ -122,7 +126,7 @@ const make = Effect.gen(function* () {
           return admitted;
         }),
         // A request is waiting on this: past half a minute it is told the app is busy.
-        { _tag: "upTo", duration: "30 seconds" },
+        AdmissionWait.upTo({ duration: "30 seconds" }),
       ),
 
     succeed: (payload: GoalExecutionPayloadType) =>
@@ -131,12 +135,11 @@ const make = Effect.gen(function* () {
         yield* provideEngine(
           DurableDeferred.succeed(GoalExecutionCompletion, {
             token: token(executionId),
-            value: {
-              _tag: "GoalExecutionSuccess",
+            value: GoalExecutionSuccess.make({
               executionId,
               runId: payload.identity.runId,
               outcome: "completed",
-            },
+            }),
           }),
         );
         yield* provideEngine(GoalExecution.execute(payload)).pipe(Effect.result);

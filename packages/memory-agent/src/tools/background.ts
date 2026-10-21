@@ -295,7 +295,7 @@ const make = Effect.gen(function* () {
                 Effect.catch((error) =>
                   Effect.logError("Background terminal recording failed", {
                     taskId: handle.taskId,
-                    error: error._tag,
+                    error: failureTags(Cause.fail(error)),
                   }),
                 ),
               ),

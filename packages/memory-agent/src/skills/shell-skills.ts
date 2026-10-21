@@ -8,6 +8,7 @@ import {
   HashSet,
   Layer,
   Option,
+  Predicate,
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
@@ -175,7 +176,8 @@ const make = Effect.gen(function* () {
     const path = shellSkillScript(name);
     const target = yield* resolveProjectPath(project.root, path, "file").pipe(
       Effect.catchIf(
-        (rejection) => rejection._tag === "PathRejected" && rejection.reason === "not_found",
+        (rejection) =>
+          Predicate.isTagged(rejection, "PathRejected") && rejection.reason === "not_found",
         () =>
           Effect.fail(
             ShellSkillRejected.make({

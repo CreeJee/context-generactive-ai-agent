@@ -34,8 +34,8 @@ export const GoalExecutionSuccess = Schema.TaggedStruct("GoalExecutionSuccess", 
 });
 export type GoalExecutionSuccess = typeof GoalExecutionSuccess.Type;
 
-export const GoalExecutionErrorReason = Schema.Union([
-  Schema.TaggedStruct("AdmissionRejected", {
+export const GoalExecutionErrorReason = Schema.TaggedUnion({
+  AdmissionRejected: {
     reason: Schema.Literals([
       "legacy_unbound",
       "workflow_changed",
@@ -43,16 +43,16 @@ export const GoalExecutionErrorReason = Schema.Union([
       "run_outcome_uncertain",
       "owner_mismatch",
     ]),
-  }),
-  Schema.TaggedStruct("SideEffectUncertain", {
+  },
+  SideEffectUncertain: {
     operationId: Identifier,
     state: Schema.Literals(["pending", "uncertain"]),
-  }),
-  Schema.TaggedStruct("ExecutionFailed", {
+  },
+  ExecutionFailed: {
     phase: Schema.Literals(["owner_admission", "sdk_loop", "approval", "completion"]),
     code: Identifier,
-  }),
-]);
+  },
+});
 export type GoalExecutionErrorReason = typeof GoalExecutionErrorReason.Type;
 
 export class GoalExecutionError extends Schema.TaggedError<GoalExecutionError>()(
@@ -63,26 +63,22 @@ export class GoalExecutionError extends Schema.TaggedError<GoalExecutionError>()
   },
 ) {}
 
-const SideEffectSucceeded = Schema.TaggedStruct("Succeeded", {
-  operationId: Identifier,
-  replay: Schema.Literal("reuse_receipt"),
-  receipt: Schema.Json,
-});
-const SideEffectPending = Schema.TaggedStruct("Pending", {
-  operationId: Identifier,
-  disposition: Schema.Literal("stop"),
-});
-const SideEffectUncertain = Schema.TaggedStruct("Uncertain", {
-  operationId: Identifier,
-  disposition: Schema.Literal("stop"),
-});
-
 /** Only a succeeded receipt is replayable. Pending and uncertain operations stop execution. */
-export const GoalExecutionSideEffectState = Schema.Union([
-  SideEffectSucceeded,
-  SideEffectPending,
-  SideEffectUncertain,
-]);
+export const GoalExecutionSideEffectState = Schema.TaggedUnion({
+  Succeeded: {
+    operationId: Identifier,
+    replay: Schema.Literal("reuse_receipt"),
+    receipt: Schema.Json,
+  },
+  Pending: {
+    operationId: Identifier,
+    disposition: Schema.Literal("stop"),
+  },
+  Uncertain: {
+    operationId: Identifier,
+    disposition: Schema.Literal("stop"),
+  },
+});
 export type GoalExecutionSideEffectState = typeof GoalExecutionSideEffectState.Type;
 
 const GoalExecutionIdentityTuple = Schema.Tuple([Identifier, Identifier, Identifier, RevisionId]);

@@ -20,6 +20,7 @@ import {
   ArchiveHost,
   ArchiveInstaller,
   ArchiveInstallFailed,
+  ArchiveInstallFailedReason,
   type PinnedArchive,
   type ArchiveStaging,
 } from "./archive-install.ts";
@@ -38,9 +39,13 @@ export interface ArchiveFailure {
   readonly detail: string;
 }
 
+const UnsupportedAlgorithm = Schema.TaggedStruct("UnsupportedAlgorithm", {
+  algorithm: Schema.String,
+});
+
 export class ArchiveIntegrityRejected extends Schema.TaggedError<ArchiveIntegrityRejected>()(
   "ArchiveIntegrityRejected",
-  { reason: Schema.TaggedStruct("UnsupportedAlgorithm", { algorithm: Schema.String }) },
+  { reason: UnsupportedAlgorithm },
 ) {
   override get message() {
     return `unsupported integrity algorithm: ${this.reason.algorithm}`;
@@ -54,7 +59,7 @@ function npmIntegrityBody(url: string, integrity: string): PinnedArchive {
   const [algorithm, base64 = ""] = integrity.split("-", 2);
   if (algorithm !== "sha512") {
     throw ArchiveIntegrityRejected.make({
-      reason: { _tag: "UnsupportedAlgorithm", algorithm: algorithm ?? "" },
+      reason: UnsupportedAlgorithm.make({ algorithm: algorithm ?? "" }),
     });
   }
   return { url, algorithm, digest: Buffer.from(base64, "base64").toString("hex") };
@@ -65,15 +70,10 @@ const explain = (cause: unknown): string => {
   return cause.cause instanceof Error ? `${cause.message}: ${explain(cause.cause)}` : cause.message;
 };
 
-const hostFailure =
-  (
-    operation: Extract<
-      ArchiveInstallFailed["reason"],
-      { _tag: "HostOperationFailed" }
-    >["operation"],
-  ) =>
-  (cause: unknown) =>
-    ArchiveInstallFailed.make({ reason: { _tag: "HostOperationFailed", operation, cause } });
+const HostOperationFailed = ArchiveInstallFailedReason.cases.HostOperationFailed;
+
+const hostFailure = (operation: typeof HostOperationFailed.Type.operation) => (cause: unknown) =>
+  ArchiveInstallFailed.make({ reason: HostOperationFailed.make({ operation, cause }) });
 
 interface ArchiveCommandOutput {
   readonly chunks: Uint8Array[];
@@ -163,21 +163,23 @@ export const archiveHostLayer = Layer.effect(
       );
     return ArchiveHost.of({
       download: Effect.fn("ArchiveHost.download")(function* (url: string) {
-        const response = yield* client
-          .get(url)
-          .pipe(
-            Effect.mapError((cause) =>
-              ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
-            ),
-          );
+        const response = yield* client.get(url).pipe(
+          Effect.mapError((cause) =>
+            ArchiveInstallFailed.make({
+              reason: ArchiveInstallFailedReason.cases.DownloadFailed.make({ cause }),
+            }),
+          ),
+        );
         if (response.status < 200 || response.status >= 300)
           return yield* ArchiveInstallFailed.make({
-            reason: { _tag: "HttpStatus", status: response.status },
+            reason: ArchiveInstallFailedReason.cases.HttpStatus.make({ status: response.status }),
           });
         return yield* response.arrayBuffer.pipe(
           Effect.map((bytes) => new Uint8Array(bytes)),
           Effect.mapError((cause) =>
-            ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
+            ArchiveInstallFailed.make({
+              reason: ArchiveInstallFailedReason.cases.DownloadFailed.make({ cause }),
+            }),
           ),
         );
       }),
@@ -250,23 +252,17 @@ export const archiveInstallerLayer = ArchiveInstaller.layer.pipe(
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
 );
 
-const nativeFailure = (error: ArchiveInstallFailed): ArchiveFailure => {
-  switch (error.reason._tag) {
-    case "DownloadFailed":
-      return { reason: "download_failed", detail: explain(error.reason.cause) };
-    case "HttpStatus":
-      return { reason: "download_failed", detail: `HTTP ${error.reason.status}` };
-    case "ChecksumMismatch":
-      return {
-        reason: "checksum_mismatch",
-        detail: `${error.reason.algorithm} differs from the pin`,
-      };
-    case "UnsafeEntry":
-      return { reason: "unsafe_archive", detail: error.reason.entry };
-    case "HostOperationFailed":
-      return { reason: "extract_failed", detail: explain(error.reason.cause) };
-  }
-};
+const nativeFailure = (error: ArchiveInstallFailed) =>
+  ArchiveInstallFailedReason.match<ArchiveFailure>(error.reason, {
+    DownloadFailed: ({ cause }) => ({ reason: "download_failed", detail: explain(cause) }),
+    HttpStatus: ({ status }) => ({ reason: "download_failed", detail: `HTTP ${status}` }),
+    ChecksumMismatch: ({ algorithm }) => ({
+      reason: "checksum_mismatch",
+      detail: `${algorithm} differs from the pin`,
+    }),
+    UnsafeEntry: ({ entry }) => ({ reason: "unsafe_archive", detail: entry }),
+    HostOperationFailed: ({ cause }) => ({ reason: "extract_failed", detail: explain(cause) }),
+  });
 
 /** Native Promise entry point. Effect consumers compose ArchiveInstaller in their own runtime. */
 export const installArchive: {

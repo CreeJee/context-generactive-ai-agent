@@ -26,30 +26,30 @@ export const ProtectedBranches = Schema.Array(
 );
 
 /** Where a Goal's merge into its target branch stands. Only metadata, never provider text. */
-export const GoalMergeState = Schema.Union([
+export const GoalMergeState = Schema.TaggedUnion({
   /** The Goal branch at `head` is being checked as a whole. */
-  Schema.TaggedStruct("Verifying", { head: Schema.String }),
+  Verifying: { head: Schema.String },
   /** The Goal-level check failed at `head`; a new Goal branch commit is checked again. */
-  Schema.TaggedStruct("VerifyFailed", { head: Schema.String, verdict: VerdictFailure }),
+  VerifyFailed: { head: Schema.String, verdict: VerdictFailure },
   /** The target is checked out with uncommitted changes there; the merge waits for them. */
-  Schema.TaggedStruct("WaitingWorktree", { head: Schema.String, worktree: Schema.String }),
+  WaitingWorktree: { head: Schema.String, worktree: Schema.String },
   /** The target kept moving while the merge ran; the next look tries again. */
-  Schema.TaggedStruct("TargetMoving", {}),
+  TargetMoving: {},
   /** A person decides (protected branch or conflict); the request names the wait. */
-  Schema.TaggedStruct("AwaitingDecision", { requestId: Schema.String }),
-  Schema.TaggedStruct("Merged", { commit: Schema.String }),
+  AwaitingDecision: { requestId: Schema.String },
+  Merged: { commit: Schema.String },
   /** The person merges by hand; the Goal branch stays. */
-  Schema.TaggedStruct("ManualMerge", {}),
+  ManualMerge: {},
   /** The push and pull request ran without a recorded result. Never run again on its own. */
-  Schema.TaggedStruct("PullRequestPending", {}),
-  Schema.TaggedStruct("PullRequestCreated", { url: Schema.String }),
+  PullRequestPending: {},
+  PullRequestCreated: { url: Schema.String },
   /** The owner stopped while a pull request was being made; a person checks what happened. */
-  Schema.TaggedStruct("PullRequestUncertain", {}),
-  Schema.TaggedStruct("PullRequestFailed", { stage: Schema.Literals(["push", "create"]) }),
-  Schema.TaggedStruct("Stopped", {
+  PullRequestUncertain: {},
+  PullRequestFailed: { stage: Schema.Literals(["push", "create"]) },
+  Stopped: {
     reason: Schema.Literals(["no_target", "target_missing", "conflict_stopped", "goal_replaced"]),
-  }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  },
+});
 export type GoalMergeState = typeof GoalMergeState.Type;
 
 const settledMerge = GoalMergeState.match({
@@ -112,15 +112,18 @@ export class GoalScheduleRefused extends Schema.TaggedError<GoalScheduleRefused>
   },
 ) {}
 
+export const GoalScheduleStorageReason = Schema.TaggedUnion({
+  /** The database or a stored row failed; `cause` has the SQL or decode error. */
+  Storage: {},
+  /** A value the owner made did not encode for storage. */
+  Encode: {},
+});
+export type GoalScheduleStorageReason = typeof GoalScheduleStorageReason.Type;
+
 export class GoalScheduleStorageFailed extends Schema.TaggedError<GoalScheduleStorageFailed>()(
   "GoalScheduleStorageFailed",
   {
-    reason: Schema.Union([
-      /** The database or a stored row failed; `cause` has the SQL or decode error. */
-      Schema.TaggedStruct("Storage", {}),
-      /** A value the owner made did not encode for storage. */
-      Schema.TaggedStruct("Encode", {}),
-    ]),
+    reason: GoalScheduleStorageReason,
     cause: Schema.Defect(),
   },
 ) {}
@@ -169,9 +172,15 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const now = Clock.currentTimeMillis;
   const failed = (cause: SqlError.SqlError | Schema.SchemaError) =>
-    GoalScheduleStorageFailed.make({ reason: { _tag: "Storage" }, cause });
+    GoalScheduleStorageFailed.make({
+      reason: GoalScheduleStorageReason.cases.Storage.make({}),
+      cause,
+    });
   const unencoded = (cause: Schema.SchemaError) =>
-    GoalScheduleStorageFailed.make({ reason: { _tag: "Encode" }, cause });
+    GoalScheduleStorageFailed.make({
+      reason: GoalScheduleStorageReason.cases.Encode.make({}),
+      cause,
+    });
   const rows =
     <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
     <E, R>(query: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>

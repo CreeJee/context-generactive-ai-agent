@@ -37,10 +37,10 @@ const progressFields = {
 };
 
 /** What a pass streams: any number of `Progress` events, then one `Finished`. */
-export const PassEvent = Schema.Union([
-  Schema.TaggedStruct("Progress", progressFields),
-  Schema.TaggedStruct("Finished", { ...progressFields, counts: TranscriptCounts }),
-]);
+export const PassEvent = Schema.TaggedUnion({
+  Progress: progressFields,
+  Finished: { ...progressFields, counts: TranscriptCounts },
+});
 export type PassEvent = typeof PassEvent.Type;
 
 /** Transcripts on disk per source. */

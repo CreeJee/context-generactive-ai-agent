@@ -15,15 +15,14 @@ import {
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import { Effect, Stream, MutableHashMap, DateTime, Option, Schema } from "effect";
+import { Effect, Stream, Match, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
   ProviderStreamFailed,
   ReasoningSummaryProtocolFailed,
+  ReasoningSummaryProtocolFailedReason,
   RequestNotSent,
-  RequestOutcomeUnknown,
-  ResponseInterrupted,
   ToolArguments,
   type NormalizedStreamEvent,
   type OAuthProvider,
@@ -62,22 +61,24 @@ export const publicReasoningLimits = {
   idCharacters: 512,
 } as const;
 
+export const SubscriptionStreamFailedReason = Schema.TaggedUnion({
+  ProviderRejected: {},
+  RequestNotSent: { stage: RequestNotSent.fields.stage },
+  ProviderStatusRejected: { statusClass: ProviderStatusRejected.fields.statusClass },
+  ResponseInterrupted: {},
+  RequestOutcomeUnknown: {},
+  InvalidReasoning: {},
+  InvalidToolCall: {},
+  InvalidBlockEnd: {},
+  IncompleteBlocks: {},
+  EncryptedReasoningLimit: {},
+});
+
 export class SubscriptionStreamFailed extends Schema.TaggedError<SubscriptionStreamFailed>()(
   "SubscriptionStreamFailed",
   {
     provider: Schema.Literals(["openai", "anthropic"]),
-    reason: Schema.Union([
-      Schema.TaggedStruct("ProviderRejected", {}),
-      RequestNotSent,
-      ProviderStatusRejected,
-      ResponseInterrupted,
-      RequestOutcomeUnknown,
-      Schema.TaggedStruct("InvalidReasoning", {}),
-      Schema.TaggedStruct("InvalidToolCall", {}),
-      Schema.TaggedStruct("InvalidBlockEnd", {}),
-      Schema.TaggedStruct("IncompleteBlocks", {}),
-      Schema.TaggedStruct("EncryptedReasoningLimit", {}),
-    ]),
+    reason: SubscriptionStreamFailedReason,
   },
 ) {
   override get message() {
@@ -382,14 +383,27 @@ const streamFailure = (
   )
     return cause;
   if (received)
-    return SubscriptionStreamFailed.make({ provider, reason: { _tag: "ResponseInterrupted" } });
+    return SubscriptionStreamFailed.make({
+      provider,
+      reason: SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}),
+    });
   return SubscriptionStreamFailed.make({
     provider,
     reason: Schema.is(ProviderStreamFailed)(cause)
       ? cause.reason
-      : { _tag: "RequestOutcomeUnknown" },
+      : SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({}),
   });
 };
+
+/** The failure's tag, which is all the error log says about it. */
+const streamFailureCode = Match.typeTags<
+  SubscriptionStreamFailed | ProviderFeatureRejectedError | ReasoningSummaryProtocolFailed,
+  string
+>()({
+  SubscriptionStreamFailed: () => "SubscriptionStreamFailed",
+  ProviderFeatureRejectedError: () => "ProviderFeatureRejectedError",
+  ReasoningSummaryProtocolFailed: () => "ReasoningSummaryProtocolFailed",
+});
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function providerEventsWithPromptCacheFallback(
@@ -505,7 +519,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           if (event.type === "error")
             throw SubscriptionStreamFailed.make({
               provider: providerName,
-              reason: { _tag: "ProviderRejected" },
+              reason: SubscriptionStreamFailedReason.cases.ProviderRejected.make({}),
             });
           // Public OpenAI summary parts are SDK reasoning messages, not Anthropic block ends.
           switch (event.type) {
@@ -513,14 +527,16 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
               const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
               if (MutableHashMap.has(summaries, summaryId))
                 throw ReasoningSummaryProtocolFailed.make({
-                  reason: { _tag: "ConflictingSummary" },
+                  reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
                 });
               if (
                 summaryCount >= publicReasoningLimits.parts ||
                 event.id.length > publicReasoningLimits.idCharacters ||
                 summaryCharacters + event.text.length > publicReasoningLimits.characters
               )
-                throw ReasoningSummaryProtocolFailed.make({ reason: { _tag: "ResourceLimit" } });
+                throw ReasoningSummaryProtocolFailed.make({
+                  reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
+                });
               summaryCount++;
               openSummaries++;
               summaryCharacters += event.text.length;
@@ -546,17 +562,19 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
               const summary = Option.getOrUndefined(MutableHashMap.get(summaries, summaryId));
               if (summary === undefined)
                 throw ReasoningSummaryProtocolFailed.make({
-                  reason: { _tag: "ConflictingSummary" },
+                  reason: ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
                 });
               switch (summary.type) {
                 case "closed":
-                  throw ReasoningSummaryProtocolFailed.make({ reason: { _tag: "AlreadyEnded" } });
+                  throw ReasoningSummaryProtocolFailed.make({
+                    reason: ReasoningSummaryProtocolFailedReason.cases.AlreadyEnded.make({}),
+                  });
                 case "open": {
                   switch (event.type) {
                     case "reasoning-summary-delta":
                       if (summaryCharacters + event.delta.length > publicReasoningLimits.characters)
                         throw ReasoningSummaryProtocolFailed.make({
-                          reason: { _tag: "ResourceLimit" },
+                          reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
                         });
                       summaryCharacters += event.delta.length;
                       MutableHashMap.set(summaries, summaryId, {
@@ -573,12 +591,13 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
                     case "reasoning-summary-end": {
                       if (!event.text.startsWith(summary.text))
                         throw ReasoningSummaryProtocolFailed.make({
-                          reason: { _tag: "ConflictingSummary" },
+                          reason:
+                            ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
                         });
                       const remaining = event.text.slice(summary.text.length);
                       if (summaryCharacters + remaining.length > publicReasoningLimits.characters)
                         throw ReasoningSummaryProtocolFailed.make({
-                          reason: { _tag: "ResourceLimit" },
+                          reason: ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
                         });
                       summaryCharacters += remaining.length;
                       openSummaries--;
@@ -610,7 +629,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             if (event.encryptedContent.length > maxEncryptedReasoningCharacters)
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
-                reason: { _tag: "EncryptedReasoningLimit" },
+                reason: SubscriptionStreamFailedReason.cases.EncryptedReasoningLimit.make({}),
               });
             yield {
               ...stamp(),
@@ -679,7 +698,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             )
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
-                reason: { _tag: "InvalidToolCall" },
+                reason: SubscriptionStreamFailedReason.cases.InvalidToolCall.make({}),
               });
             MutableHashMap.set(streamingCalls, event.index, { id: event.id, name: event.name });
             toolCalls += 1;
@@ -700,7 +719,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             )
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
-                reason: { _tag: "InvalidReasoning" },
+                reason: SubscriptionStreamFailedReason.cases.InvalidReasoning.make({}),
               });
             const reasoningId = `reasoning-${event.index}`;
             MutableHashMap.set(streamingReasoning, event.index, reasoningId);
@@ -719,7 +738,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             if (!isTruthy(reasoningId))
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
-                reason: { _tag: "InvalidReasoning" },
+                reason: SubscriptionStreamFailedReason.cases.InvalidReasoning.make({}),
               });
             yield {
               ...stamp(),
@@ -736,7 +755,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             if (!isTruthy(reasoningId))
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
-                reason: { _tag: "InvalidReasoning" },
+                reason: SubscriptionStreamFailedReason.cases.InvalidReasoning.make({}),
               });
             yield {
               ...stamp(),
@@ -752,7 +771,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             if (!isTruthy(call))
               throw SubscriptionStreamFailed.make({
                 provider: providerName,
-                reason: { _tag: "InvalidToolCall" },
+                reason: SubscriptionStreamFailedReason.cases.InvalidToolCall.make({}),
               });
             yield {
               ...stamp(),
@@ -778,7 +797,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           if (!isTruthy(call))
             throw SubscriptionStreamFailed.make({
               provider: providerName,
-              reason: { _tag: "InvalidBlockEnd" },
+              reason: SubscriptionStreamFailedReason.cases.InvalidBlockEnd.make({}),
             });
           MutableHashMap.remove(streamingCalls, event.index);
           yield {
@@ -837,7 +856,9 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
                       ? thrown
                       : SubscriptionStreamFailed.make({
                           provider: providerName,
-                          reason: { _tag: "RequestOutcomeUnknown" },
+                          reason: SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make(
+                            {},
+                          ),
                         }),
                 }),
               ).pipe(Stream.flatMap(Stream.fromIterable)),
@@ -847,7 +868,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
               // Native transport/SDK edge: never publish provider-controlled error text.
               options.logger.errors("subscription model request failed", {
                 provider: this.name,
-                code: failure._tag,
+                code: streamFailureCode(failure),
               });
               return Stream.fail(failure);
             }),
@@ -859,7 +880,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
               if (signal?.aborted === true) return;
               if (openSummaries > 0)
                 throw ReasoningSummaryProtocolFailed.make({
-                  reason: { _tag: "IncompleteSummary" },
+                  reason: ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({}),
                 });
               if (
                 MutableHashMap.size(streamingCalls) > 0 ||
@@ -867,7 +888,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
               )
                 throw SubscriptionStreamFailed.make({
                   provider: providerName,
-                  reason: { _tag: "IncompleteBlocks" },
+                  reason: SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({}),
                 });
               if (textOpen) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
               const finished: AdapterYieldChunk = {

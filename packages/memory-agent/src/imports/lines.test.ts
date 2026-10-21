@@ -3,7 +3,7 @@ import { Effect, FileSystem, Path } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { withTestPlatform } from "../../tests/support/platform.ts";
-import { MaxDecompressedBytes, readLinesFrom } from "./lines.ts";
+import { MaxDecompressedBytes, readLinesFrom, TranscriptDecompressFailed } from "./lines.ts";
 
 it.live("resumes at complete UTF-8 lines across a 1 MiB read boundary and an unfinished tail", () =>
   Effect.scoped(
@@ -68,7 +68,7 @@ it.live("fails a zstd transcript that decompresses past the limit instead of hol
           Effect.provideService(MaxDecompressedBytes, 1024),
           Effect.flip,
         );
-        expect(failure._tag).toBe("TranscriptDecompressFailed");
+        expect(failure).toBeInstanceOf(TranscriptDecompressFailed);
       }),
     ),
   ),

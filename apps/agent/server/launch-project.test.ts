@@ -4,6 +4,7 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { NetAddress } from "effect/net";
 import { homeDirectory } from "memory-agent/host-system";
 import { describe, expect } from "vite-plus/test";
 import { isThisApp, launchFolder, openProject } from "./launch-project";
@@ -108,7 +109,7 @@ describe("opening the folder on the app", () => {
         serverServices,
       );
       const address = server.address;
-      if (address._tag === "UnixPathAddress")
+      if (NetAddress.isUnixPathAddress(address))
         return yield* Effect.die(new Error("HTTP fixture requires TCP"));
       const baseUrl = `http://127.0.0.1:${address.port}`;
 

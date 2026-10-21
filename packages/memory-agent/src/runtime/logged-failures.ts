@@ -1,4 +1,4 @@
-import { Cause, Effect, Option, Schema } from "effect";
+import { Cause, Effect, Match, Option, Schema } from "effect";
 import { DefectReporter } from "./defect-reporter.ts";
 
 /**
@@ -64,22 +64,20 @@ const decodeReasonTag = Schema.decodeUnknownOption(
  * such as a platform error's `PermissionDenied`, is named too; messages never are.
  */
 export const failureTags = (cause: Cause.Cause<unknown>) => {
-  const tags = cause.reasons.map((reason) => {
-    switch (reason._tag) {
-      case "Fail":
-        return Option.match(decodeTagged(reason.error), {
+  const tags = cause.reasons.map(
+    Match.valueTags({
+      Fail: ({ error }) =>
+        Option.match(decodeTagged(error), {
           onNone: () => "Failure",
           onSome: ({ _tag }) =>
-            Option.match(decodeReasonTag(reason.error), {
+            Option.match(decodeReasonTag(error), {
               onNone: () => _tag,
               onSome: (failure) => `${_tag}:${failure.reason._tag}`,
             }),
-        });
-      case "Die":
-        return "Defect";
-      case "Interrupt":
-        return "Interrupted";
-    }
-  });
+        }),
+      Die: () => "Defect",
+      Interrupt: () => "Interrupted",
+    }),
+  );
   return [...new Set(tags)].join(",");
 };

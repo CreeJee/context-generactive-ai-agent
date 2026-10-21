@@ -146,7 +146,11 @@ import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { createChatExecution } from "./chat-execution.ts";
 import { withShownRunErrors } from "./run-errors.ts";
 import { createFullLoopExecution, preflightFullLoopExecution } from "./full-loop-execution.ts";
-import { FullLoopAdmissionRejected } from "./full-loop-admission-preflight.ts";
+import {
+  FullLoopAdmissionReason,
+  FullLoopAdmissionRejected,
+  fullLoopAdmissionReasonName,
+} from "./full-loop-admission-preflight.ts";
 import type { ChatExecutionTurn, ChatExecutionCapabilities } from "./chat-execution.ts";
 import { goalWorkerAuthority, type GoalWorkerCapability } from "./goal-worker-authority.ts";
 // Protocol ledger adapter, not an Effect service constructor; the central owner
@@ -230,7 +234,7 @@ const goalSourceFailure = (
 ) =>
   Match.valueTags(error, {
     GoalWorkerGenerationError: ({ reason }) => reason,
-    GoalWorkerAssetsFailed: ({ reason }) => reason._tag,
+    GoalWorkerAssetsFailed: ({ reason }) => GoalWorkerAssets.goalWorkerAssetsReasonName(reason),
   });
 
 /** Where this app keeps settings the model may be asked about. */
@@ -331,13 +335,13 @@ export const workspaceInstructions: {
 export const attachmentInstructions = `Images the user attached arrive with their message, in order. "#1" in the user's text means the first attached image, "#2" the second, and so on. If an image did not arrive or cannot be read, say so instead of guessing its contents.`;
 
 /** One part of a user message, reduced to what the agent keeps. */
-const TextTurnPart = Schema.TaggedStruct("text", { text: Schema.String });
-const ImageTurnPart = Schema.TaggedStruct("image", { url: Schema.String });
-const OtherTurnPart = Schema.TaggedStruct("other", {});
-const TurnPart = Schema.Union([TextTurnPart, ImageTurnPart, OtherTurnPart]).pipe(
-  Schema.toTaggedUnion("_tag"),
-);
+const TurnPart = Schema.TaggedUnion({
+  text: { text: Schema.String },
+  image: { url: Schema.String },
+  other: {},
+});
 type TurnPart = typeof TurnPart.Type;
+const { text: TextTurnPart, image: ImageTurnPart, other: OtherTurnPart } = TurnPart.cases;
 
 /**
  * Each union member is a complete incoming shape — AG-UI `text`, TanStack `content`, an image by
@@ -349,7 +353,7 @@ const IncomingPart = Schema.Union([
     Schema.decodeTo(
       TextTurnPart,
       SchemaTransformation.transform({
-        decode: (part) => ({ _tag: "text" as const, text: part.text }),
+        decode: (part) => TextTurnPart.make({ text: part.text }),
         encode: (part) => ({ type: "text" as const, text: part.text }),
       }),
     ),
@@ -358,7 +362,7 @@ const IncomingPart = Schema.Union([
     Schema.decodeTo(
       TextTurnPart,
       SchemaTransformation.transform({
-        decode: (part) => ({ _tag: "text" as const, text: part.content }),
+        decode: (part) => TextTurnPart.make({ text: part.content }),
         encode: (part) => ({ type: "text" as const, content: part.text }),
       }),
     ),
@@ -370,7 +374,7 @@ const IncomingPart = Schema.Union([
     Schema.decodeTo(
       ImageTurnPart,
       SchemaTransformation.transform({
-        decode: (part) => ({ _tag: "image" as const, url: part.source.value }),
+        decode: (part) => ImageTurnPart.make({ url: part.source.value }),
         encode: (part) => ({
           type: "image" as const,
           source: { type: "url" as const, value: part.url },
@@ -382,7 +386,7 @@ const IncomingPart = Schema.Union([
     Schema.decodeTo(
       OtherTurnPart,
       SchemaTransformation.transform({
-        decode: () => ({ _tag: "other" as const }),
+        decode: () => OtherTurnPart.make({}),
         encode: () => ({ type: "other" }),
       }),
     ),
@@ -408,7 +412,7 @@ const Content = Schema.Union([
     Schema.decodeTo(
       Schema.Array(TextTurnPart),
       SchemaTransformation.transform({
-        decode: (text): readonly (typeof TextTurnPart.Type)[] => [{ _tag: "text" as const, text }],
+        decode: (text): readonly (typeof TextTurnPart.Type)[] => [TextTurnPart.make({ text })],
         encode: (parts) => toTurn(parts).text,
       }),
     ),
@@ -593,7 +597,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.catchTag("GlobalConfigFailed", (error) =>
       Effect.as(
         Effect.logWarning("Settings unreadable; memory stays in the project", {
-          error: error._tag,
+          error: errorTag(error),
           reason: error.reason._tag,
         }),
         { crossProject: false, toExternalAgents: false },
@@ -791,7 +795,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       if (!workerScopeAlive) {
         yield* created.dispose({ remove: true });
         return yield* GoalWorkerAssets.GoalWorkerAssetsFailed.make({
-          reason: { _tag: "Inactive" },
+          reason: GoalWorkerAssets.GoalWorkerAssetsReason.cases.Inactive.make({}),
         });
       }
       workerAssetsRegistry = created;
@@ -832,14 +836,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       // Shutdown is best effort: a Worker that did not terminate or a registry still leased is
       // logged by its tag, and the remaining cleanup still runs.
       Effect.catch((error) =>
-        Effect.logWarning("Goal worker shutdown failed", { error: error._tag }),
+        Effect.logWarning("Goal worker shutdown failed", { error: errorTag(error) }),
       ),
       Effect.ensuring(
         Effect.suspend(() => workerAssetsRegistry?.dispose() ?? Effect.void).pipe(
           Effect.catch((error) =>
             Effect.logWarning("Goal worker assets disposal failed", {
-              error: error._tag,
-              reason: error.reason._tag,
+              error: errorTag(error),
+              reason: GoalWorkerAssets.goalWorkerAssetsReasonName(error.reason),
             }),
           ),
         ),
@@ -2278,14 +2282,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ? cause
                 : FullLoopAdmissionRejected.make({
                     member: "turn",
-                    reason: { _tag: "NotCloneable" },
+                    reason: FullLoopAdmissionReason.cases.NotCloneable.make({}),
                   }),
           }).pipe(
             Effect.match({
               onFailure: (error) =>
                 json(409, {
                   error: "unsupported_worker_capabilities",
-                  detail: error.reason._tag,
+                  detail: fullLoopAdmissionReasonName(error.reason),
                 }),
               onSuccess: () => null,
             }),
@@ -2295,7 +2299,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // and the fresh per-run capability generation. Never repair a missing pin
           // by assigning today's code to a Goal that already executed.
           const inactiveOwner = GoalWorkerAssets.GoalWorkerAssetsFailed.make({
-            reason: { _tag: "Inactive" },
+            reason: GoalWorkerAssets.GoalWorkerAssetsReason.cases.Inactive.make({}),
           });
           const generationFailure = yield* Effect.gen(function* () {
             const goalId = yield* Effect.sync(() => workerGoalId).pipe(
@@ -2431,7 +2435,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     workerAssetsRegistry === undefined
                   )
                     return yield* GoalWorkerAssets.GoalWorkerAssetsFailed.make({
-                      reason: { _tag: "Inactive" },
+                      reason: GoalWorkerAssets.GoalWorkerAssetsReason.cases.Inactive.make({}),
                     });
                   workerLease = yield* workerAssetsRegistry.use(workerAssets);
                 }),
@@ -2554,14 +2558,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 const ended = (
                   code: "run_failed" | "run_record_failed",
                   message: string,
-                  error: { readonly _tag: string },
+                  error: Error,
                   reason: string | null,
                 ) =>
                   Stream.fromEffect(
                     Effect.gen(function* () {
                       yield* Effect.logError("Bound run delivery failed", {
                         code,
-                        error: error._tag,
+                        error: errorTag(error),
                         reason,
                         chunks: sequence,
                       });
@@ -2575,7 +2579,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                       } satisfies StreamChunk;
                     }),
                   );
-                const notRecorded = (error: { readonly _tag: string }, reason: string | null) =>
+                const notRecorded = (error: Error, reason: string | null) =>
                   ended(
                     "run_record_failed",
                     "The run's output could not be recorded, so it is no longer delivered.",
@@ -2618,7 +2622,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               Effect.uninterruptible,
               // The stream already ended; a settlement that failed leaves the execution fenced.
               Effect.catch((error) =>
-                Effect.logError("Durable Goal execution settlement failed", { error: error._tag }),
+                Effect.logError("Durable Goal execution settlement failed", {
+                  error: errorTag(error),
+                }),
               ),
               Effect.catchDefect((defect) =>
                 logDefect("Durable Goal execution settlement failed")(Cause.die(defect)),
@@ -3346,7 +3352,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     yield* goalExecutions.unsettled.pipe(
       Effect.catch((error) =>
         Effect.as(
-          Effect.logWarning("Unsettled Goal executions unavailable", { error: error._tag }),
+          Effect.logWarning("Unsettled Goal executions unavailable", { error: errorTag(error) }),
           [],
         ),
       ),

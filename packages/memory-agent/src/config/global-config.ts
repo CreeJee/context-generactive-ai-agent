@@ -1,7 +1,7 @@
 import { isTruthy } from "../truthy.ts";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Effect, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema, Semaphore } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
 import {
   CompatibleAccounts,
@@ -103,16 +103,18 @@ export const Settings = Schema.Struct({
 });
 export type Settings = typeof Settings.Type;
 
+export const GlobalConfigFailedReason = Schema.TaggedUnion({
+  MissingFile: {},
+  ReadFailed: {},
+  WriteFailed: {},
+  InvalidSettings: {},
+});
+
 export class GlobalConfigFailed extends Schema.TaggedError<GlobalConfigFailed>()(
   "GlobalConfigFailed",
   {
     operation: Schema.Literals(["read", "write"]),
-    reason: Schema.Union([
-      Schema.TaggedStruct("MissingFile", {}),
-      Schema.TaggedStruct("ReadFailed", {}),
-      Schema.TaggedStruct("WriteFailed", {}),
-      Schema.TaggedStruct("InvalidSettings", {}),
-    ]),
+    reason: GlobalConfigFailedReason,
     cause: Schema.Defect(),
   },
 ) {}
@@ -131,7 +133,7 @@ const make = Effect.gen(function* () {
         Effect.mapError((cause) =>
           GlobalConfigFailed.make({
             operation: "write",
-            reason: { _tag: "InvalidSettings" },
+            reason: GlobalConfigFailedReason.cases.InvalidSettings.make({}),
             cause,
           }),
         ),
@@ -147,7 +149,11 @@ const make = Effect.gen(function* () {
       ).pipe(
         Effect.uninterruptible,
         Effect.mapError((cause) =>
-          GlobalConfigFailed.make({ operation: "write", reason: { _tag: "WriteFailed" }, cause }),
+          GlobalConfigFailed.make({
+            operation: "write",
+            reason: GlobalConfigFailedReason.cases.WriteFailed.make({}),
+            cause,
+          }),
         ),
       );
       return settings;
@@ -157,8 +163,9 @@ const make = Effect.gen(function* () {
       Effect.mapError((cause) =>
         GlobalConfigFailed.make({
           operation: "read",
-          reason:
-            cause.reason._tag === "NotFound" ? { _tag: "MissingFile" } : { _tag: "ReadFailed" },
+          reason: Predicate.isTagged(cause.reason, "NotFound")
+            ? GlobalConfigFailedReason.cases.MissingFile.make({})
+            : GlobalConfigFailedReason.cases.ReadFailed.make({}),
           cause,
         }),
       ),
@@ -167,7 +174,11 @@ const make = Effect.gen(function* () {
     if (json === null) return {};
     const settings = yield* Schema.decodeEffect(jsonSettings)(json).pipe(
       Effect.mapError((cause) =>
-        GlobalConfigFailed.make({ operation: "read", reason: { _tag: "InvalidSettings" }, cause }),
+        GlobalConfigFailed.make({
+          operation: "read",
+          reason: GlobalConfigFailedReason.cases.InvalidSettings.make({}),
+          cause,
+        }),
       ),
     );
     if (

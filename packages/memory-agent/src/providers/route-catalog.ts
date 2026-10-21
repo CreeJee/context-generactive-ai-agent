@@ -100,17 +100,19 @@ export interface RouteCatalogSnapshot {
   readonly execution: readonly ExecutionRoute[];
 }
 
+export const RouteCatalogRefreshFailedReason = Schema.TaggedUnion({
+  /** The provider, its catalog or the environment failed; `cause` has its error. */
+  Failed: {},
+  /** A provider's catalog listed a model under another provider. */
+  ProviderMismatch: {},
+});
+
 export class RouteCatalogRefreshFailed extends Schema.TaggedError<RouteCatalogRefreshFailed>()(
   "RouteCatalogRefreshFailed",
   {
     provider: Schema.optionalKey(ProviderId),
     operation: Schema.Literals(["provider", "auth", "models", "tools", "config"]),
-    reason: Schema.Union([
-      /** The provider, its catalog or the environment failed; `cause` has its error. */
-      Schema.TaggedStruct("Failed", {}),
-      /** A provider's catalog listed a model under another provider. */
-      Schema.TaggedStruct("ProviderMismatch", {}),
-    ]),
+    reason: RouteCatalogRefreshFailedReason,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -199,7 +201,7 @@ const sourceFromServices = Effect.gen(function* () {
               new RouteCatalogRefreshFailed({
                 provider,
                 operation: "provider",
-                reason: { _tag: "Failed" },
+                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                 cause,
               }),
           ),
@@ -210,7 +212,7 @@ const sourceFromServices = Effect.gen(function* () {
               new RouteCatalogRefreshFailed({
                 provider,
                 operation: "auth",
-                reason: { _tag: "Failed" },
+                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                 cause,
               }),
           ),
@@ -228,7 +230,7 @@ const sourceFromServices = Effect.gen(function* () {
               new RouteCatalogRefreshFailed({
                 provider,
                 operation: "models",
-                reason: { _tag: "Failed" },
+                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                 cause,
               }),
           ),
@@ -238,7 +240,7 @@ const sourceFromServices = Effect.gen(function* () {
             return yield* new RouteCatalogRefreshFailed({
               provider,
               operation: "models",
-              reason: { _tag: "ProviderMismatch" },
+              reason: RouteCatalogRefreshFailedReason.cases.ProviderMismatch.make({}),
             });
           const chatRoute: ChatRoute = Object.freeze({
             type: "chat",
@@ -277,7 +279,7 @@ const sourceFromServices = Effect.gen(function* () {
                       new RouteCatalogRefreshFailed({
                         provider,
                         operation: "tools",
-                        reason: { _tag: "Failed" },
+                        reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                         cause,
                       }),
                   ),
@@ -316,7 +318,7 @@ const sourceFromServices = Effect.gen(function* () {
             (cause) =>
               new RouteCatalogRefreshFailed({
                 operation: "config",
-                reason: { _tag: "Failed" },
+                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                 cause,
               }),
           ),

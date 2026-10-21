@@ -1,4 +1,4 @@
-import { Cause, Effect, Schedule, Schema } from "effect";
+import { Cause, Data, Effect, Schedule, Schema } from "effect";
 import { logDefect, logFailure } from "./logged-failures.ts";
 
 /**
@@ -6,18 +6,18 @@ import { logDefect, logFailure } from "./logged-failures.ts";
  * when the retries run out, or a defect happens, the loop stops and stays stopped until a person
  * restarts it. A success resets the count.
  */
-export const LoopHealth = Schema.Union([
-  Schema.TaggedStruct("Healthy", {}),
+export const LoopHealth = Schema.TaggedUnion({
+  Healthy: {},
   /** The step failed `attempt` times in a row and waits before trying again. */
-  Schema.TaggedStruct("Retrying", { attempt: Schema.Int, of: Schema.Int }),
+  Retrying: { attempt: Schema.Int, of: Schema.Int },
   /** The retries ran out on an expected failure, named by its tag. */
-  Schema.TaggedStruct("Exhausted", { error: Schema.String }),
+  Exhausted: { error: Schema.String },
   /** A defect stopped the loop; it was never retried. */
-  Schema.TaggedStruct("Defected", {}),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  Defected: {},
+});
 export type LoopHealth = typeof LoopHealth.Type;
 
-export const healthyLoop: LoopHealth = { _tag: "Healthy" };
+export const healthyLoop: LoopHealth = LoopHealth.cases.Healthy.make({});
 
 export const sameLoopHealth = Schema.toEquivalence(LoopHealth);
 
@@ -38,9 +38,14 @@ export const loopRetrySchedule = Schedule.max([
 ]);
 
 /** What one supervised step of a loop came to. */
-export type LoopStep<A> =
-  | { readonly _tag: "Continued"; readonly value: A }
-  | { readonly _tag: "Stopped"; readonly health: LoopHealth };
+export type LoopStep<A> = Data.TaggedEnum<{
+  Continued: { readonly value: A };
+  Stopped: { readonly health: LoopHealth };
+}>;
+interface LoopStepDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: LoopStep<this["A"]>;
+}
+export const LoopStep = Data.taggedEnum<LoopStepDefinition>();
 
 export interface LoopSupervision {
   /** Logged with each failure, by its tag only. */
@@ -68,31 +73,31 @@ export const superviseLoopStep =
           Schedule.tap(({ input, attempt }) =>
             Effect.andThen(
               logFailure(message, { ...annotations, attempt: String(attempt) })(input),
-              setHealth({ _tag: "Retrying", attempt, of: maxLoopRetries }),
+              setHealth(LoopHealth.cases.Retrying.make({ attempt, of: maxLoopRetries })),
             ),
           ),
         ),
       ),
       Effect.tap(() => setHealth(healthyLoop)),
-      Effect.map((value): LoopStep<A> => ({ _tag: "Continued", value })),
+      Effect.map((value): LoopStep<A> => LoopStep.Continued({ value })),
       Effect.catch((error) => {
-        const health: LoopHealth = { _tag: "Exhausted", error: error._tag };
+        const health: LoopHealth = LoopHealth.cases.Exhausted.make({ error: error._tag });
         return logFailure(
           message,
           annotations,
         )(error).pipe(
           Effect.andThen(setHealth(health)),
-          Effect.as<LoopStep<A>>({ _tag: "Stopped", health }),
+          Effect.as<LoopStep<A>>(LoopStep.Stopped({ health })),
         );
       }),
       Effect.catchDefect((defect) => {
-        const health: LoopHealth = { _tag: "Defected" };
+        const health: LoopHealth = LoopHealth.cases.Defected.make({});
         return logDefect(
           message,
           annotations,
         )(Cause.die(defect)).pipe(
           Effect.andThen(setHealth(health)),
-          Effect.as<LoopStep<A>>({ _tag: "Stopped", health }),
+          Effect.as<LoopStep<A>>(LoopStep.Stopped({ health })),
         );
       }),
     );

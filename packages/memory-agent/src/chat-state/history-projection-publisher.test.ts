@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema, Result, Function as EffectFunction } from "effect";
+import { Effect, Layer, Match, Schema, Result, Function as EffectFunction } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
@@ -8,6 +8,7 @@ import { groupHistoryMessages } from "./history-groups.ts";
 import { HistoryProjectionReader } from "./history-projection-reader.ts";
 import {
   HistoryProjectionPublisher,
+  HistoryProjectionPublishReason,
   type HistoryProjectionPublication,
 } from "./history-projection-publisher.ts";
 import { sqlGet, sqlRun, sqlExec } from "../../tests/support/sql.ts";
@@ -15,6 +16,7 @@ const encodeJson = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
+const publishReason = HistoryProjectionPublishReason.cases;
 
 const ownedDatabase = Database.layer(":memory:");
 const publisher = HistoryProjectionPublisher.layer.pipe(Layer.provideMerge(ownedDatabase));
@@ -68,14 +70,15 @@ describe("Effect history projection publication", () => {
         provideFixture(HistoryProjectionPublisher.layer.pipe(Layer.provide(readOnly))),
         Effect.flip,
       );
-      switch (failed._tag) {
-        case "HistoryProjectionPublishFailed":
-          expect(failed.reason).toEqual({ _tag: "SqliteWrite", phase: "install" });
-          break;
-        case "DatabaseOpenError":
-        case "SqlError":
-          expect.fail("read-only fixture setup should succeed");
-      }
+      const setupFailed = () => expect.fail("read-only fixture setup should succeed");
+      Match.valueTags(failed, {
+        HistoryProjectionPublishFailed: (publishFailed) =>
+          expect(publishFailed.reason).toEqual(
+            publishReason.SqliteWrite.make({ phase: "install" }),
+          ),
+        DatabaseOpenError: setupFailed,
+        SqlError: setupFailed,
+      });
     }),
   );
 
@@ -83,7 +86,7 @@ describe("Effect history projection publication", () => {
     Effect.gen(function* () {
       const service = yield* HistoryProjectionPublisher.pipe(provideFixture(publisher));
       const failed = yield* service.publish(first).pipe(Effect.flip);
-      expect(failed.reason).toEqual({ _tag: "SqliteWrite", phase: "publish" });
+      expect(failed.reason).toEqual(publishReason.SqliteWrite.make({ phase: "publish" }));
     }),
   );
 
@@ -153,7 +156,7 @@ describe("Effect history projection publication", () => {
           { ...first, groups: [{ id: "", messages: first.sourceJSON }] },
         ]) {
           const failed = yield* service.publish(input).pipe(Effect.flip);
-          expect(failed.reason._tag).toBe("InvalidPublication");
+          expect(failed.reason).toEqual(publishReason.InvalidPublication.make({}));
           expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(
             current,
           );
@@ -162,7 +165,7 @@ describe("Effect history projection publication", () => {
           const failed = yield* service
             .publish({ ...first, groups: [{ id: "old", messages }] })
             .pipe(Effect.flip);
-          expect(failed.reason._tag).toBe("InvalidPreparedJson");
+          expect(failed.reason).toEqual(publishReason.InvalidPreparedJson.make({}));
           expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(
             current,
           );
@@ -170,7 +173,7 @@ describe("Effect history projection publication", () => {
         const failed = yield* service
           .publish({ ...first, groups: [...first.groups, ...first.groups] })
           .pipe(Effect.flip);
-        expect(failed.reason).toEqual({ _tag: "SqliteWrite", phase: "publish" });
+        expect(failed.reason).toEqual(publishReason.SqliteWrite.make({ phase: "publish" }));
         expect(encodeJson(failed)).not.toContain("Original preserved");
         expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual(current);
       }),
@@ -190,7 +193,7 @@ describe("Effect history projection publication", () => {
         const invalid = yield* service
           .publish({ threadId: "a", sourceJSON: "{}", groups: [] })
           .pipe(Effect.flip);
-        expect(invalid.reason._tag).toBe("InvalidPreparedJson");
+        expect(invalid.reason).toEqual(publishReason.InvalidPreparedJson.make({}));
         expect(yield* reader.read({ type: "initial", threadId: "a", limit: 50 })).toEqual({
           type: "page",
           groups: [],

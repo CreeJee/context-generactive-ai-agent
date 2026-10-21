@@ -1,5 +1,9 @@
 import { Schema } from "effect";
-import type { CardWorktreeFailed } from "./worktree.ts";
+import {
+  cardWorktreeFailedReasonName,
+  type CardWorktreeFailed,
+  type CardWorktreeFailedReason,
+} from "./worktree.ts";
 
 /**
  * Why kanban cards fail and why the loop holds them, as closed literal sets (decisions.md "칸반 실패
@@ -8,17 +12,26 @@ import type { CardWorktreeFailed } from "./worktree.ts";
  */
 
 /** Why a verifier did not pass a card or a Goal branch. Only `Rejected` carries its own words. */
-export const VerdictFailure = Schema.Union([
+export const VerdictFailure = Schema.TaggedUnion({
   /** The verifier checked and found the work short; `note` is what it wrote. */
-  Schema.TaggedStruct("Rejected", { note: Schema.String }),
+  Rejected: { note: Schema.String },
   /** The verifier finished without recording a verdict. */
-  Schema.TaggedStruct("NoVerdict", {}),
-  Schema.TaggedStruct("NotFinished", {}),
-  Schema.TaggedStruct("ModelSelectionRequired", {}),
+  NoVerdict: {},
+  NotFinished: {},
+  ModelSelectionRequired: {},
   /** The verifier could not run: its session, project or run failed. */
-  Schema.TaggedStruct("Unavailable", {}),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  Unavailable: {},
+});
 export type VerdictFailure = typeof VerdictFailure.Type;
+
+/** The verdict failure's tag, as failure codes name it. */
+const verdictFailureName = VerdictFailure.match({
+  Rejected: () => "Rejected" as const,
+  NoVerdict: () => "NoVerdict" as const,
+  NotFinished: () => "NotFinished" as const,
+  ModelSelectionRequired: () => "ModelSelectionRequired" as const,
+  Unavailable: () => "Unavailable" as const,
+});
 
 /** How a card's agent run ended without finishing the card. */
 export const AgentFailureCode = Schema.Literals([
@@ -43,45 +56,43 @@ export const WorktreeFailureReason = Schema.Literals([
   "GoalAdvanced",
   "TargetMissing",
   "GitFailed",
-] as const satisfies readonly CardWorktreeFailed["reason"]["_tag"][]);
+] as const satisfies readonly (keyof (typeof CardWorktreeFailedReason)["cases"])[]);
 
 /** Why one attempt or verification of a card failed. */
-export const CardFailure = Schema.Union([
-  Schema.TaggedStruct("Agent", { code: AgentFailureCode }),
-  Schema.TaggedStruct("Worktree", { reason: WorktreeFailureReason }),
-  Schema.TaggedStruct("Verification", { verdict: VerdictFailure }),
+export const CardFailure = Schema.TaggedUnion({
+  Agent: { code: AgentFailureCode },
+  Worktree: { reason: WorktreeFailureReason },
+  Verification: { verdict: VerdictFailure },
   /** The Goal branch moved during every verification round. */
-  Schema.TaggedStruct("GoalBranchKeptMoving", {}),
-  Schema.TaggedStruct("Defect", {}),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  GoalBranchKeptMoving: {},
+  Defect: {},
+});
 export type CardFailure = typeof CardFailure.Type;
 
-export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure => ({
-  _tag: "Worktree",
-  reason: failure.reason._tag,
-});
+export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure =>
+  CardFailure.cases.Worktree.make({ reason: cardWorktreeFailedReasonName(failure.reason) });
 
 /** Why the loop stopped or delayed a card, as the board shows it. */
-export const CardHoldReason = Schema.Union([
-  Schema.TaggedStruct("RetryBackoff", { failure: CardFailure }),
+export const CardHoldReason = Schema.TaggedUnion({
+  RetryBackoff: { failure: CardFailure },
   /** The orchestrator model replaces the card; no failure when a person asked for it. */
-  Schema.TaggedStruct("ReplanRequested", { failure: Schema.NullOr(CardFailure) }),
-  Schema.TaggedStruct("RepeatedFailure", { failure: CardFailure }),
-  Schema.TaggedStruct("MergeConflict", { files: Schema.Array(Schema.String) }),
-  Schema.TaggedStruct("UncertainEffect", { runId: Schema.String }),
+  ReplanRequested: { failure: Schema.NullOr(CardFailure) },
+  RepeatedFailure: { failure: CardFailure },
+  MergeConflict: { files: Schema.Array(Schema.String) },
+  UncertainEffect: { runId: Schema.String },
   /** The card's queue item ran out of deliveries. */
-  Schema.TaggedStruct("DeadLettered", {}),
+  DeadLettered: {},
   /** The orchestrator model stopped the card or asks a person about it after a Goal change. */
-  Schema.TaggedStruct("GoalChanged", { note: Schema.String }),
-  Schema.TaggedStruct("UpstreamRegressed", { verdict: VerdictFailure }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  GoalChanged: { note: Schema.String },
+  UpstreamRegressed: { verdict: VerdictFailure },
+});
 export type CardHoldReason = typeof CardHoldReason.Type;
 
 /** The failure as revision details and logs name it: tags only, never a model's words. */
 export const failureCode = CardFailure.match({
   Agent: (failure) => `agent_${failure.code}`,
   Worktree: (failure) => `worktree_${failure.reason}`,
-  Verification: (failure) => `verification_${failure.verdict._tag}`,
+  Verification: (failure) => `verification_${verdictFailureName(failure.verdict)}`,
   GoalBranchKeptMoving: () => "goal_branch_kept_moving",
   Defect: () => "defect",
 });

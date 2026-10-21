@@ -44,14 +44,14 @@ const Runs = Schema.Array(Schema.Struct({ runId: Schema.String }));
 const Operations = Schema.Array(Operation);
 const decodeOperations = Schema.decodeUnknownEffect(Operations);
 
+const UncertainRunsFailedReason = Schema.TaggedUnion({
+  Read: { cause: Schema.Defect() },
+  Acknowledge: { cause: Schema.Defect() },
+});
+
 export class UncertainRunsFailed extends Schema.TaggedError<UncertainRunsFailed>()(
   "UncertainRunsFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("Read", { cause: Schema.Defect() }),
-      Schema.TaggedStruct("Acknowledge", { cause: Schema.Defect() }),
-    ]),
-  },
+  { reason: UncertainRunsFailedReason },
 ) {}
 
 const stateOf = (operation: typeof Operation.Type): UncertainToolState | null => {
@@ -106,7 +106,7 @@ export const uncertainRuns = Effect.gen(function* () {
     LIMIT 1`;
   const read = <A>(effect: Effect.Effect<A, SqlError.SqlError>) =>
     Effect.mapError(effect, (cause) =>
-      UncertainRunsFailed.make({ reason: { _tag: "Read", cause } }),
+      UncertainRunsFailed.make({ reason: UncertainRunsFailedReason.cases.Read.make({ cause }) }),
     );
 
   const tools = Effect.fnUntraced(function* (runId: string) {
@@ -175,7 +175,11 @@ export const uncertainRuns = Effect.gen(function* () {
         )
         .pipe(
           Effect.catchTag("SqlError", (cause) =>
-            Effect.fail(UncertainRunsFailed.make({ reason: { _tag: "Acknowledge", cause } })),
+            Effect.fail(
+              UncertainRunsFailed.make({
+                reason: UncertainRunsFailedReason.cases.Acknowledge.make({ cause }),
+              }),
+            ),
           ),
         );
     }),

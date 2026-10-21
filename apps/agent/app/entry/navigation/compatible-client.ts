@@ -60,6 +60,16 @@ export type CompatibleAccountsView = typeof CompatibleAccountsView.Type;
 const TestResult = Schema.Struct({ ok: Schema.Literal(true) });
 const ModelList = Schema.Struct({ models: Schema.Array(Schema.Struct({ id: Schema.String })) });
 
+/** Why a compatible-endpoint request failed; the rejected body is never read. */
+export const CompatibleRequestFailedReason = Schema.TaggedUnion({
+  TransportFailed: {},
+  PartialWrite: {},
+  RequestRejected: {},
+  InvalidResponse: {},
+});
+export type CompatibleRequestFailedReason = typeof CompatibleRequestFailedReason.Type;
+const reasons = CompatibleRequestFailedReason.cases;
+
 export class CompatibleRequestFailed extends Schema.TaggedError<CompatibleRequestFailed>()(
   "CompatibleRequestFailed",
   {
@@ -76,12 +86,7 @@ export class CompatibleRequestFailed extends Schema.TaggedError<CompatibleReques
       "discover",
     ]),
     status: Schema.Finite,
-    reason: Schema.Union([
-      Schema.TaggedStruct("TransportFailed", {}),
-      Schema.TaggedStruct("PartialWrite", {}),
-      Schema.TaggedStruct("RequestRejected", {}),
-      Schema.TaggedStruct("InvalidResponse", {}),
-    ]),
+    reason: CompatibleRequestFailedReason,
     message: Schema.String,
   },
 ) {}
@@ -96,22 +101,21 @@ export function makeCompatibleClient(fetcher: typeof fetch) {
   const requestEffect = <A, I>(schema: Schema.Codec<A, I>, body?: CompatibleAction) =>
     Effect.gen(function* () {
       const operation = body?.intent ?? "list";
-      const failed = (reason: CompatibleRequestFailed["reason"]["_tag"], status: number) =>
+      const failed = (reason: CompatibleRequestFailedReason, status: number) =>
         CompatibleRequestFailed.make({
           operation,
           status,
-          reason: { _tag: reason },
-          message:
-            reason === "PartialWrite"
-              ? "키와 설정이 부분적으로 저장됐을 수 있어요. 계정 목록을 새로고침하고 키 상태를 확인해 주세요."
-              : `호환 공급자 요청에 실패했어요 (${status}).`,
+          reason,
+          message: CompatibleRequestFailedReason.guards.PartialWrite(reason)
+            ? "키와 설정이 부분적으로 저장됐을 수 있어요. 계정 목록을 새로고침하고 키 상태를 확인해 주세요."
+            : `호환 공급자 요청에 실패했어요 (${status}).`,
         });
       const signal = yield* Effect.abortSignal;
       const encoded =
         body === undefined
           ? undefined
           : yield* Schema.encodeEffect(Schema.fromJsonString(CompatibleAction))(body).pipe(
-              Effect.mapError(() => failed("InvalidResponse", 0)),
+              Effect.mapError(() => failed(reasons.InvalidResponse.make({}), 0)),
             );
       const response = yield* Effect.tryPromise({
         try: () =>
@@ -126,16 +130,17 @@ export function makeCompatibleClient(fetcher: typeof fetch) {
                   signal,
                 },
           ),
-        catch: () => failed("TransportFailed", 0),
+        catch: () => failed(reasons.TransportFailed.make({}), 0),
       });
-      if (response.status === 409) return yield* failed("PartialWrite", response.status);
-      if (!response.ok) return yield* failed("RequestRejected", response.status);
+      if (response.status === 409)
+        return yield* failed(reasons.PartialWrite.make({}), response.status);
+      if (!response.ok) return yield* failed(reasons.RequestRejected.make({}), response.status);
       const json: unknown = yield* Effect.tryPromise({
         try: () => response.json(),
-        catch: () => failed("InvalidResponse", response.status),
+        catch: () => failed(reasons.InvalidResponse.make({}), response.status),
       });
       return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
-        Effect.mapError(() => failed("InvalidResponse", response.status)),
+        Effect.mapError(() => failed(reasons.InvalidResponse.make({}), response.status)),
       );
     }).pipe(Effect.scoped);
   const effects = {

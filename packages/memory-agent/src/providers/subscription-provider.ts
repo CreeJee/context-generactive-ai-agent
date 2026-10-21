@@ -4,6 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
 import {
   Clock,
+  Data,
   Deferred,
   MutableHashSet,
   Effect,
@@ -241,6 +242,25 @@ const fromPromise = <A>(
     catch: () => operationFailure(provider, operation),
   });
 
+/** A catalog load in flight, or models served until `expiresAt`. */
+type CatalogState = Data.TaggedEnum<{
+  Loading: {};
+  Cached: { readonly expiresAt: number };
+}>;
+const CatalogState = Data.taggedEnum<CatalogState>();
+type CatalogEntry = {
+  readonly key: string;
+  readonly token: object;
+  readonly completion: Deferred.Deferred<ReadonlyArray<ProviderModel>, ProviderOperationFailed>;
+  readonly state: CatalogState;
+};
+/** The first caller owns the load; later callers wait on the owner's completion. */
+type Admission = Data.TaggedEnum<{
+  Waiter: { readonly entry: CatalogEntry };
+  Owner: { readonly entry: CatalogEntry };
+}>;
+const Admission = Data.taggedEnum<Admission>();
+
 export function createSubscriptionProvider(
   options: SubscriptionProviderOptions,
 ): ProviderConfiguration & { readonly contextWindow: (model: string) => number | null } {
@@ -340,14 +360,6 @@ export function createSubscriptionProvider(
     Effect.andThen(authState()),
     Effect.mapError(() => operationFailure(provider, "auth")),
   );
-  type CatalogEntry = {
-    readonly key: string;
-    readonly token: object;
-    readonly completion: Deferred.Deferred<ReadonlyArray<ProviderModel>, ProviderOperationFailed>;
-    readonly state:
-      | { readonly _tag: "Loading" }
-      | { readonly _tag: "Cached"; readonly expiresAt: number };
-  };
   const catalogEntry = Ref.makeUnsafe<CatalogEntry | null>(null);
   const catalogLock = Semaphore.makeUnsafe(1);
   const invalidateCatalog = catalogLock.withPermits(1)(
@@ -383,13 +395,12 @@ export function createSubscriptionProvider(
           const key = options.catalogKey?.() ?? "__default__";
           const current = yield* Ref.get(catalogEntry);
           if (current?.key === key) {
-            switch (current.state._tag) {
-              case "Loading":
-                return { _tag: "Waiter", entry: current } as const;
-              case "Cached":
-                if ((yield* Clock.currentTimeMillis) < current.state.expiresAt)
-                  return { _tag: "Waiter", entry: current } as const;
-            }
+            const reusable = yield* CatalogState.$match(current.state, {
+              Loading: () => Effect.succeed(true),
+              Cached: (state) =>
+                Effect.map(Clock.currentTimeMillis, (now) => now < state.expiresAt),
+            });
+            if (reusable) return Admission.Waiter({ entry: current });
           }
           const next: CatalogEntry = {
             key,
@@ -398,18 +409,16 @@ export function createSubscriptionProvider(
               ReadonlyArray<ProviderModel>,
               ProviderOperationFailed
             >(),
-            state: { _tag: "Loading" },
+            state: CatalogState.Loading(),
           };
           yield* Ref.set(catalogEntry, next);
-          return { _tag: "Owner", entry: next } as const;
+          return Admission.Owner({ entry: next });
         }),
       );
-      const { entry } = admission;
-      switch (admission._tag) {
-        case "Waiter":
-          return yield* restore(Deferred.await(entry.completion));
-        case "Owner":
-          return yield* restore(
+      return yield* Admission.$match(admission, {
+        Waiter: ({ entry }) => restore(Deferred.await(entry.completion)),
+        Owner: ({ entry }) =>
+          restore(
             Effect.gen(function* () {
               const pages =
                 provider === "anthropic"
@@ -435,10 +444,9 @@ export function createSubscriptionProvider(
                         Exit.isSuccess(exit)
                           ? {
                               ...entry,
-                              state: {
-                                _tag: "Cached",
+                              state: CatalogState.Cached({
                                 expiresAt: (yield* Clock.currentTimeMillis) + 30_000,
-                              },
+                              }),
                             }
                           : null,
                       );
@@ -448,8 +456,8 @@ export function createSubscriptionProvider(
                 ),
               ),
             ),
-          );
-      }
+          ),
+      });
     }),
   );
   const selected = Effect.map(options.config.read, (settings): ModelSelection | null =>

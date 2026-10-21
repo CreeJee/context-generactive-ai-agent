@@ -1,5 +1,6 @@
 import {
   Context,
+  Data,
   Effect,
   Function as EffectFunction,
   Layer,
@@ -51,27 +52,26 @@ export const overlappingBoundaries: {
 );
 
 /** How a card's expected files meet another Goal's cards. */
-export type CrossGoalOverlap =
-  | { readonly _tag: "None" }
+export type CrossGoalOverlap = Data.TaggedEnum<{
+  None: {};
   /** The other card is running; this card waits until it finishes. */
-  | {
-      readonly _tag: "Running";
-      readonly otherGoalInstanceId: string;
-      readonly otherCardId: string;
-    }
+  Running: {
+    readonly otherGoalInstanceId: string;
+    readonly otherCardId: string;
+  };
   /** The other card is done but its Goal is not merged, and nobody chose an order yet. */
-  | {
-      readonly _tag: "Unmerged";
-      readonly otherGoalInstanceId: string;
-      readonly otherCardId: string;
-      readonly files: readonly string[];
-    }
+  Unmerged: {
+    readonly otherGoalInstanceId: string;
+    readonly otherCardId: string;
+    readonly files: readonly string[];
+  };
   /** A person chose to wait for the other Goal's merge. */
-  | {
-      readonly _tag: "Waiting";
-      readonly otherGoalInstanceId: string;
-      readonly otherCardId: string;
-    };
+  Waiting: {
+    readonly otherGoalInstanceId: string;
+    readonly otherCardId: string;
+  };
+}>;
+export const CrossGoalOverlap = Data.taggedEnum<CrossGoalOverlap>();
 
 interface Contender {
   readonly goalInstanceId: string;
@@ -234,7 +234,7 @@ const make = Effect.gen(function* () {
       CrossGoalOverlap,
       KanbanStorageFailed | GoalScheduleStorageFailed | WorkflowStorageError
     > {
-      if ((card.boundaries ?? []).length === 0) return { _tag: "None" };
+      if ((card.boundaries ?? []).length === 0) return CrossGoalOverlap.None();
       const others = (yield* attempts.activeGoals).filter(
         (other) =>
           other.goalInstanceId !== goal.goalInstanceId && other.projectRoot === goal.projectRoot,
@@ -254,7 +254,7 @@ const make = Effect.gen(function* () {
           switch (step.status) {
             case "in_progress":
             case "verify":
-              return { _tag: "Running", ...otherCard };
+              return CrossGoalOverlap.Running(otherCard);
             case "done": {
               const chosen = (yield* decisions.forCard(
                 goal.sessionId,
@@ -272,9 +272,9 @@ const make = Effect.gen(function* () {
                 case "proceed":
                   continue;
                 case "wait":
-                  return { _tag: "Waiting", ...otherCard };
+                  return CrossGoalOverlap.Waiting(otherCard);
                 case undefined:
-                  return { _tag: "Unmerged", ...otherCard, files };
+                  return CrossGoalOverlap.Unmerged({ ...otherCard, files });
               }
               break;
             }
@@ -283,7 +283,7 @@ const make = Effect.gen(function* () {
           }
         }
       }
-      return { _tag: "None" };
+      return CrossGoalOverlap.None();
     }),
 
     /**

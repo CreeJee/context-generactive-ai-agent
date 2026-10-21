@@ -61,15 +61,16 @@ export const HistoryPageSnapshot = Schema.Union([
 ]);
 export type HistoryPageSnapshot = typeof HistoryPageSnapshot.Type;
 
+export const HistoryProjectionReadReason = Schema.TaggedUnion({
+  InvalidRequest: {},
+  SqliteRead: { phase: Schema.Literal("query") },
+  InvalidSnapshot: {},
+});
+const readReason = HistoryProjectionReadReason.cases;
+
 export class HistoryProjectionReadFailed extends Schema.TaggedError<HistoryProjectionReadFailed>()(
   "HistoryProjectionReadFailed",
-  {
-    reason: Schema.Union([
-      Schema.TaggedStruct("InvalidRequest", {}),
-      Schema.TaggedStruct("SqliteRead", { phase: Schema.Literal("query") }),
-      Schema.TaggedStruct("InvalidSnapshot", {}),
-    ]),
-  },
+  { reason: HistoryProjectionReadReason },
 ) {}
 
 const decodeRequest = Schema.decodeUnknownEffect(HistoryPageRequest);
@@ -93,7 +94,7 @@ export class HistoryProjectionReader extends Context.Service<
       ): Effect.fn.Return<HistoryPageSnapshot, HistoryProjectionReadFailed> {
         const request = yield* decodeRequest(input).pipe(
           Effect.mapError(() =>
-            HistoryProjectionReadFailed.make({ reason: { _tag: "InvalidRequest" } }),
+            HistoryProjectionReadFailed.make({ reason: readReason.InvalidRequest.make({}) }),
           ),
         );
         const raw = yield* (() => {
@@ -112,17 +113,21 @@ export class HistoryProjectionReader extends Context.Service<
           }
         })().pipe(
           Effect.mapError(() =>
-            HistoryProjectionReadFailed.make({ reason: { _tag: "SqliteRead", phase: "query" } }),
+            HistoryProjectionReadFailed.make({
+              reason: readReason.SqliteRead.make({ phase: "query" }),
+            }),
           ),
         );
         const rows = yield* decodeRows(raw).pipe(
           Effect.mapError(() =>
-            HistoryProjectionReadFailed.make({ reason: { _tag: "InvalidSnapshot" } }),
+            HistoryProjectionReadFailed.make({ reason: readReason.InvalidSnapshot.make({}) }),
           ),
         );
         const state = rows[0];
         if (state === undefined)
-          return yield* HistoryProjectionReadFailed.make({ reason: { _tag: "InvalidSnapshot" } });
+          return yield* HistoryProjectionReadFailed.make({
+            reason: readReason.InvalidSnapshot.make({}),
+          });
         if (state.format_version === 0) return { type: "not-ready", reason: "unprepared" };
         if (state.format_version !== 1) return { type: "not-ready", reason: "unsupported-format" };
         if (state.ready === 0) return { type: "not-ready", reason: "stale" };

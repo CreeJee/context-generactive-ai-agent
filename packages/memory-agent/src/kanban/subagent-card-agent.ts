@@ -13,15 +13,15 @@ import { toToolSchema } from "../tools/schema.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import {
   CardAgent,
+  CardAgentOutcome,
+  CardVerdict,
   CardVerifier,
   GoalVerifier,
-  type CardAgentOutcome,
-  type CardVerdict,
   type CardVerification,
   type GoalVerification,
 } from "./card-agent.ts";
 import { cardToolProject, type CardWorktree } from "./worktree.ts";
-import type { AgentFailureCode, VerdictFailure } from "./failures.ts";
+import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
 
 /**
  * Production card agents: each card attempt and each verification is a named session subagent
@@ -100,16 +100,14 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const failed = (code: AgentFailureCode): CardAgentOutcome => ({
-    _tag: "Failed",
-    failure: { _tag: "Agent", code },
-  });
+  const failed = (code: AgentFailureCode): CardAgentOutcome =>
+    CardAgentOutcome.Failed({ failure: CardFailure.cases.Agent.make({ code }) });
   const unavailable = (error: string, reason: string | null) =>
     Effect.as(
       Effect.logWarning("Kanban card agent unavailable", { error, reason }),
       failed("unavailable"),
     );
-  const rejected = (failure: VerdictFailure): CardVerdict => ({ _tag: "Failed", failure });
+  const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
 
   const agent = CardAgent.of({
     run: (run) =>
@@ -153,7 +151,7 @@ const make = Effect.gen(function* () {
         if (outcome === null) return failed("not_started");
         switch (outcome.status) {
           case "completed":
-            return { _tag: "Finished", report: outcome.answer } satisfies CardAgentOutcome;
+            return CardAgentOutcome.Finished({ report: outcome.answer });
           case "failed":
             return failed("failed");
           case "cancelled":
@@ -163,7 +161,7 @@ const make = Effect.gen(function* () {
         // Its session, project or run records failed; the error stays in the logs only.
       }).pipe(
         // A database failure also names its kind (lock, constraint, ...), never its statement.
-        Effect.catchTag("SqlError", (error) => unavailable(error._tag, error.reason._tag)),
+        Effect.catchTag("SqlError", (error) => unavailable("SqlError", error.reason._tag)),
         Effect.catch((error) => unavailable(error._tag, null)),
         // The card run's tool calls join this span's trace.
         Effect.withSpan("CardAgent.run"),
@@ -188,7 +186,8 @@ const make = Effect.gen(function* () {
         input.projectId,
         input.worktree,
       );
-      if (Option.isNone(selection)) return rejected({ _tag: "ModelSelectionRequired" });
+      if (Option.isNone(selection))
+        return rejected(VerdictFailure.cases.ModelSelectionRequired.make({}));
       const verdict = yield* Ref.make(Option.none<CardVerdict>());
       const runSync = Effect.runSyncWith(yield* Effect.context<never>());
       const record = toolDefinition({
@@ -203,14 +202,12 @@ const make = Effect.gen(function* () {
               verdict,
               Option.some<CardVerdict>(
                 input.passed
-                  ? { _tag: "Passed", evidence: input.evidence }
-                  : {
-                      _tag: "Failed",
-                      failure: {
-                        _tag: "Rejected",
+                  ? CardVerdict.Passed({ evidence: input.evidence })
+                  : rejected(
+                      VerdictFailure.cases.Rejected.make({
                         note: input.reason ?? input.evidence.join("; "),
-                      },
-                    },
+                      }),
+                    ),
               ),
             ),
             { recorded: true },
@@ -240,13 +237,17 @@ const make = Effect.gen(function* () {
         () => Effect.void,
       );
       return Option.getOrElse(yield* Ref.get(verdict), () =>
-        rejected(outcome?.status === "completed" ? { _tag: "NoVerdict" } : { _tag: "NotFinished" }),
+        rejected(
+          outcome?.status === "completed"
+            ? VerdictFailure.cases.NoVerdict.make({})
+            : VerdictFailure.cases.NotFinished.make({}),
+        ),
       );
     }).pipe(
       Effect.catch((error) =>
         Effect.as(
           Effect.logWarning("Kanban verifier unavailable", { error: error._tag }),
-          rejected({ _tag: "Unavailable" }),
+          rejected(VerdictFailure.cases.Unavailable.make({})),
         ),
       ),
       // The verifier run's tool calls join this span's trace.

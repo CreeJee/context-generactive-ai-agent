@@ -2,7 +2,11 @@ import { Function as EffectFunction, HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { convertSchemaToJsonSchema, type AnyTextAdapter } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
-import { FullLoopAdmissionRejected, reject } from "./full-loop-admission-preflight.ts";
+import {
+  FullLoopAdmissionReason,
+  FullLoopAdmissionRejected,
+  reject,
+} from "./full-loop-admission-preflight.ts";
 
 export const fullLoopHooks = HashSet.fromIterable([
   "setup",
@@ -89,6 +93,9 @@ const cloneable = <T>(value: T) => {
   try {
     structuredClone(value);
   } catch {
-    throw FullLoopAdmissionRejected.make({ member: "turn", reason: { _tag: "NotCloneable" } });
+    throw FullLoopAdmissionRejected.make({
+      member: "turn",
+      reason: FullLoopAdmissionReason.cases.NotCloneable.make({}),
+    });
   }
 };

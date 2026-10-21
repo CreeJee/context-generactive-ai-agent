@@ -12,21 +12,21 @@ import { CardFailure, CardHoldReason } from "./failures.ts";
  */
 
 /** What a card attempt ended with. The queue handler records it; the orchestrator takes it up. */
-export const CardAttemptOutcome = Schema.Union([
+export const CardAttemptOutcome = Schema.TaggedUnion({
   /** The agent finished; its work is committed to the card branch when there was any. */
-  Schema.TaggedStruct("Completed", {
+  Completed: {
     report: Schema.String,
     commit: Schema.NullOr(Schema.String),
-  }),
+  },
   /** The agent or the card's worktree failed. */
-  Schema.TaggedStruct("Failed", { failure: CardFailure }),
+  Failed: { failure: CardFailure },
   /** An earlier run of the card may have had an effect nobody knows; nothing ran. */
-  Schema.TaggedStruct("Fenced", { runId: Schema.String }),
+  Fenced: { runId: Schema.String },
   /** The session moved to another Goal instance before the item ran; nothing ran. */
-  Schema.TaggedStruct("Superseded", {}),
+  Superseded: {},
   /** The card left in_progress, or the orchestrator stopped the attempt. */
-  Schema.TaggedStruct("Stopped", { cardStatus: Schema.NullOr(CardStatus) }),
-]).pipe(Schema.toTaggedUnion("_tag"));
+  Stopped: { cardStatus: Schema.NullOr(CardStatus) },
+});
 export type CardAttemptOutcome = typeof CardAttemptOutcome.Type;
 
 /** A Goal instance stopped by the orchestrator until its cards are classified against a new Goal. */
@@ -84,6 +84,16 @@ export interface DeadLetteredAttempt extends CardAttemptKey {
   readonly itemId: string;
 }
 
+export const KanbanStorageReason = Schema.TaggedUnion({
+  /** The database or a stored row failed; `cause` has the SQL or decode error. */
+  Storage: {},
+  /** A value the owner made did not encode for storage. */
+  Encode: {},
+  /** A record the owner just stored or read is not there. */
+  Missing: {},
+});
+export type KanbanStorageReason = typeof KanbanStorageReason.Type;
+
 export class KanbanStorageFailed extends Schema.TaggedError<KanbanStorageFailed>()(
   "KanbanStorageFailed",
   {
@@ -96,14 +106,7 @@ export class KanbanStorageFailed extends Schema.TaggedError<KanbanStorageFailed>
       "change_request",
       "decision",
     ]),
-    reason: Schema.Union([
-      /** The database or a stored row failed; `cause` has the SQL or decode error. */
-      Schema.TaggedStruct("Storage", {}),
-      /** A value the owner made did not encode for storage. */
-      Schema.TaggedStruct("Encode", {}),
-      /** A record the owner just stored or read is not there. */
-      Schema.TaggedStruct("Missing", {}),
-    ]),
+    reason: KanbanStorageReason,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -195,9 +198,17 @@ const make = Effect.gen(function* () {
   const failed =
     (operation: KanbanStorageFailed["operation"]) =>
     (cause: SqlError.SqlError | Schema.SchemaError) =>
-      KanbanStorageFailed.make({ operation, reason: { _tag: "Storage" }, cause });
+      KanbanStorageFailed.make({
+        operation,
+        reason: KanbanStorageReason.cases.Storage.make({}),
+        cause,
+      });
   const unencoded = (operation: KanbanStorageFailed["operation"]) => (cause: Schema.SchemaError) =>
-    KanbanStorageFailed.make({ operation, reason: { _tag: "Encode" }, cause });
+    KanbanStorageFailed.make({
+      operation,
+      reason: KanbanStorageReason.cases.Encode.make({}),
+      cause,
+    });
   const rows =
     <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
     <E, R>(query: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>

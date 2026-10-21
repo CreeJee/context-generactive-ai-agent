@@ -1,4 +1,5 @@
 import { Cause } from "effect";
+import { logFailure } from "../runtime/logged-failures.ts";
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { onRun, runTrace } from "../runtime/run-trace.ts";
 
@@ -134,7 +135,7 @@ const make = Effect.gen(function* () {
       Effect.all([
         // An unreadable Kagi setting hides the tools, as a disabled one does.
         Effect.catch(kagi.status, (error) =>
-          Effect.as(Effect.logWarning("kagi_status_unavailable", { error: error._tag }), {
+          Effect.as(logFailure("kagi_status_unavailable")(error), {
             keyRegistered: false,
             enabled: false,
           }),

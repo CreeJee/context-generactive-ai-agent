@@ -14,9 +14,11 @@ const ReadStage = Schema.Literals([
 ]);
 type ReadStage = typeof ReadStage.Type;
 
+const StorageRead = Schema.TaggedStruct("StorageRead", { stage: ReadStage });
+
 export class EvidenceReadFailed extends Schema.TaggedError<EvidenceReadFailed>()(
   "EvidenceReadFailed",
-  { reason: Schema.TaggedStruct("StorageRead", { stage: ReadStage }) },
+  { reason: StorageRead },
 ) {}
 
 /** Recorded changes describe evidence, not independently verified present-day truth. */
@@ -56,7 +58,7 @@ const provenanceLimit = 4;
  * paths or row contents. A failed read is never returned as an absence of corrections.
  */
 const storageRead = <A, E>(stage: ReadStage, read: Effect.Effect<A, E>) =>
-  Effect.mapError(read, () => EvidenceReadFailed.make({ reason: { _tag: "StorageRead", stage } }));
+  Effect.mapError(read, () => EvidenceReadFailed.make({ reason: StorageRead.make({ stage }) }));
 
 /** Projects whose memory this read may show. */
 const visibleProjects = Effect.fnUntraced(function* (projectId: string, crossProject: boolean) {

@@ -1,4 +1,4 @@
-import { Function as EffectFunction, Option, Result, Schema } from "effect";
+import { Data, Function as EffectFunction, Option, Result, Schema } from "effect";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { OwnerRpcJson } from "./owner-rpc.ts";
 
@@ -12,10 +12,17 @@ const Compact = Schema.TaggedStruct("OwnerRpcFingerprintV1", {
   inputKind: Schema.Literals(["complete", "middleware-hook", "omitted"]),
 });
 const Descriptor = Schema.Struct({ operation: Schema.String, input: Schema.Json });
-type Evidence =
-  | { readonly _tag: "complete"; readonly input: OwnerRpcJson }
-  | { readonly _tag: "middleware-hook"; readonly input: OwnerRpcJson }
-  | { readonly _tag: "omitted"; readonly input: null };
+type Evidence = Data.TaggedEnum<{
+  complete: { readonly input: OwnerRpcJson };
+  "middleware-hook": { readonly input: OwnerRpcJson };
+  omitted: { readonly input: null };
+}>;
+const Evidence = Data.taggedEnum<Evidence>();
+const evidenceKind = Evidence.$match({
+  complete: () => "complete" as const,
+  "middleware-hook": () => "middleware-hook" as const,
+  omitted: () => "omitted" as const,
+});
 // Covers the bounded 32-report recovery request as well as ordinary read evidence.
 const evidenceLimit = 16384;
 
@@ -60,21 +67,22 @@ function middlewareEvidence(input: OwnerRpcJson): Evidence {
     );
     const selected: OwnerRpcJson = ["object", fields];
     if (ownerRpcCanonicalJson(selected).length <= evidenceLimit)
-      return { _tag: "middleware-hook", input: selected };
+      return Evidence["middleware-hook"]({ input: selected });
   }
-  return { _tag: "omitted", input: null };
+  return Evidence.omitted({ input: null });
 }
 
 function encodeFingerprint(operation: string, canonical: string, evidence: Evidence): string {
-  return JSON.stringify({
-    _tag: "OwnerRpcFingerprintV1",
-    algorithm: "sha256",
-    canonicalization: "owner-rpc-json-v1",
-    digest: sha256(canonical),
-    operation,
-    input: evidence.input,
-    inputKind: evidence._tag,
-  });
+  return JSON.stringify(
+    Compact.make({
+      algorithm: "sha256",
+      canonicalization: "owner-rpc-json-v1",
+      digest: sha256(canonical),
+      operation,
+      input: evidence.input,
+      inputKind: evidenceKind(evidence),
+    }),
+  );
 }
 
 /** Full request bytes are hashed; only bounded diagnostic/recovery evidence is retained. */
@@ -82,10 +90,10 @@ function fingerprintBody(operation: string, input: OwnerRpcJson): string {
   const canonical = ownerRpcCanonicalJson({ operation, input });
   const evidence: Evidence =
     canonical.length <= evidenceLimit
-      ? { _tag: "complete", input }
+      ? Evidence.complete({ input })
       : operation === "middleware"
         ? middlewareEvidence(input)
-        : { _tag: "omitted", input: null };
+        : Evidence.omitted({ input: null });
   return encodeFingerprint(operation, canonical, evidence);
 }
 export const ownerRpcFingerprint: {
@@ -109,10 +117,11 @@ export function compactLegacyOwnerRpcFingerprint(fingerprint: string): string {
     const descriptor = Result.getOrThrow(
       Schema.decodeResult(Schema.fromJsonString(Descriptor))(fingerprint),
     );
-    return encodeFingerprint(descriptor.operation, fingerprint, {
-      _tag: "complete",
-      input: descriptor.input,
-    });
+    return encodeFingerprint(
+      descriptor.operation,
+      fingerprint,
+      Evidence.complete({ input: descriptor.input }),
+    );
   }
   // Legacy production bytes sort input before operation. Extract only the suffix,
   // avoiding a second 100+ MiB JSON tree when converting historical context snapshots.
@@ -122,5 +131,5 @@ export function compactLegacyOwnerRpcFingerprint(fingerprint: string): string {
   const operation = Result.getOrThrow(
     Schema.decodeResult(Schema.fromJsonString(Schema.String))(suffix[1]),
   );
-  return encodeFingerprint(operation, fingerprint, { _tag: "omitted", input: null });
+  return encodeFingerprint(operation, fingerprint, Evidence.omitted({ input: null }));
 }

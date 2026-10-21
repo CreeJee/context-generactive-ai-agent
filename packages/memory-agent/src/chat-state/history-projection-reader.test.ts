@@ -4,13 +4,19 @@ import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
 import { Database } from "../db/database.ts";
-import { HistoryProjectionReader, type HistoryPageRequest } from "./history-projection-reader.ts";
+import {
+  HistoryProjectionReadFailed,
+  HistoryProjectionReader,
+  HistoryProjectionReadReason,
+  type HistoryPageRequest,
+} from "./history-projection-reader.ts";
 import { historyProjectionSchema, historyProjectionSql as sql } from "./history-projection-sql.ts";
 import { sqlRun, sqlExec } from "../../tests/support/sql.ts";
 const encodeJson = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
+const readReason = HistoryProjectionReadReason.cases;
 
 const database = Database.over(
   Effect.acquireRelease(
@@ -49,7 +55,7 @@ describe("Effect history projection reader boundary", () => {
       const failure = yield* reader
         .read({ type: "initial", threadId: "a", limit: 3 })
         .pipe(Effect.flip);
-      expect(failure.reason).toEqual({ _tag: "SqliteRead", phase: "query" });
+      expect(failure.reason).toEqual(readReason.SqliteRead.make({ phase: "query" }));
     }),
   );
 
@@ -73,7 +79,7 @@ describe("Effect history projection reader boundary", () => {
           const failure = yield* reader
             .read({ type: "initial", threadId: "a", limit: 3 })
             .pipe(Effect.flip);
-          expect(failure.reason._tag).toBe("InvalidSnapshot");
+          expect(failure.reason).toEqual(readReason.InvalidSnapshot.make({}));
         }),
       ),
   );
@@ -169,8 +175,8 @@ describe("Effect history projection reader boundary", () => {
           ];
           for (const input of inputs) {
             const failure = yield* reader.read(input).pipe(Effect.flip);
-            expect(failure._tag).toBe("HistoryProjectionReadFailed");
-            expect(failure.reason._tag).toBe("InvalidRequest");
+            expect(failure).toBeInstanceOf(HistoryProjectionReadFailed);
+            expect(failure.reason).toEqual(readReason.InvalidRequest.make({}));
           }
         }),
       ),
@@ -189,12 +195,12 @@ describe("Effect history projection reader boundary", () => {
           const invalid = yield* reader
             .read({ type: "initial", threadId: "a", limit: 3 })
             .pipe(Effect.flip);
-          expect(invalid.reason._tag).toBe("InvalidSnapshot");
+          expect(invalid.reason).toEqual(readReason.InvalidSnapshot.make({}));
           yield* sqlExec("DROP TABLE chat_history_groups");
           const failed = yield* reader
             .read({ type: "initial", threadId: "a", limit: 3 })
             .pipe(Effect.flip);
-          expect(failed.reason).toEqual({ _tag: "SqliteRead", phase: "query" });
+          expect(failed.reason).toEqual(readReason.SqliteRead.make({ phase: "query" }));
           expect(encodeJson(failed)).not.toContain("Message 0");
         }),
       ),

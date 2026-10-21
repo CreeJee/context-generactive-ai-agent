@@ -1,7 +1,9 @@
 import { it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { makeCompatibleClient } from "./compatible-client.ts";
+import { CompatibleRequestFailedReason, makeCompatibleClient } from "./compatible-client.ts";
+
+const reasons = CompatibleRequestFailedReason.cases;
 
 const decodeBody = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
@@ -32,7 +34,7 @@ it.effect("validates the endpoint list with the shared server schema", () =>
       Promise.resolve(Response.json({ type: "subscription", profiles: [] })),
     );
     const failure = yield* Effect.flip(malformed.effects.list());
-    expect(failure.reason._tag).toBe("InvalidResponse");
+    expect(failure.reason).toEqual(reasons.InvalidResponse.make({}));
     expect(failure.operation).toBe("list");
   }),
 );
@@ -47,7 +49,7 @@ it.effect("preserves partial-write guidance without reading a private failure bo
     const failure = yield* Effect.flip(
       client.effects.change({ intent: "create", baseUrl: "http://localhost" }),
     );
-    expect(failure.reason._tag).toBe("PartialWrite");
+    expect(failure.reason).toEqual(reasons.PartialWrite.make({}));
     expect(failure.operation).toBe("create");
     expect(failure.message).toContain("부분적으로 저장");
     expect(failure.message).not.toContain("private");
@@ -84,7 +86,7 @@ it.effect("does not expose upstream response bodies on failure", () =>
     };
     const client = makeCompatibleClient(() => Promise.resolve(response));
     const failure = yield* Effect.flip(client.effects.test("a", "local"));
-    expect(failure.reason._tag).toBe("RequestRejected");
+    expect(failure.reason).toEqual(reasons.RequestRejected.make({}));
     expect(failure.message).toContain("502");
     expect(failure.message).not.toContain("secret");
   }),
