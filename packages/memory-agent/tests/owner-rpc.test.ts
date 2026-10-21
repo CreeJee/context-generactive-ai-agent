@@ -245,11 +245,12 @@ describe("Effect-native owner RPC", () => {
           const failure = yield* rpc(nativeRequest).pipe(
             Effect.catchTag("OwnerRpcFailure", (error) => Effect.succeed(error)),
           );
+          expect(failure).toBeInstanceOf(OwnerRpcFailure);
           expect(failure).toMatchObject({
-            _tag: "OwnerRpcFailure",
             phase: "authority",
-            cause: expect.objectContaining({ _tag: "OwnerAuthorityError", cause: defect }),
+            cause: expect.any(OwnerAuthorityError),
           });
+          expect(failure).toMatchObject({ cause: expect.objectContaining({ cause: defect }) });
         }
         expect(keys).toHaveLength(1);
         expect(calls).toBe(1);

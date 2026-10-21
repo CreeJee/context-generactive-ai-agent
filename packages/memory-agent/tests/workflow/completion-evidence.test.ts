@@ -4,7 +4,7 @@ import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { GoalExecution, GoalExecutions } from "../../src/workflow/goal-execution.ts";
-import type { GoalExecutionPayload } from "../../src/workflow/goal-execution-contracts.ts";
+import { GoalExecutionPayload } from "../../src/workflow/goal-execution-contracts.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import {
@@ -99,8 +99,7 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
         "2026-10-07T00:00:00.000Z",
       );
       const goals = yield* GoalExecutions;
-      const payload: GoalExecutionPayload = {
-        _tag: "GoalExecutionPayload",
+      const payload = GoalExecutionPayload.make({
         identity: {
           owner: { ownerId: project.id, generation: "test-owner-generation" },
           sessionId,
@@ -108,7 +107,7 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
           goalInstanceId: goalId,
           workflowRevisionId: revision,
         },
-      };
+      });
       expect((yield* goals.admitAndStart(payload, bind)).type).toBe("admitted");
       yield* goals.succeed(payload);
       yield* GoalExecution.execute(payload);

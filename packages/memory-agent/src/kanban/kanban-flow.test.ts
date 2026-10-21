@@ -28,6 +28,7 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
+import { BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
 import { GoalChangeVerdict, KanbanBoardActions } from "./board-actions.ts";
 import { CardAgentOutcome, CardVerdict, type CardAgentRun } from "./card-agent.ts";
@@ -51,7 +52,7 @@ import { ProjectScheduler } from "./scheduler.ts";
 
 const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
 const passed: CardVerdict = CardVerdict.Passed({ evidence: ["checked"] });
-const orchestrator = { _tag: "Orchestrator", runId: "test-model" } as const;
+const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "test-model" });
 
 // These tests run real git repositories and worktrees; beside other test files they pass 5s.
 const gitTimeout = { timeout: 30_000 };

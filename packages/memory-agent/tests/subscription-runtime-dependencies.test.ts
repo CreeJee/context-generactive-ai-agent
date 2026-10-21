@@ -1,5 +1,5 @@
 import { Cause } from "effect";
-import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
+import { ProviderUnavailable, SubscriptionAccountProvider } from "../src/providers/contracts.ts";
 import { Clock, Context, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
 import { EventType } from "@tanstack/ai";
@@ -173,10 +173,9 @@ it.live(
             legacy.releaseRun?.();
             expect(profiles.inUse("openai", "second")).toBe(false);
             const missing = yield* Effect.result(registry.subscriptionDependencies!("anthropic"));
-            expect(Result.isFailure(missing) && missing.failure).toMatchObject({
-              _tag: "ProviderUnavailable",
-              provider: "anthropic",
-            });
+            expect(Result.isFailure(missing) && missing.failure).toEqual(
+              ProviderUnavailable.make({ provider: "anthropic" }),
+            );
           });
           yield* verification.pipe(
             // Test entry point owns this Layer and its resource scope.
@@ -211,10 +210,9 @@ it.live(
           expect(registry.providers).toEqual([]);
           for (const provider of ["openai", "anthropic"] as const) {
             const missing = yield* Effect.result(registry.subscriptionDependencies!(provider));
-            expect(Result.isFailure(missing) && missing.failure).toMatchObject({
-              _tag: "ProviderUnavailable",
-              provider,
-            });
+            expect(Result.isFailure(missing) && missing.failure).toEqual(
+              ProviderUnavailable.make({ provider }),
+            );
           }
         });
         // Test entry point owns this Layer and its resource scope.

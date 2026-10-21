@@ -6,8 +6,8 @@ import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
-import { workflowRunEvents } from "../../src/workflow/run-events.ts";
-import { uncertainRuns } from "../../src/workflow/uncertain-runs.ts";
+import { RunEventRejected, workflowRunEvents } from "../../src/workflow/run-events.ts";
+import { UncertainRunsFailed, uncertainRuns } from "../../src/workflow/uncertain-runs.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { sqlAll, sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
@@ -101,10 +101,12 @@ testAgent()("workflow run bindings", (it) => {
       yield* sqlExec(
         "CREATE TEMP TRIGGER reject_ack BEFORE INSERT ON workflow_uncertain_acknowledgements BEGIN SELECT RAISE(ABORT, 'fixture'); END",
       );
-      expect(yield* owner.acknowledge(session, [runId]).pipe(Effect.flip)).toMatchObject({
-        _tag: "UncertainRunsFailed",
-        reason: { _tag: "Acknowledge" },
-      });
+      const failed = yield* owner.acknowledge(session, [runId]).pipe(Effect.flip);
+      expect(failed).toBeInstanceOf(UncertainRunsFailed);
+      expect(
+        Schema.is(UncertainRunsFailed)(failed) &&
+          UncertainRunsFailed.fields.reason.guards.Acknowledge(failed.reason),
+      ).toBe(true);
       expect(yield* owner.list(session)).toHaveLength(1);
       yield* sqlExec("DROP TRIGGER reject_ack");
       expect(yield* owner.acknowledge(session, [runId])).toEqual({ status: "acknowledged" });
@@ -299,7 +301,7 @@ testAgent()("workflow run event journal", (it) => {
           yield* events
             .append(other, run, "chunk:0", "chunk", { text: "stolen" })
             .pipe(Effect.flip),
-        ).toMatchObject({ _tag: "RunEventRejected", reason: "unbound" });
+        ).toEqual(RunEventRejected.make({ reason: "unbound" }));
         const first = yield* events.append(session, run, "chunk:0", "chunk", {
           text: "before restart",
         });
@@ -310,7 +312,7 @@ testAgent()("workflow run event journal", (it) => {
           yield* events
             .append(session, run, "chunk:0", "chunk", { text: "different" })
             .pipe(Effect.flip),
-        ).toMatchObject({ _tag: "RunEventRejected", reason: "key-reused" });
+        ).toEqual(RunEventRejected.make({ reason: "key-reused" }));
         const second = yield* events.append(session, run, "chunk:1", "chunk", {
           text: "after first",
         });

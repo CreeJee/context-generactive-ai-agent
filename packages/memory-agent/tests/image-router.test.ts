@@ -2,7 +2,10 @@ import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import {
+  FixedImageRouteRejected,
   ImageRouteFacts,
+  ImageRouteUnavailable,
+  ImageRoutingInvalidRequest,
   makeImageRouter,
   makeRouteCatalog,
   rankImageRoutes,
@@ -214,7 +217,9 @@ describe("image router", () => {
           policy: { mode: "fixed", fixedRouteId: fast.id },
         }),
       );
-      expect(Result.isFailure(rejected) && rejected.failure._tag).toBe("FixedImageRouteRejected");
+      expect(Result.isFailure(rejected) && rejected.failure).toBeInstanceOf(
+        FixedImageRouteRejected,
+      );
     }),
   );
 
@@ -299,9 +304,7 @@ describe("image router", () => {
       const result = yield* Effect.result(
         service.select({ initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" } }),
       );
-      expect(Result.isFailure(result) && result.failure).toMatchObject({
-        _tag: "ImageRouteUnavailable",
-      });
+      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ImageRouteUnavailable);
     }),
   );
 
@@ -338,8 +341,8 @@ describe("image router", () => {
           policy: { mode: "auto" },
         }),
       );
-      expect(Result.isFailure(invalidIntent) && invalidIntent.failure._tag).toBe(
-        "ImageRoutingInvalidRequest",
+      expect(Result.isFailure(invalidIntent) && invalidIntent.failure).toBeInstanceOf(
+        ImageRoutingInvalidRequest,
       );
       const invalidFact = yield* Effect.result(
         rankImageRoutes({
@@ -349,8 +352,8 @@ describe("image router", () => {
           policy: { mode: "auto" },
         }),
       );
-      expect(Result.isFailure(invalidFact) && invalidFact.failure._tag).toBe(
-        "ImageRoutingInvalidRequest",
+      expect(Result.isFailure(invalidFact) && invalidFact.failure).toBeInstanceOf(
+        ImageRoutingInvalidRequest,
       );
     }),
   );

@@ -1,3 +1,4 @@
+import { BoardAuthor } from "memory-agent";
 import { describe, expect, test } from "vite-plus/test";
 import type { BoardView } from "../../api";
 import {
@@ -30,7 +31,10 @@ const step = (
 
 const held = (entry: BoardCard): BoardCard => ({
   ...entry,
-  card: { ...entry.card, hold: { by: { _tag: "User" }, at: "2026-10-18T00:00:00Z" } },
+  card: {
+    ...entry.card,
+    hold: { by: BoardAuthor.cases.User.make({}), at: "2026-10-18T00:00:00Z" },
+  },
 });
 const cards = [
   step("a", "in_progress"),

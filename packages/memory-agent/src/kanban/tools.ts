@@ -7,7 +7,7 @@ import { CardDraft, type BoardEditRefused } from "../workflow/board-edit.ts";
 import type { PlanDependenciesRejected } from "../workflow/plan-schedule.ts";
 import type { WorkflowStorageError } from "../workflow/workflow.ts";
 import { Boards } from "../workflow/board.ts";
-import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
+import { BoardAuthor, CardStatus } from "../workflow/card.ts";
 import {
   ChangeDecision,
   GoalChangeVerdict,
@@ -72,7 +72,7 @@ const make = Effect.gen(function* () {
 
   return {
     forSession(sessionId: string, runId: string): AnyServerTool[] {
-      const author: BoardAuthor = { _tag: "Orchestrator", runId };
+      const author: BoardAuthor = BoardAuthor.cases.Orchestrator.make({ runId });
       /** Runs a board change and tells pages the board moved; a refusal is the call's answer. */
       const change = <A>(
         effect: (actions: KanbanBoardActions["Service"]) => Effect.Effect<A, ActionFailure>,

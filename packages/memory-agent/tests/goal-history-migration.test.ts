@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Path } from "effect";
 import { expect } from "vite-plus/test";
-import { migrateDatabase } from "../src/db/database.ts";
+import { DatabaseSchemaRejectedReason, migrateDatabase } from "../src/db/database.ts";
 import { goalHistoryMigration, migrations } from "../src/db/migrations.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
@@ -111,7 +111,7 @@ it.live(
       const before = snapshot(db);
       expect(() => migrateDatabase(db)).toThrow(
         expect.objectContaining({
-          reason: expect.objectContaining({ _tag: "InvalidForeignKeys" }),
+          reason: DatabaseSchemaRejectedReason.cases.InvalidForeignKeys.make({}),
         }),
       );
       expect(snapshot(db)).toEqual(before);

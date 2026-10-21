@@ -25,7 +25,7 @@ export {
 } from "../report/diagnosis-contract.ts";
 export {
   ReportBundle,
-  type BundleEvent,
+  BundleEvent,
   type BundleRun,
   type BundleText,
 } from "../report/bundle-contract.ts";

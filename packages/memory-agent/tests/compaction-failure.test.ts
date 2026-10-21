@@ -3,7 +3,13 @@ import { assertExitFailure } from "@effect/vitest/utils";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { compactEffect, compactionStateEffect, lookupSources } from "../src/agent/compaction.ts";
+import {
+  CompactionFailed,
+  CompactionReason,
+  compactEffect,
+  compactionStateEffect,
+  lookupSources,
+} from "../src/agent/compaction.ts";
 
 const state = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
 const messages: readonly ModelMessage[] = [
@@ -29,9 +35,9 @@ describe("Compaction failure boundaries", () => {
         delete: () => Promise.resolve(),
       };
       const error = yield* compactionStateEffect({ metadata, threadId: "t1" }).pipe(Effect.flip);
-      expect(error._tag).toBe("CompactionFailed");
+      expect(error).toBeInstanceOf(CompactionFailed);
       expect(error.operation).toBe("read-state");
-      expect(error.reason._tag).toBe("MetadataFailed");
+      expect(CompactionReason.guards.MetadataFailed(error.reason)).toBe(true);
       expect(error.cause).toBe(cause);
     }),
   );

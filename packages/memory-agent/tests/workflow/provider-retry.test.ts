@@ -25,13 +25,20 @@ import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Database } from "../../src/db/database.ts";
 import { NodeDetail } from "../../src/memory/nodes.ts";
-import { SubscriptionStreamFailed } from "../../src/providers/subscription-adapter.ts";
+import {
+  SubscriptionStreamFailed,
+  SubscriptionStreamFailedReason,
+} from "../../src/providers/subscription-adapter.ts";
 import {
   ExecutionAdmission,
   defaultExecutionAdmissionLimits,
 } from "../../src/runtime/execution-admission.ts";
 import { WorkflowExecution } from "../../src/workflow/execution.ts";
-import { ProviderRetries, providerRetryLayer } from "../../src/workflow/provider-retry.ts";
+import {
+  ProviderRetries,
+  ProviderRetryOutcome,
+  providerRetryLayer,
+} from "../../src/workflow/provider-retry.ts";
 import { OwnerWorkflowStorageError } from "../../src/workflow/owner-workflow-storage.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
@@ -119,7 +126,7 @@ describe("durable provider retry", () => {
         yield* settle;
         expect(waiting.pollUnsafe()).toBeUndefined();
         yield* TestClock.adjust(31_000);
-        expect(yield* Fiber.join(waiting)).toEqual({ _tag: "Retry" });
+        expect(yield* Fiber.join(waiting)).toEqual(ProviderRetryOutcome.Retry());
         expect(yield* storedWaits(sql)).toEqual([
           { status: "completed", payload: stored?.payload },
         ]);
@@ -145,7 +152,7 @@ describe("durable provider retry", () => {
         yield* settle;
         expect(resumed.pollUnsafe()).toBeUndefined();
         yield* TestClock.adjust(40_000);
-        expect(yield* Fiber.join(resumed)).toEqual({ _tag: "Retry" });
+        expect(yield* Fiber.join(resumed)).toEqual(ProviderRetryOutcome.Retry());
         expect(yield* storedWaits(reopened.sql)).toEqual([
           { status: "completed", payload: before[0]?.payload },
         ]);
@@ -163,7 +170,7 @@ describe("durable provider retry", () => {
         const waiting = yield* Effect.forkChild(retries.wait({ ...request, retry: 1 }, signal));
         yield* settle;
         yield* Scope.close(callerScope, Exit.void);
-        expect(yield* Fiber.join(waiting)).toEqual({ _tag: "Cancelled" });
+        expect(yield* Fiber.join(waiting)).toEqual(ProviderRetryOutcome.Cancelled());
         expect((yield* storedWaits(sql)).map((wait) => wait.status)).toEqual(["interrupted"]);
         expect(yield* scheduledClocks(sql)).toEqual([]);
         yield* Scope.close(scope, Exit.void);
@@ -178,9 +185,9 @@ describe("durable provider retry", () => {
         const signal = yield* Effect.abortSignal;
         yield* runningGoal(request.runId).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         yield* TestClock.adjust(Duration.hours(24));
-        expect(yield* retries.wait({ ...request, retry: 60 }, signal)).toEqual({
-          _tag: "Exhausted",
-        });
+        expect(yield* retries.wait({ ...request, retry: 60 }, signal)).toEqual(
+          ProviderRetryOutcome.Exhausted(),
+        );
         expect(yield* storedWaits(sql)).toEqual([]);
         expect(yield* execution.get("s")).toMatchObject({
           kind: "blocked",
@@ -243,6 +250,7 @@ describe("durable provider retry", () => {
 describe("owner model pull", () => {
   const failing = (reason: SubscriptionStreamFailed["reason"]) =>
     SubscriptionStreamFailed.make({ provider: "openai", reason });
+  const reasons = SubscriptionStreamFailedReason.cases;
   const iterator = (steps: ReadonlyArray<{ readonly type: string } | Error>) => {
     let index = 0;
     return {
@@ -260,7 +268,7 @@ describe("owner model pull", () => {
     wait: (input) =>
       Effect.sync(() => {
         waits.push(input.retry);
-        return { _tag: "Retry" } as const;
+        return ProviderRetryOutcome.Retry();
       }),
   });
   const pull = (stream: OwnerModelStream, retries: ProviderRetryOwner) =>
@@ -279,7 +287,7 @@ describe("owner model pull", () => {
       });
       let reopened = false;
       const stream: OwnerModelStream = {
-        iterator: iterator([failing({ _tag: "RequestNotSent", stage: "dns" })]),
+        iterator: iterator([failing(reasons.RequestNotSent.make({ stage: "dns" }))]),
         open: () => {
           reopened = true;
           return iterator([]);
@@ -297,7 +305,7 @@ describe("owner model pull", () => {
     Effect.gen(function* () {
       const waits: number[] = [];
       const stream: OwnerModelStream = {
-        iterator: iterator([failing({ _tag: "RequestNotSent", stage: "dns" })]),
+        iterator: iterator([failing(reasons.RequestNotSent.make({ stage: "dns" }))]),
         open: () => iterator([{ type: "RUN_STARTED" }, { type: "TEXT_MESSAGE_START" }]),
         delivered: false,
       };
@@ -314,7 +322,7 @@ describe("owner model pull", () => {
       const waits: number[] = [];
       const unknown = yield* pull(
         {
-          iterator: iterator([failing({ _tag: "RequestOutcomeUnknown" })]),
+          iterator: iterator([failing(reasons.RequestOutcomeUnknown.make({}))]),
           open: () => iterator([]),
           delivered: false,
         },
@@ -326,7 +334,7 @@ describe("owner model pull", () => {
       const afterOutput: OwnerModelStream = {
         iterator: iterator([
           { type: "TOOL_CALL_START" },
-          failing({ _tag: "RequestNotSent", stage: "connect" }),
+          failing(reasons.RequestNotSent.make({ stage: "connect" })),
         ]),
         open: () => iterator([]),
         delivered: false,

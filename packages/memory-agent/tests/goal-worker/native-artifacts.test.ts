@@ -17,11 +17,13 @@ import { Hex } from "effect/encoding";
 import { build } from "vite";
 import { expect } from "vite-plus/test";
 import type * as NativeArtifact from "../../src/agent/native-artifact-entry.ts";
+import { NativeArtifactLoadError } from "../../src/agent/native-artifact-loader.ts";
 import {
   OwnerNativeArtifacts,
   makeOwnerNativeArtifacts,
 } from "../../src/agent/owner-native-artifacts.ts";
 import { OwnerNativeBuild } from "../../src/agent/owner-native-build.ts";
+import { NativeRegistrationError } from "../../src/agent/owner-native-error.ts";
 import { StorageRoot } from "../../src/config/storage-root.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -588,7 +590,7 @@ testAgent()("owner native artifacts", (it) => {
           ),
         ),
       );
-      expect(failure).toMatchObject({ _tag: "NativeRegistrationError" });
+      expect(failure).toBeInstanceOf(NativeRegistrationError);
     }),
   );
 
@@ -638,9 +640,7 @@ testAgent()("owner native artifacts", (it) => {
         const pinned = yield* path.fromFileUrl(new URL(registered.artifact_url));
         const original = yield* fs.readFile(pinned);
         yield* fs.writeFileString(pinned, "// corrupt durable pin\n");
-        expect(yield* Effect.flip(acquire(manifest, id))).toMatchObject({
-          _tag: "NativeArtifactLoadError",
-        });
+        expect(yield* Effect.flip(acquire(manifest, id))).toBeInstanceOf(NativeArtifactLoadError);
         yield* fs.writeFile(pinned, original);
         yield* acquire(manifest, id);
       }),
@@ -657,13 +657,13 @@ testAgent()("owner native artifacts", (it) => {
 
       const worker = path.join(directory, "full-loop-worker.mjs");
       yield* fs.remove(worker);
-      expect(yield* rejected).toMatchObject({ _tag: "NativeRegistrationError" });
+      expect(yield* rejected).toBeInstanceOf(NativeRegistrationError);
       yield* fs.copy(
         path.join(path.dirname(runtimeArtifact("artifact-manifest.json")), "full-loop-worker.mjs"),
         worker,
       );
       yield* fs.writeFileString(manifest, "{}\n");
-      expect(yield* rejected).toMatchObject({ _tag: "NativeRegistrationError" });
+      expect(yield* rejected).toBeInstanceOf(NativeRegistrationError);
       yield* fs.copy(runtimeArtifact("artifact-manifest.json"), manifest);
 
       yield* sqlRun(
@@ -674,10 +674,9 @@ testAgent()("owner native artifacts", (it) => {
         "file:///tmp/old-worker.mjs",
         "test",
       );
-      expect(yield* rejected).toMatchObject({
-        _tag: "NativeRegistrationError",
-        reason: "historical_goal",
-      });
+      const historical = yield* rejected;
+      expect(historical).toBeInstanceOf(NativeRegistrationError);
+      expect(historical).toMatchObject({ reason: "historical_goal" });
     }),
   );
 });

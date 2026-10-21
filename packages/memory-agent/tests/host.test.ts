@@ -4,6 +4,7 @@ import { Cause, Effect, FileSystem, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { toolLocations } from "../src/acp/tool-view.ts";
 import {
+  DirectoryRenameFailed,
   findExecutable,
   helperEnvironment,
   renameWhenReleased,
@@ -120,20 +121,15 @@ describe("host differences", () => {
       expect(windows.calls()).toBe(3);
 
       const posix = renameAfter(1);
-      expect(
-        yield* Effect.flip(
-          Effect.tryPromise({
-            try: () =>
-              renameWhenReleased({ from: "a", to: "b", platform: "linux", rename: posix.rename }),
-            catch: (cause) => new Cause.UnknownError(cause),
-          }),
-        ),
-      ).toMatchObject({
-        cause: {
-          _tag: "DirectoryRenameFailed",
-          reason: { _tag: "RenameFailed", code: "EPERM" },
-        },
-      });
+      const rejected = yield* Effect.flip(
+        Effect.tryPromise({
+          try: () =>
+            renameWhenReleased({ from: "a", to: "b", platform: "linux", rename: posix.rename }),
+          catch: (cause) => new Cause.UnknownError(cause),
+        }),
+      );
+      expect(rejected.cause).toBeInstanceOf(DirectoryRenameFailed);
+      expect(rejected.cause).toMatchObject({ reason: { code: "EPERM" } });
       expect(posix.calls()).toBe(1);
     }),
   );

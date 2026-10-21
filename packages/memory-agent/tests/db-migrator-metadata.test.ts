@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
-import { migrateDatabase } from "../src/db/database.ts";
+import { DatabaseSchemaRejectedReason, migrateDatabase } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 
 const open = Effect.acquireRelease(
@@ -36,7 +36,9 @@ it.effect("rejects missing metadata without repairing it or changing the release
     migrateDatabase(db);
     db.exec("DELETE FROM effect_sql_migrations WHERE migration_id = 1");
     expect(() => migrateDatabase(db)).toThrow(
-      expect.objectContaining({ reason: expect.objectContaining({ _tag: "MetadataMismatch" }) }),
+      expect.objectContaining({
+        reason: DatabaseSchemaRejectedReason.cases.MetadataMismatch.make({}),
+      }),
     );
     expect(
       db.prepare("SELECT migration_id FROM effect_sql_migrations WHERE migration_id = 1").get(),

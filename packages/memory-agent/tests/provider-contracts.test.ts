@@ -7,6 +7,7 @@ import { ActiveProvider } from "../src/providers/active-provider.ts";
 import {
   ProviderId,
   ProviderConnection,
+  ProviderUnavailable,
   providerConnection,
   SubscriptionAccountProvider,
   ProviderVendor,
@@ -130,10 +131,9 @@ describe("provider-neutral contracts", () => {
       expect(registry.providers).toEqual(["openai"]);
       expect(yield* registry.get("openai")).toBe(openai);
       const missing = yield* Effect.result(registry.get("anthropic"));
-      expect(Result.isFailure(missing) && missing.failure).toMatchObject({
-        _tag: "ProviderUnavailable",
-        provider: "anthropic",
-      });
+      expect(Result.isFailure(missing) && missing.failure).toEqual(
+        ProviderUnavailable.make({ provider: "anthropic" }),
+      );
     }),
   );
 
@@ -148,10 +148,9 @@ describe("provider-neutral contracts", () => {
 
       expect(yield* registry.runtime("openai")).toBe(openai.runtime);
       const missing = yield* Effect.result(registry.runtime("anthropic"));
-      expect(Result.isFailure(missing) && missing.failure).toMatchObject({
-        _tag: "ProviderUnavailable",
-        provider: "anthropic",
-      });
+      expect(Result.isFailure(missing) && missing.failure).toEqual(
+        ProviderUnavailable.make({ provider: "anthropic" }),
+      );
     }),
   );
 
@@ -215,10 +214,9 @@ describe("provider-neutral contracts", () => {
       const missingRuntime = yield* Effect.result(
         active.runtime({ provider: "openai", model: "test", reasoningEffort: "medium" }),
       );
-      expect(Result.isFailure(missingRuntime) && missingRuntime.failure).toMatchObject({
-        _tag: "ProviderUnavailable",
-        provider: "openai",
-      });
+      expect(Result.isFailure(missingRuntime) && missingRuntime.failure).toEqual(
+        ProviderUnavailable.make({ provider: "openai" }),
+      );
       expect(yield* active.authFor("anthropic")).toMatchObject({
         status: "error",
       });

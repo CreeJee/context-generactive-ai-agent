@@ -4,6 +4,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Match,
   MutableHashMap,
   Option,
   Path,
@@ -26,14 +27,11 @@ const call = Effect.fn("oauthAccounts.sdkCall")(<A>(operation: () => Promise<A>)
   Effect.tryPromise({ try: operation, catch: (cause) => new Cause.UnknownError(cause) }),
 );
 /** The rejection code, or the keychain's own message when the vault failed. */
-const failureText = (error: OAuthProfileRejected | OAuthProfileStoreFailed) => {
-  switch (error._tag) {
-    case "OAuthProfileRejected":
-      return error.reason;
-    case "OAuthProfileStoreFailed":
-      return String(error.cause);
-  }
-};
+const failureText = (error: OAuthProfileRejected | OAuthProfileStoreFailed) =>
+  Match.valueTags(error, {
+    OAuthProfileRejected: (rejected) => rejected.reason,
+    OAuthProfileStoreFailed: (failed) => String(failed.cause),
+  });
 const rejects = Effect.fn("oauthAccounts.rejects")(function* <A>(
   operation: Effect.Effect<A, OAuthProfileRejected | OAuthProfileStoreFailed>,
   message: string,

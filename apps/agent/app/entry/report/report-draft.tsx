@@ -1,4 +1,4 @@
-import { runHasFailure, runPlace, type ReportBundle } from "memory-agent/definitions";
+import { BundleEvent, runHasFailure, runPlace, type ReportBundle } from "memory-agent/definitions";
 import { bundleGaps } from "./report-bundle";
 import { diagnosisFailureText, type DiagnosisText } from "./report-diagnosis";
 export interface ReportFields {
@@ -31,7 +31,7 @@ function evidenceLines(evidence: DraftEvidence): string[] {
         `환경: ${environment.release} · ${environment.platform} · ${environment.runtime} · 모델 ${environment.provider ?? "?"}/${environment.model ?? "?"}`,
         ...failing.map((run) => {
           const calls = run.events.flatMap((event) =>
-            event._tag === "ToolCall" && event.result?.ok === false
+            BundleEvent.guards.ToolCall(event) && event.result?.ok === false
               ? [`${runPlace(run)}/call-${event.seq} ${event.name ?? "?"}`]
               : [],
           );

@@ -4,6 +4,8 @@ import { Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   consumeColdObservationEffect,
+  ContextUsageFailed,
+  ContextUsageReason,
   lastContextUsageEffect,
   pendingColdObservationEffect,
 } from "../src/agent/context-usage.ts";
@@ -17,15 +19,15 @@ it.effect("keeps context metadata read and write failures typed", () =>
       delete: () => Promise.resolve(),
     };
     const read = yield* Effect.flip(lastContextUsageEffect({ metadata, threadId: "thread" }));
-    expect(read._tag).toBe("ContextUsageFailed");
+    expect(read).toBeInstanceOf(ContextUsageFailed);
     expect(read.operation).toBe("read-usage");
-    expect(read.reason._tag).toBe("ReadFailed");
+    expect(ContextUsageReason.guards.ReadFailed(read.reason)).toBe(true);
     expect(read.cause).toBe(cause);
     const write = yield* Effect.flip(
       consumeColdObservationEffect({ metadata, threadId: "thread", observationId: "observation" }),
     );
     expect(write.operation).toBe("consume");
-    expect(write.reason._tag).toBe("WriteFailed");
+    expect(ContextUsageReason.guards.WriteFailed(write.reason)).toBe(true);
     expect(write.cause).toBe(cause);
   }),
 );

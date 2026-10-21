@@ -4,7 +4,7 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
 import { attachmentUrl } from "../../src/attachments/urls.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
-import { btwToolNames } from "../../src/btw/contracts.ts";
+import { BtwError, BtwThreadNotFound, btwToolNames } from "../../src/btw/contracts.ts";
 import { btwToolGuard } from "../../src/btw/tools.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -152,9 +152,8 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
       ).toBe(0);
       expect(yield* attachments.get(image.id)).toBeNull();
       expect(yield* (yield* FileSystem.FileSystem).exists(attachments.pathOf(image))).toBe(false);
-      expect(yield* Effect.flip(btw.remove(thread.id))).toMatchObject({
-        reason: { _tag: "BtwThreadNotFound" },
-      });
+      const missing = yield* Effect.flip(btw.remove(thread.id));
+      expect(Schema.is(BtwError)(missing) && missing.reason).toBeInstanceOf(BtwThreadNotFound);
 
       // Deleting the main conversation takes its remaining BTW threads with it.
       const deleted = yield* (yield* AgentChat).deleteSession(

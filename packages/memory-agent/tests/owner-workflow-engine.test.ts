@@ -84,11 +84,8 @@ describe("owner workflow engine", () => {
       return Effect.gen(function* () {
         const first = yield* run;
         const replayed = yield* run;
-        expect(first).toMatchObject({
-          _tag: "ActivityRefused",
-          reason: "refused",
-          value: "captured service",
-        });
+        expect(first).toBeInstanceOf(ActivityRefused);
+        expect(first).toMatchObject({ reason: "refused", value: "captured service" });
         expect(replayed).toEqual(first);
         expect(executions).toBe(1);
       });

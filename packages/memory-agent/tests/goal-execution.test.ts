@@ -5,7 +5,11 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ExecutionAdmission } from "../src/runtime/execution-admission.ts";
-import type { GoalExecutionPayload } from "../src/workflow/goal-execution-contracts.ts";
+import {
+  GoalExecutionErrorReason,
+  GoalExecutionPayload,
+  GoalExecutionSuccess,
+} from "../src/workflow/goal-execution-contracts.ts";
 import type { Admission } from "../src/workflow/run-bindings.ts";
 import {
   GoalExecution,
@@ -15,8 +19,7 @@ import {
 } from "../src/workflow/goal-execution.ts";
 import { sqlAll, sqlGet, sqlRun, sqlExec } from "./support/sql.ts";
 
-const payload: GoalExecutionPayload = {
-  _tag: "GoalExecutionPayload",
+const payload = GoalExecutionPayload.make({
   identity: {
     owner: { ownerId: "project-1", generation: "generation-1" },
     sessionId: "session-1",
@@ -24,7 +27,7 @@ const payload: GoalExecutionPayload = {
     goalInstanceId: "goal-1",
     workflowRevisionId: 7,
   },
-};
+});
 
 const binding = {
   runId: "run-1",
@@ -86,12 +89,13 @@ describe("GoalExecution workflow", () => {
         const first = yield* GoalExecution.execute(payload);
         const replayed = yield* GoalExecution.execute(payload);
         expect(first).toEqual(replayed);
-        expect(first).toEqual({
-          _tag: "GoalExecutionSuccess",
-          executionId,
-          runId: payload.identity.runId,
-          outcome: "completed",
-        });
+        expect(first).toEqual(
+          GoalExecutionSuccess.make({
+            executionId,
+            runId: payload.identity.runId,
+            outcome: "completed",
+          }),
+        );
         expect(binds).toBe(1);
       }),
     ),
@@ -148,11 +152,13 @@ describe("GoalExecution workflow", () => {
           payload,
           Effect.succeed<Admission>({ status: "bound", binding }),
         );
-        yield* goals.fail(payload, {
-          _tag: "SideEffectUncertain",
-          operationId: "1",
-          state: "uncertain",
-        });
+        yield* goals.fail(
+          payload,
+          GoalExecutionErrorReason.cases.SideEffectUncertain.make({
+            operationId: "1",
+            state: "uncertain",
+          }),
+        );
         expect(yield* sqlGet("SELECT status FROM owner_workflow_executions")).toEqual({
           status: "completed",
         });

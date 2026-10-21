@@ -8,6 +8,7 @@ import {
   createFullLoopExecution,
   type FullLoopOwner,
 } from "../../src/agent/full-loop-execution.ts";
+import { WorkerLifecycleError } from "../../src/agent/full-loop-resources.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import {
   capabilities,
@@ -194,10 +195,9 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop worker lifecycle", (
         const pull = stream.next();
         yield* sdkCall(() => vi.waitFor(() => expect(worker()).toBeDefined()));
         controller.abort();
-        expect((yield* Effect.flip(sdkCall(() => pull))).cause).toMatchObject({
-          _tag: "WorkerLifecycleError",
-          operation: "cancel",
-        });
+        const cancelled = (yield* Effect.flip(sdkCall(() => pull))).cause;
+        expect(cancelled).toBeInstanceOf(WorkerLifecycleError);
+        expect(cancelled).toMatchObject({ operation: "cancel" });
         expect(lifecycle.filter((event) => event === "stop")).toHaveLength(1);
         expect(worker()?.threadId).toBe(-1);
         expect(modelCall).not.toHaveBeenCalled();

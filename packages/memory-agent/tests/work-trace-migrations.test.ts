@@ -3,10 +3,11 @@ import { Layer } from "effect";
 
 import { DatabaseSync } from "node:sqlite";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { DateTime, Effect, FileSystem, Path } from "effect";
+import { DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { migrateDatabase } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
+import { AttemptFailure, AttemptFailureReason } from "../src/work-trace/contracts.ts";
 
 const databaseFile = Effect.fn("workTrace.databaseFile")(function* () {
   const context = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
@@ -348,6 +349,10 @@ describe("Work Trace migration", () => {
         )
         .run();
       legacy.close();
+      const restarted = yield* Schema.encodeEffect(Schema.fromJsonString(AttemptFailure))({
+        reason: AttemptFailureReason.cases.ServerRestarted.make({}),
+        stage: "restart",
+      });
 
       yield* withDatabase(file, (db) => {
         expect(db.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -360,7 +365,7 @@ describe("Work Trace migration", () => {
             .get(),
         ).toEqual({
           pending_tool_call_ids: '["tool-a"]',
-          failure: '{"reason":{"_tag":"ServerRestarted"},"stage":"restart"}',
+          failure: restarted,
           heartbeat_state: "idle",
         });
         expect(

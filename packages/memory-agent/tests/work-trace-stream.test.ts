@@ -1,8 +1,9 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import { DateTime, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
+import { AttemptFailureReason } from "../src/work-trace/contracts.ts";
 import {
   heartbeatIntervalMs,
   heartbeatLostMs,
@@ -214,7 +215,10 @@ describe("Work Trace durable stream source", () => {
         yield* TestClock.adjust(heartbeatLostMs + heartbeatIntervalMs);
         const task = (yield* trace.taskTree("s1"))[0];
         expect(task?.status).toBe("failed");
-        expect(task?.latestFailure).toEqual({ reason: { _tag: "HeartbeatLost" }, stage: "model" });
+        expect(task?.latestFailure).toEqual({
+          reason: AttemptFailureReason.cases.HeartbeatLost.make({}),
+          stage: "model",
+        });
         expect(
           (yield* trace.consumeParentNotifications("s1", "parent-2")).map(
             (notification) => notification.kind,
@@ -272,7 +276,7 @@ describe("Work Trace durable stream source", () => {
           .pipe(Effect.flip);
         expect(failure).toBeInstanceOf(WorkTraceReadFailed);
         expect(failure.operation).toBe("latest_cursor");
-        expect(failure.reason._tag).toBe("ReadFailed");
+        expect(Schema.is(WorkTraceReadFailed.fields.reason)(failure.reason)).toBe(true);
       }),
     ),
   );

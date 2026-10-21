@@ -1,4 +1,5 @@
 import { Cause, Effect, Result, Schema } from "effect";
+import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
@@ -6,7 +7,12 @@ import { AppEvents } from "../../src/events/app-events.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { evaluateWorkflowAction, workflowActions } from "../../src/workflow/actions.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
-import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
+import { PlanDependencyIssue } from "../../src/workflow/plan-schedule.ts";
+import {
+  WorkflowStorageError,
+  Workflows,
+  type WorkflowState,
+} from "../../src/workflow/workflow.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { inRun } from "../support/run-span.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
@@ -112,7 +118,12 @@ testAgent()("Workflows", (it) => {
         }),
       );
       expect(failure).toMatchObject({
-        issues: [{ _tag: "UnknownDependency", stepId: "store", dependsOn: "missing" }],
+        issues: [
+          PlanDependencyIssue.cases.UnknownDependency.make({
+            stepId: "store",
+            dependsOn: "missing",
+          }),
+        ],
       });
       expect((yield* workflows.get(id)).plan).toBeNull();
     }),
@@ -806,10 +817,9 @@ testAgent()("Workflows snapshot failure", (it) => {
         CREATE TRIGGER reject_workflow_revision BEFORE INSERT ON workflow_state_revisions
         BEGIN SELECT RAISE(ABORT, 'snapshot unavailable'); END;
       `);
-      expect(yield* Effect.flip((yield* Workflows).updateGoal(id, goal))).toMatchObject({
-        _tag: "WorkflowStorageError",
-        cause: { _tag: "SqlError" },
-      });
+      const failure = yield* Effect.flip((yield* Workflows).updateGoal(id, goal));
+      expect(failure).toBeInstanceOf(WorkflowStorageError);
+      expect(failure).toMatchObject({ cause: expect.any(SqlError.SqlError) });
       expect(
         yield* sqlAll("SELECT * FROM workflow_goal_identities WHERE session_id = ?", id),
       ).toEqual([]);

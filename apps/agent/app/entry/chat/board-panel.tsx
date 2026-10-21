@@ -1,6 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, Match } from "effect";
 import { ChevronRightIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { Alert, AlertDescription } from "../../components/ui/alert";
@@ -36,10 +36,10 @@ import {
 } from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
 import {
+  BoardEdit,
+  BoardIntent,
   isApiError,
   type ApiErrorCode,
-  type BoardEdit,
-  type BoardIntent,
   type BoardView,
   type CardStatus as BoardCardStatus,
   type GoalMergeState,
@@ -285,23 +285,17 @@ const pendingOf = (
   cards: BoardView["cards"],
 ): PendingMove | null => {
   if (!request.isPending || !KanbanAction.$is("Intent")(request.variables)) return null;
-  const intent = request.variables.intent;
-  switch (intent._tag) {
-    case "Reorder":
-      return PendingMove.Order({
-        cardId: intent.cardId,
-        index: cards.findIndex(({ card }) => card.id === intent.at),
-      });
-    case "Hold":
-    case "Release":
-    case "Requeue":
-      return landing?.cardId === intent.cardId
-        ? PendingMove.Status({ cardId: intent.cardId, to: landing.lands })
-        : null;
-    case "ChangeRequest":
-    case "Cancel":
-      return null;
-  }
+  const moved = ({ cardId }: { readonly cardId: string }) =>
+    landing?.cardId === cardId ? PendingMove.Status({ cardId, to: landing.lands }) : null;
+  return BoardIntent.$match(request.variables.intent, {
+    Reorder: ({ cardId, at }) =>
+      PendingMove.Order({ cardId, index: cards.findIndex(({ card }) => card.id === at) }),
+    Hold: moved,
+    Release: moved,
+    Requeue: moved,
+    ChangeRequest: () => null,
+    Cancel: () => null,
+  });
 };
 
 /** The wide board over the page, with the card peek panel and the board's notices. */
@@ -371,17 +365,16 @@ function BoardSheet({
   const save = (change: BoardEdit): Promise<null> => {
     const intent = (sent: BoardIntent) =>
       kanbanAction.mutateAsync(KanbanAction.Intent({ intent: sent })).then(() => null);
-    switch (change._tag) {
-      case "EditCard":
-        return cards.find(({ card }) => card.id === change.cardId)?.card.status === "in_progress"
-          ? intent({ _tag: "ChangeRequest", cardId: change.cardId, patch: change.patch })
-          : edit.mutateAsync(change).then(() => null);
-      case "CancelCard":
-        return intent({ _tag: "Cancel", cardId: change.cardId });
-      case "AddCard":
-      case "MoveCard":
-        return edit.mutateAsync(change).then(() => null);
-    }
+    const editBoard = () => edit.mutateAsync(change).then(() => null);
+    return BoardEdit.$match(change, {
+      EditCard: ({ cardId, patch }) =>
+        cards.find(({ card }) => card.id === cardId)?.card.status === "in_progress"
+          ? intent(BoardIntent.ChangeRequest({ cardId, patch }))
+          : editBoard(),
+      CancelCard: ({ cardId }) => intent(BoardIntent.Cancel({ cardId })),
+      AddCard: editBoard,
+      MoveCard: editBoard,
+    });
   };
   const peek: Peek | null = adding
     ? Peek.New()
@@ -482,8 +475,11 @@ function BoardSheet({
                       {view.pendingChanges.map((request) => (
                         <li key={request.id}>
                           {titleOf(request.cardId)} ·{" "}
-                          {request.change._tag === "Edit" ? "수정" : "취소"} 요청 ·{" "}
-                          {koreanLocalTime(request.createdAt)}
+                          {Match.valueTags(request.change, {
+                            Edit: () => "수정",
+                            Cancel: () => "취소",
+                          })}{" "}
+                          요청 · {koreanLocalTime(request.createdAt)}
                         </li>
                       ))}
                     </ul>
@@ -522,13 +518,13 @@ function BoardSheet({
             busy={request.isPending}
             onOpen={(cardId) => onPeek(cardId)}
             onReorder={(cardId, at) =>
-              request.mutate(KanbanAction.Intent({ intent: { _tag: "Reorder", cardId, at } }), {
+              request.mutate(KanbanAction.Intent({ intent: BoardIntent.Reorder({ cardId, at }) }), {
                 onError: refused,
               })
             }
             onSend={(cardId, intent, lands) => {
               setLanding({ cardId, lands });
-              request.mutate(KanbanAction.Intent({ intent: { _tag: intent, cardId } }), {
+              request.mutate(KanbanAction.Intent({ intent: BoardIntent[intent]({ cardId }) }), {
                 onError: refused,
               });
             }}
@@ -569,9 +565,12 @@ function BoardSheet({
             kanbanActive={loop !== null}
             onEdit={(editing) => setEditingCardId(editing ? peekCardId : null)}
             onIntent={(intent, cardId) =>
-              kanbanAction.mutate(KanbanAction.Intent({ intent: { _tag: intent, cardId } }), {
-                onError: refused,
-              })
+              kanbanAction.mutate(
+                KanbanAction.Intent({ intent: BoardIntent[intent]({ cardId }) }),
+                {
+                  onError: refused,
+                },
+              )
             }
             onClose={() => {
               setAdding(false);
@@ -626,44 +625,32 @@ const priorityItems = [
   { value: "low", label: "낮음" },
 ] as const satisfies ReadonlyArray<{ readonly value: GoalPriority; readonly label: string }>;
 
+/** Why the scheduler stopped merging a Goal on its own. */
+const stoppedMergeTexts = {
+  no_target: "시작할 때 브랜치가 없어(detached HEAD) 자동 merge하지 않아요",
+  target_missing: "대상 브랜치가 없어졌어요",
+  conflict_stopped: "충돌로 자동 merge를 멈췄어요",
+  goal_replaced: "Goal이 바뀌어 merge를 멈췄어요",
+} as const;
+
 /** Where a Goal's merge into its target stands, in words. */
 export function mergeStateLabel(state: GoalMergeState | null): string {
   if (state === null) return "카드가 모두 끝나면 merge해요";
-  switch (state._tag) {
-    case "Verifying":
-      return "Goal 전체를 검증하는 중";
-    case "VerifyFailed":
-      return `Goal 검증 실패: ${verdictText(state.verdict)}`;
-    case "WaitingWorktree":
-      return `작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${state.worktree})`;
-    case "TargetMoving":
-      return "대상 브랜치가 계속 바뀌어 다시 시도할 예정";
-    case "AwaitingDecision":
-      return "사람의 판단을 기다리는 중";
-    case "Merged":
-      return `merge됨 (${state.commit.slice(0, 8)})`;
-    case "ManualMerge":
-      return "직접 merge하기로 함, Goal 브랜치를 남겨 둠";
-    case "PullRequestPending":
-      return "PR을 만드는 중";
-    case "PullRequestCreated":
-      return `PR을 만듦: ${state.url}`;
-    case "PullRequestUncertain":
-      return "PR을 만들던 중 멈췄어요. 원격 저장소에서 직접 확인해 주세요";
-    case "PullRequestFailed":
-      return state.stage === "push" ? "Goal 브랜치 push 실패" : "PR 생성 실패";
-    case "Stopped":
-      switch (state.reason) {
-        case "no_target":
-          return "시작할 때 브랜치가 없어(detached HEAD) 자동 merge하지 않아요";
-        case "target_missing":
-          return "대상 브랜치가 없어졌어요";
-        case "conflict_stopped":
-          return "충돌로 자동 merge를 멈췄어요";
-        case "goal_replaced":
-          return "Goal이 바뀌어 merge를 멈췄어요";
-      }
-  }
+  return Match.valueTags(state, {
+    Verifying: () => "Goal 전체를 검증하는 중",
+    VerifyFailed: ({ verdict }) => `Goal 검증 실패: ${verdictText(verdict)}`,
+    WaitingWorktree: ({ worktree }) =>
+      `작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${worktree})`,
+    TargetMoving: () => "대상 브랜치가 계속 바뀌어 다시 시도할 예정",
+    AwaitingDecision: () => "사람의 판단을 기다리는 중",
+    Merged: ({ commit }) => `merge됨 (${commit.slice(0, 8)})`,
+    ManualMerge: () => "직접 merge하기로 함, Goal 브랜치를 남겨 둠",
+    PullRequestPending: () => "PR을 만드는 중",
+    PullRequestCreated: ({ url }) => `PR을 만듦: ${url}`,
+    PullRequestUncertain: () => "PR을 만들던 중 멈췄어요. 원격 저장소에서 직접 확인해 주세요",
+    PullRequestFailed: ({ stage }) => (stage === "push" ? "Goal 브랜치 push 실패" : "PR 생성 실패"),
+    Stopped: ({ reason }) => stoppedMergeTexts[reason],
+  });
 }
 
 /** How the project scheduler runs this Goal: its priority, the Goals it waits for, its merge. */

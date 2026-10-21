@@ -24,7 +24,9 @@ import {
 import { expect, vi } from "vite-plus/test";
 import type { ChatExecutionCapabilities } from "../../src/agent/chat-execution.ts";
 import { compaction, lookupSources } from "../../src/agent/compaction.ts";
+import { FullLoopOwnerRefusal, FullLoopOwnerRefused } from "../../src/agent/full-loop-execution.ts";
 import { handoffNotice, modelHandoffHistory } from "../../src/agent/model-handoff.ts";
+import { OwnerToolGrantRefused } from "../../src/agent/owner-tool-grants.ts";
 import { Database } from "../../src/db/database.ts";
 import { makePermissionGateMiddleware } from "../../src/permissions/gate.ts";
 import { PermissionClassifier } from "../../src/permissions/classifier.ts";
@@ -466,9 +468,9 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
             ),
           ),
         );
+        expect(inactive.cause).toBeInstanceOf(FullLoopOwnerRefused);
         expect(inactive.cause).toMatchObject({
-          _tag: "FullLoopOwnerRefused",
-          reason: { _tag: "Inactive", stage: "tool" },
+          reason: FullLoopOwnerRefusal.cases.Inactive.make({ stage: "tool" }),
         });
         expect(Reflect.set(run.stream, "abortController", callerController())).toBe(true);
         yield* collect<GatedAdapter>(second.owner, run);
@@ -729,8 +731,8 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
                             ),
                           ),
                         ).pipe(Effect.orDie);
+                        expect(ungranted.cause).toBeInstanceOf(OwnerToolGrantRefused);
                         expect(ungranted.cause).toMatchObject({
-                          _tag: "OwnerToolGrantRefused",
                           reason: "repeated_implementation_grant",
                         });
                         expect(started).toEqual([]);

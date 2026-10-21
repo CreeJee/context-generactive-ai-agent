@@ -13,7 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { findExecutable } from "../runtime/host.ts";
-import type { BoardAuthor } from "../workflow/card.ts";
+import { BoardAuthor } from "../workflow/card.ts";
 import { Workflows } from "../workflow/workflow.ts";
 import { CardVerifier, GoalVerifier } from "./card-agent.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
@@ -43,10 +43,8 @@ import { BoardHealth } from "./board-health.ts";
  */
 
 /** The decisions the merge queue asks under its own name. */
-const queueAuthor = (goalInstanceId: string): BoardAuthor => ({
-  _tag: "Orchestrator",
-  runId: `kanban-merge:${goalInstanceId}`,
-});
+const queueAuthor = (goalInstanceId: string): BoardAuthor =>
+  BoardAuthor.cases.Orchestrator.make({ runId: `kanban-merge:${goalInstanceId}` });
 
 /** How many times the user's branch may move under one merge before the next look tries again. */
 const mergeRounds = 3;

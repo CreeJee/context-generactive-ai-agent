@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Match, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ExternalAgents, type ExternalPromptOutcome } from "../external-agents/agents.ts";
-import type { AttemptFailureReason } from "../work-trace/contracts.ts";
+import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import { onRun, runTrace, type RunTrace } from "../runtime/run-trace.ts";
@@ -53,9 +53,12 @@ const externalFailure = Match.type<ExternalPromptOutcome>().pipe(
   Match.discriminatorsExhaustive("status")({
     completed: (): AttemptFailureReason | null => null,
     cancelled: () => null,
-    disconnected: () => ({ _tag: "ExternalAgentFailed", code: "disconnected" }) as const,
-    failed: ({ failure }) => ({ _tag: "ExternalAgentFailed", code: failure.code }) as const,
-    unavailable: ({ failure }) => ({ _tag: "ExternalAgentFailed", code: failure.code }) as const,
+    disconnected: () =>
+      AttemptFailureReason.cases.ExternalAgentFailed.make({ code: "disconnected" }),
+    failed: ({ failure }) =>
+      AttemptFailureReason.cases.ExternalAgentFailed.make({ code: failure.code }),
+    unavailable: ({ failure }) =>
+      AttemptFailureReason.cases.ExternalAgentFailed.make({ code: failure.code }),
   }),
 );
 

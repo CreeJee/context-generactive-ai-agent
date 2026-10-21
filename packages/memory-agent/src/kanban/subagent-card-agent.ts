@@ -7,6 +7,7 @@ import { Sessions } from "../sessions/sessions.ts";
 import { Subagents } from "../subagents/subagents.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
+import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { toToolSchema } from "../tools/schema.ts";
@@ -161,8 +162,8 @@ const make = Effect.gen(function* () {
         // Its session, project or run records failed; the error stays in the logs only.
       }).pipe(
         // A database failure also names its kind (lock, constraint, ...), never its statement.
-        Effect.catchTag("SqlError", (error) => unavailable("SqlError", error.reason._tag)),
-        Effect.catch((error) => unavailable(error._tag, null)),
+        Effect.catchTag("SqlError", (error) => unavailable("SqlError", errorTag(error.reason))),
+        Effect.catch((error) => unavailable(errorTag(error), null)),
         // The card run's tool calls join this span's trace.
         Effect.withSpan("CardAgent.run"),
       ),
@@ -246,7 +247,7 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.catch((error) =>
         Effect.as(
-          Effect.logWarning("Kanban verifier unavailable", { error: error._tag }),
+          Effect.logWarning("Kanban verifier unavailable", { error: errorTag(error) }),
           rejected(VerdictFailure.cases.Unavailable.make({})),
         ),
       ),

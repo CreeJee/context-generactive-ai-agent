@@ -1,6 +1,7 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, FileSystem, Path } from "effect";
+import { PathRejected } from "../src/files/paths.ts";
 import {
   createTextFileEffect,
   deleteTextFileEffect,
@@ -8,6 +9,9 @@ import {
   readFileBytesEffect,
   replaceTextFileEffect,
   FileReadPlatform,
+  TextFileIoFailed,
+  TextFileRejected,
+  TextFileRejectedReason,
 } from "../src/files/text.ts";
 
 layer(NodeServices.layer)((it) => {
@@ -41,15 +45,15 @@ layer(NodeServices.layer)((it) => {
       const symbolic = path.join(directory, "symbolic.txt");
       yield* fs.symlink(original, symbolic);
       expect(
-        yield* Effect.result(readFileBytesEffect({ absolute: symbolic, path: "symbolic.txt" })),
-      ).toMatchObject({ _tag: "Failure", failure: { _tag: "PathRejected", reason: "symlink" } });
+        yield* Effect.flip(readFileBytesEffect({ absolute: symbolic, path: "symbolic.txt" })),
+      ).toEqual(PathRejected.make({ path: "symbolic.txt", reason: "symlink" }));
       const hard = path.join(directory, "hard.txt");
       yield* fs.link(original, hard);
       expect(
-        yield* Effect.result(
+        yield* Effect.flip(
           readFileBytesEffect({ absolute: hard, path: "hard.txt", checkLeaf: true }),
         ),
-      ).toMatchObject({ _tag: "Failure", failure: { _tag: "PathRejected", reason: "hard_link" } });
+      ).toEqual(PathRejected.make({ path: "hard.txt", reason: "hard_link" }));
       // Skills intentionally permit hard-linked ordinary files when checkLeaf is false.
       expect(
         (yield* readFileBytesEffect({ absolute: hard, path: "hard.txt" })).bytes.toString(),
@@ -69,23 +73,21 @@ layer(NodeServices.layer)((it) => {
       expect(result.bytes.toString("utf8")).toBe(contents);
       const symbolic = path.join(directory, "symbolic.txt");
       yield* fs.symlink(absolute, symbolic);
-      expect(
-        yield* Effect.result(readFileBytesEffect({ absolute: symbolic, path: "symbolic.txt" })),
-      ).toMatchObject(
-        (yield* FileReadPlatform) === "windows"
-          ? { _tag: "Failure", failure: { _tag: "PathRejected", reason: "symlink" } }
-          : {
-              _tag: "Failure",
-              failure: { _tag: "TextFileIoFailed", reason: { operation: "open" } },
-            },
+      const windows = (yield* FileReadPlatform) === "windows";
+      const linked = yield* Effect.flip(
+        readFileBytesEffect({ absolute: symbolic, path: "symbolic.txt" }),
+      );
+      expect(linked).toBeInstanceOf(windows ? PathRejected : TextFileIoFailed);
+      expect(linked).toMatchObject(
+        windows ? { reason: "symlink" } : { reason: { operation: "open" } },
       );
       const hard = path.join(directory, "hard.txt");
       yield* fs.link(absolute, hard);
       expect(
-        yield* Effect.result(
+        yield* Effect.flip(
           readFileBytesEffect({ absolute: hard, path: "hard.txt", checkLeaf: true }),
         ),
-      ).toMatchObject({ _tag: "Failure", failure: { _tag: "PathRejected", reason: "hard_link" } });
+      ).toEqual(PathRejected.make({ path: "hard.txt", reason: "hard_link" }));
     }),
   );
 
@@ -100,17 +102,19 @@ layer(NodeServices.layer)((it) => {
         const options = { absolute, path: "note.txt" };
         const created = yield* createTextFileEffect({ ...options, text: "before" });
         yield* replaceTextFileEffect({ ...options, expectedSha256: created.sha256, text: "after" });
-        const stale = yield* Effect.result(
+        const stale = yield* Effect.flip(
           replaceTextFileEffect({
             ...options,
             expectedSha256: created.sha256,
             text: "lost update",
           }),
         );
-        expect(stale).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "TextFileRejected", reason: { _tag: "changed" } },
-        });
+        expect(stale).toEqual(
+          TextFileRejected.make({
+            path: "note.txt",
+            reason: TextFileRejectedReason.cases.changed.make({}),
+          }),
+        );
         const current = yield* readTextFileEffect(options);
         expect(current.text).toBe("after");
         expect(yield* fs.readDirectory(directory)).toEqual(["note.txt"]);
@@ -126,26 +130,26 @@ layer(NodeServices.layer)((it) => {
       const directory = yield* fs.makeTempDirectoryScoped();
       const absolute = path.join(directory, "note.txt");
       const options = { absolute, path: "note.txt" };
-      expect(yield* Effect.result(readTextFileEffect(options))).toMatchObject({
-        _tag: "Failure",
-        failure: {
-          _tag: "TextFileIoFailed",
-          path: "note.txt",
-          reason: { _tag: "IoFailed", operation: "open", code: "ENOENT" },
-        },
+      const missing = yield* Effect.flip(readTextFileEffect(options));
+      expect(missing).toBeInstanceOf(TextFileIoFailed);
+      expect(missing).toMatchObject({
+        path: "note.txt",
+        reason: { operation: "open", code: "ENOENT" },
       });
       yield* fs.writeFile(absolute, new Uint8Array([0xff]));
-      expect(yield* Effect.result(readTextFileEffect(options))).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "TextFileRejected", reason: { _tag: "invalid_utf8" } },
-      });
+      expect(yield* Effect.flip(readTextFileEffect(options))).toEqual(
+        TextFileRejected.make({
+          path: "note.txt",
+          reason: TextFileRejectedReason.cases.invalid_utf8.make({}),
+        }),
+      );
       yield* fs.writeFileString(absolute, "existing");
-      expect(
-        yield* Effect.result(createTextFileEffect({ ...options, text: "overwrite" })),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "TextFileRejected", reason: { _tag: "exists" } },
-      });
+      expect(yield* Effect.flip(createTextFileEffect({ ...options, text: "overwrite" }))).toEqual(
+        TextFileRejected.make({
+          path: "note.txt",
+          reason: TextFileRejectedReason.cases.exists.make({}),
+        }),
+      );
       expect(yield* fs.readFileString(absolute)).toBe("existing");
     }),
   );

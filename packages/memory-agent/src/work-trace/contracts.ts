@@ -160,6 +160,20 @@ export const AttemptFailureReason = Schema.TaggedUnion({
 });
 export type AttemptFailureReason = typeof AttemptFailureReason.Type;
 
+/** The reason's code as reports show it: the case name, never its fields. */
+export const attemptFailureCode = AttemptFailureReason.match({
+  ModelRunError: () => "ModelRunError",
+  ModelStreamFailed: () => "ModelStreamFailed",
+  AgentCrashed: () => "AgentCrashed",
+  HeartbeatLost: () => "HeartbeatLost",
+  ServerRestarted: () => "ServerRestarted",
+  ExternalAgentFailed: () => "ExternalAgentFailed",
+  ProcessExited: () => "ProcessExited",
+  ProcessTimedOut: () => "ProcessTimedOut",
+  OperationFailed: () => "OperationFailed",
+  ResultStorageFailed: () => "ResultStorageFailed",
+});
+
 export const AttemptFailure = Schema.Struct({
   reason: AttemptFailureReason,
   stage: AttemptFailureStage,

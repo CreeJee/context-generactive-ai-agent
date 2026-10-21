@@ -5,7 +5,13 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect";
 import { connectionContext } from "../src/db/database.ts";
 import { createResultPageReader } from "../src/memory/result-pages.ts";
-import { createTextPageReader, linePage, maxTextBytes, sha256 } from "../src/files/text.ts";
+import {
+  createTextPageReader,
+  linePage,
+  maxTextBytes,
+  sha256,
+  TextFileRejectedReason,
+} from "../src/files/text.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
 import { FileTools } from "../src/tools/files.ts";
 import { inRun } from "./support/run-span.ts";
@@ -112,19 +118,16 @@ layer(NodeServices.layer)((it) => {
       }
       yield* fs.writeFile(absolute, new Uint8Array([0xff]));
       expect(
-        yield* Effect.result(reader({ absolute, path: "text", startLine: 1, maxLines: 1 })),
-      ).toMatchObject({ _tag: "Failure", failure: { reason: { _tag: "invalid_utf8" } } });
+        (yield* Effect.flip(reader({ absolute, path: "text", startLine: 1, maxLines: 1 }))).reason,
+      ).toEqual(TextFileRejectedReason.cases.invalid_utf8.make({}));
       yield* fs.writeFileString(absolute, "a".repeat(maxTextBytes + 1));
       expect(
-        yield* Effect.result(reader({ absolute, path: "text", startLine: 1, maxLines: 1 })),
-      ).toMatchObject({ _tag: "Failure", failure: { reason: { _tag: "too_large" } } });
+        (yield* Effect.flip(reader({ absolute, path: "text", startLine: 1, maxLines: 1 }))).reason,
+      ).toEqual(TextFileRejectedReason.cases.too_large.make({}));
       yield* fs.remove(absolute);
       expect(
-        yield* Effect.result(reader({ absolute, path: "text", startLine: 1, maxLines: 1 })),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { operation: "open", code: "ENOENT" } },
-      });
+        (yield* Effect.flip(reader({ absolute, path: "text", startLine: 1, maxLines: 1 }))).reason,
+      ).toMatchObject({ operation: "open", code: "ENOENT" });
     }),
   );
 

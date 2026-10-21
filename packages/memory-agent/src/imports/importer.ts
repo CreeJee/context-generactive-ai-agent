@@ -2,6 +2,7 @@ import { NodeWorker } from "@effect/platform-node";
 import { ignoreLogged } from "../runtime/logged-failures.ts";
 import {
   healthyLoop,
+  LoopStep,
   sameLoopHealth,
   superviseLoopStep,
   type LoopHealth,
@@ -434,7 +435,7 @@ const make = (watching: boolean, home: string) =>
       superviseLoopStep({ message: "import_watch_failed", setHealth: setWatchHealth }),
       Effect.repeat({
         schedule: Schedule.spaced(pollEvery),
-        while: (step) => step._tag === "Continued",
+        while: LoopStep.$is("Continued"),
       }),
     );
     const watcher = yield* FiberHandle.make();

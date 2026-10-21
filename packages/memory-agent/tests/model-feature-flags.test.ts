@@ -1,10 +1,12 @@
 import { HashSet } from "effect";
-import { GlobalConfigFailed } from "../src/config/global-config.ts";
+import { GlobalConfigFailed, GlobalConfigFailedReason } from "../src/config/global-config.ts";
 import { it as effectTest } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import {
   decideModelFeatureFlag,
   makeModelFeatureFlags,
+  ModelFeatureFlagStoreFailed,
+  UnknownModelFeatureCapability,
   type ModelFeatureFlagSettings,
   type Settings,
 } from "memory-agent";
@@ -91,15 +93,15 @@ describe("ModelFeatureFlags service", () => {
       const unknown = yield* Effect.result(
         fixture().service.decide({ ...query, capability: "unknown" }),
       );
-      expect(Result.isFailure(unknown) && unknown.failure._tag).toBe(
-        "UnknownModelFeatureCapability",
+      expect(Result.isFailure(unknown) && unknown.failure).toBeInstanceOf(
+        UnknownModelFeatureCapability,
       );
       const failed = makeModelFeatureFlags(
         {
           read: Effect.fail(
             GlobalConfigFailed.make({
               operation: "read",
-              reason: { _tag: "ReadFailed" },
+              reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
               cause: "broken",
             }),
           ),
@@ -107,7 +109,7 @@ describe("ModelFeatureFlags service", () => {
             Effect.fail(
               GlobalConfigFailed.make({
                 operation: "read",
-                reason: { _tag: "ReadFailed" },
+                reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
                 cause: "broken",
               }),
             ),
@@ -115,7 +117,9 @@ describe("ModelFeatureFlags service", () => {
         [capability],
       );
       const result = yield* Effect.result(failed.read);
-      expect(Result.isFailure(result) && result.failure._tag).toBe("ModelFeatureFlagStoreFailed");
+      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+        ModelFeatureFlagStoreFailed,
+      );
     }),
   );
 });

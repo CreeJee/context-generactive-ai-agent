@@ -7,6 +7,7 @@ import {
   BackgroundResultStoreFailed,
   BackgroundTasks,
 } from "../../src/tools/background.ts";
+import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { inRun } from "../support/run-span.ts";
@@ -140,7 +141,7 @@ testAgent()("background task lifecycle", (it) => {
         "failing command",
         Effect.succeed({
           report: "exit report",
-          failure: { _tag: "ProcessExited" as const, exitCode: 2, signal: null },
+          failure: AttemptFailureReason.cases.ProcessExited.make({ exitCode: 2, signal: null }),
         }),
       );
       expect(yield* tasks.waitResult(sessionId, receipt.taskId, 2000)).toMatchObject({
@@ -149,7 +150,7 @@ testAgent()("background task lifecycle", (it) => {
       const detail = yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId);
       expect(detail?.task.status).toBe("failed");
       expect(detail?.task.latestFailure).toEqual({
-        reason: { _tag: "ProcessExited", exitCode: 2, signal: null },
+        reason: AttemptFailureReason.cases.ProcessExited.make({ exitCode: 2, signal: null }),
         stage: "process",
       });
     }),

@@ -11,11 +11,11 @@ import { AppEvents } from "../events/app-events.ts";
 import { canonicalPathEffect } from "../files/paths.ts";
 import {
   CardAgent,
+  CardVerdict,
   CardVerifier,
   GoalVerifier,
   type CardAgentOutcome,
   type CardAgentRun,
-  type CardVerdict,
   type CardVerification,
   type GoalVerification,
 } from "../kanban/card-agent.ts";
@@ -39,6 +39,7 @@ import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
 import { workflowRunBindings } from "../workflow/run-bindings.ts";
+import { BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep, type UpdatePlan } from "../workflow/workflow.ts";
 import { KanbanBoardActions } from "../kanban/board-actions.ts";
 import { KanbanOrchestrator } from "../kanban/orchestrator.ts";
@@ -87,7 +88,8 @@ export const scriptedAgent = (run: (run: CardAgentRun) => Effect.Effect<CardAgen
 export const passingVerifier = Layer.succeed(
   CardVerifier,
   CardVerifier.of({
-    verify: (input) => Effect.succeed({ _tag: "Passed", evidence: [`verified ${input.card.id}`] }),
+    verify: (input) =>
+      Effect.succeed(CardVerdict.Passed({ evidence: [`verified ${input.card.id}`] })),
   }),
 );
 
@@ -121,7 +123,7 @@ const kanbanOwnerBase = (fixture: KanbanFixture, cores: number) =>
 export const passingGoalVerifier = Layer.succeed(
   GoalVerifier,
   GoalVerifier.of({
-    verify: () => Effect.succeed({ _tag: "Passed", evidence: ["goal verified"] }),
+    verify: () => Effect.succeed(CardVerdict.Passed({ evidence: ["goal verified"] })),
   }),
 );
 
@@ -175,7 +177,7 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
             verify:
               options.verify ??
               ((input) =>
-                Effect.succeed({ _tag: "Passed", evidence: [`verified ${input.card.id}`] })),
+                Effect.succeed(CardVerdict.Passed({ evidence: [`verified ${input.card.id}`] }))),
           }),
         ),
         goalVerifier: Layer.succeed(
@@ -183,7 +185,7 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
           GoalVerifier.of({
             verify:
               options.verifyGoal ??
-              (() => Effect.succeed({ _tag: "Passed", evidence: ["goal verified"] })),
+              (() => Effect.succeed(CardVerdict.Passed({ evidence: ["goal verified"] }))),
           }),
         ),
         cores: options.cores ?? 2,
@@ -272,7 +274,7 @@ export const executingSession = Effect.fn("executingSession")(function* (
   });
   const ops = boardOps(workflows);
   for (const [cardId, files] of Object.entries(boundaries))
-    yield* ops.editCard(session.id, cardId, { boundaries: files }, { _tag: "User" });
+    yield* ops.editCard(session.id, cardId, { boundaries: files }, BoardAuthor.cases.User.make({}));
   yield* workflows.setPhase(session.id, "execute");
   const goalInstanceId = Option.getOrThrow(
     Option.fromNullishOr(yield* workflows.goalInstanceId(session.id)),
@@ -314,7 +316,7 @@ export const assignCard = Effect.fn("assignCard")(function* (
   const state = yield* workflows.transitionCard(
     board.sessionId,
     { cardId, from: "ready", to: "in_progress" },
-    { _tag: "Orchestrator", runId: "test" },
+    BoardAuthor.cases.Orchestrator.make({ runId: "test" }),
   );
   const attemptNo = yield* attempts.nextAttemptNo(board.goalInstanceId, cardId);
   const payload = {

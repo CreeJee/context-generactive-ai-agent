@@ -1,5 +1,6 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Layer } from "effect";
+import { NetAddress } from "effect/net";
 import {
   FetchHttpClient,
   HttpClient,
@@ -15,13 +16,12 @@ export const testHttpServer = Effect.fn("testHttpServer")(function* <E, R>(
   const services = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest));
   const server = yield* Effect.provideContext(HttpServer.HttpServer, services);
   yield* Effect.provideContext(HttpServer.serveEffect(handler), services);
-  switch (server.address._tag) {
-    case "InetAddressV4":
-    case "InetAddressV6":
-      return { url: `http://127.0.0.1:${server.address.port}`, port: server.address.port };
-    case "UnixPathAddress":
-      return yield* Effect.die(new Error("HTTP test fixture requires TCP"));
-  }
+  return yield* Effect.succeed(server.address).pipe(
+    Effect.filterOrElse(NetAddress.isInetAddress, () =>
+      Effect.die(new Error("HTTP test fixture requires TCP")),
+    ),
+    Effect.map(({ port }) => ({ url: `http://127.0.0.1:${port}`, port })),
+  );
 });
 
 /** A real Effect client; callers keep status, typed body decoding and interruption in Effect. */

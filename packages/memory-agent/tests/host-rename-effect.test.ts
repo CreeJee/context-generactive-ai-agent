@@ -3,7 +3,7 @@ import { expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { renameWhenReleasedEffect } from "../src/runtime/host.ts";
+import { DirectoryRenameFailed, renameWhenReleasedEffect } from "../src/runtime/host.ts";
 
 const busy = () => Object.assign(new Error("file held open"), { code: "EPERM" });
 
@@ -11,7 +11,7 @@ it.effect("Windows rename retries stop after twenty attempts", () =>
   Effect.gen(function* () {
     let calls = 0;
     const renamed = yield* Effect.forkChild(
-      Effect.result(
+      Effect.flip(
         renameWhenReleasedEffect({
           from: "before",
           to: "after",
@@ -24,13 +24,9 @@ it.effect("Windows rename retries stop after twenty attempts", () =>
       ),
     );
     yield* TestClock.adjust("10 seconds");
-    expect(yield* Fiber.join(renamed)).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "DirectoryRenameFailed",
-        reason: { _tag: "RenameFailed", code: "EPERM" },
-      },
-    });
+    const failure = yield* Fiber.join(renamed);
+    expect(failure).toBeInstanceOf(DirectoryRenameFailed);
+    expect(failure.reason.code).toBe("EPERM");
     expect(calls).toBe(20);
   }).pipe(withTestPlatform),
 );

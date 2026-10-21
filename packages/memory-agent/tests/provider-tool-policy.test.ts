@@ -11,8 +11,21 @@ import {
   type ProviderToolMetadataFailure,
 } from "../src/providers/tool-capabilities.ts";
 import {
+  ProviderToolApprovalCancelled,
+  ProviderToolApprovalDenied,
+  ProviderToolApprovalRequired,
+  ProviderToolCapabilityDenied,
+  ProviderToolFactoryFailure,
+  ProviderToolFactoryOptionsFailure,
+  ProviderToolLeaseFailure,
+  ProviderToolNotExposed,
+  ProviderToolOperationFailure,
+  ProviderToolOptionsViolation,
+  ProviderToolPathViolation,
   ProviderToolPolicy,
+  ProviderToolPolicyDenied,
   ProviderToolRuntime,
+  ProviderToolSandboxViolation,
   makeProviderToolPolicy,
   makeProviderToolRuntime,
   normalizeProviderToolUsage,
@@ -142,10 +155,8 @@ describe("ProviderToolPolicy", () => {
           approval: "not_requested",
         }),
       );
-      expect(denied).toMatchObject({
-        _tag: "ProviderToolPolicyDenied",
-        reason: "feature_flag_disabled",
-      });
+      expect(denied).toBeInstanceOf(ProviderToolPolicyDenied);
+      expect(denied).toMatchObject({ reason: "feature_flag_disabled" });
     }),
   );
 
@@ -213,7 +224,7 @@ describe("ProviderToolPolicy", () => {
           ),
           trustedPolicyLayer(root),
         );
-        expect(required).toMatchObject({ _tag: "ProviderToolApprovalRequired" });
+        expect(required).toBeInstanceOf(ProviderToolApprovalRequired);
       }).pipe(withTestPlatform),
   );
 
@@ -240,16 +251,16 @@ describe("ProviderToolPolicy", () => {
   );
 
   effectTest.live.each([
-    ["denied", "ProviderToolApprovalDenied"],
-    ["cancelled", "ProviderToolApprovalCancelled"],
-  ] as const)("returns typed %s approval outcomes", ([approval, tag]) =>
+    ["denied", ProviderToolApprovalDenied],
+    ["cancelled", ProviderToolApprovalCancelled],
+  ] as const)("returns typed %s approval outcomes", ([approval, outcome]) =>
     Effect.gen(function* () {
       const value = yield* run(
         Effect.flatMap(ProviderToolPolicy, (policy) =>
           errorOf(policy.revalidateExecution(execution({ approval }))),
         ),
       );
-      expect(value).toMatchObject({ _tag: tag });
+      expect(value).toBeInstanceOf(outcome);
     }).pipe(withTestPlatform),
   );
 
@@ -298,10 +309,8 @@ describe("ProviderToolPolicy", () => {
           errorOf(policy.revalidateExecution(execution())),
         ),
       );
-      expect(error).toMatchObject({
-        _tag: "ProviderToolSandboxViolation",
-        reason: "trusted_profile_required",
-      });
+      expect(error).toBeInstanceOf(ProviderToolSandboxViolation);
+      expect(error).toMatchObject({ reason: "trusted_profile_required" });
     }).pipe(withTestPlatform),
   );
 
@@ -316,10 +325,8 @@ describe("ProviderToolPolicy", () => {
           errorOf(policy.revalidateExecution(execution({ options }))),
         ),
       );
-      expect(error).toMatchObject({
-        _tag: "ProviderToolOptionsViolation",
-        reason: "unknown_policy_option",
-      });
+      expect(error).toBeInstanceOf(ProviderToolOptionsViolation);
+      expect(error).toMatchObject({ reason: "unknown_policy_option" });
     }).pipe(withTestPlatform),
   );
 
@@ -355,8 +362,9 @@ describe("ProviderToolPolicy", () => {
           { reason: "unknown_model" },
           { reason: "unknown_tool" },
           { reason: "model_unsupported" },
-          { _tag: "ProviderToolCapabilityDenied", reason: "account_unsupported" },
+          { reason: "account_unsupported" },
         ]);
+        expect(errors[3]).toBeInstanceOf(ProviderToolCapabilityDenied);
       }).pipe(withTestPlatform),
   );
 
@@ -372,8 +380,8 @@ describe("ProviderToolPolicy", () => {
           errorOf(policy.revalidateExecution(execution({ provider: "anthropic" }))),
         ),
       );
-      expect(kind).toMatchObject({ _tag: "ProviderToolOptionsViolation" });
-      expect(provider).toMatchObject({ _tag: "ProviderToolOptionsViolation" });
+      expect(kind).toBeInstanceOf(ProviderToolOptionsViolation);
+      expect(provider).toBeInstanceOf(ProviderToolOptionsViolation);
     }).pipe(withTestPlatform),
   );
 
@@ -410,11 +418,12 @@ describe("ProviderToolPolicy", () => {
             ),
           { concurrency: "unbounded" },
         );
+        expect(errors).toEqual(errors.map(() => expect.any(ProviderToolPathViolation)));
         expect(errors).toMatchObject([
-          { _tag: "ProviderToolPathViolation", reason: "invalid_path" },
-          { _tag: "ProviderToolPathViolation", reason: "absolute_path" },
-          { _tag: "ProviderToolPathViolation", reason: "symlink" },
-          { _tag: "ProviderToolPathViolation", reason: "credential_path" },
+          { reason: "invalid_path" },
+          { reason: "absolute_path" },
+          { reason: "symlink" },
+          { reason: "credential_path" },
         ]);
       }).pipe(withTestPlatform),
   );
@@ -454,12 +463,19 @@ describe("ProviderToolPolicy", () => {
           unisolated,
         ),
       );
+      expect(errors).toEqual([
+        expect.any(ProviderToolSandboxViolation),
+        expect.any(ProviderToolSandboxViolation),
+        expect.any(ProviderToolOptionsViolation),
+        expect.any(ProviderToolOptionsViolation),
+        expect.any(ProviderToolSandboxViolation),
+      ]);
       expect(errors).toMatchObject([
-        { _tag: "ProviderToolSandboxViolation", reason: "network_denied" },
-        { _tag: "ProviderToolSandboxViolation", reason: "environment_denied" },
-        { _tag: "ProviderToolOptionsViolation", reason: "timeout_limit_invalid" },
-        { _tag: "ProviderToolOptionsViolation", reason: "processes_limit_invalid" },
-        { _tag: "ProviderToolSandboxViolation", reason: "isolated_compute_required" },
+        { reason: "network_denied" },
+        { reason: "environment_denied" },
+        { reason: "timeout_limit_invalid" },
+        { reason: "processes_limit_invalid" },
+        { reason: "isolated_compute_required" },
       ]);
     }).pipe(withTestPlatform),
   );
@@ -573,13 +589,9 @@ describe("ProviderToolRuntime", () => {
           ),
         ),
       );
+      expect(errors).toEqual(errors.map(() => expect.any(ProviderToolOptionsViolation)));
       expect(errors).toEqual(
-        errors.map(() =>
-          expect.objectContaining({
-            _tag: "ProviderToolOptionsViolation",
-            reason: "invalid_factory_options",
-          }),
-        ),
+        errors.map(() => expect.objectContaining({ reason: "invalid_factory_options" })),
       );
     }).pipe(withTestPlatform),
   );
@@ -605,7 +617,7 @@ describe("ProviderToolRuntime", () => {
           ),
         );
         expect(result[0]).toEqual([]);
-        expect(result[1]).toMatchObject({ _tag: "ProviderToolNotExposed" });
+        expect(result[1]).toBeInstanceOf(ProviderToolNotExposed);
       }).pipe(withTestPlatform),
   );
 
@@ -655,7 +667,7 @@ describe("ProviderToolRuntime", () => {
           ]),
         );
         expect(received).toBe(expected);
-        expect(error).toMatchObject({ _tag: "ProviderToolFactoryFailure" });
+        expect(error).toBeInstanceOf(ProviderToolFactoryFailure);
       }),
   );
 
@@ -787,7 +799,7 @@ describe("ProviderToolRuntime", () => {
           ),
         ),
       );
-      expect(rejection).toMatchObject({ _tag: "ProviderToolOperationFailure" });
+      expect(rejection).toBeInstanceOf(ProviderToolOperationFailure);
       expect(rejectedReleases).toBe(1);
       expect(failedLifecycle).toEqual(["running", "failed"]);
       let aborted = false;
@@ -873,7 +885,8 @@ describe("ProviderToolRuntime", () => {
           ),
         ),
       );
-      expect(error).toMatchObject({ _tag: "ProviderToolLeaseFailure", phase: "release" });
+      expect(error).toBeInstanceOf(ProviderToolLeaseFailure);
+      expect(error).toMatchObject({ phase: "release" });
     }).pipe(withTestPlatform),
   );
 
@@ -892,14 +905,16 @@ describe("ProviderToolRuntime", () => {
           ]),
         ),
       );
-      expect(unknown).toMatchObject({
-        _tag: "ProviderToolFactoryOptionsFailure",
-        reason: "invalid_request",
-      });
-      expect(mismatch).toMatchObject({
-        _tag: "ProviderToolFactoryOptionsFailure",
-        reason: "provider_mismatch",
-      });
+      expect([unknown, mismatch]).toEqual([
+        ProviderToolFactoryOptionsFailure.make({
+          toolId: "openai:web_search",
+          reason: "invalid_request",
+        }),
+        ProviderToolFactoryOptionsFailure.make({
+          toolId: "anthropic:web_fetch",
+          reason: "provider_mismatch",
+        }),
+      ]);
     }).pipe(withTestPlatform),
   );
 

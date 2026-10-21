@@ -1,8 +1,12 @@
 import { NodeFileSystem } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { assertInstanceOf, strictEqual } from "@effect/vitest/utils";
+import { assertInstanceOf, assertTrue, strictEqual } from "@effect/vitest/utils";
 import { Context, Effect, FileSystem, Layer } from "effect";
-import { GlobalConfig, GlobalConfigFailed } from "../src/config/global-config.ts";
+import {
+  GlobalConfig,
+  GlobalConfigFailed,
+  GlobalConfigFailedReason,
+} from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 
 const fixture = Effect.gen(function* () {
@@ -23,7 +27,7 @@ it.effect("returns malformed persisted settings through the typed failure channe
     const failure = yield* Effect.flip(config.read);
     assertInstanceOf(failure, GlobalConfigFailed);
     strictEqual(failure.operation, "read");
-    strictEqual(failure.reason._tag, "InvalidSettings");
+    assertTrue(GlobalConfigFailedReason.guards.InvalidSettings(failure.reason));
   }),
 );
 
@@ -36,7 +40,7 @@ it.effect("preserves the read stage when updating an inaccessible settings path"
     const failure = yield* Effect.flip(config.update({ imageGenerationEnabled: true }));
     assertInstanceOf(failure, GlobalConfigFailed);
     strictEqual(failure.operation, "read");
-    strictEqual(failure.reason._tag, "ReadFailed");
+    assertTrue(GlobalConfigFailedReason.guards.ReadFailed(failure.reason));
   }),
 );
 
@@ -50,6 +54,6 @@ it.effect("returns write failures without treating them as settings validation f
     const failure = yield* Effect.flip(config.update({ imageGenerationEnabled: true }));
     assertInstanceOf(failure, GlobalConfigFailed);
     strictEqual(failure.operation, "write");
-    strictEqual(failure.reason._tag, "WriteFailed");
+    assertTrue(GlobalConfigFailedReason.guards.WriteFailed(failure.reason));
   }),
 );

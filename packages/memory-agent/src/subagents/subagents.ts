@@ -39,7 +39,7 @@ import type { Project } from "../projects/projects.ts";
 import { errorTag } from "../tools/failure.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
-import type { AttemptFailureReason } from "../work-trace/contracts.ts";
+import { AttemptFailureReason, attemptFailureCode } from "../work-trace/contracts.ts";
 import {
   WorkTraceRejected,
   WorkTraceStore,
@@ -759,7 +759,7 @@ const make = Effect.gen(function* () {
                     break;
                   case EventType.RUN_ERROR:
                     // A code, not the SDK's text: that can carry provider bodies.
-                    ended.failure = { _tag: "ModelRunError" };
+                    ended.failure = AttemptFailureReason.cases.ModelRunError.make({});
                     break;
                   default:
                     break;
@@ -772,7 +772,7 @@ const make = Effect.gen(function* () {
           // launcher records a defect as a crash.
           Effect.catch(() =>
             Effect.sync(() => {
-              ended.failure = { _tag: "ModelStreamFailed" };
+              ended.failure = AttemptFailureReason.cases.ModelStreamFailed.make({});
             }),
           ),
         );
@@ -788,6 +788,7 @@ const make = Effect.gen(function* () {
           ? (Option.getOrUndefined(MutableHashMap.get(texts, lastMessageId)) ?? "")
           : "";
         const failure = ended.failure;
+        const failureCode = failure === null ? null : attemptFailureCode(failure);
         const status = controller.signal.aborted
           ? "cancelled"
           : isTruthy(failure)
@@ -813,7 +814,7 @@ const make = Effect.gen(function* () {
           // Where the report's answer is in the child's transcript.
           answerMessageId === null ? {} : { messageId: answerMessageId },
         );
-        yield* finish(status, answer, failure?._tag ?? null, row.id);
+        yield* finish(status, answer, failureCode, row.id);
         yield* events.publishSession(binding.sessionId, "subagents");
         return {
           status,
@@ -822,7 +823,7 @@ const make = Effect.gen(function* () {
           taskId: handle.taskId,
           attemptId: handle.id,
           answer,
-          error: failure?._tag ?? null,
+          error: failureCode,
         };
       }),
     );
@@ -885,7 +886,7 @@ const make = Effect.gen(function* () {
                 "failed",
                 "attempt_failed",
                 "Subagent crashed",
-                { reason: { _tag: "AgentCrashed" } },
+                { reason: AttemptFailureReason.cases.AgentCrashed.make({}) },
                 false,
                 binding.runId,
               );
@@ -1215,7 +1216,7 @@ const make = Effect.gen(function* () {
                   ? "failed"
                   : "interrupted",
           answer,
-          error: attempt.failure?.reason._tag ?? null,
+          error: attempt.failure === null ? null : attemptFailureCode(attempt.failure.reason),
         };
       }),
     );

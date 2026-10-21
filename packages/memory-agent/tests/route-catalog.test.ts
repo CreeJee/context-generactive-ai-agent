@@ -5,6 +5,7 @@ import {
   ProviderToolCapabilityRegistry,
   RouteCatalog,
   RouteCatalogRefreshFailed,
+  UnknownCatalogRoute,
   makeRouteCatalog,
   type ProviderConfiguration,
   type RouteCatalogSource,
@@ -12,6 +13,7 @@ import {
 } from "memory-agent";
 import { describe, expect, it } from "vite-plus/test";
 import { TestClock } from "effect/testing";
+import { RouteCatalogRefreshFailedReason } from "../src/providers/route-catalog.ts";
 
 const chat = {
   type: "chat" as const,
@@ -166,9 +168,9 @@ describe("RouteCatalog", () => {
           return attempt === 1
             ? Effect.succeed(loaded)
             : Effect.fail(
-                new RouteCatalogRefreshFailed({
+                RouteCatalogRefreshFailed.make({
                   operation: "models",
-                  reason: { _tag: "Failed" },
+                  reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                   cause: new Error("unavailable"),
                 }),
               );
@@ -177,7 +179,9 @@ describe("RouteCatalog", () => {
       const catalog = yield* makeRouteCatalog(changing, () => attempt);
       const first = yield* catalog.refresh;
       const failure = yield* Effect.result(catalog.refresh);
-      expect(Result.isFailure(failure) && failure.failure._tag).toBe("RouteCatalogRefreshFailed");
+      expect(Result.isFailure(failure) && failure.failure).toBeInstanceOf(
+        RouteCatalogRefreshFailed,
+      );
       expect(yield* catalog.snapshot).toBe(first);
     }),
   );
@@ -187,10 +191,12 @@ describe("RouteCatalog", () => {
       const catalog = yield* makeRouteCatalog(source());
       yield* catalog.refresh;
       const result = yield* Effect.result(catalog.media("media:openai:direct_adapter:missing"));
-      expect(Result.isFailure(result) && result.failure).toMatchObject({
-        _tag: "UnknownCatalogRoute",
-        routeType: "media",
-      });
+      expect(Result.isFailure(result) && result.failure).toEqual(
+        UnknownCatalogRoute.make({
+          routeType: "media",
+          id: "media:openai:direct_adapter:missing",
+        }),
+      );
     }),
   );
 

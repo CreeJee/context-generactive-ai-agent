@@ -2,7 +2,7 @@ import { layer } from "@effect/vitest";
 import { NodeServices } from "@effect/platform-node";
 import { Cause, Effect, Exit, Fiber, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { runCommandEffect } from "../src/shell/run.ts";
+import { CommandStartFailed, runCommandEffect } from "../src/shell/run.ts";
 
 const env = { PATH: "/usr/bin:/bin", SHELL: "/bin/sh" };
 
@@ -42,8 +42,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           env,
         }),
       );
-      expect(failure._tag).toBe("CommandStartFailed");
-      expect(failure.reason._tag).toBe("SpawnFailed");
+      expect(failure).toBeInstanceOf(CommandStartFailed);
+      expect(Schema.is(CommandStartFailed.fields.reason)(failure.reason)).toBe(true);
     }),
   );
 

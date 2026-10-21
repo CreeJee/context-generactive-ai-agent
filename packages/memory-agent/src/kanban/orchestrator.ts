@@ -21,7 +21,7 @@ import { AppEvents } from "../events/app-events.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import type { BoardEditRefused } from "../workflow/board-edit.ts";
-import type { BoardAuthor, CardStatus } from "../workflow/card.ts";
+import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
 import { Workflows, type PlanStep, type WorkflowState } from "../workflow/workflow.ts";
 import { CardVerifier } from "./card-agent.ts";
 import {
@@ -123,10 +123,8 @@ export interface KanbanOrchestratorOptions {
   readonly backoff?: Duration.Input;
 }
 
-const loopAuthor = (goalInstanceId: string): BoardAuthor => ({
-  _tag: "Orchestrator",
-  runId: `kanban:${goalInstanceId}`,
-});
+const loopAuthor = (goalInstanceId: string): BoardAuthor =>
+  BoardAuthor.cases.Orchestrator.make({ runId: `kanban:${goalInstanceId}` });
 
 /** A squash attempt or Goal sync, read as what the loop does next. */
 type Integration = Data.TaggedEnum<{

@@ -42,7 +42,7 @@ import {
   type ShownFailure,
 } from "../runtime/shown-failure.ts";
 import { Schedule } from "effect";
-import { superviseLoopStep } from "../runtime/loop-health.ts";
+import { LoopStep, superviseLoopStep } from "../runtime/loop-health.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
 const leaseRenewMs = 20_000;
@@ -321,7 +321,7 @@ export function startAcpAgent(options: {
       superviseLoopStep({ message: "acp_lease_renewal_stopped", setHealth: () => Effect.void }),
       Effect.repeat({
         schedule: Schedule.spaced(leaseRenewMs),
-        while: (step) => step._tag === "Continued",
+        while: LoopStep.$is("Continued"),
       }),
       Effect.delay(leaseRenewMs),
       Effect.asVoid,
@@ -435,7 +435,7 @@ export function startAcpAgent(options: {
         superviseLoopStep({ message: "acp_approval_relay_stopped", setHealth: () => Effect.void }),
         Effect.repeat({
           schedule: Schedule.spaced(relayPollMs),
-          while: (step) => step._tag === "Continued",
+          while: LoopStep.$is("Continued"),
         }),
         Effect.delay(relayPollMs),
       ),

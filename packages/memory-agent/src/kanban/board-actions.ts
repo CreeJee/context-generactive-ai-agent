@@ -1,9 +1,10 @@
 import { Context, Effect, Layer, Match, Option, Predicate, Schema } from "effect";
 import {
+  BoardEdit,
+  BoardEditResult,
   CardDraft,
   CardPatch,
   UserChange,
-  type BoardEditResult,
   type BoardIntent,
 } from "../workflow/board-edit.ts";
 import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
@@ -405,10 +406,9 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: (goal) => orchestrator.poke(goal.goalInstanceId),
       });
-      const applied = Effect.map(workflows.get(sessionId), (state): BoardEditResult => ({
-        _tag: "Applied",
-        state,
-      }));
+      const applied = Effect.map(workflows.get(sessionId), (state): BoardEditResult =>
+        BoardEditResult.Applied({ state }),
+      );
       const hold = Effect.fnUntraced(function* (hold: boolean) {
         yield* board(sessionId);
         yield* workflows.holdCard(sessionId, { cardId: card.id, hold }, author);
@@ -424,7 +424,7 @@ const make = Effect.gen(function* () {
           if (target.status !== card.status) return yield* refuse("reorder_across_columns");
           const result = yield* workflows.editBoard(
             sessionId,
-            { _tag: "MoveCard", planVersion, cardId: card.id, index },
+            BoardEdit.cases.MoveCard.make({ planVersion, cardId: card.id, index }),
             author,
           );
           yield* poke;
@@ -446,13 +446,13 @@ const make = Effect.gen(function* () {
             ? Effect.fail(refuse("card_not_running"))
             : workflows.editBoard(
                 sessionId,
-                { _tag: "EditCard", planVersion, cardId: card.id, patch },
+                BoardEdit.cases.EditCard.make({ planVersion, cardId: card.id, patch }),
                 author,
               ),
         Cancel: Effect.fnUntraced(function* () {
           const result = yield* workflows.editBoard(
             sessionId,
-            { _tag: "CancelCard", planVersion, cardId: card.id },
+            BoardEdit.cases.CancelCard.make({ planVersion, cardId: card.id }),
             author,
           );
           // A stopped card's decision is closed, not answered: nobody refused it.

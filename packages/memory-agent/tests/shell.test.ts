@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effect";
+import { Cause, Effect, Exit, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { withTestPlatform } from "./support/platform.ts";
 import { describe, expect } from "vite-plus/test";
@@ -70,7 +70,7 @@ describe("runCommand", () => {
           Effect.timeout("1000 millis"),
         );
       yield* Fiber.interrupt(running);
-      expect((yield* Fiber.await(running))._tag).toBe("Failure");
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true);
     }).pipe(withTestPlatform),
   );
 

@@ -1,9 +1,11 @@
+import { Predicate } from "effect";
 import { expect, test } from "vite-plus/test";
 import {
   compactLegacyOwnerRpcFingerprint,
   ownerRpcCanonicalJson,
   ownerRpcFingerprint,
   ownerRpcFingerprintDigest,
+  OwnerRpcFingerprintFailed,
 } from "../src/agent/owner-rpc-fingerprint.ts";
 import { encodeFullLoopValue, decodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
 import { sha256 } from "../src/runtime/synchronous-crypto.ts";
@@ -17,8 +19,9 @@ test("large middleware requests retain a digest and hook evidence without the co
   const stored = ownerRpcFingerprint("middleware", input);
   expect(stored.length).toBeLessThan(512);
   expect(stored).not.toContain("private context");
-  expect(JSON.parse(stored)).toMatchObject({
-    _tag: "OwnerRpcFingerprintV1",
+  const compact = JSON.parse(stored);
+  expect(Predicate.isTagged(compact, "OwnerRpcFingerprintV1")).toBe(true);
+  expect(compact).toMatchObject({
     operation: "middleware",
     inputKind: "middleware-hook",
     digest: sha256(ownerRpcCanonicalJson({ operation: "middleware", input })),
@@ -33,9 +36,9 @@ test("digest preserves canonical key ordering and distinguishes the entire reque
   expect(ownerRpcFingerprintDigest(first)).not.toBe(
     ownerRpcFingerprintDigest(ownerRpcFingerprint("tool", { a: true, b: ["changed", 0] })),
   );
-  expect(() => ownerRpcFingerprint("tool", { number: Number.NaN })).toThrow(
-    expect.objectContaining({ _tag: "OwnerRpcFingerprintFailed", reason: "non_finite" }),
-  );
+  const nonFinite = () => ownerRpcFingerprint("tool", { number: Number.NaN });
+  expect(nonFinite).toThrow(OwnerRpcFingerprintFailed);
+  expect(nonFinite).toThrow(expect.objectContaining({ reason: "non_finite" }));
 });
 
 test("legacy conversion hashes the original bytes and retains small read recovery inputs", () => {
@@ -64,9 +67,9 @@ test("large historical snapshots compact without retaining their request tree", 
     inputKind: "omitted",
     input: null,
   });
-  expect(() => compactLegacyOwnerRpcFingerprint("invalid".repeat(5000))).toThrow(
-    expect.objectContaining({ _tag: "OwnerRpcFingerprintFailed", reason: "unsupported_legacy" }),
-  );
+  const unsupported = () => compactLegacyOwnerRpcFingerprint("invalid".repeat(5000));
+  expect(unsupported).toThrow(OwnerRpcFingerprintFailed);
+  expect(unsupported).toThrow(expect.objectContaining({ reason: "unsupported_legacy" }));
 });
 
 test("maximum report recovery requests and envelope overhead remain replayable on repeated conversion", () => {

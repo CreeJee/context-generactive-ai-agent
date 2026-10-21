@@ -9,11 +9,13 @@ import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { expect, test, vi } from "vite-plus/test";
 import {
   ReasoningSummaryProtocolFailed,
+  ReasoningSummaryProtocolFailedReason,
   type NormalizedStreamEvent,
 } from "../src/oauth/protocol.ts";
 import {
   SubscriptionTextAdapter,
   SubscriptionStreamFailed,
+  SubscriptionStreamFailedReason,
   publicReasoningLimits,
 } from "../src/providers/subscription-adapter.ts";
 
@@ -43,6 +45,13 @@ const end: NormalizedStreamEvent = {
   summaryIndex: 0,
   text: "",
 };
+const summaryFailed = (reason: ReasoningSummaryProtocolFailed["reason"]) =>
+  ReasoningSummaryProtocolFailed.make({ reason });
+const resourceLimit = summaryFailed(
+  ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
+);
+const streamFailed = (reason: SubscriptionStreamFailed["reason"]) =>
+  SubscriptionStreamFailed.make({ provider: "openai", reason });
 const collect = (events: readonly NormalizedStreamEvent[]) => {
   const adapter = new SubscriptionTextAdapter(
     {
@@ -79,10 +88,7 @@ test("public summaries fail explicitly at text/part/id limits rather than retain
       yield* nativePromise(() =>
         expect(
           collect([{ ...start, text: "x".repeat(publicReasoningLimits.characters + 1) }]),
-        ).rejects.toMatchObject({
-          _tag: "ReasoningSummaryProtocolFailed",
-          reason: { _tag: "ResourceLimit" },
-        }),
+        ).rejects.toEqual(resourceLimit),
       );
       yield* nativePromise(() =>
         expect(
@@ -100,19 +106,17 @@ test("public summaries fail explicitly at text/part/id limits rather than retain
       yield* nativePromise(() =>
         expect(
           collect([start, { ...end, text: "x".repeat(publicReasoningLimits.characters + 1) }]),
-        ).rejects.toMatchObject({ reason: { _tag: "ResourceLimit" } }),
+        ).rejects.toEqual(resourceLimit),
       );
       yield* nativePromise(() =>
         expect(
           collect([{ ...start, id: "x".repeat(publicReasoningLimits.idCharacters + 1) }]),
-        ).rejects.toMatchObject({ reason: { _tag: "ResourceLimit" } }),
+        ).rejects.toEqual(resourceLimit),
       );
       const parts: NormalizedStreamEvent[] = [];
       for (let index = 0; index <= publicReasoningLimits.parts; index++)
         parts.push({ ...start, summaryIndex: index }, { ...end, summaryIndex: index });
-      yield* nativePromise(() =>
-        expect(collect(parts)).rejects.toMatchObject({ reason: { _tag: "ResourceLimit" } }),
-      );
+      yield* nativePromise(() => expect(collect(parts)).rejects.toEqual(resourceLimit));
     }),
   ));
 
@@ -141,17 +145,18 @@ test("clean exhaustion with open summary/tool/reasoning cannot report RUN_FINISH
   runNativeEffect(
     Effect.gen(function* () {
       yield* nativePromise(() =>
-        expect(collect([start])).rejects.toMatchObject({ reason: { _tag: "IncompleteSummary" } }),
+        expect(collect([start])).rejects.toEqual(
+          summaryFailed(ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({})),
+        ),
       );
       for (const event of [
         { type: "tool-call-start", index: 0, id: "call", name: "fixture" },
         { type: "reasoning-start", index: 0 },
       ] satisfies NormalizedStreamEvent[])
         yield* nativePromise(() =>
-          expect(collect([event])).rejects.toMatchObject({
-            _tag: "SubscriptionStreamFailed",
-            reason: { _tag: "IncompleteBlocks" },
-          }),
+          expect(collect([event])).rejects.toEqual(
+            streamFailed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})),
+          ),
         );
     }),
   ));
@@ -223,6 +228,8 @@ test("overlapping native blocks cannot overwrite another tool's pending result a
           { type: "tool-call-start", index: 0, id: "first", name: "fixture" },
           { type: "tool-call-start", index: 0, id: "second", name: "fixture" },
         ]),
-      ).rejects.toMatchObject({ reason: { _tag: "InvalidToolCall" } }),
+      ).rejects.toEqual(
+        streamFailed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({})),
+      ),
     ),
   ));

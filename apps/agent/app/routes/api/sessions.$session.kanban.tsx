@@ -1,6 +1,7 @@
 import { Effect, Match, Option, Result, Schema } from "effect";
 import {
   AppEvents,
+  BoardAuthor,
   BoardIntent,
   GoalPriority,
   KanbanBoardActions,
@@ -64,14 +65,16 @@ export function action({ request, params }: Route.ActionArgs) {
       const actions = yield* KanbanBoardActions;
       const applyIntent = (intent: BoardIntent) =>
         Effect.gen(function* () {
-          const result = yield* actions.applyIntent(params.session, intent, { _tag: "User" });
+          const result = yield* actions.applyIntent(
+            params.session,
+            intent,
+            BoardAuthor.cases.User.make({}),
+          );
           yield* events.publishSession(params.session, "run-state");
-          switch (result._tag) {
-            case "Applied":
-              return Response.json(result);
-            case "Requested":
-              return Response.json(result, { status: 202 });
-          }
+          return Match.valueTags(result, {
+            Applied: (applied) => Response.json(applied),
+            Requested: (requested) => Response.json(requested, { status: 202 }),
+          });
         });
       return yield* Match.valueTags(body.success, {
         Start: () =>

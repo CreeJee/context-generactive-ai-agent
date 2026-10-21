@@ -3,7 +3,7 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { WorkTraceRejected, WorkTraceStore } from "../src/work-trace/store.ts";
 import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -181,7 +181,7 @@ describe("Work Trace final answer sources", () => {
           parentRunId: "parent-1",
           parentMessageId: "parent-answer",
         };
-        expect(
+        const rejections = [
           yield* Effect.flip(
             trace.finalizeAnswerClaim({
               ...base,
@@ -189,8 +189,6 @@ describe("Work Trace final answer sources", () => {
               reflectedNotificationIds: [],
             }),
           ),
-        ).toMatchObject({ _tag: "WorkTraceRejected", reason: "foreign_report" });
-        expect(
           yield* Effect.flip(
             trace.finalizeAnswerClaim({
               ...base,
@@ -198,7 +196,12 @@ describe("Work Trace final answer sources", () => {
               reflectedNotificationIds: ["never-delivered"],
             }),
           ),
-        ).toMatchObject({ _tag: "WorkTraceRejected", reason: "undelivered_notification" });
+        ];
+        expect(rejections).toEqual([expect.any(WorkTraceRejected), expect.any(WorkTraceRejected)]);
+        expect(rejections).toMatchObject([
+          { reason: "foreign_report" },
+          { reason: "undelivered_notification" },
+        ]);
       }),
     ),
   );

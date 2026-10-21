@@ -5,7 +5,7 @@ import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
 import { Cause, Context, Effect, FileSystem, Layer, Match, Schema } from "effect";
-import type { AttemptFailureReason } from "../work-trace/contracts.ts";
+import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { temporaryDirectory } from "../runtime/host-system.ts";
@@ -70,8 +70,9 @@ const commandFailure = Match.type<CommandResult>().pipe(
   Match.discriminatorsExhaustive("status")({
     succeeded: (): AttemptFailureReason | null => null,
     cancelled: () => null,
-    failed: ({ exitCode, signal }) => ({ _tag: "ProcessExited", exitCode, signal }) as const,
-    timed_out: () => ({ _tag: "ProcessTimedOut" }) as const,
+    failed: ({ exitCode, signal }) =>
+      AttemptFailureReason.cases.ProcessExited.make({ exitCode, signal }),
+    timed_out: () => AttemptFailureReason.cases.ProcessTimedOut.make({}),
   }),
 );
 

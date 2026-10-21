@@ -3,7 +3,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { describe, expect, test, vi } from "vite-plus/test";
 import ReportPage from "../../routes/report";
 import { ReportLink, reportHref } from "./report-link";
-import type { ReportBundle } from "memory-agent/definitions";
+import { BundleEvent, type ReportBundle } from "memory-agent/definitions";
 import { reportText, shareableText } from "./report-draft";
 
 describe("independent report entry", () => {
@@ -81,14 +81,13 @@ describe("independent report entry", () => {
             error: null,
             eventsCut: false,
             events: [
-              {
-                _tag: "ToolCall",
+              BundleEvent.cases.ToolCall.make({
                 seq: 2,
                 name: "read_file",
                 at: "2026-10-18T00:00:01Z",
                 input: text('{"path":"x"}'),
                 result: { ok: false, at: "2026-10-18T00:00:02Z", text: text("ENOENT x") },
-              },
+              }),
             ],
           },
         ],

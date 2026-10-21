@@ -3,7 +3,7 @@ import { Cause, Context, Effect, Layer, Ref, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { JsonValue } from "../../src/json.ts";
-import { Kagi } from "../../src/kagi/kagi.ts";
+import { Kagi, KagiKeyMissing } from "../../src/kagi/kagi.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { KagiTools, maxPageCharacters } from "../../src/tools/kagi.ts";
 import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
@@ -68,7 +68,7 @@ testAgent()("Kagi settings", (it) => {
         const kagi = yield* Kagi;
         expect(yield* kagi.status).toEqual({ keyRegistered: false, enabled: false });
         const refused = yield* Effect.result(kagi.setEnabled(true));
-        expect(Result.isFailure(refused) && refused.failure._tag).toBe("KagiKeyMissing");
+        expect(Result.isFailure(refused) && refused.failure).toBeInstanceOf(KagiKeyMissing);
         yield* kagi.registerKey("  sk-test-key  ");
         expect(yield* kagi.status).toEqual({ keyRegistered: true, enabled: false });
         expect(yield* tools).toEqual([]);

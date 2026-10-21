@@ -29,7 +29,8 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
-import type { BoardIntent } from "../workflow/board-edit.ts";
+import { BoardEdit, BoardEditResult, BoardIntent } from "../workflow/board-edit.ts";
+import { BoardAuthor } from "../workflow/card.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import { Workflows } from "../workflow/workflow.ts";
 import { ChangeDecision, GoalChangeVerdict, KanbanBoardActions } from "./board-actions.ts";
@@ -54,8 +55,8 @@ import { KanbanOrchestrator } from "./orchestrator.ts";
 
 type Owner = Layer.Success<ReturnType<typeof kanbanBoardOwner>>;
 
-const orchestrator = { _tag: "Orchestrator", runId: "test-model" } as const;
-const user = { _tag: "User" } as const;
+const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "test-model" });
+const user = BoardAuthor.cases.User.make({});
 const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
 
 /** Opens an owner with the orchestrator loop over the fixture; closing the scope stops it. */
@@ -493,7 +494,7 @@ it.live(
           // Dragging the blocked card to ready puts the same item back on the queue.
           yield* (yield* KanbanBoardActions).applyIntent(
             board.sessionId,
-            { _tag: "Requeue", cardId: "a" },
+            BoardIntent.cases.Requeue.make({ cardId: "a" }),
             user,
           );
           yield* waitForCards(board.sessionId, allDone);
@@ -536,13 +537,21 @@ it.live(
               }),
             );
 
-          expect(yield* refused({ _tag: "Requeue", cardId: "a" })).toBe("card_not_blocked");
+          expect(yield* refused(BoardIntent.cases.Requeue.make({ cardId: "a" }))).toBe(
+            "card_not_blocked",
+          );
           expect(
-            yield* refused({ _tag: "ChangeRequest", cardId: "c", patch: { title: "C" } }),
+            yield* refused(
+              BoardIntent.cases.ChangeRequest.make({ cardId: "c", patch: { title: "C" } }),
+            ),
           ).toBe("card_not_running");
-          expect(yield* refused({ _tag: "Hold", cardId: "a" })).toBe("card_not_waiting");
-          expect(yield* refused({ _tag: "Release", cardId: "c" })).toBe("card_not_held");
-          expect(yield* refused({ _tag: "Reorder", cardId: "c", at: "a" })).toBe(
+          expect(yield* refused(BoardIntent.cases.Hold.make({ cardId: "a" }))).toBe(
+            "card_not_waiting",
+          );
+          expect(yield* refused(BoardIntent.cases.Release.make({ cardId: "c" }))).toBe(
+            "card_not_held",
+          );
+          expect(yield* refused(BoardIntent.cases.Reorder.make({ cardId: "c", at: "a" }))).toBe(
             "reorder_across_columns",
           );
           // Nothing moved, and the running card kept its attempt.
@@ -591,10 +600,14 @@ it.live(
           ]);
           const actions = yield* KanbanBoardActions;
           yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "in_progress");
-          yield* actions.applyIntent(board.sessionId, { _tag: "Hold", cardId: "b" }, user);
           yield* actions.applyIntent(
             board.sessionId,
-            { _tag: "Reorder", cardId: "d", at: "c" },
+            BoardIntent.cases.Hold.make({ cardId: "b" }),
+            user,
+          );
+          yield* actions.applyIntent(
+            board.sessionId,
+            BoardIntent.cases.Reorder.make({ cardId: "d", at: "c" }),
             user,
           );
           yield* Deferred.succeed(gate, undefined);
@@ -620,7 +633,7 @@ it.live(
           expect(held).toMatchObject({ status: "backlog", hold: { by: user } });
           yield* (yield* KanbanBoardActions).applyIntent(
             board.sessionId,
-            { _tag: "Release", cardId: "b" },
+            BoardIntent.cases.Release.make({ cardId: "b" }),
             user,
           );
           yield* waitForCards(board.sessionId, allDone);
@@ -653,11 +666,18 @@ it.live(
             const plan = (yield* workflows.get(board.sessionId)).plan;
             const result = yield* workflows.editBoard(
               board.sessionId,
-              { _tag: "EditCard", planVersion: plan?.version ?? 0, cardId: "a", patch: { title } },
+              BoardEdit.cases.EditCard.make({
+                planVersion: plan?.version ?? 0,
+                cardId: "a",
+                patch: { title },
+              }),
               user,
             );
-            expect(result._tag).toBe("Requested");
-            return result._tag === "Requested" ? result.request.id : -1;
+            expect(BoardEditResult.$is("Requested")(result)).toBe(true);
+            return BoardEditResult.$match(result, {
+              Applied: () => -1,
+              Requested: ({ request }) => request.id,
+            });
           });
           const requestStatus = (id: number) =>
             sqlGet("SELECT status, reason FROM board_change_requests WHERE id = ?", id);

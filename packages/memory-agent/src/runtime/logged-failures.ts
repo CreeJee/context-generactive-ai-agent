@@ -9,7 +9,7 @@ import { DefectReporter } from "./defect-reporter.ts";
 
 type Annotations = Readonly<Record<string, string>>;
 
-const tagged = (annotations: Annotations, error: { readonly _tag: string }) => ({
+const tagged = <E extends { readonly _tag: string }>(annotations: Annotations, error: E) => ({
   ...annotations,
   error: error._tag,
 });

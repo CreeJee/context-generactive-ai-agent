@@ -1,22 +1,21 @@
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { sdkPromise } from "../src/runtime/sdk-promise.ts";
+import { SdkRequestFailed, sdkPromise } from "../src/runtime/sdk-promise.ts";
 
 it.effect("keeps SDK rejection and synchronous throws in the typed error channel", () =>
   Effect.gen(function* () {
     const cause = new Error("SDK failed");
-    expect(yield* Effect.result(sdkPromise(() => Promise.reject(cause)))).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "SdkRequestFailed", cause },
-    });
+    expect(yield* Effect.flip(sdkPromise(() => Promise.reject(cause)))).toEqual(
+      SdkRequestFailed.make({ cause }),
+    );
     expect(
-      yield* Effect.result(
-        sdkPromise(() => {
+      yield* Effect.flip(
+        sdkPromise<never>(() => {
           throw cause;
         }),
       ),
-    ).toMatchObject({ _tag: "Failure", failure: { _tag: "SdkRequestFailed", cause } });
+    ).toEqual(SdkRequestFailed.make({ cause }));
     expect(yield* sdkPromise(() => Promise.resolve("answer"))).toBe("answer");
   }),
 );

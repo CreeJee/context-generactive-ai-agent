@@ -3,6 +3,7 @@ import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { EvidenceReadFailed } from "../../src/memory/evidence.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
@@ -522,10 +523,8 @@ testAgent()("structured memory evidence", (it) => {
         at.projectId,
       ).tools[1];
       const failure = yield* refusal(() => broken.execute!({ id: node.id }));
-      expect(failure).toMatchObject({
-        _tag: "EvidenceReadFailed",
-        reason: { _tag: "StorageRead", stage: "trace" },
-      });
+      expect(failure).toBeInstanceOf(EvidenceReadFailed);
+      expect(failure).toMatchObject({ reason: { stage: "trace" } });
       expect(
         yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(failure),
       ).not.toContain("private storage detail");

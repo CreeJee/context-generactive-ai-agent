@@ -32,8 +32,12 @@ import {
 } from "../src/oauth/validation-harness.ts";
 import {
   ProviderFeatureRejectedError,
+  ProviderStatusRejected,
   ProviderStreamFailed,
   providerProtocols,
+  RequestNotSent,
+  RequestOutcomeUnknown,
+  ResponseInterrupted,
   type OAuthProvider,
   type ProviderProtocol,
 } from "../src/oauth/protocol.ts";
@@ -1152,9 +1156,9 @@ describe("provider wire contracts", () => {
           ProviderFeatureRejectedError,
         );
         const unrelatedFailure = (yield* Effect.flip(drain(unrelated))).cause;
+        expect(unrelatedFailure).toBeInstanceOf(ProviderStreamFailed);
         expect(unrelatedFailure).toMatchObject({
-          _tag: "ProviderStreamFailed",
-          reason: { _tag: "ProviderStatusRejected", statusClass: "client_error" },
+          reason: ProviderStatusRejected.make({ statusClass: "client_error" }),
         });
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(unrelatedFailure),
@@ -1196,17 +1200,13 @@ describe("provider wire contracts", () => {
             new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) }),
           );
 
-        expect(yield* failureOf(rejectsWith("ECONNREFUSED"))).toEqual({
-          _tag: "RequestNotSent",
-          stage: "connect",
-        });
-        expect(yield* failureOf(rejectsWith("ENOTFOUND"))).toEqual({
-          _tag: "RequestNotSent",
-          stage: "dns",
-        });
-        expect(yield* failureOf(rejectsWith("ECONNRESET"))).toEqual({
-          _tag: "RequestOutcomeUnknown",
-        });
+        expect(yield* failureOf(rejectsWith("ECONNREFUSED"))).toEqual(
+          RequestNotSent.make({ stage: "connect" }),
+        );
+        expect(yield* failureOf(rejectsWith("ENOTFOUND"))).toEqual(
+          RequestNotSent.make({ stage: "dns" }),
+        );
+        expect(yield* failureOf(rejectsWith("ECONNRESET"))).toEqual(RequestOutcomeUnknown.make({}));
         expect(
           yield* failureOf(() =>
             Promise.resolve(
@@ -1220,7 +1220,7 @@ describe("provider wire contracts", () => {
               ),
             ),
           ),
-        ).toEqual({ _tag: "ResponseInterrupted" });
+        ).toEqual(ResponseInterrupted.make({}));
       }),
     ),
   );

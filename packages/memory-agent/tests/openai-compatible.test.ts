@@ -1,4 +1,8 @@
-import { GlobalConfigFailed, type GlobalConfigApi } from "../src/config/global-config.ts";
+import {
+  GlobalConfigFailed,
+  GlobalConfigFailedReason,
+  type GlobalConfigApi,
+} from "../src/config/global-config.ts";
 import {
   compatibleAccountsOf,
   LEGACY_COMPATIBLE_ACCOUNT_ID,
@@ -21,6 +25,7 @@ import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
 import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
+import { ModelUnavailable } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { describe, expect } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
@@ -797,7 +802,7 @@ describe("OpenAI compatible settings", () => {
               Effect.fail(
                 GlobalConfigFailed.make({
                   operation: "write",
-                  reason: { _tag: "WriteFailed" },
+                  reason: GlobalConfigFailedReason.cases.WriteFailed.make({}),
                   cause: new Error("private config detail"),
                 }),
               ),
@@ -977,7 +982,7 @@ describe("OpenAI compatible settings", () => {
         );
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(changing);
-        expect((yield* Fiber.join(selection))._tag).toBe("ModelUnavailable");
+        expect(yield* Fiber.join(selection)).toBeInstanceOf(ModelUnavailable);
         expect(yield* api.services.models.selected).toBeNull();
         expect((yield* api.services.models.list)[0]?.id).toBe("new-model");
       }),
@@ -1358,10 +1363,9 @@ describe("OpenAI compatible settings", () => {
         expect((yield* api.status).accounts).toMatchObject([
           { id: LEGACY_COMPATIBLE_ACCOUNT_ID, selected: true },
         ]);
-        expect(yield* Effect.flip(api.select("missing"))).toMatchObject({
-          _tag: "OpenAICompatibleFailed",
-          operation: "missing",
-        });
+        const missing = yield* Effect.flip(api.select("missing"));
+        expect(missing).toBeInstanceOf(OpenAICompatibleFailed);
+        expect(missing).toMatchObject({ operation: "missing" });
       }),
   );
 });

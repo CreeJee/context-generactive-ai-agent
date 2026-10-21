@@ -1,8 +1,10 @@
-import { Effect, Result } from "effect";
+import { Effect, Match, Predicate, Result } from "effect";
 import {
   AppEvents,
+  BoardAuthor,
   BoardEdit,
   Boards,
+  DecisionCloseScope,
   HumanDecisions,
   SessionLeases,
   Sessions,
@@ -45,28 +47,29 @@ export function action({ request, params }: Route.ActionArgs) {
         return Response.json({ error: "session_in_use" }, { status: 423 });
       yield* (yield* Sessions).get(params.session);
       const workflows = yield* Workflows;
-      const result = yield* workflows.editBoard(params.session, body.success, { _tag: "User" });
+      const result = yield* workflows.editBoard(
+        params.session,
+        body.success,
+        BoardAuthor.cases.User.make({}),
+      );
       // A stopped card's decision is closed, not answered: nobody refused it.
-      if (result._tag === "Applied" && body.success._tag === "CancelCard") {
+      if (Predicate.isTagged(result, "Applied") && BoardEdit.guards.CancelCard(body.success)) {
         const goalInstanceId = yield* workflows.goalInstanceId(params.session);
         if (goalInstanceId !== null)
           yield* (yield* HumanDecisions).close(
-            {
-              _tag: "Card",
+            DecisionCloseScope.Card({
               sessionId: params.session,
               goalInstanceId,
               cardId: body.success.cardId,
-            },
+            }),
             "card_stopped",
           );
       }
       yield* (yield* AppEvents).publishSession(params.session, "run-state");
-      switch (result._tag) {
-        case "Applied":
-          return Response.json(result);
-        case "Requested":
-          return Response.json(result, { status: 202 });
-      }
+      return Match.valueTags(result, {
+        Applied: (applied) => Response.json(applied),
+        Requested: (requested) => Response.json(requested, { status: 202 }),
+      });
     }).pipe(answerKanbanFailures),
   );
 }

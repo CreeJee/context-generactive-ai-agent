@@ -73,7 +73,8 @@ export const providerRetryIdempotencyKey: {
     `provider-retry-v1-${sha256(encodeRetryKey([runId, sequence]))}`,
 );
 
-const ProviderRetryWait = Workflow.make("ProviderRetryWait", {
+const providerRetryWorkflow = "ProviderRetryWait";
+const ProviderRetryWait = Workflow.make(providerRetryWorkflow, {
   payload: ProviderRetryWaitPayload,
   idempotencyKey: ({ runId, sequence }) => providerRetryIdempotencyKey(runId, sequence),
 });
@@ -127,8 +128,8 @@ const make = Effect.gen(function* () {
 
   const stored = (pendingOnly: boolean) =>
     (pendingOnly
-      ? storage.pendingExecutions(ProviderRetryWait._tag)
-      : storage.workflowExecutions(ProviderRetryWait._tag)
+      ? storage.pendingExecutions(providerRetryWorkflow)
+      : storage.workflowExecutions(providerRetryWorkflow)
     ).pipe(
       Effect.map((executions) =>
         executions.flatMap((entry) => {

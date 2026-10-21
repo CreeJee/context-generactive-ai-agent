@@ -1,3 +1,4 @@
+import { Match, Predicate } from "effect";
 import type { LoopHealth } from "memory-agent/definitions";
 import { RotateCcwIcon } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
@@ -5,29 +6,21 @@ import { Button } from "../../components/ui/button";
 
 /** How a background loop the server runs stands, in words. */
 export function loopHealthLabel(health: LoopHealth): string {
-  switch (health._tag) {
-    case "Healthy":
-      return "정상";
-    case "Retrying":
-      return `재시도 중 ${health.attempt}/${health.of}`;
-    case "Exhausted":
-      return "재시도 소진";
-    case "Defected":
-      return "결함으로 중단";
-  }
+  return Match.valueTags(health, {
+    Healthy: () => "정상",
+    Retrying: ({ attempt, of }) => `재시도 중 ${attempt}/${of}`,
+    Exhausted: () => "재시도 소진",
+    Defected: () => "결함으로 중단",
+  });
 }
 
-const variantOf = (health: LoopHealth) => {
-  switch (health._tag) {
-    case "Healthy":
-      return "secondary" as const;
-    case "Retrying":
-      return "outline" as const;
-    case "Exhausted":
-    case "Defected":
-      return "destructive" as const;
-  }
-};
+const variantOf = (health: LoopHealth) =>
+  Match.valueTags(health, {
+    Healthy: () => "secondary" as const,
+    Retrying: () => "outline" as const,
+    Exhausted: () => "destructive" as const,
+    Defected: () => "destructive" as const,
+  });
 
 /**
  * A background loop's health, with a restart button once it stopped. The server owns the health
@@ -44,7 +37,7 @@ export function LoopHealthStatus({
   readonly disabled: boolean;
   readonly onRestart: () => void;
 }) {
-  const stopped = health._tag === "Exhausted" || health._tag === "Defected";
+  const stopped = Predicate.isTagged(health, "Exhausted") || Predicate.isTagged(health, "Defected");
   return (
     <span className="inline-flex items-center gap-2" role="status" aria-label={label}>
       <Badge variant={variantOf(health)}>

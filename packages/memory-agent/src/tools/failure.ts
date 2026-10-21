@@ -3,7 +3,7 @@ import { Function as EffectFunction } from "effect";
 import { Cause, Context, Effect, Exit, HashMap, Result, Option, Predicate, Schema } from "effect";
 import { type RunTrace } from "../runtime/run-trace.ts";
 import { PathRejected } from "../files/paths.ts";
-import { TextFileRejected, TextFileIoFailed } from "../files/text.ts";
+import { TextFileRejected, TextFileIoFailed, textFileRejectedReasonName } from "../files/text.ts";
 
 const refusalHints = HashMap.fromIterable<string, string>([
   [
@@ -101,7 +101,7 @@ function toolFailureBody(error: Error, path: string): ToolFailed {
   const reason = Schema.is(PathRejected)(error)
     ? error.reason
     : Schema.is(TextFileRejected)(error)
-      ? error.reason._tag
+      ? textFileRejectedReasonName(error.reason)
       : null;
   if (reason !== null)
     return ToolFailed.make({

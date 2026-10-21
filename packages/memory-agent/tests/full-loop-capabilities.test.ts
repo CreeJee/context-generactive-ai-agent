@@ -15,7 +15,15 @@ import {
   createFullLoopExecution,
   preflightFullLoopExecution,
 } from "../src/agent/full-loop-execution.ts";
-import { encodeFullLoopValue, decodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
+import {
+  FullLoopAdmissionReason,
+  FullLoopAdmissionRejected,
+} from "../src/agent/full-loop-admission-preflight.ts";
+import {
+  encodeFullLoopValue,
+  decodeFullLoopValue,
+  FullLoopCodecFailed,
+} from "../src/agent/full-loop-codec.ts";
 import { makeInMemoryOwnerRpcLedger } from "../src/agent/owner-rpc.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 
@@ -130,12 +138,12 @@ test("tagged codec retains Maps, Sets, undefined and errors without tag collisio
     ...original,
     error: expect.objectContaining({ name: "Error", message: "provider failed" }),
   });
-  expect(() => decodeFullLoopValue(["bad-tag"])).toThrow(
-    expect.objectContaining({ _tag: "FullLoopCodecFailed", reason: "invalid_tag" }),
-  );
-  expect(() => encodeFullLoopValue(Infinity)).toThrow(
-    expect.objectContaining({ _tag: "FullLoopCodecFailed", reason: "non_finite" }),
-  );
+  const badTag = () => decodeFullLoopValue(["bad-tag"]);
+  expect(badTag).toThrow(FullLoopCodecFailed);
+  expect(badTag).toThrow(expect.objectContaining({ reason: "invalid_tag" }));
+  const nonFinite = () => encodeFullLoopValue(Infinity);
+  expect(nonFinite).toThrow(FullLoopCodecFailed);
+  expect(nonFinite).toThrow(expect.objectContaining({ reason: "non_finite" }));
 });
 
 it.live(
@@ -335,7 +343,7 @@ it.live(
 
 test("preflight rejects unsupported continuation before dispatching any owner capability", () => {
   const adapter = new ScriptedTextAdapter([{ text: "must not run" }]);
-  expect(() =>
+  const preflight = () =>
     preflightFullLoopExecution(
       {
         messages: [],
@@ -347,11 +355,11 @@ test("preflight rejects unsupported continuation before dispatching any owner ca
         middleware: [],
         stream: { abortController: new AbortController() },
       },
-    ),
-  ).toThrow(
+    );
+  expect(preflight).toThrow(FullLoopAdmissionRejected);
+  expect(preflight).toThrow(
     expect.objectContaining({
-      _tag: "FullLoopAdmissionRejected",
-      reason: { _tag: "ContinuationWithoutPersistence" },
+      reason: FullLoopAdmissionReason.cases.ContinuationWithoutPersistence.make({}),
     }),
   );
   expect(adapter.invocations).toHaveLength(0);

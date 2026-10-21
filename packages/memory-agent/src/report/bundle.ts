@@ -13,6 +13,7 @@ import { hostPlatform } from "../runtime/host-system.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import { LoopHealth } from "../runtime/loop-health.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import { attemptFailureCode } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import {
   BundleEvent,
@@ -430,7 +431,10 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                       ref: taskRef,
                       status: task.status,
                       parentToolSeq: BundleEvent.guards.ToolCall(call) ? call.seq : null,
-                      failure: task.latestFailure?.reason._tag ?? null,
+                      failure:
+                        task.latestFailure === null
+                          ? null
+                          : attemptFailureCode(task.latestFailure.reason),
                       updatedAt: iso(task.updatedAt),
                     });
                   }),

@@ -3,6 +3,9 @@ import { it as effectTest } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import {
   DirectImageExecutionFailed,
+  ImageMediaApprovalRequired,
+  ImageMediaExecutionFailed,
+  ImageMediaUnavailable,
   makeImageMediaWorkflow,
   type ImageFeatureApi,
   type ImageRouteDecision,
@@ -80,7 +83,7 @@ describe("ImageMediaWorkflow", () => {
         attachments: attachmentStore([]),
       });
       const result = yield* Effect.result(workflow.generate({ ...request, approved: false }));
-      expect(Result.isFailure(result) && result.failure._tag).toBe("ImageMediaApprovalRequired");
+      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ImageMediaApprovalRequired);
       expect(executions).toBe(0);
     }),
   );
@@ -162,12 +165,11 @@ describe("ImageMediaWorkflow", () => {
           },
         });
         const first = yield* Effect.result(workflow.generate(request));
-        expect(Result.isFailure(first) && first.failure).toMatchObject({
-          _tag: "ImageMediaApprovalRequired",
-          reason: "cross_provider",
-        });
-        if (!Result.isFailure(first) || first.failure._tag !== "ImageMediaApprovalRequired") return;
-        const approval = first.failure.approval!;
+        const required = Result.isFailure(first) && first.failure;
+        expect(required).toBeInstanceOf(ImageMediaApprovalRequired);
+        expect(required).toMatchObject({ reason: "cross_provider" });
+        if (!Schema.is(ImageMediaApprovalRequired)(required)) return;
+        const approval = required.approval!;
         yield* workflow.generate({
           ...request,
           runId: approval.runId,
@@ -181,15 +183,14 @@ describe("ImageMediaWorkflow", () => {
             crossProviderApproval: { ...approval, executorMediaRouteId: "tampered" },
           }),
         );
-        expect(Result.isFailure(wrong) && wrong.failure._tag).toBe("ImageMediaApprovalRequired");
+        expect(Result.isFailure(wrong) && wrong.failure).toBeInstanceOf(ImageMediaApprovalRequired);
         mode = "disabled";
         const revoked = yield* Effect.result(
           workflow.generate({ ...request, runId: approval.runId, crossProviderApproval: approval }),
         );
-        expect(Result.isFailure(revoked) && revoked.failure).toMatchObject({
-          _tag: "ImageMediaUnavailable",
-          reason: "consent_disabled",
-        });
+        const unavailable = Result.isFailure(revoked) && revoked.failure;
+        expect(unavailable).toBeInstanceOf(ImageMediaUnavailable);
+        expect(unavailable).toMatchObject({ reason: "consent_disabled" });
         expect(executions).toBe(1);
       }),
   );
@@ -206,8 +207,9 @@ describe("ImageMediaWorkflow", () => {
         attachments: attachmentStore([]),
       });
       const result = yield* Effect.result(workflow.generate(request));
-      expect(Result.isFailure(result) && result.failure).toMatchObject({
-        _tag: "ImageMediaExecutionFailed",
+      const failed = Result.isFailure(result) && result.failure;
+      expect(failed).toBeInstanceOf(ImageMediaExecutionFailed);
+      expect(failed).toMatchObject({
         reroute: { type: "confirmation_required", alternatives: [] },
       });
     }),

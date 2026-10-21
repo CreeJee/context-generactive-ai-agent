@@ -4,7 +4,7 @@ import { Crypto, DateTime, Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
-import { KnowledgePromotions } from "../src/memory/knowledge.ts";
+import { KnowledgePromotions, MemoryPromotionRejected } from "../src/memory/knowledge.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 import { sqlGet, sqlRun } from "./support/sql.ts";
@@ -88,10 +88,8 @@ describe("Work Trace knowledge promotion", () => {
             disposition: "save",
           }),
         );
-        expect(rejected).toMatchObject({
-          _tag: "MemoryPromotionRejected",
-          reason: "claim_not_adopted",
-        });
+        expect(rejected).toBeInstanceOf(MemoryPromotionRejected);
+        expect(rejected).toMatchObject({ reason: "claim_not_adopted" });
 
         const candidate = yield* knowledge.promote({
           projectId: "p1",

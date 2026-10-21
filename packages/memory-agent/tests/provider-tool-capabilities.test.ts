@@ -4,10 +4,14 @@ import { it as effectTest } from "@effect/vitest";
 import { memoryTool } from "@tanstack/ai-anthropic/tools";
 import { optionalProperty } from "../src/optional-property.ts";
 import { OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderToolCapabilityRegistry,
+  ProviderToolMetadataFailure,
+  ProviderToolMetadataFailureReason,
+  UnknownProviderTool,
+  UnknownProviderToolModel,
   filterProviderTools,
   installedProviderToolModelMetadata,
   makeProviderToolCapabilityRegistry,
@@ -69,14 +73,12 @@ describe("ProviderToolCapabilityRegistry", () => {
             return { unknownTool, unknownModel, empty };
           }),
         );
-        expect(result.unknownTool).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "UnknownProviderTool" },
-        });
-        expect(result.unknownModel).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "UnknownProviderToolModel" },
-        });
+        expect(Result.isFailure(result.unknownTool) && result.unknownTool.failure).toBeInstanceOf(
+          UnknownProviderTool,
+        );
+        expect(Result.isFailure(result.unknownModel) && result.unknownModel.failure).toBeInstanceOf(
+          UnknownProviderToolModel,
+        );
         expect(result.empty).toEqual([]);
       }),
   );
@@ -170,10 +172,11 @@ describe("ProviderToolCapabilityRegistry", () => {
       const error = yield* Effect.flip(
         makeProviderToolCapabilityRegistry({ descriptors: [first, first], models: [] }),
       );
-      expect(error).toMatchObject({
-        _tag: "ProviderToolMetadataFailure",
-        reason: { _tag: "DuplicateTool", id: first.id },
-      });
+      expect(error).toEqual(
+        ProviderToolMetadataFailure.make({
+          reason: ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id: first.id }),
+        }),
+      );
     }),
   );
 

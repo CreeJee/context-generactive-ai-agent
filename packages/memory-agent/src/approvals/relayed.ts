@@ -34,7 +34,8 @@ const RelayedApprovalOutcome = Schema.TaggedUnion({
 });
 type RelayedApprovalOutcome = typeof RelayedApprovalOutcome.Type;
 
-const RelayedApprovalExecution = Workflow.make("RelayedApprovalExecution", {
+const relayedApprovalWorkflow = "RelayedApprovalExecution";
+const RelayedApprovalExecution = Workflow.make(relayedApprovalWorkflow, {
   payload: RelayedApprovalPayload,
   success: RelayedApprovalOutcome,
   idempotencyKey: ({ sessionId, runId, approvalId }) =>
@@ -85,7 +86,7 @@ const make = (timeoutMs: number) =>
 
     const find = (sessionId: string, approvalId: string) =>
       Effect.map(
-        storage.workflowExecutions(RelayedApprovalExecution._tag),
+        storage.workflowExecutions(relayedApprovalWorkflow),
         (executions) =>
           executions.flatMap((execution) => {
             const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(execution.payload);
@@ -143,7 +144,7 @@ const make = (timeoutMs: number) =>
       },
 
       pending: (sessionId: string) =>
-        Effect.map(storage.pendingExecutions(RelayedApprovalExecution._tag), (executions) =>
+        Effect.map(storage.pendingExecutions(relayedApprovalWorkflow), (executions) =>
           executions
             .flatMap((execution) => {
               const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(execution.payload);

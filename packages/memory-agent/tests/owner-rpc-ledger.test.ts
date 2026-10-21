@@ -9,6 +9,8 @@ import {
   makeOwnerRpc,
   makeOwnerRpcEffect,
   type OwnerRpcCapability,
+  OwnerRpcFailure,
+  OwnerRpcLedgerError,
 } from "../src/agent/owner-rpc.ts";
 import { connectionContext } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
@@ -112,16 +114,16 @@ it.live("pending and uncertain effects survive reopen and never reset with a new
       reason: "uncertain_run",
     });
     expect(yield* reopened.reserve(key, 2, "read", false)).toEqual({ type: "reserved" });
-    expect(
-      yield* reopened
-        .settle(key, 1, { type: "succeeded", operationId: 1, output: null })
-        .pipe(Effect.flip),
-    ).toMatchObject({ _tag: "OwnerRpcLedgerError", reason: "unreserved" });
-    expect(
-      yield* reopened
-        .reserve(key.replace('"goal"', '"other"'), 3, "forged", false)
-        .pipe(Effect.flip),
-    ).toMatchObject({ _tag: "OwnerRpcLedgerError", reason: "unbound_run" });
+    const unreserved = yield* reopened
+      .settle(key, 1, { type: "succeeded", operationId: 1, output: null })
+      .pipe(Effect.flip);
+    expect(unreserved).toBeInstanceOf(OwnerRpcLedgerError);
+    expect(unreserved).toMatchObject({ reason: "unreserved" });
+    const unbound = yield* reopened
+      .reserve(key.replace('"goal"', '"other"'), 3, "forged", false)
+      .pipe(Effect.flip);
+    expect(unbound).toBeInstanceOf(OwnerRpcLedgerError);
+    expect(unbound).toMatchObject({ reason: "unbound_run" });
   }).pipe(withTestPlatform),
 );
 
@@ -282,8 +284,9 @@ it.live("outer transactions reject before dispatch and cannot roll back ledger s
           operation: "effect" as const,
           input: null,
         };
-        expect(yield* sql.withTransaction(rpc(request)).pipe(Effect.flip)).toMatchObject({
-          _tag: "OwnerRpcFailure",
+        const failure = yield* sql.withTransaction(rpc(request)).pipe(Effect.flip);
+        expect(failure).toBeInstanceOf(OwnerRpcFailure);
+        expect(failure).toMatchObject({
           phase: "reserve",
           cause: expect.objectContaining({ reason: "outer_transaction" }),
         });
@@ -387,9 +390,9 @@ it.live("JSON run keys must match every persisted binding field", () =>
         goalVersion: "1",
       }),
     ]) {
-      expect(yield* ledger.reserve(forged, 1, "forged", true).pipe(Effect.flip)).toMatchObject({
-        _tag: "OwnerRpcLedgerError",
-      });
+      expect(yield* ledger.reserve(forged, 1, "forged", true).pipe(Effect.flip)).toBeInstanceOf(
+        OwnerRpcLedgerError,
+      );
     }
     expect(f.sqlite.prepare("SELECT count(*) AS n FROM owner_rpc_operations").get()).toEqual({
       n: 0,
@@ -399,11 +402,11 @@ it.live("JSON run keys must match every persisted binding field", () =>
       ...keyValue,
       sessionId: "other",
     });
-    expect(
-      yield* ledger
-        .settle(foreignKey, 1, { type: "succeeded", operationId: 1, output: null })
-        .pipe(Effect.flip),
-    ).toMatchObject({ _tag: "OwnerRpcLedgerError", reason: "unbound_run" });
+    const foreign = yield* ledger
+      .settle(foreignKey, 1, { type: "succeeded", operationId: 1, output: null })
+      .pipe(Effect.flip);
+    expect(foreign).toBeInstanceOf(OwnerRpcLedgerError);
+    expect(foreign).toMatchObject({ reason: "unbound_run" });
     expect(yield* ledger.reserve(key, 1, "valid", true)).toMatchObject({
       type: "existing",
       record: { reply: { type: "pending" } },
@@ -449,11 +452,11 @@ it.live("additive upgrade has no legacy backfill and failed DDL rolls back atomi
         user_version: rpcMigrationIndex,
       });
       sqlite.exec(rpcMigration);
-      expect(
-        yield* (yield* owner(sqlite))
-          .reserve(key.replace('"run"', '"legacy"'), 1, "effect", true)
-          .pipe(Effect.flip),
-      ).toMatchObject({ _tag: "OwnerRpcLedgerError", reason: "unbound_run" });
+      const legacy = yield* (yield* owner(sqlite))
+        .reserve(key.replace('"run"', '"legacy"'), 1, "effect", true)
+        .pipe(Effect.flip);
+      expect(legacy).toBeInstanceOf(OwnerRpcLedgerError);
+      expect(legacy).toMatchObject({ reason: "unbound_run" });
     } finally {
       sqlite.close();
     }

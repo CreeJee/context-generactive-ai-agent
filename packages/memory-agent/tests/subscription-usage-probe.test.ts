@@ -1,7 +1,8 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect } from "effect";
+import { DateTime, Effect, Result } from "effect";
 import { expect } from "vite-plus/test";
 import {
+  SubscriptionUsageCredentialExpired,
   anthropicSubscriptionUsage,
   anthropicSubscriptionUsageProbe,
   anthropicUsageUrl,
@@ -89,9 +90,7 @@ it.effect(
           { name: "five_hour", usedPercent: 12.5, windowSeconds: 18_000, resetsAt: "fixture" },
         ],
       });
-      expect(yield* lookup(now)).toMatchObject({
-        failure: { _tag: "SubscriptionUsageCredentialExpired" },
-      });
+      expect(yield* lookup(now)).toEqual(Result.fail(SubscriptionUsageCredentialExpired.make()));
       expect(requests).toEqual([anthropicUsageUrl]);
     }),
 );

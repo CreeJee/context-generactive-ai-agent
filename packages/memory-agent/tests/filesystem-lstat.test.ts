@@ -1,6 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Option, Path } from "effect";
+import { Effect, FileSystem, Option, Path, Predicate } from "effect";
 import { expect } from "vite-plus/test";
 
 it.live(
@@ -26,10 +26,10 @@ it.live(
       expect((yield* fs.stat(link)).type).toBe("File");
       expect((yield* fs.lstat(dangling)).type).toBe("SymbolicLink");
       const missing = yield* fs.lstat(path.join(root, "missing")).pipe(Effect.flip);
-      expect(missing.reason._tag).toBe("NotFound");
+      expect(Predicate.isTagged(missing.reason, "NotFound")).toBe(true);
       expect(missing.reason.method).toBe("lstat");
       const noop = yield* FileSystem.makeNoop({}).lstat(file).pipe(Effect.flip);
-      expect(noop.reason._tag).toBe("NotFound");
+      expect(Predicate.isTagged(noop.reason, "NotFound")).toBe(true);
       expect(noop.reason.method).toBe("lstat");
     }).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer])),
 );

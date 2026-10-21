@@ -17,10 +17,11 @@ import {
   readTextFileEffect,
   replaceTextFileEffect,
   TextFileRejected,
+  TextFileRejectedReason,
 } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
-import { mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
+import { HiddenReplaceFailure, mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
 import { runTrace } from "../runtime/run-trace.ts";
 import { guardedWith } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
@@ -135,25 +136,17 @@ const make = Effect.gen(function* () {
       replaceAll: options.replaceAll,
     });
     if (Result.isSuccess(replaced)) return replaced.success;
-    const failure = replaced.failure;
-    switch (failure._tag) {
-      case "no_match":
-        return yield* new Cause.UnknownError(
-          new Error(`no_match: ${options.path}. oldText does not occur; read the file again.`),
-        );
-      case "ambiguous":
-        return yield* new Cause.UnknownError(
-          new Error(
-            `ambiguous_match: ${options.path}. oldText occurs ${failure.occurrences} times; add surrounding lines or pass replaceAll.`,
-          ),
-        );
-      case "cuts_hidden":
-        return yield* new Cause.UnknownError(
-          new Error(
+    return yield* new Cause.UnknownError(
+      new Error(
+        HiddenReplaceFailure.$match(replaced.failure, {
+          no_match: () => `no_match: ${options.path}. oldText does not occur; read the file again.`,
+          ambiguous: ({ occurrences }) =>
+            `ambiguous_match: ${options.path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
+          cuts_hidden: () =>
             `hidden_value_split: ${options.path}. oldText starts or ends inside a [redacted:…] placeholder; include the whole placeholder.`,
-          ),
-        );
-    }
+        }),
+      ),
+    );
   });
   const candidateCache = MutableHashMap.empty<string, HashSet.HashSet<string> | null>();
   const readPage = createTextPageReader();
@@ -415,7 +408,10 @@ const make = Effect.gen(function* () {
               if (mentionsHidden(content)) {
                 const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
                 if (file.sha256 !== expectedSha256)
-                  return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+                  return yield* TextFileRejected.make({
+                    path,
+                    reason: TextFileRejectedReason.cases.changed.make({}),
+                  });
                 text = (yield* keepingHidden({
                   path,
                   current: file.text,
@@ -447,7 +443,10 @@ const make = Effect.gen(function* () {
               const resolved = yield* resolveProjectPath(root, path, "file");
               const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
               if (expectedSha256 !== undefined && expectedSha256 !== file.sha256)
-                return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+                return yield* TextFileRejected.make({
+                  path,
+                  reason: TextFileRejectedReason.cases.changed.make({}),
+                });
               const crlf = file.text.includes("\r\n") && !oldText.includes("\r\n");
               const find = crlf ? oldText.replaceAll("\n", "\r\n") : oldText;
               const replacement = crlf ? newText.replaceAll("\n", "\r\n") : newText;

@@ -5,13 +5,13 @@ import { Data, Effect, Function as EffectFunction } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   Attachment,
-  BoardEdit,
+  BoardEdit as BoardEditCase,
   BoardEditResult,
-  BoardIntent,
+  BoardIntent as BoardIntentCase,
   BoardView,
   BtwThread,
   CardStatus,
-  DecisionAnswer,
+  DecisionAnswer as DecisionAnswerCase,
   DecisionInboxItem,
   DecisionKind,
   HumanDecisionRequest,
@@ -82,6 +82,17 @@ type KanbanCommand = Data.TaggedEnum<{
 }>;
 const KanbanCommand = Data.taggedEnum<KanbanCommand>();
 
+/*
+ * Constructors and matchers for the server's unions that pages send. The browser loads only
+ * memory-agent's types, so they are built from the types; the routes decode what arrives.
+ */
+export type BoardEdit = BoardEditCase;
+export const BoardEdit = Data.taggedEnum<BoardEdit>();
+export type BoardIntent = BoardIntentCase;
+export const BoardIntent = Data.taggedEnum<BoardIntent>();
+export type DecisionAnswer = DecisionAnswerCase;
+export const DecisionAnswer = Data.taggedEnum<DecisionAnswer>();
+
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
 export type ImageSettingsView = ImageFeatureStatus & {
   readonly crossProviderMediaConsent: CrossProviderMediaConsentSettings;
@@ -128,15 +139,12 @@ export type AccountAction =
 export type KanbanView = { readonly active: false } | ({ readonly active: true } & KanbanBoardView);
 
 export type {
-  BoardEdit,
   BoardEditResult,
-  BoardIntent,
   BoardView,
   CardStatus,
   KanbanScheduleView,
   GoalMergeState,
   GoalPriority,
-  DecisionAnswer,
   DecisionInboxItem,
   DecisionKind,
   HumanDecisionRequest,

@@ -9,12 +9,14 @@ import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderFeatureRejectedError,
   ProviderStreamFailed,
+  RequestNotSent,
   decodeProviderEvent,
   providerProtocols,
 } from "../src/oauth/protocol.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
 import {
   SubscriptionStreamFailed,
+  SubscriptionStreamFailedReason,
   SubscriptionTextAdapter,
   requestFingerprints,
   subscriptionRequest,
@@ -749,11 +751,12 @@ describe("subscription model adapters", () => {
         [Symbol.asyncIterator]();
       yield* sdkCall(() => stream.next());
       yield* sdkCall(() =>
-        expect(stream.next()).rejects.toMatchObject({
-          _tag: "SubscriptionStreamFailed",
-          provider: "anthropic",
-          reason: { _tag: "ProviderRejected" },
-        }),
+        expect(stream.next()).rejects.toEqual(
+          SubscriptionStreamFailed.make({
+            provider: "anthropic",
+            reason: SubscriptionStreamFailedReason.cases.ProviderRejected.make({}),
+          }),
+        ),
       );
       expect(attempts).toBe(1);
     }),
@@ -799,19 +802,18 @@ describe("subscription model adapters", () => {
       });
       const connectionRefused = ProviderStreamFailed.make({
         provider: "openai",
-        reason: { _tag: "RequestNotSent", stage: "connect" },
+        reason: RequestNotSent.make({ stage: "connect" }),
       });
 
-      expect(yield* reasonOf(failingAfter([], connectionRefused))).toEqual({
-        _tag: "RequestNotSent",
-        stage: "connect",
-      });
+      expect(yield* reasonOf(failingAfter([], connectionRefused))).toEqual(
+        SubscriptionStreamFailedReason.cases.RequestNotSent.make({ stage: "connect" }),
+      );
       expect(
         yield* reasonOf(failingAfter([{ type: "text", text: "partial" }], new Error())),
-      ).toEqual({ _tag: "ResponseInterrupted" });
-      expect(yield* reasonOf(failingAfter([], new Error("socket hang up")))).toEqual({
-        _tag: "RequestOutcomeUnknown",
-      });
+      ).toEqual(SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}));
+      expect(yield* reasonOf(failingAfter([], new Error("socket hang up")))).toEqual(
+        SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({}),
+      );
     }),
   );
 

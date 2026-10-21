@@ -1,5 +1,5 @@
 import { SqlClient } from "effect/sql";
-import { Effect, Schema } from "effect";
+import { Effect, Exit, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
@@ -9,6 +9,10 @@ import { migrateOwnerRpcFingerprintBatch } from "../../src/agent/owner-rpc-finge
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { GoalExecutions } from "../../src/workflow/goal-execution.ts";
+import {
+  GoalExecutionErrorReason,
+  GoalExecutionPayload,
+} from "../../src/workflow/goal-execution-contracts.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -58,8 +62,7 @@ const failedRead = Effect.fnUntraced(function* (
     directory: `${env.storage}/native-artifacts`,
   });
   yield* Effect.scoped(artifacts.acquire(revision.goal_instance_id));
-  const payload = {
-    _tag: "GoalExecutionPayload" as const,
+  const payload = GoalExecutionPayload.make({
     identity: {
       owner: { ownerId: env.project.id, generation: "fixture-owner" },
       sessionId: session,
@@ -67,7 +70,7 @@ const failedRead = Effect.fnUntraced(function* (
       goalInstanceId: revision.goal_instance_id,
       workflowRevisionId: revision.id,
     },
-  };
+  });
   const admitted = yield* executions.admitAndStart(
     payload,
     owner.bind(session, runId, revision.id),
@@ -89,11 +92,13 @@ const failedRead = Effect.fnUntraced(function* (
   yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
   expect(yield* ledger.reserve(key, 2, fingerprint("tool"), true)).toEqual({ type: "reserved" });
   yield* ledger.settle(key, 2, { type: "uncertain", operationId: 2 });
-  yield* executions.fail(payload, {
-    _tag: "SideEffectUncertain",
-    operationId: "2",
-    state: "uncertain",
-  });
+  yield* executions.fail(
+    payload,
+    GoalExecutionErrorReason.cases.SideEffectUncertain.make({
+      operationId: "2",
+      state: "uncertain",
+    }),
+  );
   const recovery = yield* OwnerReadRecovery;
   const preview = yield* recovery.assess(session, runId);
   expect(preview.type).toBe("eligible");
@@ -394,7 +399,7 @@ testAgent({ testProvider: {} })("owner read recovery across the database", (it) 
       const result = yield* Effect.exit(
         sql.withTransaction(f.recovery.confirm(f.session, f.runId, f.confirmation)),
       );
-      expect(result._tag).toBe("Failure");
+      expect(Exit.isFailure(result)).toBe(true);
       expect(yield* f.receipts).toEqual({ n: 0 });
     }),
   );

@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "cn";
+import { Match, Predicate } from "effect";
 import type { BoardAuthor, CardRisk } from "memory-agent";
 import { Badge } from "../../../components/ui/badge";
 import { Spinner } from "../../../components/ui/spinner";
@@ -53,12 +54,7 @@ export const riskLabels: Readonly<Record<CardRisk, string>> = {
 
 export function authorLabel(author: BoardAuthor | null): string {
   if (author === null) return "기록 없음";
-  switch (author._tag) {
-    case "User":
-      return "사용자";
-    case "Orchestrator":
-      return "오케스트레이터";
-  }
+  return Match.valueTags(author, { User: () => "사용자", Orchestrator: () => "오케스트레이터" });
 }
 
 /** Who last changed the card, as a small avatar with the name and time as its label. */
@@ -67,7 +63,7 @@ export function AuthorAvatar({ change }: { readonly change: BoardCard["lastChang
     change === null
       ? "마지막 변경 기록 없음"
       : `마지막 변경: ${authorLabel(change.author)} · ${koreanLocalTime(change.at)}`;
-  const Icon = change?.author?._tag === "Orchestrator" ? BotIcon : UserRoundIcon;
+  const Icon = Predicate.isTagged(change?.author, "Orchestrator") ? BotIcon : UserRoundIcon;
   return (
     <span
       role="img"

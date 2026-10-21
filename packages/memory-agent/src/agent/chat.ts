@@ -64,7 +64,7 @@ import { modelBoundMessages, modelImages } from "../attachments/model-images.ts"
 import { ChatState } from "../chat-state/chat-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { GlobalConfig } from "../config/global-config.ts";
+import { GlobalConfig, GlobalConfigFailedReason } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import * as GoalWorkerAssets from "./goal-worker-assets.ts";
 import * as GoalWorkerGenerations from "./goal-worker-generation-store.ts";
@@ -185,7 +185,10 @@ import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowExecution } from "../workflow/execution.ts";
 import { GoalExecutionAdmissionRefused, GoalExecutions } from "../workflow/goal-execution.ts";
 import { ProviderRetries } from "../workflow/provider-retry.ts";
-import type { GoalExecutionPayload } from "../workflow/goal-execution-contracts.ts";
+import {
+  GoalExecutionErrorReason,
+  GoalExecutionPayload,
+} from "../workflow/goal-execution-contracts.ts";
 import { toolProgressFingerprint } from "../workflow/tool-progress.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
@@ -598,7 +601,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.as(
         Effect.logWarning("Settings unreadable; memory stays in the project", {
           error: errorTag(error),
-          reason: error.reason._tag,
+          reason: GlobalConfigFailedReason.match(error.reason, {
+            MissingFile: () => "MissingFile",
+            ReadFailed: () => "ReadFailed",
+            WriteFailed: () => "WriteFailed",
+            InvalidSettings: () => "InvalidSettings",
+          }),
         }),
         { crossProject: false, toExternalAgents: false },
       ),
@@ -1169,18 +1177,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const durable = goalExecution();
         if (durable !== null) {
           if (unresolved !== undefined)
-            yield* goalExecutions.fail(durable, {
-              _tag: "SideEffectUncertain",
-              operationId: String(unresolved.operation_id),
-              state: unresolved.status === "pending" ? "pending" : "uncertain",
-            });
+            yield* goalExecutions.fail(
+              durable,
+              GoalExecutionErrorReason.cases.SideEffectUncertain.make({
+                operationId: String(unresolved.operation_id),
+                state: unresolved.status === "pending" ? "pending" : "uncertain",
+              }),
+            );
           else if (completed) yield* goalExecutions.succeed(durable);
           else
-            yield* goalExecutions.fail(durable, {
-              _tag: "ExecutionFailed",
-              phase: "sdk_loop",
-              code: "run_failed",
-            });
+            yield* goalExecutions.fail(
+              durable,
+              GoalExecutionErrorReason.cases.ExecutionFailed.make({
+                phase: "sdk_loop",
+                code: "run_failed",
+              }),
+            );
         }
         const state =
           completed && unresolved === undefined
@@ -2343,8 +2355,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // Capability preparation may yield: owner admission rechecks the captured revision and
           // commits the run binding with the first durable Effect Workflow request atomically.
           const generation = randomUUID();
-          const durablePayload: GoalExecutionPayload = {
-            _tag: "GoalExecutionPayload",
+          const durablePayload = GoalExecutionPayload.make({
             identity: {
               owner: { ownerId: projectId, generation: goalExecutionOwnerGeneration },
               sessionId,
@@ -2352,7 +2363,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               goalInstanceId: workerGoalId,
               workflowRevisionId: workerRevision,
             },
-          };
+          });
           goalExecutionPayload = durablePayload;
           const durableAdmission = yield* goalExecutions
             .admitAndStart(
@@ -3365,12 +3376,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* goalExecutions.fail(
           payload,
           effect === undefined
-            ? { _tag: "ExecutionFailed", phase: "sdk_loop", code: serverRestartedCode }
-            : {
-                _tag: "SideEffectUncertain",
+            ? GoalExecutionErrorReason.cases.ExecutionFailed.make({
+                phase: "sdk_loop",
+                code: serverRestartedCode,
+              })
+            : GoalExecutionErrorReason.cases.SideEffectUncertain.make({
                 operationId: String(effect.operation_id),
                 state: effect.status === "pending" ? "pending" : "uncertain",
-              },
+              }),
         );
         // A pending provider retry of the run sets when its continuation starts.
         const waiting = (yield* providerRetries.pending(sessionId)).filter(

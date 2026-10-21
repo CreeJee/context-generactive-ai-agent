@@ -8,7 +8,7 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { sessionHolderHeader } from "../../src/sessions/lease-state.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
+import { SessionNotFound, Sessions } from "../../src/sessions/sessions.ts";
 import { approvalToolDefinitions } from "../../src/tools/definitions.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -76,7 +76,7 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
         [kept.id, session.id].sort(),
       );
       const missing = yield* Effect.result(sessions.setArchived("no-such-session", true));
-      expect(Result.isFailure(missing) && missing.failure._tag).toBe("SessionNotFound");
+      expect(Result.isFailure(missing) && missing.failure).toBeInstanceOf(SessionNotFound);
     }),
   );
 

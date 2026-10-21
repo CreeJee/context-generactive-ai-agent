@@ -1,5 +1,5 @@
 import { Effect, Match, Option } from "effect";
-import type { CardDraft, CardPatch } from "../workflow/board-edit.ts";
+import { BoardEdit, type CardDraft, type CardPatch } from "../workflow/board-edit.ts";
 import type { BoardAuthor } from "../workflow/card.ts";
 import type { PlanStep, Workflows } from "../workflow/workflow.ts";
 
@@ -18,7 +18,11 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     const known = new Set(before.plan?.steps.map((step) => step.id) ?? []);
     const result = yield* workflows.editBoard(
       sessionId,
-      { _tag: "AddCard", planVersion: before.plan?.version ?? 0, card },
+      // The draft is not checked here: a resolution card copies a stored title as it is.
+      BoardEdit.cases.AddCard.make(
+        { planVersion: before.plan?.version ?? 0, card },
+        { disableChecks: true },
+      ),
       author,
     );
     return Match.valueTags(result, {
@@ -37,7 +41,7 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     const current = yield* workflows.get(sessionId);
     return yield* workflows.editBoard(
       sessionId,
-      { _tag: "EditCard", planVersion: current.plan?.version ?? 0, cardId, patch },
+      BoardEdit.cases.EditCard.make({ planVersion: current.plan?.version ?? 0, cardId, patch }),
       author,
     );
   });
@@ -50,7 +54,7 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     const current = yield* workflows.get(sessionId);
     return yield* workflows.editBoard(
       sessionId,
-      { _tag: "CancelCard", planVersion: current.plan?.version ?? 0, cardId },
+      BoardEdit.cases.CancelCard.make({ planVersion: current.plan?.version ?? 0, cardId }),
       author,
     );
   });

@@ -1,7 +1,8 @@
-import { Schema } from "effect";
+import { Schema, Struct } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
   GoalExecutionError,
+  GoalExecutionErrorReason,
   GoalExecutionPayload,
   GoalExecutionSideEffectState,
   GoalExecutionSuccess,
@@ -20,25 +21,22 @@ const identity = (overrides: Partial<GoalExecutionIdentity> = {}): GoalExecution
 
 describe("GoalExecution contracts", () => {
   it("accepts complete payload/success/error values and rejects malformed identities", () => {
-    expect(
-      Schema.is(GoalExecutionPayload)({
-        _tag: "GoalExecutionPayload",
-        identity: identity(),
-      }),
-    ).toBe(true);
-    expect(
-      Schema.is(GoalExecutionSuccess)({
-        _tag: "GoalExecutionSuccess",
-        executionId: "a".repeat(32),
-        runId: "run-a",
-        outcome: "completed",
-      }),
-    ).toBe(true);
+    const payload = GoalExecutionPayload.make({ identity: identity() });
+    expect(Schema.is(GoalExecutionPayload)(payload)).toBe(true);
+    const success = GoalExecutionSuccess.make({
+      executionId: "a".repeat(32),
+      runId: "run-a",
+      outcome: "completed",
+    });
+    expect(Schema.is(GoalExecutionSuccess)(success)).toBe(true);
     expect(
       Schema.is(GoalExecutionError)(
         GoalExecutionError.make({
           executionId: "a".repeat(32),
-          reason: { _tag: "SideEffectUncertain", operationId: "tool-1", state: "pending" },
+          reason: GoalExecutionErrorReason.cases.SideEffectUncertain.make({
+            operationId: "tool-1",
+            state: "pending",
+          }),
         }),
       ),
     ).toBe(true);
@@ -54,17 +52,10 @@ describe("GoalExecution contracts", () => {
       { ...identity(), owner: { ownerId: "owner-a", generation: "" } },
     ];
     for (const value of malformed) {
-      expect(
-        Schema.is(GoalExecutionPayload)({ _tag: "GoalExecutionPayload", identity: value }),
-      ).toBe(false);
+      expect(Schema.is(GoalExecutionPayload)({ ...payload, identity: value })).toBe(false);
     }
     expect(
-      Schema.is(GoalExecutionSuccess)({
-        _tag: "GoalExecutionSuccess",
-        executionId: "not-a-goal-execution-id",
-        runId: "run-a",
-        outcome: "completed",
-      }),
+      Schema.is(GoalExecutionSuccess)({ ...success, executionId: "not-a-goal-execution-id" }),
     ).toBe(false);
   });
 
@@ -102,47 +93,24 @@ describe("GoalExecution contracts", () => {
   });
 
   it("replays only succeeded receipts and stops pending or uncertain operations", () => {
-    expect(
-      Schema.is(GoalExecutionSideEffectState)({
-        _tag: "Succeeded",
-        operationId: "operation-1",
-        replay: "reuse_receipt",
-        receipt: { providerReceiptId: "receipt-1" },
-      }),
-    ).toBe(true);
-    expect(
-      Schema.is(GoalExecutionSideEffectState)({
-        _tag: "Pending",
-        operationId: "operation-1",
-        disposition: "stop",
-      }),
-    ).toBe(true);
-    expect(
-      Schema.is(GoalExecutionSideEffectState)({
-        _tag: "Uncertain",
-        operationId: "operation-1",
-        disposition: "stop",
-      }),
-    ).toBe(true);
+    const { Succeeded, Pending, Uncertain } = GoalExecutionSideEffectState.cases;
+    const isState = Schema.is(GoalExecutionSideEffectState);
+    const succeeded = Succeeded.make({
+      operationId: "operation-1",
+      replay: "reuse_receipt",
+      receipt: { providerReceiptId: "receipt-1" },
+    });
+    const pending = Pending.make({ operationId: "operation-1", disposition: "stop" });
+    const uncertain = Uncertain.make({ operationId: "operation-1", disposition: "stop" });
+    expect(isState(succeeded)).toBe(true);
+    expect(isState(pending)).toBe(true);
+    expect(isState(uncertain)).toBe(true);
 
+    expect(isState({ ...pending, disposition: "retry" })).toBe(false);
+    expect(isState(Struct.omit(succeeded, ["receipt"]))).toBe(false);
     expect(
-      Schema.is(GoalExecutionSideEffectState)({
-        _tag: "Pending",
-        operationId: "operation-1",
-        disposition: "retry",
-      }),
-    ).toBe(false);
-    expect(
-      Schema.is(GoalExecutionSideEffectState)({
-        _tag: "Succeeded",
-        operationId: "operation-1",
-        replay: "reuse_receipt",
-      }),
-    ).toBe(false);
-    expect(
-      Schema.is(GoalExecutionSideEffectState)({
-        _tag: "Uncertain",
-        operationId: "operation-1",
+      isState({
+        ...Struct.omit(uncertain, ["disposition"]),
         replay: "reuse_receipt",
         receipt: { providerReceiptId: "receipt-1" },
       }),

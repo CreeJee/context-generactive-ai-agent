@@ -380,7 +380,8 @@ testAgent()("vector publication", (it) => {
           }),
         ),
       );
-      expect(failure).toMatchObject({ _tag: "IndexingError", reason: "mapping-commit-failed" });
+      expect(failure).toBeInstanceOf(IndexingError);
+      expect(failure).toMatchObject({ reason: "mapping-commit-failed" });
       // Saved ahead-of-DB; existing reopen recovery repairs this, not a fake rollback.
       expect(vectors.size()).toBe(2);
       expect(

@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Match, Path, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
@@ -45,17 +45,13 @@ const refusalOf = <A>(
   >,
 ) =>
   Effect.match(save, {
-    onFailure: (error) => {
-      switch (error._tag) {
-        case "AttachmentRejected":
-          return error.reason;
-        case "AttachmentStorageFailed":
-          return `${error._tag}:${error.operation}`;
-        case "SqlError":
-        case "SchemaError":
-          return error._tag;
-      }
-    },
+    onFailure: (error) =>
+      Match.valueTags(error, {
+        AttachmentRejected: (rejected) => rejected.reason,
+        AttachmentStorageFailed: (failed) => `AttachmentStorageFailed:${failed.operation}`,
+        SqlError: () => "SqlError",
+        SchemaError: () => "SchemaError",
+      }),
     onSuccess: () => "saved",
   });
 

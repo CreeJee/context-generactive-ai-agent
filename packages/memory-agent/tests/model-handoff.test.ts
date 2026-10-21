@@ -10,8 +10,10 @@ import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import {
   handoffNotice,
+  ModelHandoffFailed,
   modelHandoffHistoryEffect,
   modelHandoffNamespace,
+  ModelHandoffReason,
 } from "../src/agent/model-handoff.ts";
 import { lookupSources } from "../src/agent/compaction.ts";
 
@@ -139,7 +141,7 @@ it.effect("rejects an invalidated boundary instead of dropping unrelated history
         "new-model",
       )([past[0]!, past[1]!, { role: "tool", content: "different result" }]),
     );
-    expect(failed.reason._tag).toBe("HistoryChanged");
+    expect(ModelHandoffReason.guards.HistoryChanged(failed.reason)).toBe(true);
   }),
 );
 
@@ -148,7 +150,7 @@ it.effect("does not invent a user request for an assistant-only legacy thread", 
     const history = past.slice(1);
     const f = fixture(history);
     const failed = yield* Effect.flip(f.restore("new", "new-model")(history));
-    expect(failed.reason._tag).toBe("UserQuestionMissing");
+    expect(ModelHandoffReason.guards.UserQuestionMissing(failed.reason)).toBe(true);
   }),
 );
 
@@ -171,7 +173,7 @@ it.effect("UI hydration preserves a handoff across tool fan-out and field reorde
       message.id === "boundary" ? { ...message, content: "changed" } : message,
     );
     const failed = yield* Effect.flip(f.restore("new", "new-model")(changed));
-    expect(failed.reason._tag).toBe("HistoryChanged");
+    expect(ModelHandoffReason.guards.HistoryChanged(failed.reason)).toBe(true);
   }),
 );
 
@@ -235,8 +237,8 @@ it.effect(
       });
       expect(reads).toBe(1);
       for (const failure of failures) {
-        expect(failure._tag).toBe("ModelHandoffFailed");
-        expect(failure.reason._tag).toBe("ReadStateFailed");
+        expect(failure).toBeInstanceOf(ModelHandoffFailed);
+        expect(ModelHandoffReason.guards.ReadStateFailed(failure.reason)).toBe(true);
         expect(failure.cause).toBe(cause);
         expect(failure.message).not.toContain("private metadata");
       }

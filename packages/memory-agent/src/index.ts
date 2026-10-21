@@ -431,7 +431,7 @@ export {
   decisionChoices,
   goalDecisionCardId,
   type DecisionAnswerInput,
-  type DecisionCloseScope,
+  DecisionCloseScope,
   type DecisionInboxItem,
   type DecisionRequestInput,
   type DecisionState,

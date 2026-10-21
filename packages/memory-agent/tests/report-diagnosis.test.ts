@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import type { BundleRun, ReportBundle } from "../src/report/bundle-contract.ts";
+import { BundleEvent, type BundleRun, type ReportBundle } from "../src/report/bundle-contract.ts";
 import { bundlePlaces, diagnosisDigest, digestLimits } from "../src/report/bundle-digest.ts";
 import { parseDiagnosis } from "../src/report/diagnosis.ts";
 
@@ -20,15 +20,14 @@ const run = (seq: number, failed: boolean): BundleRun => ({
   error: null,
   eventsCut: false,
   events: [
-    { _tag: "Message", role: "user", at: "t", text: text(`ask ${seq}`) },
-    {
-      _tag: "ToolCall",
+    BundleEvent.cases.Message.make({ role: "user", at: "t", text: text(`ask ${seq}`) }),
+    BundleEvent.cases.ToolCall.make({
       seq: 1,
       name: "read_file",
       at: "t",
       input: text(`{"path":"f${seq}"}`),
       result: { ok: !failed, at: "t", text: text(failed ? `ENOENT f${seq}` : "contents") },
-    },
+    }),
   ],
 });
 

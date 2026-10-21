@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, Schema } from "effect";
+import { Context, Effect, Exit, Layer, Match, Schema } from "effect";
 import { DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import {
   AdmissionWait,
@@ -35,8 +35,10 @@ export class GoalExecutionAdmissionRefused extends Schema.TaggedError<GoalExecut
   },
 ) {}
 
+const goalExecutionWorkflow = "GoalExecution";
+
 /** The durable runtime envelope around one owner-bound Goal SDK run. */
-export const GoalExecution = Workflow.make("GoalExecution", {
+export const GoalExecution = Workflow.make(goalExecutionWorkflow, {
   payload: GoalExecutionPayload,
   success: GoalExecutionSuccess,
   error: GoalExecutionError,
@@ -72,7 +74,7 @@ const make = Effect.gen(function* () {
   return {
     /** Admitted executions still waiting for their run to settle them, as their stored payloads. */
     unsettled: storage
-      .pendingExecutions(GoalExecution._tag)
+      .pendingExecutions(goalExecutionWorkflow)
       .pipe(
         Effect.flatMap((executions) =>
           Effect.forEach(executions, (execution) =>
@@ -99,20 +101,19 @@ const make = Effect.gen(function* () {
           const admitted = yield* admission
             .admit(
               {
-                workflowName: GoalExecution._tag,
+                workflowName: goalExecutionWorkflow,
                 executionId,
                 payload,
               },
-              Effect.flatMap(bind, (result) => {
-                switch (result.status) {
-                  case "bound":
-                    return Effect.succeed(result.binding);
-                  case "refused":
-                    return Effect.fail(
-                      GoalExecutionAdmissionRefused.make({ reason: result.reason }),
-                    );
-                }
-              }),
+              Effect.flatMap(bind, (result) =>
+                Match.value(result).pipe(
+                  Match.discriminatorsExhaustive("status")({
+                    bound: ({ binding }) => Effect.succeed(binding),
+                    refused: ({ reason }) =>
+                      Effect.fail(GoalExecutionAdmissionRefused.make({ reason })),
+                  }),
+                ),
+              ),
             )
             .pipe(
               Effect.catchIf(

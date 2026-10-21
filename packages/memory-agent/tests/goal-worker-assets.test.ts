@@ -9,7 +9,10 @@ import { expect } from "vite-plus/test";
 import { layerMessagePortRpcServer } from "../src/agent/effect-rpc-message-port.ts";
 import { encodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
 import { FullLoopOwnerRpcGroup, FullLoopRpcGroup } from "../src/agent/full-loop-effect-rpc.ts";
-import { makeGoalWorkerAssetsRegistry } from "../src/agent/goal-worker-assets.ts";
+import {
+  GoalWorkerAssetsReason,
+  makeGoalWorkerAssetsRegistry,
+} from "../src/agent/goal-worker-assets.ts";
 import { runtimeArtifact } from "../src/runtime/resources.ts";
 
 const boot = Effect.fn("bootGoalWorker")(
@@ -144,13 +147,15 @@ layer(NodeServices.layer)((it) => {
             yield* fs.readFile(yield* path.fromFileUrl(first.workerUrl)),
           );
           const lease = yield* registry.use(first);
-          expect((yield* Effect.flip(registry.dispose())).reason).toEqual({ _tag: "LeasesActive" });
+          expect((yield* Effect.flip(registry.dispose())).reason).toEqual(
+            GoalWorkerAssetsReason.cases.LeasesActive.make({}),
+          );
           lease.release();
           lease.release();
           expect(yield* registry.resolve("goal-a")).toBe(first);
-          expect((yield* Effect.flip(registry.use({ ...first }))).reason).toEqual({
-            _tag: "Unregistered",
-          });
+          expect((yield* Effect.flip(registry.use({ ...first }))).reason).toEqual(
+            GoalWorkerAssetsReason.cases.Unregistered.make({}),
+          );
         } finally {
           yield* registry.dispose({ remove: true });
         }
@@ -173,10 +178,9 @@ layer(NodeServices.layer)((it) => {
       try {
         const pinned = yield* registry.resolve("pinned");
         yield* fs.writeFileString(path.join(build, "full-loop-worker.mjs"), "// corrupt\n");
-        expect((yield* Effect.flip(registry.resolve("new-goal"))).reason).toEqual({
-          _tag: "Integrity",
-          check: "worker_hash",
-        });
+        expect((yield* Effect.flip(registry.resolve("new-goal"))).reason).toEqual(
+          GoalWorkerAssetsReason.cases.Integrity.make({ check: "worker_hash" }),
+        );
         expect(yield* registry.resolve("pinned")).toBe(pinned);
         expect(yield* registry.verify(pinned)).toEqual(pinned);
       } finally {

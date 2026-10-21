@@ -1,7 +1,14 @@
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Boards } from "../../src/workflow/board.ts";
-import type { CardStatus } from "../../src/workflow/card.ts";
+import {
+  BoardEdit,
+  BoardEditRefused,
+  BoardEditResult,
+  UserChange,
+} from "../../src/workflow/board-edit.ts";
+import { BoardAuthor, type CardStatus } from "../../src/workflow/card.ts";
+import { PlanDependenciesRejected, PlanDependencyIssue } from "../../src/workflow/plan-schedule.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 import { freshSession, testAgent, TestEnv } from "../support/test-env.ts";
@@ -33,8 +40,8 @@ const plan = {
   status: "ready" as const,
 };
 
-const orchestrator = { _tag: "Orchestrator", runId: "run-1" } as const;
-const user = { _tag: "User" } as const;
+const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "run-1" });
+const user = BoardAuthor.cases.User.make({});
 
 testAgent()("kanban board", (it) => {
   it.effect("reads Plans saved before cards as cards without rewriting them", () =>
@@ -92,12 +99,11 @@ testAgent()("kanban board", (it) => {
       yield* workflows.updatePlan(id, plan, orchestrator);
       yield* workflows.editBoard(
         id,
-        {
-          _tag: "EditCard",
+        BoardEdit.cases.EditCard.make({
           planVersion: 1,
           cardId: "b",
           patch: { title: "Renamed", risk: "high" },
-        },
+        }),
         user,
       );
 
@@ -140,15 +146,19 @@ testAgent()("kanban board", (it) => {
 
       const edit = yield* workflows.editBoard(
         id,
-        { _tag: "EditCard", planVersion: 1, cardId: "a", patch: { title: "Changed" } },
+        BoardEdit.cases.EditCard.make({ planVersion: 1, cardId: "a", patch: { title: "Changed" } }),
         user,
       );
-      expect(edit._tag).toBe("Requested");
+      expect(BoardEditResult.$is("Requested")(edit)).toBe(true);
       const view = yield* (yield* Boards).view(id);
       expect(view.plan?.version).toBe(1);
       expect(view.cards[0]?.card).toEqual(executing.plan?.steps[0]);
       expect(view.pendingChanges).toMatchObject([
-        { cardId: "a", status: "pending", change: { _tag: "Edit", patch: { title: "Changed" } } },
+        {
+          cardId: "a",
+          status: "pending",
+          change: UserChange.cases.Edit.make({ patch: { title: "Changed" } }),
+        },
       ]);
     }),
   );
@@ -180,11 +190,10 @@ testAgent()("kanban board", (it) => {
         ],
         Effect.flip,
       );
-      expect(refused).toMatchObject(
-        ["card_status_changed", "card_transition_invalid", "card_missing"].map((reason) => ({
-          _tag: "BoardEditRefused",
-          reason,
-        })),
+      expect(refused).toEqual(
+        (["card_status_changed", "card_transition_invalid", "card_missing"] as const).map(
+          (reason) => BoardEditRefused.make({ reason }),
+        ),
       );
 
       yield* workflows.transitionCard(
@@ -210,27 +219,43 @@ testAgent()("kanban board", (it) => {
       const unknown = yield* Effect.flip(
         workflows.editBoard(
           id,
-          { _tag: "EditCard", planVersion: 1, cardId: "a", patch: { dependsOn: ["missing"] } },
+          BoardEdit.cases.EditCard.make({
+            planVersion: 1,
+            cardId: "a",
+            patch: { dependsOn: ["missing"] },
+          }),
           user,
         ),
       );
       const cycle = yield* Effect.flip(
         workflows.editBoard(
           id,
-          { _tag: "EditCard", planVersion: 1, cardId: "a", patch: { dependsOn: ["b"] } },
+          BoardEdit.cases.EditCard.make({
+            planVersion: 1,
+            cardId: "a",
+            patch: { dependsOn: ["b"] },
+          }),
           user,
         ),
       );
       const dependedOn = yield* Effect.flip(
-        workflows.editBoard(id, { _tag: "CancelCard", planVersion: 1, cardId: "a" }, user),
+        workflows.editBoard(
+          id,
+          BoardEdit.cases.CancelCard.make({ planVersion: 1, cardId: "a" }),
+          user,
+        ),
       );
-      expect([unknown, cycle, dependedOn]).toMatchObject([
-        { _tag: "PlanDependenciesRejected", issues: [{ _tag: "UnknownDependency", stepId: "a" }] },
-        { _tag: "PlanDependenciesRejected", issues: [{ _tag: "DependencyCycle" }] },
-        {
-          _tag: "PlanDependenciesRejected",
-          issues: [{ _tag: "UnknownDependency", stepId: "b", dependsOn: "a" }],
-        },
+      const issue = PlanDependencyIssue.cases;
+      expect([unknown, cycle, dependedOn]).toEqual([
+        PlanDependenciesRejected.make({
+          issues: [issue.UnknownDependency.make({ stepId: "a", dependsOn: "missing" })],
+        }),
+        PlanDependenciesRejected.make({
+          issues: [issue.DependencyCycle.make({ cycle: ["a", "b", "a"] })],
+        }),
+        PlanDependenciesRejected.make({
+          issues: [issue.UnknownDependency.make({ stepId: "b", dependsOn: "a" })],
+        }),
       ]);
       expect((yield* workflows.get(id)).plan).toEqual(before.plan);
     }),

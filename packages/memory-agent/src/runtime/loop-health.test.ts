@@ -1,11 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
-import { KanbanStorageFailed } from "../kanban/card-attempts.ts";
+import { KanbanStorageFailed, KanbanStorageReason } from "../kanban/card-attempts.ts";
 import { DefectReporter } from "./defect-reporter.ts";
 import { LoopHealth, LoopStep, superviseLoopStep } from "./loop-health.ts";
 
-const storageFailed = KanbanStorageFailed.make({ operation: "card", reason: { _tag: "Missing" } });
+const storageFailed = KanbanStorageFailed.make({
+  operation: "card",
+  reason: KanbanStorageReason.cases.Missing.make({}),
+});
 
 const supervised = Effect.gen(function* () {
   const seen = yield* Ref.make<LoopHealth[]>([]);

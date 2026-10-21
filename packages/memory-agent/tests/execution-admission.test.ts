@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Latch, Layer } from "effect";
+import { Config, Deferred, Effect, Fiber, Latch, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import {
+  AdmissionWait,
   ExecutionAdmission,
   type ExecutionAdmissionLimits,
   ExecutionSaturated,
@@ -48,10 +49,11 @@ describe("ExecutionAdmission", () => {
       // A request starting new work waits a while for room, then hears the app is busy.
       const refused = yield* Effect.forkChild(
         Effect.flip(
-          admission.run("workflow", Effect.succeed("must not run"), {
-            _tag: "upTo",
-            duration: "1 second",
-          }),
+          admission.run(
+            "workflow",
+            Effect.succeed("must not run"),
+            AdmissionWait.upTo({ duration: "1 second" }),
+          ),
         ),
       );
       yield* TestClock.adjust("5 seconds");
@@ -126,7 +128,7 @@ describe("ExecutionAdmission", () => {
           }),
         ),
       );
-      assert.strictEqual(failure._tag, "ConfigError");
+      assert.instanceOf(failure, Config.ConfigError);
     }),
   );
 });

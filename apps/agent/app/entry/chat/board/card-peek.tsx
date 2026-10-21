@@ -23,7 +23,7 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet";
 import { Textarea } from "../../../components/ui/textarea";
-import type { BoardEdit, BoardView, HumanDecisionRequest, KanbanView } from "../../api";
+import { BoardEdit, type BoardView, type HumanDecisionRequest, type KanbanView } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
 import { cardStatusLabels } from "./board-moves";
@@ -363,34 +363,36 @@ function CardEditor({
   const submit = (change: BoardEdit) => void onSubmit(change).then((message) => setError(message));
   const save = () =>
     card === null
-      ? submit({
-          _tag: "AddCard",
-          planVersion,
-          index: cardCount,
-          card: {
-            title: form.title.trim(),
-            description: form.description,
-            dependsOn: ids(form.dependsOn),
-            acceptanceCriteria: lines(form.acceptanceCriteria),
-            ...contractFields(form),
-          },
-        })
-      : submit({
-          _tag: "EditCard",
-          planVersion,
-          cardId: card.id,
-          patch: {
-            title: form.title.trim(),
-            description: form.description,
-            dependsOn: ids(form.dependsOn),
-            acceptanceCriteria: lines(form.acceptanceCriteria),
-            outcome: blankToNull(form.outcome),
-            boundaries: listOrNull(form.boundaries),
-            risk: form.risk === "none" ? null : form.risk,
-            requiredEvidence: listOrNull(form.requiredEvidence),
-            humanDecision: blankToNull(form.humanDecision),
-          },
-        });
+      ? submit(
+          BoardEdit.AddCard({
+            planVersion,
+            index: cardCount,
+            card: {
+              title: form.title.trim(),
+              description: form.description,
+              dependsOn: ids(form.dependsOn),
+              acceptanceCriteria: lines(form.acceptanceCriteria),
+              ...contractFields(form),
+            },
+          }),
+        )
+      : submit(
+          BoardEdit.EditCard({
+            planVersion,
+            cardId: card.id,
+            patch: {
+              title: form.title.trim(),
+              description: form.description,
+              dependsOn: ids(form.dependsOn),
+              acceptanceCriteria: lines(form.acceptanceCriteria),
+              outcome: blankToNull(form.outcome),
+              boundaries: listOrNull(form.boundaries),
+              risk: form.risk === "none" ? null : form.risk,
+              requiredEvidence: listOrNull(form.requiredEvidence),
+              humanDecision: blankToNull(form.humanDecision),
+            },
+          }),
+        );
 
   return (
     <form
@@ -520,7 +522,7 @@ function CardEditor({
             variant="destructive"
             className="mr-auto"
             disabled={pending}
-            onClick={() => submit({ _tag: "CancelCard", planVersion, cardId: card.id })}
+            onClick={() => submit(BoardEdit.CancelCard({ planVersion, cardId: card.id }))}
           >
             카드 취소
           </Button>

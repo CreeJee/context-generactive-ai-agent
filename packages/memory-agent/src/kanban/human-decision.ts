@@ -15,7 +15,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import { Activity, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { AppEvents } from "../events/app-events.ts";
 import { KanbanStorageFailed, KanbanStorageReason } from "./card-attempts.ts";
-import type { BoardAuthor, CardStatus } from "../workflow/card.ts";
+import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
 import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowStorage, type StoredExecution } from "../workflow/owner-workflow-storage.ts";
 import { Workflows, WorkflowStorageError } from "../workflow/workflow.ts";
@@ -268,7 +268,7 @@ const applyAnswer = (payload: HumanDecisionPayload, answer: DecisionAnswer) =>
           to,
           detail: `card ${payload.cardId} decided: ${answer.choice}`,
         },
-        { _tag: "User" },
+        BoardAuthor.cases.User.make({}),
       )
       .pipe(
         Effect.as(true),

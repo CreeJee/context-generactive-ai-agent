@@ -16,6 +16,7 @@ import {
   ArchiveHost,
   ArchiveInstaller,
   ArchiveInstallFailed,
+  ArchiveInstallFailedReason,
   type PinnedArchive,
 } from "../src/runtime/archive-install.ts";
 import {
@@ -79,19 +80,15 @@ it.effect("checksum mismatch never stages; escaping entries never extract or pub
   Effect.gen(function* () {
     const mismatch = fixture();
     expect(
-      yield* Effect.result(install({ ...mismatch.host, checksum: () => Effect.succeed("wrong") })),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "ArchiveInstallFailed", reason: { _tag: "ChecksumMismatch" } },
-    });
+      (yield* Effect.flip(install({ ...mismatch.host, checksum: () => Effect.succeed("wrong") })))
+        .reason,
+    ).toEqual(ArchiveInstallFailedReason.cases.ChecksumMismatch.make({ algorithm: "sha256" }));
     expect(mismatch.calls).toEqual(["download"]);
     const unsafe = fixture();
     expect(
-      yield* Effect.result(install({ ...unsafe.host, list: () => Effect.succeed("../outside\n") })),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: { reason: { _tag: "UnsafeEntry", entry: "../outside" } },
-    });
+      (yield* Effect.flip(install({ ...unsafe.host, list: () => Effect.succeed("../outside\n") })))
+        .reason,
+    ).toEqual(ArchiveInstallFailedReason.cases.UnsafeEntry.make({ entry: "../outside" }));
     expect(unsafe.calls).toEqual(["download", "checksum", "stage", "write", "cleanup"]);
   }),
 );
@@ -100,27 +97,25 @@ it.effect("extract and cleanup failures remain typed; interruption waits for cle
   Effect.gen(function* () {
     const failed = fixture();
     const error = ArchiveInstallFailed.make({
-      reason: { _tag: "HostOperationFailed", operation: "extract", cause: "tar failed" },
+      reason: ArchiveInstallFailedReason.cases.HostOperationFailed.make({
+        operation: "extract",
+        cause: "tar failed",
+      }),
     });
-    expect(
-      yield* Effect.result(install({ ...failed.host, extract: () => Effect.fail(error) })),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: error,
-    });
+    expect(yield* Effect.flip(install({ ...failed.host, extract: () => Effect.fail(error) }))).toBe(
+      error,
+    );
     expect(failed.calls.at(-1)).toBe("cleanup");
     expect(failed.calls).not.toContain("publish");
     const cleanupError = ArchiveInstallFailed.make({
-      reason: { _tag: "HostOperationFailed", operation: "cleanup", cause: "busy" },
+      reason: ArchiveInstallFailedReason.cases.HostOperationFailed.make({
+        operation: "cleanup",
+        cause: "busy",
+      }),
     });
     expect(
-      yield* Effect.result(
-        install({ ...fixture().host, cleanup: () => Effect.fail(cleanupError) }),
-      ),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: cleanupError,
-    });
+      yield* Effect.flip(install({ ...fixture().host, cleanup: () => Effect.fail(cleanupError) })),
+    ).toBe(cleanupError);
     const cancelled = fixture();
     const entered = yield* Deferred.make<void>();
     const extracting = yield* Effect.forkChild(
@@ -165,18 +160,22 @@ it.live("native adapter installs real tar contents and keeps an existing target 
     );
     const installer = Context.get(installerContext, ArchiveInstaller);
     expect(
-      yield* Effect.result(installer.install({ archive: { ...pin, digest: "wrong" }, target })),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: { reason: { _tag: "ChecksumMismatch" } },
-    });
+      (yield* Effect.flip(installer.install({ archive: { ...pin, digest: "wrong" }, target })))
+        .reason,
+    ).toEqual(ArchiveInstallFailedReason.cases.ChecksumMismatch.make({ algorithm: "sha256" }));
     expect(yield* fs.readFileString(path.join(target, "old"))).toBe("old");
     yield* installer.install({ archive: { ...pin, digest }, target });
     expect(yield* fs.readFileString(path.join(target, "package/tool"))).toBe("installed");
     expect(yield* fs.readDirectory(directory)).toEqual(["tool"]);
     for (const rejected of [
-      { bytes: tgz([{ name: "../outside", content: "escape" }]), reason: "UnsafeEntry" },
-      { bytes: new Uint8Array([1, 2, 3]), reason: "HostOperationFailed" },
+      {
+        bytes: tgz([{ name: "../outside", content: "escape" }]),
+        isReason: ArchiveInstallFailedReason.guards.UnsafeEntry,
+      },
+      {
+        bytes: new Uint8Array([1, 2, 3]),
+        isReason: ArchiveInstallFailedReason.guards.HostOperationFailed,
+      },
     ]) {
       const rejectedDigest = yield* native.checksum({ bytes: rejected.bytes, algorithm: "sha256" });
       const rejectedContext = yield* Layer.build(
@@ -189,14 +188,13 @@ it.live("native adapter installs real tar contents and keeps an existing target 
           ),
         ),
       );
-      expect(
-        yield* Effect.result(
-          Context.get(rejectedContext, ArchiveInstaller).install({
-            archive: { ...pin, digest: rejectedDigest },
-            target,
-          }),
-        ),
-      ).toMatchObject({ _tag: "Failure", failure: { reason: { _tag: rejected.reason } } });
+      const failure = yield* Effect.flip(
+        Context.get(rejectedContext, ArchiveInstaller).install({
+          archive: { ...pin, digest: rejectedDigest },
+          target,
+        }),
+      );
+      expect(rejected.isReason(failure.reason)).toBe(true);
       expect(yield* fs.readFileString(path.join(target, "package/tool"))).toBe("installed");
       expect(yield* fs.readDirectory(directory)).toEqual(["tool"]);
     }
@@ -233,15 +231,14 @@ it.effect("platform cleanup retries transient errno failures and interruption st
       ),
     );
     const host = Context.get(context, ArchiveHost);
-    const exhausted = yield* Effect.forkChild(Effect.result(host.cleanup(staging)));
+    const exhausted = yield* Effect.forkChild(Effect.flip(host.cleanup(staging)));
     yield* TestClock.adjust("11 seconds");
-    expect(yield* Fiber.join(exhausted)).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "ArchiveInstallFailed",
-        reason: { _tag: "HostOperationFailed", operation: "cleanup", cause: busy },
-      },
-    });
+    expect((yield* Fiber.join(exhausted)).reason).toEqual(
+      ArchiveInstallFailedReason.cases.HostOperationFailed.make({
+        operation: "cleanup",
+        cause: busy,
+      }),
+    );
     expect(attempts).toBe(11);
     attempts = 0;
     const cancelled = yield* Effect.forkChild(host.cleanup(staging));

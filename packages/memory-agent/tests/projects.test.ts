@@ -3,7 +3,13 @@ import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Context, Effect, FileSystem, Layer, Path, PlatformError } from "effect";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
-import { Projects } from "../src/projects/projects.ts";
+import {
+  ProjectHostFailed,
+  ProjectHostReason,
+  ProjectNotFound,
+  ProjectRootRejected,
+  Projects,
+} from "../src/projects/projects.ts";
 
 const hostLayer = Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer);
 const workspace = Effect.fnUntraced(function* () {
@@ -43,15 +49,14 @@ it.live("registers a canonical root once and lists it after reopening", () =>
       Effect.gen(function* () {
         const projects = yield* fixture.open(fs);
         const project = yield* projects.add(link);
-        const again = yield* Effect.result(projects.add(app));
+        const again = yield* Effect.flip(projects.add(app));
         return { project, again };
       }),
     );
     expect(added.project).toMatchObject({ root: app, name: "app", crossRecallExcluded: false });
-    expect(added.again).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "ProjectRootRejected", reason: "already_registered" },
-    });
+    expect(added.again).toEqual(
+      ProjectRootRejected.make({ root: app, reason: "already_registered" }),
+    );
     const reopened = yield* fixture.open(fs);
     expect(yield* reopened.list).toEqual([added.project]);
   }),
@@ -69,11 +74,8 @@ it.live("rejects missing, file and storage-overlapping roots", () =>
       { root: file, reason: "not_directory" },
       { root: storage, reason: "overlaps_storage" },
       { root: base, reason: "overlaps_storage" },
-    ]) {
-      expect(yield* Effect.result(projects.add(input.root))).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "ProjectRootRejected", reason: input.reason },
-      });
+    ] as const) {
+      expect(yield* Effect.flip(projects.add(input.root))).toEqual(ProjectRootRejected.make(input));
     }
   }),
 );
@@ -86,10 +88,9 @@ it.live("toggles cross-project recall exclusion and reports unknown ids", () =>
     expect((yield* projects.setCrossRecallExcluded(project.id, true)).crossRecallExcluded).toBe(
       true,
     );
-    expect(yield* Effect.result(projects.setCrossRecallExcluded("nope", true))).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "ProjectNotFound", id: "nope" },
-    });
+    expect(yield* Effect.flip(projects.setCrossRecallExcluded("nope", true))).toEqual(
+      ProjectNotFound.make({ id: "nope" }),
+    );
   }),
 );
 
@@ -102,10 +103,9 @@ it.live("starts in ask mode and switches the permission mode", () =>
     for (const mode of ["auto", "full", "ask"] as const) {
       expect((yield* projects.setPermissionMode(project.id, mode)).permissionMode).toBe(mode);
     }
-    expect(yield* Effect.result(projects.setPermissionMode("nope", "auto"))).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "ProjectNotFound" },
-    });
+    expect(yield* Effect.flip(projects.setPermissionMode("nope", "auto"))).toBeInstanceOf(
+      ProjectNotFound,
+    );
   }),
 );
 
@@ -124,20 +124,24 @@ it.live("permission and stat failures stay typed and cannot register a project",
           requested === fixture.app ? Effect.fail(denied) : fixture.fs.realPath(requested),
       }),
     );
-    expect(yield* Effect.result(projects.add(fixture.app))).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "ProjectHostFailed", reason: { _tag: "RealPathFailed", cause: denied } },
-    });
+    expect(yield* Effect.flip(projects.add(fixture.app))).toEqual(
+      ProjectHostFailed.make({
+        root: fixture.app,
+        reason: ProjectHostReason.cases.RealPathFailed.make({ cause: denied }),
+      }),
+    );
     const raced = yield* fixture.open(
       FileSystem.makeNoop({
         ...fixture.fs,
         stat: () => Effect.fail(denied),
       }),
     );
-    expect(yield* Effect.result(raced.add(fixture.app))).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "ProjectHostFailed", reason: { _tag: "StatFailed", cause: denied } },
-    });
+    expect(yield* Effect.flip(raced.add(fixture.app))).toEqual(
+      ProjectHostFailed.make({
+        root: fixture.app,
+        reason: ProjectHostReason.cases.StatFailed.make({ cause: denied }),
+      }),
+    );
     expect(yield* projects.list).toEqual([]);
   }),
 );

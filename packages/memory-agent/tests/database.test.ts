@@ -2,7 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { it } from "@effect/vitest";
 import { DateTime, Effect, Exit, FileSystem, Layer, Path } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { Database, migrateDatabase, assertDatabaseSchema } from "../src/db/database.ts";
+import {
+  Database,
+  DatabaseSchemaRejectedReason,
+  migrateDatabase,
+  assertDatabaseSchema,
+} from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
@@ -101,13 +106,23 @@ describe("Database", () => {
     const sqlite = new DatabaseSync(":memory:");
     try {
       expect(() => assertDatabaseSchema(sqlite)).toThrow(
-        expect.objectContaining({ reason: expect.objectContaining({ _tag: "MigrationPending" }) }),
+        expect.objectContaining({
+          reason: DatabaseSchemaRejectedReason.cases.MigrationPending.make({
+            actual: 0,
+            supported: migrations.length,
+          }),
+        }),
       );
       migrateDatabase(sqlite);
       expect(assertDatabaseSchema(sqlite)).toBe(migrations.length);
       sqlite.exec(`PRAGMA user_version=${migrations.length + 1}`);
       expect(() => assertDatabaseSchema(sqlite)).toThrow(
-        expect.objectContaining({ reason: expect.objectContaining({ _tag: "NewerThanBuild" }) }),
+        expect.objectContaining({
+          reason: DatabaseSchemaRejectedReason.cases.NewerThanBuild.make({
+            actual: migrations.length + 1,
+            supported: migrations.length,
+          }),
+        }),
       );
       sqlite.exec(
         `PRAGMA user_version=${migrations.length}; ALTER TABLE owner_read_recoveries RENAME TO missing_receipts`,

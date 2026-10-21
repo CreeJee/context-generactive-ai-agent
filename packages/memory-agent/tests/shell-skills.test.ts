@@ -1,7 +1,7 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Cause, Effect, FileSystem, Option, Path } from "effect";
 import { HttpServerResponse } from "effect/http";
-import type { NetAddress } from "effect/net";
+import { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { expect, test } from "vite-plus/test";
 import { builtinOverlap } from "../src/skills/shell-skills.ts";
@@ -10,15 +10,13 @@ import { TestEnv, testAgent } from "./support/test-env.ts";
 import { inRun } from "./support/run-span.ts";
 import { sdk } from "./agents/agent-env.ts";
 
-const portOf = (address: NetAddress.SocketAddress) => {
-  switch (address._tag) {
-    case "InetAddressV4":
-    case "InetAddressV6":
-      return Effect.succeed(address.port);
-    case "UnixPathAddress":
-      return Effect.die("the test server listens on TCP");
-  }
-};
+const portOf = (address: NetAddress.SocketAddress) =>
+  Effect.succeed(address).pipe(
+    Effect.filterOrElse(NetAddress.isInetAddress, () =>
+      Effect.die("the test server listens on TCP"),
+    ),
+    Effect.map((inet) => inet.port),
+  );
 
 const rejection = <A, R>(operation: Effect.Effect<A, Cause.UnknownError, R>) =>
   operation.pipe(

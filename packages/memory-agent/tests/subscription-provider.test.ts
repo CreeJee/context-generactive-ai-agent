@@ -11,6 +11,7 @@ import {
   type OAuthConnectionStatus,
 } from "../src/oauth/validation-harness.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
+import { ModelUnavailable } from "../src/providers/contracts.ts";
 import {
   createSubscriptionProvider,
   parseSubscriptionCatalog,
@@ -546,15 +547,14 @@ describe("subscription provider product services", () => {
         reasoningEffort: "high",
       });
 
-      const invalid = yield* Effect.result(provider.models.select("gpt-6-astra", "medium"));
-      expect(invalid._tag).toBe("Failure");
-      if (invalid._tag === "Failure")
-        expect(invalid.failure).toMatchObject({
-          _tag: "ModelUnavailable",
+      const invalid = yield* Effect.flip(provider.models.select("gpt-6-astra", "medium"));
+      expect(invalid).toEqual(
+        ModelUnavailable.make({
           provider: "openai",
           model: "gpt-6-astra",
           reasoningEffort: "medium",
-        });
+        }),
+      );
     }),
   );
 });

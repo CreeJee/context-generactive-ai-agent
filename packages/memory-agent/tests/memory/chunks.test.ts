@@ -77,7 +77,7 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunk r
             }),
           ),
         );
-        expect(failed._tag).toBe("IndexingError");
+        expect(failed).toBeInstanceOf(IndexingError);
         expect(index.size()).toBe(2);
         yield* env.reopen;
         yield* env.use(

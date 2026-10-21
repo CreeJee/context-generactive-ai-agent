@@ -1,4 +1,4 @@
-import { GlobalConfigFailed } from "../src/config/global-config.ts";
+import { GlobalConfigFailed, GlobalConfigFailedReason } from "../src/config/global-config.ts";
 import { it as effectTest } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -92,7 +92,7 @@ describe("CrossProviderMediaConsent", () => {
         read: Effect.fail(
           GlobalConfigFailed.make({
             operation: "read",
-            reason: { _tag: "ReadFailed" },
+            reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
             cause: "broken store",
           }),
         ),
@@ -100,7 +100,7 @@ describe("CrossProviderMediaConsent", () => {
           Effect.fail(
             GlobalConfigFailed.make({
               operation: "read",
-              reason: { _tag: "ReadFailed" },
+              reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
               cause: "broken store",
             }),
           ),

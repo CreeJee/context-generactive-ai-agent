@@ -42,7 +42,7 @@ it.effect("returns a safe partial-save response without credential or provider d
           Effect.fail(
             GlobalConfigFailed.make({
               operation: "write",
-              reason: { _tag: "WriteFailed" },
+              reason: GlobalConfigFailed.fields.reason.cases.WriteFailed.make({}),
               cause: new Error("private config detail"),
             }),
           ),

@@ -16,7 +16,7 @@ import {
 } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
-import type { AttemptFailureReason } from "../work-trace/contracts.ts";
+import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
@@ -242,14 +242,17 @@ const make = Effect.gen(function* () {
                         status: "failed" as const,
                         result: `Operation failed (${failureTags(cause)}). Inspect its effects before retrying.`,
                       },
-                      failure: { _tag: "OperationFailed" as const },
+                      failure: AttemptFailureReason.cases.OperationFailed.make({}),
                     },
             });
             // Persist once. A storage failure is not a second operation failure to save again.
             const stored = yield* Effect.exit(save(saved.status, saved.result));
             const recorded = Exit.isSuccess(stored)
               ? { failure, stage: "process" as const }
-              : { failure: { _tag: "ResultStorageFailed" as const }, stage: "finish" as const };
+              : {
+                  failure: AttemptFailureReason.cases.ResultStorageFailed.make({}),
+                  stage: "finish" as const,
+                };
             const status =
               recorded.failure !== null
                 ? "failed"

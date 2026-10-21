@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
-import { ReportBundle } from "../src/report/bundle-contract.ts";
+import { BundleEvent, ReportBundle } from "../src/report/bundle-contract.ts";
 import { bundleLimits, collectReportBundle } from "../src/report/bundle.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
@@ -74,9 +74,9 @@ testAgent()("report evidence bundle", (it) => {
         error: { code: "provider_failed" },
       });
       // The call and its result are one event; a failed result keeps the longer limit.
-      const call = last?.events.find((event) => event._tag === "ToolCall");
+      const call = last?.events.find(BundleEvent.guards.ToolCall);
       expect(call).toMatchObject({ seq: 1, name: "read_file", result: { ok: false } });
-      if (call?._tag !== "ToolCall" || call.result === null) throw new Error("missing call");
+      if (call === undefined || call.result === null) throw new Error("missing call");
       expect(call.result.text).toEqual({
         text: expect.stringContaining("ENOENT f400"),
         cut: true,

@@ -1,8 +1,8 @@
 import { ChevronRightIcon } from "lucide-react";
 import {
+  BundleEvent,
   runHasFailure,
   runPlace,
-  type BundleEvent,
   type BundleRun,
   type BundleText,
   type ReportBundle,
@@ -37,17 +37,13 @@ export function bundleGaps(bundle: ReportBundle): string[] {
 
 /** How many texts in the bundle were cut to their limit. */
 export function cutTexts(bundle: ReportBundle): number {
-  const texts = (event: BundleEvent): BundleText[] => {
-    switch (event._tag) {
-      case "Message":
-        return [event.text];
-      case "ToolCall":
-        return event.result === null ? [event.input] : [event.input, event.result.text];
-      case "Approval":
-      case "Trace":
-        return [];
-    }
-  };
+  const texts = (event: BundleEvent): BundleText[] =>
+    BundleEvent.match(event, {
+      Message: ({ text }) => [text],
+      ToolCall: ({ input, result }) => (result === null ? [input] : [input, result.text]),
+      Approval: () => [],
+      Trace: () => [],
+    });
   return [
     ...bundle.timeline.items.flatMap((run) => [
       ...(run.error === null ? [] : [run.error.detail]),
@@ -92,51 +88,47 @@ function Text({ value }: { value: BundleText }) {
 }
 
 function Event({ event }: { event: BundleEvent }) {
-  switch (event._tag) {
-    case "Message":
-      return (
-        <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">
-            {event.role === "user" ? "사용자" : "모델"} · {koreanLocalTime(event.at)}
-          </p>
-          <Text value={event.text} />
-        </div>
-      );
-    case "ToolCall":
-      return (
-        <div className="space-y-1">
-          <p className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-medium">
-              call-{event.seq} {event.name ?? "(이름 없음)"}
-            </span>
-            {event.result === null ? (
-              <Badge variant="outline">결과 없음</Badge>
-            ) : event.result.ok === false ? (
-              <Badge variant="destructive">실패</Badge>
-            ) : (
-              <Badge variant="secondary">완료</Badge>
-            )}
-          </p>
-          <Text value={event.input} />
-          {event.result && <Text value={event.result.text} />}
-        </div>
-      );
-    case "Approval":
-      return (
-        <p className="text-xs">
-          승인 요청 {event.tool ?? "(도구 미상)"}: {event.status}
-          {event.approved === null ? "" : event.approved ? " · 승인" : " · 거부"} ·{" "}
-          {koreanLocalTime(event.requestedAt)}
+  return BundleEvent.match(event, {
+    Message: (message) => (
+      <div className="space-y-1">
+        <p className="text-xs text-muted-foreground">
+          {message.role === "user" ? "사용자" : "모델"} · {koreanLocalTime(message.at)}
         </p>
-      );
-    case "Trace":
-      return (
-        <p className="text-xs">
-          Work Trace #{event.ref}: {event.status}
-          {event.parentToolSeq === null ? "" : ` (call-${event.parentToolSeq}에서 시작)`}
+        <Text value={message.text} />
+      </div>
+    ),
+    ToolCall: (call) => (
+      <div className="space-y-1">
+        <p className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-medium">
+            call-{call.seq} {call.name ?? "(이름 없음)"}
+          </span>
+          {call.result === null ? (
+            <Badge variant="outline">결과 없음</Badge>
+          ) : call.result.ok === false ? (
+            <Badge variant="destructive">실패</Badge>
+          ) : (
+            <Badge variant="secondary">완료</Badge>
+          )}
         </p>
-      );
-  }
+        <Text value={call.input} />
+        {call.result && <Text value={call.result.text} />}
+      </div>
+    ),
+    Approval: (approval) => (
+      <p className="text-xs">
+        승인 요청 {approval.tool ?? "(도구 미상)"}: {approval.status}
+        {approval.approved === null ? "" : approval.approved ? " · 승인" : " · 거부"} ·{" "}
+        {koreanLocalTime(approval.requestedAt)}
+      </p>
+    ),
+    Trace: (trace) => (
+      <p className="text-xs">
+        Work Trace #{trace.ref}: {trace.status}
+        {trace.parentToolSeq === null ? "" : ` (call-${trace.parentToolSeq}에서 시작)`}
+      </p>
+    ),
+  });
 }
 
 function Run({ run }: { run: BundleRun }) {

@@ -1,7 +1,7 @@
 import { it as effectTest } from "@effect/vitest";
 import { deepStrictEqual, strictEqual, assertTrue } from "@effect/vitest/utils";
-import { Context, Effect, Layer } from "effect";
-import { ApiUsage } from "../src/agent/api-usage.ts";
+import { Context, Effect, Layer, Schema } from "effect";
+import { ApiUsage, ApiUsageRejected } from "../src/agent/api-usage.ts";
 import { Database } from "../src/db/database.ts";
 import { sqlAll } from "./support/sql.ts";
 
@@ -41,7 +41,7 @@ effectTest.effect(
         }),
       );
       deepStrictEqual(
-        rejected._tag === "ApiUsageRejected" && rejected.reason,
+        Schema.is(ApiUsageRejected)(rejected) && rejected.reason,
         "cache-exceeds-input",
       );
       yield* usage.record({

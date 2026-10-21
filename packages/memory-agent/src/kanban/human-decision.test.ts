@@ -6,6 +6,7 @@ import { sqlGet, sqlRun } from "../../tests/support/sql.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Boards } from "../workflow/board.ts";
+import { BoardAuthor } from "../workflow/card.ts";
 import { Workflows } from "../workflow/workflow.ts";
 import {
   DecisionAnswer,
@@ -35,7 +36,7 @@ const step = (id: string) => ({
   ruleRefs: [],
 });
 
-const orchestrator = { _tag: "Orchestrator", runId: "run-1" } as const;
+const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "run-1" });
 const uncertain: DecisionKind = DecisionKind.cases.UncertainSideEffect.make({
   runId: "card-run-1",
   toolNames: ["write_file"],
@@ -115,9 +116,9 @@ testAgent()("human decisions", (it) => {
       );
       expect(yield* cardStatus(sessionId, "a")).toBe("blocked");
       const board = yield* (yield* Boards).view(sessionId);
-      expect(board.cards.find(({ card }) => card.id === "a")?.lastChange?.author).toEqual({
-        _tag: "User",
-      });
+      expect(board.cards.find(({ card }) => card.id === "a")?.lastChange?.author).toEqual(
+        BoardAuthor.cases.User.make({}),
+      );
       expect(yield* decisions.pending(sessionId)).toEqual([]);
       expect(yield* executionStatus(request.requestId)).toEqual({ status: "completed" });
     }),
