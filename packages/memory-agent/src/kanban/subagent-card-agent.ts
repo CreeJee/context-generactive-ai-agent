@@ -102,6 +102,11 @@ const make = Effect.gen(function* () {
     _tag: "Failed",
     failure: { _tag: "Agent", code },
   });
+  const unavailable = (error: string, reason: string | null) =>
+    Effect.as(
+      Effect.logWarning("Kanban card agent unavailable", { error, reason }),
+      failed("unavailable"),
+    );
   const rejected = (failure: VerdictFailure): CardVerdict => ({ _tag: "Failed", failure });
 
   const agent = CardAgent.of({
@@ -155,12 +160,9 @@ const make = Effect.gen(function* () {
         }
         // Its session, project or run records failed; the error stays in the logs only.
       }).pipe(
-        Effect.catch((error) =>
-          Effect.as(
-            Effect.logWarning("Kanban card agent unavailable", { error: error._tag }),
-            failed("unavailable"),
-          ),
-        ),
+        // A database failure also names its kind (lock, constraint, ...), never its statement.
+        Effect.catchTag("SqlError", (error) => unavailable(error._tag, error.reason._tag)),
+        Effect.catch((error) => unavailable(error._tag, null)),
         // The card run's tool calls join this span's trace.
         Effect.withSpan("CardAgent.run"),
       ),
