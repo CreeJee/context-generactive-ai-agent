@@ -200,10 +200,33 @@ const stringify = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-const parseToolJson = EffectFunction.flow(
-  Schema.decodeResult(Schema.fromJsonString(Schema.Unknown)),
-  Result.getOrThrow,
-);
+const decodeToolJson = Schema.decodeResult(Schema.fromJsonString(Schema.Unknown));
+
+/**
+ * A tool call's arguments as its input schema reads them, or the text the model gets back instead
+ * of a run failure: arguments the stream cut off or the schema refuses are the model's to fix.
+ */
+// SDK tool definitions and calls are opaque here, as everywhere in this boundary.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters
+const toolJson = (call: any): Result.Result<any, string> =>
+  Result.mapError(
+    decodeToolJson(call.function.arguments.trim() || "{}"),
+    () =>
+      `Tool arguments for ${call.function.name} are not valid JSON; they may have been cut off. Call the tool again with complete arguments, splitting large content across smaller calls.`,
+  );
+// oxlint-disable-next-line anti-slop/no-unknown-parameters
+const toolInput = (tool: any, call: any): Result.Result<{ raw: any; args: any }, string> =>
+  Result.flatMap(toolJson(call), (raw) => {
+    if (!(isTruthy(tool.inputSchema) && isStandardSchema(tool.inputSchema)))
+      return Result.succeed({ raw, args: raw });
+    try {
+      return Result.succeed({ raw, args: parseWithStandardSchema(tool.inputSchema, raw) });
+    } catch (error) {
+      return Result.fail(
+        `Input validation failed for tool ${call.function.name}: ${error instanceof Error ? error.message : "Validation failed"}`,
+      );
+    }
+  });
 
 /** Complete SDK loop in worker_threads. No worker restart or operation replay is performed.
  * Unsupported object-identity SDK capabilities are rejected before worker admission.
@@ -545,14 +568,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   const tool = ownerTools.find((tool) => tool.name === invocation.name);
                   // The inventory retains SDK needsApproval. Without owner-issued
                   // approval continuation support, it cannot authorize execution.
-                  if (
+                  // Arguments the schema refuses are answered to the model, not refused here.
+                  return !(
                     !isTruthy(tool?.execute) ||
                     (isTruthy(tool.needsApproval) && !resumedApproval(invocation.toolCallId))
-                  )
-                    return false;
-                  if (isTruthy(tool.inputSchema) && isStandardSchema(tool.inputSchema))
-                    parseWithStandardSchema(tool.inputSchema, invocation.args);
-                  return true;
+                  );
                 } catch {
                   return false;
                 }
@@ -594,6 +614,21 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   return false;
               }
               return true;
+            };
+            /** The model gets `result` for `call` in place of running it; later hooks see it done. */
+            const answerInvalid = (call: any, result: string) => {
+              MutableHashMap.set(completedTools, call.id, {
+                toolCallId: call.id,
+                toolName: call.function.name,
+                toolCall: call,
+                tool: ownerTools.find((tool) => tool.name === call.function.name),
+                ok: false,
+                error: result,
+                duration: 0,
+                result,
+              });
+              ownerContext.messages.push({ role: "tool", toolCallId: call.id, content: result });
+              MutableHashMap.set(decisions, call.id, { type: "skip", result });
             };
             const ownerEndpointOptions = {
               permits: (capability: OwnerRpcCapability) =>
@@ -669,6 +704,14 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         if (isTruthy(next.done)) {
                           MutableHashMap.remove(models, input.id);
                           ownerContext.phase = "afterModel";
+                          // The worker's SDK answers arguments that are not JSON by itself and
+                          // never asks the owner; record the same answer here.
+                          for (const call of grants.toolCalls())
+                            if (!MutableHashMap.has(completedTools, call.id))
+                              Result.match(toolJson(call), {
+                                onSuccess: () => undefined,
+                                onFailure: (result) => answerInvalid(call, result),
+                              });
                         } else {
                           grants.observe(next.value);
                           if (next.value.type === "TOOL_CALL_END") {
@@ -764,13 +807,12 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                             (isTruthy(definition.needsApproval) && !resumedApproval(call.id))
                           )
                             return yield* refused({ _tag: "UnsupportedApprovalTool" });
-                          const raw = parseToolJson(call.function.arguments);
-                          let args = raw;
-                          if (
-                            isTruthy(definition.inputSchema) &&
-                            isStandardSchema(definition.inputSchema)
-                          )
-                            args = parseWithStandardSchema(definition.inputSchema, args);
+                          const input = toolInput(definition, call);
+                          if (Result.isFailure(input)) {
+                            answerInvalid(call, input.failure);
+                            continue;
+                          }
+                          const { raw, args } = input.success;
                           const info = {
                             toolCall: call,
                             tool: definition,

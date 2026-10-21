@@ -35,6 +35,7 @@ import { Subagents } from "../../src/subagents/subagents.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
 import { ToolFailed } from "../../src/tools/failure.ts";
+import { toToolSchema } from "../../src/tools/schema.ts";
 import { parallelReads } from "../../src/tools/parallel-reads.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -193,6 +194,62 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
         expect(
           reopened.prepare("SELECT fingerprint, status FROM owner_rpc_operations").all(),
         ).toEqual(rows);
+      }),
+    20000,
+  );
+
+  it.effect(
+    "arguments the stream cut off or the schema refuses go back to the model, not end the run",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* ownerFixture();
+        const adapter = new ScriptedTextAdapter([
+          {
+            toolCalls: [
+              { id: "cut", name: "owner_tool", arguments: '{"value": "unterminated' },
+              { id: "invalid", name: "owner_tool", arguments: '{"not": "null"}' },
+            ],
+          },
+          { text: "retried" },
+        ]);
+        let calls = 0;
+        let phases = 0;
+        const tool = toolDefinition({
+          name: "owner_tool",
+          description: "owner",
+          inputSchema: toToolSchema(Schema.Struct({ value: Schema.String })),
+        }).server(() => {
+          calls++;
+          return "unused";
+        });
+        const chunks = yield* collect(
+          f.owner,
+          capabilities(
+            { adapter, agentLoopStrategy: maxIterations(3) },
+            {
+              tools: [tool],
+              middleware: [
+                {
+                  name: "record",
+                  onToolPhaseComplete: () => {
+                    phases++;
+                  },
+                },
+              ],
+            },
+          ),
+          { ...ownerTurn, messages: [{ role: "user", content: "go" }] },
+        );
+        expect(calls).toBe(0);
+        expect(phases).toBe(1);
+        const answered = adapter.invocations[1]?.messages.filter((m) => m.role === "tool") ?? [];
+        expect(answered.map((m) => [m.toolCallId, String(m.content)])).toEqual([
+          ["cut", expect.stringContaining("not valid JSON")],
+          ["invalid", expect.stringContaining("Input validation failed for tool owner_tool")],
+        ]);
+        expect(chunks).toContainEqual(
+          expect.objectContaining({ type: "TEXT_MESSAGE_CONTENT", delta: "retried" }),
+        );
       }),
     20000,
   );
