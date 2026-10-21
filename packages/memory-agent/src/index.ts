@@ -413,7 +413,14 @@ export {
   type CardTransition,
   type UserChangeRequest,
 } from "./workflow/board-edit.ts";
-export { Boards, type BoardCard, type BoardRevision, type BoardView } from "./workflow/board.ts";
+export {
+  Boards,
+  type BoardCard,
+  type BoardColumnCounts,
+  type BoardRevision,
+  type BoardView,
+  type ProjectBoard,
+} from "./workflow/board.ts";
 export {
   DecisionAnswer,
   DecisionCloseReason,

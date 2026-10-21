@@ -44,6 +44,12 @@ export const projectQueries = {
       queryFn: () => api.decisionInbox(projectId),
       staleTime: 0,
     }),
+  boards: (projectId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.project.boards(projectId),
+      queryFn: () => api.projectBoards(projectId),
+      staleTime: 0,
+    }),
   traceTask: (projectId: string, taskId: string) =>
     queryOptions({
       queryKey: appQueryKeys.project.traceTask(projectId, taskId),
@@ -73,6 +79,8 @@ export const useSkillsQuery: {
 } & typeof useSkillsQueryBody = EffectFunction.dual(2, useSkillsQueryBody);
 export const useDecisionInboxQuery = (projectId: string) =>
   useQuery(projectQueries.decisions(projectId));
+export const useProjectBoardsQuery = (projectId: string) =>
+  useQuery(projectQueries.boards(projectId));
 export const useProjectTraceQuery = (projectId: string) =>
   useQuery(projectQueries.trace(projectId));
 const useProjectTraceTaskQueryBody = (projectId: string, taskId: string | null) =>

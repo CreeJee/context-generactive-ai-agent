@@ -39,6 +39,7 @@ import type {
   ModelSelection,
   PermissionMode,
   Project,
+  ProjectBoard,
   Session,
   SkillCatalog,
   TraceTaskDetail,
@@ -613,6 +614,9 @@ export const api = {
   /** Every unanswered card decision of the project, across conversations and Goals. */
   decisionInbox: (projectId: string) =>
     call<DecisionInboxItem[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/decisions`),
+  /** Every conversation's Plan as a board, across the project; running boards first. */
+  projectBoards: (projectId: string) =>
+    call<ProjectBoard[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/boards`),
   answerDecision: (
     holder: string,
     request: Pick<HumanDecisionRequest, "requestId" | "sessionId" | "goalInstanceId" | "cardId">,

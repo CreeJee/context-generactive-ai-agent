@@ -23,7 +23,7 @@ import {
 } from "./queries/project";
 import { FolderIcon, LogInIcon, SettingsIcon } from "lucide-react";
 import { match, P } from "ts-pattern";
-import { parseAsString, useQueryStates } from "nuqs";
+import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useState } from "react";
 import {
   Empty,
@@ -55,6 +55,7 @@ import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
+import { BoardList } from "./navigation/board-list";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
@@ -69,6 +70,8 @@ const locationParsers = {
   session: parseAsString,
   /** A board card the inbox opened; the session's board opens on it. */
   card: parseAsString,
+  /** The session's board, opened from the project's board list. */
+  board: parseAsBoolean,
 };
 
 function Placeholder({
@@ -180,7 +183,7 @@ export function App() {
   }, [projectId, sessions, sessionsQuery.data, setLocation]);
 
   const selectProject = (id: string) =>
-    void setLocation({ project: id, session: null, card: null }, { history: "push" });
+    void setLocation({ project: id, session: null, card: null, board: null }, { history: "push" });
   useEffect(() => setArchiveError(null), [projectId]);
 
   const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
@@ -478,6 +481,14 @@ export function App() {
                 holder={pageHolder()}
                 onOpenCard={(session, card) =>
                   void setLocation({ session, card }, { history: "push" })
+                }
+              />
+            )}
+            {projectId && (
+              <BoardList
+                projectId={projectId}
+                onOpenBoard={(session) =>
+                  void setLocation({ session, board: true, card: null }, { history: "push" })
                 }
               />
             )}

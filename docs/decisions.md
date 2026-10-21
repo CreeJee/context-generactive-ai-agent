@@ -2409,3 +2409,9 @@
 
 - `@tanstack/openai-base`의 chat-completions 어댑터는 `options.runId`를 무시하고 자기 id(`openai-compatible-…`)로 `RUN_STARTED`·`RUN_FINISHED`를 냈다. Goal에 묶인 run의 durable 전달 로그는 다른 run id의 lifecycle 이벤트를 `run_mismatch`로 거부하므로, compatible 모델로 Goal을 실행하면 첫 이벤트에서 전달이 끊겼다. responses 어댑터·Anthropic 어댑터처럼 `options.runId ?? generateId(...)`를 쓰도록 `patches/@tanstack__openai-base@0.11.1.patch`로 고친다.
 - bound run의 출력 기록(`workflow_run_events`)이나 실행 스트림이 실패하면 메시지 없는 태그드 오류를 SDK로 던지지 않는다. 서버가 실패를 태그·사유로 로그에 남기고 `run_record_failed`(기록 실패) 또는 `run_failed`(실행 스트림 실패) 코드의 `RUN_ERROR`로 전달을 끝낸다. 던지면 SDK가 "Unknown error occurred"로만 기록한다.
+
+## 칸반 보드 목록 접근 경로 (2026-10-21)
+
+- 보드는 대화마다 하나이고 그 대화의 채팅 안에서만 열 수 있었다. 사이드바 "판단 대기" 아래에 "칸반 보드"를 두어 프로젝트의 모든 대화 보드를 한 목록으로 보고, 고르면 그 대화로 이동해 보드를 연다(`?board=1`). 대화를 사이드바에서 바꾸면 `board`·`card` 쿼리는 사라진다.
+- 목록은 `GET /api/projects/:project/boards`(`Boards.list`)로 읽는다. Plan이 있는 보관하지 않은 대화만 담고, 카드 본문 대신 열별 카드 수·Plan 상태·버전·마지막 저장 시각·칸반 실행 여부를 준다. 칸반 실행 여부는 세션의 현재 Goal에 `active`인 `kanban_goals` 행이 있는지로 본다. 실행 중인 보드가 먼저, 그다음 최근 저장 순이다.
+- 목록은 세션 `run-state` 이벤트(보드 변경)와 프로젝트 `sessions` 이벤트(제목·보관 변경)로 다시 읽는다.

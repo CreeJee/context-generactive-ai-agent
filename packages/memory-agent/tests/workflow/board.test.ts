@@ -4,7 +4,7 @@ import { Boards } from "../../src/workflow/board.ts";
 import type { CardStatus } from "../../src/workflow/card.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
-import { freshSession, testAgent } from "../support/test-env.ts";
+import { freshSession, testAgent, TestEnv } from "../support/test-env.ts";
 
 const goal = {
   statement: "Run a Goal as a board",
@@ -233,6 +233,41 @@ testAgent()("kanban board", (it) => {
         },
       ]);
       expect((yield* workflows.get(id)).plan).toEqual(before.plan);
+    }),
+  );
+
+  it.effect("lists the project's boards: unarchived conversations with a Plan", () =>
+    Effect.gen(function* () {
+      const workflows = yield* Workflows;
+      const withPlan = yield* freshSession;
+      yield* workflows.updateGoal(withPlan, goal);
+      yield* workflows.updatePlan(withPlan, plan, orchestrator);
+      yield* workflows.transitionCard(
+        withPlan,
+        { cardId: "a", from: "ready", to: "in_progress" },
+        orchestrator,
+      );
+      const withoutPlan = yield* freshSession;
+      yield* workflows.updateGoal(withoutPlan, goal);
+      const archived = yield* freshSession;
+      yield* workflows.updateGoal(archived, goal);
+      yield* workflows.updatePlan(archived, plan, orchestrator);
+      yield* sqlRun(
+        "UPDATE sessions SET archived_at = ? WHERE id = ?",
+        "2026-01-01T00:00:00.000Z",
+        archived,
+      );
+
+      const boards = yield* (yield* Boards).list((yield* TestEnv).project.id);
+      const ids = boards.map((board) => board.sessionId);
+      expect(ids).toContain(withPlan);
+      expect(ids).not.toContain(withoutPlan);
+      expect(ids).not.toContain(archived);
+      expect(boards.find((board) => board.sessionId === withPlan)).toMatchObject({
+        plan: { version: 1, status: "ready", summary: "Board" },
+        counts: { backlog: 1, ready: 0, in_progress: 1, verify: 0, done: 0, blocked: 0 },
+        kanbanActive: false,
+      });
     }),
   );
 });

@@ -41,10 +41,25 @@ describe("hierarchical app query keys", () => {
     ]);
   });
 
+  test("refreshes the project's board list with its sessions and with board changes", () => {
+    expect(
+      invalidationKeys({
+        scope: "session",
+        projectId: "p1",
+        sessionId: "s1",
+        topic: "run-state",
+        revision: 1,
+      }),
+    ).toContainEqual(appQueryKeys.project.boards("p1"));
+    expect(
+      invalidationKeys({ scope: "project", projectId: "p1", topic: "sessions", revision: 1 }),
+    ).toContainEqual(appQueryKeys.project.boards("p1"));
+  });
+
   test("maps project and global resources without crossing scopes", () => {
     expect(
       invalidationKeys({ scope: "project", projectId: "p1", topic: "sessions", revision: 1 }),
-    ).toEqual([appQueryKeys.project.sessions("p1")]);
+    ).toEqual([appQueryKeys.project.sessions("p1"), appQueryKeys.project.boards("p1")]);
     expect(invalidationKeys({ scope: "global", topic: "embedding", revision: 1 })).toEqual([
       appQueryKeys.global.embedding,
     ]);

@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { UserChange, UserChangeRequestStatus, type UserChangeRequest } from "./board-edit.ts";
-import { BoardAuthor } from "./card.ts";
+import { BoardAuthor, type CardStatus } from "./card.ts";
 import {
   decodeWorkflowState,
   PlanStep,
@@ -34,6 +34,21 @@ export interface BoardView {
   readonly pendingChanges: readonly UserChangeRequest[];
 }
 
+/** Cards in each column of a board. */
+export type BoardColumnCounts = Readonly<Record<CardStatus, number>>;
+
+/** `GET /api/projects/:project/boards`: one conversation's Plan as a board, without its cards. */
+export interface ProjectBoard {
+  readonly sessionId: string;
+  readonly sessionTitle: string | null;
+  readonly plan: Pick<PlanArtifact, "version" | "status" | "summary">;
+  readonly counts: BoardColumnCounts;
+  /** Whether the session's current Goal runs as an active kanban board. */
+  readonly kanbanActive: boolean;
+  /** When the Plan was last saved. */
+  readonly updatedAt: string;
+}
+
 /** Revisions read to attribute cards; one more is the baseline of the oldest. */
 const revisionWindow = 200;
 const historyLimit = 30;
@@ -53,6 +68,28 @@ const ChangeRequestRow = Schema.Struct({
   reason: Schema.NullOr(Schema.String),
   created_at: Schema.String,
 });
+const ProjectBoardRow = Schema.Struct({
+  session_id: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  state_json: Schema.String,
+  updated_at: Schema.String,
+  kanban_active: Schema.Literals([0, 1]),
+});
+
+const noCards: BoardColumnCounts = {
+  backlog: 0,
+  ready: 0,
+  in_progress: 0,
+  verify: 0,
+  human_decision: 0,
+  done: 0,
+  blocked: 0,
+};
+const countedBy = (steps: readonly PlanStep[]): BoardColumnCounts =>
+  steps.reduce<BoardColumnCounts>(
+    (counts, step) => ({ ...counts, [step.status]: counts[step.status] + 1 }),
+    noCards,
+  );
 
 const encodeCard = Schema.encodeEffect(Schema.fromJsonString(PlanStep));
 
@@ -70,6 +107,10 @@ export class Boards extends Context.Service<
   Boards,
   {
     readonly view: (sessionId: string) => Effect.Effect<BoardView, WorkflowStorageError>;
+    /** The project's boards: every unarchived conversation with a Plan, running boards first. */
+    readonly list: (
+      projectId: string,
+    ) => Effect.Effect<readonly ProjectBoard[], WorkflowStorageError>;
   }
 >()("memory-agent/workflow/board/Boards") {
   static readonly layer = Layer.effect(
@@ -96,8 +137,47 @@ export class Boards extends Context.Service<
           created_at FROM board_change_requests
           WHERE session_id = ${sessionId} AND status = 'pending' ORDER BY id`,
       });
+      // A board runs when the session's current Goal has an active kanban row.
+      const projectBoards = SqlSchema.findAll({
+        Request: Schema.String,
+        Result: ProjectBoardRow,
+        execute: (projectId) => sql`SELECT w.session_id, s.title, w.state_json, w.updated_at,
+          EXISTS(SELECT 1 FROM kanban_goals k JOIN workflow_goal_identities g
+            ON g.goal_instance_id = k.goal_instance_id
+            WHERE g.session_id = w.session_id AND k.status = 'active') AS kanban_active
+          FROM session_workflows w JOIN sessions s ON s.id = w.session_id
+          WHERE s.project_id = ${projectId} AND s.archived_at IS NULL
+          ORDER BY kanban_active DESC, w.updated_at DESC`,
+      });
 
       return Boards.of({
+        list: (projectId) =>
+          Effect.gen(function* () {
+            const rows = yield* projectBoards(projectId);
+            const boards = yield* Effect.forEach(rows, (row) =>
+              Effect.map(
+                decodeWorkflowState(row.state_json),
+                ({ plan }): readonly ProjectBoard[] =>
+                  plan === null
+                    ? []
+                    : [
+                        {
+                          sessionId: row.session_id,
+                          sessionTitle: row.title,
+                          plan: {
+                            version: plan.version,
+                            status: plan.status,
+                            summary: plan.summary,
+                          },
+                          counts: countedBy(plan.steps),
+                          kanbanActive: row.kanban_active === 1,
+                          updatedAt: row.updated_at,
+                        },
+                      ],
+              ),
+            );
+            return boards.flat();
+          }).pipe(Effect.mapError((cause) => WorkflowStorageError.make({ cause }))),
         view: (sessionId) =>
           Effect.gen(function* () {
             const row = yield* current(sessionId);
