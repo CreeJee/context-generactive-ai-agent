@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect";
+import { Effect, Match, Option } from "effect";
 import type { CardDraft, CardPatch } from "../workflow/board-edit.ts";
 import type { BoardAuthor } from "../workflow/card.ts";
 import type { PlanStep, Workflows } from "../workflow/workflow.ts";
@@ -21,12 +21,11 @@ export const boardOps = (workflows: Workflows["Service"]) => {
       { _tag: "AddCard", planVersion: before.plan?.version ?? 0, card },
       author,
     );
-    switch (result._tag) {
-      case "Applied":
-        return Option.fromUndefinedOr(result.state.plan?.steps.find((step) => !known.has(step.id)));
-      case "Requested":
-        return Option.none<PlanStep>();
-    }
+    return Match.valueTags(result, {
+      Applied: ({ state }) =>
+        Option.fromUndefinedOr(state.plan?.steps.find((step) => !known.has(step.id))),
+      Requested: () => Option.none<PlanStep>(),
+    });
   });
 
   const editCard = Effect.fnUntraced(function* (

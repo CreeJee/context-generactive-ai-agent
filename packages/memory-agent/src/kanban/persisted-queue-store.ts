@@ -7,6 +7,7 @@ import {
   Exit,
   Latch,
   Layer,
+  Match,
   MutableHashMap,
 } from "effect";
 import { Crypto, Option, Predicate, Schema, Scope } from "effect";
@@ -87,18 +88,16 @@ const isDeadLetterSignal = Predicate.isTagged("~effect/persistence/PersistedQueu
 
 /** Error tags only: a failure cause can carry provider bodies, prompts or paths. */
 const failureSummary = (cause: Cause.Cause<unknown>) => {
-  const tags = cause.reasons.map((reason) => {
-    switch (reason._tag) {
-      case "Fail":
-        return Predicate.hasProperty(reason.error, "_tag") && Predicate.isString(reason.error._tag)
-          ? reason.error._tag
-          : "Failure";
-      case "Die":
-        return "Defect";
-      case "Interrupt":
-        return "Interrupted";
-    }
-  });
+  const tags = cause.reasons.map((reason) =>
+    Match.valueTags(reason, {
+      Fail: ({ error }) =>
+        Predicate.hasProperty(error, "_tag") && Predicate.isString(error._tag)
+          ? error._tag
+          : "Failure",
+      Die: () => "Defect",
+      Interrupt: () => "Interrupted",
+    }),
+  );
   return [...new Set(tags)].join(",");
 };
 
@@ -215,37 +214,35 @@ const make = Effect.fnUntraced(function* (options?: {
       );
       const row = rows[0];
       if (row === undefined) return Option.none();
-      yield* Effect.addFinalizer((exit) => {
-        const settlement = settlementOf(exit, row.attempts, options.maxAttempts);
-        switch (settlement._tag) {
-          case "Complete":
-            return settle(
+      yield* Effect.addFinalizer((exit) =>
+        Match.valueTags(settlementOf(exit, row.attempts, options.maxAttempts), {
+          Complete: () =>
+            settle(
               row.sequence,
               sql`UPDATE persisted_queue_items
                   SET state = 'completed', acquired_by = NULL, updated_at = ${now()}
                   WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
-            );
-          case "Release":
-            return settle(
+            ),
+          Release: () =>
+            settle(
               row.sequence,
               sql`UPDATE persisted_queue_items
                   SET acquired_by = NULL, attempts = attempts - 1, updated_at = ${now()}
                   WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
-            );
-          case "DeadLetter":
-            return markFailed(row.sequence, settlement.cause);
-          case "Retry":
-            return Effect.flatMap(options.retryDelay(row.attempts), (delay) =>
+            ),
+          DeadLetter: ({ cause }) => markFailed(row.sequence, cause),
+          Retry: ({ cause }) =>
+            Effect.flatMap(options.retryDelay(row.attempts), (delay) =>
               settle(
                 row.sequence,
                 sql`UPDATE persisted_queue_items
                     SET acquired_by = NULL, visible_at = ${now() + Duration.toMillis(delay)},
-                        last_failure = ${failureSummary(settlement.cause)}, updated_at = ${now()}
+                        last_failure = ${failureSummary(cause)}, updated_at = ${now()}
                     WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
               ),
-            );
-        }
-      });
+            ),
+        }),
+      );
       return Option.some(row);
     });
 

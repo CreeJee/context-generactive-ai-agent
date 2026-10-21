@@ -60,7 +60,7 @@ export type BoardEdit = typeof BoardEdit.Type;
 export const UserChange = Schema.Union([
   Schema.TaggedStruct("Edit", { patch: CardPatch }),
   Schema.TaggedStruct("Cancel", {}),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type UserChange = typeof UserChange.Type;
 
 export const UserChangeRequestStatus = Schema.Literals([
@@ -330,5 +330,5 @@ export const BoardIntent = Schema.Union([
   /** A change to an executing card, which the orchestrator settles. */
   Schema.TaggedStruct("ChangeRequest", { cardId: Schema.String, patch: CardPatch }),
   Schema.TaggedStruct("Cancel", { cardId: Schema.String }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type BoardIntent = typeof BoardIntent.Type;

@@ -49,40 +49,45 @@ export const GoalMergeState = Schema.Union([
   Schema.TaggedStruct("Stopped", {
     reason: Schema.Literals(["no_target", "target_missing", "conflict_stopped", "goal_replaced"]),
   }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type GoalMergeState = typeof GoalMergeState.Type;
 
+const settledMerge = GoalMergeState.match({
+  Merged: () => true,
+  ManualMerge: () => true,
+  PullRequestPending: () => true,
+  PullRequestCreated: () => true,
+  PullRequestUncertain: () => true,
+  PullRequestFailed: () => true,
+  Stopped: () => true,
+  Verifying: () => false,
+  VerifyFailed: () => false,
+  WaitingWorktree: () => false,
+  TargetMoving: () => false,
+  AwaitingDecision: () => false,
+});
+
 /** A merge that is over: nothing more happens to it without a person. */
-export const mergeSettled = (state: GoalMergeState | null) => {
-  if (state === null) return false;
-  switch (state._tag) {
-    case "Merged":
-    case "ManualMerge":
-    case "PullRequestPending":
-    case "PullRequestCreated":
-    case "PullRequestUncertain":
-    case "PullRequestFailed":
-    case "Stopped":
-      return true;
-    case "Verifying":
-    case "VerifyFailed":
-    case "WaitingWorktree":
-    case "TargetMoving":
-    case "AwaitingDecision":
-      return false;
-  }
-};
+export const mergeSettled = (state: GoalMergeState | null) => state !== null && settledMerge(state);
+
+const releasingMerge = GoalMergeState.match({
+  Merged: () => true,
+  ManualMerge: () => true,
+  PullRequestPending: () => false,
+  PullRequestCreated: () => false,
+  PullRequestUncertain: () => false,
+  PullRequestFailed: () => false,
+  Stopped: () => false,
+  Verifying: () => false,
+  VerifyFailed: () => false,
+  WaitingWorktree: () => false,
+  TargetMoving: () => false,
+  AwaitingDecision: () => false,
+});
 
 /** A Goal that waits for this one may go on: its work is in the target, or a person took it. */
-export const mergeReleases = (state: GoalMergeState | null) => {
-  switch (state?._tag) {
-    case "Merged":
-    case "ManualMerge":
-      return true;
-    default:
-      return false;
-  }
-};
+export const mergeReleases = (state: GoalMergeState | null) =>
+  state !== null && releasingMerge(state);
 
 export interface GoalSchedule {
   readonly goalInstanceId: string;

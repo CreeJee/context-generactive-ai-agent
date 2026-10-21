@@ -1,4 +1,15 @@
-import { Clock, Context, DateTime, Effect, Layer, Option, Result, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Predicate,
+  Result,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Activity, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { AppEvents } from "../events/app-events.ts";
@@ -49,7 +60,7 @@ export const DecisionKind = Schema.Union([
     otherCardId: Schema.String,
     files: Schema.Array(Schema.String),
   }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type DecisionKind = typeof DecisionKind.Type;
 
 /**
@@ -59,19 +70,15 @@ export type DecisionKind = typeof DecisionKind.Type;
 export const goalDecisionCardId = "@goal";
 
 /** Whether a request kind is about one card or the whole Goal. */
-export const decisionSubject = (kind: DecisionKind): "card" | "goal" => {
-  switch (kind._tag) {
-    case "UncertainSideEffect":
-    case "IntegrationConflict":
-    case "ImpactUnclear":
-    case "RetryExhausted":
-    case "FileOverlap":
-      return "card";
-    case "ProtectedBranchMerge":
-    case "MergeConflict":
-      return "goal";
-  }
-};
+export const decisionSubject: (kind: DecisionKind) => "card" | "goal" = DecisionKind.match({
+  UncertainSideEffect: () => "card" as const,
+  IntegrationConflict: () => "card" as const,
+  ImpactUnclear: () => "card" as const,
+  RetryExhausted: () => "card" as const,
+  FileOverlap: () => "card" as const,
+  ProtectedBranchMerge: () => "goal" as const,
+  MergeConflict: () => "goal" as const,
+});
 
 /** A person's answer; its tag must be the request's kind. */
 export const DecisionAnswer = Schema.Union([
@@ -90,7 +97,7 @@ export const DecisionAnswer = Schema.Union([
   }),
   Schema.TaggedStruct("MergeConflict", { choice: Schema.Literals(["resolved", "stop"]) }),
   Schema.TaggedStruct("FileOverlap", { choice: Schema.Literals(["wait", "proceed"]) }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type DecisionAnswer = typeof DecisionAnswer.Type;
 
 /**
@@ -113,24 +120,16 @@ export const decisionChoices = {
   >;
 };
 
-export const answeredCardStatus = (answer: DecisionAnswer): CardStatus | null => {
-  switch (answer._tag) {
-    case "UncertainSideEffect":
-      return decisionChoices.UncertainSideEffect[answer.choice];
-    case "IntegrationConflict":
-      return decisionChoices.IntegrationConflict[answer.choice];
-    case "ImpactUnclear":
-      return decisionChoices.ImpactUnclear[answer.choice];
-    case "RetryExhausted":
-      return decisionChoices.RetryExhausted[answer.choice];
-    case "ProtectedBranchMerge":
-      return decisionChoices.ProtectedBranchMerge[answer.choice];
-    case "MergeConflict":
-      return decisionChoices.MergeConflict[answer.choice];
-    case "FileOverlap":
-      return decisionChoices.FileOverlap[answer.choice];
-  }
-};
+export const answeredCardStatus: (answer: DecisionAnswer) => CardStatus | null =
+  DecisionAnswer.match({
+    UncertainSideEffect: ({ choice }) => decisionChoices.UncertainSideEffect[choice],
+    IntegrationConflict: ({ choice }) => decisionChoices.IntegrationConflict[choice],
+    ImpactUnclear: ({ choice }) => decisionChoices.ImpactUnclear[choice],
+    RetryExhausted: ({ choice }) => decisionChoices.RetryExhausted[choice],
+    ProtectedBranchMerge: ({ choice }) => decisionChoices.ProtectedBranchMerge[choice],
+    MergeConflict: ({ choice }) => decisionChoices.MergeConflict[choice],
+    FileOverlap: ({ choice }) => decisionChoices.FileOverlap[choice],
+  });
 
 /** Why a wait ended without an answer. A close is never an answer, and never a refusal. */
 export const DecisionCloseReason = Schema.Literals([
@@ -274,20 +273,19 @@ const ClosureRow = Schema.Struct({ reason: DecisionCloseReason });
 const SessionRow = Schema.Struct({ id: Schema.String, title: Schema.NullOr(Schema.String) });
 
 /** An answer must be for the request's kind; a pull request needs the GitHub CLI. */
-const answerFits = (kind: DecisionKind, answer: DecisionAnswer) => {
-  switch (kind._tag) {
-    case "ProtectedBranchMerge":
-      return (
-        answer._tag === "ProtectedBranchMerge" &&
-        (answer.choice !== "create_pr" || kind.prAvailable)
-      );
-    default:
-      return kind._tag === answer._tag;
-  }
-};
+const answerFits = (kind: DecisionKind, answer: DecisionAnswer) =>
+  DecisionKind.matchOrElse(
+    kind,
+    {
+      ProtectedBranchMerge: ({ prAvailable }) =>
+        DecisionAnswer.guards.ProtectedBranchMerge(answer) &&
+        (answer.choice !== "create_pr" || prAvailable),
+    },
+    (other) => Predicate.isTagged(answer, other._tag),
+  );
 
 const sameAnswer = (left: DecisionAnswer, right: DecisionAnswer) =>
-  left._tag === right._tag && left.choice === right.choice;
+  Predicate.isTagged(right, left._tag) && left.choice === right.choice;
 
 const make = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -383,7 +381,7 @@ const make = Effect.gen(function* () {
   const open = () =>
     stored(storage.pendingExecutions(HumanDecisionExecution._tag)).pipe(
       Effect.flatMap(requests),
-      Effect.map((all) => all.filter((request) => request.state._tag === "Pending")),
+      Effect.map((all) => all.filter((request) => Predicate.isTagged(request.state, "Pending"))),
     );
 
   /** A Goal instance's requests in any state, newest first. */
@@ -550,54 +548,52 @@ const make = Effect.gen(function* () {
           if (Option.isNone(current)) return yield* missing;
           return yield* view(current.value.execution, current.value.payload);
         });
-        const state = yield* stateOf(execution);
-        switch (state._tag) {
-          case "Answered":
-            return yield* settle;
-          case "Closed":
-            return yield* HumanDecisionRefused.make({ reason: "request_closed" });
-          case "Pending":
-            break;
-        }
-        if ((yield* pointer(input.sessionId)) !== payload.goalInstanceId) {
-          yield* closeOne(input, "goal_replaced");
-          return yield* HumanDecisionRefused.make({ reason: "goal_superseded" });
-        }
-        const token = DurableDeferred.tokenFromExecutionId(DecisionAnswered, {
-          workflow: HumanDecisionExecution,
-          executionId: execution.executionId,
+        const admit = Effect.gen(function* () {
+          if ((yield* pointer(input.sessionId)) !== payload.goalInstanceId) {
+            yield* closeOne(input, "goal_replaced");
+            return yield* HumanDecisionRefused.make({ reason: "goal_superseded" });
+          }
+          const token = DurableDeferred.tokenFromExecutionId(DecisionAnswered, {
+            workflow: HumanDecisionExecution,
+            executionId: execution.executionId,
+          });
+          yield* provideEngine(
+            DurableDeferred.succeed(DecisionAnswered, { token, value: input.answer }),
+          );
+          // Two different answers may race; the stored one decides, and the other is a conflict.
+          const settled = yield* settle;
+          yield* events.publishSession(input.sessionId, "run-state");
+          return settled;
         });
-        yield* provideEngine(
-          DurableDeferred.succeed(DecisionAnswered, { token, value: input.answer }),
-        );
-        // Two different answers may race; the stored one decides, and the other is a conflict.
-        const settled = yield* settle;
-        yield* events.publishSession(input.sessionId, "run-state");
-        return settled;
+        const state = yield* stateOf(execution);
+        return yield* Match.valueTags(state, {
+          Answered: () => settle,
+          Closed: () => Effect.fail(HumanDecisionRefused.make({ reason: "request_closed" })),
+          Pending: () => admit,
+        });
       }),
 
     /** Ends open waits without an answer. Returns how many it closed. */
-    close: (scope: DecisionCloseScope, reason: DecisionCloseReason) => {
-      switch (scope._tag) {
-        case "Request":
-          return closeWhere((request) => request.requestId === scope.requestId, reason);
-        case "Card":
-          return closeWhere(
+    close: (scope: DecisionCloseScope, reason: DecisionCloseReason) =>
+      Match.valueTags(scope, {
+        Request: ({ requestId }) =>
+          closeWhere((request) => request.requestId === requestId, reason),
+        Card: (card) =>
+          closeWhere(
             (request) =>
-              request.sessionId === scope.sessionId &&
-              request.goalInstanceId === scope.goalInstanceId &&
-              request.cardId === scope.cardId,
+              request.sessionId === card.sessionId &&
+              request.goalInstanceId === card.goalInstanceId &&
+              request.cardId === card.cardId,
             reason,
-          );
-        case "Goal":
-          return closeWhere(
+          ),
+        Goal: (goal) =>
+          closeWhere(
             (request) =>
-              request.sessionId === scope.sessionId &&
-              request.goalInstanceId === scope.goalInstanceId,
+              request.sessionId === goal.sessionId &&
+              request.goalInstanceId === goal.goalInstanceId,
             reason,
-          );
-      }
-    },
+          ),
+      }),
 
     /** Closes the session's open waits whose Goal is no longer the session's current one. */
     closeSuperseded,

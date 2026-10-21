@@ -4,6 +4,7 @@ import {
   Function as EffectFunction,
   Layer,
   Option,
+  Predicate,
   PubSub,
   Ref,
   Stream,
@@ -260,10 +261,10 @@ const make = Effect.gen(function* () {
                 goal.goalInstanceId,
                 card.id,
               )).flatMap((request) =>
-                request.kind._tag === "FileOverlap" &&
+                Predicate.isTagged(request.kind, "FileOverlap") &&
                 request.kind.otherGoalInstanceId === other.goalInstanceId &&
-                request.state._tag === "Answered" &&
-                request.state.answer._tag === "FileOverlap"
+                Predicate.isTagged(request.state, "Answered") &&
+                Predicate.isTagged(request.state.answer, "FileOverlap")
                   ? [request.state.answer.choice]
                   : [],
               )[0];

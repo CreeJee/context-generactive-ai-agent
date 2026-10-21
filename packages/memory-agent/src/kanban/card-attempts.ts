@@ -26,7 +26,7 @@ export const CardAttemptOutcome = Schema.Union([
   Schema.TaggedStruct("Superseded", {}),
   /** The card left in_progress, or the orchestrator stopped the attempt. */
   Schema.TaggedStruct("Stopped", { cardStatus: Schema.NullOr(CardStatus) }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type CardAttemptOutcome = typeof CardAttemptOutcome.Type;
 
 /** A Goal instance stopped by the orchestrator until its cards are classified against a new Goal. */

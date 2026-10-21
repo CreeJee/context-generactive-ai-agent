@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref } from "effect";
+import { Context, Effect, Layer, Predicate, Ref } from "effect";
 import { AppEvents } from "../events/app-events.ts";
 import {
   healthyLoop,
@@ -43,7 +43,7 @@ const make = Effect.gen(function* () {
     restart: (board: BoardRef) =>
       Ref.modify(health, (all): [boolean, Readonly<Record<string, LoopHealth>>] => {
         const { [board.goalInstanceId]: previous, ...rest } = all;
-        return [previous !== undefined && previous._tag !== "Healthy", rest];
+        return [previous !== undefined && !Predicate.isTagged(previous, "Healthy"), rest];
       }).pipe(Effect.flatMap((isChanged) => changed(board, isChanged))),
 
     /** Runs one step of the board's loop, or of a step beside it, under the loop retry policy. */

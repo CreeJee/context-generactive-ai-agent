@@ -6,6 +6,7 @@ import {
   Fiber,
   FiberMap,
   Layer,
+  Match,
   Option,
   PubSub,
   Schema,
@@ -223,27 +224,23 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
         return Cause.hasInterruptsOnly(exit.cause)
           ? ({ _tag: "Stopped", cardStatus: "in_progress" } satisfies CardAttemptOutcome)
           : failedWith({ _tag: "Defect" });
-      const outcome = exit.value;
-      switch (outcome._tag) {
-        case "Failed":
-          return failedWith(outcome.failure);
-        case "Finished": {
-          // The card's agent cannot write the repository's git metadata from its sandbox; the owner
-          // commits its work to the card branch.
-          const commit =
+      return yield* Match.valueTags(exit.value, {
+        Failed: ({ failure }) => Effect.succeed(failedWith(failure)),
+        // The card's agent cannot write the repository's git metadata from its sandbox; the owner
+        // commits its work to the card branch.
+        Finished: ({ report }) =>
+          Effect.map(
             worktree === null
-              ? Option.none<string>()
-              : yield* worktrees.commitWork(
-                  cardRef,
-                  `${card.title}\n\nattempt ${payload.attemptNo}`,
-                );
-          return {
-            _tag: "Completed",
-            report: outcome.report,
-            commit: Option.getOrNull(commit),
-          } satisfies CardAttemptOutcome;
-        }
-      }
+              ? Effect.succeed(Option.none<string>())
+              : worktrees.commitWork(cardRef, `${card.title}\n\nattempt ${payload.attemptNo}`),
+            (commit) =>
+              ({
+                _tag: "Completed",
+                report,
+                commit: Option.getOrNull(commit),
+              }) satisfies CardAttemptOutcome,
+          ),
+      });
     }),
   ).pipe(
     Effect.catchTag("CardWorktreeFailed", (failure) =>

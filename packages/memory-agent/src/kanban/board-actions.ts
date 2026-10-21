@@ -1,10 +1,10 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
 import {
+  BoardIntent,
   CardDraft,
   CardPatch,
+  UserChange,
   type BoardEditResult,
-  type BoardIntent,
-  type UserChange,
 } from "../workflow/board-edit.ts";
 import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
@@ -59,7 +59,7 @@ export const ChangeDecision = Schema.Union([
   /** Stop the attempt, apply the change, and reschedule the card in a fresh agent conversation. */
   Schema.TaggedStruct("Reassign", {}),
   Schema.TaggedStruct("Reject", { reason: Schema.NonEmptyString }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type ChangeDecision = typeof ChangeDecision.Type;
 
 /** The orchestrator's judgement of one card against a changed Goal. */
@@ -73,7 +73,7 @@ export const GoalChangeVerdict = Schema.Union([
   Schema.TaggedStruct("Stop", { cardId: Schema.String, reason: Schema.NonEmptyString }),
   Schema.TaggedStruct("Replace", { cardId: Schema.String, card: CardDraft }),
   Schema.TaggedStruct("NeedsDecision", { cardId: Schema.String, question: Schema.NonEmptyString }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type GoalChangeVerdict = typeof GoalChangeVerdict.Type;
 
 /** What the loop knows about a card beyond the Plan. */
@@ -309,7 +309,7 @@ const make = Effect.gen(function* () {
         ...current,
         failureStreak: 0,
         notBefore: null,
-        replans: current.replans + (current.reason?._tag === "ReplanRequested" ? 1 : 0),
+        replans: current.replans + (Predicate.isTagged(current.reason, "ReplanRequested") ? 1 : 0),
         reason: null,
       }));
     yield* orchestrator.poke(goal.goalInstanceId);
@@ -400,10 +400,16 @@ const make = Effect.gen(function* () {
         _tag: "Applied",
         state,
       }));
-      switch (intent._tag) {
-        case "Reorder": {
+      const hold = Effect.fnUntraced(function* (hold: boolean) {
+        yield* board(sessionId);
+        yield* workflows.holdCard(sessionId, { cardId: card.id, hold }, author);
+        yield* poke;
+        return yield* applied;
+      });
+      return yield* BoardIntent.match(intent, {
+        Reorder: Effect.fnUntraced(function* ({ at }) {
           const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
-          const index = steps.findIndex((step) => step.id === intent.at);
+          const index = steps.findIndex((step) => step.id === at);
           const target = steps[index];
           if (target === undefined) return yield* refuse("card_missing");
           if (target.status !== card.status) return yield* refuse("reorder_across_columns");
@@ -414,8 +420,8 @@ const make = Effect.gen(function* () {
           );
           yield* poke;
           return result;
-        }
-        case "Requeue": {
+        }),
+        Requeue: Effect.fnUntraced(function* () {
           yield* board(sessionId);
           if (card.status !== "blocked") return yield* refuse("card_not_blocked");
           // A dead-lettered attempt continues as the same queue item; any other blocked card
@@ -423,37 +429,30 @@ const make = Effect.gen(function* () {
           if (!(yield* orchestrator.requeue(sessionId, card.id, author)))
             yield* moveCard(sessionId, { cardId: card.id, from: "blocked", to: "ready" }, author);
           return yield* applied;
-        }
-        case "Hold":
-        case "Release":
-          yield* board(sessionId);
-          yield* workflows.holdCard(
-            sessionId,
-            { cardId: card.id, hold: intent._tag === "Hold" },
-            author,
-          );
-          yield* poke;
-          return yield* applied;
-        case "ChangeRequest":
-          if (card.status !== "in_progress") return yield* refuse("card_not_running");
-          return yield* workflows.editBoard(
-            sessionId,
-            { _tag: "EditCard", planVersion, cardId: card.id, patch: intent.patch },
-            author,
-          );
-        case "Cancel": {
+        }),
+        Hold: () => hold(true),
+        Release: () => hold(false),
+        ChangeRequest: ({ patch }) =>
+          card.status !== "in_progress"
+            ? Effect.fail(refuse("card_not_running"))
+            : workflows.editBoard(
+                sessionId,
+                { _tag: "EditCard", planVersion, cardId: card.id, patch },
+                author,
+              ),
+        Cancel: Effect.fnUntraced(function* () {
           const result = yield* workflows.editBoard(
             sessionId,
             { _tag: "CancelCard", planVersion, cardId: card.id },
             author,
           );
           // A stopped card's decision is closed, not answered: nobody refused it.
-          if (result._tag === "Applied" && Option.isSome(kanban))
+          if (Predicate.isTagged(result, "Applied") && Option.isSome(kanban))
             yield* closeDecisions(kanban.value, [card.id], "card_stopped");
           yield* poke;
           return result;
-        }
-      }
+        }),
+      });
     }),
 
     /** Settles a user's pending change to an executing card and records the decision. */
@@ -471,41 +470,40 @@ const make = Effect.gen(function* () {
       const change: UserChange = request.change_json;
       const settle = (status: "applied" | "reassigned" | "rejected", reason: string | null) =>
         attempts.settleChangeRequest(requestId, { status, reason });
-      switch (decision._tag) {
-        case "Reject":
-          yield* settle("rejected", decision.reason);
-          return { status: "rejected" as const };
-        case "Apply":
-        case "Reassign": {
-          const fresh = decision._tag === "Reassign";
-          switch (change._tag) {
-            case "Cancel": {
-              if (fresh) return yield* refuse("reassign_needs_edit");
-              const card = yield* cardOf(sessionId, request.card_id);
-              yield* ops.cancelCard(sessionId, card.id, author);
-              yield* closeDecisions(goal, [card.id], "card_stopped");
-              if (running(card)) yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
-              else yield* retire(goal, [card.id]);
-              break;
-            }
-            case "Edit": {
-              const card = yield* cardOf(sessionId, request.card_id);
-              yield* amend(
+      const apply = Effect.fnUntraced(function* (fresh: boolean) {
+        yield* UserChange.match(change, {
+          Cancel: () =>
+            fresh
+              ? Effect.fail(refuse("reassign_needs_edit"))
+              : Effect.gen(function* () {
+                  const card = yield* cardOf(sessionId, request.card_id);
+                  yield* ops.cancelCard(sessionId, card.id, author);
+                  yield* closeDecisions(goal, [card.id], "card_stopped");
+                  if (running(card)) yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
+                  else yield* retire(goal, [card.id]);
+                }),
+          Edit: ({ patch }) =>
+            Effect.flatMap(cardOf(sessionId, request.card_id), (card) =>
+              amend(
                 goal,
                 card,
-                change.patch,
-                `The user changed this card (${describePatch(change.patch)}).`,
+                patch,
+                `The user changed this card (${describePatch(patch)}).`,
                 author,
                 fresh,
-              );
-              break;
-            }
-          }
-          yield* settle(fresh ? "reassigned" : "applied", null);
-          yield* orchestrator.poke(goal.goalInstanceId);
-          return { status: fresh ? ("reassigned" as const) : ("applied" as const) };
-        }
-      }
+              ),
+            ),
+        });
+        yield* settle(fresh ? "reassigned" : "applied", null);
+        yield* orchestrator.poke(goal.goalInstanceId);
+        return { status: fresh ? ("reassigned" as const) : ("applied" as const) };
+      });
+      return yield* ChangeDecision.match(decision, {
+        Reject: ({ reason }) =>
+          Effect.as(settle("rejected", reason), { status: "rejected" as const }),
+        Apply: () => apply(false),
+        Reassign: () => apply(true),
+      });
     }),
 
     /**
@@ -524,74 +522,76 @@ const make = Effect.gen(function* () {
         verdicts,
         Effect.fnUntraced(function* (verdict) {
           const card = yield* cardOf(sessionId, verdict.cardId);
-          switch (verdict._tag) {
-            case "Continue":
-              return;
-            case "Amend":
-              return yield* amend(goal, card, verdict.patch, verdict.note, author, false);
-            case "Stop":
-              yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
-                ...current,
-                reason: { _tag: "GoalChanged", note: verdict.reason },
-              }));
-              yield* closeDecisions(goal, [card.id], "card_stopped");
-              if (running(card))
-                return yield* interrupt(
-                  goal,
-                  card,
-                  "blocked",
-                  `card ${card.id} stopped: ${verdict.reason}`,
+          yield* GoalChangeVerdict.match(verdict, {
+            Continue: () => Effect.void,
+            Amend: ({ patch, note }) => amend(goal, card, patch, note, author, false),
+            Stop: ({ reason }) =>
+              Effect.gen(function* () {
+                yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
+                  ...current,
+                  reason: { _tag: "GoalChanged", note: reason },
+                }));
+                yield* closeDecisions(goal, [card.id], "card_stopped");
+                if (running(card))
+                  return yield* interrupt(
+                    goal,
+                    card,
+                    "blocked",
+                    `card ${card.id} stopped: ${reason}`,
+                    author,
+                  );
+                if (card.status === "blocked" || card.status === "done") return;
+                return yield* workflows.transitionCard(
+                  sessionId,
+                  {
+                    cardId: card.id,
+                    from: card.status,
+                    to: "blocked",
+                    detail: `card ${card.id} stopped: ${reason}`,
+                  },
                   author,
                 );
-              if (card.status === "blocked" || card.status === "done") return;
-              return yield* workflows.transitionCard(
-                sessionId,
-                {
+              }),
+            Replace: ({ card: draft }) =>
+              Effect.gen(function* () {
+                yield* closeDecisions(goal, [card.id], "card_stopped");
+                const replacement = yield* ops.addCard(sessionId, draft, author);
+                yield* ops.replaceCards(
+                  sessionId,
+                  [card.id],
+                  Option.toArray(Option.map(replacement, (added) => added.id)),
+                  author,
+                );
+                // The replaced card's branch stays for the new card to consult.
+                if (running(card))
+                  return yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
+                return yield* retire(goal, [card.id]);
+              }),
+            NeedsDecision: ({ question }) =>
+              Effect.gen(function* () {
+                yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
+                  ...current,
+                  reason: { _tag: "GoalChanged", note: question },
+                }));
+                if (card.status === "done") return;
+                // The request moves the card first, so a running attempt then ends as Stopped. One
+                // Goal change asks about a card once.
+                yield* decisions.request({
+                  sessionId,
+                  goalInstanceId: goal.goalInstanceId,
                   cardId: card.id,
-                  from: card.status,
-                  to: "blocked",
-                  detail: `card ${card.id} stopped: ${verdict.reason}`,
-                },
-                author,
-              );
-            case "Replace": {
-              yield* closeDecisions(goal, [card.id], "card_stopped");
-              const replacement = yield* ops.addCard(sessionId, verdict.card, author);
-              yield* ops.replaceCards(
-                sessionId,
-                [card.id],
-                Option.toArray(Option.map(replacement, (added) => added.id)),
-                author,
-              );
-              // The replaced card's branch stays for the new card to consult.
-              if (running(card))
-                return yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
-              return yield* retire(goal, [card.id]);
-            }
-            case "NeedsDecision":
-              yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
-                ...current,
-                reason: { _tag: "GoalChanged", note: verdict.question },
-              }));
-              if (card.status === "done") return;
-              // The request moves the card first, so a running attempt then ends as Stopped. One
-              // Goal change asks about a card once.
-              yield* decisions.request({
-                sessionId,
-                goalInstanceId: goal.goalInstanceId,
-                cardId: card.id,
-                key: `impact_unclear:${hold.fromVersion}:${hold.toVersion}`,
-                kind: {
-                  _tag: "ImpactUnclear",
-                  fromGoalVersion: hold.fromVersion,
-                  toGoalVersion: hold.toVersion,
-                },
-                author,
-              });
-              if (running(card))
-                return yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
-              return;
-          }
+                  key: `impact_unclear:${hold.fromVersion}:${hold.toVersion}`,
+                  kind: {
+                    _tag: "ImpactUnclear",
+                    fromGoalVersion: hold.fromVersion,
+                    toGoalVersion: hold.toVersion,
+                  },
+                  author,
+                });
+                if (running(card))
+                  return yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
+              }),
+          });
         }),
         { discard: true },
       );

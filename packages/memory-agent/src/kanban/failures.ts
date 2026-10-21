@@ -17,7 +17,7 @@ export const VerdictFailure = Schema.Union([
   Schema.TaggedStruct("ModelSelectionRequired", {}),
   /** The verifier could not run: its session, project or run failed. */
   Schema.TaggedStruct("Unavailable", {}),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type VerdictFailure = typeof VerdictFailure.Type;
 
 /** How a card's agent run ended without finishing the card. */
@@ -53,7 +53,7 @@ export const CardFailure = Schema.Union([
   /** The Goal branch moved during every verification round. */
   Schema.TaggedStruct("GoalBranchKeptMoving", {}),
   Schema.TaggedStruct("Defect", {}),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type CardFailure = typeof CardFailure.Type;
 
 export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure => ({
@@ -74,21 +74,14 @@ export const CardHoldReason = Schema.Union([
   /** The orchestrator model stopped the card or asks a person about it after a Goal change. */
   Schema.TaggedStruct("GoalChanged", { note: Schema.String }),
   Schema.TaggedStruct("UpstreamRegressed", { verdict: VerdictFailure }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type CardHoldReason = typeof CardHoldReason.Type;
 
 /** The failure as revision details and logs name it: tags only, never a model's words. */
-export const failureCode = (failure: CardFailure) => {
-  switch (failure._tag) {
-    case "Agent":
-      return `agent_${failure.code}`;
-    case "Worktree":
-      return `worktree_${failure.reason}`;
-    case "Verification":
-      return `verification_${failure.verdict._tag}`;
-    case "GoalBranchKeptMoving":
-      return "goal_branch_kept_moving";
-    case "Defect":
-      return "defect";
-  }
-};
+export const failureCode = CardFailure.match({
+  Agent: (failure) => `agent_${failure.code}`,
+  Worktree: (failure) => `worktree_${failure.reason}`,
+  Verification: (failure) => `verification_${failure.verdict._tag}`,
+  GoalBranchKeptMoving: () => "goal_branch_kept_moving",
+  Defect: () => "defect",
+});

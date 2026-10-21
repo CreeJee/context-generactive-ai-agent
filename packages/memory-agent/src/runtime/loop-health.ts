@@ -14,7 +14,7 @@ export const LoopHealth = Schema.Union([
   Schema.TaggedStruct("Exhausted", { error: Schema.String }),
   /** A defect stopped the loop; it was never retried. */
   Schema.TaggedStruct("Defected", {}),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type LoopHealth = typeof LoopHealth.Type;
 
 export const healthyLoop: LoopHealth = { _tag: "Healthy" };
@@ -22,16 +22,12 @@ export const healthyLoop: LoopHealth = { _tag: "Healthy" };
 export const sameLoopHealth = Schema.toEquivalence(LoopHealth);
 
 /** Whether the loop stopped and waits for a person to restart it. */
-export const loopStopped = (health: LoopHealth) => {
-  switch (health._tag) {
-    case "Healthy":
-    case "Retrying":
-      return false;
-    case "Exhausted":
-    case "Defected":
-      return true;
-  }
-};
+export const loopStopped = LoopHealth.match({
+  Healthy: () => false,
+  Retrying: () => false,
+  Exhausted: () => true,
+  Defected: () => true,
+});
 
 export const maxLoopRetries = 5;
 

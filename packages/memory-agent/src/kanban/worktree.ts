@@ -4,6 +4,7 @@ import {
   FileSystem,
   HashSet,
   Layer,
+  Match,
   Option,
   Path,
   Ref,
@@ -510,55 +511,57 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       card: CardRef,
       disposition: WorktreeDisposition,
     ) {
-      switch (disposition._tag) {
-        case "Blocked":
-        case "HumanDecision":
-          yield* checkIds("settle", [card.goalInstanceId, card.cardId]);
-          return { _tag: "Retained" } satisfies WorktreeSettlement;
-        case "Done":
-        case "Cancelled":
-          break;
-      }
-      return yield* serially(
-        cardKey(card),
-        Effect.gen(function* (): Effect.fn.Return<WorktreeSettlement, CardWorktreeFailed> {
-          if (HashSet.has(yield* Ref.get(leases), cardKey(card)))
-            return yield* fail("settle", { _tag: "InUse" });
-          const found = yield* lookup("settle", card);
-          const { worktree } = found;
-          const keepBranch = disposition._tag === "Cancelled";
-          switch (found.state) {
-            case "present":
-              if (keepBranch)
-                yield* commitIn("settle", worktree, `Cancelled card ${card.cardId} (snapshot)`);
-              else if (!(yield* isClean("settle", worktree.path)))
-                return yield* fail("settle", { _tag: "WorktreeDirty" });
-              yield* expect("settle", worktree.repository, [
-                "worktree",
-                "remove",
-                worktree.path,
-              ]).pipe(Effect.uninterruptible);
-              break;
-            case "stale":
-              yield* expect("settle", worktree.repository, ["worktree", "prune"]);
-              break;
-            case "absent":
-              break;
-          }
-          if (!keepBranch) {
-            const branch = yield* revision(
-              "settle",
-              worktree.repository,
-              `refs/heads/${worktree.branch}`,
-            );
-            if (Option.isSome(branch))
-              yield* expect("settle", worktree.repository, ["branch", "-D", worktree.branch]).pipe(
-                Effect.uninterruptible,
+      const retained = Effect.as(checkIds("settle", [card.goalInstanceId, card.cardId]), {
+        _tag: "Retained",
+      } satisfies WorktreeSettlement);
+      const remove = (keepBranch: boolean) =>
+        serially(
+          cardKey(card),
+          Effect.gen(function* (): Effect.fn.Return<WorktreeSettlement, CardWorktreeFailed> {
+            if (HashSet.has(yield* Ref.get(leases), cardKey(card)))
+              return yield* fail("settle", { _tag: "InUse" });
+            const found = yield* lookup("settle", card);
+            const { worktree } = found;
+            switch (found.state) {
+              case "present":
+                if (keepBranch)
+                  yield* commitIn("settle", worktree, `Cancelled card ${card.cardId} (snapshot)`);
+                else if (!(yield* isClean("settle", worktree.path)))
+                  return yield* fail("settle", { _tag: "WorktreeDirty" });
+                yield* expect("settle", worktree.repository, [
+                  "worktree",
+                  "remove",
+                  worktree.path,
+                ]).pipe(Effect.uninterruptible);
+                break;
+              case "stale":
+                yield* expect("settle", worktree.repository, ["worktree", "prune"]);
+                break;
+              case "absent":
+                break;
+            }
+            if (!keepBranch) {
+              const branch = yield* revision(
+                "settle",
+                worktree.repository,
+                `refs/heads/${worktree.branch}`,
               );
-          }
-          return { _tag: "Removed", branchKept: keepBranch };
-        }),
-      );
+              if (Option.isSome(branch))
+                yield* expect("settle", worktree.repository, [
+                  "branch",
+                  "-D",
+                  worktree.branch,
+                ]).pipe(Effect.uninterruptible);
+            }
+            return { _tag: "Removed", branchKept: keepBranch };
+          }),
+        );
+      return yield* Match.valueTags(disposition, {
+        Blocked: () => retained,
+        HumanDecision: () => retained,
+        Done: () => remove(false),
+        Cancelled: () => remove(true),
+      });
     }),
 
     /** Commits the card's uncommitted work to its branch, for verify and integration to see. */
