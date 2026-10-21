@@ -55,6 +55,8 @@ export type ConfigFileFailureCode = typeof ConfigFileFailureCode.Type;
 export const RunFailureCode = Schema.Literals([
   ...ExternalAgentFailureCode.literals,
   "worker_execution_failed",
+  /** The run's output could not be recorded, so the page stopped receiving it. */
+  "run_record_failed",
   "run_failed",
 ]);
 export type RunFailureCode = typeof RunFailureCode.Type;
@@ -83,5 +85,7 @@ export const externalAgentFailureText = {
 export const runFailureText = {
   ...externalAgentFailureText,
   worker_execution_failed: "에이전트 실행이 실패했어요. 이 실행은 자동으로 다시 하지 않아요.",
+  run_record_failed:
+    "응답을 기록하지 못해 이 화면으로 더 보내지 못했어요. 실행은 계속될 수 있으니 보드와 작업 기록을 확인해 주세요.",
   run_failed: "응답하는 중에 오류가 났어요.",
 } as const satisfies Record<RunFailureCode, string>;

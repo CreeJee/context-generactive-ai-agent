@@ -30,6 +30,7 @@ import {
   type AnyServerTool,
   type ChatMiddleware,
   type ModelMessage,
+  type StreamChunk,
   type UIMessage,
 } from "@tanstack/ai";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -2523,11 +2524,43 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 }),
               )
             : withShownRunErrors(redactor, executionStream);
-        // Commit each bound run's output before delivering it to the page.
+        // Commit each bound run's output before delivering it to the page. A failure ends the
+        // delivery with a coded RUN_ERROR: thrown, the SDK words it "Unknown error occurred".
         const recorded = isTruthy(boundRun)
           ? Stream.toAsyncIterable(
               Stream.suspend(() => {
                 let sequence = 0;
+                const ended = (
+                  code: "run_failed" | "run_record_failed",
+                  message: string,
+                  error: { readonly _tag: string },
+                  reason: string | null,
+                ) =>
+                  Stream.fromEffect(
+                    Effect.gen(function* () {
+                      yield* Effect.logError("Bound run delivery failed", {
+                        code,
+                        error: error._tag,
+                        reason,
+                        chunks: sequence,
+                      });
+                      return {
+                        type: EventType.RUN_ERROR,
+                        runId,
+                        threadId: sessionId,
+                        timestamp: DateTime.toEpochMillis(yield* DateTime.now),
+                        code,
+                        message,
+                      } satisfies StreamChunk;
+                    }),
+                  );
+                const notRecorded = (error: { readonly _tag: string }, reason: string | null) =>
+                  ended(
+                    "run_record_failed",
+                    "The run's output could not be recorded, so it is no longer delivered.",
+                    error,
+                    reason,
+                  );
                 return Stream.fromAsyncIterable(
                   stream,
                   (cause) => new Cause.UnknownError(cause),
@@ -2535,6 +2568,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   Stream.tap((chunk) =>
                     runEvents.append(sessionId, runId, `chunk:${sequence++}`, "chunk", chunk),
                   ),
+                  Stream.catchTags({
+                    UnknownError: (error) =>
+                      ended(
+                        "run_failed",
+                        "The run's output stream failed before the run ended.",
+                        error,
+                        null,
+                      ),
+                    RunEventRejected: (error) => notRecorded(error, error.reason),
+                    SchemaError: (error) => notRecorded(error, null),
+                    SqlError: (error) => notRecorded(error, null),
+                  }),
                 );
               }),
             )

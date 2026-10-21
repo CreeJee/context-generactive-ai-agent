@@ -2387,3 +2387,8 @@
 - 랩의 프로젝트 루트는 랩 실행 cwd(패키지 디렉터리)다. `Projects.add`는 실존하는 디렉터리만 등록하므로 존재하지 않는 임시 `project` 폴더 등록은 `ProjectRootRejected(not_found)`로 거부된다. 임시 스토리지 루트(`node_modules/.vp-tmp`)는 패키지 루트와 겹치지 않아 `overlaps_storage`도 피한다.
 - `MemorySearch.tuned`는 `SearchTuning`(trigram 텍스트 채널 on/off 등)만 바꾼다. 벡터 채널은 튜닝과 무관하게 항상 시도되므로, 임베더 없는 스테이지(fts-only·morph-only)의 `degraded vector`와 `unindexed > 0`은 설계된 정상 상태다. 랩 판정은 이 스테이지들을 고장 판정에서 제외한다.
 - 태그드 스키마 에러(`Schema.TaggedError`)의 `message`는 빈 문자열이다. 실패 사유를 사용자에게 보여줄 때는 `Error.message` 대신 태그와 필드(예: `Cause.pretty` 꼬리)를 렌더링한다.
+
+## compatible 어댑터의 run id와 bound run 전달 실패 (2026-10-21)
+
+- `@tanstack/openai-base`의 chat-completions 어댑터는 `options.runId`를 무시하고 자기 id(`openai-compatible-…`)로 `RUN_STARTED`·`RUN_FINISHED`를 냈다. Goal에 묶인 run의 durable 전달 로그는 다른 run id의 lifecycle 이벤트를 `run_mismatch`로 거부하므로, compatible 모델로 Goal을 실행하면 첫 이벤트에서 전달이 끊겼다. responses 어댑터·Anthropic 어댑터처럼 `options.runId ?? generateId(...)`를 쓰도록 `patches/@tanstack__openai-base@0.11.1.patch`로 고친다.
+- bound run의 출력 기록(`workflow_run_events`)이나 실행 스트림이 실패하면 메시지 없는 태그드 오류를 SDK로 던지지 않는다. 서버가 실패를 태그·사유로 로그에 남기고 `run_record_failed`(기록 실패) 또는 `run_failed`(실행 스트림 실패) 코드의 `RUN_ERROR`로 전달을 끝낸다. 던지면 SDK가 "Unknown error occurred"로만 기록한다.
