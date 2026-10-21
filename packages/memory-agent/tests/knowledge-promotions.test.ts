@@ -43,138 +43,117 @@ const seed = Effect.fnUntraced(function* () {
 });
 
 describe("Work Trace knowledge promotion", () => {
-  it.effect(
-    "saves only adopted verified evidence and distinguishes retrieval from answer use",
-    () =>
-      run(
-        Effect.gen(function* () {
-          const nodes = yield* Nodes;
-          const trace = yield* WorkTraceStore;
-          const knowledge = yield* KnowledgePromotions;
-          yield* seed();
-          const user = yield* nodes.append({
-            projectId: "p1",
-            sessionId: "s1",
-            kind: "user",
-            text: "Save this project decision.",
-          });
-          const handle = yield* trace.startAttempt({
-            sessionId: "s1",
-            parentRunId: "parent-1",
-            parentToolCallId: "call-1",
-            agentId: "agent-1",
-            title: "Research",
-            request: "Research the code",
-            kind: "start",
-            threadId: "subagent-agent-1",
-          });
-          const evidence = yield* trace.recordEvidence({
-            handle,
-            locator: { kind: "message", threadId: handle.threadId, messageId: "child-answer" },
-            verification: "verified",
-          });
-          const pending = yield* trace.recordEvidence({
-            handle,
-            locator: { kind: "tool_result", threadId: handle.threadId, toolCallId: "pending-tool" },
-          });
-          yield* trace.recordReportDisposition({
-            handle,
-            sessionId: "s1",
-            disposition: "reviewed",
-            parentRunId: "parent-1",
-          });
-          const claimId = yield* trace.finalizeAnswerClaim({
-            projectId: "p1",
-            sessionId: "s1",
-            parentRunId: "parent-1",
-            parentMessageId: "parent-answer",
-            usedReports: [
-              { taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [evidence.id] },
-            ],
-            reflectedNotificationIds: [],
-          });
+  it.effect("saves only adopted claims and distinguishes retrieval from answer use", () =>
+    run(
+      Effect.gen(function* () {
+        const nodes = yield* Nodes;
+        const trace = yield* WorkTraceStore;
+        const knowledge = yield* KnowledgePromotions;
+        yield* seed();
+        const user = yield* nodes.append({
+          projectId: "p1",
+          sessionId: "s1",
+          kind: "user",
+          text: "Save this project decision.",
+        });
+        const handle = yield* trace.startAttempt({
+          sessionId: "s1",
+          parentRunId: "parent-1",
+          parentToolCallId: "call-1",
+          agentId: "agent-1",
+          title: "Research",
+          request: "Research the code",
+          kind: "start",
+          threadId: "subagent-agent-1",
+        });
+        const claimId = yield* trace.finalizeAnswerClaim({
+          projectId: "p1",
+          sessionId: "s1",
+          parentRunId: "parent-1",
+          parentMessageId: "parent-answer",
+          usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
+          reflectedNotificationIds: [],
+        });
 
-          const rejected = yield* Effect.flip(
-            knowledge.promote({
-              projectId: "p1",
-              sessionId: "s1",
-              authorizedByUserNodeId: user.id,
-              claimId,
-              taskId: handle.taskId,
-              attemptId: handle.id,
-              evidenceRefIds: [pending.id],
-              proposedText: "Use SQLite.",
-              resolvedText: "Use SQLite.",
-              disposition: "save",
-            }),
-          );
-          expect(rejected).toMatchObject({
-            _tag: "MemoryPromotionRejected",
-            reason: "evidence_not_adopted",
-          });
-
-          const candidate = yield* knowledge.promote({
+        const rejected = yield* Effect.flip(
+          knowledge.promote({
             projectId: "p1",
             sessionId: "s1",
             authorizedByUserNodeId: user.id,
-            claimId,
+            claimId: "unadopted",
             taskId: handle.taskId,
             attemptId: handle.id,
-            evidenceRefIds: [evidence.id],
-            proposedText: "Use the old database.",
-            resolvedText: "Use SQLite for durable Work Trace state.",
+            proposedText: "Use SQLite.",
+            resolvedText: "Use SQLite.",
             disposition: "save",
-          });
-          expect(candidate).toMatchObject({
-            disposition: "edited_saved",
-            evidence: [{ evidenceRefId: evidence.id }],
-          });
-          const memory = yield* nodes.get(candidate.memoryNodeId!);
-          expect(memory).toMatchObject({
-            projectId: "p1",
-            sessionId: null,
-            kind: "topic",
-            text: "Use SQLite for durable Work Trace state.",
-            detail: { memoryCandidateId: candidate.id, authorizedByUserNodeId: user.id },
-          });
+          }),
+        );
+        expect(rejected).toMatchObject({
+          _tag: "MemoryPromotionRejected",
+          reason: "claim_not_adopted",
+        });
 
-          expect(
-            yield* knowledge.recordRetrieval({
-              projectId: "p1",
-              sessionId: "s1",
-              runId: "run-2",
-              memoryNodeIds: [memory!.id],
-            }),
-          ).toEqual([memory!.id]);
-          expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
-            "retrieved",
-          ]);
-          yield* knowledge.recordUsed({
+        const candidate = yield* knowledge.promote({
+          projectId: "p1",
+          sessionId: "s1",
+          authorizedByUserNodeId: user.id,
+          claimId,
+          taskId: handle.taskId,
+          attemptId: handle.id,
+          proposedText: "Use the old database.",
+          resolvedText: "Use SQLite for durable Work Trace state.",
+          disposition: "save",
+        });
+        expect(candidate).toMatchObject({
+          disposition: "edited_saved",
+          evidence: [],
+        });
+        const memory = yield* nodes.get(candidate.memoryNodeId!);
+        expect(memory).toMatchObject({
+          projectId: "p1",
+          sessionId: null,
+          kind: "topic",
+          text: "Use SQLite for durable Work Trace state.",
+          detail: { memoryCandidateId: candidate.id, authorizedByUserNodeId: user.id },
+        });
+
+        expect(
+          yield* knowledge.recordRetrieval({
             projectId: "p1",
             sessionId: "s1",
             runId: "run-2",
-            parentMessageId: "answer-2",
             memoryNodeIds: [memory!.id],
-          });
-          expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
-            "retrieved",
-            "used",
-          ]);
+          }),
+        ).toEqual([memory!.id]);
+        expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
+          "retrieved",
+        ]);
+        yield* knowledge.recordUsed({
+          projectId: "p1",
+          sessionId: "s1",
+          runId: "run-2",
+          parentMessageId: "answer-2",
+          memoryNodeIds: [memory!.id],
+        });
+        expect((yield* knowledge.usageForTask(handle.taskId)).map((item) => item.kind)).toEqual([
+          "retrieved",
+          "used",
+        ]);
 
-          yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
-          yield* sqlRun("DELETE FROM interpret_jobs WHERE node_id = ?", user.id);
-          yield* sqlRun("DELETE FROM nodes WHERE session_id = 's1'");
-          yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
-          expect((yield* knowledge.candidatesForTask(handle.taskId))[0]).toMatchObject({
-            id: candidate.id,
-            originSessionId: null,
-            authorizedByUserNodeId: user.id,
-          });
-          expect((yield* nodes.get(memory!.id))?.text).toBe(
-            "Use SQLite for durable Work Trace state.",
-          );
-        }),
-      ),
+        yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
+        yield* sqlRun("DELETE FROM interpret_jobs WHERE node_id = ?", user.id);
+        yield* sqlRun("DELETE FROM nodes WHERE session_id = 's1'");
+        yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
+        expect((yield* knowledge.candidatesForTask(handle.taskId))[0]).toMatchObject({
+          id: candidate.id,
+          originSessionId: null,
+          authorizedByUserNodeId: user.id,
+        });
+        expect((yield* nodes.get(memory!.id))?.text).toBe(
+          "Use SQLite for durable Work Trace state.",
+        );
+      }),
+    ),
   );
 
   it.effect("conversation-only and rejected dispositions never create recall nodes", () =>
@@ -200,21 +179,14 @@ describe("Work Trace knowledge promotion", () => {
           kind: "start",
           threadId: "subagent-agent-1",
         });
-        yield* trace.recordReportDisposition({
-          handle,
-          sessionId: "s1",
-          disposition: "reviewed",
-          parentRunId: "parent-1",
-        });
         const claimId = yield* trace.finalizeAnswerClaim({
           projectId: "p1",
           sessionId: "s1",
           parentRunId: "parent-1",
           parentMessageId: "answer",
-          usedReports: [{ taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [] }],
+          usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
           reflectedNotificationIds: [],
         });
-        const evidenceRefIds: string[] = [];
         const common = {
           projectId: "p1",
           sessionId: "s1",
@@ -222,7 +194,6 @@ describe("Work Trace knowledge promotion", () => {
           claimId,
           taskId: handle.taskId,
           attemptId: handle.id,
-          evidenceRefIds,
           proposedText: "Temporary conclusion",
           resolvedText: "Temporary conclusion",
         };

@@ -431,25 +431,12 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         kind: "start",
         threadId: `${sessionId}-factory-thread`,
       });
-      const evidence = yield* trace.recordEvidence({
-        handle,
-        locator: { kind: "message", threadId: handle.threadId, messageId: "verified-answer" },
-        verification: "verified",
-      });
-      yield* trace.recordReportDisposition({
-        handle,
-        sessionId,
-        disposition: "reviewed",
-        parentRunId: "parent",
-      });
       const claimId = yield* trace.finalizeAnswerClaim({
         projectId: project.id,
         sessionId,
         parentRunId: "parent",
         parentMessageId: "research-answer",
-        usedReports: [
-          { taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [evidence.id] },
-        ],
+        usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
         reflectedNotificationIds: [],
       });
       const artifactA = yield* bundles.load(bundles.a, "memory-a");
@@ -469,7 +456,6 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
             claimId,
             taskId: handle.taskId,
             attemptId: handle.id,
-            evidenceRefIds: [evidence.id],
             proposedText: "isolated-memory-state is a fixture decision",
             resolvedText: "isolated-memory-state is a fixture decision",
             disposition: "save",

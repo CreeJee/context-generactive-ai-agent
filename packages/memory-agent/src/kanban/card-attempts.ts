@@ -408,13 +408,8 @@ const make = Effect.gen(function* () {
           WHERE k.goal_instance_id = ${goalInstanceId} AND k.card_id = ${cardId}
             AND k.acknowledged_at IS NULL AND r.status <> 'completed'
             AND (NOT ${sql.literal(endedWithKnownEffectsSql("r"))}
-              OR EXISTS (SELECT 1 FROM run_events requested
-                WHERE requested.attempt_id = k.trace_attempt_id AND requested.kind = 'tool_requested'
-                  AND NOT EXISTS (SELECT 1 FROM run_events settled
-                    WHERE settled.attempt_id = requested.attempt_id
-                      AND settled.kind IN ('tool_completed', 'tool_failed')
-                      AND json_extract(settled.payload, '$.toolCallId')
-                        = json_extract(requested.payload, '$.toolCallId'))))
+              OR EXISTS (SELECT 1 FROM agent_run_attempts a
+                WHERE a.id = k.trace_attempt_id AND a.pending_tool_call_ids <> '[]'))
           ORDER BY k.created_at LIMIT 1`.pipe(
         rows(RunRow),
         Effect.map((found) => Option.map(Option.fromUndefinedOr(found[0]), (row) => row.run_id)),

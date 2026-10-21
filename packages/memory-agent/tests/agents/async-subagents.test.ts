@@ -31,7 +31,6 @@ const Report = Schema.Struct({
   ...Ids.fields,
   status: Schema.String,
   answer: Schema.String,
-  evidenceRefIds: Schema.Array(Schema.String),
 });
 const Count = Schema.Struct({ count: Schema.Finite });
 const RunSpans = Schema.Array(
@@ -72,10 +71,7 @@ const asyncTurn = Effect.fnUntraced(
             Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
           )(messageText(last!));
           return yield* toolCall("call-adopt-batch", "adopt_subagent_reports", {
-            reports: reports.map((report) => ({
-              ...idsOf(report),
-              evidenceRefIds: report.evidenceRefIds,
-            })),
+            reports: reports.map(idsOf),
           });
         }
         case "call-adopt-batch":
@@ -119,9 +115,9 @@ const asyncTurn = Effect.fnUntraced(
       );
       switch (lastTool) {
         case "call-review-report": {
-          const report = yield* reportFrom(messageText(last!));
+          yield* reportFrom(messageText(last!));
           return yield* toolCall("call-adopt-report", "adopt_subagent_reports", {
-            reports: [{ ...ids, evidenceRefIds: report.evidenceRefIds }],
+            reports: [ids],
           });
         }
         case "call-adopt-report":
@@ -199,10 +195,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       for (const attempt of attempts)
         expect(
-          (yield* trace.taskDetail(sessionId, attempt.taskId))?.adoptions.map(
-            (entry) => entry.disposition,
+          (yield* trace.taskDetail(sessionId, attempt.taskId))?.answerClaims.flatMap(
+            (claim) => claim.sources,
           ),
-        ).toEqual(["returned", "reviewed", "used"]);
+        ).toContainEqual(attempt);
     }),
   );
 
@@ -248,7 +244,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         const trace = yield* WorkTraceStore;
         const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
         expect((yield* children.list(sessionId))[0]?.status).toBe("running");
-        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.adoptions).toEqual([]);
+        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
         expect(yield* send(sessionId, "unrelated parent work")).toContain("Hello");
         yield* turns.release("nap");
         yield* until(
@@ -262,7 +258,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         );
         expect(yield* deliveredCompletions(sessionId)).toBe(1);
         expect(yield* userNodes(sessionId)).toBe(2);
-        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.adoptions).toEqual([]);
+        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
         const { persistence } = yield* ChatState;
         const messages = yield* sdk(() => persistence.stores.messages.loadThread(sessionId));
         expect(
@@ -334,25 +330,19 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       expect(yield* wait({ timeoutMs: 0 })).toContain('"status":"pending"');
       expect(yield* wait({ timeoutMs: 1 })).toContain('"status":"timed_out"');
-      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.adoptions).toEqual([]);
+      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toEqual([]);
       yield* turns.release("nap");
       expect(yield* wait({ timeoutMs: 5000 })).toContain('"status":"completed"');
       expect(yield* wait({})).toContain('"status":"completed"');
-      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.adoptions).toEqual([]);
+      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toEqual([]);
       const adopt = callTool(sessionId, "adopt_subagent_reports", {
-        reports: [{ ...ids, evidenceRefIds: [] }],
+        reports: [ids],
       });
       expect(yield* adopt).toContain("Only reports reviewed in this run");
       expect(yield* send(sessionId, `review-and-adopt ${yield* encodeJson(ids)}`)).toContain(
         "Used the reviewed report",
       );
-      const detail = yield* trace.taskDetail(sessionId, ids.taskId);
-      expect(detail?.adoptions.map((entry) => entry.disposition)).toEqual([
-        "returned",
-        "reviewed",
-        "used",
-      ]);
-      expect(detail?.answerClaims).toHaveLength(1);
+      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toHaveLength(1);
       expect(yield* adopt).toContain("Only reports reviewed in this run");
     }),
   );

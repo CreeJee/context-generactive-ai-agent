@@ -1,5 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { HashSet, Array as EffectArray } from "effect";
+import { Array as EffectArray } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -23,20 +23,24 @@ import type { MemoryCandidateView, MemoryUsageView } from "../memory/knowledge.t
 import {
   ArtifactKind,
   ArtifactLocator,
+  AttemptFailure,
+  type AttemptFailureReason,
+  type AttemptFailureStage,
   AttemptStatus,
-  EvidenceLocator,
-  EvidenceSourceKind,
   EvidenceVerification,
+  HeartbeatState,
   type InvocationKind,
   RedactionState,
-  ReportDisposition,
   RunEventKind,
   TaskStatus,
   TraceVisibility,
   canTransitionAttempt,
   type ArtifactLocator as ArtifactLocatorValue,
-  type EvidenceLocator as EvidenceLocatorValue,
 } from "./contracts.ts";
+
+/** How often a live attempt beats, and how long without a beat makes it lost. */
+export const heartbeatIntervalMs = 10_000;
+export const heartbeatLostMs = 60_000;
 
 export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>()(
   "WorkTraceReadFailed",
@@ -55,17 +59,11 @@ export class WorkTraceRejected extends Schema.TaggedError<WorkTraceRejected>()(
       "handle_mismatch",
       "unsafe_file_path",
       "missing_file_digest",
-      "locator_kind_changed",
-      "foreign_thread",
-      "foreign_artifact",
       "artifact_kind_mismatch",
       "origin_missing",
       "invalid_transition",
-      "superseding_attempt_required",
-      "foreign_superseding_attempt",
       "foreign_session",
-      "unreviewed_report",
-      "unrelated_evidence",
+      "foreign_report",
       "undelivered_notification",
       "attempt_not_found",
     ]),
@@ -92,16 +90,21 @@ const RecoveryRow = Schema.Struct({
   agent_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
 });
-const ToolCallRow = Schema.Struct({
-  tool_call_id: Schema.String,
-  completed: Schema.Finite,
-  settled: Schema.Finite,
+const PendingToolsRow = Schema.Struct({ pending_tool_call_ids: Schema.String });
+const RetryRow = Schema.Struct({
+  id: Schema.String,
+  previous_attempt_id: Schema.String,
+  retry_confirm_uncertain: Schema.Finite,
 });
-const RecoveryJobRow = Schema.Struct({
+const LostAttemptRow = Schema.Struct({
   id: Schema.String,
   task_id: Schema.String,
-  interrupted_attempt_id: Schema.String,
-  confirm_uncertain: Schema.Finite,
+  invocation_id: Schema.String,
+  attempt_number: Schema.Finite,
+  chat_run_id: Schema.String,
+  thread_id: Schema.String,
+  status: AttemptStatus,
+  origin_session_id: Schema.NullOr(Schema.String),
 });
 const NotificationTaskRow = Schema.Struct({
   project_id: Schema.String,
@@ -120,7 +123,6 @@ const SequenceRow = Schema.Struct({ sequence: Schema.Finite });
 const CursorRow = Schema.Struct({ seq: Schema.Finite });
 const IdRow = Schema.Struct({ id: Schema.String });
 const TaskIdRow = Schema.Struct({ task_id: Schema.String });
-const AttemptIdRow = Schema.Struct({ attempt_id: Schema.String });
 const AttemptNumberRow = Schema.Struct({ attempt_number: Schema.Finite });
 const LifecycleOperationRow = Schema.Struct({
   id: Schema.String,
@@ -172,8 +174,10 @@ const TaskViewRow = Schema.Struct({
   latest_attempt_status: Schema.NullOr(AttemptStatus),
   latest_attempt_number: Schema.NullOr(Schema.Finite),
   latest_resumed_from_attempt_id: Schema.NullOr(Schema.String),
-  latest_activity: Schema.NullOr(Schema.String),
-  latest_activity_at: Schema.NullOr(Schema.Finite),
+  heartbeat_state: Schema.NullOr(HeartbeatState),
+  heartbeat_step: Schema.NullOr(Schema.String),
+  heartbeat_at: Schema.NullOr(Schema.Finite),
+  latest_failure: Schema.NullOr(Schema.String),
   archived_at: Schema.NullOr(Schema.Finite),
   delete_requested_at: Schema.NullOr(Schema.Finite),
   deleted_at: Schema.NullOr(Schema.Finite),
@@ -190,6 +194,11 @@ const AttemptViewRow = Schema.Struct({
   status: AttemptStatus,
   resumed_from_attempt_id: Schema.NullOr(Schema.String),
   superseded_by_attempt_id: Schema.NullOr(Schema.String),
+  heartbeat_state: Schema.NullOr(HeartbeatState),
+  heartbeat_step: Schema.NullOr(Schema.String),
+  heartbeat_at: Schema.NullOr(Schema.Finite),
+  pending_tool_call_ids: Schema.String,
+  failure: Schema.NullOr(Schema.String),
   started_at: Schema.NullOr(Schema.Finite),
   finished_at: Schema.NullOr(Schema.Finite),
   created_at: Schema.Finite,
@@ -210,19 +219,6 @@ const ResumeTaskRow = Schema.Struct({
   previous_status: AttemptStatus,
   thread_id: Schema.String,
 });
-const EvidenceRow = Schema.Struct({
-  id: Schema.String,
-  task_id: Schema.String,
-  attempt_id: Schema.String,
-  source_kind: EvidenceSourceKind,
-  locator: Schema.NullOr(Schema.String),
-  verification: EvidenceVerification,
-  visibility: TraceVisibility,
-  redaction: RedactionState,
-  source_deleted_at: Schema.NullOr(Schema.Finite),
-  created_at: Schema.Finite,
-  updated_at: Schema.Finite,
-});
 const ArtifactRow = Schema.Struct({
   id: Schema.String,
   task_id: Schema.String,
@@ -233,17 +229,6 @@ const ArtifactRow = Schema.Struct({
   verification: EvidenceVerification,
   source_deleted_at: Schema.NullOr(Schema.Finite),
   created_at: Schema.Finite,
-  updated_at: Schema.Finite,
-});
-const ReportAdoptionRow = Schema.Struct({
-  seq: Schema.Finite,
-  task_id: Schema.String,
-  attempt_id: Schema.String,
-  disposition: ReportDisposition,
-  superseded_by_attempt_id: Schema.NullOr(Schema.String),
-  parent_run_id: Schema.NullOr(Schema.String),
-  parent_message_id: Schema.NullOr(Schema.String),
-  claim_id: Schema.NullOr(Schema.String),
   updated_at: Schema.Finite,
 });
 const FinalAnswerClaimRow = Schema.Struct({
@@ -259,7 +244,6 @@ const FinalAnswerSourceRow = Schema.Struct({
   claim_id: Schema.String,
   task_id: Schema.String,
   attempt_id: Schema.String,
-  evidence_ref_id: Schema.NullOr(Schema.String),
 });
 const FinalAnswerNotificationRow = Schema.Struct({
   claim_id: Schema.String,
@@ -294,8 +278,14 @@ const PendingLifecycleRow = Schema.Struct({
 });
 const decodeAttempt = Schema.decodeUnknownEffect(AttemptRow);
 const decodeRecoveryRows = Schema.decodeUnknownEffect(Schema.Array(RecoveryRow));
-const decodeToolCallRows = Schema.decodeUnknownEffect(Schema.Array(ToolCallRow));
-const decodeRecoveryJobRows = Schema.decodeUnknownEffect(Schema.Array(RecoveryJobRow));
+const decodePendingTools = Schema.decodeUnknownEffect(PendingToolsRow);
+const decodeRetryRows = Schema.decodeUnknownEffect(Schema.Array(RetryRow));
+const decodeLostAttemptRows = Schema.decodeUnknownEffect(Schema.Array(LostAttemptRow));
+const decodeStringArray = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+const decodeFailure = Schema.decodeUnknownEffect(Schema.fromJsonString(AttemptFailure));
+const encodeFailure = Schema.encodeEffect(Schema.fromJsonString(AttemptFailure));
 const decodeNotificationTask = Schema.decodeUnknownEffect(NotificationTaskRow);
 const decodeParentNotificationRows = Schema.decodeUnknownEffect(
   Schema.Array(ParentNotificationRow),
@@ -305,7 +295,6 @@ const decodeCursor = Schema.decodeUnknownEffect(CursorRow);
 const decodeId = Schema.decodeUnknownEffect(IdRow);
 const decodeIds = Schema.decodeUnknownEffect(Schema.Array(IdRow));
 const decodeTaskId = Schema.decodeUnknownEffect(TaskIdRow);
-const decodeAttemptId = Schema.decodeUnknownEffect(AttemptIdRow);
 const decodeAttemptNumber = Schema.decodeUnknownEffect(AttemptNumberRow);
 const decodeLifecycleOperation = Schema.decodeUnknownEffect(LifecycleOperationRow);
 const decodeLifecycleTask = Schema.decodeUnknownEffect(LifecycleTaskRow);
@@ -313,11 +302,8 @@ const decodeTaskViewRows = Schema.decodeUnknownEffect(Schema.Array(TaskViewRow))
 const decodeAttemptViewRows = Schema.decodeUnknownEffect(Schema.Array(AttemptViewRow));
 const decodeStoredEventRows = Schema.decodeUnknownEffect(Schema.Array(StoredEventRow));
 const decodeResumeTask = Schema.decodeUnknownEffect(ResumeTaskRow);
-const decodeEvidenceRows = Schema.decodeUnknownEffect(Schema.Array(EvidenceRow));
-const decodeEvidenceRow = Schema.decodeUnknownEffect(EvidenceRow);
 const decodeArtifactRows = Schema.decodeUnknownEffect(Schema.Array(ArtifactRow));
 const decodeArtifactRow = Schema.decodeUnknownEffect(ArtifactRow);
-const decodeReportAdoptionRows = Schema.decodeUnknownEffect(Schema.Array(ReportAdoptionRow));
 const decodeFinalAnswerClaimRows = Schema.decodeUnknownEffect(Schema.Array(FinalAnswerClaimRow));
 const decodeFinalAnswerSourceRows = Schema.decodeUnknownEffect(Schema.Array(FinalAnswerSourceRow));
 const decodeFinalAnswerNotificationRows = Schema.decodeUnknownEffect(
@@ -333,7 +319,6 @@ const decodeAttemptStatus = Schema.decodeUnknownEffect(Schema.Struct({ status: A
 const decodeOriginSessions = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ origin_session_id: Schema.String })),
 );
-const decodeEvidenceLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(EvidenceLocator));
 const decodeArtifactLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(ArtifactLocator));
 const decodeRunResult = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -343,7 +328,6 @@ const decodeRunResult = Schema.decodeUnknownEffect(
 );
 const decodePayload = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonValue));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-const encodeEvidenceLocator = Schema.encodeEffect(Schema.fromJsonString(EvidenceLocator));
 const encodeArtifactLocator = Schema.encodeEffect(Schema.fromJsonString(ArtifactLocator));
 
 export interface TraceTaskView {
@@ -363,8 +347,10 @@ export interface TraceTaskView {
   readonly latestAttemptStatus: AttemptStatus | null;
   readonly latestAttemptNumber: number | null;
   readonly latestResumedFromAttemptId: string | null;
-  readonly latestActivity: string | null;
-  readonly latestActivityAt: number | null;
+  /** Where the latest attempt is, as its last heartbeat said. */
+  readonly heartbeat: TraceHeartbeatView | null;
+  /** Why the latest attempt failed, if it did. */
+  readonly latestFailure: AttemptFailure | null;
   readonly archivedAt: number | null;
   readonly deleteRequestedAt: number | null;
   readonly deletedAt: number | null;
@@ -382,10 +368,21 @@ export interface TraceAttemptView {
   readonly status: AttemptStatus;
   readonly resumedFromAttemptId: string | null;
   readonly supersededByAttemptId: string | null;
+  readonly heartbeat: TraceHeartbeatView | null;
+  /** Tool calls the attempt started and never settled. */
+  readonly pendingToolCallIds: readonly string[];
+  readonly failure: AttemptFailure | null;
   readonly startedAt: number | null;
   readonly finishedAt: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
+}
+
+export interface TraceHeartbeatView {
+  readonly state: HeartbeatState;
+  /** One line about the current step. */
+  readonly step: string | null;
+  readonly at: number;
 }
 
 export interface TraceTreeSnapshot {
@@ -396,27 +393,13 @@ export interface TraceTreeSnapshot {
 export interface TraceTaskDetail {
   readonly task: TraceTaskView;
   readonly attempts: readonly TraceAttemptView[];
-  readonly evidence: readonly TraceEvidenceView[];
   readonly artifacts: readonly TraceArtifactView[];
-  readonly adoptions: readonly TraceReportAdoptionView[];
   readonly answerClaims: readonly TraceFinalAnswerClaimView[];
   /** Present on HTTP detail projections; omitted by the lower-level trace store. */
   readonly memoryCandidates?: readonly MemoryCandidateView[];
   /** Retrieval and actual-use events are separate so recall does not imply answer influence. */
   readonly memoryUsage?: readonly MemoryUsageView[];
   readonly events: readonly TraceEventView[];
-}
-
-export interface TraceReportAdoptionView {
-  readonly sequence: number;
-  readonly taskId: string;
-  readonly attemptId: string;
-  readonly disposition: ReportDisposition;
-  readonly supersededByAttemptId: string | null;
-  readonly parentRunId: string | null;
-  readonly parentMessageId: string | null;
-  readonly claimId: string | null;
-  readonly updatedAt: number;
 }
 
 export interface TraceFinalAnswerClaimView {
@@ -428,25 +411,9 @@ export interface TraceFinalAnswerClaimView {
   readonly sources: readonly {
     readonly taskId: string;
     readonly attemptId: string;
-    readonly evidenceRefId: string | null;
   }[];
   readonly notificationIds: readonly string[];
   readonly createdAt: number;
-}
-
-export interface TraceEvidenceView {
-  readonly id: string;
-  readonly taskId: string;
-  readonly attemptId: string;
-  readonly sourceKind: EvidenceSourceKind;
-  /** Null for redacted user projections and source-deleted tombstones. */
-  readonly locator: EvidenceLocatorValue | null;
-  readonly verification: EvidenceVerification;
-  readonly visibility: TraceVisibility;
-  readonly redaction: RedactionState;
-  readonly sourceDeletedAt: number | null;
-  readonly createdAt: number;
-  readonly updatedAt: number;
 }
 
 export interface TraceArtifactView {
@@ -488,10 +455,10 @@ export interface ParentNotificationView {
   readonly createdAt: number;
 }
 
-/** What a retry tells the new attempt. Tool calls come from the previous attempt's run events. */
+/** What a retry tells the new attempt. The child's own transcript shows what already ran. */
 export interface ResumeContext {
   readonly originalRequest: string;
-  readonly completedToolCallIds: readonly string[];
+  /** Tool calls the previous attempt started and never settled. */
   readonly uncertainToolCallIds: readonly string[];
 }
 
@@ -550,14 +517,6 @@ export interface AppendEventInput {
   readonly occurredAt?: number;
 }
 
-export interface RecordEvidenceInput {
-  readonly handle: AttemptHandle;
-  readonly locator: EvidenceLocatorValue;
-  readonly verification?: Exclude<EvidenceVerification, "source_deleted">;
-  readonly visibility?: TraceVisibility;
-  readonly redaction?: RedactionState;
-}
-
 export interface RecordArtifactInput {
   readonly handle: AttemptHandle;
   readonly kind: ArtifactKind;
@@ -586,6 +545,18 @@ const taskStatusForAttempt = (status: AttemptStatus): TaskStatus => {
       return "cancelled";
   }
 };
+
+/** What a heartbeat says once an attempt reaches a status by transition. */
+const heartbeatStateForAttempt = {
+  queued: "idle",
+  running: "working",
+  waiting: "waiting",
+  blocked: "waiting",
+  interrupted: "idle",
+  completed: "idle",
+  failed: "idle",
+  cancelled: "idle",
+} as const satisfies Record<AttemptStatus, HeartbeatState>;
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
@@ -643,25 +614,6 @@ const make = Effect.gen(function* () {
     threadId: attempt.thread_id,
     attemptNumber: attempt.attempt_number,
   });
-  const evidenceView = Effect.fnUntraced(function* (row: typeof EvidenceRow.Type) {
-    const view: TraceEvidenceView = {
-      id: row.id,
-      taskId: row.task_id,
-      attemptId: row.attempt_id,
-      sourceKind: row.source_kind,
-      locator:
-        row.locator === null || row.redaction === "redacted"
-          ? null
-          : yield* decodeEvidenceLocator(row.locator),
-      verification: row.verification,
-      visibility: row.visibility,
-      redaction: row.redaction,
-      sourceDeletedAt: row.source_deleted_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
-    return view;
-  });
   const artifactView = Effect.fnUntraced(function* (row: typeof ArtifactRow.Type) {
     const view: TraceArtifactView = {
       id: row.id,
@@ -697,71 +649,6 @@ const make = Effect.gen(function* () {
   });
   const eventViews = (rows: ReadonlyArray<typeof StoredEventRow.Type>) =>
     Effect.forEach(rows, eventView);
-
-  const recordEvidence = (input: RecordEvidenceInput) =>
-    Effect.gen(function* () {
-      yield* assertHandle(input.handle);
-      const locator = yield* Schema.decodeEffect(EvidenceLocator)(input.locator);
-      if (locator.kind !== input.locator.kind)
-        return yield* rejected(
-          "locator_kind_changed",
-          "Evidence locator kind changed during decoding",
-        );
-      if (locator.kind === "file") yield* assertSafeFile(locator);
-      if (
-        (locator.kind === "message" ||
-          locator.kind === "tool_call" ||
-          locator.kind === "tool_result") &&
-        locator.threadId !== input.handle.threadId
-      )
-        return yield* rejected("foreign_thread", "Evidence locator belongs to another thread");
-      if (
-        locator.kind === "artifact" &&
-        !isTruthy(
-          yield* first(sql`SELECT 1 FROM work_artifacts
-            WHERE id = ${locator.artifactId} AND task_id = ${input.handle.taskId}`),
-        )
-      )
-        return yield* rejected(
-          "foreign_artifact",
-          "Evidence artifact does not belong to this task",
-        );
-      const sourceKind = locator.kind;
-      const encoded = yield* encodeEvidenceLocator(locator);
-      const existing = yield* first(sql`SELECT * FROM evidence_refs
-        WHERE attempt_id = ${input.handle.id} AND source_kind = ${sourceKind} AND locator = ${encoded}`);
-      if (isTruthy(existing)) return yield* evidenceView(yield* decodeEvidenceRow(existing));
-      const now = effectClock.currentTimeMillisUnsafe();
-      const inserted = yield* first(sql`INSERT INTO evidence_refs
-        (id, task_id, attempt_id, source_kind, locator, verification, visibility,
-         redaction, created_at, updated_at)
-        VALUES (${yield* crypto.randomUUIDv4()}, ${input.handle.taskId}, ${input.handle.id},
-          ${sourceKind}, ${encoded}, ${input.verification ?? "unverified"},
-          ${input.visibility ?? "summary"}, ${input.redaction ?? "clear"}, ${now}, ${now})
-        RETURNING *`);
-      return yield* evidenceView(yield* decodeEvidenceRow(inserted));
-    }).pipe(sql.withTransaction);
-
-  const setEvidenceVerification = (
-    evidenceId: string,
-    verification: Exclude<EvidenceVerification, "source_deleted">,
-  ) =>
-    Effect.gen(function* () {
-      const row = yield* first(sql`UPDATE evidence_refs SET verification = ${verification},
-          source_deleted_at = NULL, updated_at = ${effectClock.currentTimeMillisUnsafe()}
-        WHERE id = ${evidenceId} AND locator IS NOT NULL RETURNING *`);
-      return isTruthy(row) ? yield* evidenceView(yield* decodeEvidenceRow(row)) : null;
-    }).pipe(sql.withTransaction);
-
-  const markEvidenceSourceDeleted = (evidenceId: string) =>
-    Effect.gen(function* () {
-      const now = effectClock.currentTimeMillisUnsafe();
-      const row = yield* first(sql`UPDATE evidence_refs
-        SET locator = NULL, verification = 'source_deleted', redaction = 'redacted',
-            source_deleted_at = ${now}, updated_at = ${now}
-        WHERE id = ${evidenceId} RETURNING *`);
-      return isTruthy(row) ? yield* evidenceView(yield* decodeEvidenceRow(row)) : null;
-    }).pipe(sql.withTransaction);
 
   const recordArtifact = (input: RecordArtifactInput) =>
     Effect.gen(function* () {
@@ -805,28 +692,43 @@ const make = Effect.gen(function* () {
       return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
     }).pipe(sql.withTransaction);
 
-  /**
-   * Tool calls an attempt requested, read from its run events. A call with neither a completed nor
-   * a failed event may have run, so a retry must not repeat it without the user's confirmation.
-   */
-  const toolCallsOf = Effect.fnUntraced(function* (attemptId: string) {
-    const rows = yield* decodeToolCallRows(
-      yield* sql`SELECT json_extract(payload, '$.toolCallId') AS tool_call_id,
-          max(kind = 'tool_completed') AS completed,
-          max(kind IN ('tool_completed', 'tool_failed')) AS settled
-        FROM run_events
-        WHERE attempt_id = ${attemptId}
-          AND kind IN ('tool_requested', 'tool_completed', 'tool_failed')
-          AND json_extract(payload, '$.toolCallId') IS NOT NULL
-        GROUP BY tool_call_id ORDER BY min(seq)`,
+  /** Tool calls an attempt started and never settled. A retry must not repeat them unasked. */
+  const pendingToolsOf = (attemptId: string) =>
+    first(sql`SELECT pending_tool_call_ids FROM agent_run_attempts WHERE id = ${attemptId}`).pipe(
+      Effect.flatMap(decodePendingTools),
+      Effect.flatMap((row) => decodeStringArray(row.pending_tool_call_ids)),
     );
-    return {
-      completed: rows.filter((row) => row.completed === 1).map((row) => row.tool_call_id),
-      uncertain: rows.filter((row) => row.settled === 0).map((row) => row.tool_call_id),
-    };
+  const heartbeatView = (
+    state: HeartbeatState | null,
+    step: string | null,
+    at: number | null,
+  ): TraceHeartbeatView | null => (state === null || at === null ? null : { state, step, at });
+  const failureOf = (failure: string | null) =>
+    failure === null ? Effect.succeed(null) : decodeFailure(failure);
+  /** Where an attempt was, read from its heartbeat, for a failure its caller cannot place. */
+  const stageOf = Effect.fnUntraced(function* (attemptId: string) {
+    const row = yield* first(sql`SELECT heartbeat_state, status, pending_tool_call_ids
+      FROM agent_run_attempts WHERE id = ${attemptId}`);
+    const live = yield* Schema.decodeUnknownEffect(
+      Schema.Struct({
+        heartbeat_state: Schema.NullOr(HeartbeatState),
+        status: AttemptStatus,
+        pending_tool_call_ids: Schema.String,
+      }),
+    )(row);
+    const stage: AttemptFailureStage =
+      live.status === "queued"
+        ? "start"
+        : (yield* decodeStringArray(live.pending_tool_call_ids)).length > 0
+          ? "tool"
+          : live.heartbeat_state === "waiting"
+            ? "approval"
+            : "model";
+    return stage;
   });
 
-  // Attempts the previous process left running are interrupted before any new work starts.
+  // Attempts the previous process left live failed with it. Retrying is the user's or the
+  // parent's call, never automatic.
   const recoveredAttempts = yield* Effect.gen(function* () {
     const now = effectClock.currentTimeMillisUnsafe();
     const attempts = yield* decodeRecoveryRows(
@@ -835,36 +737,31 @@ const make = Effect.gen(function* () {
         FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
         WHERE a.status IN ('queued', 'running', 'waiting', 'blocked')`,
     );
+    const failure: AttemptFailure = { reason: { _tag: "ServerRestarted" }, stage: "restart" };
+    const encodedFailure = yield* encodeFailure(failure);
     for (const row of attempts) {
-      const blocker =
-        row.origin_session_id === null
-          ? "origin_deleted"
-          : row.agent_id === null
-            ? "agent_deleted"
-            : (yield* toolCallsOf(row.id)).uncertain.length > 0
-              ? "uncertain_side_effect"
-              : null;
-      const safe = blocker === null;
+      const uncertain = (yield* pendingToolsOf(row.id)).length > 0;
+      const retryable = row.origin_session_id !== null && row.agent_id !== null;
       yield* run(sql`UPDATE agent_run_attempts
-        SET status = 'interrupted', resume_reason = 'server_restarted',
+        SET status = 'interrupted', resume_reason = 'server_restarted', failure = ${encodedFailure},
+            heartbeat_state = 'idle', heartbeat_step = 'Stopped by a server restart',
             finished_at = ${now}, updated_at = ${now}
         WHERE id = ${row.id}`);
-      yield* run(sql`UPDATE work_tasks SET status = ${safe ? "resumable" : "blocked"},
-          active_attempt_id = NULL, updated_at = ${now}
+      yield* run(sql`UPDATE work_tasks
+        SET status = ${!retryable ? "interrupted" : uncertain ? "blocked" : "resumable"},
+            active_attempt_id = NULL, updated_at = ${now}
         WHERE id = ${row.task_id}`);
-      yield* run(sql`INSERT INTO work_recovery_jobs
-        (id, project_id, task_id, interrupted_attempt_id, status, blocker, created_at, updated_at)
-        VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id}, ${row.id},
-          ${safe ? "queued" : "blocked"}, ${blocker}, ${now}, ${now})
-        ON CONFLICT(task_id) DO NOTHING`);
-      const summary = safe
-        ? "Subagent execution was interrupted and queued for safe recovery."
-        : `Subagent execution was interrupted; recovery is blocked by ${blocker}.`;
+      const summary = !retryable
+        ? "Execution was interrupted by a server restart."
+        : uncertain
+          ? "Subagent execution was interrupted by a server restart. A tool call may have run; check its effects before retrying."
+          : "Subagent execution was interrupted by a server restart and can be retried.";
       yield* run(sql`INSERT INTO parent_notifications
         (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
          idempotency_key, created_at)
         VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id},
-          ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary}, '{}',
+          ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary},
+          ${yield* encodeJson({ attemptId: row.id, failure })},
           ${`recovery:${row.id}:interrupted`}, ${now})
         ON CONFLICT(idempotency_key) DO NOTHING`);
     }
@@ -895,6 +792,76 @@ const make = Effect.gen(function* () {
     for (const listener of listeners) listener(input.sessionId, event.cursor);
     return event;
   });
+
+  /** Wakes trace readers when a heartbeat says something new. Periodic beats alone do not. */
+  const progressListeners = MutableHashSet.empty<(sessionId: string) => void>();
+  const announceProgress = (sessionId: string) =>
+    Effect.sync(() => {
+      for (const listener of progressListeners) listener(sessionId);
+    });
+  const liveStatuses = sql.literal("('queued', 'running', 'waiting', 'blocked')");
+
+  /** Records what a live attempt is doing now. An attempt that already ended keeps its last beat. */
+  const beat = (
+    handle: AttemptHandle,
+    sessionId: string,
+    update: { readonly state: HeartbeatState; readonly step: string },
+  ) =>
+    run(sql`UPDATE agent_run_attempts
+      SET heartbeat_state = ${update.state}, heartbeat_step = ${update.step},
+          heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
+      WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
+      Effect.flatMap((result) =>
+        result.changes === 1 ? announceProgress(sessionId) : Effect.void,
+      ),
+    );
+
+  /** A live attempt started a tool call; until it settles a retry treats it as possibly run. */
+  const toolStarted = (
+    handle: AttemptHandle,
+    sessionId: string,
+    toolCall: { readonly id: string; readonly name: string },
+  ) =>
+    run(sql`UPDATE agent_run_attempts
+      SET pending_tool_call_ids = json_insert(pending_tool_call_ids, '$[#]', ${toolCall.id}),
+          heartbeat_state = 'working', heartbeat_step = ${`Running ${toolCall.name}`},
+          heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
+      WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
+      Effect.andThen(announceProgress(sessionId)),
+    );
+
+  const toolSettled = (
+    handle: AttemptHandle,
+    sessionId: string,
+    toolCall: { readonly id: string; readonly name: string },
+  ) =>
+    run(sql`UPDATE agent_run_attempts
+      SET pending_tool_call_ids = (SELECT json_group_array(value)
+            FROM json_each(pending_tool_call_ids) WHERE value <> ${toolCall.id}),
+          heartbeat_state = 'working', heartbeat_step = ${`Finished ${toolCall.name}`},
+          heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
+      WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
+      Effect.andThen(announceProgress(sessionId)),
+    );
+
+  /**
+   * Beats for a live attempt until interrupted. The owner forks it into the attempt's own scope,
+   * so the beats stop exactly when the attempt's fiber does. A failed write is logged; missing
+   * beats then let the watchdog judge the attempt lost.
+   */
+  const keepAlive = (handle: AttemptHandle) =>
+    Effect.forever(
+      Effect.sleep(heartbeatIntervalMs).pipe(
+        Effect.andThen(
+          run(sql`UPDATE agent_run_attempts
+            SET heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
+            WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+        ),
+        Effect.catch((error) =>
+          Effect.logWarning("work_trace_heartbeat_not_recorded", { error: error._tag }),
+        ),
+      ),
+    );
 
   const notifyParent = (input: {
     readonly taskId: string;
@@ -1004,10 +971,11 @@ const make = Effect.gen(function* () {
           ${idempotencyKey}, ${now})`);
       yield* run(sql`INSERT INTO agent_run_attempts
         (id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-         resumed_from_attempt_id, resume_reason, created_at, updated_at)
+         resumed_from_attempt_id, resume_reason, heartbeat_state, heartbeat_step, heartbeat_at,
+         created_at, updated_at)
         VALUES (${attemptId}, ${taskId}, ${invocationId}, ${attemptNumber}, ${chatRunId},
           ${input.threadId}, 'queued', ${input.resumedFromAttemptId ?? null},
-          ${input.resumeReason ?? null}, ${now}, ${now})`);
+          ${input.resumeReason ?? null}, 'idle', 'Queued', ${now}, ${now}, ${now})`);
       yield* run(sql`UPDATE work_tasks SET active_attempt_id = ${attemptId} WHERE id = ${taskId}`);
       const handle: AttemptHandle = {
         id: attemptId,
@@ -1059,9 +1027,13 @@ const make = Effect.gen(function* () {
     status: AttemptStatus,
     event: RunEventKind,
     summary: string,
-    error?: string | null,
+    failure?: {
+      readonly reason: AttemptFailureReason;
+      readonly stage?: AttemptFailureStage;
+    } | null,
     deliveredImmediately = true,
     deliveredToRunId?: string,
+    detail: Readonly<Record<string, JsonValue>> = {},
   ) =>
     Effect.gen(function* () {
       const current = yield* decodeAttempt(
@@ -1075,9 +1047,15 @@ const make = Effect.gen(function* () {
         );
       const now = effectClock.currentTimeMillisUnsafe();
       const terminal = ["interrupted", "completed", "failed", "cancelled"].includes(status);
+      const recorded: AttemptFailure | null = isTruthy(failure)
+        ? { reason: failure.reason, stage: failure.stage ?? (yield* stageOf(handle.id)) }
+        : null;
       yield* run(sql`UPDATE agent_run_attempts
         SET status = ${status}, started_at = coalesce(started_at, ${now}),
-            finished_at = ${terminal ? now : null}, updated_at = ${now}
+            finished_at = ${terminal ? now : null}, updated_at = ${now},
+            failure = ${recorded === null ? null : yield* encodeFailure(recorded)},
+            heartbeat_state = ${heartbeatStateForAttempt[status]}, heartbeat_step = ${summary},
+            heartbeat_at = ${now}
         WHERE id = ${handle.id}`);
       yield* run(sql`UPDATE work_tasks SET status = ${taskStatusForAttempt(status)},
           active_attempt_id = ${terminal ? null : handle.id}, updated_at = ${now}
@@ -1098,7 +1076,7 @@ const make = Effect.gen(function* () {
         sessionId,
         kind: event,
         summary,
-        payload: isTruthy(error) ? { error } : {},
+        payload: recorded === null ? detail : { ...detail, failure: recorded },
         occurredAt: now,
       });
       const notificationKind =
@@ -1119,53 +1097,20 @@ const make = Effect.gen(function* () {
           kind: notificationKind,
           summary,
           idempotencyKey: `attempt:${handle.id}:${notificationKind}`,
-          payload: { attemptId: handle.id },
+          payload:
+            recorded === null
+              ? { attemptId: handle.id }
+              : { attemptId: handle.id, failure: recorded },
           deliveredImmediately,
           ...optionalProperty("deliveredToRunId", deliveredToRunId),
         });
       return appended;
     }).pipe(sql.withTransaction);
 
-  const evidenceForTask = (taskId: string) =>
-    sql`SELECT * FROM evidence_refs
-      WHERE task_id = ${taskId} AND visibility <> 'internal' AND redaction <> 'omitted'
-      ORDER BY created_at, id`.pipe(
-      Effect.flatMap(decodeEvidenceRows),
-      Effect.flatMap((rows) => Effect.forEach(rows, evidenceView)),
-    );
-
   const artifactsForTask = (taskId: string) =>
     sql`SELECT * FROM work_artifacts WHERE task_id = ${taskId} ORDER BY created_at, id`.pipe(
       Effect.flatMap(decodeArtifactRows),
       Effect.flatMap((rows) => Effect.forEach(rows, artifactView)),
-    );
-
-  const evidenceIdsForAttempt = (attemptId: string) =>
-    sql`SELECT * FROM evidence_refs WHERE attempt_id = ${attemptId} AND verification = 'verified'
-        AND visibility <> 'internal' AND redaction <> 'omitted'
-      ORDER BY created_at, id`.pipe(
-      Effect.flatMap(decodeEvidenceRows),
-      Effect.map((rows) => rows.map((row) => row.id)),
-    );
-
-  const reportAdoptionsForTask = (taskId: string) =>
-    sql`SELECT seq, task_id, attempt_id, disposition, superseded_by_attempt_id,
-        parent_run_id, parent_message_id, claim_id, updated_at
-      FROM report_adoptions WHERE task_id = ${taskId} ORDER BY seq`.pipe(
-      Effect.flatMap(decodeReportAdoptionRows),
-      Effect.map((rows) =>
-        rows.map((row): TraceReportAdoptionView => ({
-          sequence: row.seq,
-          taskId: row.task_id,
-          attemptId: row.attempt_id,
-          disposition: row.disposition,
-          supersededByAttemptId: row.superseded_by_attempt_id,
-          parentRunId: row.parent_run_id,
-          parentMessageId: row.parent_message_id,
-          claimId: row.claim_id,
-          updatedAt: row.updated_at,
-        })),
-      ),
     );
 
   const answerClaimsForTask = Effect.fnUntraced(function* (taskId: string) {
@@ -1182,9 +1127,9 @@ const make = Effect.gen(function* () {
     return yield* Effect.forEach(claims, (claim) =>
       Effect.gen(function* () {
         const sources = yield* decodeFinalAnswerSourceRows(
-          yield* sql`SELECT id, claim_id, task_id, attempt_id, evidence_ref_id
+          yield* sql`SELECT id, claim_id, task_id, attempt_id
             FROM final_answer_sources WHERE claim_id = ${claim.id}
-            ORDER BY task_id, attempt_id, evidence_ref_id`,
+            ORDER BY task_id, attempt_id`,
         );
         const notifications = yield* decodeFinalAnswerNotificationRows(
           yield* sql`SELECT claim_id, notification_id, task_id FROM final_answer_notifications
@@ -1199,7 +1144,6 @@ const make = Effect.gen(function* () {
           sources: sources.map((source) => ({
             taskId: source.task_id,
             attemptId: source.attempt_id,
-            evidenceRefId: source.evidence_ref_id,
           })),
           notificationIds: notifications.map((notification) => notification.notification_id),
           createdAt: claim.created_at,
@@ -1209,69 +1153,16 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const recordReportDisposition = (input: {
-    readonly handle: AttemptHandle;
-    readonly sessionId: string;
-    readonly disposition: ReportDisposition;
-    readonly parentRunId?: string | null;
-    readonly parentMessageId?: string | null;
-    readonly claimId?: string | null;
-    readonly supersededByAttemptId?: string | null;
-  }) =>
-    Effect.gen(function* () {
-      yield* assertHandle(input.handle);
-      if ((input.disposition === "superseded") !== Boolean(input.supersededByAttemptId))
-        return yield* rejected(
-          "superseding_attempt_required",
-          "Only superseded reports require a superseding attempt",
-        );
-      if (
-        isTruthy(input.supersededByAttemptId) &&
-        !isTruthy(
-          yield* first(sql`SELECT 1 FROM agent_run_attempts
-            WHERE id = ${input.supersededByAttemptId} AND task_id = ${input.handle.taskId}`),
-        )
-      )
-        return yield* rejected(
-          "foreign_superseding_attempt",
-          "Superseding attempt belongs to another task",
-        );
-      const existing = yield* first(sql`SELECT seq FROM report_adoptions
-        WHERE task_id = ${input.handle.taskId} AND attempt_id = ${input.handle.id}
-          AND disposition = ${input.disposition}
-          AND parent_run_id IS ${input.parentRunId ?? null}
-          AND parent_message_id IS ${input.parentMessageId ?? null}
-          AND claim_id IS ${input.claimId ?? null}
-          AND superseded_by_attempt_id IS ${input.supersededByAttemptId ?? null}
-        ORDER BY seq DESC LIMIT 1`);
-      if (isTruthy(existing)) return (yield* decodeCursor(existing)).seq;
-      const now = effectClock.currentTimeMillisUnsafe();
-      const result = yield* run(sql`INSERT INTO report_adoptions
-        (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
-         parent_run_id, parent_message_id, claim_id)
-        VALUES (${input.handle.taskId}, ${input.handle.id}, ${input.disposition},
-          ${input.supersededByAttemptId ?? null}, ${now}, ${input.parentRunId ?? null},
-          ${input.parentMessageId ?? null}, ${input.claimId ?? null})`);
-      yield* appendEvent({
-        handle: input.handle,
-        sessionId: input.sessionId,
-        kind: `report_${input.disposition}`,
-        summary: `Subagent report ${input.disposition.replace("_", " ")}`,
-        payload: isTruthy(input.claimId) ? { claimId: input.claimId } : {},
-      });
-      return Number(result.lastInsertRowid);
-    }).pipe(sql.withTransaction);
-
+  /**
+   * Records which subagent reports and status notifications an answer used. The caller checks
+   * that each report was reviewed in its run; the store checks that each belongs to the session.
+   */
   const finalizeAnswerClaim = (input: {
     readonly projectId: string;
     readonly sessionId: string;
     readonly parentRunId: string;
     readonly parentMessageId: string;
-    readonly usedReports: readonly {
-      readonly taskId: string;
-      readonly attemptId: string;
-      readonly evidenceRefIds: readonly string[];
-    }[];
+    readonly usedReports: readonly { readonly taskId: string; readonly attemptId: string }[];
     readonly reflectedNotificationIds: readonly string[];
   }) =>
     Effect.gen(function* () {
@@ -1285,38 +1176,22 @@ const make = Effect.gen(function* () {
           "foreign_session",
           "Final answer session does not belong to the project",
         );
-      const reviewed = yield* decodeReportAdoptionRows(
-        yield* sql`SELECT a.seq, a.task_id, a.attempt_id, a.disposition, a.superseded_by_attempt_id,
-            a.parent_run_id, a.parent_message_id, a.claim_id, a.updated_at
-          FROM report_adoptions a JOIN work_tasks t ON t.id = a.task_id
-          WHERE a.parent_run_id = ${input.parentRunId} AND a.disposition = 'reviewed'
-            AND t.project_id = ${input.projectId} AND t.origin_session_id = ${input.sessionId}
-          ORDER BY a.seq`,
+      const reports = EffectArray.dedupeWith(
+        input.usedReports,
+        (a, b) => a.taskId === b.taskId && a.attemptId === b.attemptId,
       );
-      const reviewedKeys = HashSet.fromIterable(
-        reviewed.map((row) => `${row.task_id}:${row.attempt_id}`),
-      );
-      const selected = MutableHashMap.fromIterable(
-        input.usedReports.map(
-          (report) => [`${report.taskId}:${report.attemptId}`, report] as const,
-        ),
-      );
-      for (const [key, report] of selected) {
-        if (!HashSet.has(reviewedKeys, key))
-          return yield* rejected("unreviewed_report", "Final answer selected an unreviewed report");
-        for (const evidenceId of report.evidenceRefIds)
-          if (
-            !isTruthy(
-              yield* first(sql`SELECT 1 FROM evidence_refs
-                WHERE id = ${evidenceId} AND task_id = ${report.taskId}
-                  AND attempt_id = ${report.attemptId} AND verification = 'verified'`),
-            )
+      for (const report of reports)
+        if (
+          !isTruthy(
+            yield* first(sql`SELECT 1 FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+              WHERE a.id = ${report.attemptId} AND a.task_id = ${report.taskId}
+                AND t.project_id = ${input.projectId} AND t.origin_session_id = ${input.sessionId}`),
           )
-            return yield* rejected(
-              "unrelated_evidence",
-              "Final answer selected unavailable or unrelated evidence",
-            );
-      }
+        )
+          return yield* rejected(
+            "foreign_report",
+            "Final answer selected another session's report",
+          );
       const notificationTasks = MutableHashMap.empty<string, string>();
       for (const notificationId of input.reflectedNotificationIds) {
         const row = yield* first(sql`SELECT n.task_id FROM parent_notifications n
@@ -1330,98 +1205,52 @@ const make = Effect.gen(function* () {
           );
         MutableHashMap.set(notificationTasks, notificationId, (yield* decodeTaskId(row)).task_id);
       }
-
       const claimId = yield* crypto.randomUUIDv4();
-      const now = effectClock.currentTimeMillisUnsafe();
-      const eventInputs: {
-        handle: AttemptHandle;
-        disposition: "used" | "not_used" | "superseded";
-      }[] = [];
-      const attemptOf = (attemptId: string, taskId: string) =>
-        first(sql`SELECT id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status
-          FROM agent_run_attempts WHERE id = ${attemptId} AND task_id = ${taskId}`).pipe(
-          Effect.flatMap(decodeAttempt),
-        );
       yield* run(sql`INSERT INTO final_answer_claims
         (id, project_id, origin_session_id, parent_run_id, parent_message_id, created_at)
         VALUES (${claimId}, ${input.projectId}, ${input.sessionId}, ${input.parentRunId},
-          ${input.parentMessageId}, ${now})`);
-      for (const report of MutableHashMap.values(selected)) {
-        const ids = EffectArray.dedupe(report.evidenceRefIds);
-        for (const evidenceId of ids.length === 0 ? [null] : ids)
-          yield* run(sql`INSERT INTO final_answer_sources
-            (id, claim_id, task_id, attempt_id, evidence_ref_id)
-            VALUES (${yield* crypto.randomUUIDv4()}, ${claimId}, ${report.taskId},
-              ${report.attemptId}, ${evidenceId})`);
-      }
+          ${input.parentMessageId}, ${effectClock.currentTimeMillisUnsafe()})`);
+      for (const report of reports)
+        yield* run(sql`INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id)
+          VALUES (${yield* crypto.randomUUIDv4()}, ${claimId}, ${report.taskId},
+            ${report.attemptId})`);
       for (const [id, taskId] of notificationTasks)
         yield* run(sql`INSERT INTO final_answer_notifications (claim_id, notification_id, task_id)
           VALUES (${claimId}, ${id}, ${taskId})`);
-
-      for (const row of reviewed) {
-        const attempt = yield* attemptOf(row.attempt_id, row.task_id);
-        const disposition = MutableHashMap.has(selected, `${row.task_id}:${row.attempt_id}`)
-          ? "used"
-          : "not_used";
-        yield* run(sql`INSERT INTO report_adoptions
-          (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
-           parent_run_id, parent_message_id, claim_id)
-          VALUES (${row.task_id}, ${row.attempt_id}, ${disposition}, NULL, ${now},
-            ${input.parentRunId}, ${input.parentMessageId}, ${claimId})`);
-        eventInputs.push({ handle: handleOf(attempt), disposition });
-      }
-      for (const report of MutableHashMap.values(selected)) {
-        const priorRow = yield* first(sql`SELECT attempt_id FROM report_adoptions
-          WHERE task_id = ${report.taskId} AND disposition = 'used'
-            AND attempt_id <> ${report.attemptId}
-          ORDER BY seq DESC LIMIT 1`);
-        if (!isTruthy(priorRow)) continue;
-        const prior = yield* decodeAttemptId(priorRow);
-        yield* run(sql`INSERT INTO report_adoptions
-          (task_id, attempt_id, disposition, superseded_by_attempt_id, updated_at,
-           parent_run_id, parent_message_id, claim_id)
-          VALUES (${report.taskId}, ${prior.attempt_id}, 'superseded', ${report.attemptId}, ${now},
-            ${input.parentRunId}, ${input.parentMessageId}, ${claimId})`);
-        const priorAttempt = yield* attemptOf(prior.attempt_id, report.taskId);
-        eventInputs.push({ handle: handleOf(priorAttempt), disposition: "superseded" });
-      }
-      for (const event of eventInputs)
-        yield* appendEvent({
-          handle: event.handle,
-          sessionId: input.sessionId,
-          kind: `report_${event.disposition}`,
-          summary: `Subagent report ${event.disposition.replace("_", " ")}`,
-          payload: { claimId, parentMessageId: input.parentMessageId },
-        });
       return claimId;
     }).pipe(sql.withTransaction);
 
-  const taskView = (row: typeof TaskViewRow.Type): TraceTaskView => ({
-    id: row.id,
-    projectId: row.project_id,
-    originSessionId: row.origin_session_id,
-    parentTaskId: row.parent_task_id,
-    parentRunId: row.parent_run_id,
-    parentToolCallId: row.parent_tool_call_id,
-    agentId: row.agent_id,
-    agentName: row.agent_name,
-    status: row.status,
-    title: row.title,
-    request: row.request,
-    activeAttemptId: row.active_attempt_id,
-    latestAttemptId: row.latest_attempt_id,
-    latestAttemptStatus: row.latest_attempt_status,
-    latestAttemptNumber: row.latest_attempt_number,
-    latestResumedFromAttemptId: row.latest_resumed_from_attempt_id,
-    latestActivity: row.latest_activity,
-    latestActivityAt: row.latest_activity_at,
-    archivedAt: row.archived_at,
-    deleteRequestedAt: row.delete_requested_at,
-    deletedAt: row.deleted_at,
-    purgeReceiptId: row.purge_receipt_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+  const taskView = Effect.fnUntraced(function* (row: typeof TaskViewRow.Type) {
+    const view: TraceTaskView = {
+      id: row.id,
+      projectId: row.project_id,
+      originSessionId: row.origin_session_id,
+      parentTaskId: row.parent_task_id,
+      parentRunId: row.parent_run_id,
+      parentToolCallId: row.parent_tool_call_id,
+      agentId: row.agent_id,
+      agentName: row.agent_name,
+      status: row.status,
+      title: row.title,
+      request: row.request,
+      activeAttemptId: row.active_attempt_id,
+      latestAttemptId: row.latest_attempt_id,
+      latestAttemptStatus: row.latest_attempt_status,
+      latestAttemptNumber: row.latest_attempt_number,
+      latestResumedFromAttemptId: row.latest_resumed_from_attempt_id,
+      heartbeat: heartbeatView(row.heartbeat_state, row.heartbeat_step, row.heartbeat_at),
+      latestFailure: yield* failureOf(row.latest_failure),
+      archivedAt: row.archived_at,
+      deleteRequestedAt: row.delete_requested_at,
+      deletedAt: row.deleted_at,
+      purgeReceiptId: row.purge_receipt_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    return view;
   });
+  const taskViews = (rows: ReadonlyArray<typeof TaskViewRow.Type>) =>
+    Effect.forEach(rows, taskView);
 
   const taskTree = (sessionId: string) =>
     sql`SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
@@ -1435,21 +1264,16 @@ const make = Effect.gen(function* () {
         t.active_attempt_id, a.id AS latest_attempt_id,
         a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
         a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
-        e.summary AS latest_activity, e.occurred_at AS latest_activity_at,
+        a.heartbeat_state, a.heartbeat_step, a.heartbeat_at, a.failure AS latest_failure,
         t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
         t.updated_at, t.created_at
       FROM work_tasks t
       LEFT JOIN agent_run_attempts a ON a.id =
         (SELECT latest.id FROM agent_run_attempts latest
          WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
-      LEFT JOIN run_events e ON e.seq =
-        (SELECT latest_event.seq FROM run_events latest_event
-         WHERE latest_event.task_id = t.id AND latest_event.visibility <> 'internal'
-           AND latest_event.redaction <> 'omitted'
-         ORDER BY latest_event.seq DESC LIMIT 1)
       WHERE t.origin_session_id = ${sessionId} ORDER BY t.created_at, t.id`.pipe(
       Effect.flatMap(decodeTaskViewRows),
-      Effect.map((rows) => rows.map(taskView)),
+      Effect.flatMap(taskViews),
     );
 
   /** Project-owned review projection, including tasks whose origin session was deleted. */
@@ -1465,44 +1289,48 @@ const make = Effect.gen(function* () {
         t.active_attempt_id, a.id AS latest_attempt_id,
         a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
         a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
-        e.summary AS latest_activity, e.occurred_at AS latest_activity_at,
+        a.heartbeat_state, a.heartbeat_step, a.heartbeat_at, a.failure AS latest_failure,
         t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
         t.updated_at, t.created_at
       FROM work_tasks t
       LEFT JOIN agent_run_attempts a ON a.id =
         (SELECT latest.id FROM agent_run_attempts latest
          WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
-      LEFT JOIN run_events e ON e.seq =
-        (SELECT latest_event.seq FROM run_events latest_event
-         WHERE latest_event.task_id = t.id AND latest_event.visibility <> 'internal'
-           AND latest_event.redaction <> 'omitted'
-         ORDER BY latest_event.seq DESC LIMIT 1)
       WHERE t.project_id = ${projectId} ORDER BY t.created_at, t.id`.pipe(
       Effect.flatMap(decodeTaskViewRows),
-      Effect.map((rows) => rows.map(taskView)),
+      Effect.flatMap(taskViews),
     );
 
   const attemptsForTask = Effect.fnUntraced(function* (taskId: string) {
     const rows = yield* decodeAttemptViewRows(
       yield* sql`SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-          resumed_from_attempt_id, superseded_by_attempt_id,
+          resumed_from_attempt_id, superseded_by_attempt_id, heartbeat_state, heartbeat_step,
+          heartbeat_at, pending_tool_call_ids, failure,
           started_at, finished_at, created_at, updated_at
         FROM agent_run_attempts WHERE task_id = ${taskId} ORDER BY attempt_number`,
     );
-    return rows.map((row): TraceAttemptView => ({
-      id: row.id,
-      invocationId: row.invocation_id,
-      attemptNumber: row.attempt_number,
-      chatRunId: row.chat_run_id,
-      threadId: row.thread_id,
-      status: row.status,
-      resumedFromAttemptId: row.resumed_from_attempt_id,
-      supersededByAttemptId: row.superseded_by_attempt_id,
-      startedAt: row.started_at,
-      finishedAt: row.finished_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return yield* Effect.forEach(rows, (row) =>
+      Effect.gen(function* () {
+        const view: TraceAttemptView = {
+          id: row.id,
+          invocationId: row.invocation_id,
+          attemptNumber: row.attempt_number,
+          chatRunId: row.chat_run_id,
+          threadId: row.thread_id,
+          status: row.status,
+          resumedFromAttemptId: row.resumed_from_attempt_id,
+          supersededByAttemptId: row.superseded_by_attempt_id,
+          heartbeat: heartbeatView(row.heartbeat_state, row.heartbeat_step, row.heartbeat_at),
+          pendingToolCallIds: yield* decodeStringArray(row.pending_tool_call_ids),
+          failure: yield* failureOf(row.failure),
+          startedAt: row.started_at,
+          finishedAt: row.finished_at,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+        return view;
+      }),
+    );
   });
 
   const detailOf = Effect.fnUntraced(function* <E>(
@@ -1512,9 +1340,7 @@ const make = Effect.gen(function* () {
     return {
       task,
       attempts: yield* attemptsForTask(task.id),
-      evidence: yield* evidenceForTask(task.id),
       artifacts: yield* artifactsForTask(task.id),
-      adoptions: yield* reportAdoptionsForTask(task.id),
       answerClaims: yield* answerClaimsForTask(task.id),
       events: yield* events,
     };
@@ -1581,8 +1407,8 @@ const make = Effect.gen(function* () {
       if (task.status === "completed") return resumeBlocked("task_terminal");
       if (task.previous_attempt_id !== input.expectedAttemptId)
         return resumeBlocked("stale_attempt");
-      const toolCalls = yield* toolCallsOf(task.previous_attempt_id);
-      if (toolCalls.uncertain.length > 0 && !input.confirmUncertain)
+      const uncertain = yield* pendingToolsOf(task.previous_attempt_id);
+      if (uncertain.length > 0 && !input.confirmUncertain)
         return resumeBlocked("uncertain_side_effect");
 
       const now = effectClock.currentTimeMillisUnsafe();
@@ -1600,14 +1426,16 @@ const make = Effect.gen(function* () {
           ${`${input.parentRunId}:${input.parentToolCallId}`}, ${now})`);
       yield* run(sql`INSERT INTO agent_run_attempts
         (id, task_id, invocation_id, attempt_number, chat_run_id, thread_id, status,
-         resumed_from_attempt_id, resume_reason, created_at, updated_at)
+         resumed_from_attempt_id, resume_reason, heartbeat_state, heartbeat_step, heartbeat_at,
+         created_at, updated_at)
         VALUES (${attemptId}, ${task.id}, ${invocationId}, ${attemptNumber}, ${chatRunId},
-          ${task.thread_id}, 'queued', ${task.previous_attempt_id}, ${resumeReason}, ${now}, ${now})`);
+          ${task.thread_id}, 'queued', ${task.previous_attempt_id}, ${resumeReason}, 'idle',
+          'Queued for retry', ${now}, ${now}, ${now})`);
       yield* run(sql`UPDATE agent_run_attempts SET superseded_by_attempt_id = ${attemptId},
           updated_at = ${now}
         WHERE id = ${task.previous_attempt_id}`);
       yield* run(sql`UPDATE work_tasks SET status = 'resuming', active_attempt_id = ${attemptId},
-          updated_at = ${now}
+          retry_requested_at = NULL, retry_confirm_uncertain = 0, updated_at = ${now}
         WHERE id = ${task.id}`);
       const handle: AttemptHandle = {
         id: attemptId,
@@ -1628,11 +1456,7 @@ const make = Effect.gen(function* () {
         status: "started",
         handle,
         agentId: task.agent_id,
-        context: {
-          originalRequest: task.request,
-          completedToolCallIds: toolCalls.completed,
-          uncertainToolCallIds: toolCalls.uncertain,
-        },
+        context: { originalRequest: task.request, uncertainToolCallIds: uncertain },
       };
       return claim;
     }).pipe(sql.withTransaction);
@@ -1909,12 +1733,6 @@ const make = Effect.gen(function* () {
     const taskId = operation.target_id;
     yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
       WHERE id = ${operation.id}`);
-    const evidence = (yield* run(sql`UPDATE evidence_refs SET locator = NULL,
-        verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
-      WHERE task_id = ${taskId}`)).changes;
-    yield* run(sql`UPDATE memory_candidate_evidence SET evidence_ref_id = NULL,
-        source_deleted_at = ${now}
-      WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE task_id = ${taskId})`);
     const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL,
         verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
       WHERE task_id = ${taskId}`)).changes;
@@ -1926,7 +1744,7 @@ const make = Effect.gen(function* () {
       SET summary = 'Deleted task lifecycle notification', payload = '{}'
       WHERE task_id = ${taskId}`);
     const receiptId = yield* crypto.randomUUIDv4();
-    const purgedCounts = yield* encodeJson({ evidence, artifacts, events });
+    const purgedCounts = yield* encodeJson({ artifacts, events });
     const retainedKinds = yield* encodeJson([
       "task_tombstone",
       "attempt_lineage",
@@ -2048,7 +1866,7 @@ const make = Effect.gen(function* () {
     }).pipe(sql.withTransaction);
 
   /**
-   * Queue a user-requested logical resume. Execution waits for the next valid parent run so the
+   * Mark a user-requested retry on its task. Execution waits for the next valid parent run so the
    * child receives the current model, project tools, permission policy and abort ownership.
    */
   const requestResume = (input: {
@@ -2083,87 +1901,59 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, reason: "task_terminal" as const };
       if (task.previous_attempt_id !== input.expectedAttemptId)
         return { status: "blocked" as const, reason: "stale_attempt" as const };
-      const toolCalls = yield* toolCallsOf(task.previous_attempt_id);
-      if (toolCalls.uncertain.length > 0 && !input.confirmUncertain)
+      if ((yield* pendingToolsOf(task.previous_attempt_id)).length > 0 && !input.confirmUncertain)
         return { status: "blocked" as const, reason: "uncertain_side_effect" as const };
 
       const now = effectClock.currentTimeMillisUnsafe();
-      yield* run(sql`INSERT INTO work_recovery_jobs
-        (id, project_id, task_id, interrupted_attempt_id, status, blocker,
-         claimed_by, claimed_at, created_at, updated_at, confirm_uncertain)
-        SELECT ${yield* crypto.randomUUIDv4()}, project_id, id, ${task.previous_attempt_id},
-          'queued', NULL, NULL, NULL, ${now}, ${now}, ${input.confirmUncertain ? 1 : 0}
-        FROM work_tasks WHERE id = ${task.id}
-        ON CONFLICT(task_id) DO UPDATE SET
-          interrupted_attempt_id = excluded.interrupted_attempt_id,
-          status = 'queued', blocker = NULL, claimed_by = NULL, claimed_at = NULL,
-          updated_at = excluded.updated_at,
-          confirm_uncertain = excluded.confirm_uncertain`);
-      const queued = yield* decodeId(
-        yield* first(sql`SELECT id FROM work_recovery_jobs WHERE task_id = ${task.id}`),
-      );
+      yield* run(sql`UPDATE work_tasks SET retry_requested_at = ${now},
+          retry_confirm_uncertain = ${input.confirmUncertain ? 1 : 0}, updated_at = ${now}
+        WHERE id = ${task.id}`);
       return {
         status: "queued" as const,
-        jobId: queued.id,
         taskId: task.id,
         expectedAttemptId: task.previous_attempt_id,
       };
     }).pipe(sql.withTransaction);
 
-  const claimRecoveryJobs = (sessionId: string, parentRunId: string) =>
+  /**
+   * Claims the retries the user asked for in this session for one parent run. A retry that can no
+   * longer start is cleared and reported to the parent instead of waiting forever.
+   */
+  const claimRetries = (sessionId: string, parentRunId: string) =>
     Effect.gen(function* () {
-      const jobs = yield* decodeRecoveryJobRows(
-        yield* sql`SELECT j.id, j.task_id, j.interrupted_attempt_id, j.confirm_uncertain
-          FROM work_recovery_jobs j JOIN work_tasks t ON t.id = j.task_id
-          WHERE j.status = 'queued' AND t.origin_session_id = ${sessionId}
-          ORDER BY j.created_at, j.id`,
+      const requested = yield* decodeRetryRows(
+        yield* sql`SELECT t.id, a.id AS previous_attempt_id, t.retry_confirm_uncertain
+          FROM work_tasks t JOIN agent_run_attempts a ON a.id =
+            (SELECT latest.id FROM agent_run_attempts latest
+             WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
+          WHERE t.origin_session_id = ${sessionId} AND t.retry_requested_at IS NOT NULL
+          ORDER BY t.retry_requested_at, t.id`,
       );
-      const claimed: Array<{
-        readonly jobId: string;
-        readonly claim: Extract<ResumeClaim, { readonly status: "started" }>;
-      }> = [];
-      for (const job of jobs) {
-        const now = effectClock.currentTimeMillisUnsafe();
-        const acquired = yield* run(sql`UPDATE work_recovery_jobs
-          SET status = 'claimed', claimed_by = ${parentRunId}, claimed_at = ${now}, updated_at = ${now}
-          WHERE id = ${job.id} AND status = 'queued'`);
+      const claimed: Array<Extract<ResumeClaim, { readonly status: "started" }>> = [];
+      for (const task of requested) {
+        const acquired = yield* run(sql`UPDATE work_tasks SET retry_requested_at = NULL
+          WHERE id = ${task.id} AND retry_requested_at IS NOT NULL`);
         if (acquired.changes !== 1) continue;
         const claim = yield* claimResume({
           sessionId,
-          taskId: job.task_id,
-          expectedAttemptId: job.interrupted_attempt_id,
+          taskId: task.id,
+          expectedAttemptId: task.previous_attempt_id,
           parentRunId,
-          parentToolCallId: `recovery:${job.id}`,
-          confirmUncertain: job.confirm_uncertain === 1,
+          parentToolCallId: `retry:${task.previous_attempt_id}`,
+          confirmUncertain: task.retry_confirm_uncertain === 1,
         });
-        switch (claim.status) {
-          case "started":
-            claimed.push({ jobId: job.id, claim });
-            break;
-          case "blocked": {
-            const blocker =
-              claim.reason === "origin_deleted" ||
-              claim.reason === "agent_deleted" ||
-              claim.reason === "uncertain_side_effect"
-                ? claim.reason
-                : "task_unavailable";
-            yield* run(sql`UPDATE work_recovery_jobs SET status = 'blocked', blocker = ${blocker},
-                updated_at = ${now}
-              WHERE id = ${job.id}`);
-            break;
-          }
-        }
+        if (claim.status === "started") claimed.push(claim);
+        else
+          yield* notifyParent({
+            taskId: task.id,
+            kind: "resume_blocked",
+            summary: `Requested retry could not start: ${claim.reason}`,
+            idempotencyKey: `retry:${task.previous_attempt_id}:blocked`,
+            payload: { reason: claim.reason },
+          });
       }
       return claimed;
     }).pipe(sql.withTransaction);
-
-  const finishRecoveryJob = (jobId: string, completed: boolean) =>
-    Effect.map(
-      run(sql`UPDATE work_recovery_jobs SET status = ${completed ? "completed" : "failed"},
-          updated_at = ${effectClock.currentTimeMillisUnsafe()}
-        WHERE id = ${jobId} AND status = 'claimed'`),
-      (result) => result.changes === 1,
-    );
 
   const events = (sessionId: string, afterCursor = 0, limit = 200) =>
     sql`SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
@@ -2233,13 +2023,19 @@ const make = Effect.gen(function* () {
   }) {
     const { sessionId, afterCursor } = options;
     if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
-    const changed = yield* Deferred.make<"event">();
+    const changed = yield* Deferred.make<"event" | "progress">();
     const listener = (changedSessionId: string, cursor: number) => {
       if (changedSessionId === sessionId && cursor > afterCursor)
         Deferred.doneUnsafe(changed, Effect.succeed("event"));
     };
+    const progressed = (changedSessionId: string) => {
+      if (changedSessionId === sessionId) Deferred.doneUnsafe(changed, Effect.succeed("progress"));
+    };
     return yield* Effect.acquireUseRelease(
-      Effect.sync(() => MutableHashSet.add(listeners, listener)),
+      Effect.sync(() => {
+        MutableHashSet.add(listeners, listener);
+        MutableHashSet.add(progressListeners, progressed);
+      }),
       () =>
         Effect.gen(function* () {
           // Close the gap between the first durable read and listener registration.
@@ -2249,7 +2045,11 @@ const make = Effect.gen(function* () {
           );
           return Option.getOrElse(result, () => "heartbeat" as const);
         }),
-      () => Effect.sync(() => MutableHashSet.remove(listeners, listener)),
+      () =>
+        Effect.sync(() => {
+          MutableHashSet.remove(listeners, listener);
+          MutableHashSet.remove(progressListeners, progressed);
+        }),
     );
   });
 
@@ -2259,7 +2059,7 @@ const make = Effect.gen(function* () {
     afterCursor: number,
     signal: AbortSignal,
     heartbeatMs = 15_000,
-  ): Promise<"event" | "heartbeat" | "aborted"> =>
+  ): Promise<"event" | "progress" | "heartbeat" | "aborted"> =>
     runPromiseExit(waitForChangeEffect({ sessionId, afterCursor, heartbeatMs }), { signal }).then(
       (exit) => {
         if (Exit.isSuccess(exit)) return exit.value;
@@ -2283,6 +2083,40 @@ const make = Effect.gen(function* () {
         ORDER BY a.created_at DESC LIMIT 1`);
       return isTruthy(row) ? handleOf(yield* decodeAttempt(row)) : null;
     });
+
+  /** Fails live attempts whose beats stopped: their fiber ended without settling, or hangs. */
+  const failLostAttempts = Effect.gen(function* () {
+    const lost = yield* decodeLostAttemptRows(
+      yield* sql`SELECT a.id, a.task_id, a.invocation_id, a.attempt_number, a.chat_run_id,
+          a.thread_id, a.status, t.origin_session_id
+        FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+        WHERE a.status IN ${liveStatuses} AND t.origin_session_id IS NOT NULL
+          AND coalesce(a.heartbeat_at, a.created_at)
+            < ${effectClock.currentTimeMillisUnsafe() - heartbeatLostMs}`,
+    );
+    for (const attempt of lost)
+      yield* transitionAttempt(
+        handleOf(attempt),
+        attempt.origin_session_id ?? "",
+        "failed",
+        "attempt_failed",
+        "Stopped responding",
+        { reason: { _tag: "HeartbeatLost" } },
+        false,
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("work_trace_lost_attempt_not_recorded", { error: error._tag }),
+        ),
+      );
+  });
+  yield* Effect.forever(
+    Effect.sleep(heartbeatIntervalMs).pipe(
+      Effect.andThen(failLostAttempts),
+      Effect.catch((error) =>
+        Effect.logWarning("work_trace_watchdog_failed", { error: error._tag }),
+      ),
+    ),
+  ).pipe(Effect.forkScoped);
 
   return {
     recoveredAttempts,
@@ -2318,16 +2152,14 @@ const make = Effect.gen(function* () {
       ),
     releaseParentNotifications,
     transitionAttempt,
-    recordEvidence,
-    setEvidenceVerification,
-    markEvidenceSourceDeleted,
+    beat,
+    toolStarted,
+    toolSettled,
+    keepAlive,
     recordArtifact,
     setArtifactVerification,
     markArtifactSourceDeleted,
-    evidenceForTask,
     artifactsForTask,
-    evidenceIdsForAttempt,
-    recordReportDisposition,
     finalizeAnswerClaim,
     taskTree,
     projectTaskTree,
@@ -2352,8 +2184,7 @@ const make = Effect.gen(function* () {
     finalizeTaskLifecycle,
     recoverLifecycleOperations,
     archiveTask,
-    claimRecoveryJobs,
-    finishRecoveryJob,
+    claimRetries,
     events,
     snapshot,
     latestCursor,

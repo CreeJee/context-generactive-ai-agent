@@ -49,7 +49,7 @@ const eventLine = (event: BundleEvent): string => {
     case "Approval":
       return `approval ${event.tool ?? "?"} ${event.status}${event.approved === null ? "" : event.approved ? " approved" : " denied"}`;
     case "Trace":
-      return `work trace ${event.status}`;
+      return `work trace ${event.status}${event.failure === null ? "" : ` failure=${event.failure}`}`;
   }
 };
 
@@ -65,8 +65,9 @@ export const runHasFailure = (run: BundleRun) =>
         return event.result?.ok === false;
       case "Approval":
         return event.approved === false;
-      case "Message":
       case "Trace":
+        return event.failure !== null;
+      case "Message":
         return false;
     }
   });

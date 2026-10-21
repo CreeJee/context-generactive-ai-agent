@@ -81,7 +81,7 @@ describe("Work Trace domain contracts", () => {
         invocationId: "invocation-1",
         attemptId: "attempt-1",
         sequence: 1,
-        kind: "activity",
+        kind: "steered",
         summary: "Checking the repository",
         occurredAt: 1,
       } as const;

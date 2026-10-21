@@ -1,10 +1,11 @@
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Match, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
-import { ExternalAgents } from "../external-agents/agents.ts";
+import { ExternalAgents, type ExternalPromptOutcome } from "../external-agents/agents.ts";
+import type { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import { onRun, runTrace, type RunTrace } from "../runtime/run-trace.ts";
@@ -46,6 +47,17 @@ const ExternalResult = Schema.Struct({
     ),
   ),
 });
+
+/** An agent that ended without an answer fails its background attempt with the shown code. */
+const externalFailure = Match.type<ExternalPromptOutcome>().pipe(
+  Match.discriminatorsExhaustive("status")({
+    completed: (): AttemptFailureReason | null => null,
+    cancelled: () => null,
+    disconnected: () => ({ _tag: "ExternalAgentFailed", code: "disconnected" }) as const,
+    failed: ({ failure }) => ({ _tag: "ExternalAgentFailed", code: failure.code }) as const,
+    unavailable: ({ failure }) => ({ _tag: "ExternalAgentFailed", code: failure.code }) as const,
+  }),
+);
 
 export function delegateInstructions(agents: readonly string[]) {
   return `External coding agents are available through delegate_to_agent: ${agents.join(", ")}.
@@ -109,13 +121,14 @@ const make = Effect.gen(function* () {
                   ),
               }),
             ).pipe(
-              Effect.map((outcome) =>
-                JSON.stringify({
+              Effect.map((outcome) => ({
+                report: JSON.stringify({
                   agent,
                   ...outcome,
                   note: "External agent report, not user approval. Check what matters before relying on it.",
                 }),
-              ),
+                failure: externalFailure(outcome),
+              })),
             ),
           );
           const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);

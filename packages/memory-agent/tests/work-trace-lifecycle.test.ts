@@ -115,11 +115,6 @@ describe("Work Trace task lifecycle", () => {
           const trace = yield* WorkTraceStore;
           yield* seed();
           const handle = yield* start(trace);
-          yield* trace.recordEvidence({
-            handle,
-            locator: { kind: "message", threadId: handle.threadId, messageId: "message-1" },
-            verification: "verified",
-          });
           yield* trace.recordArtifact({
             handle,
             kind: "file",
@@ -163,11 +158,6 @@ describe("Work Trace task lifecycle", () => {
             activeAttemptId: null,
             deletedAt: expect.any(Number),
             purgeReceiptId: expect.any(String),
-          });
-          expect((yield* trace.evidenceForTask(handle.taskId))[0]).toMatchObject({
-            locator: null,
-            verification: "source_deleted",
-            sourceDeletedAt: expect.any(Number),
           });
           expect((yield* trace.artifactsForTask(handle.taskId))[0]).toMatchObject({
             locator: null,

@@ -58,10 +58,6 @@ const PromoteMemoryCandidateInput = Schema.Struct({
   }),
   taskId: Schema.String,
   attemptId: Schema.String,
-  evidenceRefIds: Schema.Array(Schema.String).annotate({
-    description:
-      "Verified evidence ids adopted by the claim; use [] only when the adopted report had no evidence.",
-  }),
   proposedText: Schema.String.annotate({
     description: "The candidate wording presented to the user.",
   }),
@@ -231,7 +227,7 @@ function createMemoryToolsBody(
   const promote = toolDefinition({
     name: "promote_memory_candidate",
     description:
-      "Apply the current user's explicit disposition to a candidate derived from a previously adopted final-answer claim: save it as project memory, keep it in this conversation only, or reject it. Never call merely because a fact seems useful. `resolvedText` must be the exact user-selected or user-edited wording; only verified evidence adopted by the claim may be listed.",
+      "Apply the current user's explicit disposition to a candidate derived from a previously adopted final-answer claim: save it as project memory, keep it in this conversation only, or reject it. Never call merely because a fact seems useful. `resolvedText` must be the exact user-selected or user-edited wording.",
     inputSchema: toToolSchema(PromoteMemoryCandidateInput),
   }).server((input) =>
     run(

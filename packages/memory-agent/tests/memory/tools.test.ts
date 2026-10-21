@@ -48,7 +48,6 @@ const unadoptedClaim = {
   claimId: "not-adopted",
   taskId: "task",
   attemptId: "attempt",
-  evidenceRefIds: [],
   proposedText: "memory",
   resolvedText: "memory",
   disposition: "save" as const,
@@ -713,24 +712,11 @@ testAgent()("memory tools per run", (it) => {
         kind: "start",
         threadId: `${sessionId}:factory-thread`,
       });
-      const evidence = yield* trace.recordEvidence({
-        handle,
-        locator: { kind: "message", threadId: handle.threadId, messageId: "verified-answer" },
-        verification: "verified",
-      });
-      yield* trace.recordReportDisposition({
-        handle,
-        sessionId,
-        disposition: "reviewed",
-        parentRunId,
-      });
       const claimId = yield* trace.finalizeAnswerClaim({
         ...at,
         parentRunId,
         parentMessageId: "research-answer",
-        usedReports: [
-          { taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [evidence.id] },
-        ],
+        usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
         reflectedNotificationIds: [],
       });
       const runA = `${sessionId}:memory-run-a`;
@@ -754,7 +740,6 @@ testAgent()("memory tools per run", (it) => {
             claimId,
             taskId: handle.taskId,
             attemptId: handle.id,
-            evidenceRefIds: [evidence.id],
             proposedText: "isolated-memory-state is a fixture decision",
             resolvedText: "isolated-memory-state is a fixture decision",
             disposition: "save",

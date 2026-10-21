@@ -13,6 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/component
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
+import { failureLabel } from "../session/attempt-failure";
 import { taskForToolCall, type TraceConnection } from "../session/work-trace";
 
 type Part = UIMessage["parts"][number];
@@ -323,9 +324,14 @@ function TaskSummaryCard({
         <span className="min-w-0 truncate">
           {active && connection !== "live"
             ? "실행 상태에 다시 연결 중"
-            : (task.latestActivity ?? "작업 기록을 준비하는 중")}
+            : (task.heartbeat?.step ?? "작업 기록을 준비하는 중")}
         </span>
       </div>
+      {task.latestFailure !== null && (
+        <p className="mt-1 text-xs text-destructive" role="status">
+          {failureLabel(task.latestFailure)}
+        </p>
+      )}
       {task.latestResumedFromAttemptId && (
         <p className="mt-1 text-xs text-muted-foreground">이전 실행을 새 attempt로 다시 시도함</p>
       )}

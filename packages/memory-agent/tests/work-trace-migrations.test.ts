@@ -111,7 +111,7 @@ describe("Work Trace migration", () => {
             `SELECT name FROM sqlite_schema
            WHERE type = 'table' AND name IN
              ('work_tasks', 'agent_invocations', 'agent_run_attempts', 'run_events',
-              'evidence_refs', 'work_artifacts', 'report_adoptions')
+              'work_artifacts')
            ORDER BY name`,
           )
           .all(),
@@ -119,7 +119,7 @@ describe("Work Trace migration", () => {
 
       expect(result.version).toEqual({ user_version: migrations.length });
       expect(result.agent).toEqual({ id: "agent-1", last_task: "legacy task" });
-      expect(result.tables).toHaveLength(7);
+      expect(result.tables).toHaveLength(5);
     }),
   );
 
@@ -227,12 +227,10 @@ describe("Work Trace migration", () => {
         expect(() =>
           db.sqlite
             .prepare(
-              `INSERT INTO evidence_refs
-             (id, task_id, attempt_id, source_kind, locator, verification, visibility,
-              redaction, created_at, updated_at)
-             VALUES ('evidence-cross-task', 'task-1', 'attempt-3', 'message',
-                     '{"kind":"message","threadId":"subagent-agent-1","messageId":"m"}',
-                     'verified', 'summary', 'clear', 3, 3)`,
+              `INSERT INTO work_artifacts
+             (id, task_id, attempt_id, kind, locator, verification, created_at, updated_at)
+             VALUES ('artifact-cross-task', 'task-1', 'attempt-3', 'generated',
+                     '{"kind":"generated","reference":"r"}', 'verified', 3, 3)`,
             )
             .run(),
         ).toThrow();
@@ -240,7 +238,7 @@ describe("Work Trace migration", () => {
     ),
   );
 
-  it.live("keeps project-owned trace and evidence when its origin session is deleted", () =>
+  it.live("keeps project-owned trace when its origin session is deleted", () =>
     Effect.flatMap(databaseFile(), (file) =>
       withDatabase(file, (db) => {
         seedProjectSessionAndAgent(db.sqlite);
@@ -251,17 +249,7 @@ describe("Work Trace migration", () => {
            (id, origin_session_id, task_id, invocation_id, attempt_id, attempt_sequence, kind,
             visibility, redaction, summary, occurred_at)
            VALUES ('event-1', 's1', 'task-1', 'invocation-1', 'attempt-1', 1,
-                   'activity', 'summary', 'clear', 'working', 1)`,
-          )
-          .run();
-        db.sqlite
-          .prepare(
-            `INSERT INTO evidence_refs
-           (id, task_id, attempt_id, source_kind, locator, verification, visibility,
-            redaction, created_at, updated_at)
-           VALUES ('evidence-1', 'task-1', 'attempt-1', 'tool_result',
-                   '{"kind":"tool_result","threadId":"subagent-agent-1","toolCallId":"result-1"}',
-                   'verified', 'summary', 'clear', 1, 1)`,
+                   'attempt_started', 'summary', 'clear', 'working', 1)`,
           )
           .run();
         db.sqlite
@@ -300,95 +288,100 @@ describe("Work Trace migration", () => {
             .prepare(
               `SELECT
                (SELECT count(*) FROM agent_run_attempts WHERE task_id = 'task-1') AS attempts,
-               (SELECT count(*) FROM evidence_refs WHERE task_id = 'task-1') AS evidence,
                (SELECT count(*) FROM work_artifacts WHERE task_id = 'task-1') AS artifacts`,
             )
             .get(),
-        ).toEqual({ attempts: 1, evidence: 1, artifacts: 1 });
+        ).toEqual({ attempts: 1, artifacts: 1 });
       }),
     ),
   );
 
-  it.live(
-    "backfills legacy evidence into typed locators and enforces source-deleted tombstones",
-    () =>
-      Effect.gen(function* () {
-        const file = yield* databaseFile();
-        const legacy = yield* Effect.acquireRelease(
-          Effect.sync(() => new DatabaseSync(file)),
-          (db) =>
-            Effect.sync(() => {
-              if (db.isOpen) db.close();
-            }),
-        );
-        legacy.exec("PRAGMA foreign_keys = ON");
-        // Stop before typed locators, answer provenance, knowledge promotion, and lifecycle receipts.
-        // Reproduce the shipped schema, before the composite key was added to old CREATE TABLEs.
-        const typedLocatorIndex = migrations.findIndex((step) =>
-          step.includes("-- Evidence stores typed locators"),
-        );
-        expect(typedLocatorIndex).toBeGreaterThan(0);
-        for (const step of migrations.slice(0, typedLocatorIndex))
-          legacy.exec(step.replaceAll("    UNIQUE (id, task_id),\n", ""));
-        legacy.exec(`PRAGMA user_version = ${typedLocatorIndex}`);
-        seedProjectSessionAndAgent(legacy);
-        seedTask(legacy);
-        legacy
-          .prepare(
-            `INSERT INTO evidence_refs
-         (id, task_id, attempt_id, source_kind, source_id, verification, visibility,
-          redaction, created_at)
-         VALUES ('legacy-evidence', 'task-1', 'attempt-1', 'message', 'message-1',
-                 'verified', 'summary', 'clear', 1)`,
-          )
-          .run();
-        legacy.close();
+  it.live("keeps progress, failure and requested retries when dropping trace history", () =>
+    Effect.gen(function* () {
+      const file = yield* databaseFile();
+      const legacy = yield* Effect.acquireRelease(
+        Effect.sync(() => new DatabaseSync(file)),
+        (db) =>
+          Effect.sync(() => {
+            if (db.isOpen) db.close();
+          }),
+      );
+      legacy.exec("PRAGMA foreign_keys = ON");
+      // The 0.0.17 schema: every step before the one that drops trace history.
+      for (const step of migrations.slice(0, -1)) legacy.exec(step);
+      legacy.exec(`PRAGMA user_version = ${migrations.length - 1}`);
+      seedProjectSessionAndAgent(legacy);
+      seedTask(legacy);
+      legacy
+        .prepare(
+          `UPDATE agent_run_attempts
+           SET status = 'interrupted', resume_reason = 'server_restarted', finished_at = 2
+           WHERE id = 'attempt-1'`,
+        )
+        .run();
+      const event = legacy.prepare(
+        `INSERT INTO run_events
+         (id, origin_session_id, task_id, invocation_id, attempt_id, attempt_sequence, kind,
+          visibility, redaction, summary, payload, occurred_at)
+         VALUES (?, 's1', 'task-1', 'invocation-1', 'attempt-1', ?, ?, 'summary', 'clear', ?, ?, ?)`,
+      );
+      event.run("event-1", 1, "attempt_started", "Started", "{}", 1);
+      event.run("event-2", 2, "tool_requested", "Requested", '{"toolCallId":"tool-a"}', 1);
+      event.run("event-3", 3, "tool_requested", "Requested", '{"toolCallId":"tool-b"}', 1);
+      event.run("event-4", 4, "tool_completed", "Completed", '{"toolCallId":"tool-b"}', 1);
+      legacy
+        .prepare(
+          `INSERT INTO evidence_refs
+           (id, task_id, attempt_id, source_kind, locator, verification, visibility,
+            redaction, created_at, updated_at)
+           VALUES ('evidence-1', 'task-1', 'attempt-1', 'message',
+                   '{"kind":"message","threadId":"subagent-agent-1","messageId":"m"}',
+                   'verified', 'summary', 'clear', 1, 1)`,
+        )
+        .run();
+      legacy
+        .prepare(
+          `INSERT INTO work_recovery_jobs
+           (id, project_id, task_id, interrupted_attempt_id, status, created_at, updated_at,
+            confirm_uncertain)
+           VALUES ('job-1', 'p1', 'task-1', 'attempt-1', 'queued', 5, 5, 1)`,
+        )
+        .run();
+      legacy.close();
 
-        yield* withDatabase(file, (db) => {
-          expect(db.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-          expect(
-            db.sqlite.prepare("SELECT count(*) AS count FROM agent_run_attempts").get(),
-          ).toEqual({
-            count: 1,
-          });
-          expect(
-            db.sqlite
-              .prepare(
-                `SELECT source_kind, locator, verification, updated_at
-             FROM evidence_refs WHERE id = 'legacy-evidence'`,
-              )
-              .get(),
-          ).toEqual({
-            source_kind: "message",
-            locator: '{"kind":"message","threadId":"subagent-agent-1","messageId":"message-1"}',
-            verification: "verified",
-            updated_at: 1,
-          });
-          expect(() =>
-            db.sqlite
-              .prepare(
-                `UPDATE evidence_refs
-             SET verification = 'source_deleted', source_deleted_at = 2
-             WHERE id = 'legacy-evidence'`,
-              )
-              .run(),
-          ).toThrow();
+      yield* withDatabase(file, (db) => {
+        expect(db.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(
           db.sqlite
             .prepare(
-              `UPDATE evidence_refs
-           SET verification = 'source_deleted', locator = NULL, source_deleted_at = 2, updated_at = 2
-           WHERE id = 'legacy-evidence'`,
+              `SELECT pending_tool_call_ids, failure, heartbeat_state
+               FROM agent_run_attempts WHERE id = 'attempt-1'`,
             )
-            .run();
-          expect(
-            db.sqlite
-              .prepare(
-                "SELECT locator, verification, source_deleted_at FROM evidence_refs WHERE id = 'legacy-evidence'",
-              )
-              .get(),
-          ).toEqual({ locator: null, verification: "source_deleted", source_deleted_at: 2 });
+            .get(),
+        ).toEqual({
+          pending_tool_call_ids: '["tool-a"]',
+          failure: '{"reason":{"_tag":"ServerRestarted"},"stage":"restart"}',
+          heartbeat_state: "idle",
         });
-      }),
+        expect(
+          db.sqlite
+            .prepare(
+              "SELECT retry_requested_at, retry_confirm_uncertain FROM work_tasks WHERE id = 'task-1'",
+            )
+            .get(),
+        ).toEqual({ retry_requested_at: 5, retry_confirm_uncertain: 1 });
+        expect(db.sqlite.prepare("SELECT id FROM run_events").all()).toEqual([{ id: "event-1" }]);
+        expect(
+          db.sqlite
+            .prepare(
+              `SELECT name FROM sqlite_schema WHERE type = 'table' AND (
+                 name LIKE 'evidence_refs%' OR name LIKE 'report_adoptions%'
+                 OR name LIKE 'work_checkpoints%' OR name LIKE 'work_recovery_jobs%')`,
+            )
+            .all(),
+        ).toEqual([]);
+      });
+    }),
   );
 
   it.live("assigns durable event cursors and rejects duplicate attempt sequence numbers", () =>
@@ -400,7 +393,7 @@ describe("Work Trace migration", () => {
           `INSERT INTO run_events
          (id, origin_session_id, task_id, invocation_id, attempt_id, attempt_sequence, kind,
           visibility, redaction, summary, occurred_at)
-         VALUES (?, 's1', 'task-1', 'invocation-1', 'attempt-1', ?, 'activity',
+         VALUES (?, 's1', 'task-1', 'invocation-1', 'attempt-1', ?, 'steered',
                  'summary', 'clear', ?, ?)`,
         );
         insert.run("event-1", 1, "one", 1);

@@ -3,7 +3,12 @@ import { DateTime, Effect, Exit, Fiber, Layer, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceReadFailed, WorkTraceStore } from "../src/work-trace/store.ts";
+import {
+  heartbeatIntervalMs,
+  heartbeatLostMs,
+  WorkTraceReadFailed,
+  WorkTraceStore,
+} from "../src/work-trace/store.ts";
 import { sqlRun, sqlExec } from "./support/sql.ts";
 
 const testLayer = () => {
@@ -52,7 +57,7 @@ describe("Work Trace durable stream source", () => {
         yield* trace.appendEvent({
           handle,
           sessionId: "s1",
-          kind: "activity",
+          kind: "steered",
           summary: "private reasoning",
           visibility: "internal",
           payload: { secret: "never-return" },
@@ -60,7 +65,7 @@ describe("Work Trace durable stream source", () => {
         const redacted = yield* trace.appendEvent({
           handle,
           sessionId: "s1",
-          kind: "activity",
+          kind: "steered",
           summary: "Sensitive tool activity",
           redaction: "redacted",
           payload: { secret: "never-return" },
@@ -68,7 +73,7 @@ describe("Work Trace durable stream source", () => {
         const visible = yield* trace.appendEvent({
           handle,
           sessionId: "s1",
-          kind: "activity",
+          kind: "steered",
           summary: "Checked source files",
           payload: { count: 3 },
         });
@@ -85,7 +90,7 @@ describe("Work Trace durable stream source", () => {
         const omitted = yield* trace.appendEvent({
           handle,
           sessionId: "s1",
-          kind: "activity",
+          kind: "steered",
           summary: "Omitted payload",
           redaction: "omitted",
         });
@@ -140,7 +145,7 @@ describe("Work Trace durable stream source", () => {
         yield* trace.appendEvent({
           handle,
           sessionId: "s1",
-          kind: "activity",
+          kind: "steered",
           summary: "Continued",
         });
         expect(yield* Fiber.join(waiting)).toBe("event");
@@ -155,6 +160,66 @@ describe("Work Trace durable stream source", () => {
           .pipe(Effect.forkChild);
         yield* TestClock.adjust(5);
         expect(yield* Fiber.join(heartbeat)).toBe("heartbeat");
+      }),
+    ),
+  );
+
+  it.effect("wakes a live tail on a child's beat without writing an event", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const handle = yield* trace.startAttempt({
+          sessionId: "s1",
+          parentRunId: "parent-1",
+          parentToolCallId: "call-1",
+          agentId: "agent-1",
+          title: "Research",
+          request: "Research the code",
+          kind: "start",
+          threadId: "subagent-agent-1",
+        });
+        const cursor = yield* trace.latestCursor("s1");
+        const waiting = yield* trace
+          .waitForChangeEffect({ sessionId: "s1", afterCursor: cursor, heartbeatMs: 1_000 })
+          .pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        yield* trace.beat(handle, "s1", { state: "working", step: "Reading files" });
+        expect(yield* Fiber.join(waiting)).toBe("progress");
+        expect(yield* trace.latestCursor("s1")).toBe(cursor);
+        expect((yield* trace.taskTree("s1"))[0]?.heartbeat).toMatchObject({
+          state: "working",
+          step: "Reading files",
+        });
+      }),
+    ),
+  );
+
+  it.effect("fails a live attempt whose beats stopped as lost and notifies the parent", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const handle = yield* trace.startAttempt({
+          sessionId: "s1",
+          parentRunId: "parent-1",
+          parentToolCallId: "call-1",
+          agentId: "agent-1",
+          title: "Research",
+          request: "Research the code",
+          kind: "start",
+          threadId: "subagent-agent-1",
+        });
+        yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
+        yield* TestClock.adjust(heartbeatLostMs + heartbeatIntervalMs);
+        const task = (yield* trace.taskTree("s1"))[0];
+        expect(task?.status).toBe("failed");
+        expect(task?.latestFailure).toEqual({ reason: { _tag: "HeartbeatLost" }, stage: "model" });
+        expect(
+          (yield* trace.consumeParentNotifications("s1", "parent-2")).map(
+            (notification) => notification.kind,
+          ),
+        ).toContain("failed");
       }),
     ),
   );

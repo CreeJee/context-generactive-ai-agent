@@ -217,8 +217,8 @@ export const makeOwnerReadRecovery = Effect.gen(function* () {
             AND (active_attempt_id IS NOT NULL OR status IN ('queued','running','waiting','resuming')))
           + (SELECT count(*) FROM chat_interrupts WHERE thread_id = ${sessionId} AND status='pending')
           + (SELECT count(*) FROM queued_messages WHERE session_id = ${sessionId} AND state IN ('waiting','editing','held'))
-          + (SELECT count(*) FROM work_recovery_jobs j JOIN work_tasks t ON t.id=j.task_id
-            WHERE t.origin_session_id = ${sessionId} AND j.status IN ('queued','claimed'))
+          + (SELECT count(*) FROM work_tasks WHERE origin_session_id = ${sessionId}
+            AND retry_requested_at IS NOT NULL)
           + (SELECT count(*) FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id=b.run_id
             WHERE b.session_id = ${sessionId} AND b.run_id <> ${runId} AND (r.status IS NULL OR r.status <> 'completed')
               AND NOT ${sql.literal(recoveredReadRunSql("r"))})

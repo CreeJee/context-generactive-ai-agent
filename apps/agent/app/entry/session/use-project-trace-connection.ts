@@ -37,6 +37,7 @@ function useProjectTraceConnectionBody(projectId: string, sessionId: string | nu
       source = new EventSource(api.workTraceStreamUrl(sessionId));
       source.addEventListener("open", () => setConnection("live"));
       source.addEventListener("trace", changed);
+      source.addEventListener("progress", changed);
       source.addEventListener("snapshot", changed);
       source.addEventListener("error", () => setConnection("reconnecting"));
       changed();

@@ -1728,44 +1728,90 @@ export const migrations: readonly string[] = [
   BEGIN SELECT RAISE(ABORT, 'nodes are immutable evidence'); END;
   `,
   `
-  -- Work Trace keeps where a task is and what a retry needs, not a resume snapshot per tool call.
-  -- A retry reruns the task; whether a tool call may have run is read from its run events.
-  UPDATE final_answer_sources SET evidence_ref_id = NULL
-    WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE source_kind = 'checkpoint');
-  UPDATE memory_candidate_evidence
-    SET evidence_ref_id = NULL,
-        source_deleted_at = coalesce(source_deleted_at, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
-    WHERE evidence_ref_id IN (SELECT id FROM evidence_refs WHERE source_kind = 'checkpoint');
-  DELETE FROM evidence_refs WHERE source_kind = 'checkpoint';
-  DELETE FROM run_events WHERE kind = 'checkpoint_created';
-  DROP TABLE work_checkpoints;
+  -- Work Trace shows where each task is through its attempt's heartbeat and keeps why an attempt
+  -- failed. A retry reruns the task. Resume checkpoints, evidence, report-adoption and
+  -- recovery-job history is dropped (decided 2026-10-21).
+  PRAGMA defer_foreign_keys = ON;
 
-  CREATE TABLE work_recovery_jobs_v2 (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    task_id TEXT NOT NULL UNIQUE REFERENCES work_tasks(id) ON DELETE CASCADE,
-    interrupted_attempt_id TEXT NOT NULL UNIQUE REFERENCES agent_run_attempts(id) ON DELETE CASCADE,
-    status TEXT NOT NULL CHECK (status IN ('queued', 'blocked', 'claimed', 'completed', 'failed')),
-    blocker TEXT CHECK (blocker IS NULL OR blocker IN (
-      'uncertain_side_effect', 'origin_deleted', 'agent_deleted', 'task_unavailable'
-    )),
-    claimed_by TEXT,
-    claimed_at INTEGER,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    confirm_uncertain INTEGER NOT NULL DEFAULT 0 CHECK (confirm_uncertain IN (0, 1))
+  ALTER TABLE agent_run_attempts ADD COLUMN heartbeat_state TEXT
+    CHECK (heartbeat_state IS NULL OR heartbeat_state IN ('working', 'idle', 'waiting'));
+  ALTER TABLE agent_run_attempts ADD COLUMN heartbeat_step TEXT;
+  ALTER TABLE agent_run_attempts ADD COLUMN heartbeat_at INTEGER;
+  -- Tool calls the attempt started and has not settled. A retry must not repeat them unasked.
+  ALTER TABLE agent_run_attempts ADD COLUMN pending_tool_call_ids TEXT NOT NULL DEFAULT '[]'
+    CHECK (json_valid(pending_tool_call_ids));
+  ALTER TABLE agent_run_attempts ADD COLUMN failure TEXT
+    CHECK (failure IS NULL OR json_valid(failure));
+  UPDATE agent_run_attempts SET pending_tool_call_ids = coalesce((
+    SELECT json_group_array(json_extract(requested.payload, '$.toolCallId'))
+    FROM run_events requested
+    WHERE requested.attempt_id = agent_run_attempts.id AND requested.kind = 'tool_requested'
+      AND json_extract(requested.payload, '$.toolCallId') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events settled
+        WHERE settled.attempt_id = requested.attempt_id
+          AND settled.kind IN ('tool_completed', 'tool_failed')
+          AND json_extract(settled.payload, '$.toolCallId')
+            = json_extract(requested.payload, '$.toolCallId'))), '[]');
+  UPDATE agent_run_attempts
+    SET heartbeat_at = coalesce(finished_at, started_at, created_at),
+        heartbeat_state = CASE WHEN status = 'waiting' THEN 'waiting'
+          WHEN status IN ('running', 'blocked') THEN 'working' ELSE 'idle' END;
+  UPDATE agent_run_attempts SET failure = '{"reason":{"_tag":"ServerRestarted"},"stage":"restart"}'
+    WHERE status = 'interrupted' AND resume_reason = 'server_restarted';
+  DELETE FROM run_events WHERE kind NOT IN (
+    'attempt_queued', 'attempt_started', 'approval_waiting', 'approval_resolved', 'steered',
+    'attempt_interrupted', 'attempt_completed', 'attempt_failed', 'attempt_cancelled',
+    'resume_requested'
   );
-  INSERT INTO work_recovery_jobs_v2
-    (id, project_id, task_id, interrupted_attempt_id, status, blocker, claimed_by, claimed_at,
-     created_at, updated_at, confirm_uncertain)
-  SELECT id, project_id, task_id, interrupted_attempt_id, status,
-    CASE WHEN blocker IN ('missing_checkpoint', 'approval_expired') THEN 'task_unavailable'
-      ELSE blocker END,
-    claimed_by, claimed_at, created_at, updated_at, confirm_uncertain
-  FROM work_recovery_jobs;
-  DROP TABLE work_recovery_jobs;
-  ALTER TABLE work_recovery_jobs_v2 RENAME TO work_recovery_jobs;
-  CREATE INDEX work_recovery_jobs_status ON work_recovery_jobs(status, created_at, id);
+
+  -- A retry the user asked for waits on its task for the next parent run that can execute it.
+  ALTER TABLE work_tasks ADD COLUMN retry_requested_at INTEGER;
+  ALTER TABLE work_tasks ADD COLUMN retry_confirm_uncertain INTEGER NOT NULL DEFAULT 0
+    CHECK (retry_confirm_uncertain IN (0, 1));
+  UPDATE work_tasks SET retry_requested_at = j.created_at,
+      retry_confirm_uncertain = j.confirm_uncertain
+    FROM work_recovery_jobs j WHERE j.task_id = work_tasks.id AND j.status = 'queued';
+
+  -- An adopted answer names the tasks and attempts it used; evidence rows no longer exist.
+  CREATE TABLE final_answer_sources_v2 (
+    id TEXT PRIMARY KEY,
+    claim_id TEXT NOT NULL REFERENCES final_answer_claims(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES work_tasks(id) ON DELETE CASCADE,
+    attempt_id TEXT NOT NULL REFERENCES agent_run_attempts(id) ON DELETE CASCADE,
+    UNIQUE (claim_id, task_id, attempt_id),
+    FOREIGN KEY (attempt_id, task_id) REFERENCES agent_run_attempts(id, task_id) ON DELETE CASCADE
+  );
+  INSERT OR IGNORE INTO final_answer_sources_v2 (id, claim_id, task_id, attempt_id)
+    SELECT id, claim_id, task_id, attempt_id FROM final_answer_sources ORDER BY id;
+  DROP TABLE final_answer_sources;
+  ALTER TABLE final_answer_sources_v2 RENAME TO final_answer_sources;
+  CREATE INDEX final_answer_sources_task ON final_answer_sources(task_id, claim_id);
+
+  -- Promoted memories keep the evidence ids they were adopted with as history only.
+  CREATE TABLE memory_candidate_evidence_v2 (
+    candidate_id TEXT NOT NULL REFERENCES memory_candidates(id) ON DELETE CASCADE,
+    evidence_ref_id_snapshot TEXT NOT NULL,
+    source_deleted_at INTEGER,
+    PRIMARY KEY (candidate_id, evidence_ref_id_snapshot)
+  );
+  INSERT INTO memory_candidate_evidence_v2
+    (candidate_id, evidence_ref_id_snapshot, source_deleted_at)
+  SELECT ce.candidate_id, ce.evidence_ref_id_snapshot,
+    coalesce(ce.source_deleted_at, e.source_deleted_at,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  FROM memory_candidate_evidence ce LEFT JOIN evidence_refs e ON e.id = ce.evidence_ref_id;
+  DROP TABLE memory_candidate_evidence;
+  ALTER TABLE memory_candidate_evidence_v2 RENAME TO memory_candidate_evidence;
+
+  DROP TABLE IF EXISTS work_checkpoints;
+  DROP TABLE IF EXISTS work_checkpoints_v2;
+  DROP TABLE IF EXISTS evidence_refs;
+  DROP TABLE IF EXISTS evidence_refs_v2;
+  DROP TABLE IF EXISTS evidence_refs_v3;
+  DROP TABLE IF EXISTS report_adoptions;
+  DROP TABLE IF EXISTS report_adoptions_v2;
+  DROP TABLE IF EXISTS work_recovery_jobs;
+  DROP TABLE IF EXISTS work_recovery_jobs_v2;
   `,
 ];
 
