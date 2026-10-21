@@ -181,6 +181,8 @@ const spanCollector = Effect.fnUntraced(function* (port: number, file: string) {
 const stableBackend = Effect.fnUntraced(function* (buildId: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const args = [
+    // Node warnings (listener leaks, deprecations) carry their stack into the backend log.
+    "--trace-warnings",
     "dist/context-agent.mjs",
     "--port",
     String(backendPort),
