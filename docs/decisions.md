@@ -2415,3 +2415,12 @@
 - 보드는 대화마다 하나이고 그 대화의 채팅 안에서만 열 수 있었다. 사이드바 "판단 대기" 아래에 "칸반 보드"를 두어 프로젝트의 모든 대화 보드를 한 목록으로 보고, 고르면 그 대화로 이동해 보드를 연다(`?board=1`). 대화를 사이드바에서 바꾸면 `board`·`card` 쿼리는 사라진다.
 - 목록은 `GET /api/projects/:project/boards`(`Boards.list`)로 읽는다. Plan이 있는 보관하지 않은 대화만 담고, 카드 본문 대신 열별 카드 수·Plan 상태·버전·마지막 저장 시각·칸반 실행 여부를 준다. 칸반 실행 여부는 세션의 현재 Goal에 `active`인 `kanban_goals` 행이 있는지로 본다. 실행 중인 보드가 먼저, 그다음 최근 저장 순이다.
 - 목록은 세션 `run-state` 이벤트(보드 변경)와 프로젝트 `sessions` 이벤트(제목·보관 변경)로 다시 읽는다.
+
+## 태그 유니온은 생성자·match·guards로만 다룬다 (2026-10-21)
+
+- 사용자 결정: 코드에서 `_tag` 토큰을 손으로 쓰지 않는다. 분기만이 아니라 정의·생성·검사까지 Effect가 주는 함수로 한다. 2026-10-20의 "match를 기본으로" 결정을 넓힌 것이다.
+- TS 유니온은 `Data.TaggedEnum<{...}>` 타입과 같은 이름의 `Data.taggedEnum<X>()` 값으로 정의한다. 생성은 `X.A({...})`, 분기는 `X.$match`, 검사는 `X.$is("A")`.
+- Schema 유니온은 `Schema.TaggedUnion({ A: {...}, B: {...} })`로 정의한다(`toTaggedUnion("_tag")` 문자열도 쓰지 않는다). 생성은 `X.cases.A.make({...})`, 분기는 `X.match`/`matchOrElse`, 검사는 `X.guards.A`/`isAnyOf`. `Schema.TaggedError`의 `reason` 유니온도 같다.
+- Effect 자체 타입은 그 모듈의 함수(`Exit.isFailure`, `Result.isSuccess`, `Cause.isFailReason`, `Effect.catchTag`/`catchReason`, `Predicate.isTagged`)를 쓴다.
+- 남길 수 있는 곳은 제네릭 제약 `E extends { readonly _tag: string }`과 외부 라이브러리 타입에 맞춰야 하는 경계뿐이다.
+- 적용은 Orca orchestration으로 범위를 디렉터리별로 나눠 두 웨이브(정의 → 사용처)로 일괄 진행했다.
