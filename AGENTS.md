@@ -38,7 +38,7 @@ release. Add a tool name to select part of the graph. For example, run
 - 테스트를 추가할때 명확히 필요한 부분만 테스트하고, 과하게 테스트를 만들거나 검증하지 않도록하기 (ex: rust 를 사용하는데 cargo가 있는지 확인하기)
 - 하위호환성의 기준점은 github 릴리즈 기준으로만 잡기
 
-- 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 Effect의 `match`로 분기하시오. Schema로 정의한 유니온은 `Schema.toTaggedUnion("<tag>")`의 `.match`를, 일반 값은 `Match.discriminatorsExhaustive("<tag>")`(`_tag`이면 `Match.valueTags`)를 쓰고, 모든 경우를 처리하게 하시오. `switch`는 새로 쓰지 마시오. `"key" in obj` 식 판별은 쓰지 마시오.
+- 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고, 코드에 `_tag` 토큰을 손으로 쓰지 마시오. TS 유니온은 `Data.TaggedEnum`/`Data.taggedEnum<X>()`로 정의해 생성은 `X.A({...})`, 분기는 `X.$match`, 검사는 `X.$is("A")`로 하시오. Schema 유니온은 `Schema.TaggedUnion({ A: {...} })`로 정의해 생성은 `X.cases.A.make({...})`, 분기는 `X.match`/`matchOrElse`, 검사는 `X.guards.A`로 하시오. Effect 자체 타입은 그 모듈의 함수(`Exit.isFailure`, `Result.isSuccess`, `Effect.catchTag`/`catchReason`, `Predicate.isTagged`)를 쓰고, 모든 경우를 처리하게 하시오. `switch`는 새로 쓰지 마시오. `"key" in obj` 식 판별은 쓰지 마시오. 남길 수 있는 `_tag`는 제네릭 제약(`E extends { readonly _tag: string }`)과 외부 라이브러리 타입 경계뿐이오.
 - 확정한 제품과 설계 결정은 [docs/decisions.md](docs/decisions.md)에 날짜와 함께 남기시오.
 
 ## CodeGraph로 코드 탐색하기
