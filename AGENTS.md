@@ -64,6 +64,7 @@ Effect에 대응 API가 있는 node 내장 모듈(`fs`, `child_process`, `http` 
 
 ## Typed error와 취소 계약
 
+- 오류는 모두 잡는 것이 아니라 제대로 올린다. 실패한 자리에서 태그와 reason(필요하면 cause)을 가진 typed error로 올리고, 중간에서는 처리할 수 있는 태그만 잡고 나머지는 그대로 전파한다. 다른 오류로 감쌀 때 원래 reason을 필드로 유지하고, 여러 사유를 하나로 뭉치지 않는다. Effect 밖(SDK·worker RPC·HTTP)으로 나가는 경계에서만 코드가 있는 응답·이벤트로 한 번 변환하고, 그 자리에서 태그와 reason 태그를 로그에 남긴다. 메시지가 빈 태그드 오류나 `Cause.UnknownError(cause)`를 경계 밖으로 throw하지 않는다.
 - 예상 가능한 도메인·저장소·공급자·프로토콜·프로세스 실패는 `Schema.TaggedError`와 리터럴 태그를 가진 reason 모델로 정의한다. 공개 Effect의 오류 채널에 실제 실패 타입을 포함하고, `Error.message` 문자열을 오류 식별이나 분기 계약으로 사용하지 않는다.
 - 일반 `throw new Error(...)`로 예상 실패를 표현하지 않는다. Effect 내부 로직은 `Effect.fail` 또는 generator의 `return yield* new TypedError(...)`로 실패를 오류 채널에 전달한다. Effect를 받을 수 없는 SDK·callback 등 좁은 상호운용 경계에서는 정의된 typed error를 사용할 수 있다. 외부 라이브러리의 예외·Promise rejection은 입출력 경계의 `Effect.try`·`tryPromise`·`callback`에서 변환한다.
 - 외부 Promise·callback·파일·DB·HTTP 경계에서 실패를 타입이 있는 오류로 변환한다. `Effect.promise`나 `Effect.sync`로 예상 가능한 실패를 defect에 숨기지 않는다. 결함과 예상 실패를 구분하고, 실패를 `void`나 임의 기본값으로 삼켜 실행 성공으로 보이게 하지 않는다.
