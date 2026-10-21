@@ -56,7 +56,8 @@ import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
-import { BoardList } from "./navigation/board-list";
+import { ProjectBoardButton } from "./navigation/project-board-button";
+import { boardCardKey, parseBoardCardKey, ProjectBoard } from "./chat/board/project-board";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
@@ -71,8 +72,12 @@ const locationParsers = {
   session: parseAsString,
   /** A board card the inbox opened; the session's board opens on it. */
   card: parseAsString,
-  /** The session's board, opened from the project's board list. */
+  /** The session's board, opened from the project board's lane. */
   board: parseAsBoolean,
+  /** The project board: every conversation's board as a lane, opened from the sidebar. */
+  boards: parseAsBoolean,
+  /** A card the project board peeks, as `sessionId:cardId`. */
+  boardCard: parseAsString,
 };
 
 function Placeholder({
@@ -120,7 +125,10 @@ export function App() {
   const [selection, setSelection] = useState<ModelSelection | null>(null);
   const projectsQuery = useProjectsQuery();
   const projects = projectsQuery.data ?? [];
-  const [{ project: projectId, session: sessionId }, setLocation] = useQueryStates(locationParsers);
+  const [
+    { project: projectId, session: sessionId, boards: boardsOpen, boardCard: boardCardKeyParam },
+    setLocation,
+  ] = useQueryStates(locationParsers);
   const addProjectMutation = useAddProjectMutation();
   const modelMutation = useSelectModelMutation(provider);
   const switchMutation = useSwitchAccountMutation();
@@ -184,7 +192,10 @@ export function App() {
   }, [projectId, sessions, sessionsQuery.data, setLocation]);
 
   const selectProject = (id: string) =>
-    void setLocation({ project: id, session: null, card: null, board: null }, { history: "push" });
+    void setLocation(
+      { project: id, session: null, card: null, board: null, boards: null, boardCard: null },
+      { history: "push" },
+    );
   useEffect(() => setArchiveError(null), [projectId]);
 
   const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
@@ -478,11 +489,9 @@ export function App() {
               />
             )}
             {projectId && (
-              <BoardList
+              <ProjectBoardButton
                 projectId={projectId}
-                onOpenBoard={(session) =>
-                  void setLocation({ session, board: true, card: null }, { history: "push" })
-                }
+                onOpen={() => void setLocation({ boards: true }, { history: "push" })}
               />
             )}
             {projectId && (
@@ -533,6 +542,26 @@ export function App() {
             <BtwPanel key={sessionId} projectId={projectId} sessionId={sessionId} />
           )}
           {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
+          {projectId && (boardsOpen === true || boardCardKeyParam !== null) && (
+            <ProjectBoard
+              projectId={projectId}
+              holder={pageHolder()}
+              peek={boardCardKeyParam === null ? null : parseBoardCardKey(boardCardKeyParam)}
+              onPeek={(card) =>
+                void setLocation({
+                  boards: true,
+                  boardCard: card === null ? null : boardCardKey(card),
+                })
+              }
+              onOpenSession={(session) =>
+                void setLocation(
+                  { session, board: true, card: null, boards: null, boardCard: null },
+                  { history: "push" },
+                )
+              }
+              onClose={() => void setLocation({ boards: null, boardCard: null })}
+            />
+          )}
         </div>
       </SessionEventsProvider>
     </AppEventsProvider>
