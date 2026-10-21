@@ -102,6 +102,7 @@ import type { PermissionReviews } from "../permissions/reviews.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
+import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -2497,24 +2498,39 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     executionStream,
                     (cause) => new Cause.UnknownError(cause),
                   ).pipe(
-                    Stream.map((chunk) => {
-                      if (chunk.type !== "RUN_ERROR") return chunk;
-                      if (errorDelivered) return null;
+                    Stream.mapEffect((chunk): Effect.Effect<StreamChunk | null> => {
+                      if (chunk.type !== "RUN_ERROR") return Effect.succeed(chunk);
+                      if (errorDelivered) return Effect.succeed(null);
                       errorDelivered = true;
-                      return failure();
+                      // The page gets the single owner failure; the worker's own code stays in
+                      // the log so a failed run can still be told apart afterwards.
+                      return Effect.as(
+                        Effect.logWarning("Worker run failed", { runId, code: chunk.code ?? null }),
+                        failure(),
+                      );
                     }),
                     Stream.filter((chunk) => chunk !== null),
-                    Stream.catchCause(() => {
+                    Stream.catchCause((cause) => {
                       const failed = failure();
+                      const thrown = Cause.squash(cause);
+                      const inner = thrown instanceof Cause.UnknownError ? thrown.cause : thrown;
                       // Settle the actual SDK row before publishing the single owner failure.
                       return Stream.fromEffect(
-                        nativePromise(
-                          () =>
-                            chatState.persistence.stores.runs?.update(runId, {
-                              status: "failed",
-                              finishedAt: failed.timestamp,
-                              error: { code: failed.code, message: failed.message },
-                            }) ?? Promise.resolve(),
+                        Effect.logError("Worker run stream failed", {
+                          runId,
+                          // Only the failure's tag or class: its message may carry provider text.
+                          error: inner instanceof Error ? errorTag(inner) : "non-error",
+                        }).pipe(
+                          Effect.andThen(
+                            nativePromise(
+                              () =>
+                                chatState.persistence.stores.runs?.update(runId, {
+                                  status: "failed",
+                                  finishedAt: failed.timestamp,
+                                  error: { code: failed.code, message: failed.message },
+                                }) ?? Promise.resolve(),
+                            ),
+                          ),
                         ),
                       ).pipe(
                         Stream.flatMap(() => {
