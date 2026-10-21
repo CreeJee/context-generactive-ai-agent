@@ -1,5 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, HashSet, Layer, Option, Ref, Schema } from "effect";
+import { Context, Crypto, Effect, HashSet, Layer, Option, Ref, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -82,6 +83,7 @@ const make = Effect.gen(function* () {
   const fileTools = yield* FileTools;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
+  const crypto = yield* Crypto.Crypto;
 
   /** The session's project as the card's tools see it, and the model the session uses. */
   const cardSetting = Effect.fnUntraced(function* (
@@ -173,12 +175,14 @@ const make = Effect.gen(function* () {
     readonly sessionId: string;
     readonly projectId: string;
     readonly worktree: CardWorktree | null;
-    readonly runId: string;
+    /** Each verification is its own run: Work Trace refuses a second invocation under one run. */
+    readonly runPrefix: string;
     readonly agent: string;
     readonly message: string;
     readonly instructions: string;
   }) =>
     Effect.gen(function* () {
+      const runId = `${input.runPrefix}:${yield* crypto.randomUUIDv7()}`;
       const { project, selection } = yield* cardSetting(
         input.sessionId,
         input.projectId,
@@ -226,7 +230,7 @@ const make = Effect.gen(function* () {
         {
           project,
           sessionId: input.sessionId,
-          runId: input.runId,
+          runId,
           selection: selection.value,
           tools,
           systemPrompts: [],
@@ -254,7 +258,7 @@ const make = Effect.gen(function* () {
       sessionId: input.sessionId,
       projectId: input.projectId,
       worktree: input.worktree,
-      runId: `kanban:${input.goalInstanceId}:${input.card.id}:verify`,
+      runPrefix: `kanban:${input.goalInstanceId}:${input.card.id}:verify`,
       agent: `card-${input.card.id}-verify`,
       message: [cardText(input.card), `The card's agent reported:\n${input.report}`].join("\n\n"),
       instructions: verifierInstructions,
@@ -265,7 +269,7 @@ const make = Effect.gen(function* () {
       sessionId: input.sessionId,
       projectId: input.projectId,
       worktree: input.checkout,
-      runId: `kanban:${input.goalInstanceId}:goal:verify`,
+      runPrefix: `kanban:${input.goalInstanceId}:goal:verify`,
       agent: "goal-verify",
       message: [
         `Goal: ${input.goal.statement}`,
@@ -294,4 +298,4 @@ export const subagentCardAgentsLayer = Layer.effectContext(
       Context.add(GoalVerifier, goalVerifier),
     ),
   ),
-);
+).pipe(Layer.provide(NodeCrypto.layer));
