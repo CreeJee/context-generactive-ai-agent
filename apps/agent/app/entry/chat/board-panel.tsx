@@ -1,9 +1,8 @@
 import { isTruthy } from "../../truthy.ts";
-import { useEffect, useState } from "react";
-import { Effect, Fiber, Match } from "effect";
+import { useState } from "react";
+import { Match } from "effect";
 import { ChevronRightIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
-import { Alert, AlertDescription } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -11,14 +10,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../components/ui/dialog";
 import { Field, FieldLabel } from "../../components/ui/field";
 import {
   Select,
@@ -36,100 +27,29 @@ import {
 } from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
 import {
-  BoardEdit,
-  BoardIntent,
-  isApiError,
-  type ApiErrorCode,
   type BoardView,
-  type CardStatus as BoardCardStatus,
   type GoalMergeState,
   type GoalPriority,
   type HumanDecisionRequest,
   type KanbanScheduleView,
-  type KanbanView,
 } from "../api";
 import { useBoardQuery, useDecisionsQuery, useKanbanQuery } from "../queries/session";
 import { DecisionPrompt } from "./decision-prompt";
-import {
-  KanbanAction,
-  useEditBoardMutation,
-  useKanbanMutation,
-} from "../queries/mutations/session";
+import { KanbanAction, useKanbanMutation } from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
 import { LoopHealthStatus } from "../shared/loop-health";
-import { boardColumns, cardStatusLabels, PendingMove, withPending } from "./board/board-moves";
-import { authorLabel, StatusIcon, type CardSignals } from "./board/card-face";
-import { CardPeek, Peek } from "./board/card-peek";
-import { KanbanBoard } from "./board/kanban-board";
-import { holdReasonText, verdictText } from "./board/hold-reason";
+import { boardColumns, cardStatusLabels } from "./board/board-moves";
+import {
+  BoardSurface,
+  editErrorText,
+  type ActiveKanban,
+  type BoardPlan,
+} from "./board/board-surface";
+import { authorLabel, StatusIcon } from "./board/card-face";
+import { verdictText } from "./board/hold-reason";
 
 export { cardStatusLabels } from "./board/board-moves";
 export { authorLabel } from "./board/card-face";
-
-const errorText = (code: ApiErrorCode) => {
-  switch (code) {
-    case "plan_version_conflict":
-      return "그사이 계획이 바뀌었어요. 최신 보드를 다시 확인해 주세요.";
-    case "plan_dependencies_rejected":
-      return "의존 관계가 올바르지 않아요. 없는 카드나 순환 의존을 확인해 주세요.";
-    case "card_finished":
-      return "완료된 카드는 수정하거나 취소할 수 없어요.";
-    case "card_missing":
-      return "카드를 찾을 수 없어요.";
-    case "card_status_changed":
-      return "그사이 카드가 옮겨졌어요. 최신 보드를 다시 확인해 주세요.";
-    case "card_transition_invalid":
-      return "이 열로는 옮길 수 없어요.";
-    case "card_not_waiting":
-      return "시작하지 않은 카드만 보류할 수 있어요.";
-    case "card_held":
-      return "이미 보류한 카드예요.";
-    case "card_not_held":
-      return "보류하지 않은 카드예요.";
-    case "card_not_blocked":
-      return "막힌 카드만 다시 대기열에 넣을 수 있어요.";
-    case "card_not_running":
-      return "진행 중인 카드에만 수정 요청을 남길 수 있어요.";
-    case "reorder_across_columns":
-      return "순서는 같은 열 안에서만 바꿀 수 있어요.";
-    case "not_kanban":
-      return "칸반으로 실행할 때만 열을 옮길 수 있어요.";
-    case "plan_closed":
-      return "완료된 계획은 바꿀 수 없어요.";
-    case "session_in_use":
-      return "다른 창에서 이 대화를 쓰고 있어요.";
-    case "plan_not_executing":
-      return "실행 중인 계획만 칸반으로 돌릴 수 있어요.";
-    case "worktree_unavailable":
-      return "카드 작업 폴더를 만들 수 없어요.";
-    case "dependency_cycle":
-      return "서로 기다리는 Goal이 생겨서 지정할 수 없어요.";
-    case "goal_missing":
-    case "other_project":
-    case "self_dependency":
-      return "기다릴 수 없는 Goal이에요.";
-    case "queue_item_changed":
-      return "그사이 카드의 대기열 상태가 바뀌었어요. 최신 보드를 다시 확인해 주세요.";
-    case "worktree_in_use":
-      return "카드 작업 폴더를 다른 실행이 쓰고 있어요. 잠시 뒤 다시 시도해 주세요.";
-    case "worktree_failed":
-      return "카드 작업 폴더를 정리하지 못했어요.";
-    case "kanban_storage_failed":
-    case "workflow_storage_failed":
-    case "schedule_storage_failed":
-    case "storage_failed":
-      return "보드를 저장하거나 읽지 못했어요. 잠시 뒤 다시 시도해 주세요.";
-    default:
-      return "보드를 바꾸지 못했어요.";
-  }
-};
-const holdText = (reason: Parameters<typeof holdReasonText>[0] | null) =>
-  reason === null ? null : holdReasonText(reason);
-const editErrorText = (error: Error) =>
-  isApiError(error) ? errorText(error.code) : "보드를 바꾸지 못했어요.";
-
-type ActiveKanban = Extract<KanbanView, { readonly active: true }>;
-type BoardPlan = NonNullable<BoardView["plan"]>;
 
 /**
  * The Plan's kanban board. The chat shows a summary of it; the board itself opens wide over the
@@ -275,29 +195,6 @@ export function WorkflowBoard({
   );
 }
 
-/** Where a dropped card is expected to land while its request is on the way. */
-type Landing = { readonly cardId: string; readonly lands: BoardCardStatus };
-
-/** The request in flight, read from the mutation that sends it. */
-const pendingOf = (
-  request: ReturnType<typeof useKanbanMutation>,
-  landing: Landing | null,
-  cards: BoardView["cards"],
-): PendingMove | null => {
-  if (!request.isPending || !KanbanAction.$is("Intent")(request.variables)) return null;
-  const moved = ({ cardId }: { readonly cardId: string }) =>
-    landing?.cardId === cardId ? PendingMove.Status({ cardId, to: landing.lands }) : null;
-  return BoardIntent.$match(request.variables.intent, {
-    Reorder: ({ cardId, at }) =>
-      PendingMove.Order({ cardId, index: cards.findIndex(({ card }) => card.id === at) }),
-    Hold: moved,
-    Release: moved,
-    Requeue: moved,
-    ChangeRequest: () => null,
-    Cancel: () => null,
-  });
-};
-
 /** The wide board over the page, with the card peek panel and the board's notices. */
 function BoardSheet({
   projectId,
@@ -326,65 +223,17 @@ function BoardSheet({
   readonly onPeek: (cardId: string | null) => void;
   readonly onClose: () => void;
 }) {
-  // Drops get their own mutation, so the board shows one as requested while it is on the way and
-  // drops it when refused; the server's board then draws the card where it really is.
-  const request = useKanbanMutation(projectId, sessionId, holder);
-  const [landing, setLanding] = useState<Landing | null>(null);
-  const edit = useEditBoardMutation(projectId, sessionId, holder);
-  const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [editingCardId, setEditingCardId] = useState<string | null>(null);
-  const [askChange, setAskChange] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  useEffect(() => {
-    if (notice === null) return;
-    const dismiss = Effect.runFork(
-      Effect.sleep("5 seconds").pipe(Effect.andThen(Effect.sync(() => setNotice(null)))),
-    );
-    return () => void Effect.runFork(Fiber.interrupt(dismiss));
-  }, [notice]);
-
+  const [actionError, setActionError] = useState<string | null>(null);
   const closed = plan.status === "completed";
-  const pending = pendingOf(request, landing, view.cards);
-  const cards = withPending(view.cards, pending);
   const titleOf = (cardId: string) =>
     view.cards.find(({ card }) => card.id === cardId)?.card.title ?? cardId;
-  const loopCard = (cardId: string) => loop?.cards.find((card) => card.cardId === cardId) ?? null;
-  const decisionsOf = (cardId: string) => decisions.filter((request) => request.cardId === cardId);
-  const changePending = (cardId: string) =>
-    view.pendingChanges.some((request) => request.cardId === cardId);
-  const signalsOf = (cardId: string): CardSignals => ({
-    decisionPending: decisionsOf(cardId).length > 0,
-    changePending: changePending(cardId),
-    requesting: pending?.cardId === cardId,
-    reason: holdText(loopCard(cardId)?.reason ?? null),
-    dependsOn: (cards.find(({ card }) => card.id === cardId)?.card.dependsOn ?? []).map(titleOf),
-  });
-  const refused = (error: Error) => setNotice(editErrorText(error));
-  /** A change to an executing card is a request, and cancelling stops the card: both intents. */
-  const save = (change: BoardEdit): Promise<null> => {
-    const intent = (sent: BoardIntent) =>
-      kanbanAction.mutateAsync(KanbanAction.Intent({ intent: sent })).then(() => null);
-    const editBoard = () => edit.mutateAsync(change).then(() => null);
-    return BoardEdit.$match(change, {
-      EditCard: ({ cardId, patch }) =>
-        cards.find(({ card }) => card.id === cardId)?.card.status === "in_progress"
-          ? intent(BoardIntent.ChangeRequest({ cardId, patch }))
-          : editBoard(),
-      CancelCard: ({ cardId }) => intent(BoardIntent.Cancel({ cardId })),
-      AddCard: editBoard,
-      MoveCard: editBoard,
-    });
+  const act = (action: KanbanAction) => {
+    setActionError(null);
+    kanbanAction.mutate(action, { onError: (error) => setActionError(editErrorText(error)) });
   };
-  const peek: Peek | null = adding
-    ? Peek.New()
-    : peekCardId === null
-      ? null
-      : Peek.Card({ cardId: peekCardId, editing: editingCardId === peekCardId });
-  /** The card the peek panel shows; null for a new card's form. */
-  const peekedCardId =
-    peek === null ? null : Peek.$match(peek, { New: () => null, Card: ({ cardId }) => cardId });
-  const goalDecisions = decisionsOf(goalDecisionCardId);
+  const goalDecisions = decisions.filter((request) => request.cardId === goalDecisionCardId);
 
   return (
     <Sheet
@@ -407,9 +256,7 @@ function BoardSheet({
                   label="보드 루프"
                   health={loop.loop}
                   disabled={disabled || kanbanAction.isPending}
-                  onRestart={() =>
-                    kanbanAction.mutate(KanbanAction.RestartLoop(), { onError: refused })
-                  }
+                  onRestart={() => act(KanbanAction.RestartLoop())}
                 />
               )}
               <span>
@@ -427,7 +274,7 @@ function BoardSheet({
                 type="button"
                 size="sm"
                 disabled={disabled || kanbanAction.isPending}
-                onClick={() => kanbanAction.mutate(KanbanAction.Start(), { onError: refused })}
+                onClick={() => act(KanbanAction.Start())}
               >
                 칸반으로 실행
               </Button>
@@ -442,6 +289,11 @@ function BoardSheet({
               <PlusIcon data-icon="inline-start" />
               카드 추가
             </Button>
+            {actionError !== null && (
+              <span className="text-destructive" role="alert">
+                {actionError}
+              </span>
+            )}
           </div>
           {(loop?.schedule != null ||
             view.pendingChanges.length > 0 ||
@@ -465,7 +317,7 @@ function BoardSheet({
                     projectId={projectId}
                     holder={holder}
                     disabled={disabled || kanbanAction.isPending}
-                    onChange={(action) => kanbanAction.mutate(action, { onError: refused })}
+                    onChange={act}
                   />
                 )}
                 {view.pendingChanges.length > 0 && (
@@ -505,112 +357,23 @@ function BoardSheet({
             </Collapsible>
           )}
         </SheetHeader>
-        <div className="min-h-0 flex-1 pt-3">
-          <KanbanBoard
-            cards={cards}
-            signalsOf={signalsOf}
-            context={{
-              cards: cards.map(({ card }) => card),
-              kanbanActive: loop !== null,
-              closed,
-            }}
-            disabled={disabled}
-            busy={request.isPending}
-            onOpen={(cardId) => onPeek(cardId)}
-            onReorder={(cardId, at) =>
-              request.mutate(KanbanAction.Intent({ intent: BoardIntent.Reorder({ cardId, at }) }), {
-                onError: refused,
-              })
-            }
-            onSend={(cardId, intent, lands) => {
-              setLanding({ cardId, lands });
-              request.mutate(KanbanAction.Intent({ intent: BoardIntent[intent]({ cardId }) }), {
-                onError: refused,
-              });
-            }}
-            onAskChange={setAskChange}
-            onRefused={setNotice}
-            onDraggingChange={setDragging}
-          />
-        </div>
-        {notice !== null && (
-          <Alert
-            variant="destructive"
-            className="fixed right-4 bottom-4 left-4 z-50 w-auto sm:left-auto sm:max-w-sm"
-          >
-            <AlertDescription>{notice}</AlertDescription>
-          </Alert>
-        )}
-        {peek !== null && (
-          <CardPeek
-            key={peekedCardId ?? "new"}
-            peek={peek}
-            entry={
-              peekedCardId === null
-                ? null
-                : (cards.find(({ card }) => card.id === peekedCardId) ?? null)
-            }
-            loopCard={peekedCardId === null ? null : loopCard(peekedCardId)}
-            decisions={peekedCardId === null ? [] : decisionsOf(peekedCardId)}
-            titleOf={titleOf}
-            changePending={peekedCardId !== null && changePending(peekedCardId)}
-            projectId={projectId}
-            holder={holder}
-            disabled={disabled}
-            closed={closed}
-            planVersion={plan.version}
-            cardCount={view.cards.length}
-            editPending={edit.isPending || kanbanAction.isPending}
-            intentPending={kanbanAction.isPending}
-            kanbanActive={loop !== null}
-            onEdit={(editing) => setEditingCardId(editing ? peekCardId : null)}
-            onIntent={(intent, cardId) =>
-              kanbanAction.mutate(
-                KanbanAction.Intent({ intent: BoardIntent[intent]({ cardId }) }),
-                {
-                  onError: refused,
-                },
-              )
-            }
-            onClose={() => {
-              setAdding(false);
-              setEditingCardId(null);
-              onPeek(null);
-            }}
-            onSubmit={(change) => save(change).catch((error: Error) => editErrorText(error))}
-          />
-        )}
-        <Dialog
-          open={askChange !== null}
-          onOpenChange={(next) => {
-            if (!next) setAskChange(null);
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>진행 중인 카드예요</DialogTitle>
-              <DialogDescription>
-                진행 중인 카드는 오케스트레이터가 옮겨요. 바꾸고 싶은 내용을 수정 요청으로 남기면
-                오케스트레이터가 반영할지 정해요.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setAskChange(null)}>
-                그대로 두기
-              </Button>
-              <Button
-                type="button"
-                onClick={() => {
-                  setEditingCardId(askChange);
-                  onPeek(askChange);
-                  setAskChange(null);
-                }}
-              >
-                수정 요청 남기기
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <BoardSurface
+          projectId={projectId}
+          sessionId={sessionId}
+          holder={holder}
+          disabled={disabled}
+          view={view}
+          plan={plan}
+          decisions={decisions}
+          loop={loop}
+          kanbanAction={kanbanAction}
+          peekCardId={peekCardId}
+          onPeek={onPeek}
+          adding={adding}
+          onAddingChange={setAdding}
+          onDraggingChange={setDragging}
+          className="min-h-0 flex-1 pt-3"
+        />
       </SheetContent>
     </Sheet>
   );
