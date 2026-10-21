@@ -60,6 +60,8 @@ export const BundleTrace = Schema.TaggedStruct("Trace", {
   status: Schema.String,
   /** The tool call of the run that started the task, by its order; `null` when not in the bundle. */
   parentToolSeq: Schema.NullOr(Schema.Int),
+  /** Why the task's latest attempt ended abnormally, as its failure tag; `null` when it did not. */
+  failure: Schema.NullOr(Schema.String),
   updatedAt: Schema.String,
 });
 

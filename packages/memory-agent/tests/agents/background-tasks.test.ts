@@ -33,6 +33,9 @@ const runOf = Effect.fnUntraced(function* (sessionId: string, abortSignal?: Abor
   };
 });
 
+/** An operation's report when it ended normally. */
+const reported = (report: string) => ({ report, failure: null });
+
 /** Read a stored result through the session's `get_background_result` tool. */
 const readResult = Effect.fnUntraced(function* (
   sessionId: string,
@@ -59,7 +62,9 @@ testAgent()("background task lifecycle", (it) => {
       const run = yield* runOf(sessionId);
       const callId = `${sessionId}:call`;
       const executions = yield* Ref.make(0);
-      const operation = Ref.update(executions, (count) => count + 1).pipe(Effect.as("done"));
+      const operation = Ref.update(executions, (count) => count + 1).pipe(
+        Effect.as(reported("done")),
+      );
       const [first, second] = yield* Effect.all(
         [
           tasks.start(run, callId, "shell", "task", operation),
@@ -88,7 +93,7 @@ testAgent()("background task lifecycle", (it) => {
         `${sessionId}:call`,
         "shell",
         "task",
-        Effect.succeed("done"),
+        Effect.succeed(reported("done")),
       );
       yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
       yield* sdk(() =>
@@ -121,6 +126,32 @@ testAgent()("background task lifecycle", (it) => {
       expect(
         (yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId))?.task.status,
       ).toBe("failed");
+    }),
+  );
+
+  it.effect("a reported process failure keeps the report and fails the attempt with its code", () =>
+    Effect.gen(function* () {
+      const sessionId = yield* freshSession;
+      const tasks = yield* BackgroundTasks;
+      const receipt = yield* tasks.start(
+        yield* runOf(sessionId),
+        `${sessionId}:call`,
+        "shell",
+        "failing command",
+        Effect.succeed({
+          report: "exit report",
+          failure: { _tag: "ProcessExited" as const, exitCode: 2, signal: null },
+        }),
+      );
+      expect(yield* tasks.waitResult(sessionId, receipt.taskId, 2000)).toMatchObject({
+        result: "exit report",
+      });
+      const detail = yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId);
+      expect(detail?.task.status).toBe("failed");
+      expect(detail?.task.latestFailure).toEqual({
+        reason: { _tag: "ProcessExited", exitCode: 2, signal: null },
+        stage: "process",
+      });
     }),
   );
 
@@ -175,7 +206,7 @@ testAgent()("background task lifecycle", (it) => {
         `${sessionId}:call`,
         "external_agent",
         "task",
-        Effect.succeed("x".repeat(6000)),
+        Effect.succeed(reported("x".repeat(6000))),
       );
       yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
       expect(yield* readResult(sessionId, { taskId: receipt.taskId })).toMatchObject({
@@ -241,7 +272,7 @@ testAgent()("background result storage failure", (it) => {
           `${session.id}:call`,
           "shell",
           "task",
-          Effect.succeed("operation completed"),
+          Effect.succeed(reported("operation completed")),
         );
         const result = yield* tasks.waitResult(session.id, receipt.taskId, 2000);
         expect(result).toMatchObject({ status: "failed" });
@@ -271,7 +302,7 @@ testAgent()("read-only background results", (it) => {
         `${session.id}:call`,
         "shell",
         "synthetic read-only contract",
-        Effect.succeed("saved result"),
+        Effect.succeed(reported("saved result")),
       );
       yield* tasks.waitResult(session.id, receipt.taskId, 2000);
       expect((yield* trace.taskDetail(session.id, receipt.taskId))?.task.status).toBe("completed");

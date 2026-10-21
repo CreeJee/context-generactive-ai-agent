@@ -1,6 +1,7 @@
 import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
+import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 
 /** Stable identity of a child agent. One-off agents have no reusable name. */
 export const AgentIdentityKind = Schema.Literals(["one_off", "named"]);
@@ -37,7 +38,7 @@ export const TaskStatus = Schema.Literals([
 ]);
 export type TaskStatus = typeof TaskStatus.Type;
 
-/** Physical lifecycle of one provider run. Resumability is a separate derived decision. */
+/** Physical lifecycle of one provider run. Whether a retry is safe is derived from run events. */
 export const AttemptStatus = Schema.Literals([
   "queued",
   "running",
@@ -60,55 +61,6 @@ export const ResumeReason = Schema.Literals([
 ]);
 export type ResumeReason = typeof ResumeReason.Type;
 
-export const ResumeBlocker = Schema.Literals([
-  "attempt_alive",
-  "task_terminal",
-  "active_attempt_exists",
-  "missing_checkpoint",
-  "uncertain_side_effect",
-  "pending_approval",
-  "legacy_record",
-  "not_authorized",
-]);
-export type ResumeBlocker = typeof ResumeBlocker.Type;
-
-export const Resumability = Schema.Union([
-  Schema.Struct({ state: Schema.Literal("not_needed") }),
-  Schema.Struct({
-    state: Schema.Literal("available"),
-    reason: ResumeReason,
-    checkpointId: Schema.String,
-    requiresConfirmation: Schema.Boolean,
-  }),
-  Schema.Struct({
-    state: Schema.Literal("blocked"),
-    reason: ResumeReason,
-    blockers: Schema.Array(ResumeBlocker),
-  }),
-]);
-export type Resumability = typeof Resumability.Type;
-
-/** A report returning is not evidence that the parent reviewed or used it. */
-export const ReportDisposition = Schema.Literals([
-  "returned",
-  "reviewed",
-  "used",
-  "not_used",
-  "superseded",
-]);
-export type ReportDisposition = typeof ReportDisposition.Type;
-
-export const EvidenceSourceKind = Schema.Literals([
-  "message",
-  "tool_call",
-  "tool_result",
-  "file",
-  "artifact",
-  "checkpoint",
-  "memory",
-]);
-export type EvidenceSourceKind = typeof EvidenceSourceKind.Type;
-
 export const EvidenceVerification = Schema.Literals([
   "unverified",
   "verified",
@@ -117,31 +69,6 @@ export const EvidenceVerification = Schema.Literals([
   "source_deleted",
 ]);
 export type EvidenceVerification = typeof EvidenceVerification.Type;
-
-/** A durable pointer to source material. It identifies content without copying that content. */
-export const EvidenceLocator = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("message"),
-    threadId: Schema.String,
-    messageId: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literals(["tool_call", "tool_result"]),
-    threadId: Schema.String,
-    toolCallId: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("file"),
-    path: Schema.String,
-    sha256: Schema.String,
-    startLine: Schema.optional(Schema.Finite),
-    endLine: Schema.optional(Schema.Finite),
-  }),
-  Schema.Struct({ kind: Schema.Literal("artifact"), artifactId: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("checkpoint"), checkpointId: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("memory"), memoryId: Schema.String }),
-]);
-export type EvidenceLocator = typeof EvidenceLocator.Type;
 
 export const ArtifactKind = Schema.Literals(["file", "generated", "external"]);
 export type ArtifactKind = typeof ArtifactKind.Type;
@@ -172,36 +99,72 @@ export const ToolExecutionState = Schema.Literals([
 ]);
 export type ToolExecutionState = typeof ToolExecutionState.Type;
 
+/** Lifecycle changes only. Where an attempt is right now lives in its heartbeat, not in events. */
 export const RunEventKind = Schema.Literals([
   "attempt_queued",
   "attempt_started",
-  "activity",
-  "tool_requested",
   "approval_waiting",
   "approval_resolved",
-  "tool_started",
-  "tool_completed",
-  "tool_failed",
-  "tool_uncertain",
   "steered",
-  "checkpoint_created",
   "attempt_interrupted",
   "attempt_completed",
   "attempt_failed",
   "attempt_cancelled",
   "resume_requested",
-  "resume_started",
-  "report_returned",
-  "report_reviewed",
-  "report_used",
-  "report_not_used",
-  "report_superseded",
-  "recovery_queued",
-  "recovery_blocked",
-  "parent_notified",
-  "task_archived",
 ]);
 export type RunEventKind = typeof RunEventKind.Type;
+
+/** What a live attempt is doing, as its last heartbeat said. */
+export const HeartbeatState = Schema.Literals(["working", "idle", "waiting"]);
+export type HeartbeatState = typeof HeartbeatState.Type;
+
+/** Where an attempt was when it failed. */
+export const AttemptFailureStage = Schema.Literals([
+  "start",
+  "model",
+  "tool",
+  "approval",
+  "finish",
+  "process",
+  "restart",
+]);
+export type AttemptFailureStage = typeof AttemptFailureStage.Type;
+
+/**
+ * Why an attempt failed. Only these codes and safe fields are stored and shown; provider bodies,
+ * command output and paths never are.
+ */
+export const AttemptFailureReason = Schema.Union([
+  /** The model stream reported an error. */
+  Schema.TaggedStruct("ModelRunError", {}),
+  /** The model stream itself failed. */
+  Schema.TaggedStruct("ModelStreamFailed", {}),
+  /** The child's own runtime died: a defect, or a store write it could not finish. */
+  Schema.TaggedStruct("AgentCrashed", {}),
+  /** The attempt stopped beating without settling. */
+  Schema.TaggedStruct("HeartbeatLost", {}),
+  /** The server stopped while the attempt was live. */
+  Schema.TaggedStruct("ServerRestarted", {}),
+  /** An external ACP agent ended without an answer. */
+  Schema.TaggedStruct("ExternalAgentFailed", { code: ExternalAgentFailureCode }),
+  /** A background command exited unsuccessfully or was killed. */
+  Schema.TaggedStruct("ProcessExited", {
+    exitCode: Schema.NullOr(Schema.Finite),
+    signal: Schema.NullOr(Schema.String),
+  }),
+  Schema.TaggedStruct("ProcessTimedOut", {}),
+  /** A background operation failed before it produced a result. */
+  Schema.TaggedStruct("OperationFailed", {}),
+  /** The operation ended but its result could not be stored. */
+  Schema.TaggedStruct("ResultStorageFailed", {}),
+]);
+export type AttemptFailureReason = typeof AttemptFailureReason.Type;
+
+export const AttemptFailure = Schema.Struct({
+  reason: AttemptFailureReason,
+  stage: AttemptFailureStage,
+});
+export type AttemptFailure = typeof AttemptFailure.Type;
 
 export const AgentIdentity = Schema.Struct({
   id: Schema.String,
@@ -258,7 +221,6 @@ export const AgentRunAttempt = Schema.Struct({
   supersededByAttemptId: Schema.NullOr(Schema.String),
   startedAt: Schema.NullOr(Schema.Finite),
   finishedAt: Schema.NullOr(Schema.Finite),
-  resumability: Resumability,
 });
 export type AgentRunAttempt = typeof AgentRunAttempt.Type;
 
@@ -277,35 +239,6 @@ export const RunEvent = Schema.Struct({
 });
 export type RunEvent = typeof RunEvent.Type;
 
-export const WorkCheckpoint = Schema.Struct({
-  id: Schema.String,
-  taskId: Schema.String,
-  attemptId: Schema.String,
-  eventSequence: Schema.Finite,
-  transcriptMessageId: Schema.NullOr(Schema.String),
-  completedToolCallIds: Schema.Array(Schema.String),
-  uncertainToolCallIds: Schema.Array(Schema.String),
-  pendingApprovalIds: Schema.Array(Schema.String),
-  remainingWork: Schema.String,
-  createdAt: Schema.Finite,
-});
-export type WorkCheckpoint = typeof WorkCheckpoint.Type;
-
-export const EvidenceRef = Schema.Struct({
-  id: Schema.String,
-  taskId: Schema.String,
-  attemptId: Schema.String,
-  sourceKind: EvidenceSourceKind,
-  locator: Schema.NullOr(EvidenceLocator),
-  verification: EvidenceVerification,
-  visibility: TraceVisibility,
-  redaction: RedactionState,
-  sourceDeletedAt: Schema.NullOr(Schema.Finite),
-  createdAt: Schema.Finite,
-  updatedAt: Schema.Finite,
-});
-export type EvidenceRef = typeof EvidenceRef.Type;
-
 export const ArtifactRef = Schema.Struct({
   id: Schema.String,
   taskId: Schema.String,
@@ -319,50 +252,6 @@ export const ArtifactRef = Schema.Struct({
   updatedAt: Schema.Finite,
 });
 export type ArtifactRef = typeof ArtifactRef.Type;
-
-export const ReportAdoption = Schema.Struct({
-  taskId: Schema.String,
-  attemptId: Schema.String,
-  disposition: ReportDisposition,
-  supersededByAttemptId: Schema.NullOr(Schema.String),
-  updatedAt: Schema.Finite,
-});
-export type ReportAdoption = typeof ReportAdoption.Type;
-
-export const MemoryCandidateStatus = Schema.Literals([
-  "proposed",
-  "confirmed",
-  "conversation_only",
-  "rejected",
-  "promoted",
-  "superseded",
-]);
-export type MemoryCandidateStatus = typeof MemoryCandidateStatus.Type;
-
-export const MemoryCandidate = Schema.Struct({
-  id: Schema.String,
-  taskId: Schema.String,
-  attemptId: Schema.String,
-  evidenceRefIds: Schema.Array(Schema.String),
-  status: MemoryCandidateStatus,
-  requiresUserConfirmation: Schema.Boolean,
-  createdAt: Schema.Finite,
-  updatedAt: Schema.Finite,
-});
-export type MemoryCandidate = typeof MemoryCandidate.Type;
-
-export const DecisionStatus = Schema.Literals(["proposed", "confirmed", "rejected", "superseded"]);
-export type DecisionStatus = typeof DecisionStatus.Type;
-export const WorkDecision = Schema.Struct({
-  id: Schema.String,
-  taskId: Schema.String,
-  evidenceRefIds: Schema.Array(Schema.String),
-  status: DecisionStatus,
-  decidedBy: Schema.Literals(["user", "assistant"]),
-  createdAt: Schema.Finite,
-  updatedAt: Schema.Finite,
-});
-export type WorkDecision = typeof WorkDecision.Type;
 
 const activeAttemptStatuses = HashSet.fromIterable<AttemptStatus>([
   "queued",

@@ -400,7 +400,7 @@ const make = Effect.gen(function* () {
     /**
      * A run of the card a new attempt must not continue past: it did not complete, and it may have
      * left a pending or uncertain tool, or a write tool without a recorded result
-     * (`endedWithKnownEffectsSql`), or its last Work Trace checkpoint names an uncertain tool call.
+     * (`endedWithKnownEffectsSql`), or its Work Trace attempt requested a tool call that never settled.
      * A run with no `chat_runs` row never reached the model. Acknowledged runs no longer fence.
      */
     fencedRun: (goalInstanceId: string, cardId: string) =>
@@ -408,9 +408,8 @@ const make = Effect.gen(function* () {
           WHERE k.goal_instance_id = ${goalInstanceId} AND k.card_id = ${cardId}
             AND k.acknowledged_at IS NULL AND r.status <> 'completed'
             AND (NOT ${sql.literal(endedWithKnownEffectsSql("r"))}
-              OR coalesce((SELECT json_array_length(c.uncertain_tool_call_ids)
-                FROM work_checkpoints c WHERE c.attempt_id = k.trace_attempt_id
-                ORDER BY c.event_sequence DESC LIMIT 1), 0) > 0)
+              OR EXISTS (SELECT 1 FROM agent_run_attempts a
+                WHERE a.id = k.trace_attempt_id AND a.pending_tool_call_ids <> '[]'))
           ORDER BY k.created_at LIMIT 1`.pipe(
         rows(RunRow),
         Effect.map((found) => Option.map(Option.fromUndefinedOr(found[0]), (row) => row.run_id)),

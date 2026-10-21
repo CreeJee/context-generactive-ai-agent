@@ -51,12 +51,6 @@ describe("Work Trace domain contracts", () => {
         supersededByAttemptId: "attempt-2",
         startedAt: 1,
         finishedAt: 2,
-        resumability: {
-          state: "available",
-          reason: "server_restarted",
-          checkpointId: "checkpoint-1",
-          requiresConfirmation: true,
-        },
       });
       const resumed = yield* decode({
         ...previous,
@@ -69,7 +63,6 @@ describe("Work Trace domain contracts", () => {
         supersededByAttemptId: null,
         startedAt: 3,
         finishedAt: null,
-        resumability: { state: "not_needed" },
       });
 
       expect(previous.status).toBe("interrupted");
@@ -88,7 +81,7 @@ describe("Work Trace domain contracts", () => {
         invocationId: "invocation-1",
         attemptId: "attempt-1",
         sequence: 1,
-        kind: "activity",
+        kind: "steered",
         summary: "Checking the repository",
         occurredAt: 1,
       } as const;

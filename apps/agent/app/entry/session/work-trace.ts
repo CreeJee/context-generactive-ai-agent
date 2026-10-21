@@ -64,6 +64,7 @@ export function useWorkTrace(sessionId: string) {
       source.addEventListener("open", () => setConnection("live"));
       source.addEventListener("snapshot", refresh);
       source.addEventListener("trace", refresh);
+      source.addEventListener("progress", refresh);
       source.addEventListener("error", () => setConnection("reconnecting"));
     };
     const visibilityChanged = () => {

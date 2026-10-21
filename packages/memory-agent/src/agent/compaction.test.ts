@@ -418,9 +418,8 @@ describe("lightweight tool results", () => {
         agent: null,
         answer: "final".repeat(4_000),
         error: null,
-        evidenceRefIds: ["evidence-1"],
       },
-      essential: '"evidenceRefIds":["evidence-1"]',
+      essential: '"attemptId":"attempt"',
     },
   ])("$name keeps navigation and outcome while omitting bulk", ({ name, result, essential }) => {
     const original = JSON.stringify(result);

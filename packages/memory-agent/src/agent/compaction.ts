@@ -569,7 +569,6 @@ const largeReportResult = Schema.fromJsonString(
     attemptId: Schema.String,
     agent: Schema.NullOr(Schema.String),
     answer: Schema.String,
-    evidenceRefIds: Schema.Array(Schema.String),
     error: Schema.NullOr(Schema.String),
   }),
 );
@@ -655,7 +654,6 @@ function lightweightToolResultsBody(
         ...result,
         answer: preview(result.answer, 1_200),
         error: result.error === null ? null : preview(result.error, 1_500),
-        evidenceRefIds: result.evidenceRefIds.slice(0, 12),
       };
     }
     const serialized = JSON.stringify(summary);

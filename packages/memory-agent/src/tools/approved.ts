@@ -4,7 +4,8 @@ import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { Cause, Context, Effect, FileSystem, Layer, Match, Schema } from "effect";
+import type { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { temporaryDirectory } from "../runtime/host-system.ts";
@@ -63,6 +64,16 @@ const ShellResult = Schema.Struct({
   stdoutTruncated: Schema.Boolean,
   stderrTruncated: Schema.Boolean,
 });
+
+/** A background command that did not exit cleanly fails its attempt; its output is still kept. */
+const commandFailure = Match.type<CommandResult>().pipe(
+  Match.discriminatorsExhaustive("status")({
+    succeeded: (): AttemptFailureReason | null => null,
+    cancelled: () => null,
+    failed: ({ exitCode, signal }) => ({ _tag: "ProcessExited", exitCode, signal }) as const,
+    timed_out: () => ({ _tag: "ProcessTimedOut" }) as const,
+  }),
+);
 
 const isSameOrBelow = (root: string, candidate: string) => {
   const path = relative(root, candidate);
@@ -196,9 +207,14 @@ const make = Effect.gen(function* () {
                   "shell",
                   label,
                   backgroundOperation(execute).pipe(
-                    Effect.map((result) =>
-                      JSON.stringify({ workdir: directory.relative, ...result, command: label }),
-                    ),
+                    Effect.map((result) => ({
+                      report: JSON.stringify({
+                        workdir: directory.relative,
+                        ...result,
+                        command: label,
+                      }),
+                      failure: commandFailure(result),
+                    })),
                   ),
                 );
                 const result = yield* background.waitResult(

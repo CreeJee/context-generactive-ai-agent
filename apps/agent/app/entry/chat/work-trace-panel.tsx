@@ -1,6 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { Schema } from "effect";
-import type { TraceTaskDetail, TraceTaskView } from "memory-agent";
+import type { HeartbeatState, TraceTaskDetail, TraceTaskView } from "memory-agent";
 import {
   ActivityIcon,
   ChevronRightIcon,
@@ -9,7 +9,6 @@ import {
   NetworkIcon,
   PanelRightOpenIcon,
   RefreshCwIcon,
-  ShieldAlertIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
@@ -23,6 +22,7 @@ import {
   SheetTitle,
 } from "~/components/ui/sheet";
 import { Separator } from "~/components/ui/separator";
+import { failureLabel } from "../session/attempt-failure";
 import type { TraceConnection } from "../session/work-trace";
 import { useProjectTraceConnection } from "../session/use-project-trace-connection";
 import { useProjectTraceQuery, useProjectTraceTaskQuery } from "../queries/project";
@@ -37,8 +37,8 @@ const statusLabel: Readonly<Record<TraceTaskView["status"], string>> = {
   waiting: "승인 대기",
   blocked: "확인 필요",
   interrupted: "중단됨",
-  resumable: "재개 가능",
-  resuming: "재개 중",
+  resumable: "다시 시도 가능",
+  resuming: "다시 시도 중",
   completed: "완료",
   failed: "실패",
   cancelled: "취소됨",
@@ -57,28 +57,13 @@ function connectionLabel(connection: TraceConnection) {
   }
 }
 
-type EvidenceLocator = NonNullable<TraceTaskDetail["evidence"][number]["locator"]>;
 type ArtifactLocator = NonNullable<TraceTaskDetail["artifacts"][number]["locator"]>;
 
-function evidenceLocatorLabel(locator: EvidenceLocator | null) {
-  if (!isTruthy(locator)) return "원본 위치가 삭제되었거나 가려졌어요.";
-  switch (locator.kind) {
-    case "message":
-      return `Message ${locator.messageId} · Thread ${locator.threadId}`;
-    case "tool_call":
-      return `Tool call ${locator.toolCallId} · Thread ${locator.threadId}`;
-    case "tool_result":
-      return `Tool result ${locator.toolCallId} · Thread ${locator.threadId}`;
-    case "checkpoint":
-      return `Checkpoint ${locator.checkpointId}`;
-    case "artifact":
-      return `Artifact ${locator.artifactId}`;
-    case "file":
-      return `${locator.path} · sha256 ${locator.sha256}`;
-    case "memory":
-      return `Memory ${locator.memoryId}`;
-  }
-}
+const heartbeatLabel: Readonly<Record<HeartbeatState, string>> = {
+  working: "작업 중",
+  idle: "대기",
+  waiting: "응답 대기",
+};
 
 function artifactLocatorLabel(locator: ArtifactLocator | null) {
   if (!isTruthy(locator)) return "원본 위치가 삭제되었거나 가려졌어요.";
@@ -123,7 +108,7 @@ function TaskTree({
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium">{task.title}</span>
               <span className="block truncate text-xs text-muted-foreground">
-                {task.agentName} · {task.latestActivity ?? task.request}
+                {task.agentName} · {task.heartbeat?.step ?? task.request}
               </span>
             </span>
             <Badge
@@ -162,6 +147,15 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
           </Badge>
         </div>
         <p className="mt-2 text-sm">{task.request}</p>
+        {task.heartbeat !== null && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {heartbeatLabel[task.heartbeat.state]} · {task.heartbeat.step} ·{" "}
+            {new Date(task.heartbeat.at).toLocaleTimeString()}
+          </p>
+        )}
+        {task.latestFailure !== null && (
+          <p className="mt-1 text-xs text-destructive">{failureLabel(task.latestFailure)}</p>
+        )}
         <dl className="mt-3 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <dt>에이전트</dt>
           <dd className="min-w-0 break-words">{task.agentName}</dd>
@@ -193,60 +187,23 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                 Run {attempt.chatRunId}
               </p>
               {attempt.resumedFromAttemptId && (
-                <p className="mt-1 text-muted-foreground">이전 attempt의 checkpoint에서 재개됨</p>
+                <p className="mt-1 text-muted-foreground">이전 실행을 다시 시도함</p>
+              )}
+              {attempt.failure !== null && (
+                <p className="mt-1 text-destructive">{failureLabel(attempt.failure)}</p>
               )}
             </li>
           ))}
         </ol>
       </section>
-      <section aria-labelledby="trace-checkpoints">
-        <h3 id="trace-checkpoints" className="flex items-center gap-2 text-sm font-medium">
-          <ShieldAlertIcon className="size-4" aria-hidden /> Checkpoint
+      <section aria-labelledby="trace-artifacts">
+        <h3 id="trace-artifacts" className="flex items-center gap-2 text-sm font-medium">
+          <CircleDotIcon className="size-4" aria-hidden /> 결과물
         </h3>
-        {detail.checkpoints.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">저장된 checkpoint가 없어요.</p>
+        {detail.artifacts.length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">연결된 결과물이 없어요.</p>
         ) : (
           <ul className="mt-2 space-y-2">
-            {detail.checkpoints.map((checkpoint) => (
-              <li key={checkpoint.id} className="rounded-md bg-muted/50 p-2 text-xs">
-                <p>{checkpoint.remainingWork || "남은 작업이 기록되지 않았어요."}</p>
-                <p className="mt-1 text-muted-foreground">
-                  완료 tool {checkpoint.completedToolCallIds.length} · 불확실 tool{" "}
-                  {checkpoint.uncertainToolCallIds.length} · 승인{" "}
-                  {checkpoint.pendingApprovalIds.length}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section aria-labelledby="trace-evidence">
-        <h3 id="trace-evidence" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> 근거와 결과
-        </h3>
-        {detail.evidence.length === 0 && detail.artifacts.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">연결된 근거나 결과물이 없어요.</p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {detail.evidence.map((evidence) => (
-              <li key={evidence.id} className="rounded-md border p-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">Evidence · {evidence.sourceKind}</span>
-                  <Badge className="ml-auto" variant="secondary">
-                    {evidence.verification}
-                  </Badge>
-                </div>
-                <p className="mt-1 text-muted-foreground">
-                  Attempt{" "}
-                  {detail.attempts.find((attempt) => attempt.id === evidence.attemptId)
-                    ?.attemptNumber ?? "?"}
-                  {evidence.verification === "source_deleted" ? " · 원본 삭제됨" : ""}
-                </p>
-                <p className="mt-1 break-all font-mono text-muted-foreground">
-                  {evidenceLocatorLabel(evidence.locator)}
-                </p>
-              </li>
-            ))}
             {detail.artifacts.map((artifact) => (
               <li key={artifact.id} className="rounded-md border p-2 text-xs">
                 <div className="flex items-center gap-2">
@@ -267,47 +224,23 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
           </ul>
         )}
       </section>
-      <section aria-labelledby="trace-adoption">
-        <h3 id="trace-adoption" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> 보고서 채택과 답변 출처
+      <section aria-labelledby="trace-answers">
+        <h3 id="trace-answers" className="flex items-center gap-2 text-sm font-medium">
+          <CircleDotIcon className="size-4" aria-hidden /> 답변 출처
         </h3>
-        {(detail.adoptions ?? []).length === 0 ? (
+        {detail.answerClaims.length === 0 && (
           <p className="mt-2 text-xs text-muted-foreground">
-            아직 검토되거나 채택된 보고서가 없어요.
+            이 작업의 보고서를 쓴 최종 답변이 없어요.
           </p>
-        ) : (
-          <ol className="mt-2 space-y-2">
-            {(detail.adoptions ?? []).map((adoption) => (
-              <li key={adoption.sequence} className="rounded-md border p-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{adoption.disposition}</span>
-                  <span className="ml-auto text-muted-foreground">
-                    Attempt{" "}
-                    {detail.attempts.find((attempt) => attempt.id === adoption.attemptId)
-                      ?.attemptNumber ?? "?"}
-                  </span>
-                </div>
-                {adoption.parentMessageId && (
-                  <p className="mt-1 truncate font-mono text-muted-foreground">
-                    Answer {adoption.parentMessageId}
-                  </p>
-                )}
-                {adoption.supersededByAttemptId && (
-                  <p className="mt-1 text-muted-foreground">새 attempt 보고서로 대체됨</p>
-                )}
-              </li>
-            ))}
-          </ol>
         )}
-        {(detail.answerClaims ?? []).map((claim) => (
+        {detail.answerClaims.map((claim) => (
           <div key={claim.id} className="mt-2 rounded-md bg-muted/50 p-2 text-xs">
             <p className="font-medium">최종 답변 provenance</p>
             <p className="mt-1 truncate font-mono text-muted-foreground">
               Message {claim.parentMessageId}
             </p>
             <p className="mt-1 text-muted-foreground">
-              연결된 evidence {claim.sources.filter((source) => source.evidenceRefId).length} ·
-              반영된 상태 알림 {claim.notificationIds.length}
+              사용한 보고서 {claim.sources.length} · 반영된 상태 알림 {claim.notificationIds.length}
             </p>
           </div>
         ))}

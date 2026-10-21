@@ -1383,6 +1383,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 });
                 if (change === "heartbeat")
                   return [[`: heartbeat ${cursor}\n\n`], Option.some(cursor)] as const;
+                // A child's beat or current step changed: no event was written, the page rereads
+                // the task tree.
+                if (change === "progress")
+                  return [[traceFrame("progress", "{}")], Option.some(cursor)] as const;
                 const next = yield* workTrace.snapshotEffect({ sessionId, afterCursor: cursor });
                 const events = yield* Effect.forEach(next.events, (event) =>
                   encodeTrace(event).pipe(

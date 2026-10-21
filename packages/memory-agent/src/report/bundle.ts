@@ -434,6 +434,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                       ref: taskRef,
                       status: task.status,
                       parentToolSeq: call?._tag === "ToolCall" ? call.seq : null,
+                      failure: task.latestFailure?.reason._tag ?? null,
                       updatedAt: iso(task.updatedAt),
                     };
                   }),

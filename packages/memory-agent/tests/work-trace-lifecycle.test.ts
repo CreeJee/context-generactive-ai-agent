@@ -73,13 +73,6 @@ describe("Work Trace task lifecycle", () => {
           expect(yield* trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
             status: "waiting_for_stop",
           });
-          yield* trace.checkpoint("s1", {
-            handle,
-            completedToolCallIds: [],
-            uncertainToolCallIds: [],
-            pendingApprovalIds: [],
-            remainingWork: "Stopped by archive request.",
-          });
           yield* trace.transitionAttempt(
             handle,
             "s1",
@@ -122,11 +115,6 @@ describe("Work Trace task lifecycle", () => {
           const trace = yield* WorkTraceStore;
           yield* seed();
           const handle = yield* start(trace);
-          yield* trace.recordEvidence({
-            handle,
-            locator: { kind: "message", threadId: handle.threadId, messageId: "message-1" },
-            verification: "verified",
-          });
           yield* trace.recordArtifact({
             handle,
             kind: "file",
@@ -136,14 +124,6 @@ describe("Work Trace task lifecycle", () => {
               sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             },
             verification: "verified",
-          });
-          yield* trace.checkpoint("s1", {
-            handle,
-            transcriptMessageId: "message-1",
-            completedToolCallIds: ["tool-1"],
-            uncertainToolCallIds: [],
-            pendingApprovalIds: [],
-            remainingWork: "",
           });
           yield* trace.transitionAttempt(
             handle,
@@ -179,22 +159,11 @@ describe("Work Trace task lifecycle", () => {
             deletedAt: expect.any(Number),
             purgeReceiptId: expect.any(String),
           });
-          expect((yield* trace.evidenceForTask(handle.taskId))[0]).toMatchObject({
-            locator: null,
-            verification: "source_deleted",
-            sourceDeletedAt: expect.any(Number),
-          });
           expect((yield* trace.artifactsForTask(handle.taskId))[0]).toMatchObject({
             locator: null,
             verification: "source_deleted",
             sourceDeletedAt: expect.any(Number),
           });
-          expect(
-            yield* sqlGet(
-              "SELECT count(*) AS count FROM work_checkpoints WHERE task_id = ?",
-              handle.taskId,
-            ),
-          ).toEqual({ count: 0 });
           expect(
             yield* sqlGet(
               "SELECT count(*) AS count FROM run_events WHERE task_id = ?",

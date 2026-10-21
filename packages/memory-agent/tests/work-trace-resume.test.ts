@@ -3,7 +3,7 @@ import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { WorkTraceStore, type AttemptHandle } from "../src/work-trace/store.ts";
 import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const AttemptLineage = Schema.Struct({
@@ -44,6 +44,17 @@ const seed = Effect.fnUntraced(function* () {
   );
 });
 
+const toolCall = Effect.fnUntraced(function* (
+  trace: WorkTraceStore["Service"],
+  handle: AttemptHandle,
+  toolCallId: string,
+  settled: boolean,
+) {
+  const call = { id: toolCallId, name: "write_file" };
+  yield* trace.toolStarted(handle, "s1", call);
+  if (settled) yield* trace.toolSettled(handle, "s1", call);
+});
+
 const interruptedAttempt = Effect.fnUntraced(function* (
   trace: WorkTraceStore["Service"],
   uncertain: readonly string[] = [],
@@ -59,13 +70,8 @@ const interruptedAttempt = Effect.fnUntraced(function* (
     threadId: "subagent-agent-1",
   });
   yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-  yield* trace.checkpoint("s1", {
-    handle,
-    completedToolCallIds: ["tool-complete"],
-    uncertainToolCallIds: uncertain,
-    pendingApprovalIds: ["approval-expired"],
-    remainingWork: "Write the verified report.",
-  });
+  yield* toolCall(trace, handle, "tool-complete", true);
+  for (const toolCallId of uncertain) yield* toolCall(trace, handle, toolCallId, false);
   yield* trace.transitionAttempt(
     handle,
     "s1",
@@ -100,11 +106,7 @@ describe("Work Trace logical resume", () => {
           expect(resumed.handle.chatRunId).not.toBe(previous.chatRunId);
           expect(resumed.context).toEqual({
             originalRequest: "Research the code",
-            remainingWork: "Write the verified report.",
-            completedToolCallIds: ["tool-complete"],
             uncertainToolCallIds: [],
-            expiredApprovalIds: ["approval-expired"],
-            checkpointId: expect.any(String),
           });
 
           expect(
@@ -149,53 +151,24 @@ describe("Work Trace logical resume", () => {
       ),
   );
 
-  it.effect("only one parent run can claim a queued automatic recovery", () =>
+  it.effect("only one parent run claims a requested retry", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
         yield* seed();
-        const handle = yield* trace.startAttempt({
+        const handle = yield* interruptedAttempt(trace);
+        yield* trace.requestResume({
           sessionId: "s1",
-          parentRunId: "parent-1",
-          parentToolCallId: "call-1",
-          agentId: "agent-1",
-          title: "Research",
-          request: "Research",
-          kind: "start",
-          threadId: "subagent-agent-1",
+          taskId: handle.taskId,
+          expectedAttemptId: handle.id,
+          confirmUncertain: false,
         });
-        yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
-        yield* trace.checkpoint("s1", {
-          handle,
-          completedToolCallIds: ["tool-complete"],
-          uncertainToolCallIds: [],
-          pendingApprovalIds: [],
-          remainingWork: "Finish the report.",
-        });
-        yield* trace.transitionAttempt(
-          handle,
-          "s1",
-          "interrupted",
-          "attempt_interrupted",
-          "Interrupted",
-        );
-        yield* sqlRun(
-          `INSERT INTO work_recovery_jobs
-             (id, project_id, task_id, interrupted_attempt_id, status, blocker,
-              created_at, updated_at)
-             VALUES ('job-1', 'p1', ?, ?, 'queued', NULL, 1, 1)`,
-          handle.taskId,
-          handle.id,
-        );
 
-        const first = yield* trace.claimRecoveryJobs("s1", "parent-recovery-1");
-        const second = yield* trace.claimRecoveryJobs("s1", "parent-recovery-2");
+        const first = yield* trace.claimRetries("s1", "parent-retry-1");
+        const second = yield* trace.claimRetries("s1", "parent-retry-2");
         expect(first).toHaveLength(1);
-        expect(first[0]?.claim.handle.attemptNumber).toBe(2);
+        expect(first[0]?.handle.attemptNumber).toBe(2);
         expect(second).toEqual([]);
-        expect(
-          yield* sqlGet("SELECT status, claimed_by FROM work_recovery_jobs WHERE id = 'job-1'"),
-        ).toEqual({ status: "claimed", claimed_by: "parent-recovery-1" });
         expect(
           yield* sqlGet(
             "SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?",
@@ -206,7 +179,7 @@ describe("Work Trace logical resume", () => {
     ),
   );
 
-  it.effect("requires explicit confirmation when a checkpoint has uncertain side effects", () =>
+  it.effect("requires explicit confirmation when a requested tool call never settled", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
@@ -254,16 +227,14 @@ describe("Work Trace logical resume", () => {
         });
         expect(
           yield* sqlGet(
-            "SELECT status, confirm_uncertain FROM work_recovery_jobs WHERE task_id = ?",
+            "SELECT retry_requested_at IS NOT NULL AS requested, retry_confirm_uncertain FROM work_tasks WHERE id = ?",
             previous.taskId,
           ),
-        ).toEqual({ status: "queued", confirm_uncertain: 1 });
+        ).toEqual({ requested: 1, retry_confirm_uncertain: 1 });
 
-        const [claimed] = yield* trace.claimRecoveryJobs("s1", "parent-http-resume");
-        expect(claimed?.claim.status).toBe("started");
-        if (claimed?.claim.status === "started")
-          expect(claimed.claim.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
-        expect(yield* trace.claimRecoveryJobs("s1", "parent-race")).toEqual([]);
+        const [claimed] = yield* trace.claimRetries("s1", "parent-http-resume");
+        expect(claimed?.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
+        expect(yield* trace.claimRetries("s1", "parent-race")).toEqual([]);
       }),
     ),
   );
@@ -325,7 +296,7 @@ describe("Work Trace logical resume", () => {
     ),
   );
 
-  it.effect("rejects stale attempt ids and tasks without a durable checkpoint", () =>
+  it.effect("rejects stale attempt ids and retries a failed attempt without tool calls", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
@@ -353,9 +324,12 @@ describe("Work Trace logical resume", () => {
           status: "blocked",
           reason: "stale_attempt",
         });
-        expect(yield* trace.claimResume({ ...base, expectedAttemptId: handle.id })).toEqual({
-          status: "blocked",
-          reason: "missing_checkpoint",
+        expect(yield* trace.claimResume({ ...base, expectedAttemptId: handle.id })).toMatchObject({
+          status: "started",
+          context: {
+            originalRequest: "Research",
+            uncertainToolCallIds: [],
+          },
         });
       }),
     ),

@@ -125,7 +125,6 @@ const ownerRun = Effect.fnUntraced(function* (
       claimId: "unadopted",
       taskId: "task",
       attemptId: "attempt",
-      evidenceRefIds: [],
       proposedText: "memory",
       resolvedText: "memory",
       disposition: "save",

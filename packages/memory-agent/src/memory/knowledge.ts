@@ -15,7 +15,6 @@ export interface PromoteMemoryInput {
   readonly claimId: string;
   readonly taskId: string;
   readonly attemptId: string;
-  readonly evidenceRefIds: readonly string[];
   readonly proposedText: string;
   readonly resolvedText: string;
   readonly disposition: "save" | "conversation_only" | "reject";
@@ -34,6 +33,7 @@ export interface MemoryCandidateView {
   readonly resolvedText: string;
   readonly disposition: MemoryDisposition;
   readonly memoryNodeId: string | null;
+  /** Evidence ids a promotion listed before evidence records were dropped; new ones list none. */
   readonly evidence: readonly {
     readonly evidenceRefId: string;
     readonly sourceDeletedAt: number | null;
@@ -92,7 +92,6 @@ const MemoryPromotionReason = Schema.Literals([
   "empty_resolved_text",
   "missing_user_authorization",
   "claim_not_adopted",
-  "evidence_not_adopted",
 ]);
 type MemoryPromotionReason = typeof MemoryPromotionReason.Type;
 
@@ -102,7 +101,6 @@ const promotionMessages: Readonly<Record<MemoryPromotionReason, string>> = {
   empty_resolved_text: "resolvedText must not be empty",
   missing_user_authorization: "Memory promotion requires the current user turn as authorization",
   claim_not_adopted: "Memory promotion source is not an adopted final-answer claim",
-  evidence_not_adopted: "Memory promotion evidence must be verified and adopted by the claim",
 };
 
 export class MemoryPromotionRejected extends Schema.TaggedError<MemoryPromotionRejected>()(
@@ -148,19 +146,6 @@ const make = Effect.gen(function* () {
       WHERE c.id = ${claimId} AND c.project_id = ${projectId} AND s.task_id = ${taskId}
         AND s.attempt_id = ${attemptId} LIMIT 1`,
   });
-  const evidenceSource = SqlSchema.findOneOption({
-    Request: Schema.Struct({
-      claimId: Schema.String,
-      taskId: Schema.String,
-      attemptId: Schema.String,
-      evidenceRefId: Schema.String,
-    }),
-    Result: ExistingRow,
-    execute: ({ claimId, taskId, attemptId, evidenceRefId }) => sql`
-      SELECT e.id FROM final_answer_sources s JOIN evidence_refs e ON e.id = s.evidence_ref_id
-      WHERE s.claim_id = ${claimId} AND s.task_id = ${taskId} AND s.attempt_id = ${attemptId}
-        AND s.evidence_ref_id = ${evidenceRefId} AND e.verification = 'verified'`,
-  });
   const existing = SqlSchema.findOneOption({
     Request: Schema.Struct({
       claimId: Schema.String,
@@ -178,9 +163,8 @@ const make = Effect.gen(function* () {
     Request: Schema.String,
     Result: CandidateEvidenceRow,
     execute: (candidateId) => sql`
-      SELECT ce.evidence_ref_id_snapshot,
-             coalesce(ce.source_deleted_at, e.source_deleted_at) AS source_deleted_at
-      FROM memory_candidate_evidence ce LEFT JOIN evidence_refs e ON e.id = ce.evidence_ref_id
+      SELECT ce.evidence_ref_id_snapshot, ce.source_deleted_at
+      FROM memory_candidate_evidence ce
       WHERE ce.candidate_id = ${candidateId} ORDER BY ce.evidence_ref_id_snapshot`,
   });
   const candidateRows = (column: "d.id" | "d.task_id") =>
@@ -280,10 +264,6 @@ const make = Effect.gen(function* () {
             Effect.fail(promotionRejected("claim_not_adopted")),
           ),
         );
-        const evidenceRefIds = EffectArray.dedupe(input.evidenceRefIds);
-        for (const evidenceRefId of evidenceRefIds)
-          if (Option.isNone(yield* evidenceSource({ ...input, evidenceRefId })))
-            return yield* promotionRejected("evidence_not_adopted");
         const status: MemoryDisposition =
           input.disposition === "reject"
             ? "rejected"
@@ -337,10 +317,6 @@ const make = Effect.gen(function* () {
             memory_node_id: memoryNode?.id ?? null,
             created_at: createdAt,
           })}`;
-          for (const evidenceRefId of evidenceRefIds)
-            yield* sql`INSERT INTO memory_candidate_evidence
-              (candidate_id, evidence_ref_id, evidence_ref_id_snapshot, source_deleted_at)
-              VALUES (${candidateId}, ${evidenceRefId}, ${evidenceRefId}, NULL)`;
           return yield* candidateByDecision(decisionId);
         }).pipe(sql.withTransaction);
       }),
@@ -423,7 +399,7 @@ const make = Effect.gen(function* () {
   return { promote, recordRetrieval, recordUsed, candidatesForTask, usageForTask };
 });
 
-/** User-governed bridge from adopted Work Trace evidence into durable project memory. */
+/** User-governed bridge from adopted final-answer claims into durable project memory. */
 export class KnowledgePromotions extends Context.Service<
   KnowledgePromotions,
   Effect.Success<typeof make>

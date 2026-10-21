@@ -490,7 +490,7 @@ function ChatPanel({
             }),
           );
           if (result.status === "queued") {
-            setNotice(done("재개 요청을 저장했어요. 다음 실행 연결에서 새 attempt로 이어가요."));
+            setNotice(done("다시 시도 요청을 저장했어요. 다음 실행에서 새 attempt로 시작해요."));
             return { status: "queued" as const };
           }
           if (result.reason !== "uncertain_side_effect")
@@ -500,14 +500,14 @@ function ChatPanel({
                   ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
                   : result.reason === "attempt_alive"
                     ? "이미 실행 중인 attempt가 있어요."
-                    : "이 작업은 현재 안전하게 재개할 수 없어요.",
+                    : "이 작업은 지금 다시 시도할 수 없어요.",
               ),
             );
           return result;
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
-              setNotice(problem("재개 요청을 저장하지 못했어요."));
+              setNotice(problem("다시 시도 요청을 저장하지 못했어요."));
               return { status: "failed" as const };
             }),
           ),

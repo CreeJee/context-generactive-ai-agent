@@ -16,6 +16,7 @@ import {
 } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import type { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { toToolSchema } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
@@ -70,6 +71,15 @@ const parentInterrupted = (signal: AbortSignal) =>
     else signal.addEventListener("abort", interrupt, { once: true });
     return Effect.sync(() => signal.removeEventListener("abort", interrupt));
   });
+
+/**
+ * What a background operation returns: its report, and why it ended abnormally when it did. A
+ * command that exited non-zero still reports its output; its attempt is recorded as failed.
+ */
+export interface BackgroundOutcome {
+  readonly report: string;
+  readonly failure: AttemptFailureReason | null;
+}
 
 const ResultInput = Schema.Struct({
   taskId: Schema.NonEmptyString,
@@ -160,7 +170,7 @@ const make = Effect.gen(function* () {
     toolCallId: string,
     kind: "shell" | "external_agent",
     request: string,
-    operation: Effect.Effect<string, BackgroundOperationFailed>,
+    operation: Effect.Effect<BackgroundOutcome, BackgroundOperationFailed>,
   ) {
     if (binding.abortSignal.aborted) return yield* Effect.interrupt;
     const hiddenRequest = yield* redactor.redactText(request);
@@ -209,29 +219,43 @@ const make = Effect.gen(function* () {
             });
           });
           const finalize = Effect.fn("BackgroundTasks.finalize")(function* (
-            exit: Exit.Exit<string, BackgroundOperationFailed | BackgroundTraceFailed>,
+            exit: Exit.Exit<BackgroundOutcome, BackgroundOperationFailed | BackgroundTraceFailed>,
           ) {
-            let outcome: typeof SavedResult.Type;
-            switch (exit._tag) {
-              case "Success":
-                outcome = { status: "completed", result: exit.value };
-                break;
-              case "Failure":
-                outcome = Cause.hasInterrupts(exit.cause)
+            // `saved` is what get_background_result returns; `failure` is why the attempt failed.
+            const { saved, failure } = Exit.match(exit, {
+              onSuccess: ({ report, failure }) => ({
+                saved: { status: "completed" as const, result: report },
+                failure,
+              }),
+              onFailure: (cause) =>
+                Cause.hasInterrupts(cause)
                   ? {
-                      status: "cancelled",
-                      result: "Operation stopped. Inspect its effects before retrying.",
+                      saved: {
+                        status: "cancelled" as const,
+                        result: "Operation stopped. Inspect its effects before retrying.",
+                      },
+                      failure: null,
                     }
                   : // Tags only: the cause can hold command output, paths or provider text.
                     {
-                      status: "failed",
-                      result: `Operation failed (${failureTags(exit.cause)}). Inspect its effects before retrying.`,
-                    };
-                break;
-            }
+                      saved: {
+                        status: "failed" as const,
+                        result: `Operation failed (${failureTags(cause)}). Inspect its effects before retrying.`,
+                      },
+                      failure: { _tag: "OperationFailed" as const },
+                    },
+            });
             // Persist once. A storage failure is not a second operation failure to save again.
-            const stored = yield* Effect.exit(save(outcome.status, outcome.result));
-            const status = Exit.isSuccess(stored) ? outcome.status : "failed";
+            const stored = yield* Effect.exit(save(saved.status, saved.result));
+            const recorded = Exit.isSuccess(stored)
+              ? { failure, stage: "process" as const }
+              : { failure: { _tag: "ResultStorageFailed" as const }, stage: "finish" as const };
+            const status =
+              recorded.failure !== null
+                ? "failed"
+                : saved.status === "cancelled"
+                  ? "cancelled"
+                  : "completed";
             yield* traceEffect(
               trace.transitionAttempt(
                 handle,
@@ -245,7 +269,9 @@ const make = Effect.gen(function* () {
                 Exit.isSuccess(stored)
                   ? `Background ${kind} ${status}; retrieve with get_background_result taskId ${handle.taskId}`
                   : `Background ${kind} ended but result storage failed; inspect effects before retrying`,
-                Exit.isSuccess(stored) ? null : "background_result_storage_failed",
+                recorded.failure === null
+                  ? null
+                  : { reason: recorded.failure, stage: recorded.stage },
                 false,
                 binding.runId,
               ),
@@ -282,7 +308,14 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
-          yield* FiberMap.run(fibers, handle.taskId, Effect.interruptible(job));
+          // The attempt beats while the operation runs; a lost fiber stops the beats.
+          yield* FiberMap.run(
+            fibers,
+            handle.taskId,
+            Effect.interruptible(
+              Effect.forkScoped(trace.keepAlive(handle)).pipe(Effect.andThen(job), Effect.scoped),
+            ),
+          );
           return {
             status: "running" as const,
             taskId: handle.taskId,
