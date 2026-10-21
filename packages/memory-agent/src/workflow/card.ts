@@ -69,7 +69,7 @@ export const cardContract = <S extends Schema.Struct.Type<typeof cardContractFie
 export const BoardAuthor = Schema.Union([
   Schema.TaggedStruct("User", {}),
   Schema.TaggedStruct("Orchestrator", { runId: Schema.String }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type BoardAuthor = typeof BoardAuthor.Type;
 
 /**

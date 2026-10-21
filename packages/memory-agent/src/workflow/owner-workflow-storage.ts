@@ -1,6 +1,6 @@
 /* Effect's encoded workflow boundary necessarily accepts parsed unknown values. */
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns */
-import { type Cause, Context, Effect, Layer, Option, Schema } from "effect";
+import { type Cause, Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
 export class OwnerWorkflowStorageError extends Schema.TaggedError<OwnerWorkflowStorageError>()(
@@ -140,15 +140,13 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
     <A>(
       effect: Effect.Effect<A, SqlError.SqlError | Schema.SchemaError | Cause.NoSuchElementError>,
     ): Stored<A> =>
-      Effect.mapError(effect, (cause) => {
-        switch (cause._tag) {
-          case "SqlError":
-            return failure(operation, "database", cause);
-          case "SchemaError":
-          case "NoSuchElementError":
-            return failure(operation, "invalid_state", cause);
-        }
-      });
+      Effect.mapError(effect, (cause) =>
+        Match.valueTags(cause, {
+          SqlError: (cause) => failure(operation, "database", cause),
+          SchemaError: (cause) => failure(operation, "invalid_state", cause),
+          NoSuchElementError: (cause) => failure(operation, "invalid_state", cause),
+        }),
+      );
 
   const byExecution = SqlSchema.findOneOption({
     Request: Schema.String,
@@ -334,7 +332,10 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
           WHERE execution_id = ${executionId} AND status <> 'completed'`),
       ),
     setResult: Effect.fnUntraced(function* (executionId, result) {
-      const status = result._tag === "Complete" ? "completed" : "suspended";
+      const status = Match.valueTags(result, {
+        Complete: () => "completed" as const,
+        Suspended: () => "suspended" as const,
+      });
       const json = yield* encodeJson("execution.result", result);
       const changed = yield* step("execution.result")(sql`
         UPDATE owner_workflow_executions SET status = ${status}, result_json = ${json}

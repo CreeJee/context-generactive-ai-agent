@@ -22,6 +22,7 @@ import {
   Effect,
   Exit,
   Layer,
+  Match,
   Schema,
   Scope,
 } from "effect";
@@ -1325,15 +1326,12 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     return chunk;
                   }),
                 ),
-                Stream.mapError((error) => {
-                  switch (error._tag) {
-                    case "FullLoopRpcError":
-                    case "FullLoopOwnerRefused":
-                      return error;
-                    default:
-                      return FullLoopRpcError.make({ reason: "worker_failed" });
-                  }
-                }),
+                Stream.mapError((error) =>
+                  Match.value(error).pipe(
+                    Match.tag("FullLoopRpcError", "FullLoopOwnerRefused", (error) => error),
+                    Match.orElse(() => FullLoopRpcError.make({ reason: "worker_failed" })),
+                  ),
+                ),
                 Stream.ensuring(
                   Effect.forEach(deferred, (promise) => nativePromise(() => promise), {
                     concurrency: "unbounded",

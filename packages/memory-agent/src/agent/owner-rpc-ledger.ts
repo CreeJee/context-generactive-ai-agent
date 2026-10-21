@@ -1,4 +1,4 @@
-import { type Cause, Effect, Option, Schema } from "effect";
+import { type Cause, Effect, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { type OwnerRpcLedger, OwnerRpcLedgerError } from "./owner-rpc.ts";
 import { recoveredReadRunSql } from "./owner-read-recovery.ts";
@@ -85,16 +85,14 @@ export const makeSqliteOwnerRpcLedger = Effect.gen(function* () {
       OwnerRpcLedgerError | SqlError.SqlError | Schema.SchemaError | Cause.NoSuchElementError
     >,
   ): Effect.Effect<A, OwnerRpcLedgerError> =>
-    Effect.mapError(effect, (cause) => {
-      switch (cause._tag) {
-        case "OwnerRpcLedgerError":
-          return cause;
-        case "SqlError":
-        case "SchemaError":
-        case "NoSuchElementError":
-          return OwnerRpcLedgerError.make({ reason: "storage", cause });
-      }
-    });
+    Effect.mapError(effect, (cause) =>
+      Match.valueTags(cause, {
+        OwnerRpcLedgerError: (cause) => cause,
+        SqlError: (cause) => OwnerRpcLedgerError.make({ reason: "storage", cause }),
+        SchemaError: (cause) => OwnerRpcLedgerError.make({ reason: "storage", cause }),
+        NoSuchElementError: (cause) => OwnerRpcLedgerError.make({ reason: "storage", cause }),
+      }),
+    );
 
   const ledger: OwnerRpcLedger = {
     reserve: (runKey, operationId, fingerprint, sideEffect) =>

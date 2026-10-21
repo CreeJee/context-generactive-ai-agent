@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
 const Pin = Schema.Struct({
@@ -22,15 +22,12 @@ const rejected = (reason: "already_pinned" | "unrecoverable_pin") =>
 
 const stored = (
   cause: GoalWorkerGenerationError | SqlError.SqlError | Schema.SchemaError,
-): GoalWorkerGenerationError => {
-  switch (cause._tag) {
-    case "GoalWorkerGenerationError":
-      return cause;
-    case "SqlError":
-    case "SchemaError":
-      return GoalWorkerGenerationError.make({ reason: "storage", cause });
-  }
-};
+): GoalWorkerGenerationError =>
+  Match.valueTags(cause, {
+    GoalWorkerGenerationError: (cause) => cause,
+    SqlError: (cause) => GoalWorkerGenerationError.make({ reason: "storage", cause }),
+    SchemaError: (cause) => GoalWorkerGenerationError.make({ reason: "storage", cause }),
+  });
 
 /** Durable source identity only. This never reissues a run token or adopts a live worker. */
 export const goalWorkerGenerationStore = Effect.gen(function* () {

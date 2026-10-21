@@ -44,6 +44,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Match,
   Option,
   Path,
   Queue,
@@ -226,14 +227,11 @@ export const reportAnalysisInstructions = `You are in a local, separate issue-re
 /** The `detail` a refused Goal worker source answers with: its reason, never its cause. */
 const goalSourceFailure = (
   error: GoalWorkerAssets.GoalWorkerAssetsFailed | GoalWorkerGenerations.GoalWorkerGenerationError,
-) => {
-  switch (error._tag) {
-    case "GoalWorkerGenerationError":
-      return error.reason;
-    case "GoalWorkerAssetsFailed":
-      return error.reason._tag;
-  }
-};
+) =>
+  Match.valueTags(error, {
+    GoalWorkerGenerationError: ({ reason }) => reason,
+    GoalWorkerAssetsFailed: ({ reason }) => reason._tag,
+  });
 
 /** Where this app keeps settings the model may be asked about. */
 export interface SettingsPlaces {
@@ -336,7 +334,9 @@ export const attachmentInstructions = `Images the user attached arrive with thei
 const TextTurnPart = Schema.TaggedStruct("text", { text: Schema.String });
 const ImageTurnPart = Schema.TaggedStruct("image", { url: Schema.String });
 const OtherTurnPart = Schema.TaggedStruct("other", {});
-const TurnPart = Schema.Union([TextTurnPart, ImageTurnPart, OtherTurnPart]);
+const TurnPart = Schema.Union([TextTurnPart, ImageTurnPart, OtherTurnPart]).pipe(
+  Schema.toTaggedUnion("_tag"),
+);
 type TurnPart = typeof TurnPart.Type;
 
 /**
@@ -350,7 +350,7 @@ const IncomingPart = Schema.Union([
       TextTurnPart,
       SchemaTransformation.transform({
         decode: (part) => ({ _tag: "text" as const, text: part.text }),
-        encode: (part) => ({ type: "text" as const, text: part._tag === "text" ? part.text : "" }),
+        encode: (part) => ({ type: "text" as const, text: part.text }),
       }),
     ),
   ),
@@ -359,10 +359,7 @@ const IncomingPart = Schema.Union([
       TextTurnPart,
       SchemaTransformation.transform({
         decode: (part) => ({ _tag: "text" as const, text: part.content }),
-        encode: (part) => ({
-          type: "text" as const,
-          content: part._tag === "text" ? part.text : "",
-        }),
+        encode: (part) => ({ type: "text" as const, content: part.text }),
       }),
     ),
   ),
@@ -376,7 +373,7 @@ const IncomingPart = Schema.Union([
         decode: (part) => ({ _tag: "image" as const, url: part.source.value }),
         encode: (part) => ({
           type: "image" as const,
-          source: { type: "url" as const, value: part._tag === "image" ? part.url : "" },
+          source: { type: "url" as const, value: part.url },
         }),
       }),
     ),
@@ -398,8 +395,12 @@ interface UserTurn {
 }
 
 const toTurn = (parts: readonly TurnPart[]): UserTurn => ({
-  text: parts.flatMap((part) => (part._tag === "text" ? [part.text] : [])).join(""),
-  imageUrls: parts.flatMap((part) => (part._tag === "image" ? [part.url] : [])),
+  text: parts
+    .flatMap(TurnPart.match({ text: ({ text }) => [text], image: () => [], other: () => [] }))
+    .join(""),
+  imageUrls: parts.flatMap(
+    TurnPart.match({ text: () => [], image: ({ url }) => [url], other: () => [] }),
+  ),
 });
 
 const Content = Schema.Union([
@@ -3380,10 +3381,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   for (const { sessionId, runId } of yield* execution.retryingSessions())
     yield* Effect.forkScoped(
       providerRetries.awaitRun(runId).pipe(
-        Effect.flatMap((outcome) =>
-          outcome._tag === "Cancelled"
-            ? Effect.void
-            : Effect.sync(() => wakeNotifications(sessionId)),
+        Effect.flatMap(
+          Match.valueTags({
+            Cancelled: () => Effect.void,
+            Retry: () => Effect.sync(() => wakeNotifications(sessionId)),
+          }),
         ),
         Effect.catch(logFailure("Restarted Goal continuation deferred")),
       ),

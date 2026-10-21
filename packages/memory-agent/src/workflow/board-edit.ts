@@ -1,5 +1,5 @@
 import { Effect, Schema, Struct, type Types } from "effect";
-import { CardRisk, cardContractKeys, type BoardAuthor, type CardStatus } from "./card.ts";
+import { BoardAuthor, CardRisk, cardContractKeys, type CardStatus } from "./card.ts";
 import {
   notStartedStatus,
   validatePlanDependencies,
@@ -53,7 +53,7 @@ export const BoardEdit = Schema.Union([
   }),
   Schema.TaggedStruct("MoveCard", { planVersion: Schema.Int, cardId: Schema.String, index: Index }),
   Schema.TaggedStruct("CancelCard", { planVersion: Schema.Int, cardId: Schema.String }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 export type BoardEdit = typeof BoardEdit.Type;
 
 /** What a user asked of an executing card; the orchestrator settles it. */
@@ -107,14 +107,11 @@ export type BoardEditPlan =
   | { readonly _tag: "Request"; readonly cardId: string; readonly change: UserChange };
 
 /** Executing cards are the orchestrator's; a user change to one waits as a request. */
-const waitsForOrchestrator = (author: BoardAuthor, status: CardStatus) => {
-  switch (author._tag) {
-    case "User":
-      return status === "in_progress";
-    case "Orchestrator":
-      return false;
-  }
-};
+const waitsForOrchestrator = (author: BoardAuthor, status: CardStatus) =>
+  BoardAuthor.match(author, {
+    User: () => status === "in_progress",
+    Orchestrator: () => false,
+  });
 
 /** A patched contract field: absent keeps it, null clears it. */
 const field = <A>(current: A | undefined, next: A | null | undefined) =>
@@ -183,54 +180,49 @@ export const planBoardEdit = Effect.fnUntraced(function* (
     yield* validatePlanDependencies(steps);
     return { _tag: "Apply" as const, plan: { ...plan, steps, version: plan.version + 1 }, detail };
   });
-  switch (edit._tag) {
-    case "AddCard": {
+  const changeCard = Effect.fnUntraced(function* (cardId: string, change: UserChange) {
+    const card = plan.steps.find((step) => step.id === cardId);
+    if (card === undefined) return yield* BoardEditRefused.make({ reason: "card_missing" });
+    if (card.status === "done") return yield* BoardEditRefused.make({ reason: "card_finished" });
+    if (waitsForOrchestrator(author, card.status)) {
+      // A request is checked now, so the orchestrator never receives a change it cannot apply.
+      yield* UserChange.match(change, {
+        Edit: ({ patch }) => validatePlanDependencies(replace(plan.steps, patched(card, patch))),
+        Cancel: () => Effect.void,
+      });
+      return { _tag: "Request" as const, cardId: card.id, change };
+    }
+    return yield* UserChange.match(change, {
+      Edit: ({ patch }) =>
+        applied(replace(plan.steps, patched(card, patch)), `card ${card.id} edited`),
+      Cancel: () =>
+        applied(
+          plan.steps.filter((step) => step.id !== card.id),
+          `card ${card.id} cancelled`,
+        ),
+    });
+  });
+  return yield* BoardEdit.match(edit, {
+    AddCard: Effect.fnUntraced(function* ({ card: draft, index }) {
       const card: PlanStep = {
-        ...edit.card,
+        ...draft,
         id: newCardId,
         ruleRefs: [],
         status: "backlog",
         evidence: [],
       };
       const steps = [...plan.steps];
-      steps.splice(Math.min(edit.index ?? steps.length, steps.length), 0, card);
+      steps.splice(Math.min(index ?? steps.length, steps.length), 0, card);
       return yield* applied(replace(steps, card), `card ${newCardId} added`);
-    }
-    case "MoveCard": {
-      const from = plan.steps.findIndex((step) => step.id === edit.cardId);
+    }),
+    MoveCard: Effect.fnUntraced(function* ({ cardId, index }) {
+      const from = plan.steps.findIndex((step) => step.id === cardId);
       if (from < 0) return yield* BoardEditRefused.make({ reason: "card_missing" });
-      return yield* applied(
-        moved(plan.steps, from, edit.index),
-        `card ${edit.cardId} moved to ${edit.index + 1}`,
-      );
-    }
-    case "EditCard":
-    case "CancelCard": {
-      const card = plan.steps.find((step) => step.id === edit.cardId);
-      if (card === undefined) return yield* BoardEditRefused.make({ reason: "card_missing" });
-      if (card.status === "done") return yield* BoardEditRefused.make({ reason: "card_finished" });
-      const change: UserChange =
-        edit._tag === "EditCard" ? { _tag: "Edit", patch: edit.patch } : { _tag: "Cancel" };
-      if (waitsForOrchestrator(author, card.status)) {
-        // A request is checked now, so the orchestrator never receives a change it cannot apply.
-        if (change._tag === "Edit")
-          yield* validatePlanDependencies(replace(plan.steps, patched(card, change.patch)));
-        return { _tag: "Request" as const, cardId: card.id, change };
-      }
-      switch (change._tag) {
-        case "Edit":
-          return yield* applied(
-            replace(plan.steps, patched(card, change.patch)),
-            `card ${card.id} edited`,
-          );
-        case "Cancel":
-          return yield* applied(
-            plan.steps.filter((step) => step.id !== card.id),
-            `card ${card.id} cancelled`,
-          );
-      }
-    }
-  }
+      return yield* applied(moved(plan.steps, from, index), `card ${cardId} moved to ${index + 1}`);
+    }),
+    EditCard: ({ cardId, patch }) => changeCard(cardId, { _tag: "Edit", patch }),
+    CancelCard: ({ cardId }) => changeCard(cardId, { _tag: "Cancel" }),
+  });
 });
 
 /**

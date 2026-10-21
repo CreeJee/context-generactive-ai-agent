@@ -1,6 +1,17 @@
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import { DateTime, Clock, Context, Crypto, Effect, Layer, Option, Predicate, Schema } from "effect";
+import {
+  DateTime,
+  Clock,
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { evaluateWorkflowAction, WorkflowActionReason } from "./actions.ts";
@@ -1269,37 +1280,37 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const cardId = `card-${(yield* crypto.randomUUIDv4()).slice(0, 8)}`;
             const planned = yield* planBoardEdit(current.plan, edit, author, cardId);
             const now = nowIso();
-            switch (planned._tag) {
-              case "Apply": {
+            return yield* Match.valueTags(planned, {
+              Apply: Effect.fnUntraced(function* ({ plan, detail }) {
                 const next: WorkflowState = {
                   ...current,
-                  plan: { ...planned.plan, updatedAt: now },
-                  ledger: [...current.ledger, event(current, "board_updated", planned.detail)],
+                  plan: { ...plan, updatedAt: now },
+                  ledger: [...current.ledger, event(current, "board_updated", detail)],
                 };
                 return { _tag: "Applied" as const, state: yield* save(sessionId, next, author) };
-              }
-              case "Request": {
-                const changeJson = yield* encodeChange(planned.change);
+              }),
+              Request: Effect.fnUntraced(function* ({ cardId, change }) {
+                const changeJson = yield* encodeChange(change);
                 const inserted = yield* sql<{
                   readonly id: number;
                 }>`INSERT INTO board_change_requests
                   (session_id, goal_instance_id, card_id, plan_version, change_json, status, created_at)
                   VALUES (${sessionId},
                     (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
-                    ${planned.cardId}, ${edit.planVersion}, ${changeJson}, 'pending', ${now})
+                    ${cardId}, ${edit.planVersion}, ${changeJson}, 'pending', ${now})
                   RETURNING id`;
                 const request: UserChangeRequest = {
                   id: Number(inserted[0]?.id),
-                  cardId: planned.cardId,
+                  cardId,
                   planVersion: edit.planVersion,
-                  change: planned.change,
+                  change,
                   status: "pending",
                   reason: null,
                   createdAt: now,
                 };
                 return { _tag: "Requested" as const, request };
-              }
-            }
+              }),
+            });
           }),
         ),
 

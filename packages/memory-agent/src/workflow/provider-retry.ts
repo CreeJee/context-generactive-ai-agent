@@ -6,6 +6,7 @@ import {
   Effect,
   Function as EffectFunction,
   Layer,
+  Predicate,
   Random,
   Result,
   Schema,
@@ -233,7 +234,7 @@ const make = Effect.gen(function* () {
         const pending = (yield* stored(true)).filter((entry) => entry.runId === runId);
         for (const payload of pending) {
           const outcome = yield* join(payload);
-          if (outcome._tag === "Cancelled") return outcome;
+          if (Predicate.isTagged(outcome, "Cancelled")) return outcome;
         }
         return { _tag: "Retry" } as const;
       }),

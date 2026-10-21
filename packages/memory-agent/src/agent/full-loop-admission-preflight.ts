@@ -8,51 +8,48 @@ const TransportObject = Schema.declare<object>(
   (value): value is object => value !== null && typeof value === "object",
 );
 
+const FullLoopAdmissionReason = Schema.Union([
+  Schema.TaggedStruct("NonFinite", {}),
+  Schema.TaggedStruct("NonPortable", {}),
+  Schema.TaggedStruct("Cyclic", {}),
+  Schema.TaggedStruct("UnsupportedPrototype", {}),
+  Schema.TaggedStruct("SymbolMember", {}),
+  Schema.TaggedStruct("Accessor", {}),
+  Schema.TaggedStruct("NonEnumerable", {}),
+  Schema.TaggedStruct("MissingMember", {}),
+  Schema.TaggedStruct("NotCallable", {}),
+  Schema.TaggedStruct("UnsupportedTool", {}),
+  /** A resumed turn without owner persistence to validate the resumed responses. */
+  Schema.TaggedStruct("ContinuationWithoutPersistence", {}),
+  /** A middleware requires a capability no other middleware provides. */
+  Schema.TaggedStruct("UnprovidedCapability", {}),
+  /** A middleware member is not a hook the worker can relay. */
+  Schema.TaggedStruct("UnsupportedMiddlewareMember", {}),
+  /** The turn, an interrupt definition or a tool description did not clone for the worker. */
+  Schema.TaggedStruct("NotCloneable", {}),
+]).pipe(Schema.toTaggedUnion("_tag"));
+
 export class FullLoopAdmissionRejected extends Schema.TaggedError<FullLoopAdmissionRejected>()(
   "FullLoopAdmissionRejected",
   {
     member: Schema.String,
-    reason: Schema.Union([
-      Schema.TaggedStruct("NonFinite", {}),
-      Schema.TaggedStruct("NonPortable", {}),
-      Schema.TaggedStruct("Cyclic", {}),
-      Schema.TaggedStruct("UnsupportedPrototype", {}),
-      Schema.TaggedStruct("SymbolMember", {}),
-      Schema.TaggedStruct("Accessor", {}),
-      Schema.TaggedStruct("NonEnumerable", {}),
-      Schema.TaggedStruct("MissingMember", {}),
-      Schema.TaggedStruct("NotCallable", {}),
-      Schema.TaggedStruct("UnsupportedTool", {}),
-      /** A resumed turn without owner persistence to validate the resumed responses. */
-      Schema.TaggedStruct("ContinuationWithoutPersistence", {}),
-      /** A middleware requires a capability no other middleware provides. */
-      Schema.TaggedStruct("UnprovidedCapability", {}),
-      /** A middleware member is not a hook the worker can relay. */
-      Schema.TaggedStruct("UnsupportedMiddlewareMember", {}),
-      /** The turn, an interrupt definition or a tool description did not clone for the worker. */
-      Schema.TaggedStruct("NotCloneable", {}),
-    ]),
+    reason: FullLoopAdmissionReason,
   },
 ) {
   override get message() {
-    switch (this.reason._tag) {
-      case "Accessor":
-        return `Unsupported owner snapshot accessor: ${this.member}`;
-      case "MissingMember":
-        return `Missing owner member: ${this.member}`;
-      case "NotCallable":
-        return `Unsupported owner callable: ${this.member}`;
-      case "UnsupportedTool":
-        return `Unsupported owner tool grant capability: ${this.member}`;
-      case "ContinuationWithoutPersistence":
-        return "Worker continuation requires owner persistence";
-      case "UnprovidedCapability":
-        return `Unprovided owner middleware capability: ${this.member}`;
-      case "UnsupportedMiddlewareMember":
-        return `Unsupported worker middleware member: ${this.member}`;
-      default:
-        return `Unsupported worker member: ${this.member} (${this.reason._tag})`;
-    }
+    return FullLoopAdmissionReason.matchOrElse(
+      this.reason,
+      {
+        Accessor: () => `Unsupported owner snapshot accessor: ${this.member}`,
+        MissingMember: () => `Missing owner member: ${this.member}`,
+        NotCallable: () => `Unsupported owner callable: ${this.member}`,
+        UnsupportedTool: () => `Unsupported owner tool grant capability: ${this.member}`,
+        ContinuationWithoutPersistence: () => "Worker continuation requires owner persistence",
+        UnprovidedCapability: () => `Unprovided owner middleware capability: ${this.member}`,
+        UnsupportedMiddlewareMember: () => `Unsupported worker middleware member: ${this.member}`,
+      },
+      (other) => `Unsupported worker member: ${this.member} (${other._tag})`,
+    );
   }
 }
 

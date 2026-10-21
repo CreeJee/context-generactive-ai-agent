@@ -6,7 +6,10 @@ import {
   Fiber,
   FiberMap,
   Layer,
+  Match,
   Option,
+  Predicate,
+  Result,
   Schema,
   Scope,
 } from "effect";
@@ -76,13 +79,13 @@ const engineFailure = (
 
 const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): unknown => {
   const result = Schema.encodeUnknownResult(jsonExit(owner))(exit);
-  if (result._tag === "Failure") throw engineFailure("exit.encode", "codec", result.failure);
+  if (Result.isFailure(result)) throw engineFailure("exit.encode", "codec", result.failure);
   return result.success;
 };
 
 const decodeExit = (owner: ExitSchemaOwner, encoded: unknown): Exit.Exit<unknown, unknown> => {
   const result = Schema.decodeUnknownResult(jsonExit(owner))(encoded);
-  if (result._tag === "Failure") throw engineFailure("exit.decode", "codec", result.failure);
+  if (Result.isFailure(result)) throw engineFailure("exit.decode", "codec", result.failure);
   return result.success as Exit.Exit<unknown, unknown>;
 };
 
@@ -93,13 +96,13 @@ const encodedExit = Schema.toCodecJson(
 );
 const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): unknown => {
   const result = Schema.encodeUnknownResult(encodedExit)(exit);
-  if (result._tag === "Failure")
+  if (Result.isFailure(result))
     throw engineFailure("deferred.exit.encode", "codec", result.failure);
   return result.success;
 };
 const decodeEncodedExit = (encoded: unknown): Exit.Exit<unknown, unknown> => {
   const result = Schema.decodeUnknownResult(encodedExit)(encoded);
-  if (result._tag === "Failure")
+  if (Result.isFailure(result))
     throw engineFailure("deferred.exit.decode", "codec", result.failure);
   return result.success;
 };
@@ -107,26 +110,23 @@ const decodeEncodedExit = (encoded: unknown): Exit.Exit<unknown, unknown> => {
 const encodeResult = (
   owner: ExitSchemaOwner,
   result: Workflow.Result<unknown, unknown>,
-): StoredWorkflowResult => {
-  switch (result._tag) {
-    case "Suspended":
-      return { _tag: "Suspended" };
-    case "Complete":
-      return { _tag: "Complete", exit: encodeExit(owner, result.exit) };
-  }
-};
+): StoredWorkflowResult =>
+  Match.valueTags(result, {
+    Suspended: (): StoredWorkflowResult => ({ _tag: "Suspended" }),
+    Complete: ({ exit }): StoredWorkflowResult => ({
+      _tag: "Complete",
+      exit: encodeExit(owner, exit),
+    }),
+  });
 
 const decodeResult = (
   owner: ExitSchemaOwner,
   result: StoredWorkflowResult,
-): Workflow.Result<unknown, unknown> => {
-  switch (result._tag) {
-    case "Suspended":
-      return Workflow.Suspended.make({});
-    case "Complete":
-      return new Workflow.Complete({ exit: decodeExit(owner, result.exit) });
-  }
-};
+): Workflow.Result<unknown, unknown> =>
+  Match.valueTags(result, {
+    Suspended: () => Workflow.Suspended.make({}),
+    Complete: ({ exit }) => new Workflow.Complete({ exit: decodeExit(owner, exit) }),
+  });
 
 /** A storage step the engine cannot recover from; encoding throws stay with their operation. */
 const defect = <A, E>(operation: string, evaluate: () => Effect.Effect<A, E>): Effect.Effect<A> =>
@@ -163,7 +163,7 @@ const makeEngine = Effect.gen(function* () {
   ): Effect.fn.Return<LiveExecution> {
     const current = executions.get(executionId);
     if (current !== undefined) {
-      if (current.workflow._tag !== workflow._tag)
+      if (!Predicate.isTagged(current.workflow, workflow._tag))
         return yield* Effect.die(
           engineFailure("execution.lookup", "execution_conflict", executionId),
         );
@@ -226,7 +226,7 @@ const makeEngine = Effect.gen(function* () {
           yield* defect("execution.result", () =>
             storage.setResult(executionId, encodeResult(workflow, result)),
           );
-          if (result._tag !== "Complete") return;
+          if (!Predicate.isTagged(result, "Complete")) return;
           const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
           yield* Effect.forEach(
             cancelled,
@@ -236,7 +236,8 @@ const makeEngine = Effect.gen(function* () {
         }),
       ),
       Effect.tap((result) => {
-        if (state.parentExecutionId === undefined || result._tag !== "Complete") return Effect.void;
+        if (state.parentExecutionId === undefined || !Predicate.isTagged(result, "Complete"))
+          return Effect.void;
         const parent = executions.get(state.parentExecutionId);
         return parent === undefined
           ? Effect.void
@@ -329,7 +330,7 @@ const makeEngine = Effect.gen(function* () {
             parentExecutionId: options.parent?.executionId,
           }),
         );
-        if (admitted.result?._tag === "Complete") {
+        if (Predicate.isTagged(admitted.result, "Complete")) {
           return (
             options.discard ? undefined : decodeResult(workflow, admitted.result)
           ) as Discard extends true ? void : Workflow.Result<unknown, unknown>;
@@ -396,7 +397,7 @@ const makeEngine = Effect.gen(function* () {
       const previous = yield* defect("activity.read", () =>
         storage.activityResult(instance.executionId, activity.name, attempt),
       );
-      if (Option.isSome(previous) && previous.value._tag === "Complete")
+      if (Option.isSome(previous) && Predicate.isTagged(previous.value, "Complete"))
         return new Workflow.Complete({ exit: decodeEncodedExit(previous.value.exit) });
 
       const activityScope = yield* Scope.fork(ownerScope);
@@ -409,7 +410,7 @@ const makeEngine = Effect.gen(function* () {
       const result = yield* Workflow.intoResult(activity.executeEncoded).pipe(
         Effect.provideService(WorkflowEngine.WorkflowInstance, activityInstance),
       );
-      if (result._tag === "Complete") {
+      if (Predicate.isTagged(result, "Complete")) {
         yield* defect("activity.result", () =>
           storage.setActivityResult(
             instance.executionId,

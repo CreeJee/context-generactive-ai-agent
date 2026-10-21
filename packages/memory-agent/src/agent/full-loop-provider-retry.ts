@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Option, Schema } from "effect";
+import { Cause, Clock, Effect, Match, Option, Result, Schema } from "effect";
 import { SubscriptionStreamFailed } from "../providers/subscription-adapter.ts";
 import { nativePromise } from "../runtime/native-effect.ts";
 import type { ProviderRetries, ProviderRetryStage } from "../workflow/provider-retry.ts";
@@ -32,22 +32,19 @@ export interface OwnerModelStream {
  */
 export const requestNotSentStage = (
   error: SubscriptionStreamFailed,
-): Option.Option<ProviderRetryStage> => {
-  switch (error.reason._tag) {
-    case "RequestNotSent":
-      return Option.some(error.reason.stage);
-    case "ProviderRejected":
-    case "ProviderStatusRejected":
-    case "ResponseInterrupted":
-    case "RequestOutcomeUnknown":
-    case "InvalidReasoning":
-    case "InvalidToolCall":
-    case "InvalidBlockEnd":
-    case "IncompleteBlocks":
-    case "EncryptedReasoningLimit":
-      return Option.none();
-  }
-};
+): Option.Option<ProviderRetryStage> =>
+  Match.valueTags(error.reason, {
+    RequestNotSent: ({ stage }) => Option.some(stage),
+    ProviderRejected: () => Option.none(),
+    ProviderStatusRejected: () => Option.none(),
+    ResponseInterrupted: () => Option.none(),
+    RequestOutcomeUnknown: () => Option.none(),
+    InvalidReasoning: () => Option.none(),
+    InvalidToolCall: () => Option.none(),
+    InvalidBlockEnd: () => Option.none(),
+    IncompleteBlocks: () => Option.none(),
+    EncryptedReasoningLimit: () => Option.none(),
+  });
 
 /**
  * Pulls the next chunk of an owner model stream. When the provider request was never sent and
@@ -72,7 +69,7 @@ export const pullModelChunk = Effect.fnUntraced(function* <E>(
     const pulled = yield* admit(nativePromise(() => Promise.resolve(stream.iterator.next()))).pipe(
       Effect.result,
     );
-    if (pulled._tag === "Success") {
+    if (Result.isSuccess(pulled)) {
       const next = pulled.success;
       if (next.done !== true && next.value?.type === "RUN_STARTED") {
         if (skipStart) {
@@ -93,14 +90,14 @@ export const pullModelChunk = Effect.fnUntraced(function* <E>(
     retry += 1;
     firstFailedAt ??= yield* Clock.currentTimeMillis;
     const outcome = yield* retries.wait({ retry, stage: stage.value, firstFailedAt }, signal);
-    switch (outcome._tag) {
-      case "Retry":
-        stream.iterator = stream.open();
-        skipStart = true;
-        continue;
-      case "Exhausted":
-      case "Cancelled":
-        return yield* Effect.fail(failure);
-    }
+    yield* Match.valueTags(outcome, {
+      Retry: () =>
+        Effect.sync(() => {
+          stream.iterator = stream.open();
+          skipStart = true;
+        }),
+      Exhausted: () => Effect.fail(failure),
+      Cancelled: () => Effect.fail(failure),
+    });
   }
 });

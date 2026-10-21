@@ -68,7 +68,7 @@ const HandoffState = Schema.Union([
     /** Bounded context earlier versions stored for the cut; no longer sent. */
     context: Schema.optional(Schema.String),
   }),
-]);
+]).pipe(Schema.toTaggedUnion("_tag"));
 type HandoffState = typeof HandoffState.Type;
 const decodeState = Schema.decodeUnknownOption(HandoffState);
 const StoredModel = Schema.Struct({ tanstack: Schema.Struct({ model: Schema.String }) });
@@ -202,6 +202,24 @@ export const modelHandoffHistoryEffect = (options: ModelHandoffOptions) =>
         reason: { _tag: "WriteStateFailed" },
         evaluate: () => options.metadata.set(modelHandoffNamespace, options.threadId, state),
       });
+    /** A handoff saved by an earlier version anchors on a legacy fingerprint; it moves to the new one. */
+    const migrate = Effect.fnUntraced(function* (
+      saved: Extract<HandoffState, { readonly _tag: "handoff" }>,
+    ) {
+      if (saved.anchor.startsWith("v2:")) return saved;
+      const stored = yield* readHistory();
+      const index = stored.findIndex((message) => legacyFingerprint(message) === saved.anchor);
+      const boundary = stored[index];
+      if (!isTruthy(boundary)) return saved;
+      const migrated: HandoffState = {
+        ...saved,
+        through: index + 1,
+        anchor: fingerprint(boundary),
+        anchorId: boundary.id,
+      };
+      yield* writeState(migrated);
+      return migrated;
+    });
     const prepare = Effect.gen(function* () {
       const saved = Option.getOrUndefined(
         decodeState(
@@ -211,21 +229,11 @@ export const modelHandoffHistoryEffect = (options: ModelHandoffOptions) =>
           }),
         ),
       );
-      if (saved?.target === options.target) {
-        if (saved._tag === "baseline" || saved.anchor.startsWith("v2:")) return saved;
-        const stored = yield* readHistory();
-        const index = stored.findIndex((message) => legacyFingerprint(message) === saved.anchor);
-        const boundary = stored[index];
-        if (!isTruthy(boundary)) return saved;
-        const migrated: HandoffState = {
-          ...saved,
-          through: index + 1,
-          anchor: fingerprint(boundary),
-          anchorId: boundary.id,
-        };
-        yield* writeState(migrated);
-        return migrated;
-      }
+      if (saved?.target === options.target)
+        return yield* HandoffState.match(saved, {
+          baseline: (baseline) => Effect.succeed(baseline),
+          handoff: migrate,
+        });
       const stored = yield* readHistory();
       const previousModel = stored
         .filter((message) => message.role === "assistant")
@@ -254,27 +262,27 @@ export const modelHandoffHistoryEffect = (options: ModelHandoffOptions) =>
     return (messages: readonly ModelMessage[]) =>
       Effect.gen(function* () {
         const state = yield* prepared;
-        switch (state._tag) {
-          case "baseline":
-            return null;
-          case "handoff": {
-            const recorded = yield* options.toolResultIds(answeredToolCalls(messages)).pipe(
-              Effect.mapError((cause) =>
-                ModelHandoffFailed.make({
-                  reason: { _tag: "ReadMemoryFailed" },
-                  message: "Model handoff could not read recorded tool results",
-                  cause,
-                }),
-              ),
-            );
-            return yield* Effect.try({
-              try: () => handoffHistory(messages, state, (id) => recorded.get(id) ?? null),
-              catch: (cause) => {
-                if (Schema.is(ModelHandoffFailed)(cause)) return cause;
-                throw cause;
-              },
-            });
-          }
-        }
+        return yield* HandoffState.match(state, {
+          baseline: () => Effect.succeed(null),
+          handoff: (handoff) =>
+            Effect.gen(function* () {
+              const recorded = yield* options.toolResultIds(answeredToolCalls(messages)).pipe(
+                Effect.mapError((cause) =>
+                  ModelHandoffFailed.make({
+                    reason: { _tag: "ReadMemoryFailed" },
+                    message: "Model handoff could not read recorded tool results",
+                    cause,
+                  }),
+                ),
+              );
+              return yield* Effect.try({
+                try: () => handoffHistory(messages, handoff, (id) => recorded.get(id) ?? null),
+                catch: (cause) => {
+                  if (Schema.is(ModelHandoffFailed)(cause)) return cause;
+                  throw cause;
+                },
+              });
+            }),
+        });
       });
   });
