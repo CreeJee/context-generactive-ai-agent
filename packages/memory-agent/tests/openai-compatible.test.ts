@@ -645,6 +645,16 @@ describe("OpenAI compatible settings", () => {
             expect(events).toContainEqual(
               expect.objectContaining({ type: "TEXT_MESSAGE_CONTENT", delta: "The answer is 42." }),
             );
+            // A bound run's durable log refuses lifecycle events named after another run.
+            expect(
+              new Set(
+                events.flatMap((event) =>
+                  event.type === "RUN_STARTED" || event.type === "RUN_FINISHED"
+                    ? [event.runId]
+                    : [],
+                ),
+              ),
+            ).toEqual(new Set(["reasoning-run"]));
             const response = yield* sdkCall(() =>
               reconstructChat(persistence, new Request("http://localhost/chat?threadId=reasoning")),
             );
