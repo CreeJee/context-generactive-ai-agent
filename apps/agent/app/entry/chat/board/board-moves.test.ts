@@ -2,6 +2,7 @@ import { BoardAuthor } from "memory-agent";
 import { describe, expect, test } from "vite-plus/test";
 import type { BoardView } from "../../api";
 import {
+  boardItem,
   DropOutcome,
   dropOutcome,
   PendingMove,
@@ -85,12 +86,17 @@ describe("board drops", () => {
 });
 
 describe("pending board moves", () => {
+  const items = cards.map((entry) => boardItem("session-1", entry));
+  const keyOf = (id: string) => `session-1:${id}`;
+
   test("shows a move while it is saved, and the server's board once it is refused", () => {
-    const moved = withPending(cards, PendingMove.Status({ cardId: "d", to: "ready" }));
-    expect(moved.find((entry) => entry.card.id === "d")?.card.status).toBe("ready");
-    const reordered = withPending(cards, PendingMove.Order({ cardId: "d", index: 0 }));
-    expect(reordered.map((entry) => entry.card.id)).toEqual(["d", "a", "b", "c", "e"]);
+    const moved = withPending(items, PendingMove.Status({ key: keyOf("d"), to: "ready" }));
+    expect(moved.find((item) => item.card.id === "d")?.card.status).toBe("ready");
+    const reordered = withPending(items, PendingMove.Order({ key: keyOf("d"), index: 0 }));
+    expect(reordered.map((item) => item.card.id)).toEqual(["d", "a", "b", "c", "e"]);
+    // A card leaving for another Plan stays where it is until the server has moved it.
+    expect(withPending(items, PendingMove.Leaving({ key: keyOf("d") }))).toBe(items);
     // A refused mutation is no longer pending: the board is the server's again.
-    expect(withPending(cards, null)).toBe(cards);
+    expect(withPending(items, null)).toBe(items);
   });
 });

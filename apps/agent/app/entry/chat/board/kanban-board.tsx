@@ -30,17 +30,17 @@ import { cn } from "cn";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { Button } from "../../../components/ui/button";
-import type { BoardView, CardStatus } from "../../api";
+import type { CardStatus } from "../../api";
 import {
   boardColumns,
   cardStatusLabels,
   DropOutcome,
   dropOutcome,
+  foreignCardDrop,
+  type BoardItem,
   type DropContext,
 } from "./board-moves";
 import { CardFace, StatusIcon, type CardSignals } from "./card-face";
-
-type BoardCard = BoardView["cards"][number];
 
 declare module "react" {
   /** Dynamic values the board's classes read: `w-(--board-progress)`, `transform-(--…)`. */
@@ -132,12 +132,13 @@ const neighbor = (
 /**
  * The kanban board: every status column side by side, each scrolling on its own under a fixed
  * header. Cards are dragged with the mouse, a touch hold or the keyboard; what a drop would do is
- * shown while dragging, and the parent carries it out.
+ * shown while dragging, and the parent carries it out. The cards may come from several Plans; a
+ * card is keyed by its conversation and id, and takes a place only among its own Plan's cards.
  */
 export function KanbanBoard({
   cards,
   signalsOf,
-  context,
+  contextOf,
   disabled,
   busy,
   onOpen,
@@ -147,31 +148,32 @@ export function KanbanBoard({
   onRefused,
   onDraggingChange,
 }: {
-  /** The cards as the board shows them, in Plan order. */
-  readonly cards: readonly BoardCard[];
-  readonly signalsOf: (cardId: string) => CardSignals;
-  readonly context: DropContext;
+  /** The cards as the board shows them: each Plan's cards in Plan order, Plans one after another. */
+  readonly cards: readonly BoardItem[];
+  readonly signalsOf: (item: BoardItem) => CardSignals;
+  /** The drop rules of the card's own Plan. */
+  readonly contextOf: (item: BoardItem) => DropContext;
   /** Nothing can be dragged, as when the page only reads the session. */
   readonly disabled: boolean;
   /** A request is being sent; cards wait for its answer before they can be dragged again. */
   readonly busy: boolean;
-  readonly onOpen: (cardId: string) => void;
-  /** The card takes the place of `at` in its column. */
-  readonly onReorder: (cardId: string, at: string) => void;
+  readonly onOpen: (item: BoardItem) => void;
+  /** The card takes the place of `at`, a card of its own Plan in its column. */
+  readonly onReorder: (item: BoardItem, at: BoardItem) => void;
   /** Asks the server to hold, release or requeue the card; `lands` is where it is expected. */
   readonly onSend: (
-    cardId: string,
+    item: BoardItem,
     intent: "Hold" | "Release" | "Requeue",
     lands: CardStatus,
   ) => void;
-  readonly onAskChange: (cardId: string) => void;
+  readonly onAskChange: (item: BoardItem) => void;
   readonly onRefused: (reason: string) => void;
   /** Whether a card is picked up, so Esc then only puts it back. */
   readonly onDraggingChange: (dragging: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useAtom(collapsedColumnsAtom);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [overStatus, setOverStatus] = useState<CardStatus | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [overId, setOverId] = useState<UniqueIdentifier | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
@@ -179,21 +181,38 @@ export function KanbanBoard({
   );
 
   const byStatus = (status: CardStatus) => cards.filter(({ card }) => card.status === status);
-  const entryOf = (id: UniqueIdentifier) => cards.find(({ card }) => card.id === id) ?? null;
-  const titleOf = (id: UniqueIdentifier) => entryOf(id)?.card.title ?? String(id);
+  const itemOf = (id: UniqueIdentifier) => cards.find((item) => item.key === id) ?? null;
+  const titleOf = (id: UniqueIdentifier) => itemOf(id)?.card.title ?? String(id);
   const statusOf = (id: UniqueIdentifier): CardStatus | null =>
-    boardColumns.find((status) => columnId(status) === id) ?? entryOf(id)?.card.status ?? null;
-  const active = activeId === null ? null : entryOf(activeId);
+    boardColumns.find((status) => columnId(status) === id) ?? itemOf(id)?.card.status ?? null;
+  const active = activeKey === null ? null : itemOf(activeKey);
+  /** What dropping the picked-up card on the column would do, before where in it is known. */
   const outcomeOn = (status: CardStatus): DropOutcome | null =>
-    active === null ? null : dropOutcome(active.card, status, context);
-  const overOutcome = overStatus === null ? null : outcomeOn(overStatus);
+    active === null ? null : dropOutcome(active.card, status, contextOf(active));
+  /** What dropping `item` on `over` (a column or a card) would do. */
+  const outcomeFor = (item: BoardItem, over: UniqueIdentifier): DropOutcome | null => {
+    const status = statusOf(over);
+    if (status === null) return null;
+    const base = dropOutcome(item.card, status, contextOf(item));
+    const target = itemOf(over);
+    return DropOutcome.$is("Reorder")(base) &&
+      target !== null &&
+      target.sessionId !== item.sessionId
+      ? foreignCardDrop()
+      : base;
+  };
+  const overStatus = overId === null ? null : statusOf(overId);
+  const overOutcome = active === null || overId === null ? null : outcomeFor(active, overId);
   const overRefused = DropOutcome.$is("Refused")(overOutcome);
 
   const describe = (id: UniqueIdentifier, over: UniqueIdentifier | null) => {
-    const card = entryOf(id)?.card;
+    const item = itemOf(id);
     const status = over === null ? null : statusOf(over);
-    if (card === undefined || status === null) return `${titleOf(id)} 카드가 놓을 곳 밖에 있어요.`;
-    return DropOutcome.$match(dropOutcome(card, status, context), {
+    const outcome = item === null || over === null ? null : outcomeFor(item, over);
+    if (item === null || status === null || outcome === null)
+      return `${titleOf(id)} 카드가 놓을 곳 밖에 있어요.`;
+    const { card } = item;
+    return DropOutcome.$match(outcome, {
       Reorder: () => `${card.title} 카드가 ${cardStatusLabels[status]} 열 안에 있어요.`,
       Send: ({ intent }) => `${card.title} 카드를 ${sendLabels[intent]}.`,
       AskChange: () => `${card.title} 카드는 진행 중이라 옮기지 않고 수정 요청을 남길 수 있어요.`,
@@ -211,29 +230,34 @@ export function KanbanBoard({
   };
 
   const finish = ({ active: dragged, over }: DragEndEvent) => {
-    setActiveId(null);
-    setOverStatus(null);
+    setActiveKey(null);
+    setOverId(null);
     onDraggingChange(false);
-    const entry = entryOf(dragged.id);
+    const item = itemOf(dragged.id);
     const to = over === null ? null : statusOf(over.id);
-    if (entry === null || over === null || to === null) return;
-    const { card } = entry;
-    return DropOutcome.$match(dropOutcome(card, to, context), {
+    const outcome = item === null || over === null ? null : outcomeFor(item, over.id);
+    if (item === null || over === null || to === null || outcome === null) return;
+    return DropOutcome.$match(outcome, {
       Reorder: () => {
-        const column = byStatus(to);
-        const target = over.id === columnId(to) ? column.at(-1)?.card.id : String(over.id);
-        if (target === undefined || target === card.id) return;
-        return onReorder(card.id, target);
+        // Dropped on the column itself: the card goes last among its own Plan's cards there.
+        const target =
+          over.id === columnId(to)
+            ? byStatus(to)
+                .filter((other) => other.sessionId === item.sessionId)
+                .at(-1)
+            : itemOf(over.id);
+        if (target === undefined || target === null || target.key === item.key) return;
+        return onReorder(item, target);
       },
-      Send: ({ intent, lands }) => onSend(card.id, intent, lands),
-      AskChange: () => onAskChange(card.id),
+      Send: ({ intent, lands }) => onSend(item, intent, lands),
+      AskChange: () => onAskChange(item),
       Refused: ({ reason }) => onRefused(reason),
     });
   };
 
-  const columnIds = boardColumns.map((status) => byStatus(status).map(({ card }) => card.id));
+  const columnKeys = boardColumns.map((status) => byStatus(status).map((item) => item.key));
   const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (activeId !== null) {
+    if (activeKey !== null) {
       // The board sits in a dialog, whose popup keeps arrow keys from reaching the document where
       // dnd-kit's keyboard sensor listens. Hand them over so a picked-up card moves.
       if (event.key.startsWith("Arrow")) {
@@ -247,7 +271,7 @@ export function KanbanBoard({
     if (!(event.target instanceof HTMLElement)) return;
     const current = event.target.dataset.boardCard;
     if (current === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
-    const next = neighbor(columnIds, current, event.key);
+    const next = neighbor(columnKeys, current, event.key);
     if (next === null) return;
     event.preventDefault();
     event.currentTarget
@@ -261,14 +285,14 @@ export function KanbanBoard({
       collisionDetection={collision}
       accessibility={{ announcements, screenReaderInstructions }}
       onDragStart={({ active: picked }) => {
-        setActiveId(String(picked.id));
+        setActiveKey(String(picked.id));
         onDraggingChange(true);
       }}
-      onDragOver={({ over }) => setOverStatus(over === null ? null : statusOf(over.id))}
+      onDragOver={({ over }) => setOverId(over === null ? null : over.id)}
       onDragEnd={finish}
       onDragCancel={() => {
-        setActiveId(null);
-        setOverStatus(null);
+        setActiveKey(null);
+        setOverId(null);
         onDraggingChange(false);
       }}
     >
@@ -295,20 +319,20 @@ export function KanbanBoard({
               status={status}
               count={entries.length}
               folded={folded}
-              outcome={outcomeOn(status)}
+              outcome={overStatus === status ? overOutcome : outcomeOn(status)}
               over={overStatus === status}
               onToggle={toggle}
             >
               <SortableContext
-                items={entries.map(({ card }) => card.id)}
+                items={entries.map((item) => item.key)}
                 strategy={verticalListSortingStrategy}
               >
-                {entries.map((entry) => (
+                {entries.map((item) => (
                   <SortableCard
-                    key={entry.card.id}
-                    entry={entry}
-                    signals={signalsOf(entry.card.id)}
-                    disabled={disabled || context.closed}
+                    key={item.key}
+                    item={item}
+                    signals={signalsOf(item)}
+                    disabled={disabled || contextOf(item).closed}
                     busy={busy}
                     onOpen={onOpen}
                   />
@@ -321,7 +345,7 @@ export function KanbanBoard({
       <DragOverlay dropAnimation={null}>
         {active !== null && (
           <div className="w-64 rotate-1 rounded-md border bg-card p-2.5 shadow-lg ring-1 ring-foreground/10">
-            <CardFace entry={active} signals={signalsOf(active.card.id)} />
+            <CardFace entry={active} signals={signalsOf(active)} />
             {overRefused && (
               <p className="mt-2 rounded-sm bg-destructive/10 px-2 py-1 text-2xs text-destructive">
                 {overOutcome.reason}
@@ -433,19 +457,19 @@ function BoardColumn({
 }
 
 function SortableCard({
-  entry,
+  item,
   signals,
   disabled,
   busy,
   onOpen,
 }: {
-  readonly entry: BoardCard;
+  readonly item: BoardItem;
   readonly signals: CardSignals;
   readonly disabled: boolean;
   readonly busy: boolean;
-  readonly onOpen: (cardId: string) => void;
+  readonly onOpen: (item: BoardItem) => void;
 }) {
-  const { card } = entry;
+  const { card } = item;
   const {
     attributes,
     listeners,
@@ -454,7 +478,7 @@ function SortableCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: card.id, disabled: disabled || busy });
+  } = useSortable({ id: item.key, disabled: disabled || busy });
   return (
     <div
       ref={setNodeRef}
@@ -469,11 +493,11 @@ function SortableCard({
     >
       <button
         type="button"
-        data-board-card={card.id}
+        data-board-card={item.key}
         className="min-w-0 flex-1 cursor-pointer rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => onOpen(card.id)}
+        onClick={() => onOpen(item)}
       >
-        <CardFace entry={entry} signals={signals} />
+        <CardFace entry={item} signals={signals} />
       </button>
       {!disabled && (
         <button

@@ -1,8 +1,38 @@
 import { Data, Function as EffectFunction } from "effect";
 import type { BoardView, CardStatus } from "../../api";
 
-type BoardCard = BoardView["cards"][number];
+export type BoardCard = BoardView["cards"][number];
 type PlanStep = BoardCard["card"];
+
+/** A card named by its conversation and card id: the `boardCard` query and the board's keys. */
+export interface BoardCardRef {
+  readonly sessionId: string;
+  readonly cardId: string;
+}
+
+/** Session ids are UUIDs, so the first colon splits the two. Card ids may hold any character. */
+export const boardCardKey = ({ sessionId, cardId }: BoardCardRef) => `${sessionId}:${cardId}`;
+export const parseBoardCardKey = (key: string): BoardCardRef | null => {
+  const at = key.indexOf(":");
+  return at < 0 ? null : { sessionId: key.slice(0, at), cardId: key.slice(at + 1) };
+};
+
+/**
+ * A card as a board page shows it: with its conversation, and a key unique across the
+ * conversations one board may show. Card ids repeat between Plans; keys do not.
+ */
+export interface BoardItem extends BoardCard {
+  readonly key: string;
+  readonly sessionId: string;
+}
+export const boardItem: {
+  (entry: BoardCard): (sessionId: string) => BoardItem;
+  (sessionId: string, entry: BoardCard): BoardItem;
+} = EffectFunction.dual(2, (sessionId: string, entry: BoardCard): BoardItem => ({
+  ...entry,
+  sessionId,
+  key: boardCardKey({ sessionId, cardId: entry.card.id }),
+}));
 
 export const cardStatusLabels: Readonly<Record<CardStatus, string>> = {
   backlog: "백로그",
@@ -119,13 +149,34 @@ export const dropOutcome: {
 } & typeof dropOutcomeBody = EffectFunction.dual(3, dropOutcomeBody);
 
 /**
+ * Dropping on another conversation's card: Plan order ranks cards inside their own Goal only, so
+ * the drop is refused and the card's peek offers the move to that conversation instead.
+ */
+export const foreignCardDrop = (): DropOutcome =>
+  refused("다른 대화의 카드와는 순서를 바꿀 수 없어요. 카드를 열어 다른 대화로 옮길 수 있어요.");
+
+/** Which card statuses can leave their Plan for another conversation's Plan. */
+const transferable: Readonly<Record<CardStatus, boolean>> = {
+  backlog: true,
+  ready: true,
+  blocked: true,
+  in_progress: false,
+  verify: false,
+  human_decision: false,
+  done: false,
+};
+export const canTransfer = (card: PlanStep) => transferable[card.status];
+
+/**
  * A request sent to the server and not answered yet. The board shows the card where it is expected
  * to land, marked as requested; the server's board then draws it where it really is.
  */
 export type PendingMove = Data.TaggedEnum<{
-  Status: { readonly cardId: string; readonly to: CardStatus };
-  /** `index` is the card's new place in the Plan. */
-  Order: { readonly cardId: string; readonly index: number };
+  Status: { readonly key: string; readonly to: CardStatus };
+  /** `index` is the card's new place among the shown cards. */
+  Order: { readonly key: string; readonly index: number };
+  /** The card is leaving for another conversation's Plan; it stays where it is until it has. */
+  Leaving: { readonly key: string };
 }>;
 export const PendingMove = Data.taggedEnum<PendingMove>();
 
@@ -134,25 +185,26 @@ export const PendingMove = Data.taggedEnum<PendingMove>();
  * no longer pending, so the card goes back to where the server has it.
  */
 function withPendingBody(
-  cards: readonly BoardCard[],
+  items: readonly BoardItem[],
   pending: PendingMove | null,
-): readonly BoardCard[] {
-  if (pending === null) return cards;
+): readonly BoardItem[] {
+  if (pending === null) return items;
   return PendingMove.$match(pending, {
-    Status: ({ cardId, to }) =>
-      cards.map((entry) =>
-        entry.card.id === cardId ? { ...entry, card: { ...entry.card, status: to } } : entry,
+    Status: ({ key, to }) =>
+      items.map((item) =>
+        item.key === key ? { ...item, card: { ...item.card, status: to } } : item,
       ),
-    Order: ({ cardId, index }) => {
-      const from = cards.findIndex((entry) => entry.card.id === cardId);
-      if (from < 0) return cards;
-      const next = [...cards];
+    Order: ({ key, index }) => {
+      const from = items.findIndex((item) => item.key === key);
+      if (from < 0) return items;
+      const next = [...items];
       const [moved] = next.splice(from, 1);
       if (moved !== undefined) next.splice(Math.min(index, next.length), 0, moved);
       return next;
     },
+    Leaving: () => items,
   });
 }
 export const withPending: {
-  (pending: PendingMove | null): (cards: readonly BoardCard[]) => readonly BoardCard[];
+  (pending: PendingMove | null): (items: readonly BoardItem[]) => readonly BoardItem[];
 } & typeof withPendingBody = EffectFunction.dual(2, withPendingBody);

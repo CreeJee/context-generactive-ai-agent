@@ -22,17 +22,36 @@ import {
 } from "../../api";
 import {
   KanbanAction,
-  useEditBoardMutation,
-  useKanbanMutation,
+  useBoardsEditMutation,
+  useBoardsKanbanMutation,
 } from "../../queries/mutations/session";
-import { PendingMove, withPending } from "./board-moves";
+import {
+  boardCardKey,
+  boardItem,
+  PendingMove,
+  withPending,
+  type BoardCardRef,
+  type BoardItem,
+  type DropContext,
+} from "./board-moves";
 import type { CardSignals } from "./card-face";
-import { CardPeek, Peek } from "./card-peek";
+import { CardPeek, Peek, type TransferTarget } from "./card-peek";
 import { holdReasonText } from "./hold-reason";
 import { KanbanBoard } from "./kanban-board";
 
 export type ActiveKanban = Extract<KanbanView, { readonly active: true }>;
 export type BoardPlan = NonNullable<BoardView["plan"]>;
+
+/** One Plan on the surface: a conversation's board with its loop and its waiting decisions. */
+export interface SurfaceBoard {
+  readonly sessionId: string;
+  /** The conversation's name on its cards and in the peek; null when the surface shows one Plan. */
+  readonly label: string | null;
+  readonly view: BoardView;
+  readonly plan: BoardPlan;
+  readonly decisions: readonly HumanDecisionRequest[];
+  readonly loop: ActiveKanban | null;
+}
 
 export const errorText = (code: ApiErrorCode) => {
   switch (code) {
@@ -58,6 +77,14 @@ export const errorText = (code: ApiErrorCode) => {
       return "막힌 카드만 다시 대기열에 넣을 수 있어요.";
     case "card_not_running":
       return "진행 중인 카드에만 수정 요청을 남길 수 있어요.";
+    case "card_running":
+      return "진행 중인 카드는 다른 대화로 옮길 수 없어요. 끝나거나 멈춘 뒤에 옮겨 주세요.";
+    case "card_waiting":
+      return "판단을 기다리는 카드는 판단에 답한 뒤에 옮길 수 있어요.";
+    case "card_has_dependents":
+      return "이 카드를 기다리는 카드가 있어서 옮길 수 없어요. 그 카드의 의존을 먼저 풀어 주세요.";
+    case "transfer_target_invalid":
+      return "같은 프로젝트에서 계획이 있는 다른 대화로만 옮길 수 있어요.";
     case "reorder_across_columns":
       return "순서는 같은 열 안에서만 바꿀 수 있어요.";
     case "not_kanban":
@@ -97,44 +124,55 @@ export const editErrorText = (error: Error) =>
   isApiError(error) ? errorText(error.code) : "보드를 바꾸지 못했어요.";
 
 /** Where a dropped card is expected to land while its request is on the way. */
-type Landing = { readonly cardId: string; readonly lands: BoardCardStatus };
+type Landing = { readonly key: string; readonly lands: BoardCardStatus };
 
 /** The request in flight, read from the mutation that sends it. */
 const pendingOf = (
-  request: ReturnType<typeof useKanbanMutation>,
+  request: ReturnType<typeof useBoardsKanbanMutation>,
   landing: Landing | null,
-  cards: BoardView["cards"],
+  items: readonly BoardItem[],
 ): PendingMove | null => {
-  if (!request.isPending || !KanbanAction.$is("Intent")(request.variables)) return null;
+  const sent = request.variables;
+  if (!request.isPending || sent === undefined || !KanbanAction.$is("Intent")(sent.action))
+    return null;
+  const keyOf = (cardId: string) => boardCardKey({ sessionId: sent.sessionId, cardId });
   const moved = ({ cardId }: { readonly cardId: string }) =>
-    landing?.cardId === cardId ? PendingMove.Status({ cardId, to: landing.lands }) : null;
-  return BoardIntent.$match(request.variables.intent, {
+    landing?.key === keyOf(cardId)
+      ? PendingMove.Status({ key: keyOf(cardId), to: landing.lands })
+      : null;
+  return BoardIntent.$match(sent.action.intent, {
     Reorder: ({ cardId, at }) =>
-      PendingMove.Order({ cardId, index: cards.findIndex(({ card }) => card.id === at) }),
+      PendingMove.Order({
+        key: keyOf(cardId),
+        index: items.findIndex((item) => item.key === keyOf(at)),
+      }),
     Hold: moved,
     Release: moved,
     Requeue: moved,
     ChangeRequest: () => null,
     Cancel: () => null,
+    Transfer: ({ cardId }) => PendingMove.Leaving({ key: keyOf(cardId) }),
   });
 };
 
+const refOf = (item: BoardItem): BoardCardRef => ({
+  sessionId: item.sessionId,
+  cardId: item.card.id,
+});
+
 /**
- * One Plan's board surface: the columns with their cards, the card peek panel, the notice for a
- * refused request and the prompt for changing an executing card. The session's board sheet and
- * each lane of the project board draw one; the parent owns where it sits and which card is peeked.
+ * The board surface: the columns with the cards of one or several Plans, the card peek panel, the
+ * notice for a refused request, and the prompts for changing an executing card and for moving a
+ * card to another conversation. The session's board sheet shows one Plan on it; the project board
+ * shows every Plan of the project. The parent owns where it sits and which card is peeked.
  */
 export function BoardSurface({
   projectId,
-  sessionId,
   holder,
   disabled,
-  view,
-  plan,
-  decisions,
-  loop,
-  kanbanAction,
-  peekCardId,
+  boards,
+  shown,
+  peek,
   onPeek,
   adding,
   onAddingChange,
@@ -142,33 +180,33 @@ export function BoardSurface({
   className,
 }: {
   readonly projectId: string;
-  readonly sessionId: string;
   readonly holder: string;
   readonly disabled: boolean;
-  readonly view: BoardView;
-  readonly plan: BoardPlan;
-  readonly decisions: readonly HumanDecisionRequest[];
-  readonly loop: ActiveKanban | null;
-  /** The parent's kanban mutation, shared so its pending state disables the peek's actions too. */
-  readonly kanbanAction: ReturnType<typeof useKanbanMutation>;
-  readonly peekCardId: string | null;
-  readonly onPeek: (cardId: string | null) => void;
-  /** Whether the new card form is open; the parent's button opens it. */
-  readonly adding: boolean;
-  readonly onAddingChange: (adding: boolean) => void;
+  /** The Plans on the board, in the order their cards are laid out. */
+  readonly boards: readonly SurfaceBoard[];
+  /** The conversations whose cards are shown; empty shows them all. A card can still move to a hidden one. */
+  readonly shown: readonly string[];
+  readonly peek: BoardCardRef | null;
+  readonly onPeek: (card: BoardCardRef | null) => void;
+  /** The conversation whose new card form is open; the parent's button opens it. */
+  readonly adding: string | null;
+  readonly onAddingChange: (sessionId: string | null) => void;
   /** Whether a card is picked up, so the parent's Esc then only puts it back. */
   readonly onDraggingChange: (dragging: boolean) => void;
   /** Sizes the columns' container: fill the parent, or grow with the cards up to a height. */
   readonly className: string;
 }) {
-  // Drops get their own mutation, so the board shows one as requested while it is on the way and
-  // drops it when refused; the server's board then draws the card where it really is.
-  const request = useKanbanMutation(projectId, sessionId, holder);
+  // Drops and transfers get their own mutation, so the board shows one as requested while it is on
+  // the way and drops it when refused; the server's board then draws the card where it really is.
+  const request = useBoardsKanbanMutation(projectId, holder);
+  // The peek's own actions: their pending state disables the peek, not the board.
+  const action = useBoardsKanbanMutation(projectId, holder);
+  const edit = useBoardsEditMutation(projectId, holder);
   const [landing, setLanding] = useState<Landing | null>(null);
-  const edit = useEditBoardMutation(projectId, sessionId, holder);
   const [notice, setNotice] = useState<string | null>(null);
-  const [editingCardId, setEditingCardId] = useState<string | null>(null);
-  const [askChange, setAskChange] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [askChange, setAskChange] = useState<BoardItem | null>(null);
+  const [transfer, setTransfer] = useState<{ item: BoardItem; to: SurfaceBoard } | null>(null);
   useEffect(() => {
     if (notice === null) return;
     const dismiss = Effect.runFork(
@@ -177,46 +215,97 @@ export function BoardSurface({
     return () => void Effect.runFork(Fiber.interrupt(dismiss));
   }, [notice]);
 
-  const closed = plan.status === "completed";
-  const pending = pendingOf(request, landing, view.cards);
-  const cards = withPending(view.cards, pending);
-  const titleOf = (cardId: string) =>
-    view.cards.find(({ card }) => card.id === cardId)?.card.title ?? cardId;
-  const loopCard = (cardId: string) => loop?.cards.find((card) => card.cardId === cardId) ?? null;
-  const decisionsOf = (cardId: string) => decisions.filter((request) => request.cardId === cardId);
-  const changePending = (cardId: string) =>
-    view.pendingChanges.some((request) => request.cardId === cardId);
-  const signalsOf = (cardId: string): CardSignals => ({
-    decisionPending: decisionsOf(cardId).length > 0,
-    changePending: changePending(cardId),
-    requesting: pending?.cardId === cardId,
-    reason: holdText(loopCard(cardId)?.reason ?? null),
-    dependsOn: (cards.find(({ card }) => card.id === cardId)?.card.dependsOn ?? []).map(titleOf),
+  const boardOf = (sessionId: string) =>
+    boards.find((board) => board.sessionId === sessionId) ?? null;
+  const closedIn = (board: SurfaceBoard) => board.plan.status === "completed";
+  const items = boards
+    .filter((board) => shown.length === 0 || shown.includes(board.sessionId))
+    .flatMap((board) => board.view.cards.map((entry) => boardItem(board.sessionId, entry)));
+  const pending = pendingOf(request, landing, items);
+  const cards = withPending(items, pending);
+  const itemOf = (ref: BoardCardRef) =>
+    cards.find((item) => item.key === boardCardKey(ref)) ?? null;
+  const titleIn = (sessionId: string) => (cardId: string) =>
+    boardOf(sessionId)?.view.cards.find(({ card }) => card.id === cardId)?.card.title ?? cardId;
+  const loopCard = (ref: BoardCardRef) =>
+    boardOf(ref.sessionId)?.loop?.cards.find((card) => card.cardId === ref.cardId) ?? null;
+  const decisionsOf = (ref: BoardCardRef) =>
+    boardOf(ref.sessionId)?.decisions.filter((waiting) => waiting.cardId === ref.cardId) ?? [];
+  const changePending = (ref: BoardCardRef) =>
+    boardOf(ref.sessionId)?.view.pendingChanges.some((change) => change.cardId === ref.cardId) ??
+    false;
+  const signalsOf = (item: BoardItem): CardSignals => ({
+    decisionPending: decisionsOf(refOf(item)).length > 0,
+    changePending: changePending(refOf(item)),
+    requesting: pending?.key === item.key,
+    reason: holdText(loopCard(refOf(item))?.reason ?? null),
+    dependsOn: item.card.dependsOn.map(titleIn(item.sessionId)),
+    group: boardOf(item.sessionId)?.label ?? null,
   });
+  const contextOf = (item: BoardItem): DropContext => {
+    const board = boardOf(item.sessionId);
+    return {
+      cards: cards.filter((other) => other.sessionId === item.sessionId).map(({ card }) => card),
+      kanbanActive: board !== null && board.loop !== null,
+      closed: board === null || closedIn(board),
+    };
+  };
   const refused = (error: Error) => setNotice(editErrorText(error));
+  const intent = (sessionId: string, sent: BoardIntent) =>
+    action
+      .mutateAsync({ sessionId, action: KanbanAction.Intent({ intent: sent }) })
+      .then(() => null);
   /** A change to an executing card is a request, and cancelling stops the card: both intents. */
-  const save = (change: BoardEdit): Promise<null> => {
-    const intent = (sent: BoardIntent) =>
-      kanbanAction.mutateAsync(KanbanAction.Intent({ intent: sent })).then(() => null);
-    const editBoard = () => edit.mutateAsync(change).then(() => null);
+  const save = (sessionId: string, change: BoardEdit): Promise<null> => {
+    const editBoard = () => edit.mutateAsync({ sessionId, edit: change }).then(() => null);
     return BoardEdit.$match(change, {
       EditCard: ({ cardId, patch }) =>
-        cards.find(({ card }) => card.id === cardId)?.card.status === "in_progress"
-          ? intent(BoardIntent.ChangeRequest({ cardId, patch }))
+        itemOf({ sessionId, cardId })?.card.status === "in_progress"
+          ? intent(sessionId, BoardIntent.ChangeRequest({ cardId, patch }))
           : editBoard(),
-      CancelCard: ({ cardId }) => intent(BoardIntent.Cancel({ cardId })),
+      CancelCard: ({ cardId }) => intent(sessionId, BoardIntent.Cancel({ cardId })),
       AddCard: editBoard,
       MoveCard: editBoard,
     });
   };
-  const peek: Peek | null = adding
-    ? Peek.New()
-    : peekCardId === null
-      ? null
-      : Peek.Card({ cardId: peekCardId, editing: editingCardId === peekCardId });
-  /** The card the peek panel shows; null for a new card's form. */
-  const peekedCardId =
-    peek === null ? null : Peek.$match(peek, { New: () => null, Card: ({ cardId }) => cardId });
+  /** The card leaves for the other Plan's end; the peek closes once it has. */
+  const sendTransfer = ({ item, to }: { readonly item: BoardItem; readonly to: SurfaceBoard }) => {
+    setTransfer(null);
+    request.mutate(
+      {
+        sessionId: item.sessionId,
+        action: KanbanAction.Intent({
+          intent: BoardIntent.Transfer({
+            cardId: item.card.id,
+            toSessionId: to.sessionId,
+            at: null,
+          }),
+        }),
+      },
+      { onError: refused, onSuccess: () => onPeek(null) },
+    );
+  };
+
+  /** The conversation the peek panel is about: the new card's, or the peeked card's. */
+  const peekSession = adding ?? peek?.sessionId ?? null;
+  const peekBoard = peekSession === null ? null : boardOf(peekSession);
+  const peekState: Peek | null =
+    adding !== null
+      ? Peek.New()
+      : peek === null
+        ? null
+        : Peek.Card({ cardId: peek.cardId, editing: editingKey === boardCardKey(peek) });
+  const peeked = adding !== null || peek === null ? null : itemOf(peek);
+  const peekKey = adding !== null ? `new:${adding}` : peek === null ? null : boardCardKey(peek);
+  const targets: readonly TransferTarget[] =
+    peekBoard === null
+      ? []
+      : boards
+          .filter((board) => board.sessionId !== peekBoard.sessionId && !closedIn(board))
+          .map((board) => ({
+            sessionId: board.sessionId,
+            label: board.label ?? board.plan.summary,
+          }));
 
   return (
     <>
@@ -224,24 +313,32 @@ export function BoardSurface({
         <KanbanBoard
           cards={cards}
           signalsOf={signalsOf}
-          context={{
-            cards: cards.map(({ card }) => card),
-            kanbanActive: loop !== null,
-            closed,
-          }}
+          contextOf={contextOf}
           disabled={disabled}
           busy={request.isPending}
-          onOpen={(cardId) => onPeek(cardId)}
-          onReorder={(cardId, at) =>
-            request.mutate(KanbanAction.Intent({ intent: BoardIntent.Reorder({ cardId, at }) }), {
-              onError: refused,
-            })
+          onOpen={(item) => onPeek(refOf(item))}
+          onReorder={(item, at) =>
+            request.mutate(
+              {
+                sessionId: item.sessionId,
+                action: KanbanAction.Intent({
+                  intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
+                }),
+              },
+              { onError: refused },
+            )
           }
-          onSend={(cardId, intent, lands) => {
-            setLanding({ cardId, lands });
-            request.mutate(KanbanAction.Intent({ intent: BoardIntent[intent]({ cardId }) }), {
-              onError: refused,
-            });
+          onSend={(item, sent, lands) => {
+            setLanding({ key: item.key, lands });
+            request.mutate(
+              {
+                sessionId: item.sessionId,
+                action: KanbanAction.Intent({
+                  intent: BoardIntent[sent]({ cardId: item.card.id }),
+                }),
+              },
+              { onError: refused },
+            );
           }}
           onAskChange={setAskChange}
           onRefused={setNotice}
@@ -256,40 +353,49 @@ export function BoardSurface({
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
       )}
-      {peek !== null && (
+      {peekState !== null && peekKey !== null && peekSession !== null && (
         <CardPeek
-          key={peekedCardId ?? "new"}
-          peek={peek}
-          entry={
-            peekedCardId === null
-              ? null
-              : (cards.find(({ card }) => card.id === peekedCardId) ?? null)
-          }
-          loopCard={peekedCardId === null ? null : loopCard(peekedCardId)}
-          decisions={peekedCardId === null ? [] : decisionsOf(peekedCardId)}
-          titleOf={titleOf}
-          changePending={peekedCardId !== null && changePending(peekedCardId)}
+          key={peekKey}
+          peek={peekState}
+          entry={peeked}
+          loopCard={peek === null ? null : loopCard(peek)}
+          decisions={peek === null ? [] : decisionsOf(peek)}
+          titleOf={titleIn(peekSession)}
+          group={peekBoard?.label ?? null}
+          changePending={peek !== null && changePending(peek)}
           projectId={projectId}
           holder={holder}
           disabled={disabled}
-          closed={closed}
-          planVersion={plan.version}
-          cardCount={view.cards.length}
-          editPending={edit.isPending || kanbanAction.isPending}
-          intentPending={kanbanAction.isPending}
-          kanbanActive={loop !== null}
-          onEdit={(editing) => setEditingCardId(editing ? peekCardId : null)}
-          onIntent={(intent, cardId) =>
-            kanbanAction.mutate(KanbanAction.Intent({ intent: BoardIntent[intent]({ cardId }) }), {
-              onError: refused,
-            })
+          closed={peekBoard === null || closedIn(peekBoard)}
+          planVersion={peekBoard?.plan.version ?? 0}
+          cardCount={peekBoard?.view.cards.length ?? 0}
+          editPending={edit.isPending || action.isPending}
+          intentPending={action.isPending || request.isPending}
+          kanbanActive={peekBoard !== null && peekBoard.loop !== null}
+          transferTargets={targets}
+          onTransfer={(cardId, toSessionId) => {
+            const item = itemOf({ sessionId: peekSession, cardId });
+            const to = boardOf(toSessionId);
+            if (item !== null && to !== null) setTransfer({ item, to });
+          }}
+          onEdit={(editing) => setEditingKey(editing && peek !== null ? boardCardKey(peek) : null)}
+          onIntent={(sent, cardId) =>
+            action.mutate(
+              {
+                sessionId: peekSession,
+                action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
+              },
+              { onError: refused },
+            )
           }
           onClose={() => {
-            onAddingChange(false);
-            setEditingCardId(null);
+            onAddingChange(null);
+            setEditingKey(null);
             onPeek(null);
           }}
-          onSubmit={(change) => save(change).catch((error: Error) => editErrorText(error))}
+          onSubmit={(change) =>
+            save(peekSession, change).catch((error: Error) => editErrorText(error))
+          }
         />
       )}
       <Dialog
@@ -313,12 +419,43 @@ export function BoardSurface({
             <Button
               type="button"
               onClick={() => {
-                setEditingCardId(askChange);
-                onPeek(askChange);
+                if (askChange !== null) {
+                  setEditingKey(askChange.key);
+                  onPeek(refOf(askChange));
+                }
                 setAskChange(null);
               }}
             >
               수정 요청 남기기
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={transfer !== null}
+        onOpenChange={(next) => {
+          if (!next) setTransfer(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>다른 대화로 옮길까요?</DialogTitle>
+            <DialogDescription>
+              {transfer !== null &&
+                `"${transfer.item.card.title}" 카드가 "${transfer.to.label ?? transfer.to.plan.summary}" 대화 계획의 마지막에 새 카드로 들어가요. 의존은 끊기고 처음부터 다시 시작해요. 지금까지의 작업은 이 카드의 브랜치에 남아요.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setTransfer(null)}>
+              그대로 두기
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (transfer !== null) sendTransfer(transfer);
+              }}
+            >
+              옮기기
             </Button>
           </DialogFooter>
         </DialogContent>

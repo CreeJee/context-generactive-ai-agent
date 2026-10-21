@@ -70,10 +70,15 @@ export function WorkflowBoard({
   const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
   const kanban = useKanbanQuery(projectId, sessionId);
   const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
+  // Opening this board closes the project board (`boards`, `boardCard`): one board per URL.
   const [location, setLocation] = useQueryStates({
     board: parseAsBoolean,
     card: parseAsString,
+    boards: parseAsBoolean,
+    boardCard: parseAsString,
   });
+  const openBoard = (card: string | null) =>
+    void setLocation({ board: true, card, boards: null, boardCard: null });
   const [startError, setStartError] = useState<string | null>(null);
 
   const view = board.data;
@@ -129,7 +134,7 @@ export function WorkflowBoard({
           type="button"
           size="sm"
           className="ml-auto"
-          onClick={() => void setLocation({ board: true })}
+          onClick={() => openBoard(location.card)}
         >
           <KanbanSquareIcon data-icon="inline-start" />
           보드 열기
@@ -187,7 +192,7 @@ export function WorkflowBoard({
           loop={loop}
           kanbanAction={kanbanAction}
           peekCardId={location.card}
-          onPeek={(card) => void setLocation({ board: true, card })}
+          onPeek={openBoard}
           onClose={() => void setLocation({ board: null, card: null })}
         />
       )}
@@ -359,18 +364,14 @@ function BoardSheet({
         </SheetHeader>
         <BoardSurface
           projectId={projectId}
-          sessionId={sessionId}
           holder={holder}
           disabled={disabled}
-          view={view}
-          plan={plan}
-          decisions={decisions}
-          loop={loop}
-          kanbanAction={kanbanAction}
-          peekCardId={peekCardId}
-          onPeek={onPeek}
-          adding={adding}
-          onAddingChange={setAdding}
+          boards={[{ sessionId, label: null, view, plan, decisions, loop }]}
+          shown={[]}
+          peek={peekCardId === null ? null : { sessionId, cardId: peekCardId }}
+          onPeek={(card) => onPeek(card === null ? null : card.cardId)}
+          adding={adding ? sessionId : null}
+          onAddingChange={(session) => setAdding(session !== null)}
           onDraggingChange={setDragging}
           className="min-h-0 flex-1 pt-3"
         />
@@ -416,6 +417,45 @@ export function mergeStateLabel(state: GoalMergeState | null): string {
   });
 }
 
+/**
+ * How much of the project's card slots the Goal gets next to the other Goals. Cards are ordered
+ * inside their Goal; between Goals this weight, not an order, decides who runs.
+ */
+export function GoalPrioritySelect({
+  id,
+  value,
+  disabled,
+  onChange,
+}: {
+  readonly id: string;
+  readonly value: GoalPriority;
+  readonly disabled: boolean;
+  readonly onChange: (priority: GoalPriority) => void;
+}) {
+  return (
+    <Select
+      value={value}
+      items={priorityItems}
+      disabled={disabled}
+      onValueChange={(next) => {
+        const item = priorityItems.find((option) => option.value === next);
+        if (isTruthy(item)) onChange(item.value);
+      }}
+    >
+      <SelectTrigger id={id} size="sm" className="w-24">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {priorityItems.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 /** How the project scheduler runs this Goal: its priority, the Goals it waits for, its merge. */
 function GoalSchedulePanel({
   schedule,
@@ -444,26 +484,12 @@ function GoalSchedulePanel({
       <div className="flex flex-wrap items-center gap-3">
         <Field orientation="horizontal" className="w-auto">
           <FieldLabel htmlFor="goal-priority">Goal 우선순위</FieldLabel>
-          <Select
+          <GoalPrioritySelect
+            id="goal-priority"
             value={schedule.priority}
-            items={priorityItems}
             disabled={disabled}
-            onValueChange={(value) => {
-              const item = priorityItems.find((option) => option.value === value);
-              if (isTruthy(item)) onChange(KanbanAction.SetPriority({ priority: item.value }));
-            }}
-          >
-            <SelectTrigger id="goal-priority" size="sm" className="w-24">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {priorityItems.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={(priority) => onChange(KanbanAction.SetPriority({ priority }))}
+          />
         </Field>
         <span>
           대상 브랜치: {schedule.targetBranch ?? "없음"} · {mergeStateLabel(schedule.merge)}

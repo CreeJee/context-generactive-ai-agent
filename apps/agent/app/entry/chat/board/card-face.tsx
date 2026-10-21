@@ -88,6 +88,8 @@ export interface CardSignals {
   readonly reason: string | null;
   /** Titles of the cards it depends on. */
   readonly dependsOn: readonly string[];
+  /** The conversation the card belongs to, when the board shows several Plans. */
+  readonly group: string | null;
 }
 
 /** A card's compact face, shared by the board and the card being dragged. */
@@ -103,8 +105,13 @@ export function CardFace({
     <>
       <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <StatusIcon status={card.status} />
-        <span className="truncate font-mono">{card.id}</span>
+        <span className="shrink-0 font-mono">{card.id}</span>
         <span className="sr-only">{cardStatusLabels[card.status]}</span>
+        {signals.group !== null && (
+          <span className="truncate" title={signals.group}>
+            · {signals.group}
+          </span>
+        )}
       </span>
       <span className="mt-1 line-clamp-2 block text-xs font-medium text-foreground">
         {card.title}

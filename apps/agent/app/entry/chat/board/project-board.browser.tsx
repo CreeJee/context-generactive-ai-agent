@@ -1,11 +1,16 @@
 import { it } from "@effect/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import { useState } from "react";
 import { render } from "vitest-browser-react";
 import { expect, vi } from "vite-plus/test";
 import "../../../app.css";
-import { ProjectBoard, type BoardCardRef } from "./project-board";
+import { BoardIntent } from "../../api";
+import type { BoardCardRef } from "./board-moves";
+import { ProjectBoard } from "./project-board";
+
+/** A posted body back from the JSON the page sent; only its shape as a value matters here. */
+const decodeBody = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 const noCards = {
   backlog: 0,
@@ -61,11 +66,18 @@ const boards = {
 };
 
 const requests: string[] = [];
+/** The JSON bodies the page posted, as sent. */
+const sent: string[] = [];
 /** The server behind the real API client and transport. */
 const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const request = new Request(input, init);
   const { pathname } = new URL(request.url);
   requests.push(`${request.method} ${pathname}`);
+  if (request.method === "POST")
+    return request.text().then((body) => {
+      sent.push(body);
+      return Response.json({ applied: true });
+    });
   if (pathname === "/api/projects/project-1/boards")
     return Promise.resolve(Response.json([payments, logging]));
   if (pathname === "/api/projects/project-1/decisions") return Promise.resolve(Response.json([]));
@@ -100,33 +112,57 @@ function Harness({ onOpenSession }: { readonly onOpenSession: (sessionId: string
   );
 }
 
-it.live("project board shows every conversation's cards as a lane and peeks a card", () =>
+it.live("project board shows every conversation's cards on one board and moves a card", () =>
   Effect.gen(function* () {
     vi.stubGlobal("fetch", server);
     const opened = vi.fn();
     const screen = yield* sdkCall(() => render(<Harness onOpenSession={opened} />));
 
-    yield* sdkCall(() => expect.element(screen.getByText("결제 모듈")).toBeVisible());
-    yield* sdkCall(() => expect.element(screen.getByText("제목 없는 대화")).toBeVisible());
-    // Each lane draws its own conversation's cards.
+    // Every conversation's cards share the columns; each card names its conversation.
     yield* sdkCall(() => expect.element(screen.getByText("결제 요청")).toBeVisible());
     yield* sdkCall(() => expect.element(screen.getByText("로그 포맷")).toBeVisible());
     expect(requests).toContain("GET /api/sessions/session-a/board");
     expect(requests).toContain("GET /api/sessions/session-b/board");
 
-    // A lane's "대화 열기" goes to that conversation.
+    // The status panel has a line per conversation; its "대화 열기" goes to that conversation.
+    yield* sdkCall(() => screen.getByRole("button", { name: "대화별 상태 · 동작" }).click());
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("heading", { name: "결제 모듈" })).toBeVisible(),
+    );
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("heading", { name: "제목 없는 대화" })).toBeVisible(),
+    );
     yield* sdkCall(() =>
       screen
-        .getByRole("region", { name: "결제 모듈 보드" })
+        .getByRole("region", { name: "결제 모듈 대화" })
         .getByRole("button", { name: "대화 열기" })
         .click(),
     );
     expect(opened).toHaveBeenCalledWith("session-a");
 
-    // Opening a card peeks it beside the board; the peek is a dialog over the lanes.
+    // Opening a card peeks it beside the board; from there it can move to another conversation.
+    // The columns scroll sideways at this width, so the card's column is brought into view first.
+    screen
+      .getByRole("region", { name: "준비 1개" })
+      .element()
+      .scrollIntoView({ inline: "start", block: "nearest" });
     yield* sdkCall(() => screen.getByText("로그 포맷").click());
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "로그 포맷" })).toBeVisible(),
+    );
+    yield* sdkCall(() => screen.getByRole("combobox", { name: "옮길 대화" }).click());
+    yield* sdkCall(() => screen.getByRole("option", { name: "결제 모듈" }).click());
+    yield* sdkCall(() => screen.getByRole("button", { name: "옮기기" }).click());
+    const confirm = screen.getByRole("dialog", { name: "다른 대화로 옮길까요?" });
+    yield* sdkCall(() => expect.element(confirm).toBeVisible());
+    yield* sdkCall(() => confirm.getByRole("button", { name: "옮기기" }).click());
+    yield* sdkCall(() =>
+      expect.poll(() => requests).toContain("POST /api/sessions/session-b/kanban"),
+    );
+    // The card leaves its own conversation's board for the other Plan's end.
+    const bodies = yield* Effect.forEach(sent, (body) => decodeBody(body));
+    expect(bodies.find(BoardIntent.$is("Transfer"))).toEqual(
+      BoardIntent.Transfer({ cardId: "b1", toSessionId: "session-a", at: null }),
     );
     vi.unstubAllGlobals();
   }),

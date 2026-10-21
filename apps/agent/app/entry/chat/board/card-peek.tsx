@@ -26,7 +26,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { BoardEdit, type BoardView, type HumanDecisionRequest, type KanbanView } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
-import { cardStatusLabels } from "./board-moves";
+import { canTransfer, cardStatusLabels } from "./board-moves";
 import { authorLabel, riskLabels, StatusIcon } from "./card-face";
 import { holdReasonNote, holdReasonText } from "./hold-reason";
 
@@ -40,6 +40,12 @@ export type Peek = Data.TaggedEnum<{
   Card: { readonly cardId: string; readonly editing: boolean };
 }>;
 export const Peek = Data.taggedEnum<Peek>();
+
+/** Another conversation of the project whose Plan a card can move to. */
+export interface TransferTarget {
+  readonly sessionId: string;
+  readonly label: string;
+}
 
 const riskItems = [
   { value: "none", label: "지정 안 함" },
@@ -100,6 +106,7 @@ export function CardPeek({
   loopCard,
   decisions,
   titleOf,
+  group,
   changePending,
   projectId,
   holder,
@@ -110,6 +117,8 @@ export function CardPeek({
   editPending,
   intentPending,
   kanbanActive,
+  transferTargets,
+  onTransfer,
   onEdit,
   onIntent,
   onClose,
@@ -121,6 +130,8 @@ export function CardPeek({
   readonly loopCard: LoopCard | null;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly titleOf: (cardId: string) => string;
+  /** The card's conversation, when the board shows several Plans. */
+  readonly group: string | null;
   readonly changePending: boolean;
   readonly projectId: string;
   readonly holder: string;
@@ -132,12 +143,17 @@ export function CardPeek({
   readonly intentPending: boolean;
   /** Holding and requeueing need the kanban loop that assigns cards. */
   readonly kanbanActive: boolean;
+  /** Conversations the card may move to; none hides the move. */
+  readonly transferTargets: readonly TransferTarget[];
+  /** Asks to move the card to that conversation's Plan; the parent confirms and sends. */
+  readonly onTransfer: (cardId: string, toSessionId: string) => void;
   readonly onEdit: (editing: boolean) => void;
   readonly onIntent: (intent: "Hold" | "Release" | "Requeue", cardId: string) => void;
   readonly onClose: () => void;
   /** Resolves with an error message, or null once the change was accepted. */
   readonly onSubmit: (edit: BoardEdit) => Promise<string | null>;
 }) {
+  const [transferTo, setTransferTo] = useState<string | null>(null);
   const hold = loopCard?.reason ?? null;
   const holdNote = hold === null ? null : holdReasonNote(hold);
   const content = (): ReactNode =>
@@ -175,6 +191,7 @@ export function CardPeek({
                   <StatusIcon status={card.status} />
                   {cardStatusLabels[card.status]}
                   <span className="font-mono">· {card.id}</span>
+                  {group !== null && <span>· {group}</span>}
                 </span>
               </SheetDescription>
               <SheetTitle>{card.title}</SheetTitle>
@@ -227,6 +244,53 @@ export function CardPeek({
                 />
               ) : (
                 <CardDetails card={card} titleOf={titleOf} lastChange={lastChange} />
+              )}
+              {!editing && transferTargets.length > 0 && canTransfer(card) && (
+                <div className="rounded-md border border-dashed px-3 py-2">
+                  <Field>
+                    <FieldLabel htmlFor="card-transfer">다른 대화로 옮기기</FieldLabel>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <Select
+                        value={transferTo}
+                        items={transferTargets.map(({ sessionId, label }) => ({
+                          value: sessionId,
+                          label,
+                        }))}
+                        disabled={disabled || closed || intentPending}
+                        onValueChange={setTransferTo}
+                      >
+                        <SelectTrigger
+                          id="card-transfer"
+                          aria-label="옮길 대화"
+                          className="min-w-40 flex-1"
+                        >
+                          <SelectValue placeholder="대화 선택" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {transferTargets.map((target) => (
+                            <SelectItem key={target.sessionId} value={target.sessionId}>
+                              {target.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={transferTo === null || disabled || closed || intentPending}
+                        onClick={() => {
+                          if (transferTo !== null) onTransfer(card.id, transferTo);
+                        }}
+                      >
+                        옮기기
+                      </Button>
+                    </span>
+                    <FieldDescription>
+                      그 대화 Plan의 새 카드로 들어가요. 의존은 끊기고 처음부터 다시 시작해요.
+                    </FieldDescription>
+                  </Field>
+                </div>
               )}
             </div>
             {!editing && (

@@ -2,8 +2,8 @@ import { Data, Function as EffectFunction } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
+  BoardIntent,
   type BoardEdit,
-  type BoardIntent,
   type DecisionAnswer,
   type GoalPriority,
   type HumanDecisionRequest,
@@ -75,6 +75,27 @@ export type KanbanAction = Data.TaggedEnum<{
 }>;
 export const KanbanAction = Data.taggedEnum<KanbanAction>();
 
+const sendKanbanAction = (sessionId: string, holder: string, action: KanbanAction) =>
+  KanbanAction.$match(action, {
+    Start: () => api.startKanban(sessionId, holder),
+    RestartLoop: () => api.restartKanbanLoop(sessionId, holder),
+    Intent: ({ intent }) => api.boardIntent(sessionId, holder, intent),
+    SetPriority: ({ priority }) => api.setGoalPriority(sessionId, holder, priority),
+    SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, holder, dependsOn),
+  });
+
+/** The board and loop of a conversation, read again after a kanban action. */
+const kanbanKeys = (projectId: string, sessionId: string) => [
+  sessionQueries.kanban(projectId, sessionId).queryKey,
+  sessionQueries.board(projectId, sessionId).queryKey,
+];
+
+/** The conversation a transferred card goes to; its board changes with the sender's. */
+const transferTarget = (action: KanbanAction): string | null =>
+  KanbanAction.$is("Intent")(action) && BoardIntent.$is("Transfer")(action.intent)
+    ? action.intent.toSessionId
+    : null;
+
 /** Starts the executing Plan as a kanban board, carries out an intent, or changes the schedule. */
 export const useKanbanMutation: {
   (
@@ -85,23 +106,60 @@ export const useKanbanMutation: {
 function useKanbanMutationBody(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (action: KanbanAction) =>
-      KanbanAction.$match(action, {
-        Start: () => api.startKanban(sessionId, holder),
-        RestartLoop: () => api.restartKanbanLoop(sessionId, holder),
-        Intent: ({ intent }) => api.boardIntent(sessionId, holder, intent),
-        SetPriority: ({ priority }) => api.setGoalPriority(sessionId, holder, priority),
-        SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, holder, dependsOn),
-      }),
+    mutationFn: (action: KanbanAction) => sendKanbanAction(sessionId, holder, action),
     onSettled: () =>
-      Promise.all([
-        client.invalidateQueries({
-          queryKey: sessionQueries.kanban(projectId, sessionId).queryKey,
-        }),
-        client.invalidateQueries({
-          queryKey: sessionQueries.board(projectId, sessionId).queryKey,
-        }),
-      ]),
+      Promise.all(
+        kanbanKeys(projectId, sessionId).map((queryKey) => client.invalidateQueries({ queryKey })),
+      ),
+  });
+}
+
+/**
+ * A kanban action for any conversation of the project: the board that shows several Plans names
+ * the conversation per request. A transfer reads the receiving conversation's board again too.
+ */
+export const useBoardsKanbanMutation: {
+  (holder: string): (projectId: string) => ReturnType<typeof useBoardsKanbanMutationBody>;
+} & typeof useBoardsKanbanMutationBody = EffectFunction.dual(2, useBoardsKanbanMutationBody);
+function useBoardsKanbanMutationBody(projectId: string, holder: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      action,
+    }: {
+      readonly sessionId: string;
+      readonly action: KanbanAction;
+    }) => sendKanbanAction(sessionId, holder, action),
+    onSettled: (_result, _error, { sessionId, action }) => {
+      const target = transferTarget(action);
+      const keys = [
+        ...kanbanKeys(projectId, sessionId),
+        ...(target === null ? [] : kanbanKeys(projectId, target)),
+        projectQueries.boards(projectId).queryKey,
+      ];
+      return Promise.all(keys.map((queryKey) => client.invalidateQueries({ queryKey })));
+    },
+  });
+}
+
+/** A board edit for any conversation of the project, as the board showing several Plans sends it. */
+export const useBoardsEditMutation: {
+  (holder: string): (projectId: string) => ReturnType<typeof useBoardsEditMutationBody>;
+} & typeof useBoardsEditMutationBody = EffectFunction.dual(2, useBoardsEditMutationBody);
+function useBoardsEditMutationBody(projectId: string, holder: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, edit }: { readonly sessionId: string; readonly edit: BoardEdit }) =>
+      api.editBoard(sessionId, holder, edit),
+    onSettled: (_result, _error, { sessionId }) =>
+      Promise.all(
+        [
+          sessionQueries.board(projectId, sessionId).queryKey,
+          sessionQueries.runState(projectId, sessionId, holder).queryKey,
+          projectQueries.boards(projectId).queryKey,
+        ].map((queryKey) => client.invalidateQueries({ queryKey })),
+      ),
   });
 }
 
