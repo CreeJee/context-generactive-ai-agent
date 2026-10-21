@@ -1,7 +1,7 @@
 import { MutableHashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
+import { MutableHashMap, Exit, Option, Cause, Data, Effect, Predicate, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
 import {
   ownerRpcCanonicalJson as canonical,
@@ -82,28 +82,34 @@ export type OwnerRpcRequest<M extends OwnerRpcOperations> = {
     readonly input: M[K]["input"];
   };
 }[keyof M & string];
-export type OwnerRpcReply<T extends OwnerRpcJson = OwnerRpcJson> =
-  | { readonly type: "succeeded"; readonly operationId: number; readonly output: T }
-  | { readonly type: "pending"; readonly operationId: number }
-  | { readonly type: "uncertain"; readonly operationId: number }
-  | {
-      readonly type: "rejected";
-      readonly operationId: number;
-      readonly reason:
-        | "unauthorized"
-        | "invalid_operation"
-        | "operation_conflict"
-        | "non_monotonic"
-        | "uncertain_run";
-    };
+export type OwnerRpcReply<T extends OwnerRpcJson = OwnerRpcJson> = Data.TaggedEnum<{
+  succeeded: { readonly operationId: number; readonly output: T };
+  pending: { readonly operationId: number };
+  uncertain: { readonly operationId: number };
+  rejected: {
+    readonly operationId: number;
+    readonly reason:
+      | "unauthorized"
+      | "invalid_operation"
+      | "operation_conflict"
+      | "non_monotonic"
+      | "uncertain_run";
+  };
+}>;
+interface OwnerRpcReplyDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: OwnerRpcReply<this["A"] & OwnerRpcJson>;
+}
+export const OwnerRpcReply = Data.taggedEnum<OwnerRpcReplyDefinition>();
 export type OwnerRpcRecord = {
   readonly fingerprint: string;
   readonly reply: OwnerRpcReply;
 };
-export type OwnerRpcAdmission =
-  | { readonly type: "reserved" }
-  | { readonly type: "existing"; readonly record: OwnerRpcRecord }
-  | { readonly type: "rejected"; readonly reason: "non_monotonic" | "uncertain_run" };
+export type OwnerRpcAdmission = Data.TaggedEnum<{
+  reserved: {};
+  existing: { readonly record: OwnerRpcRecord };
+  rejected: { readonly reason: "non_monotonic" | "uncertain_run" };
+}>;
+export const OwnerRpcAdmission = Data.taggedEnum<OwnerRpcAdmission>();
 
 /**
  * Central-owner ledger contract: reserve atomically records a pending operation BEFORE
@@ -150,17 +156,18 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
           MutableHashMap.set(runs, runKey, run);
         }
         const existing = Option.getOrUndefined(MutableHashMap.get(run.records, operationId));
-        if (isTruthy(existing)) return { type: "existing", record: existing };
-        if (operationId <= run.highWater) return { type: "rejected", reason: "non_monotonic" };
+        if (isTruthy(existing)) return OwnerRpcAdmission.existing({ record: existing });
+        if (operationId <= run.highWater)
+          return OwnerRpcAdmission.rejected({ reason: "non_monotonic" });
         if (sideEffect && MutableHashSet.size(run.pendingEffects) > 0)
-          return { type: "rejected", reason: "uncertain_run" };
+          return OwnerRpcAdmission.rejected({ reason: "uncertain_run" });
         run.highWater = operationId;
         MutableHashMap.set(run.records, operationId, {
           fingerprint,
-          reply: { type: "pending", operationId },
+          reply: OwnerRpcReply.pending({ operationId }),
         });
         if (sideEffect) MutableHashSet.add(run.pendingEffects, operationId);
-        return { type: "reserved" };
+        return OwnerRpcAdmission.reserved();
       }),
     settle: Effect.fnUntraced(function* (runKey, operationId, reply) {
       const run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
@@ -171,22 +178,11 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
       );
       if (!isTruthy(run) || !isTruthy(record))
         return yield* OwnerRpcLedgerError.make({ reason: "unreserved" });
-      switch (record.reply.type) {
-        case "pending":
-          break;
-        default:
-          return yield* OwnerRpcLedgerError.make({ reason: "already_settled" });
-      }
+      if (!OwnerRpcReply.$is("pending")(record.reply))
+        return yield* OwnerRpcLedgerError.make({ reason: "already_settled" });
       MutableHashMap.set(run.records, operationId, { fingerprint: record.fingerprint, reply });
-      switch (reply.type) {
-        case "succeeded":
-          MutableHashSet.remove(run.pendingEffects, operationId);
-          break;
-        case "pending":
-        case "uncertain":
-        case "rejected":
-          break;
-      }
+      if (OwnerRpcReply.$is("succeeded")(reply))
+        MutableHashSet.remove(run.pendingEffects, operationId);
     }),
   };
 }
@@ -246,12 +242,12 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     const capability = Object.freeze({ ...request.capability });
     // The worker sees only the reason; the log also names the check that refused, never the input.
     const reject = (
-      reason: Extract<OwnerRpcReply, { type: "rejected" }>["reason"],
+      reason: Data.TaggedEnum.Value<OwnerRpcReply, "rejected">["reason"],
       check: string,
     ) =>
       Effect.as(
         Effect.logWarning("Owner RPC rejected", { operation, operationId, reason, check }),
-        { type: "rejected", operationId, reason } satisfies OwnerRpcReply,
+        OwnerRpcReply.rejected({ operationId, reason }),
       );
     const permitted = (permits: OwnerRpcPermits) =>
       Effect.suspend(() => permits(capability)).pipe(
@@ -308,42 +304,40 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     const admission = yield* Effect.suspend(() =>
       options.ledger.reserve(runKey, operationId, fingerprint, handler.sideEffect),
     ).pipe(Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "reserve", cause })));
-    switch (admission.type) {
-      case "rejected":
-        return yield* reject(admission.reason, "ledger");
-      case "existing":
-        if (!initiallyActive) return yield* reject("unauthorized", "inactive_replay");
-        return ownerRpcFingerprintDigest(admission.record.fingerprint) ===
-          ownerRpcFingerprintDigest(fingerprint)
-          ? structuredClone(admission.record.reply)
-          : yield* reject("operation_conflict", "fingerprint");
-      case "reserved":
-        break;
-    }
-    const reply = yield* Effect.suspend(() => handler.execute(input, capability)).pipe(
-      Effect.flatMap((output) =>
-        Effect.try((): OwnerRpcReply => ({
-          type: "succeeded",
-          operationId,
-          output: parseJson(canonical(output)),
-        })),
-      ),
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.interrupt
-          : Effect.succeed<OwnerRpcReply>({ type: "uncertain", operationId }),
-      ),
-    );
-    yield* Effect.suspend(() =>
-      options.ledger.settle(runKey, operationId, structuredClone(reply)),
-    ).pipe(
-      Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "settle", cause })),
-      Effect.uninterruptible,
-    );
-    const stillActive = yield* permitted(options.permits);
-    if (!stillActive && !(yield* finalization))
-      return yield* reject("unauthorized", "inactive_after");
-    return reply;
+    const dispatch = Effect.gen(function* () {
+      const reply = yield* Effect.suspend(() => handler.execute(input, capability)).pipe(
+        Effect.flatMap((output) =>
+          Effect.try((): OwnerRpcReply =>
+            OwnerRpcReply.succeeded({ operationId, output: parseJson(canonical(output)) }),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.interrupt
+            : Effect.succeed<OwnerRpcReply>(OwnerRpcReply.uncertain({ operationId })),
+        ),
+      );
+      yield* Effect.suspend(() =>
+        options.ledger.settle(runKey, operationId, structuredClone(reply)),
+      ).pipe(
+        Effect.mapError((cause) => OwnerRpcFailure.make({ phase: "settle", cause })),
+        Effect.uninterruptible,
+      );
+      const stillActive = yield* permitted(options.permits);
+      if (!stillActive && !(yield* finalization))
+        return yield* reject("unauthorized", "inactive_after");
+      return reply;
+    });
+    return yield* OwnerRpcAdmission.$match(admission, {
+      rejected: ({ reason }) => reject(reason, "ledger"),
+      existing: ({ record }) =>
+        !initiallyActive
+          ? reject("unauthorized", "inactive_replay")
+          : ownerRpcFingerprintDigest(record.fingerprint) === ownerRpcFingerprintDigest(fingerprint)
+            ? Effect.succeed(structuredClone(record.reply))
+            : reject("operation_conflict", "fingerprint"),
+      reserved: () => dispatch,
+    });
   });
 }
 

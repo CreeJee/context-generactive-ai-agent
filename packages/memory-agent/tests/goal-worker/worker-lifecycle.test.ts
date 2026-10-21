@@ -1,9 +1,10 @@
 import { webSearchTool } from "@tanstack/ai-openai/tools";
-import { Clock, Deferred, Effect, Fiber, Ref, Schema } from "effect";
+import { Clock, Deferred, Effect, Fiber, Match, Ref, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import * as workerExecution from "../../src/agent/full-loop-execution.ts";
 import { makeOwnerNativeArtifacts } from "../../src/agent/owner-native-artifacts.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
+import { OwnerRpcAdmission, OwnerRpcReply } from "../../src/agent/owner-rpc.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
@@ -96,16 +97,16 @@ testAgent({ testProvider: { responder } })("Goal worker admission", (it) => {
     ({ status, runStatus: previous }) =>
       Effect.gen(function* () {
         const { id, key, ledger } = yield* previousRun(previous);
-        switch (status) {
-          case "pending":
-            break;
-          case "uncertain":
-            yield* ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
-            break;
-          case "succeeded":
-            yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
-            break;
-        }
+        yield* Match.value(status).pipe(
+          Match.when("pending", () => Effect.void),
+          Match.when("uncertain", () =>
+            ledger.settle(key, 1, OwnerRpcReply.uncertain({ operationId: 1 })),
+          ),
+          Match.when("succeeded", () =>
+            ledger.settle(key, 1, OwnerRpcReply.succeeded({ operationId: 1, output: null })),
+          ),
+          Match.exhaustive,
+        );
         const before = yield* sessionEvidence(id);
         const response = yield* send(id, `${id}-new`);
         expect(response.status).toBe(409);
@@ -119,7 +120,7 @@ testAgent({ testProvider: { responder } })("Goal worker admission", (it) => {
   it.effect("a completed run with a succeeded side effect admits the next run", () =>
     Effect.gen(function* () {
       const { id, key, ledger } = yield* previousRun("completed");
-      yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
+      yield* ledger.settle(key, 1, OwnerRpcReply.succeeded({ operationId: 1, output: null }));
       const receipts = () =>
         rows("SELECT * FROM owner_rpc_operations WHERE run_id = ?", `${id}-old`);
       const before = yield* receipts();
@@ -162,7 +163,7 @@ const previousRun = Effect.fnUntraced(function* (status: "completed" | "failed")
   );
   const ledger = yield* makeSqliteOwnerRpcLedger;
   const key = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(admission.binding);
-  expect(yield* ledger.reserve(key, 1, "old-effect", true)).toEqual({ type: "reserved" });
+  expect(yield* ledger.reserve(key, 1, "old-effect", true)).toEqual(OwnerRpcAdmission.reserved());
   return { id, key, ledger };
 });
 

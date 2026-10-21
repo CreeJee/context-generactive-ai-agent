@@ -47,20 +47,20 @@ const OwnerRejection = Schema.Literals([
   "uncertain_run",
 ]);
 
-export const FullLoopOwnerReply = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("succeeded"),
-    operationId: positiveSafeInteger,
-    output: Schema.Json,
-  }),
-  Schema.Struct({ type: Schema.Literal("pending"), operationId: positiveSafeInteger }),
-  Schema.Struct({ type: Schema.Literal("uncertain"), operationId: positiveSafeInteger }),
-  Schema.Struct({
-    type: Schema.Literal("rejected"),
-    operationId: positiveSafeInteger,
-    reason: OwnerRejection,
-  }),
-]).pipe(Schema.toTaggedUnion("type"));
+export const FullLoopOwnerReply = Schema.TaggedUnion({
+  succeeded: { operationId: positiveSafeInteger, output: Schema.Json },
+  pending: { operationId: positiveSafeInteger },
+  uncertain: { operationId: positiveSafeInteger },
+  rejected: { operationId: positiveSafeInteger, reason: OwnerRejection },
+});
+
+/** A server tool's result inside the owner's `tool` reply. */
+export const OwnerToolOutcome = Schema.TaggedUnion({
+  succeeded: { value: Schema.Unknown },
+  failed: {
+    failure: Schema.Struct({ error: Schema.String, cause: Schema.String, detail: Schema.String }),
+  },
+});
 
 export const FullLoopRunPayload = Schema.Struct({
   capability: FullLoopCapability,

@@ -6,8 +6,10 @@ import {
   makeOwnerRpc,
   makeOwnerRpcEffect,
   OwnerAuthorityError,
+  OwnerRpcAdmission,
   OwnerRpcFailure,
   OwnerRpcLedgerError,
+  OwnerRpcReply,
   type OwnerRpcCapability,
   type OwnerRpcRequest,
 } from "../src/agent/owner-rpc.ts";
@@ -144,7 +146,9 @@ describe("Effect-native owner RPC", () => {
         }
         expect(reservations).toBe(0);
         expect(calls).toBe(0);
-        expect(yield* rpc(nativeRequest)).toMatchObject({ type: "succeeded" });
+        expect(yield* rpc(nativeRequest)).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: { value: "hello" } }),
+        );
         expect(reservations).toBe(1);
         expect(calls).toBe(1);
       }),
@@ -196,7 +200,7 @@ describe("Effect-native owner RPC", () => {
         if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         expect(finalized).toBe(1);
         expect(settlements).toBe(0);
-        expect(yield* rpc(nativeRequest)).toEqual({ type: "pending", operationId: 1 });
+        expect(yield* rpc(nativeRequest)).toEqual(OwnerRpcReply.pending({ operationId: 1 }));
         expect(yield* rpc({ ...nativeRequest, operationId: 2 })).toMatchObject({
           reason: "uncertain_run",
         });
@@ -255,10 +259,14 @@ describe("Effect-native owner RPC", () => {
         expect(keys).toHaveLength(1);
         expect(calls).toBe(1);
         expect(settlements).toBe(1);
-        expect(yield* inner.reserve(keys[0]!, 1, "not reused for dispatch", true)).toMatchObject({
-          type: "existing",
-          record: { reply: { type: "succeeded", operationId: 1, output: { value: "hello" } } },
-        });
+        expect(yield* inner.reserve(keys[0]!, 1, "not reused for dispatch", true)).toEqual(
+          OwnerRpcAdmission.existing({
+            record: {
+              fingerprint: expect.any(String),
+              reply: OwnerRpcReply.succeeded({ operationId: 1, output: { value: "hello" } }),
+            },
+          }),
+        );
       }),
   );
 
@@ -302,10 +310,7 @@ describe("Effect-native owner RPC", () => {
           });
           expect(calls).toBe(phase === "reserve" ? 0 : 1);
           if (phase === "settle") {
-            expect(yield* rpc(nativeRequest)).toEqual({
-              type: "pending",
-              operationId: 1,
-            });
+            expect(yield* rpc(nativeRequest)).toEqual(OwnerRpcReply.pending({ operationId: 1 }));
             expect(yield* rpc({ ...nativeRequest, operationId: 2 })).toMatchObject({
               reason: "uncertain_run",
             });
@@ -341,7 +346,7 @@ describe("Effect-native owner RPC", () => {
           yield* rpc(nativeRequest).pipe(
             Effect.provideService(OwnerValue, { value: "owner context" }),
           ),
-        ).toMatchObject({ type: "succeeded", output: { value: "owner context" } });
+        ).toEqual(OwnerRpcReply.succeeded({ operationId: 1, output: { value: "owner context" } }));
         expect(nativeRequest.input).toEqual({ value: "hello" });
         expect(capability.token).toBe("owner-secret");
         const invalid = makeOwnerRpcEffect<Operations>({
@@ -355,10 +360,7 @@ describe("Effect-native owner RPC", () => {
             middleware: { sideEffect: false, execute: () => Effect.succeed("context") },
           },
         });
-        expect(yield* invalid(nativeRequest)).toEqual({
-          type: "uncertain",
-          operationId: 1,
-        });
+        expect(yield* invalid(nativeRequest)).toEqual(OwnerRpcReply.uncertain({ operationId: 1 }));
         expect(yield* invalid({ ...nativeRequest, operationId: 2 })).toMatchObject({
           reason: "uncertain_run",
         });
@@ -424,16 +426,10 @@ describe("owner RPC protocol foundation", () => {
         expect(executions).toBe(0);
         expect(
           yield* Effect.tryPromise(() => rpc({ ...request, input: { value: "safe" } })),
-        ).toMatchObject({
-          type: "succeeded",
-          output: { value: "safe" },
-        });
+        ).toEqual(OwnerRpcReply.succeeded({ operationId: 1, output: { value: "safe" } }));
         expect(
           yield* Effect.tryPromise(() => rpc({ ...request, input: { value: "safe" } })),
-        ).toMatchObject({
-          type: "succeeded",
-          output: { value: "safe" },
-        });
+        ).toEqual(OwnerRpcReply.succeeded({ operationId: 1, output: { value: "safe" } }));
         expect(executions).toBe(1);
         active = false;
         const before = authorizations;
@@ -528,7 +524,9 @@ describe("owner RPC protocol foundation", () => {
           operation: "middleware" as const,
           input: { hook: "onFinish" },
         };
-        expect(yield* Effect.tryPromise(() => rpc(request))).toMatchObject({ type: "succeeded" });
+        expect(yield* Effect.tryPromise(() => rpc(request))).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: null }),
+        );
         expect(yield* Effect.tryPromise(() => rpc(request))).toMatchObject({
           reason: "unauthorized",
         });
@@ -542,9 +540,9 @@ describe("owner RPC protocol foundation", () => {
             rpc({ ...request, operationId: 2, input: { hook: "onBeforeToolCall" } }),
           ),
         ).toMatchObject({ reason: "unauthorized" });
-        expect(yield* Effect.tryPromise(() => rpc({ ...request, operationId: 2 }))).toMatchObject({
-          type: "succeeded",
-        });
+        expect(yield* Effect.tryPromise(() => rpc({ ...request, operationId: 2 }))).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 2, output: null }),
+        );
         issued = false;
         expect(yield* Effect.tryPromise(() => rpc({ ...request, operationId: 3 }))).toMatchObject({
           reason: "unauthorized",
@@ -572,7 +570,7 @@ describe("owner RPC protocol foundation", () => {
           yield* Effect.tryPromise(() =>
             f.rpc({ ...request, capability: { ...request.capability, ...patch } }),
           ),
-        ).toMatchObject({ type: "rejected", reason: "unauthorized" });
+        ).toEqual(OwnerRpcReply.rejected({ operationId: 1, reason: "unauthorized" }));
       }
       expect(f.calls()).toBe(0);
     }),
@@ -584,18 +582,18 @@ describe("owner RPC protocol foundation", () => {
       Effect.gen(function* () {
         const f = fixture();
         const first = yield* Effect.tryPromise(() => f.rpc(f.request()));
-        expect(first).toEqual({ type: "succeeded", operationId: 1, output: { value: "hello" } });
-        if (first.type === "succeeded") Object.assign(first.output!, { value: "mutated" });
+        expect(first).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: { value: "hello" } }),
+        );
+        if (OwnerRpcReply.$is("succeeded")(first))
+          Object.assign(first.output!, { value: "mutated" });
         expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toMatchObject({
           output: { value: "hello" },
         });
         const request = f.request();
         expect(
           yield* Effect.tryPromise(() => f.rpc({ ...request, input: { value: "changed" } })),
-        ).toMatchObject({
-          type: "rejected",
-          reason: "operation_conflict",
-        });
+        ).toEqual(OwnerRpcReply.rejected({ operationId: 1, reason: "operation_conflict" }));
         expect(f.calls()).toBe(1);
       }),
   );
@@ -629,15 +627,16 @@ describe("owner RPC protocol foundation", () => {
         yield* Effect.addFinalizer(() => Deferred.succeed(reply, { value: "done" }));
         const f = fixture(() => legacyResult(reply));
         const first = f.rpc(f.request());
-        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual({
-          type: "pending",
-          operationId: 1,
-        });
+        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual(
+          OwnerRpcReply.pending({ operationId: 1 }),
+        );
         expect(yield* Effect.tryPromise(() => f.rpc(f.request(2)))).toMatchObject({
           reason: "uncertain_run",
         });
         yield* Deferred.succeed(reply, { value: "done" });
-        expect(yield* Effect.tryPromise(() => first)).toMatchObject({ type: "succeeded" });
+        expect(yield* Effect.tryPromise(() => first)).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: { value: "done" } }),
+        );
         expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toMatchObject({
           output: { value: "done" },
         });
@@ -654,22 +653,20 @@ describe("owner RPC protocol foundation", () => {
             throw new Error("effect happened; reply lost");
           }),
         );
-        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual({
-          type: "uncertain",
-          operationId: 1,
-        });
-        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual({
-          type: "uncertain",
-          operationId: 1,
-        });
+        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual(
+          OwnerRpcReply.uncertain({ operationId: 1 }),
+        );
+        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual(
+          OwnerRpcReply.uncertain({ operationId: 1 }),
+        );
         const stale = f.request();
         f.rotate();
         expect(yield* Effect.tryPromise(() => f.rpc(stale))).toMatchObject({
           reason: "unauthorized",
         });
-        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toMatchObject({
-          type: "uncertain",
-        });
+        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual(
+          OwnerRpcReply.uncertain({ operationId: 1 }),
+        );
         expect(yield* Effect.tryPromise(() => f.rpc(f.request(2)))).toMatchObject({
           reason: "uncertain_run",
         });
@@ -677,10 +674,7 @@ describe("owner RPC protocol foundation", () => {
           yield* Effect.tryPromise(() =>
             f.rpc({ ...f.request(2), operation: "middleware", input: null }),
           ),
-        ).toMatchObject({
-          type: "succeeded",
-          output: "context",
-        });
+        ).toEqual(OwnerRpcReply.succeeded({ operationId: 2, output: "context" }));
         expect(f.calls()).toBe(1);
       }),
   );
@@ -700,10 +694,9 @@ describe("owner RPC protocol foundation", () => {
         expect(yield* Effect.tryPromise(() => f.rpc(stale))).toMatchObject({
           reason: "unauthorized",
         });
-        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toMatchObject({
-          type: "succeeded",
-          output: { value: "done" },
-        });
+        expect(yield* Effect.tryPromise(() => f.rpc(f.request()))).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: { value: "done" } }),
+        );
         expect(f.calls()).toBe(1);
       }),
   );

@@ -309,8 +309,11 @@ describe("Work Trace migration", () => {
       );
       legacy.exec("PRAGMA foreign_keys = ON");
       // The 0.0.17 schema: every step before the one that drops trace history.
-      for (const step of migrations.slice(0, -1)) legacy.exec(step);
-      legacy.exec(`PRAGMA user_version = ${migrations.length - 1}`);
+      const dropTraceHistory = migrations.findIndex((step) =>
+        step.includes("DROP TABLE IF EXISTS evidence_refs_v3"),
+      );
+      for (const step of migrations.slice(0, dropTraceHistory)) legacy.exec(step);
+      legacy.exec(`PRAGMA user_version = ${dropTraceHistory}`);
       seedProjectSessionAndAgent(legacy);
       seedTask(legacy);
       legacy

@@ -1,6 +1,6 @@
 /* Effect's encoded workflow boundary necessarily accepts parsed unknown values. */
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns */
-import { type Cause, Context, Effect, Exit, Layer, Match, Option, Schema } from "effect";
+import { type Cause, Context, Data, Effect, Exit, Layer, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
 export class OwnerWorkflowStorageError extends Schema.TaggedError<OwnerWorkflowStorageError>()(
@@ -34,9 +34,15 @@ export type OwnerWorkflowAdmissionRequest = {
   readonly parentExecutionId?: string | undefined;
 };
 
-export type OwnerWorkflowAdmissionResult<A> =
-  | { readonly type: "admitted"; readonly value: A }
-  | { readonly type: "existing"; readonly execution: StoredExecution };
+export type OwnerWorkflowAdmissionResult<A> = Data.TaggedEnum<{
+  admitted: { readonly value: A };
+  existing: { readonly execution: StoredExecution };
+}>;
+interface OwnerWorkflowAdmissionResultDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: OwnerWorkflowAdmissionResult<this["A"]>;
+}
+export const OwnerWorkflowAdmissionResult =
+  Data.taggedEnum<OwnerWorkflowAdmissionResultDefinition>();
 
 export type ScheduledClock = {
   readonly workflowName: string;
@@ -306,10 +312,10 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
         Effect.gen(function* () {
           const existing = yield* readExecution(request.executionId);
           if (Option.isSome(existing))
-            return { type: "existing" as const, execution: yield* admitRaw(request) };
+            return OwnerWorkflowAdmissionResult.existing({ execution: yield* admitRaw(request) });
           const value = yield* bind;
           yield* admitRaw(request);
-          return { type: "admitted" as const, value };
+          return OwnerWorkflowAdmissionResult.admitted({ value });
         }),
       ),
     execution: readExecution,

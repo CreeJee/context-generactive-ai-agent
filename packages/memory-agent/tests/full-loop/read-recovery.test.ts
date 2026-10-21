@@ -7,8 +7,10 @@ import { makeOwnerNativeArtifacts } from "../../src/agent/owner-native-artifacts
 import { OwnerReadRecovery } from "../../src/agent/owner-read-recovery.ts";
 import { migrateOwnerRpcFingerprintBatch } from "../../src/agent/owner-rpc-fingerprint-migration.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
+import { OwnerRpcAdmission, OwnerRpcReply } from "../../src/agent/owner-rpc.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { GoalExecutions } from "../../src/workflow/goal-execution.ts";
+import { OwnerWorkflowAdmissionResult } from "../../src/workflow/owner-workflow-storage.ts";
 import {
   GoalExecutionErrorReason,
   GoalExecutionPayload,
@@ -75,7 +77,8 @@ const failedRead = Effect.fnUntraced(function* (
     payload,
     owner.bind(session, runId, revision.id),
   );
-  if (admitted.type !== "admitted") return yield* Effect.die("new admission expected");
+  if (!OwnerWorkflowAdmissionResult.$is("admitted")(admitted))
+    return yield* Effect.die("new admission expected");
   const key = yield* toJson(admitted.value);
   yield* sqlRun(
     "INSERT INTO chat_runs(run_id,thread_id,status,started_at,finished_at,error_code) VALUES(?,?,'failed',1,2,'worker_execution_failed')",
@@ -86,12 +89,14 @@ const failedRead = Effect.fnUntraced(function* (
   const call = { ...readCall, toolCallId: "read-call" };
   const fingerprint = (operation: string) =>
     JSON.stringify({ operation, input: encodeFullLoopValue(call) });
-  expect(yield* ledger.reserve(key, 1, fingerprint("toolAuthorize"), true)).toEqual({
-    type: "reserved",
-  });
-  yield* ledger.settle(key, 1, { type: "succeeded", operationId: 1, output: null });
-  expect(yield* ledger.reserve(key, 2, fingerprint("tool"), true)).toEqual({ type: "reserved" });
-  yield* ledger.settle(key, 2, { type: "uncertain", operationId: 2 });
+  expect(yield* ledger.reserve(key, 1, fingerprint("toolAuthorize"), true)).toEqual(
+    OwnerRpcAdmission.reserved(),
+  );
+  yield* ledger.settle(key, 1, OwnerRpcReply.succeeded({ operationId: 1, output: null }));
+  expect(yield* ledger.reserve(key, 2, fingerprint("tool"), true)).toEqual(
+    OwnerRpcAdmission.reserved(),
+  );
+  yield* ledger.settle(key, 2, OwnerRpcReply.uncertain({ operationId: 2 }));
   yield* executions.fail(
     payload,
     GoalExecutionErrorReason.cases.SideEffectUncertain.make({
@@ -445,15 +450,16 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
             )).reason.cause,
           ),
         ).toContain("retained");
-        expect((yield* f.ledger.reserve(f.key, 2, "different", true)).type).toBe("existing");
+        expect(
+          OwnerRpcAdmission.$is("existing")(yield* f.ledger.reserve(f.key, 2, "different", true)),
+        ).toBe(true);
         for (const [fingerprint, sideEffect] of [
           ["new-read", false],
           ["new-write", true],
         ] as const)
-          expect(yield* f.ledger.reserve(f.key, 3, fingerprint, sideEffect)).toEqual({
-            type: "rejected",
-            reason: "uncertain_run",
-          });
+          expect(yield* f.ledger.reserve(f.key, 3, fingerprint, sideEffect)).toEqual(
+            OwnerRpcAdmission.rejected({ reason: "uncertain_run" }),
+          );
         const authorization = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ fingerprint: Schema.String }),
         )(
@@ -482,7 +488,7 @@ testAgent({ testProvider: {} })("owner read recovery across reopen", (it) => {
         const ledger = yield* reopened(makeSqliteOwnerRpcLedger);
         expect(
           yield* ledger.reserve(yield* toJson(binding.binding), 1, "new-effect", true),
-        ).toEqual({ type: "reserved" });
+        ).toEqual(OwnerRpcAdmission.reserved());
         expect(yield* bindings.bind(f.session, f.runId, f.revision.id)).toEqual({
           status: "refused",
           reason: "run_id_conflict",

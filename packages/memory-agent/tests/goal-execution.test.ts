@@ -11,6 +11,7 @@ import {
   GoalExecutionSuccess,
 } from "../src/workflow/goal-execution-contracts.ts";
 import type { Admission } from "../src/workflow/run-bindings.ts";
+import { OwnerWorkflowAdmissionResult } from "../src/workflow/owner-workflow-storage.ts";
 import {
   GoalExecution,
   GoalExecutionAdmissionRefused,
@@ -75,7 +76,7 @@ describe("GoalExecution workflow", () => {
             return { status: "bound", binding };
           }),
         );
-        expect(admitted).toEqual({ type: "admitted", value: binding });
+        expect(admitted).toEqual(OwnerWorkflowAdmissionResult.admitted({ value: binding }));
 
         const executionId = yield* GoalExecution.executionId(payload);
         expect(

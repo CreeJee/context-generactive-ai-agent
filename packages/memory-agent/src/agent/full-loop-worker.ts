@@ -21,6 +21,7 @@ import {
   FullLoopRpcError,
   FullLoopRpcGroup,
   type FullLoopRunPayload,
+  OwnerToolOutcome,
 } from "./full-loop-effect-rpc.ts";
 import { layerMessagePortRpcClient } from "./effect-rpc-message-port.ts";
 
@@ -120,7 +121,7 @@ function runFullLoop(
         });
         const refused = (refusal: FullLoopRpcError["refusal"]) =>
           FullLoopRpcError.make({ reason: "owner_rejected", refusal });
-        return yield* FullLoopOwnerReply.match(reply, {
+        return yield* FullLoopOwnerReply.match<Effect.Effect<any, FullLoopRpcError>>(reply, {
           // SAFETY: operation-specific owner handlers validated the encoded SDK payload.
           succeeded: ({ output }) => Effect.succeed(decodeFullLoopValue(output) as any),
           pending: () => Effect.fail(refused("pending")),
@@ -147,17 +148,22 @@ function runFullLoop(
                 });
                 for (const event of result.events)
                   context?.emitCustomEvent(event.name, event.value, event.options);
-                switch (result.outcome.type) {
-                  case "succeeded":
-                    return result.outcome.value;
-                  case "failed":
-                    return yield* OwnerToolFailed.make({ result: result.outcome.failure });
-                  default:
-                    return yield* FullLoopRpcError.make({
-                      reason: "owner_rejected",
-                      refusal: "unknown_tool_outcome",
-                    });
-                }
+                return yield* OwnerToolOutcome.matchOrElse<
+                  Effect.Effect<unknown, OwnerToolFailed | FullLoopRpcError>
+                >(
+                  result.outcome,
+                  {
+                    succeeded: ({ value }) => Effect.succeed(value),
+                    failed: ({ failure }) => Effect.fail(OwnerToolFailed.make({ result: failure })),
+                  },
+                  () =>
+                    Effect.fail(
+                      FullLoopRpcError.make({
+                        reason: "owner_rejected",
+                        refusal: "unknown_tool_outcome",
+                      }),
+                    ),
+                );
               }),
             );
         return proxy;

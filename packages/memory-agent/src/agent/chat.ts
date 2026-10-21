@@ -184,6 +184,7 @@ import { workflowRunEvents } from "../workflow/run-events.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowExecution } from "../workflow/execution.ts";
 import { GoalExecutionAdmissionRefused, GoalExecutions } from "../workflow/goal-execution.ts";
+import { OwnerWorkflowAdmissionResult } from "../workflow/owner-workflow-storage.ts";
 import { ProviderRetries } from "../workflow/provider-retry.ts";
 import {
   GoalExecutionErrorReason,
@@ -2370,36 +2371,26 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               durablePayload,
               runBindings.bind(sessionId, runId, workerRevision, resumeRunId),
             )
-            .pipe(
-              Effect.match({
-                onFailure: (error) => ({ type: "failed" as const, error }),
-                onSuccess: (result) => ({ type: "accepted" as const, result }),
-              }),
-            );
-          switch (durableAdmission.type) {
-            case "failed":
-              if (Schema.is(GoalExecutionAdmissionRefused)(durableAdmission.error))
-                return json(409, { error: durableAdmission.error.reason });
-              return Schema.is(ExecutionSaturated)(durableAdmission.error)
-                ? json(503, { error: "goal_workflow_saturated" })
-                : json(500, { error: "goal_workflow_admission_failed" });
-            case "accepted":
-              if (durableAdmission.result.type === "existing")
-                return json(409, { error: "run_outcome_uncertain" });
-              workerCapability = yield* workerAuthority.issue(
-                durableAdmission.result.value,
-                generation,
-              );
-              if (!(workerCapability !== null))
-                return json(409, { error: "run_outcome_uncertain" });
-              boundRun = {
-                session_id: sessionId,
-                goal_instance_id: durableAdmission.result.value.goalInstanceId,
-                workflow_revision_id: durableAdmission.result.value.workflowRevisionId,
-              };
-              yield* persistUserTurn;
-              break;
+            .pipe(Effect.result);
+          if (Result.isFailure(durableAdmission)) {
+            const error = durableAdmission.failure;
+            if (Schema.is(GoalExecutionAdmissionRefused)(error))
+              return json(409, { error: error.reason });
+            return Schema.is(ExecutionSaturated)(error)
+              ? json(503, { error: "goal_workflow_saturated" })
+              : json(500, { error: "goal_workflow_admission_failed" });
           }
+          const admitted = durableAdmission.success;
+          if (OwnerWorkflowAdmissionResult.$is("existing")(admitted))
+            return json(409, { error: "run_outcome_uncertain" });
+          workerCapability = yield* workerAuthority.issue(admitted.value, generation);
+          if (!(workerCapability !== null)) return json(409, { error: "run_outcome_uncertain" });
+          boundRun = {
+            session_id: sessionId,
+            goal_instance_id: admitted.value.goalInstanceId,
+            workflow_revision_id: admitted.value.workflowRevisionId,
+          };
+          yield* persistUserTurn;
         }
         const claim = yield* liveRuns.claim(
           sessionId,

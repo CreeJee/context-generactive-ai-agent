@@ -6,7 +6,10 @@ import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ownerWorkflowEngineLayer } from "../src/workflow/owner-workflow-engine.ts";
-import { OwnerWorkflowAdmission } from "../src/workflow/owner-workflow-storage.ts";
+import {
+  OwnerWorkflowAdmission,
+  OwnerWorkflowAdmissionResult,
+} from "../src/workflow/owner-workflow-storage.ts";
 import { sqlAll, sqlRun, sqlExec } from "./support/sql.ts";
 
 const ContractWorkflow = Workflow.make("OwnerWorkflowEngineContract", {
@@ -207,7 +210,7 @@ describe("owner workflow engine", () => {
               rebound = true;
             }),
           );
-          expect(duplicate.type).toBe("existing");
+          expect(OwnerWorkflowAdmissionResult.$is("existing")(duplicate)).toBe(true);
           expect(rebound).toBe(false);
         }),
       ),

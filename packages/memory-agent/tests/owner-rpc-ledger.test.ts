@@ -8,11 +8,15 @@ import { makeSqliteOwnerRpcLedger } from "../src/agent/owner-rpc-ledger.ts";
 import {
   makeOwnerRpc,
   makeOwnerRpcEffect,
+  OwnerRpcAdmission,
   type OwnerRpcCapability,
   OwnerRpcFailure,
   OwnerRpcLedgerError,
+  OwnerRpcReply,
 } from "../src/agent/owner-rpc.ts";
-import { connectionContext } from "../src/db/database.ts";
+import { decodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
+import { OwnerToolOutcome } from "../src/agent/full-loop-effect-rpc.ts";
+import { connectionContext, migrateDatabase } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 import {
   ownerRpcCanonicalJson,
@@ -94,28 +98,28 @@ const fixture = Effect.fn("ownerLedgerTest.fixture")(function* () {
 it.live("pending and uncertain effects survive reopen and never reset with a new operation", () =>
   Effect.gen(function* () {
     const f = yield* fixture();
-    expect(yield* (yield* owner(f.sqlite)).reserve(key, 1, "effect", true)).toEqual({
-      type: "reserved",
-    });
+    expect(yield* (yield* owner(f.sqlite)).reserve(key, 1, "effect", true)).toEqual(
+      OwnerRpcAdmission.reserved(),
+    );
     f.reopen();
     const ledger = yield* owner(f.sqlite);
-    expect(yield* ledger.reserve(key, 1, "effect", true)).toMatchObject({
-      type: "existing",
-      record: { reply: { type: "pending" } },
-    });
-    expect(yield* ledger.reserve(key, 2, "next", true)).toEqual({
-      type: "rejected",
-      reason: "uncertain_run",
-    });
-    yield* ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
+    expect(yield* ledger.reserve(key, 1, "effect", true)).toEqual(
+      OwnerRpcAdmission.existing({
+        record: { fingerprint: "effect", reply: OwnerRpcReply.pending({ operationId: 1 }) },
+      }),
+    );
+    expect(yield* ledger.reserve(key, 2, "next", true)).toEqual(
+      OwnerRpcAdmission.rejected({ reason: "uncertain_run" }),
+    );
+    yield* ledger.settle(key, 1, OwnerRpcReply.uncertain({ operationId: 1 }));
     f.reopen();
     const reopened = yield* owner(f.sqlite);
     expect(yield* reopened.reserve(key, 2, "next", true)).toMatchObject({
       reason: "uncertain_run",
     });
-    expect(yield* reopened.reserve(key, 2, "read", false)).toEqual({ type: "reserved" });
+    expect(yield* reopened.reserve(key, 2, "read", false)).toEqual(OwnerRpcAdmission.reserved());
     const unreserved = yield* reopened
-      .settle(key, 1, { type: "succeeded", operationId: 1, output: null })
+      .settle(key, 1, OwnerRpcReply.succeeded({ operationId: 1, output: null }))
       .pipe(Effect.flip);
     expect(unreserved).toBeInstanceOf(OwnerRpcLedgerError);
     expect(unreserved).toMatchObject({ reason: "unreserved" });
@@ -135,11 +139,11 @@ it.live("legacy and compact persisted requests replay identically without execut
     const legacy = ownerRpcCanonicalJson({ operation: "effect", input });
     const ledger = yield* owner(f.sqlite);
     yield* ledger.reserve(runKey, 1, legacy, true);
-    yield* ledger.settle(runKey, 1, {
-      type: "succeeded",
-      operationId: 1,
-      output: "original result",
-    });
+    yield* ledger.settle(
+      runKey,
+      1,
+      OwnerRpcReply.succeeded({ operationId: 1, output: "original result" }),
+    );
     let calls = 0;
     const endpoint = Effect.suspend(() => owner(f.sqlite)).pipe(
       Effect.map((reopened) =>
@@ -237,7 +241,7 @@ it.live(
         { startImmediately: true },
       );
       yield* Effect.addFinalizer(() => Deferred.succeed(reply, "fixture cleanup"));
-      expect(yield* sdkCall(() => rpc(request))).toMatchObject({ type: "pending" });
+      expect(yield* sdkCall(() => rpc(request))).toEqual(OwnerRpcReply.pending({ operationId: 1 }));
       generation = "two";
       release("done");
       expect(yield* Fiber.join(running)).toMatchObject({ reason: "unauthorized" });
@@ -246,7 +250,7 @@ it.live(
       expect(yield* sdkCall(() => restarted(request))).toMatchObject({ reason: "unauthorized" });
       expect(
         yield* sdkCall(() => restarted({ ...request, capability: { ...capability, generation } })),
-      ).toMatchObject({ type: "succeeded", output: "done" });
+      ).toEqual(OwnerRpcReply.succeeded({ operationId: 1, output: "done" }));
       expect(calls).toBe(1);
     }).pipe(withTestPlatform),
 );
@@ -294,14 +298,18 @@ it.live("outer transactions reject before dispatch and cannot roll back ledger s
         expect(f.sqlite.prepare("SELECT count(*) AS n FROM owner_rpc_operations").get()).toEqual({
           n: 0,
         });
-        expect(yield* rpc(request)).toMatchObject({ type: "succeeded" });
-        expect(yield* rpc(request)).toMatchObject({ type: "succeeded" });
+        expect(yield* rpc(request)).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: null }),
+        );
+        expect(yield* rpc(request)).toEqual(
+          OwnerRpcReply.succeeded({ operationId: 1, output: null }),
+        );
         expect(calls).toBe(1);
-        expect(yield* ledger.reserve(key, 2, "second", true)).toEqual({ type: "reserved" });
+        expect(yield* ledger.reserve(key, 2, "second", true)).toEqual(OwnerRpcAdmission.reserved());
         expect(
           yield* sql
             .withTransaction(
-              ledger.settle(key, 2, { type: "succeeded", operationId: 2, output: null }),
+              ledger.settle(key, 2, OwnerRpcReply.succeeded({ operationId: 2, output: null })),
             )
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "outer_transaction" });
@@ -309,16 +317,21 @@ it.live("outer transactions reject before dispatch and cannot roll back ledger s
     );
     f.reopen();
     const reopened = yield* owner(f.sqlite);
-    expect(yield* reopened.reserve(key, 2, "second", true)).toMatchObject({
-      type: "existing",
-      record: { reply: { type: "pending" } },
-    });
-    yield* reopened.settle(key, 2, { type: "succeeded", operationId: 2, output: null });
+    expect(yield* reopened.reserve(key, 2, "second", true)).toEqual(
+      OwnerRpcAdmission.existing({
+        record: { fingerprint: "second", reply: OwnerRpcReply.pending({ operationId: 2 }) },
+      }),
+    );
+    yield* reopened.settle(key, 2, OwnerRpcReply.succeeded({ operationId: 2, output: null }));
     f.reopen();
-    expect(yield* (yield* owner(f.sqlite)).reserve(key, 2, "second", true)).toMatchObject({
-      type: "existing",
-      record: { reply: { type: "succeeded" } },
-    });
+    expect(yield* (yield* owner(f.sqlite)).reserve(key, 2, "second", true)).toEqual(
+      OwnerRpcAdmission.existing({
+        record: {
+          fingerprint: "second",
+          reply: OwnerRpcReply.succeeded({ operationId: 2, output: null }),
+        },
+      }),
+    );
   }).pipe(withTestPlatform),
 );
 
@@ -333,23 +346,22 @@ it.live("unresolved effects fence a new bound run in the same session and Goal",
       .exec(`INSERT INTO workflow_run_bindings VALUES ('next-run', 'session', 'goal', 1, NULL, 1, 'now');
       INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES ('run', 'session', 'completed', 0)`);
     const ledger = yield* owner(f.sqlite);
-    expect(yield* ledger.reserve(key, 1, "effect", true)).toEqual({ type: "reserved" });
-    expect(yield* ledger.reserve(nextKey, 1, "effect", true)).toEqual({
-      type: "rejected",
-      reason: "uncertain_run",
-    });
-    expect(yield* ledger.reserve(nextKey, 1, "read", false)).toEqual({ type: "reserved" });
-    yield* ledger.settle(key, 1, { type: "uncertain", operationId: 1 });
+    expect(yield* ledger.reserve(key, 1, "effect", true)).toEqual(OwnerRpcAdmission.reserved());
+    expect(yield* ledger.reserve(nextKey, 1, "effect", true)).toEqual(
+      OwnerRpcAdmission.rejected({ reason: "uncertain_run" }),
+    );
+    expect(yield* ledger.reserve(nextKey, 1, "read", false)).toEqual(OwnerRpcAdmission.reserved());
+    yield* ledger.settle(key, 1, OwnerRpcReply.uncertain({ operationId: 1 }));
     f.reopen();
     const reopened = yield* owner(f.sqlite);
-    expect(yield* reopened.reserve(nextKey, 2, "effect", true)).toEqual({
-      type: "rejected",
-      reason: "uncertain_run",
-    });
-    expect(yield* reopened.reserve(key, 1, "effect", true)).toMatchObject({
-      type: "existing",
-      record: { reply: { type: "uncertain" } },
-    });
+    expect(yield* reopened.reserve(nextKey, 2, "effect", true)).toEqual(
+      OwnerRpcAdmission.rejected({ reason: "uncertain_run" }),
+    );
+    expect(yield* reopened.reserve(key, 1, "effect", true)).toEqual(
+      OwnerRpcAdmission.existing({
+        record: { fingerprint: "effect", reply: OwnerRpcReply.uncertain({ operationId: 1 }) },
+      }),
+    );
   }).pipe(withTestPlatform),
 );
 
@@ -397,20 +409,21 @@ it.live("JSON run keys must match every persisted binding field", () =>
     expect(f.sqlite.prepare("SELECT count(*) AS n FROM owner_rpc_operations").get()).toEqual({
       n: 0,
     });
-    expect(yield* ledger.reserve(key, 1, "valid", true)).toEqual({ type: "reserved" });
+    expect(yield* ledger.reserve(key, 1, "valid", true)).toEqual(OwnerRpcAdmission.reserved());
     const foreignKey = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
       ...keyValue,
       sessionId: "other",
     });
     const foreign = yield* ledger
-      .settle(foreignKey, 1, { type: "succeeded", operationId: 1, output: null })
+      .settle(foreignKey, 1, OwnerRpcReply.succeeded({ operationId: 1, output: null }))
       .pipe(Effect.flip);
     expect(foreign).toBeInstanceOf(OwnerRpcLedgerError);
     expect(foreign).toMatchObject({ reason: "unbound_run" });
-    expect(yield* ledger.reserve(key, 1, "valid", true)).toMatchObject({
-      type: "existing",
-      record: { reply: { type: "pending" } },
-    });
+    expect(yield* ledger.reserve(key, 1, "valid", true)).toEqual(
+      OwnerRpcAdmission.existing({
+        record: { fingerprint: "valid", reply: OwnerRpcReply.pending({ operationId: 1 }) },
+      }),
+    );
   }).pipe(withTestPlatform),
 );
 
@@ -460,5 +473,62 @@ it.live("additive upgrade has no legacy backfill and failed DDL rolls back atomi
     } finally {
       sqlite.close();
     }
+  }).pipe(withTestPlatform),
+);
+
+it.live("startup migration renames the case key of replies a released build stored", () =>
+  Effect.gen(function* () {
+    const sqlite = yield* Effect.acquireRelease(
+      Effect.sync(() => new DatabaseSync(":memory:")),
+      (db) =>
+        Effect.sync(() => {
+          if (db.isOpen) db.close();
+        }),
+    );
+    const replyMigrationIndex = migrations.findIndex((step) =>
+      step.includes("Owner RPC replies name their case"),
+    );
+    expect(replyMigrationIndex).toBeGreaterThanOrEqual(0);
+    sqlite.exec("PRAGMA foreign_keys = ON");
+    for (const step of migrations.slice(0, replyMigrationIndex)) sqlite.exec(step);
+    sqlite.exec(`PRAGMA user_version = ${replyMigrationIndex}`);
+    seed(sqlite);
+    const failure = { error: "not_found", cause: "PathRejected", detail: "missing" };
+    // Rows as 0.0.17 wrote them: a plain reply, a tool reply whose outcome sits in the worker
+    // codec's frame tree, and an uncertain effect.
+    const insert = sqlite.prepare(`INSERT INTO owner_rpc_operations
+      (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
+      VALUES ('run', ?, ?, 'released', 1, ?, ?)`);
+    insert.run(key, 1, '{"operationId":1,"output":"done","type":"succeeded"}', "succeeded");
+    insert.run(
+      key,
+      2,
+      '{"operationId":2,"output":["object",[["outcome",["object",[["type",["string","failed"]],["failure",["object",[["error",["string","not_found"]],["cause",["string","PathRejected"]],["detail",["string","missing"]]]]]]]],["events",["array",[]]]]],"type":"succeeded"}',
+      "succeeded",
+    );
+    insert.run(key, 3, '{"operationId":3,"type":"uncertain"}', "uncertain");
+    migrateDatabase(sqlite);
+
+    const ledger = yield* owner(sqlite);
+    const replays = yield* Effect.forEach([1, 2, 3], (operationId) =>
+      ledger.reserve(key, operationId, "released", true),
+    );
+    const replies = replays.map(
+      OwnerRpcAdmission.$match({
+        existing: ({ record }) => record.reply,
+        reserved: () => null,
+        rejected: () => null,
+      }),
+    );
+    expect(replies[0]).toEqual(OwnerRpcReply.succeeded({ operationId: 1, output: "done" }));
+    expect(replies[2]).toEqual(OwnerRpcReply.uncertain({ operationId: 3 }));
+    const tool = replies[1];
+    expect(OwnerRpcReply.$is("succeeded")(tool) && decodeFullLoopValue(tool.output)).toEqual({
+      outcome: OwnerToolOutcome.cases.failed.make({ failure }),
+      events: [],
+    });
+    expect(
+      sqlite.prepare("SELECT status FROM owner_rpc_operations ORDER BY operation_id").all(),
+    ).toEqual([{ status: "succeeded" }, { status: "succeeded" }, { status: "uncertain" }]);
   }).pipe(withTestPlatform),
 );

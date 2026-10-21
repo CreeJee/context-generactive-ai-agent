@@ -1813,6 +1813,24 @@ export const migrations: readonly string[] = [
   DROP TABLE IF EXISTS work_recovery_jobs;
   DROP TABLE IF EXISTS work_recovery_jobs_v2;
   `,
+  `
+  -- Owner RPC replies name their case under _tag instead of type.
+  UPDATE owner_rpc_operations
+    SET reply_json = json_set(json_remove(reply_json, '$.type'),
+      '$._tag', json_extract(reply_json, '$.type'))
+    WHERE json_extract(reply_json, '$.type') IS NOT NULL;
+  -- A tool reply's output is the worker codec's frame tree of { outcome, events }; the outcome
+  -- object's first field names its case and moves from type to _tag the same way.
+  UPDATE owner_rpc_operations
+    SET reply_json = json_set(reply_json, '$.output[1][0][1][1][0][0]', '_tag')
+    WHERE json_extract(reply_json, '$._tag') = 'succeeded'
+      AND json_extract(reply_json, '$.output[0]') = 'object'
+      AND json_extract(reply_json, '$.output[1][0][0]') = 'outcome'
+      AND json_extract(reply_json, '$.output[1][0][1][0]') = 'object'
+      AND json_extract(reply_json, '$.output[1][0][1][1][0][0]') = 'type'
+      AND json_extract(reply_json, '$.output[1][0][1][1][0][1][0]') = 'string'
+      AND json_extract(reply_json, '$.output[1][0][1][1][0][1][1]') IN ('succeeded', 'failed');
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -33,6 +33,7 @@ import {
   FullLoopOwnerRpcGroup,
   FullLoopRpcError,
   FullLoopRpcGroup,
+  OwnerToolOutcome,
 } from "./full-loop-effect-rpc.ts";
 import { layerMessagePortRpcServer } from "./effect-rpc-message-port.ts";
 
@@ -955,33 +956,36 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         ).pipe(
                           Effect.matchEffect({
                             onSuccess: (value) =>
-                              Effect.succeed({ type: "succeeded" as const, value }),
+                              Effect.succeed(OwnerToolOutcome.cases.succeeded.make({ value })),
                             onFailure: (error) =>
                               HashSet.has(readOnlyToolNames, input.name)
-                                ? Effect.succeed({
-                                    type: "failed" as const,
-                                    // Owner tools already hid secrets in the failure's text.
-                                    failure: toolFailedOf(
-                                      error.cause instanceof Error
-                                        ? error.cause
-                                        : new Error("Read tool failed"),
-                                    )[toolResultKey],
-                                  })
+                                ? Effect.succeed(
+                                    OwnerToolOutcome.cases.failed.make({
+                                      // Owner tools already hid secrets in the failure's text.
+                                      failure: toolFailedOf(
+                                        error.cause instanceof Error
+                                          ? error.cause
+                                          : new Error("Read tool failed"),
+                                      )[toolResultKey],
+                                    }),
+                                  )
                                 : Effect.fail(error),
                           }),
                         );
-                        const value =
-                          outcome.type === "succeeded" ? outcome.value : outcome.failure;
+                        const value = OwnerToolOutcome.match<unknown>(outcome, {
+                          succeeded: (succeeded) => succeeded.value,
+                          failed: ({ failure }) => failure,
+                        });
                         MutableHashMap.set(completedTools, input.toolCallId, {
                           toolCallId: input.toolCallId,
                           toolName: input.name,
                           toolCall: grants.toolCalls().find((call) => call.id === input.toolCallId),
                           tool,
-                          ok: outcome.type === "succeeded",
-                          error:
-                            outcome.type === "failed"
-                              ? `${outcome.failure.error}: ${outcome.failure.detail}`
-                              : undefined,
+                          ok: OwnerToolOutcome.guards.succeeded(outcome),
+                          error: OwnerToolOutcome.match(outcome, {
+                            succeeded: () => undefined,
+                            failed: ({ failure }) => `${failure.error}: ${failure.detail}`,
+                          }),
                           duration: 0,
                           result: value,
                         });

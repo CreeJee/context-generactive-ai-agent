@@ -5,6 +5,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { GoalExecution, GoalExecutions } from "../../src/workflow/goal-execution.ts";
 import { GoalExecutionPayload } from "../../src/workflow/goal-execution-contracts.ts";
+import { OwnerWorkflowAdmissionResult } from "../../src/workflow/owner-workflow-storage.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import {
@@ -108,7 +109,9 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
           workflowRevisionId: revision,
         },
       });
-      expect((yield* goals.admitAndStart(payload, bind)).type).toBe("admitted");
+      expect(
+        OwnerWorkflowAdmissionResult.$is("admitted")(yield* goals.admitAndStart(payload, bind)),
+      ).toBe(true);
       yield* goals.succeed(payload);
       yield* GoalExecution.execute(payload);
       break;

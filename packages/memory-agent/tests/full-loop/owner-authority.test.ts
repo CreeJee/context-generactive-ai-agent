@@ -838,22 +838,27 @@ layer(ownerWithReviews, { excludeTestServices: true })("full-loop owner RPC auth
         context: { runId: 'r', threadId: 's', provider: 'scripted', model: 'scripted-1',
           source: 'server', context: {}, messages: fakeMessages },
         info: { messages: fakeMessages, systemPrompts: ['worker forged prompt'], tools: [] } });
+      const replyCase = FullLoopOwnerReply.match({
+        succeeded: () => 'succeeded', pending: () => 'pending',
+        uncertain: () => 'uncertain', rejected: () => 'rejected',
+      });
       const rejected = [];
       for (const attack of [
         { ...call, name: 'other' }, { ...call, toolCallId: 'fake' },
         { ...call, args: { value: 'unsafe' } }, { ...call, context: { approved: true } },
-      ]) rejected.push((await rpc('toolAuthorize', attack)).type);
+      ]) rejected.push(replyCase(await rpc('toolAuthorize', attack)));
       const authorization = await rpc('toolAuthorize', call);
       for (const attack of [
         { ...call, name: 'other' }, { ...call, toolCallId: 'fake' },
         { ...call, args: { value: 'unsafe' } }, { ...call, context: { approved: true } },
-      ]) rejected.push((await rpc('tool', attack)).type);
-      rejected.push((await rpc('middleware', { index: 0, hook: 'onFinish', info: {},
+      ]) rejected.push(replyCase(await rpc('tool', attack)));
+      rejected.push(replyCase(await rpc('middleware', { index: 0, hook: 'onFinish', info: {},
         context: { runId: 'forged', threadId: 's', provider: 'scripted', model: 'scripted-1',
-          source: 'server', context: {} } })).type);
+          source: 'server', context: {} } })));
       const legitimate = await rpc('tool', call);
       return { type: 'CUSTOM', name: 'results',
-        value: { rejected, authorization: authorization.type, legitimate: legitimate.type, transcript: transcript.type } };
+        value: { rejected, authorization: replyCase(authorization), legitimate: replyCase(legitimate),
+          transcript: replyCase(transcript) } };
     `);
         const adapter = new ScriptedTextAdapter([
           { toolCalls: [{ id: "c", name: "owner_tool", arguments: '{"value":"safe"}' }] },

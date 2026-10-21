@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeOwnerToolGrants } from "../src/agent/owner-tool-grants.ts";
-import { makeInMemoryOwnerRpcLedger, makeOwnerRpc } from "../src/agent/owner-rpc.ts";
+import { makeInMemoryOwnerRpcLedger, makeOwnerRpc, OwnerRpcReply } from "../src/agent/owner-rpc.ts";
 
 function observed() {
   const grants = makeOwnerToolGrants();
@@ -109,7 +109,7 @@ it.effect(
             input: { ...legitimate, name: "write_file" },
           }),
         ),
-      ).toMatchObject({ type: "rejected", reason: "invalid_operation" });
+      ).toEqual(OwnerRpcReply.rejected({ operationId: 1, reason: "invalid_operation" }));
       expect(reservations).toBe(0);
       expect(effects).toBe(0);
       expect(
@@ -122,7 +122,7 @@ it.effect(
             input: legitimate,
           }),
         ),
-      ).toMatchObject({ type: "succeeded" });
+      ).toEqual(OwnerRpcReply.succeeded({ operationId: 2, output: "read result" }));
       expect(reservations).toBe(1);
       expect(effects).toBe(1);
     }),

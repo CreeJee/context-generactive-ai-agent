@@ -1,6 +1,6 @@
 import { type Cause, Effect, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
-import { type OwnerRpcLedger, OwnerRpcLedgerError } from "./owner-rpc.ts";
+import { OwnerRpcAdmission, type OwnerRpcLedger, OwnerRpcLedgerError } from "./owner-rpc.ts";
 import { recoveredReadRunSql } from "./owner-read-recovery.ts";
 import { endedWithKnownEffectsSql } from "../workflow/run-bindings.ts";
 
@@ -12,15 +12,11 @@ const Binding = Schema.Struct({
   planVersion: Schema.NullOr(Schema.Finite),
   workflowRevisionId: Schema.Finite,
 });
-const Reply = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("succeeded"),
-    operationId: Schema.Finite,
-    output: Schema.Json,
-  }),
-  Schema.Struct({ type: Schema.Literals(["pending", "uncertain"]), operationId: Schema.Finite }),
-  Schema.Struct({
-    type: Schema.Literal("rejected"),
+const Reply = Schema.TaggedUnion({
+  succeeded: { operationId: Schema.Finite, output: Schema.Json },
+  pending: { operationId: Schema.Finite },
+  uncertain: { operationId: Schema.Finite },
+  rejected: {
     operationId: Schema.Finite,
     reason: Schema.Literals([
       "unauthorized",
@@ -29,8 +25,15 @@ const Reply = Schema.Union([
       "non_monotonic",
       "uncertain_run",
     ]),
-  }),
-]);
+  },
+});
+/** The `status` column names the reply's case. */
+const replyStatus = Reply.match({
+  succeeded: () => "succeeded",
+  pending: () => "pending",
+  uncertain: () => "uncertain",
+  rejected: () => "rejected",
+});
 const Row = Schema.Struct({ fingerprint: Schema.String, reply_json: Schema.String });
 const BindingJson = Schema.fromJsonString(Binding);
 const ReplyJson = Schema.fromJsonString(Reply);
@@ -100,27 +103,28 @@ export const makeSqliteOwnerRpcLedger = Effect.gen(function* () {
         Effect.gen(function* () {
           if (!Number.isSafeInteger(operationId) || operationId < 1)
             return yield* OwnerRpcLedgerError.make({ reason: "invalid_operation_id" });
-          const pending = yield* Schema.encodeEffect(ReplyJson)({ type: "pending", operationId });
+          const pending = yield* Schema.encodeEffect(ReplyJson)(
+            Reply.cases.pending.make({ operationId }),
+          );
           return yield* standalone(
             Effect.gen(function* () {
               const { runId, sessionId, goalInstanceId } = yield* identify(runKey);
               const row = yield* existing({ runId, operationId, runKey });
               if (Option.isSome(row))
-                return {
-                  type: "existing" as const,
+                return OwnerRpcAdmission.existing({
                   record: {
                     fingerprint: row.value.fingerprint,
                     reply: yield* Schema.decodeEffect(ReplyJson)(row.value.reply_json),
                   },
-                };
+                });
               // Recovery permits a different run only, including for read-only new RPCs.
               if (
                 (yield* sql`SELECT 1 FROM owner_read_recoveries WHERE run_id = ${runId}`).length > 0
               )
-                return { type: "rejected" as const, reason: "uncertain_run" as const };
+                return OwnerRpcAdmission.rejected({ reason: "uncertain_run" });
               const water = yield* highWater(runId);
               if (operationId <= (water.high_water ?? 0))
-                return { type: "rejected" as const, reason: "non_monotonic" as const };
+                return OwnerRpcAdmission.rejected({ reason: "non_monotonic" });
               if (
                 sideEffect &&
                 (yield* sql`
@@ -133,13 +137,13 @@ export const makeSqliteOwnerRpcLedger = Effect.gen(function* () {
                     AND NOT ${sql.literal(endedWithKnownEffectsSql("recovery_run"))} LIMIT 1`)
                   .length > 0
               )
-                return { type: "rejected" as const, reason: "uncertain_run" as const };
+                return OwnerRpcAdmission.rejected({ reason: "uncertain_run" });
               yield* sql`
                 INSERT INTO owner_rpc_operations
                   (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
                 VALUES (${runId}, ${runKey}, ${operationId}, ${fingerprint}, ${sideEffect ? 1 : 0},
                   ${pending}, 'pending')`;
-              return { type: "reserved" as const };
+              return OwnerRpcAdmission.reserved();
             }),
           );
         }),
@@ -155,7 +159,7 @@ export const makeSqliteOwnerRpcLedger = Effect.gen(function* () {
             Effect.gen(function* () {
               const { runId } = yield* identify(runKey);
               const settled = yield* sql`
-                UPDATE owner_rpc_operations SET reply_json = ${json}, status = ${validated.type}
+                UPDATE owner_rpc_operations SET reply_json = ${json}, status = ${replyStatus(validated)}
                 WHERE run_id = ${runId} AND operation_id = ${operationId} AND run_key = ${runKey}
                   AND status = 'pending' RETURNING operation_id`;
               if (settled.length !== 1)

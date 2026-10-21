@@ -1,14 +1,18 @@
 // Native workers exercise immutable pins; Effect services own filesystem corruption fixtures.
 import { NodeWorker, NodeServices } from "@effect/platform-node";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { Cause, Effect, Layer, Schema, Stream, FileSystem, Path } from "effect";
+import { Cause, Effect, Layer, Match, Schema, Stream, FileSystem, Path } from "effect";
 import { RpcClient, RpcServer } from "effect/rpc";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 
 import { layerMessagePortRpcServer } from "../src/agent/effect-rpc-message-port.ts";
 import { encodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
-import { FullLoopOwnerRpcGroup, FullLoopRpcGroup } from "../src/agent/full-loop-effect-rpc.ts";
+import {
+  FullLoopOwnerReply,
+  FullLoopOwnerRpcGroup,
+  FullLoopRpcGroup,
+} from "../src/agent/full-loop-effect-rpc.ts";
 import {
   GoalWorkerAssetsReason,
   makeGoalWorkerAssetsRegistry,
@@ -30,25 +34,18 @@ const boot = Effect.fn("bootGoalWorker")(
     const { port1, port2 } = new MessageChannel();
     const ownerHandlers = FullLoopOwnerRpcGroup.toLayer({
       OwnerCall: (request) => {
-        let output: Schema.Json;
-        switch (request.operation) {
-          case "modelOpen":
-            output = { id: "asset-model" };
-            break;
-          case "modelNext":
-            output = { done: true };
-            break;
-          case "strategy":
-            output = false;
-            break;
-          default:
-            output = null;
-        }
-        return Effect.succeed({
-          type: "succeeded",
-          operationId: request.operationId,
-          output: encodeFullLoopValue(output),
-        });
+        const output: Schema.Json = Match.value(request.operation).pipe(
+          Match.when("modelOpen", () => ({ id: "asset-model" })),
+          Match.when("modelNext", () => ({ done: true })),
+          Match.when("strategy", () => false),
+          Match.orElse(() => null),
+        );
+        return Effect.succeed(
+          FullLoopOwnerReply.cases.succeeded.make({
+            operationId: request.operationId,
+            output: encodeFullLoopValue(output),
+          }),
+        );
       },
     });
     const ownerServer = RpcServer.layer(FullLoopOwnerRpcGroup, { concurrency: 1 }).pipe(

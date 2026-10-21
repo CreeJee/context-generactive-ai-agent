@@ -202,6 +202,7 @@ export function maliciousWorker(source: string) {
     import { encodeFullLoopValue, decodeFullLoopValue } from ${JSON.stringify(codecUrl)};
     import {
       FullLoopCapabilityMiddleware,
+      FullLoopOwnerReply,
       FullLoopOwnerRpcGroup,
       FullLoopRpcError,
       FullLoopRpcGroup,
