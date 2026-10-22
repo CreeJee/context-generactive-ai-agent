@@ -1,6 +1,7 @@
-import { NodeHttpServer, NodePath, NodeServices, NodeSink } from "@effect/platform-node";
-import { ManagedRuntime, Path } from "effect";
+import { NodeHttpServer, NodeSink } from "@effect/platform-node";
+import { Path } from "effect";
 import { runNativeEffect } from "memory-agent/native-effect";
+import { nodePlatform } from "memory-agent/node-platform";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -15,7 +16,7 @@ import {
   createDevelopmentBoundary,
 } from "./dev-safety.ts";
 
-const { extname, resolve, sep } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const { extname, resolve, sep } = nodePlatform.runSync(Path.Path);
 
 /**
  * Who can reach the server. `loopback` listens on 127.0.0.1 and answers only loopback Host names (R14).
@@ -95,9 +96,6 @@ const clientFile = Effect.fn("serve.clientFile")(function* (
   return Option.isSome(stat) && stat.value.type === "File" ? file : null;
 });
 
-const browserLauncher = ManagedRuntime.make(NodeServices.layer);
-const assetRuntime = ManagedRuntime.make(NodeServices.layer);
-
 export function openInBrowser(url: string) {
   const [command, args] =
     process.platform === "darwin"
@@ -105,7 +103,7 @@ export function openInBrowser(url: string) {
       : process.platform === "win32"
         ? ["cmd", ["/c", "start", "", url]]
         : ["xdg-open", [url]];
-  void browserLauncher.runPromise(
+  void nodePlatform.runPromise(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const child = yield* spawner.spawn(
@@ -177,7 +175,7 @@ export function serve(options: ServeOptions) {
         return;
       }
     }
-    const task = assetRuntime.runFork(
+    const task = nodePlatform.runFork(
       Effect.gen(function* () {
         const file =
           request.method === "GET" || request.method === "HEAD"

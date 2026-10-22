@@ -1,5 +1,5 @@
-import { Cause, Effect, FileSystem, ManagedRuntime, Option, Path, Schema } from "effect";
-import { NodeServices } from "@effect/platform-node";
+import { Cause, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { nodePlatform } from "memory-agent/node-platform";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { getAsset, getRawAsset, isSea } from "node:sea";
@@ -23,7 +23,6 @@ const completeMarker = ".complete";
  * `<storage>/runtime/<hash>`, once per build, and removes folders of other builds.
  * Returns that folder, or null when not running as the executable.
  */
-const runtimeAssets = ManagedRuntime.make(NodeServices.layer);
 const unpack = Effect.fn("runtime.unpack")(function* (storageRoot: string) {
   if (!isSea()) return null;
   const fs = yield* FileSystem.FileSystem;
@@ -65,4 +64,4 @@ const unpack = Effect.fn("runtime.unpack")(function* (storageRoot: string) {
 });
 
 export const unpackRuntime = (storageRoot: string) =>
-  runtimeAssets.runPromise(Effect.scoped(unpack(storageRoot)));
+  nodePlatform.runPromise(Effect.scoped(unpack(storageRoot)));

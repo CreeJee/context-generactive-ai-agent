@@ -1,6 +1,5 @@
 import { Function as EffectFunction, Schema } from "effect";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import { nodePlatformLayer } from "./runtime/node-platform.ts";
 import { path } from "./runtime/synchronous-path.ts";
 const { join } = path;
 import { optionalProperty } from "./optional-property.ts";
@@ -207,7 +206,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
             ExecutionAdmission.layer(options.executionAdmission),
           ),
         ),
-        Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+        Layer.provideMerge(nodePlatformLayer),
       ),
     ),
   );

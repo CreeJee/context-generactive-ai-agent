@@ -1,5 +1,4 @@
-import { NodeCrypto, NodePath, NodeServices } from "@effect/platform-node";
-import { Crypto, Effect, FileSystem, ManagedRuntime, Path } from "effect";
+import { Crypto, Effect, FileSystem, Path } from "effect";
 import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Hex } from "effect/encoding";
@@ -7,9 +6,10 @@ import { Hex } from "effect/encoding";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
 import { nativeFailure } from "memory-agent/native-effect";
+import { nodePlatform } from "memory-agent/node-platform";
 import { DateTime, Match, Option, Schema, Scope, Exit, Cause } from "effect";
 
-const { join, resolve } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const { join, resolve } = nodePlatform.runSync(Path.Path);
 
 export const developmentBuildHeader = "x-context-agent-build-id";
 
@@ -23,7 +23,6 @@ export const developmentBackendWatchPaths = (appRoot: string) => [
   resolve(appRoot, "../../packages/memory-agent/package.json"),
 ];
 
-const fingerprintRuntime = ManagedRuntime.make(NodeServices.layer);
 const fingerprintFiles = Effect.fn("dev.fingerprintFiles")(function* (
   path: string,
 ): Effect.fn.Return<string[], never, FileSystem.FileSystem | Path.Path> {
@@ -79,7 +78,7 @@ const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
 
 /** Stable fingerprint of every source file owned by the no-HMR backend boundary. */
 export const developmentBuildId = (appRoot: string) =>
-  fingerprintRuntime.runPromise(fingerprint(appRoot));
+  nodePlatform.runPromise(fingerprint(appRoot));
 
 export const affectsDevelopmentBackend = (file: string) => {
   const path = file.replaceAll("\\\\", "/");
@@ -111,7 +110,7 @@ export interface DevelopmentBoundary {
 
 export function createDevelopmentBoundary({
   buildId,
-  instanceId = ManagedRuntime.make(NodeCrypto.layer).runSync(
+  instanceId = nodePlatform.runSync(
     Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4()),
   ),
 }: {
@@ -213,7 +212,7 @@ export const acquireStorageLock: {
   ): (storageRoot: string) => ReturnType<typeof acquireStorageLockBody>;
 } & typeof acquireStorageLockBody = EffectFunction.dual(3, acquireStorageLockBody);
 function acquireStorageLockBody(storageRoot: string, port: number, instanceId: string) {
-  return fingerprintRuntime
+  return nodePlatform
     .runPromiseExit(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -271,7 +270,7 @@ function acquireStorageLockBody(storageRoot: string, port: number, instanceId: s
             Effect.ignore,
           ),
         );
-        return () => fingerprintRuntime.runPromise(Scope.close(scope, Exit.void));
+        return () => nodePlatform.runPromise(Scope.close(scope, Exit.void));
       }),
     )
     .then(

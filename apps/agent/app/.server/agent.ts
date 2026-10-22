@@ -1,5 +1,5 @@
-import { NodeServices } from "@effect/platform-node";
 import { Config, Effect, Layer, ManagedRuntime, Function as EffectFunction } from "effect";
+import { nodePlatformLayer, type NodePlatform } from "memory-agent/node-platform";
 import {
   defaultStorageRoot,
   memoryAgentLayer,
@@ -48,9 +48,7 @@ const agentLayer: Layer.Layer<
 );
 // The tracer sits below the agent services so their construction and every later run are traced.
 const runtimeLayer: Layer.Layer<
-  | Layer.Success<typeof agentLayer>
-  | Layer.Success<typeof observabilityLayer>
-  | Layer.Success<typeof NodeServices.layer>,
+  Layer.Success<typeof agentLayer> | Layer.Success<typeof observabilityLayer> | NodePlatform,
   Layer.Error<typeof agentLayer> | Layer.Error<typeof observabilityLayer>
 > = agentLayer.pipe(
   Layer.provide(
@@ -59,7 +57,7 @@ const runtimeLayer: Layer.Layer<
     ),
   ),
   Layer.provideMerge(observabilityLayer),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(nodePlatformLayer),
 );
 type AgentRuntime = ManagedRuntime.ManagedRuntime<
   Layer.Success<typeof runtimeLayer>,

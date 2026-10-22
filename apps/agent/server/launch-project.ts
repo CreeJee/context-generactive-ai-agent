@@ -1,16 +1,15 @@
 import { FetchHttpClient, HttpBody, HttpClient } from "effect/http";
-import { NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path, FileSystem, Option } from "effect";
 import { Effect } from "effect";
 import { runNativeEffect } from "memory-agent/native-effect";
+import { nodePlatform } from "memory-agent/node-platform";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 import { homeDirectory } from "memory-agent/host-system";
 import { Schema } from "effect";
 
 /** The folder the app opens as a project, or why it opens none. */
-const launchRuntime = ManagedRuntime.make(NodeServices.layer);
-const { dirname, isAbsolute, relative, resolve } = launchRuntime.runSync(Path.Path);
+const { dirname, isAbsolute, relative, resolve } = nodePlatform.runSync(Path.Path);
 
 export type LaunchFolder =
   | { readonly kind: "folder"; readonly root: string }
@@ -46,7 +45,7 @@ function launchFolderBody(
   storageRoot: string,
   executableFolder: string | null,
 ): Promise<LaunchFolder> {
-  return launchRuntime.runPromise(launchFolderEffect(argument, cwd, storageRoot, executableFolder));
+  return nodePlatform.runPromise(launchFolderEffect(argument, cwd, storageRoot, executableFolder));
 }
 const launchFolderEffect = Effect.fn("launch.folder")(function* (
   argument: string | undefined,

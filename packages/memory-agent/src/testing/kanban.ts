@@ -1,5 +1,3 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DateTime, Effect, FileSystem, Layer, Option, Path, Schedule, type Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SqlClient } from "effect/sql";
@@ -9,6 +7,7 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { canonicalPathEffect } from "../files/paths.ts";
+import { nodePlatformLayer } from "../runtime/node-platform.ts";
 import {
   CardAgent,
   CardVerdict,
@@ -118,7 +117,7 @@ const kanbanOwnerBase = (fixture: KanbanFixture, cores: number) =>
     Layer.provideMerge(
       Layer.mergeAll(Database.layer(fixture.database), StorageRoot.layer(fixture.storage)),
     ),
-    Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+    Layer.provideMerge(nodePlatformLayer),
   );
 
 /** A Goal-level check that passes every Goal branch. */

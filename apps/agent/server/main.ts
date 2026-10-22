@@ -1,5 +1,5 @@
-import { NodeCrypto, NodePath, NodeServices } from "@effect/platform-node";
-import { ManagedRuntime, Option, Path, Schema, Stdio } from "effect";
+import { nodePlatform } from "memory-agent/node-platform";
+import { Option, Path, Schema, Stdio } from "effect";
 import { Config, Console, Crypto, Effect, Match } from "effect";
 import { Argument, Flag } from "effect/cli";
 import { runNativeEffect } from "memory-agent/native-effect";
@@ -13,7 +13,7 @@ import { runNativeEffect } from "memory-agent/native-effect";
 
 import { isSea } from "node:sea";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { NodeStream, NodeSink } from "@effect/platform-node";
+import { NodeStream, NodeSink, NodeTerminal } from "@effect/platform-node";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { createAppApi, startAcpAgent } from "memory-agent/acp";
@@ -28,7 +28,7 @@ import { parseCommandLine } from "./command-line.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve, type Exposure } from "./serve.ts";
 
-const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+const nodePath = nodePlatform.runSync(Path.Path);
 const { dirname } = nodePath;
 
 const usage = `사용법:
@@ -54,12 +54,19 @@ const commandLineOptions = {
   help: Flag.Boolean("help").pipe(Flag.withAlias("h"), Flag.withDefault(false)),
   version: Flag.Boolean("version").pipe(Flag.withAlias("v"), Flag.withDefault(false)),
 };
-// The parse failure already printed the usage and its details.
-const commandLine = await ManagedRuntime.make(NodeServices.layer).runPromise(
-  Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args).pipe(
-    Effect.flatMap((args) => parseCommandLine("context-agent", commandLineOptions, usage, args)),
-    Effect.catch(() => Effect.sync(() => process.exit(2))),
-  ),
+// The parse failure already printed the usage and its details. effect/cli runs with a Terminal,
+// which subscribes to stdin; it is built for the parse alone, so the server holds no stdin listener.
+const commandLine = await nodePlatform.runPromise(
+  Effect.scoped(
+    Effect.flatMap(Layer.build(NodeTerminal.layer), (terminal) =>
+      Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args).pipe(
+        Effect.flatMap((args) =>
+          parseCommandLine("context-agent", commandLineOptions, usage, args),
+        ),
+        Effect.provideContext(terminal),
+      ),
+    ),
+  ).pipe(Effect.catch(() => Effect.sync(() => process.exit(2)))),
 );
 const folderArgument = Option.getOrUndefined(commandLine.folder);
 
@@ -169,7 +176,7 @@ if (folderArgument === "acp") {
   const developmentBuildId = Option.getOrUndefined(
     Effect.runSync(Config.option(Config.String("CONTEXT_AGENT_BUILD_ID"))),
   );
-  const runtimeInstanceId = ManagedRuntime.make(NodeCrypto.layer).runSync(
+  const runtimeInstanceId = nodePlatform.runSync(
     Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4()),
   );
   const releaseStorageLock = await acquireStorageLock(storageRoot, port, runtimeInstanceId);
@@ -187,8 +194,7 @@ if (folderArgument === "acp") {
   const devScriptGone = Effect.flatMap(Stdio.Stdio, (stdio) => Stream.runDrain(stdio.stdin)).pipe(
     Effect.exit,
   );
-  if (commandLine.devBackend)
-    void ManagedRuntime.make(NodeServices.layer).runPromise(devScriptGone).then(shutdown);
+  if (commandLine.devBackend) void nodePlatform.runPromise(devScriptGone).then(shutdown);
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.once(signal, shutdown);
     await runNativeEffect(

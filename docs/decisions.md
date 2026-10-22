@@ -2477,3 +2477,9 @@
 
 - `.node-version`을 26.8.2에서 26.12.1(2026-10-21 보안 릴리즈)로 올린다. CI는 `setup-vp`가 이 파일을 읽어 같은 판을 쓰고, 최신판을 따로 확인하는 입력은 두지 않는다. `package.json`의 `engines.node`도 같은 하한으로 맞춘다.
 - 이후 Node 보안 릴리즈가 나오면 같은 방식으로 `.node-version`만 올린다. 과거 측정 기록 문서의 버전 표기는 그대로 둔다.
+
+## Node 플랫폼 서비스는 프로세스당 한 번 만든다 (2026-10-22)
+
+- 백엔드 로그의 `MaxListenersExceededWarning: 11 end listeners added to [Socket]`은 `NodeServices.layer`에 든 `NodeTerminal.layer`가 빌드될 때마다 `process.stdin.once("end", …)`를 붙이는데, 서버 진입점과 SDK Promise 경계 모듈 11곳이 각자 `ManagedRuntime.make(NodeServices.layer)`로 그 레이어를 따로 만들고 끝까지 닫지 않아서 생겼다.
+- `memory-agent/node-platform`에 `nodePlatformLayer`(FileSystem·Path·Crypto·Stdio·ChildProcessSpawner, Terminal 제외)와 프로세스당 하나의 런타임 `nodePlatform`을 둔다. 서버 진입점(`server/*.ts`)과 SDK Promise 경계(`oauth/node-runtime.ts`, `runtime/keyring.ts`)는 이 런타임을 쓰고, 조합 루트(`memoryAgentLayer`)·앱 런타임·설치기 레이어는 이 레이어를 provide한다. 이 프로세스는 Terminal을 읽지 않으므로 넣지 않는다.
+- 새 SDK 경계 모듈은 `ManagedRuntime.make(NodeServices.layer)`를 만들지 않고 `nodePlatform`을 가져다 쓴다. 별도 프로세스(dev 스크립트, 패키징 스크립트, profile 도구, 테스트)는 각자 한 번만 빌드하므로 `NodeServices.layer`를 그대로 둔다.

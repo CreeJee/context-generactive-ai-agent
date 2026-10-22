@@ -10,10 +10,10 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { NodeChildProcessSpawner, NodeServices } from "@effect/platform-node";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
@@ -241,7 +241,10 @@ export const archiveHostLayer = Layer.effect(
   Layer.provide(
     Layer.merge(
       FetchHttpClient.layer,
-      NodeChildProcessSpawner.layer.pipe(Layer.provide(NodeServices.layer)),
+      // The spawner's own file system and path; the host's come from whoever provides this layer.
+      NodeChildProcessSpawner.layer.pipe(
+        Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+      ),
     ),
   ),
 );

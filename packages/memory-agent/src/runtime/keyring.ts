@@ -1,11 +1,9 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   Config,
   Data,
   Effect,
   FileSystem,
   Function as EffectFunction,
-  ManagedRuntime,
   Option,
   Path,
   Result,
@@ -13,6 +11,7 @@ import {
 } from "effect";
 import { Base64 } from "effect/encoding";
 import { runNativeEffect } from "./native-effect.ts";
+import { nodePlatform } from "./node-platform.ts";
 import { requireRuntime } from "./resources.ts";
 import { sha256 } from "./synchronous-crypto.ts";
 
@@ -49,10 +48,10 @@ export type SecretBackend = Data.TaggedEnum<{
 }>;
 export const SecretBackend = Data.taggedEnum<SecretBackend>();
 
-// NodeServices' file system and path services own no resources; entries run their Effects through it.
-const runtime = ManagedRuntime.make(NodeServices.layer);
-const fs = runtime.runSync(FileSystem.FileSystem);
-const path = runtime.runSync(Path.Path);
+// The file system and path services own no resources; entries run their Effects through the
+// process's platform runtime.
+const fs = nodePlatform.runSync(FileSystem.FileSystem);
+const path = nodePlatform.runSync(Path.Path);
 
 const failure = (reason: FailureReason) => SecretFileStoreFailed.make({ reason });
 const failWith = (reason: FailureReason) => () => failure(reason);
