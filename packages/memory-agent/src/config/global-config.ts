@@ -6,6 +6,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Option,
   Path,
   Predicate,
   Schema,
@@ -34,11 +35,10 @@ export const GpuCheck = Schema.TaggedUnion({
 export type GpuCheck = typeof GpuCheck.Type;
 
 /**
- * `gpuCheck` as the settings file holds it. Releases up to 0.0.17 named the case under `status`;
- * reading still takes that form, and writing always names the case under `_tag`.
+ * `gpuCheck` as releases up to 0.0.17 wrote it: the case named under `status`. A settings file in
+ * that form is written back in the current form the first time it is read.
  */
-const StoredGpuCheck = Schema.Union([
-  GpuCheck,
+const LegacyGpuCheck = Schema.Union([
   Schema.Struct({ status: Schema.Literal("available"), checkedAt: Schema.String }).pipe(
     Schema.decodeTo(
       GpuCheck.cases.available,
@@ -66,6 +66,7 @@ const StoredGpuCheck = Schema.Union([
     ),
   ),
 ]);
+const legacyGpuCheck = Schema.decodeUnknownOption(LegacyGpuCheck);
 
 /** Persisted, versioned policy for model-dependent capabilities. Missing entries deny access. */
 export const ModelFeatureFlagSettings = Schema.Struct({
@@ -129,7 +130,7 @@ export const Settings = Schema.Struct({
   crossProviderMediaConsent: Schema.optional(CrossProviderMediaConsentSettings),
   /** Takes effect when the app next starts; `auto` when unset. */
   embeddingDevice: Schema.optional(EmbeddingChoice),
-  gpuCheck: Schema.optional(StoredGpuCheck),
+  gpuCheck: Schema.optional(GpuCheck),
   /** `defaultSummaryStartPercent` when unset. */
   summaryStartPercent: Schema.optional(SummaryStartPercent),
   /** Half the CPU cores (1 to 4) when unset; read via `KanbanSettings`. */
@@ -167,6 +168,13 @@ const make = Effect.gen(function* () {
 
   const updates = Semaphore.makeUnsafe(1);
   const jsonSettings = Schema.fromJsonString(Settings, { space: 2 });
+  const storedFile = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+  const invalidSettings = (cause: unknown) =>
+    GlobalConfigFailed.make({
+      operation: "read",
+      reason: GlobalConfigFailedReason.cases.InvalidSettings.make({}),
+      cause,
+    });
   const write = (settings: Settings) =>
     Effect.gen(function* () {
       const json = yield* Schema.encodeEffect(jsonSettings)(settings).pipe(
@@ -212,22 +220,25 @@ const make = Effect.gen(function* () {
       Effect.catchReason("GlobalConfigFailed", "MissingFile", () => Effect.succeed(null)),
     );
     if (json === null) return {};
-    const settings = yield* Schema.decodeEffect(jsonSettings)(json).pipe(
-      Effect.mapError((cause) =>
-        GlobalConfigFailed.make({
-          operation: "read",
-          reason: GlobalConfigFailedReason.cases.InvalidSettings.make({}),
-          cause,
-        }),
-      ),
+    const stored = yield* Schema.decodeEffect(storedFile)(json).pipe(
+      Effect.mapError(invalidSettings),
     );
-    if (
+    const migratedGpuCheck = legacyGpuCheck(stored.gpuCheck);
+    const settings = yield* Schema.decodeEffect(Settings)(
+      Option.match(migratedGpuCheck, {
+        onNone: () => stored,
+        onSome: (gpuCheck) => ({ ...stored, gpuCheck }),
+      }),
+    ).pipe(Effect.mapError(invalidSettings));
+    // A model with an effort but no provider is a setting of releases before providers: OpenAI's.
+    const legacyProvider =
       isTruthy(settings.model) &&
       isTruthy(settings.reasoningEffort) &&
-      settings.provider === undefined
-    )
-      return yield* write({ ...settings, provider: "openai" });
-    return settings;
+      settings.provider === undefined;
+    // An older file is written back once, so later reads take the current form only.
+    return Option.isSome(migratedGpuCheck) || legacyProvider
+      ? yield* write(legacyProvider ? { ...settings, provider: "openai" } : settings)
+      : settings;
   });
   return {
     read: updates.withPermit(read),
