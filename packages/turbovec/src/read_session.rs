@@ -52,6 +52,8 @@ pub struct NativeReadOutput {
     pub mapping_ms: f64,
     /// The unindexed and uninterpreted counts.
     pub coverage_ms: f64,
+    /// The stage a failed read stopped in; none when it succeeded or failed before reading.
+    pub failed_stage: Option<String>,
     pub input_logical_bytes: u32,
     pub output_logical_bytes: u32,
 }
@@ -64,6 +66,18 @@ enum Stage {
     Text,
     Morph,
     Coverage,
+}
+impl Stage {
+    fn name(self) -> &'static str {
+        match self {
+            Stage::Candidate => "candidate",
+            Stage::Vector => "vector",
+            Stage::Mapping => "mapping",
+            Stage::Text => "text",
+            Stage::Morph => "morph",
+            Stage::Coverage => "coverage",
+        }
+    }
 }
 impl NativeReadOutput {
     fn empty() -> Self {
@@ -85,6 +99,7 @@ impl NativeReadOutput {
             morph_ms: 0.,
             mapping_ms: 0.,
             coverage_ms: 0.,
+            failed_stage: None,
             input_logical_bytes: 0,
             output_logical_bytes: 0,
         }
@@ -112,6 +127,7 @@ impl NativeReadOutput {
             morph_ms: self.morph_ms,
             mapping_ms: self.mapping_ms,
             coverage_ms: self.coverage_ms,
+            failed_stage: Some(running.0.name().into()),
             ..Self::empty()
         };
         *out.stage_ms(running.0) = ms(running.1);
@@ -599,6 +615,7 @@ mod tests {
         assert_eq!((failed.candidate_ms, failed.vector_ms), (5., 6.));
         assert!(failed.mapping_ms >= 40.);
         assert_eq!(failed.text_ms, 0.);
+        assert_eq!(failed.failed_stage.as_deref(), Some("mapping"));
     }
     #[test]
     #[cfg(feature = "test-sqlite")]

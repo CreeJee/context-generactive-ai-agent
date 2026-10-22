@@ -110,6 +110,8 @@ export interface NativeReadOutput {
   mappingMs: number;
   /** The unindexed and uninterpreted counts. */
   coverageMs: number;
+  /** The stage a failed read stopped in; none when it succeeded or failed before reading. */
+  failedStage?: "candidate" | "vector" | "mapping" | "text" | "morph" | "coverage" | null;
   inputLogicalBytes: number;
   outputLogicalBytes: number;
 }

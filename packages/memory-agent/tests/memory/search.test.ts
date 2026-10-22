@@ -148,7 +148,7 @@ testAgent()("MemorySearch.find", (it) => {
     }),
   );
 
-  it.effect("keeps the project's matches when reading the other projects runs out of time", () =>
+  it.effect("keeps the project's matches when reading the other projects fails, and says why", () =>
     Effect.gen(function* () {
       const { project, session } = yield* freshProject;
       const own = yield* (yield* Nodes).append({
@@ -160,7 +160,7 @@ testAgent()("MemorySearch.find", (it) => {
       const shared = yield* otherProject("다른 프로젝트도 SQLite를 쓰기로 했다");
       yield* indexAll;
       const index = yield* VectorIndex;
-      const slowElsewhere = Layer.succeed(VectorIndex, {
+      const failingElsewhere = Layer.succeed(VectorIndex, {
         ...index,
         backend: {
           ...index.backend,
@@ -168,14 +168,26 @@ testAgent()("MemorySearch.find", (it) => {
             Effect.map(index.backend.read(input), (read) =>
               input.allowedProjects.includes(project.id)
                 ? read
-                : { ...read, result: { ...read.result, kind: "budget-exceeded" as const } },
+                : {
+                    ...read,
+                    result: {
+                      ...read.result,
+                      kind: "index-failed" as const,
+                      failedStage: "text" as const,
+                    },
+                  },
             ),
         },
       });
       const result = yield* find({ query: "SQLite", projectId: project.id }).pipe(
-        Effect.provide(MemorySearch.layer.pipe(Layer.provide(slowElsewhere))),
+        Effect.provide(MemorySearch.layer.pipe(Layer.provide(failingElsewhere))),
       );
       expect(result.degraded).toEqual(["other-projects"]);
+      expect(result.otherProjectsSkipped).toEqual({
+        reason: "index-failed",
+        stage: "text",
+        elapsedMs: expect.any(Number),
+      });
       expect(result.matches.map((match) => match.id)).toContain(own.id);
       expect(result.matches.map((match) => match.id)).not.toContain(shared.node.id);
     }),

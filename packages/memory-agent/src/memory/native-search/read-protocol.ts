@@ -62,6 +62,16 @@ export function nativeReadInputLogicalBytes(input: NativeReadInput): number {
   return bytes;
 }
 
+/** The stages of a native read, in the order it runs them. */
+export const ReadStage = Schema.Literals([
+  "candidate",
+  "vector",
+  "mapping",
+  "text",
+  "morph",
+  "coverage",
+]);
+
 export const NativeReadOutput = Schema.Struct({
   kind: Schema.Literals([
     "success",
@@ -87,6 +97,7 @@ export const NativeReadOutput = Schema.Struct({
   morphMs: elapsed,
   mappingMs: elapsed,
   coverageMs: elapsed,
+  failedStage: Schema.optional(Schema.NullOr(ReadStage)),
   inputLogicalBytes: Bytes,
   outputLogicalBytes: Bytes,
 });

@@ -6,6 +6,7 @@ import {
   Context,
   Effect,
   Layer,
+  Result,
   Schema,
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -17,7 +18,8 @@ import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
 import { ChunkSpan } from "./embedding/chunks.ts";
-import { maxVectorK, type NativeReadInput } from "./native-search/read-protocol.ts";
+import { maxVectorK, type NativeReadInput, ReadStage } from "./native-search/read-protocol.ts";
+import { NativeOwnerFailed } from "./native-search/worker-protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
 
 export interface FindInput {
@@ -65,6 +67,8 @@ export interface FindResult {
    * projects when reading them ran out of time.
    */
   readonly degraded: readonly ("vector" | "morph" | "other-projects")[];
+  /** Why the other projects were skipped, when `degraded` names them. */
+  readonly otherProjectsSkipped?: SkippedRead;
   /**
    * Statements not embedded yet; they are only reachable by text match or graph edges, as tool calls
    * and results always are.
@@ -81,12 +85,25 @@ export class NativeMemorySearchFailed extends Schema.TaggedError<NativeMemorySea
   "NativeMemorySearchFailed",
   {
     reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
+    /** The stage the native read stopped in, when it got that far. */
+    stage: Schema.optional(ReadStage),
+    /** How long the native read ran before it stopped. */
+    elapsedMs: Schema.optional(Schema.Finite),
   },
 ) {
   // The model and logs read the reason; without it a failed search looks like an empty one.
   override get message() {
-    return `Memory search stopped (${this.reason}).`;
+    const where = this.stage === undefined ? "" : ` in the ${this.stage} stage`;
+    const after = this.elapsedMs === undefined ? "" : ` after ${Math.round(this.elapsedMs)} ms`;
+    return `Memory search stopped (${this.reason})${where}${after}.`;
   }
+}
+
+/** A read the search went on without: its failure's reason, and where and when it stopped. */
+export interface SkippedRead {
+  readonly reason: NativeMemorySearchFailed["reason"] | NativeOwnerFailed["reason"];
+  readonly stage?: NativeMemorySearchFailed["stage"];
+  readonly elapsedMs?: number;
 }
 
 const snippetLength = 300;
@@ -333,7 +350,17 @@ const make = (tuning: SearchTuning) =>
           };
         }
         default:
-          return yield* NativeMemorySearchFailed.make({ reason: result.kind });
+          return yield* NativeMemorySearchFailed.make({
+            reason: result.kind,
+            ...optionalProperty("stage", result.failedStage ?? undefined),
+            elapsedMs:
+              result.candidateMs +
+              result.vectorMs +
+              result.mappingMs +
+              result.textMs +
+              result.morphMs +
+              result.coverageMs,
+          });
       }
     });
 
@@ -384,26 +411,35 @@ const make = (tuning: SearchTuning) =>
           outputBudgetBytes: 1048576,
         });
       // The conversation's own project is read first, on its own budget. The other projects hold
-      // most of the memory; a read of them that runs out of time leaves the project's matches
-      // standing and says so, instead of failing the whole search.
+      // most of the memory; a failed read of them leaves the project's matches standing and says
+      // why, so the model can judge whether to search again. The own read's failure fails the
+      // search.
       const [own, ...others] = allowed;
       const ownSeeds = yield* readOver([own!]);
+      const skip = (skipped: SkippedRead) =>
+        Effect.sync(() => {
+          degraded.push("other-projects");
+          return Result.fail(skipped);
+        });
       const otherSeeds =
         others.length === 0
-          ? Option.none()
+          ? Result.succeed(Option.none())
           : yield* readOver(others).pipe(
-              Effect.map(Option.some),
-              Effect.catchIf(
-                (error) =>
-                  Schema.is(NativeMemorySearchFailed)(error) && error.reason === "budget-exceeded",
-                () =>
-                  Effect.as(
-                    Effect.sync(() => degraded.push("other-projects")),
-                    Option.none(),
-                  ),
-              ),
+              Effect.map((seeds) => Result.succeed(Option.some(seeds))),
+              Effect.catchTags({
+                NativeMemorySearchFailed: ({ reason, stage, elapsedMs }) =>
+                  skip({
+                    reason,
+                    ...optionalProperty("stage", stage),
+                    ...optionalProperty("elapsedMs", elapsedMs),
+                  }),
+                VectorIndexError: ({ cause }) =>
+                  skip({
+                    reason: Schema.is(NativeOwnerFailed)(cause) ? cause.reason : "index-failed",
+                  }),
+              }),
             );
-      const scopes = [ownSeeds, ...Option.toArray(otherSeeds)];
+      const scopes = [ownSeeds, ...Option.toArray(Option.flatten(Result.getSuccess(otherSeeds)))];
       if (scopes.some((scope) => scope.vectorUnavailable) && !degraded.includes("vector"))
         degraded.unshift("vector");
       // The projects' matches are disjoint. Cosine scores compare across reads, so vectors merge
@@ -421,6 +457,7 @@ const make = (tuning: SearchTuning) =>
           unindexed: ownSeeds.coverage.unindexed,
           uninterpreted: scopes.reduce((sum, scope) => sum + scope.coverage.uninterpreted, 0),
         },
+        otherProjectsSkipped: Option.getOrUndefined(Result.getFailure(otherSeeds)),
       };
     });
 
@@ -430,12 +467,8 @@ const make = (tuning: SearchTuning) =>
         const allowed = yield* allowedProjects(input.projectId, input.crossProject ?? true);
         const degraded: FindResult["degraded"][number][] = [];
 
-        const { byVector, byText, byMorph, coverage, spans } = yield* collectSeeds(
-          input,
-          allowed,
-          limit,
-          degraded,
-        );
+        const { byVector, byText, byMorph, coverage, spans, otherProjectsSkipped } =
+          yield* collectSeeds(input, allowed, limit, degraded);
         // The vector list is always full, related or not. For a query that names something
         // exactly it would outvote the text match, so the text ranking goes first and counts more.
         const morph = byMorph.length > 0 ? [byMorph] : [];
@@ -501,6 +534,7 @@ const make = (tuning: SearchTuning) =>
           matches,
           complete: walk.complete && walk.visits.length <= limit,
           degraded,
+          ...optionalProperty("otherProjectsSkipped", otherProjectsSkipped),
           unindexed,
           uninterpreted,
         } satisfies FindResult;

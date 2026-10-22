@@ -1383,7 +1383,8 @@
 - 증상: 실제 기억(71개 프로젝트, 노드 23만, `agent.db` 3.7GB)에서 `find_memory`와 자동 recall이 자주 `budget-exceeded`로 실패했다. 단계별 시간을 span(`MemorySearch.readSeeds`)에 남겨 보니 2초 예산을 SQL이 썼고 벡터 엔진은 0.2~13ms였다.
   - 벡터 hit의 id 매핑이 `COALESCE(c.vector_id,n.seq) IN (…)`로 찾느라 인덱스를 못 타고 허용 프로젝트의 모든 노드를 텍스트까지 읽었다(500~1750ms, 재현 4.8s). 후보 단계가 같은 스냅샷에서 이미 거른 부모 seq의 rowid 조회로 바꿨다(0.006s, 결과 동일).
   - 두 글자 검색어 `instr` 검색은 project 인덱스로 모든 프로젝트를 훑은 뒤 일치 행 전부를 정렬했다. `+n.project_id`로 최신 rowid부터 훑다 LIMIT에서 멈추게 했다(결과 동일). 흔한 단어 0.70s→0.002s, 드문 단어는 여전히 전체를 훑어 약 1s다.
-- 결정: 대화의 프로젝트를 먼저 자기 2초 예산으로 읽고, cross recall이 허용한 다른 프로젝트를 따로 2초 예산으로 읽는다. 다른 프로젝트 읽기만 `budget-exceeded`이면 검색은 실패하지 않고 `degraded`에 `"other-projects"`를 넣어 현재 프로젝트 결과를 돌려준다. 그 밖의 실패는 그대로 올린다. 네이티브 worker는 한 번에 한 read만 돌므로 두 read는 순서대로 돈다.
+- 결정: 대화의 프로젝트를 먼저 자기 2초 예산으로 읽고, cross recall이 허용한 다른 프로젝트를 따로 2초 예산으로 읽는다. 네이티브 worker는 한 번에 한 read만 돌므로 두 read는 순서대로 돌고, 느린 검색 하나가 최악일 때 약 4초(임베딩 별도)까지 걸리는 것을 받아들인다.
+- 사용자 결정: 다른 프로젝트 읽기는 어떤 이유로 실패해도 검색을 실패시키지 않는다. `degraded`에 `"other-projects"`를 넣고 `otherProjectsSkipped`에 이유(`budget-exceeded`·`read-failed`·`index-failed`·worker 사유), 멈춘 단계, 경과 시간을 실어 현재 프로젝트 결과와 함께 돌려준다. 모델이 다시 검색할지 판단할 근거다. 현재 프로젝트 읽기의 실패는 검색 전체의 실패이고, 그 오류 문장에도 멈춘 단계와 경과 시간을 넣는다(`Memory search stopped (budget-exceeded) in the text stage after 1903 ms.`).
 - 합치기: 두 read의 결과는 서로 겹치지 않는다. 벡터는 cosine 점수가 read 사이에 비교되므로 점수순으로 합치고, text·morph는 순위만 있어 현재 프로젝트부터 번갈아 합친 뒤 지금처럼 RRF로 묶는다. 전체에서 상위 k개를 뽑던 이전과 달리 각 범위의 상위 k개가 들어오므로 현재 프로젝트 결과가 더 많이 남는다.
 - 남은 일: 드문 두 글자 검색어의 전체 스캔(질의당 검색어 수만큼 반복)은 따로 정한다. 후보는 검색어 합치기, text 단계 시간 상한, 두 글자 색인이다.
 
