@@ -1,5 +1,6 @@
 import { Effect, Match, Option, Result, Schema } from "effect";
 import {
+  AppEvents,
   GoalOrder,
   KanbanConcurrency,
   KanbanSettings,
@@ -63,6 +64,8 @@ export function action({ request }: Route.ActionArgs) {
             yield* projects.get(projectId);
             if (before !== null) yield* projects.get(before);
             yield* (yield* ProjectScheduler).moveProject(projectId, before);
+            // Other windows' kanban settings show the order too, so they read it again.
+            (yield* AppEvents).publishGlobal("kanban");
           }),
       });
       return yield* settings;

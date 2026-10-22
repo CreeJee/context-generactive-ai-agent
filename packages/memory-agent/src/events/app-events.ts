@@ -15,7 +15,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 
 export type SessionEventTopic = "all" | "run-state" | "queue" | "subagents" | "relayed-approvals";
 export type ProjectEventTopic = "all" | "sessions";
-export type GlobalEventTopic = "all" | "auth" | "imports" | "embedding" | "projects";
+export type GlobalEventTopic = "all" | "auth" | "imports" | "embedding" | "projects" | "kanban";
 
 export type AppChangedEvent =
   | {
