@@ -16,6 +16,7 @@ import { Hex } from "effect/encoding";
 import { GlobalConfig } from "../config/global-config.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
 import { DefectReporter, type DefectEvent, type RecentDefect } from "../runtime/defect-reporter.ts";
+import { tagOfUnknown } from "../runtime/failure-tag.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { ReportDelivery } from "./discord-webhook.ts";
@@ -33,13 +34,11 @@ const contentLimit = 2_000;
 const hashLength = 12;
 const hashedAnnotations = ["sessionId", "goalInstanceId"] as const;
 
-const DefectName = Schema.Struct({ _tag: Schema.String });
 const ErrorParts = Schema.Struct({
   name: Schema.String,
   message: Schema.optional(Schema.String),
   stack: Schema.optional(Schema.String),
 });
-const decodeDefectName = Schema.decodeUnknownOption(DefectName);
 const decodeErrorParts = Schema.decodeUnknownOption(ErrorParts);
 
 /** One defect as the message describes it, before redaction. */
@@ -59,10 +58,9 @@ const factsOf = (event: DefectEvent, span: Option.Option<string>): DefectFacts =
     }),
   )[0];
   const parts = decodeErrorParts(defect);
-  const tag = Option.match(decodeDefectName(defect), {
-    onSome: ({ _tag }) => _tag,
-    onNone: () => Option.match(parts, { onSome: ({ name }) => name, onNone: () => "Defect" }),
-  });
+  const tag = Option.getOrElse(tagOfUnknown(defect), () =>
+    Option.match(parts, { onSome: ({ name }) => name, onNone: () => "Defect" }),
+  );
   return {
     tag,
     location: Option.match(span, {

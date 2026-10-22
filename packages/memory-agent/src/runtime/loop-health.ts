@@ -1,4 +1,5 @@
 import { Cause, Data, Effect, Schedule, Schema } from "effect";
+import { tagOf } from "./failure-tag.ts";
 import { logDefect, logFailure } from "./logged-failures.ts";
 
 /**
@@ -81,7 +82,7 @@ export const superviseLoopStep =
       Effect.tap(() => setHealth(healthyLoop)),
       Effect.map((value): LoopStep<A> => LoopStep.Continued({ value })),
       Effect.catch((error) => {
-        const health: LoopHealth = LoopHealth.cases.Exhausted.make({ error: error._tag });
+        const health: LoopHealth = LoopHealth.cases.Exhausted.make({ error: tagOf(error) });
         return logFailure(
           message,
           annotations,

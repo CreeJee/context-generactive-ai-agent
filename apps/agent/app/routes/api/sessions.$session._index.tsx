@@ -11,20 +11,13 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
 
-const ChangeSession = Schema.Union([
-  Schema.Struct({
-    _tag: Schema.tagDefaultOmit("Archive"),
-    archived: Schema.Boolean,
-    idempotencyKey: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    _tag: Schema.tagDefaultOmit("Delete"),
-    delete: Schema.Literal(true),
-    idempotencyKey: Schema.String,
-  }),
-  Schema.Struct({ _tag: Schema.tagDefaultOmit("Phase"), phase: WorkflowPhase }),
-  Schema.Struct({ _tag: Schema.tagDefaultOmit("Control"), workflowAction: WorkflowAction }),
-]);
+/** What the page asks of one conversation; the browser client builds the same cases. */
+const ChangeSession = Schema.TaggedUnion({
+  Archive: { archived: Schema.Boolean, idempotencyKey: Schema.optional(Schema.String) },
+  Delete: { idempotencyKey: Schema.String },
+  Phase: { phase: WorkflowPhase },
+  Control: { workflowAction: WorkflowAction },
+});
 
 /**
  * GET /api/sessions/:session?holder= — run state the transcript does not carry: whether a run is
@@ -42,8 +35,9 @@ export function loader({ request, params }: Route.LoaderArgs) {
 }
 
 /**
- * POST /api/sessions/:session { archived } — archives the conversation or restores it. Refused
- * while it is answering (409) or another page holds it (423).
+ * POST /api/sessions/:session — an `Archive` body archives the conversation or restores it, a
+ * `Delete` body deletes it, `Phase` and `Control` bodies move or pause its workflow. Refused while
+ * it is answering (409) or another page holds it (423).
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export function action({ request, params }: Route.ActionArgs) {

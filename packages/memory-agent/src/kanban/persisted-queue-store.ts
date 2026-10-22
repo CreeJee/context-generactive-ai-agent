@@ -14,6 +14,7 @@ import {
 import { Crypto, Option, Predicate, Schema, Scope } from "effect";
 import { PersistedQueue } from "effect/persistence";
 import { SqlClient, type SqlError } from "effect/sql";
+import { tagOfUnknown } from "../runtime/failure-tag.ts";
 
 /**
  * `PersistedQueueStore` on the owner Database connection (`persisted_queue_items`), so card runs
@@ -92,10 +93,7 @@ const isDeadLetterSignal = Predicate.isTagged("~effect/persistence/PersistedQueu
 const failureSummary = (cause: Cause.Cause<unknown>) => {
   const tags = cause.reasons.map((reason) =>
     Match.valueTags(reason, {
-      Fail: ({ error }) =>
-        Predicate.hasProperty(error, "_tag") && Predicate.isString(error._tag)
-          ? error._tag
-          : "Failure",
+      Fail: ({ error }) => Option.getOrElse(tagOfUnknown(error), () => "Failure"),
       Die: () => "Defect",
       Interrupt: () => "Interrupted",
     }),

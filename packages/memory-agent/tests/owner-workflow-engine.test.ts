@@ -5,7 +5,7 @@ import { SqlClient } from "effect/sql";
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { ownerWorkflowEngineLayer } from "../src/workflow/owner-workflow-engine.ts";
+import { ownerWorkflowEngineLayer, workflowName } from "../src/workflow/owner-workflow-engine.ts";
 import {
   OwnerWorkflowAdmission,
   OwnerWorkflowAdmissionResult,
@@ -167,7 +167,7 @@ describe("owner workflow engine", () => {
           const sql = yield* SqlClient.SqlClient;
           const admission = yield* OwnerWorkflowAdmission;
           const request = {
-            workflowName: ContractWorkflow._tag,
+            workflowName: workflowName(ContractWorkflow),
             executionId: "atomic-execution",
             payload: { value: "bound" },
           };
@@ -199,7 +199,7 @@ describe("owner workflow engine", () => {
           ).toEqual([
             {
               execution_id: "atomic-execution",
-              workflow_name: ContractWorkflow._tag,
+              workflow_name: workflowName(ContractWorkflow),
             },
           ]);
 

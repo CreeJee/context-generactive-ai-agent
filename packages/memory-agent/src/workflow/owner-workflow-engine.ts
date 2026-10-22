@@ -27,6 +27,12 @@ import {
   StoredWorkflowResult,
 } from "./owner-workflow-storage.ts";
 
+/**
+ * The engine's name for a workflow: the tag effect/workflow gives it, which the stored executions
+ * and clocks record.
+ */
+export const workflowName = (workflow: Workflow.Any): string => workflow._tag;
+
 export class OwnerWorkflowEngineError extends Schema.TaggedError<OwnerWorkflowEngineError>()(
   "OwnerWorkflowEngineError",
   {
@@ -161,7 +167,7 @@ const makeEngine = Effect.gen(function* () {
   ): Effect.fn.Return<LiveExecution> {
     const current = executions.get(executionId);
     if (current !== undefined) {
-      if (!Predicate.isTagged(current.workflow, workflow._tag))
+      if (!Predicate.isTagged(current.workflow, workflowName(workflow)))
         return yield* Effect.die(
           engineFailure("execution.lookup", "execution_conflict", executionId),
         );
@@ -172,7 +178,7 @@ const makeEngine = Effect.gen(function* () {
       return yield* Effect.die(
         engineFailure("execution.lookup", "execution_conflict", executionId),
       );
-    if (stored.value.workflowName !== workflow._tag)
+    if (stored.value.workflowName !== workflowName(workflow))
       return yield* Effect.die(
         engineFailure("execution.lookup", "execution_conflict", executionId),
       );
@@ -197,7 +203,7 @@ const makeEngine = Effect.gen(function* () {
   ): Effect.fn.Return<void> {
     const stored = yield* defect("execution.read", () => storage.execution(executionId));
     if (Option.isNone(stored) || stored.value.status === "completed") return;
-    const entry = yield* registered(workflow._tag);
+    const entry = yield* registered(workflowName(workflow));
     const state = yield* liveExecution(workflow, executionId);
     const running = state.fiber;
     const existing = running?.pollUnsafe();
@@ -295,15 +301,14 @@ const makeEngine = Effect.gen(function* () {
         execute: (payload, executionId) => Workflow.intoResult(execute(payload, executionId)),
         scope,
       };
-      workflows.set(workflow._tag, entry);
+      const name = workflowName(workflow);
+      workflows.set(name, entry);
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          if (workflows.get(workflow._tag) === entry) workflows.delete(workflow._tag);
+          if (workflows.get(name) === entry) workflows.delete(name);
         }),
       );
-      const pending = yield* defect("execution.pending", () =>
-        storage.pendingExecutions(workflow._tag),
-      );
+      const pending = yield* defect("execution.pending", () => storage.pendingExecutions(name));
       yield* Effect.forEach(
         pending,
         (execution) => resumeExecution(workflow, execution.executionId),
@@ -322,7 +327,7 @@ const makeEngine = Effect.gen(function* () {
       Effect.gen(function* () {
         const admitted = yield* defect("execution.admit", () =>
           storage.admit({
-            workflowName: workflow._tag,
+            workflowName: workflowName(workflow),
             executionId: options.executionId,
             payload: options.payload,
             parentExecutionId: options.parent?.executionId,
@@ -456,7 +461,7 @@ const makeEngine = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const dueAt = yield* defect("clock.schedule", () =>
           storage.scheduleClock({
-            workflowName: workflow._tag,
+            workflowName: workflowName(workflow),
             executionId: options.executionId,
             clockName: options.clock.name,
             deferredName: options.clock.deferred.name,
@@ -464,7 +469,7 @@ const makeEngine = Effect.gen(function* () {
           }),
         );
         yield* armClock({
-          workflowName: workflow._tag,
+          workflowName: workflowName(workflow),
           executionId: options.executionId,
           clockName: options.clock.name,
           deferredName: options.clock.deferred.name,

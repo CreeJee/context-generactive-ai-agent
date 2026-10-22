@@ -1,4 +1,5 @@
 import { nativeFailure } from "../runtime/native-effect.ts";
+import { tagOfUnknown } from "../runtime/failure-tag.ts";
 import { Function as EffectFunction } from "effect";
 import { Cause, Context, Effect, Exit, HashMap, Result, Option, Predicate, Schema } from "effect";
 import { type RunTrace } from "../runtime/run-trace.ts";
@@ -63,11 +64,8 @@ export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
   }
 }
 
-const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
-
 /** The failure's tag, or its class name when it has none (a plain `Error`, an SDK's error). */
-export const errorTag = (error: Error) =>
-  Option.match(decodeTagged(error), { onNone: () => error.name, onSome: ({ _tag }) => _tag });
+export const errorTag = (error: Error) => Option.getOrElse(tagOfUnknown(error), () => error.name);
 
 const toolAuthored = /^([a-z_]+): ([\s\S]*)$/;
 

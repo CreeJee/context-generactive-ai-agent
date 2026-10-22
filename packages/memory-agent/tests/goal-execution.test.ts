@@ -11,6 +11,7 @@ import {
   GoalExecutionSuccess,
 } from "../src/workflow/goal-execution-contracts.ts";
 import { Admission } from "../src/workflow/run-bindings.ts";
+import { workflowName } from "../src/workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowAdmissionResult } from "../src/workflow/owner-workflow-storage.ts";
 import {
   GoalExecution,
@@ -84,7 +85,7 @@ describe("GoalExecution workflow", () => {
             "SELECT execution_id, workflow_name FROM owner_workflow_executions WHERE execution_id = ?",
             executionId,
           ),
-        ).toEqual({ execution_id: executionId, workflow_name: GoalExecution._tag });
+        ).toEqual({ execution_id: executionId, workflow_name: workflowName(GoalExecution) });
 
         yield* goals.succeed(payload);
         const first = yield* GoalExecution.execute(payload);

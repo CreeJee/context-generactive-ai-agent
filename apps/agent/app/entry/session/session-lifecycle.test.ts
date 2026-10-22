@@ -7,6 +7,7 @@ import {
   ArchiveTaskResult,
   makeSessionLifecycleClient,
   SessionArchiveResult,
+  SessionChange,
 } from "../api";
 const appFetch = vi.fn<typeof fetch>();
 const api = makeSessionLifecycleClient(appFetch);
@@ -32,17 +33,17 @@ const actions = [
   {
     name: "archive",
     invoke: () => api.setArchived(session.id, "holder-1", true),
-    change: { archived: true },
+    change: (idempotencyKey: string) => SessionChange.Archive({ archived: true, idempotencyKey }),
   },
   {
     name: "restore",
     invoke: () => api.setArchived(session.id, "holder-1", false),
-    change: { archived: false },
+    change: (idempotencyKey: string) => SessionChange.Archive({ archived: false, idempotencyKey }),
   },
   {
     name: "delete",
     invoke: () => api.deleteSession(session.id, "holder-1"),
-    change: { delete: true },
+    change: (idempotencyKey: string) => SessionChange.Delete({ idempotencyKey }),
   },
 ];
 
@@ -94,8 +95,10 @@ describe("server-authoritative session lifecycle client", () => {
         const body = yield* Schema.decodeUnknownEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
         )(requestBody);
-        expect(body).toEqual({ ...change, idempotencyKey: expect.any(String) });
-        expect(body.idempotencyKey).not.toBe("");
+        const idempotencyKey = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(
+          body.idempotencyKey,
+        );
+        expect(body).toEqual(change(idempotencyKey));
       }),
     );
 

@@ -78,6 +78,15 @@ import {
   type UncertainTool,
 } from "memory-agent/definitions";
 
+/** The session route's bodies, as `/api/sessions/:session` reads them. */
+export type SessionChange = Data.TaggedEnum<{
+  Archive: { readonly archived: boolean; readonly idempotencyKey: string };
+  Delete: { readonly idempotencyKey: string };
+  Phase: { readonly phase: WorkflowPhase };
+  Control: { readonly workflowAction: WorkflowAction };
+}>;
+export const SessionChange = Data.taggedEnum<SessionChange>();
+
 /** The kanban route's commands besides a `BoardIntent`, as `/api/sessions/:session/kanban` reads them. */
 type KanbanCommand = Data.TaggedEnum<{
   Start: {};
@@ -501,7 +510,11 @@ export const SessionArchiveResult = Data.taggedEnum<SessionArchiveResult>();
 
 export function makeSessionLifecycleClient(appFetch: typeof fetch) {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
+  function changeSessionLifecycle(
+    sessionId: string,
+    holder: string,
+    change: (idempotencyKey: string) => SessionChange,
+  ) {
     return runUiEffect(
       Effect.gen(function* () {
         const idempotencyKey = yield* browserCrypto.randomUUIDv4();
@@ -510,10 +523,7 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
             method: "POST",
             headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
             // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-            body: JSON.stringify({
-              ...change,
-              idempotencyKey: idempotencyKey,
-            }),
+            body: JSON.stringify(change(idempotencyKey)),
           }),
         );
         const body: unknown = yield* uiPromise(() => response.json());
@@ -544,9 +554,9 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
       runUiEffect(
         Effect.gen(function* () {
           const { response, body, result } = yield* uiPromise(() =>
-            changeSessionLifecycle(sessionId, holder, {
-              archived,
-            }),
+            changeSessionLifecycle(sessionId, holder, (idempotencyKey) =>
+              SessionChange.Archive({ archived, idempotencyKey }),
+            ),
           );
           if (isTruthy(result) && !ArchiveTaskResult.guards.completed(result)) return result;
           const session = Option.getOrUndefined(decodeSessionSnapshot(body));
@@ -560,9 +570,9 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
       runUiEffect(
         Effect.gen(function* () {
           const { response, result } = yield* uiPromise(() =>
-            changeSessionLifecycle(sessionId, holder, {
-              delete: true,
-            }),
+            changeSessionLifecycle(sessionId, holder, (idempotencyKey) =>
+              SessionChange.Delete({ idempotencyKey }),
+            ),
           );
           if (
             !isTruthy(result) ||
@@ -706,7 +716,7 @@ export const api = {
     call<WorkflowState>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}`,
-      { phase },
+      SessionChange.Phase({ phase }),
       { [sessionHolderHeader]: holder },
     ),
   board: (sessionId: string) =>
@@ -771,7 +781,7 @@ export const api = {
     call<WorkflowState>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}`,
-      { workflowAction },
+      SessionChange.Control({ workflowAction }),
       { [sessionHolderHeader]: holder },
     ),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */

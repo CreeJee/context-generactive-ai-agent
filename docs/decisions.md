@@ -2483,3 +2483,15 @@
 - 백엔드 로그의 `MaxListenersExceededWarning: 11 end listeners added to [Socket]`은 `NodeServices.layer`에 든 `NodeTerminal.layer`가 빌드될 때마다 `process.stdin.once("end", …)`를 붙이는데, 서버 진입점과 SDK Promise 경계 모듈 11곳이 각자 `ManagedRuntime.make(NodeServices.layer)`로 그 레이어를 따로 만들고 끝까지 닫지 않아서 생겼다.
 - `memory-agent/node-platform`에 `nodePlatformLayer`(FileSystem·Path·Crypto·Stdio·ChildProcessSpawner, Terminal 제외)와 프로세스당 하나의 런타임 `nodePlatform`을 둔다. 서버 진입점(`server/*.ts`)과 SDK Promise 경계(`oauth/node-runtime.ts`, `runtime/keyring.ts`)는 이 런타임을 쓰고, 조합 루트(`memoryAgentLayer`)·앱 런타임·설치기 레이어는 이 레이어를 provide한다. 이 프로세스는 Terminal을 읽지 않으므로 넣지 않는다.
 - 새 SDK 경계 모듈은 `ManagedRuntime.make(NodeServices.layer)`를 만들지 않고 `nodePlatform`을 가져다 쓴다. 별도 프로세스(dev 스크립트, 패키징 스크립트, profile 도구, 테스트)는 각자 한 번만 빌드하므로 `NodeServices.layer`를 그대로 둔다.
+
+## 설정 파일의 옛 gpuCheck는 읽을 때 한 번 다시 쓴다 (2026-10-22)
+
+- 사용자 결정: 0.0.17까지의 `gpuCheck.status` 형식을 계속 읽어 주는 대신 마이그레이션으로 처리한다. `config.json`에 그 형식이 있으면 `GlobalConfig.read`가 `_tag` 형식으로 바꿔 바로 다시 쓰고, `Settings` 스키마는 현재 형식(`GpuCheck`)만 안다. 공급자 없는 모델 설정을 `provider: "openai"`로 채우던 보정도 같은 자리에서 함께 쓴다.
+- 설정 파일의 마이그레이션은 이렇게 읽는 자리에서 옛 형식을 알아보고 한 번 다시 쓰는 방식으로 한다. SQLite처럼 단계 목록을 두지 않는다.
+
+## `_tag`를 직접 읽는 자리는 함수 뒤로 보낸다 (2026-10-22)
+
+- 오류의 태그로 로그·리포트·저장 요약을 만드는 코드는 `runtime/failure-tag.ts`의 `tagOf`·`tagOfUnknown`·`reasonTagOf`만 쓴다. `_tag` 프로퍼티를 읽는 곳은 이 모듈뿐이다. 제네릭 제약 `E extends { readonly _tag: string }`은 남는다.
+- 워크플로의 이름은 `owner-workflow-engine.ts`의 `workflowName(workflow)`로 얻는다. effect/workflow의 `Workflow`는 이름을 태그로만 주므로 그 경계를 이 함수 하나에 둔다.
+- `POST /api/sessions/:session` 본문은 `Archive`·`Delete`·`Phase`·`Control` 태그 유니온이다. 서버는 `Schema.TaggedUnion`, 브라우저는 같은 이름의 `Data.TaggedEnum`으로 만든다(kanban 라우트와 같은 방식). 모양으로 구분하던 본문(`{ archived }`, `{ delete: true }`, `{ phase }`, `{ workflowAction }`)은 더 받지 않는다.
+- 남는 `_tag` 글자는 SQL/JSON 경로 문자열, 모델 프롬프트 JSON, 영속 포맷 fixture, `PlatformError.systemError` 입력, 주석뿐이다. 외부 형식이거나 라이브러리 경계라 그대로 둔다.

@@ -1,5 +1,6 @@
-import { Cause, Effect, Match, Option, Schema } from "effect";
+import { Cause, Effect, Match, Option } from "effect";
 import { DefectReporter } from "./defect-reporter.ts";
+import { reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
 
 /**
  * Helpers for expected failures an owner logs instead of propagating. Each one logs a failure by
@@ -11,7 +12,7 @@ type Annotations = Readonly<Record<string, string>>;
 
 const tagged = <E extends { readonly _tag: string }>(annotations: Annotations, error: E) => ({
   ...annotations,
-  error: error._tag,
+  error: tagOf(error),
 });
 
 /** Logs an expected failure by its tag only, for a step whose failure ends nothing else. */
@@ -54,11 +55,6 @@ export const logDefect =
       yield* (yield* DefectReporter).report({ message, annotations, cause });
     });
 
-const decodeTagged = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }));
-const decodeReasonTag = Schema.decodeUnknownOption(
-  Schema.Struct({ reason: Schema.Struct({ _tag: Schema.String }) }),
-);
-
 /**
  * A cause as its failures' tags, for text a person or model reads and for logs. A tagged reason,
  * such as a platform error's `PermissionDenied`, is named too; messages never are.
@@ -67,12 +63,12 @@ export const failureTags = (cause: Cause.Cause<unknown>) => {
   const tags = cause.reasons.map(
     Match.valueTags({
       Fail: ({ error }) =>
-        Option.match(decodeTagged(error), {
+        Option.match(tagOfUnknown(error), {
           onNone: () => "Failure",
-          onSome: ({ _tag }) =>
-            Option.match(decodeReasonTag(error), {
-              onNone: () => _tag,
-              onSome: (failure) => `${_tag}:${failure.reason._tag}`,
+          onSome: (tag) =>
+            Option.match(reasonTagOf(error), {
+              onNone: () => tag,
+              onSome: (reason) => `${tag}:${reason}`,
             }),
         }),
       Die: () => "Defect",
