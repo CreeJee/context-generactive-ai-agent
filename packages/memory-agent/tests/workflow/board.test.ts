@@ -261,6 +261,76 @@ testAgent()("kanban board", (it) => {
     }),
   );
 
+  it.effect("closes a Plan without completing it and takes it off the project's boards", () =>
+    Effect.gen(function* () {
+      const workflows = yield* Workflows;
+
+      // A person closes an executing Plan: done cards stay, the rest are blocked and released.
+      const executing = yield* freshSession;
+      yield* workflows.updateGoal(executing, goal);
+      yield* workflows.updatePlan(executing, plan, orchestrator);
+      yield* workflows.setPhase(executing, "execute");
+      for (const [from, to] of [
+        ["ready", "in_progress"],
+        ["in_progress", "verify"],
+        ["verify", "done"],
+      ] as const)
+        yield* workflows.transitionCard(executing, { cardId: "a", from, to }, orchestrator);
+      yield* workflows.holdCard(executing, { cardId: "b", hold: true }, user);
+      const closed = yield* workflows.editBoard(
+        executing,
+        BoardEdit.cases.ClosePlan.make({ planVersion: 1 }),
+        user,
+      );
+      expect(BoardEditResult.$is("Applied")(closed)).toBe(true);
+      const state = yield* workflows.get(executing);
+      expect(state.phase).toBe("plan");
+      expect(state.plan).toMatchObject({ status: "closed", version: 1 });
+      expect(state.plan?.steps.map((step) => [step.id, step.status, step.hold])).toEqual([
+        ["a", "done", undefined],
+        ["b", "blocked", undefined],
+      ]);
+      expect(state.ledger.slice(-2).map((event) => event.kind)).toEqual([
+        "plan_closed",
+        "phase_changed",
+      ]);
+
+      // The model closes a Plan still being prepared, giving its reason.
+      const ready = yield* freshSession;
+      yield* workflows.updateGoal(ready, goal);
+      yield* workflows.updatePlan(ready, plan, orchestrator);
+      const byModel = yield* workflows.closePlan(
+        ready,
+        "done in another conversation",
+        orchestrator,
+      );
+      expect(byModel.plan?.status).toBe("closed");
+      expect(byModel.ledger.at(-1)).toMatchObject({
+        kind: "plan_closed",
+        detail: "plan v1 closed: done in another conversation",
+      });
+
+      const boards = yield* (yield* Boards).list((yield* TestEnv).project.id);
+      const ids = boards.map((board) => board.sessionId);
+      expect(ids).not.toContain(executing);
+      expect(ids).not.toContain(ready);
+      const refused = [
+        yield* Effect.flip(
+          workflows.editBoard(executing, BoardEdit.cases.ClosePlan.make({ planVersion: 1 }), user),
+        ),
+        yield* Effect.flip(workflows.closePlan(ready, "again")),
+      ];
+      expect(refused).toEqual([
+        BoardEditRefused.make({ reason: "plan_closed" }),
+        BoardEditRefused.make({ reason: "plan_closed" }),
+      ]);
+
+      // A closed Plan can still be replanned.
+      const replanned = yield* workflows.updatePlan(ready, plan, orchestrator);
+      expect(replanned.plan).toMatchObject({ status: "ready", version: 2 });
+    }),
+  );
+
   it.effect("lists the project's boards: unarchived conversations with a Plan", () =>
     Effect.gen(function* () {
       const workflows = yield* Workflows;

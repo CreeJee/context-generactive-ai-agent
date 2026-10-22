@@ -3,6 +3,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  FiberMap,
   FileSystem,
   Layer,
   Option,
@@ -42,6 +43,7 @@ import {
   type CardVerification,
 } from "./card-agent.ts";
 import { CardAttempts } from "./card-attempts.ts";
+import { CardRuns } from "./card-queue.ts";
 import { CardFailure, CardHoldReason } from "./failures.ts";
 import {
   DecisionAnswer,
@@ -917,6 +919,51 @@ it.live(
           );
           expect(c.state).toEqual(DecisionState.Closed({ reason: "goal_replaced" }));
           expect(yield* decisions.inbox(board.projectId)).toEqual([]);
+        }),
+      );
+    }).pipe(withNode),
+  gitTimeout,
+);
+
+it.live(
+  "stops a closed Plan's running card and its board",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* kanbanFixture;
+      const started = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      const run = yield* openOwner(
+        fixture,
+        () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(stopped, undefined)),
+          ),
+        yield* Effect.scope,
+      );
+      yield* run(
+        Effect.gen(function* () {
+          const board = yield* startBoard(fixture, [card("a"), { ...card("b"), dependsOn: ["a"] }]);
+          const workflows = yield* Workflows;
+          yield* Deferred.await(started);
+          // The agent signals before its delivery registers it; close once it can be stopped.
+          const { running } = yield* CardRuns;
+          yield* eventually(FiberMap.has(running, `${board.goalInstanceId}:a`), Boolean);
+          const planVersion = (yield* workflows.get(board.sessionId)).plan?.version ?? 0;
+          yield* workflows.editBoard(
+            board.sessionId,
+            BoardEdit.cases.ClosePlan.make({ planVersion }),
+            user,
+          );
+          yield* (yield* KanbanOrchestrator).poke(board.goalInstanceId);
+
+          yield* Deferred.await(stopped);
+          yield* eventually(
+            (yield* CardAttempts).goal(board.goalInstanceId),
+            Option.exists((goal) => !goal.active),
+          );
+          const state = yield* workflows.get(board.sessionId);
+          expect(state.plan?.steps.map((step) => step.status)).toEqual(["blocked", "blocked"]);
         }),
       );
     }).pipe(withNode),

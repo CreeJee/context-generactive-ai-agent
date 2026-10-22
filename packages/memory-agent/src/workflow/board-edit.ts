@@ -53,6 +53,8 @@ export const BoardEdit = Schema.TaggedUnion({
   },
   MoveCard: { planVersion: Schema.Int, cardId: Schema.String, index: Index },
   CancelCard: { planVersion: Schema.Int, cardId: Schema.String },
+  /** Ends the Plan without completing it, for work that settled elsewhere or is no longer wanted. */
+  ClosePlan: { planVersion: Schema.Int },
 });
 export type BoardEdit = typeof BoardEdit.Type;
 
@@ -103,12 +105,33 @@ export class BoardEditRefused extends Schema.TaggedError<BoardEditRefused>()("Bo
   ]),
 }) {}
 
-/** A change the owner saves on the Plan, or a request it stores for an executing card. */
+/**
+ * A change the owner saves on the Plan, a request it stores for an executing card, or the Plan's
+ * end without completion.
+ */
 export type BoardEditPlan = Data.TaggedEnum<{
   Apply: { readonly plan: PlanArtifact; readonly detail: string };
   Request: { readonly cardId: string; readonly change: UserChange };
+  Close: { readonly plan: PlanArtifact; readonly detail: string };
 }>;
 export const BoardEditPlan = Data.taggedEnum<BoardEditPlan>();
+
+/** A completed or closed Plan takes no more changes. */
+export const planEnded = (plan: PlanArtifact) =>
+  plan.status === "completed" || plan.status === "closed";
+
+/**
+ * Ends a Plan without completing it. Done cards keep their evidence; every other card stays on the
+ * Plan as blocked and released, so nothing assigns it again. The version stays: closing is not a
+ * change of the cards a user edits against.
+ */
+export const closedPlan = (plan: PlanArtifact): PlanArtifact => ({
+  ...plan,
+  status: "closed",
+  steps: plan.steps.map((step) =>
+    step.status === "done" ? step : { ...Struct.omit(step, ["hold"]), status: "blocked" },
+  ),
+});
 
 /** Executing cards are the orchestrator's; a user change to one waits as a request. */
 const waitsForOrchestrator = (author: BoardAuthor, status: CardStatus) =>
@@ -177,10 +200,13 @@ export const planBoardEdit = Effect.fnUntraced(function* (
   newCardId: string,
 ): Effect.fn.Return<BoardEditPlan, BoardEditRefused | PlanDependenciesRejected> {
   if (plan === null) return yield* BoardEditRefused.make({ reason: "plan_missing" });
-  if (plan.status === "completed") return yield* BoardEditRefused.make({ reason: "plan_closed" });
+  if (planEnded(plan)) return yield* BoardEditRefused.make({ reason: "plan_closed" });
   if (plan.version !== edit.planVersion)
     return yield* BoardEditRefused.make({ reason: "plan_version_conflict" });
-  const applied = Effect.fnUntraced(function* (steps: readonly PlanStep[], detail: string) {
+  const applied = Effect.fnUntraced(function* (
+    steps: readonly PlanStep[],
+    detail: string,
+  ): Effect.fn.Return<BoardEditPlan, PlanDependenciesRejected> {
     yield* validatePlanDependencies(steps);
     return BoardEditPlan.Apply({ plan: { ...plan, steps, version: plan.version + 1 }, detail });
   });
@@ -226,6 +252,10 @@ export const planBoardEdit = Effect.fnUntraced(function* (
     }),
     EditCard: ({ cardId, patch }) => changeCard(cardId, UserChange.cases.Edit.make({ patch })),
     CancelCard: ({ cardId }) => changeCard(cardId, UserChange.cases.Cancel.make({})),
+    ClosePlan: () =>
+      Effect.succeed(
+        BoardEditPlan.Close({ plan: closedPlan(plan), detail: `plan v${plan.version} closed` }),
+      ),
   });
 });
 
@@ -264,7 +294,7 @@ export const planCardTransition = Effect.fnUntraced(function* (
   transition: CardTransition,
 ): Effect.fn.Return<{ readonly plan: PlanArtifact; readonly detail: string }, BoardEditRefused> {
   if (plan === null) return yield* BoardEditRefused.make({ reason: "plan_missing" });
-  if (plan.status === "completed") return yield* BoardEditRefused.make({ reason: "plan_closed" });
+  if (planEnded(plan)) return yield* BoardEditRefused.make({ reason: "plan_closed" });
   const card = plan.steps.find((step) => step.id === transition.cardId);
   if (card === undefined) return yield* BoardEditRefused.make({ reason: "card_missing" });
   if (card.status !== transition.from)
@@ -292,7 +322,7 @@ export const planCardHold = Effect.fnUntraced(function* (
   at: string,
 ): Effect.fn.Return<{ readonly plan: PlanArtifact; readonly detail: string }, BoardEditRefused> {
   if (plan === null) return yield* BoardEditRefused.make({ reason: "plan_missing" });
-  if (plan.status === "completed") return yield* BoardEditRefused.make({ reason: "plan_closed" });
+  if (planEnded(plan)) return yield* BoardEditRefused.make({ reason: "plan_closed" });
   const card = plan.steps.find((step) => step.id === change.cardId);
   if (card === undefined) return yield* BoardEditRefused.make({ reason: "card_missing" });
   if (change.hold) {

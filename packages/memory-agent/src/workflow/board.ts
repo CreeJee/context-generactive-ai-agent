@@ -1,7 +1,12 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GoalOrder } from "../kanban/goal-order.ts";
-import { UserChange, UserChangeRequestStatus, type UserChangeRequest } from "./board-edit.ts";
+import {
+  planEnded,
+  UserChange,
+  UserChangeRequestStatus,
+  type UserChangeRequest,
+} from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
 import {
   decodeWorkflowState,
@@ -165,7 +170,9 @@ export class Boards extends Context.Service<
               Effect.map(
                 decodeWorkflowState(row.state_json),
                 ({ plan }): readonly ProjectBoard[] =>
-                  plan === null
+                  // An ended Plan (completed or closed) leaves the project board list; its
+                  // conversation's own board keeps showing it as it ended.
+                  plan === null || planEnded(plan)
                     ? []
                     : [
                         {

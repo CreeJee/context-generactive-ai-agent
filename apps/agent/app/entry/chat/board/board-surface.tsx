@@ -96,7 +96,7 @@ export const errorText = (code: ApiErrorCode) => {
     case "not_kanban":
       return "칸반으로 실행할 때만 열을 옮길 수 있어요.";
     case "plan_closed":
-      return "완료된 계획은 바꿀 수 없어요.";
+      return "완료했거나 닫은 계획은 바꿀 수 없어요.";
     case "session_in_use":
       return "다른 창에서 이 대화를 쓰고 있어요.";
     case "plan_not_executing":
@@ -223,7 +223,8 @@ export function BoardSurface({
 
   const boardOf = (sessionId: string) =>
     boards.find((board) => board.sessionId === sessionId) ?? null;
-  const closedIn = (board: SurfaceBoard) => board.plan.status === "completed";
+  const closedIn = (board: SurfaceBoard) =>
+    board.plan.status === "completed" || board.plan.status === "closed";
   const items = inProjectOrder(
     boards
       .filter((board) => shown.length === 0 || shown.includes(board.sessionId))
@@ -279,6 +280,7 @@ export function BoardSurface({
       CancelCard: ({ cardId }) => intent(sessionId, BoardIntent.Cancel({ cardId })),
       AddCard: editBoard,
       MoveCard: editBoard,
+      ClosePlan: editBoard,
     });
   };
   /** The card leaves for the other Plan's end; the peek closes once it has. */

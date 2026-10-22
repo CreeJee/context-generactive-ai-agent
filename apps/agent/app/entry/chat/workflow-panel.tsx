@@ -48,6 +48,7 @@ export const planStatusLabels: Record<NonNullable<WorkflowState["plan"]>["status
   executing: "실행 중",
   completed: "완료",
   blocked: "막힘",
+  closed: "닫음",
 };
 
 const verificationStatusLabels: Record<

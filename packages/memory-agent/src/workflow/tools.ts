@@ -28,6 +28,13 @@ import {
   unmetDependencyText,
 } from "./plan-schedule.ts";
 
+const ClosePlanInput = Schema.Struct({
+  reason: Schema.String.pipe(Schema.check(Schema.isTrimmed(), Schema.isMinLength(1))).annotate({
+    description:
+      "Why the remaining work is not needed, such as which conversation or agent already did it.",
+  }),
+});
+
 const exposeProgressRefusal = <A, R>(
   effect: Effect.Effect<A, WorkflowProgressRefused | WorkflowStorageError, R>,
 ) =>
@@ -177,15 +184,34 @@ const make = Effect.gen(function* () {
           ),
         );
 
+        const closePlan = toolDefinition({
+          name: "close_plan",
+          description:
+            "End the current Plan without completing it when its remaining work is no longer needed: another conversation or agent already did it, it was superseded, or the user asked to drop it. A draft, ready, executing or blocked Plan can be closed; a completed or closed one cannot. Done cards keep their evidence; every other card stays as blocked and nothing runs it again, and the Plan leaves the project board. An executing workflow returns to Plan. Give the concrete reason. To change the remaining work instead, revise the Plan with update_plan. Never call this in parallel with update_plan or update_workflow_progress.",
+          inputSchema: toToolSchema(ClosePlanInput),
+        }).server((input) =>
+          run(
+            Effect.flatMap(Workflows, (workflows) =>
+              workflows.closePlan(sessionId, input.reason, author),
+            ).pipe(
+              Effect.tap(() => events.publishSession(sessionId, "run-state")),
+              Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+              Effect.catchTag("BoardEditRefused", (failure) =>
+                Effect.succeed({ error: "plan_close_refused" as const, reason: failure.reason }),
+              ),
+            ),
+          ),
+        );
+
         switch (phase) {
           case "goal":
             return [updateGoal, updateProgress, startNewGoal];
           case "plan":
-            return [updateGoal, updatePlan, startNewGoal];
+            return [updateGoal, updatePlan, closePlan, startNewGoal];
           case "execute":
-            return [updateGoal, updatePlan, updateProgress, recordBlocker];
+            return [updateGoal, updatePlan, updateProgress, recordBlocker, closePlan];
           case "verify":
-            return [updateGoal, updateProgress, recordBlocker, startNewGoal];
+            return [updateGoal, updateProgress, recordBlocker, closePlan, startNewGoal];
           case "completed":
             return [startNewGoal];
           case "chat":

@@ -11,6 +11,7 @@ const bookkeeping = HashSet.fromIterable([
   "update_workflow_progress",
   "update_goal",
   "update_plan",
+  "close_plan",
   "record_workflow_blocker",
   "read_skill",
 ]);

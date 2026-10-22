@@ -1,10 +1,18 @@
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
 import { Match } from "effect";
-import { ChevronRightIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
+import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 import {
   Collapsible,
   CollapsibleContent,
@@ -19,6 +27,7 @@ import {
 } from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
 import {
+  BoardEdit,
   type BoardView,
   type GoalMergeState,
   type HumanDecisionRequest,
@@ -26,7 +35,11 @@ import {
 } from "../api";
 import { useBoardQuery, useDecisionsQuery, useKanbanQuery } from "../queries/session";
 import { DecisionPrompt } from "./decision-prompt";
-import { KanbanAction, useKanbanMutation } from "../queries/mutations/session";
+import {
+  KanbanAction,
+  useBoardsEditMutation,
+  useKanbanMutation,
+} from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
 import { LoopHealthStatus } from "../shared/loop-health";
 import { boardColumns, cardStatusLabels } from "./board/board-moves";
@@ -222,7 +235,17 @@ function BoardSheet({
   const [adding, setAdding] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const closed = plan.status === "completed";
+  const [askClose, setAskClose] = useState(false);
+  const closed = plan.status === "completed" || plan.status === "closed";
+  const edit = useBoardsEditMutation(holder)(projectId);
+  const closePlan = () => {
+    setActionError(null);
+    setAskClose(false);
+    edit.mutate(
+      { sessionId, edit: BoardEdit.ClosePlan({ planVersion: plan.version }) },
+      { onError: (error) => setActionError(editErrorText(error)) },
+    );
+  };
   const titleOf = (cardId: string) =>
     view.cards.find(({ card }) => card.id === cardId)?.card.title ?? cardId;
   const act = (action: KanbanAction) => {
@@ -285,12 +308,51 @@ function BoardSheet({
               <PlusIcon data-icon="inline-start" />
               카드 추가
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={disabled || closed || edit.isPending}
+              onClick={() => setAskClose(true)}
+            >
+              <CircleSlashIcon data-icon="inline-start" />
+              계획 닫기
+            </Button>
             {actionError !== null && (
               <span className="text-destructive" role="alert">
                 {actionError}
               </span>
             )}
           </div>
+          <Dialog open={askClose} onOpenChange={setAskClose}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>이 계획을 닫을까요?</DialogTitle>
+                <DialogDescription>
+                  완료되지 않은 카드는 막힘으로 정리되고, 이 계획은 칸반 보드 목록에서 사라져요.
+                  대화 기록과 지금까지 끝낸 카드는 그대로 남아요.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={edit.isPending}
+                  onClick={() => setAskClose(false)}
+                >
+                  그만두기
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={edit.isPending}
+                  onClick={closePlan}
+                >
+                  사용자 요청으로 닫기
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           {(loop?.schedule != null ||
             view.pendingChanges.length > 0 ||
             view.history.length > 0) && (

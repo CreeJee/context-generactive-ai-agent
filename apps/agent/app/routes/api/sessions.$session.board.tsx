@@ -6,6 +6,7 @@ import {
   Boards,
   DecisionCloseScope,
   HumanDecisions,
+  KanbanOrchestrator,
   SessionLeases,
   Sessions,
   Workflows,
@@ -29,7 +30,8 @@ export function loader({ params }: Route.LoaderArgs) {
 
 /**
  * POST /api/sessions/:session/board { _tag, planVersion, … } — the user adds, edits, moves or
- * cancels a card. A change to an executing card is stored as a request (202) instead. Refused when
+ * cancels a card, or closes the Plan. A change to an executing card is stored as a request (202)
+ * instead. Refused when
  * another page holds the session (423), the Plan changed since the page read it (409), or the
  * dependencies would break (422).
  */
@@ -64,6 +66,11 @@ export function action({ request, params }: Route.ActionArgs) {
             }),
             "card_stopped",
           );
+      }
+      // A closed Plan's board loop stops its cards and itself on its next look; wake it now.
+      if (Predicate.isTagged(result, "Applied") && BoardEdit.guards.ClosePlan(body.success)) {
+        const goalInstanceId = yield* workflows.goalInstanceId(params.session);
+        if (goalInstanceId !== null) yield* (yield* KanbanOrchestrator).poke(goalInstanceId);
       }
       yield* (yield* AppEvents).publishSession(params.session, "run-state");
       return Match.valueTags(result, {

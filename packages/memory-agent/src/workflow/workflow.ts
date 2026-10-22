@@ -33,10 +33,13 @@ import {
 } from "./card.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import {
+  BoardEditRefused,
   BoardEditResult,
+  closedPlan,
   planBoardEdit,
   planCardHold,
   planCardTransition,
+  planEnded,
   UserChange,
   type BoardEdit,
   type CardTransition,
@@ -195,7 +198,7 @@ const planFields = {
 
 export const PlanArtifact = Schema.Struct({
   ...planFields,
-  status: Schema.Literals(["draft", "ready", "executing", "completed", "blocked"]),
+  status: Schema.Literals(["draft", "ready", "executing", "completed", "blocked", "closed"]),
 });
 export type PlanArtifact = typeof PlanArtifact.Type;
 
@@ -214,6 +217,7 @@ const LedgerEvent = Schema.Struct({
     "verification_recorded",
     "verification_invalidated",
     "board_updated",
+    "plan_closed",
   ]),
   detail: Schema.String,
 });
@@ -329,7 +333,15 @@ const PersistedGoalArtifact = Schema.Struct({
 const PersistedPlanArtifact = Schema.Struct({
   ...planFields,
   steps: Schema.Array(PersistedPlanStep),
-  status: Schema.Literals(["draft", "ready", "approved", "executing", "completed", "blocked"]),
+  status: Schema.Literals([
+    "draft",
+    "ready",
+    "approved",
+    "executing",
+    "completed",
+    "blocked",
+    "closed",
+  ]),
 });
 const PersistedWorkflowState = Schema.Struct({
   phase: WorkflowPhase,
@@ -599,6 +611,26 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       kind,
       detail,
     });
+    /** The state after a Plan ends without completion; an executing workflow goes back to Plan. */
+    const closing = (current: WorkflowState, plan: PlanArtifact, detail: string): WorkflowState => {
+      const phase =
+        current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
+      const closed: WorkflowState = {
+        ...current,
+        phase,
+        plan: { ...plan, updatedAt: nowIso() },
+        ledger: [...current.ledger, event(current, "plan_closed", detail)],
+      };
+      return phase === current.phase
+        ? closed
+        : {
+            ...closed,
+            ledger: [
+              ...closed.ledger,
+              event(closed, "phase_changed", `${current.phase} -> plan (plan closed)`),
+            ],
+          };
+    };
 
     const refuseNewGoal = (reason: NewGoalTransitionRefused["reason"]) =>
       Effect.fail(NewGoalTransitionRefused.make({ reason }));
@@ -1287,6 +1319,28 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         ),
 
       /**
+       * Ends the Plan without completing it, with the author's reason. Refused when there is no
+       * Plan or it already ended.
+       */
+      closePlan: (sessionId: string, reason: string, author?: BoardAuthor) =>
+        locked(
+          sessionId,
+          Effect.gen(function* () {
+            const current = yield* get(sessionId);
+            if (current.plan === null)
+              return yield* BoardEditRefused.make({ reason: "plan_missing" });
+            if (planEnded(current.plan))
+              return yield* BoardEditRefused.make({ reason: "plan_closed" });
+            const detail = `plan v${current.plan.version} closed: ${reason}`;
+            return yield* save(
+              sessionId,
+              closing(current, closedPlan(current.plan), detail),
+              author,
+            );
+          }),
+        ),
+
+      /**
        * Saves a board change with its author. A user's change to an executing card is stored as a
        * pending request for the orchestrator and leaves the card as it is.
        */
@@ -1327,6 +1381,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   createdAt: now,
                 };
                 return BoardEditResult.Requested({ request });
+              }),
+              Close: Effect.fnUntraced(function* ({ plan, detail }) {
+                const next = closing(current, plan, detail);
+                return BoardEditResult.Applied({ state: yield* save(sessionId, next, author) });
               }),
             });
           }),

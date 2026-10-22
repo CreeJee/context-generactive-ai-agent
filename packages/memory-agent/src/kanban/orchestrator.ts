@@ -42,6 +42,7 @@ import { PersistedQueueItems } from "./persisted-queue-store.ts";
 import { boardOps } from "./board-ops.ts";
 import { CardWorktrees, WorktreeDisposition, type CardRef } from "./worktree.ts";
 import {
+  DecisionCloseScope,
   DecisionKind,
   HumanDecisions,
   type DecisionAnswer,
@@ -759,6 +760,22 @@ const make = (options: KanbanOrchestratorOptions) =>
         return "stopped" as const;
       }
       let state = yield* workflows.get(goal.sessionId);
+      if (state.plan?.status === "closed") {
+        // A closed Plan runs no card again: its running cards stop, its board stops and its
+        // people's waits close with the cards.
+        for (const step of state.plan.steps) {
+          yield* runs.stop(goalInstanceId, step.id);
+          yield* FiberMap.remove(integrations, `${goalInstanceId}:${step.id}`);
+        }
+        yield* attempts.stopGoal(goalInstanceId);
+        yield* decisions.close(
+          DecisionCloseScope.Goal({ sessionId: goal.sessionId, goalInstanceId }),
+          "card_stopped",
+        );
+        yield* scheduler.forget(goalInstanceId);
+        yield* scheduler.clearNotices(goalInstanceId);
+        return "stopped" as const;
+      }
       const reasons: KanbanAttentionReason[] = [];
       const goalVersion = state.goal?.version ?? goal.goalVersion;
       if (goalVersion > goal.goalVersion && goal.hold === null) {

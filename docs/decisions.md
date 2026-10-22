@@ -2505,3 +2505,12 @@
 - 워크플로의 이름은 `owner-workflow-engine.ts`의 `workflowName(workflow)`로 얻는다. effect/workflow의 `Workflow`는 이름을 태그로만 주므로 그 경계를 이 함수 하나에 둔다.
 - `POST /api/sessions/:session` 본문은 `Archive`·`Delete`·`Phase`·`Control` 태그 유니온이다. 서버는 `Schema.TaggedUnion`, 브라우저는 같은 이름의 `Data.TaggedEnum`으로 만든다(kanban 라우트와 같은 방식). 모양으로 구분하던 본문(`{ archived }`, `{ delete: true }`, `{ phase }`, `{ workflowAction }`)은 더 받지 않는다.
 - 남는 `_tag` 글자는 SQL/JSON 경로 문자열, 모델 프롬프트 JSON, 영속 포맷 fixture, `PlatformError.systemError` 입력, 주석뿐이다. 외부 형식이거나 라이브러리 경계라 그대로 둔다.
+
+## 끝난 Plan은 지우지 않고 닫는다 (2026-10-22)
+
+- 사용자 결정: 다른 에이전트나 대화가 이미 한 일의 Plan이 보드에 남는 문제는 Plan을 지워서 풀지 않는다. 이미 만들어진 Plan을 재검토해서, 남은 일을 다시 짜거나(`update_plan`) 통째로 닫는다. 준비 단계(draft/ready) Plan도 닫을 수 있고, AI도 닫을 수 있으며, 사용자 요청으로 닫는 경로도 둔다.
+- Plan 상태에 `closed`를 더한다. 완료(`completed`)와 달리 완료 근거·검증 없이 끝난 상태다. 닫으면 done 카드는 근거와 함께 남고, 나머지 카드는 blocked로 남으며 보류(hold)가 풀린다. Plan 버전은 그대로다. 실행(execute)·검증(verify) 중이었으면 워크플로는 Plan 단계로 돌아가고, 원장에 `plan_closed`(이유 포함)와 단계 변경이 남는다. 닫힌 Plan은 완료된 Plan처럼 보드 편집을 `plan_closed`로 거절하고, `update_plan`으로 새 버전을 짜는 것은 그대로 된다.
+- 사용자 경로: 대화 보드 Sheet의 "계획 닫기" → 확인 Dialog → `BoardEdit.ClosePlan{planVersion}`. 본 버전이 낡았으면 `plan_version_conflict`로 거절한다. 작성자는 `User`로 기록된다.
+- AI 경로: `close_plan{reason}` 도구를 Plan·Execute·Verify 단계에 준다. `update_workflow_progress`는 Plan 단계에 없어서 준비 단계 Plan을 닫을 수 없기 때문에 따로 둔다. 작성자는 그 run의 `Orchestrator`다.
+- 칸반: 보드 루프가 닫힌 Plan을 보면 그 Goal의 실행 중 카드 agent와 통합을 멈추고, 보드를 stopped로 바꾸고, 사람 판단 대기를 `card_stopped`로 닫고 스케줄러에서 뺀다. 사용자 경로는 저장 뒤 루프를 바로 깨우고, AI 경로는 다음 look(최대 poll 간격)에 처리된다. 끝난 작업트리 정리는 Goal이 바뀔 때(Superseded)와 같이 하지 않는다.
+- 프로젝트 보드 목록(`Boards.list`)은 완료되거나 닫힌 Plan을 빼고 돌려준다. "우선순위 트리 (2026-10-22)"의 "보드 밖 Plan"에는 이제 실행 전 Plan만 보인다. 끝난 Plan은 자기 대화의 보드와 워크플로 패널에서 "완료"·"닫음"으로 계속 보인다.
