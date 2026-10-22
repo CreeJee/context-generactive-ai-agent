@@ -17,7 +17,7 @@ import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
 import { ChunkSpan } from "./embedding/chunks.ts";
-import { maxVectorK } from "./native-search/read-protocol.ts";
+import { maxVectorK, type NativeReadInput } from "./native-search/read-protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
 
 export interface FindInput {
@@ -60,8 +60,11 @@ export interface FindResult {
   readonly matches: readonly Match[];
   /** False when more matches exist beyond `limit` or graph expansion stopped at its budget. */
   readonly complete: boolean;
-  /** Search paths that failed and were skipped, e.g. vector search without the model. */
-  readonly degraded: readonly ("vector" | "morph")[];
+  /**
+   * Search paths that failed and were skipped, e.g. vector search without the model, or the other
+   * projects when reading them ran out of time.
+   */
+  readonly degraded: readonly ("vector" | "morph" | "other-projects")[];
   /**
    * Statements not embedded yet; they are only reachable by text match or graph edges, as tool calls
    * and results always are.
@@ -117,6 +120,12 @@ export function fuseRanks(input: {
   const best = weights.reduce((sum, weight) => sum + weight, 0) / (fusionK + 1);
   return MutableHashMap.fromIterable([...scores].map(([id, score]) => [id, score / best]));
 }
+
+/** The lists' ids in turns: every list's first, then every list's second, and so on. */
+const alternate = (lists: readonly (readonly string[])[]) =>
+  Array.from({ length: Math.max(0, ...lists.map((list) => list.length)) }, (_, rank) =>
+    lists.flatMap((list) => list.slice(rank, rank + 1)),
+  ).flat();
 
 /**
  * Whether a query names something exactly: an error code, a path or file name, an identifier, a
@@ -272,11 +281,67 @@ const make = (tuning: SearchTuning) =>
           )
         : Effect.succeed([projectId]);
 
+    /** One native read of seeds over some of the allowed projects. */
+    const readSeeds = Effect.fn("MemorySearch.readSeeds")(function* (input: NativeReadInput) {
+      const { result } = yield* vectors.backend.read(input);
+      // Where the read's time went, kept on a failed read too: the stage it stopped in is timed
+      // up to the failure.
+      yield* Effect.annotateCurrentSpan({
+        kind: result.kind,
+        allowedProjects: input.allowedProjects.length,
+        shortTerms: input.shortTerms.length,
+        candidateCount: result.candidateCount,
+        sqliteExecutions: result.sqliteExecutions,
+        candidateMs: result.candidateMs,
+        vectorMs: result.vectorMs,
+        mappingMs: result.mappingMs,
+        textMs: result.textMs,
+        morphMs: result.morphMs,
+        coverageMs: result.coverageMs,
+      });
+      switch (result.kind) {
+        case "cancelled":
+          return yield* Effect.interrupt;
+        case "success": {
+          const spanOf = new Map(
+            (yield* chunkSpans(result.vectorSeqs.map(Number)).pipe(
+              Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
+            )).map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
+          );
+          // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
+          // span stored for a node wins.
+          const spans = result.vectorSeqs.reduce((spans, seq, index) => {
+            const id = result.vectorIds[index]!;
+            const span = spanOf.get(Number(seq));
+            if (span !== undefined && !MutableHashMap.has(spans, id))
+              MutableHashMap.set(spans, id, span);
+            return spans;
+          }, MutableHashMap.empty<string, ChunkSpan>());
+          return {
+            vector: result.vectorIds.map((id, index) => ({
+              id,
+              score: result.vectorScores[index]!,
+            })),
+            text: result.textIds,
+            morph: result.morphIds,
+            vectorUnavailable: result.vectorUnavailable,
+            spans,
+            coverage: {
+              unindexed: result.unindexed,
+              uninterpreted: result.uninterpreted,
+            },
+          };
+        }
+        default:
+          return yield* NativeMemorySearchFailed.make({ reason: result.kind });
+      }
+    });
+
     const collectSeeds = Effect.fn("MemorySearch.collectSeeds")(function* (
       input: FindInput,
       allowed: readonly string[],
       limit: number,
-      degraded: ("vector" | "morph")[],
+      degraded: FindResult["degraded"][number][],
     ) {
       // Model/network stays in the host, outside the publication admission permit.
       const query = yield* embedder.embed([input.query]).pipe(
@@ -300,77 +365,70 @@ const make = (tuning: SearchTuning) =>
         }),
       );
       const grouped = searchTerms(input.query);
-      const { result } = yield* vectors.backend.read({
-        allowedProjects: allowed,
-        embedder: embedder.identity,
-        query: limit > 0 && query !== undefined ? new Float32Array(query) : undefined,
-        trigramTerms: grouped.trigram,
-        shortTerms: grouped.short,
-        morphTerms: terms,
-        vectorK: Math.min(limit * 4, maxVectorK),
-        textK: limit * 2,
-        morphK: limit * 2,
-        textEnabled: tuning.text && limit > 0,
-        morphEnabled: limit > 0 && terms.length > 0,
-        remainingMs: 2000,
-        inputBudgetBytes: 1048576,
-        outputBudgetBytes: 1048576,
-      });
-      // Where the read's time went, kept on a failed read too: the stage it stopped in is timed
-      // up to the failure.
-      yield* Effect.annotateCurrentSpan({
-        kind: result.kind,
-        allowedProjects: allowed.length,
-        shortTerms: grouped.short.length,
-        candidateCount: result.candidateCount,
-        sqliteExecutions: result.sqliteExecutions,
-        candidateMs: result.candidateMs,
-        vectorMs: result.vectorMs,
-        mappingMs: result.mappingMs,
-        textMs: result.textMs,
-        morphMs: result.morphMs,
-        coverageMs: result.coverageMs,
-      });
-      switch (result.kind) {
-        case "cancelled":
-          return yield* Effect.interrupt;
-        case "success": {
-          if (result.vectorUnavailable && !degraded.includes("vector")) degraded.unshift("vector");
-          const spanOf = new Map(
-            (yield* chunkSpans(result.vectorSeqs.map(Number)).pipe(
-              Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
-            )).map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
-          );
-          // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
-          // span stored for a node wins.
-          const spans = result.vectorSeqs.reduce((spans, seq, index) => {
-            const id = result.vectorIds[index]!;
-            const span = spanOf.get(Number(seq));
-            if (span !== undefined && !MutableHashMap.has(spans, id))
-              MutableHashMap.set(spans, id, span);
-            return spans;
-          }, MutableHashMap.empty<string, ChunkSpan>());
-          return {
-            byVector: result.vectorIds,
-            byText: result.textIds,
-            byMorph: result.morphIds,
-            spans,
-            coverage: {
-              unindexed: result.unindexed,
-              uninterpreted: result.uninterpreted,
-            },
-          };
-        }
-        default:
-          return yield* NativeMemorySearchFailed.make({ reason: result.kind });
-      }
+      const readOver = (projects: readonly string[]) =>
+        readSeeds({
+          allowedProjects: projects,
+          embedder: embedder.identity,
+          // Each read transfers its vector's buffer to the worker, so each gets its own copy.
+          query: limit > 0 && query !== undefined ? new Float32Array(query) : undefined,
+          trigramTerms: grouped.trigram,
+          shortTerms: grouped.short,
+          morphTerms: terms,
+          vectorK: Math.min(limit * 4, maxVectorK),
+          textK: limit * 2,
+          morphK: limit * 2,
+          textEnabled: tuning.text && limit > 0,
+          morphEnabled: limit > 0 && terms.length > 0,
+          remainingMs: 2000,
+          inputBudgetBytes: 1048576,
+          outputBudgetBytes: 1048576,
+        });
+      // The conversation's own project is read first, on its own budget. The other projects hold
+      // most of the memory; a read of them that runs out of time leaves the project's matches
+      // standing and says so, instead of failing the whole search.
+      const [own, ...others] = allowed;
+      const ownSeeds = yield* readOver([own!]);
+      const otherSeeds =
+        others.length === 0
+          ? Option.none()
+          : yield* readOver(others).pipe(
+              Effect.map(Option.some),
+              Effect.catchIf(
+                (error) =>
+                  Schema.is(NativeMemorySearchFailed)(error) && error.reason === "budget-exceeded",
+                () =>
+                  Effect.as(
+                    Effect.sync(() => degraded.push("other-projects")),
+                    Option.none(),
+                  ),
+              ),
+            );
+      const scopes = [ownSeeds, ...Option.toArray(otherSeeds)];
+      if (scopes.some((scope) => scope.vectorUnavailable) && !degraded.includes("vector"))
+        degraded.unshift("vector");
+      // The projects' matches are disjoint. Cosine scores compare across reads, so vectors merge
+      // by score; text and morph lists carry only ranks, so their ranks alternate, own first.
+      return {
+        byVector: scopes
+          .flatMap((scope) => scope.vector)
+          .sort((left, right) => right.score - left.score)
+          .map((hit) => hit.id),
+        byText: alternate(scopes.map((scope) => scope.text)),
+        byMorph: alternate(scopes.map((scope) => scope.morph)),
+        spans: MutableHashMap.fromIterable(scopes.flatMap((scope) => [...scope.spans])),
+        coverage: {
+          // A count over every project, the same in each read.
+          unindexed: ownSeeds.coverage.unindexed,
+          uninterpreted: scopes.reduce((sum, scope) => sum + scope.coverage.uninterpreted, 0),
+        },
+      };
     });
 
     const find = (input: FindInput) =>
       Effect.gen(function* () {
         const limit = input.limit ?? defaultLimit;
         const allowed = yield* allowedProjects(input.projectId, input.crossProject ?? true);
-        const degraded: ("vector" | "morph")[] = [];
+        const degraded: FindResult["degraded"][number][] = [];
 
         const { byVector, byText, byMorph, coverage, spans } = yield* collectSeeds(
           input,

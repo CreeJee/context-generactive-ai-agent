@@ -17,6 +17,7 @@ import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { kiwiModel, MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Recorder } from "../../src/memory/record.ts";
@@ -144,6 +145,39 @@ testAgent()("MemorySearch.find", (it) => {
       expect(
         (yield* find({ query: "SQLite", projectId: project.id, crossProject: false })).matches,
       ).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps the project's matches when reading the other projects runs out of time", () =>
+    Effect.gen(function* () {
+      const { project, session } = yield* freshProject;
+      const own = yield* (yield* Nodes).append({
+        projectId: project.id,
+        sessionId: session.id,
+        kind: "user",
+        text: "이 프로젝트도 SQLite를 쓰기로 했다",
+      });
+      const shared = yield* otherProject("다른 프로젝트도 SQLite를 쓰기로 했다");
+      yield* indexAll;
+      const index = yield* VectorIndex;
+      const slowElsewhere = Layer.succeed(VectorIndex, {
+        ...index,
+        backend: {
+          ...index.backend,
+          read: (input) =>
+            Effect.map(index.backend.read(input), (read) =>
+              input.allowedProjects.includes(project.id)
+                ? read
+                : { ...read, result: { ...read.result, kind: "budget-exceeded" as const } },
+            ),
+        },
+      });
+      const result = yield* find({ query: "SQLite", projectId: project.id }).pipe(
+        Effect.provide(MemorySearch.layer.pipe(Layer.provide(slowElsewhere))),
+      );
+      expect(result.degraded).toEqual(["other-projects"]);
+      expect(result.matches.map((match) => match.id)).toContain(own.id);
+      expect(result.matches.map((match) => match.id)).not.toContain(shared.node.id);
     }),
   );
 
