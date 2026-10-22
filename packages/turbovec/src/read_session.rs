@@ -50,8 +50,20 @@ pub struct NativeReadOutput {
     pub text_ms: f64,
     pub morph_ms: f64,
     pub mapping_ms: f64,
+    /// The unindexed and uninterpreted counts.
+    pub coverage_ms: f64,
     pub input_logical_bytes: u32,
     pub output_logical_bytes: u32,
+}
+/// The stage a read is in, so a failed read still says where its time went.
+#[derive(Clone, Copy)]
+enum Stage {
+    Candidate,
+    Vector,
+    Mapping,
+    Text,
+    Morph,
+    Coverage,
 }
 impl NativeReadOutput {
     fn empty() -> Self {
@@ -72,9 +84,38 @@ impl NativeReadOutput {
             text_ms: 0.,
             morph_ms: 0.,
             mapping_ms: 0.,
+            coverage_ms: 0.,
             input_logical_bytes: 0,
             output_logical_bytes: 0,
         }
+    }
+    fn stage_ms(&mut self, stage: Stage) -> &mut f64 {
+        match stage {
+            Stage::Candidate => &mut self.candidate_ms,
+            Stage::Vector => &mut self.vector_ms,
+            Stage::Mapping => &mut self.mapping_ms,
+            Stage::Text => &mut self.text_ms,
+            Stage::Morph => &mut self.morph_ms,
+            Stage::Coverage => &mut self.coverage_ms,
+        }
+    }
+    /// A failed read carries no hits or coverage, only the work it did: the stages that finished
+    /// and the one it stopped in, timed up to now.
+    fn failure(&self, reason: Outcome, running: (Stage, Instant)) -> Self {
+        let mut out = Self {
+            kind: reason.tag().into(),
+            candidate_count: self.candidate_count,
+            sqlite_executions: self.sqlite_executions,
+            candidate_ms: self.candidate_ms,
+            vector_ms: self.vector_ms,
+            text_ms: self.text_ms,
+            morph_ms: self.morph_ms,
+            mapping_ms: self.mapping_ms,
+            coverage_ms: self.coverage_ms,
+            ..Self::empty()
+        };
+        *out.stage_ms(running.0) = ms(running.1);
+        out
     }
     fn bytes(&self) -> usize {
         97 + self.kind.len()
@@ -266,6 +307,7 @@ impl MemoryReadSession {
         };
         let progress_state = cell.clone();
         connection.progress_handler(1000, Some(move || progress_state.check().is_err()));
+        let mut running = (Stage::Candidate, Instant::now());
         let result = (|| -> std::result::Result<(), Outcome> {
             check()?;
             connection
@@ -295,7 +337,6 @@ impl MemoryReadSession {
                     .map(Value::Text)
                     .collect::<Vec<_>>()
             };
-            let stage = Instant::now();
             let mut allowed = Vec::new();
             let mut parents = HashMap::new();
             if input.query.is_some() && !input.allowed_projects.is_empty() {
@@ -322,8 +363,8 @@ impl MemoryReadSession {
                 }
             }
             out.candidate_count = allowed.len() as u32;
-            out.candidate_ms = ms(stage);
-            let stage = Instant::now();
+            out.candidate_ms = ms(running.1);
+            running = (Stage::Vector, Instant::now());
             if let Some(query) = &input.query {
                 check()?;
                 let mut remaining = allowed.clone();
@@ -378,8 +419,8 @@ impl MemoryReadSession {
                     out.vector_scores.clear();
                 }
             }
-            out.vector_ms = ms(stage);
-            let stage = Instant::now();
+            out.vector_ms = ms(running.1);
+            running = (Stage::Mapping, Instant::now());
             if !out.vector_seqs.is_empty() {
                 let placeholders = vec!["?"; out.vector_seqs.len()].join(",");
                 let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.id FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND {MEANINGFUL} AND COALESCE(c.vector_id,n.seq) IN ({placeholders}) AND n.project_id IN ({projects})");
@@ -429,7 +470,8 @@ impl MemoryReadSession {
                 out.vector_seqs = seqs;
                 out.vector_scores = scores;
             }
-            out.mapping_ms = ms(stage);
+            out.mapping_ms = ms(running.1);
+            running = (Stage::Text, Instant::now());
             let mut rank = |sql: String,
                             first: String,
                             k: u32,
@@ -465,7 +507,6 @@ impl MemoryReadSession {
                 }
                 Ok(())
             };
-            let stage = Instant::now();
             if input.text_enabled && !input.allowed_projects.is_empty() {
                 if !input.trigram_terms.is_empty() {
                     rank(format!("SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_fts MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.trigram_terms), input.text_k, &mut out.text_ids, false)?;
@@ -474,20 +515,22 @@ impl MemoryReadSession {
                     rank(format!("SELECT n.id FROM nodes n WHERE {MEANINGFUL} AND instr(n.text,?)>0 AND n.project_id IN ({projects}) ORDER BY n.seq DESC LIMIT ?"), term.clone(), input.text_k, &mut out.text_ids, true)?;
                 }
             }
-            out.text_ms = ms(stage);
-            let stage = Instant::now();
+            out.text_ms = ms(running.1);
+            running = (Stage::Morph, Instant::now());
             if input.morph_enabled
                 && !input.morph_terms.is_empty()
                 && !input.allowed_projects.is_empty()
             {
                 rank(format!("SELECT n.id FROM nodes_morph f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_morph MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.morph_terms), input.morph_k, &mut out.morph_ids, false)?;
             }
-            out.morph_ms = ms(stage);
+            out.morph_ms = ms(running.1);
+            running = (Stage::Coverage, Instant::now());
             out.unindexed = connection.query_row(&format!("SELECT count(*) FROM nodes n LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? WHERE v.node_seq IS NULL AND {MEANINGFUL} AND {EMBEDDED_KINDS}"), [&input.embedder], |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
             // CROSS JOIN keeps the few open jobs as the outer loop; otherwise SQLite walks every node of the project.
             out.uninterpreted = connection.query_row(&format!("SELECT count(*) FROM interpret_jobs j CROSS JOIN nodes n ON n.id=j.node_id WHERE j.status!='done' AND {MEANINGFUL} AND n.project_id IN ({projects})"), params_from_iter(project_values()), |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
+            out.coverage_ms = ms(running.1);
             check()?;
             if out.bytes() > input.output_budget_bytes as usize {
                 return Err(Outcome::BudgetExceeded);
@@ -506,10 +549,7 @@ impl MemoryReadSession {
             } else {
                 Outcome::ReadFailed
             };
-            let executions = out.sqlite_executions;
-            out = NativeReadOutput::empty();
-            out.kind = reason.tag().into();
-            out.sqlite_executions = executions;
+            out = out.failure(reason, running);
             out.input_logical_bytes = bytes as u32;
         }
         out.output_logical_bytes = out.bytes() as u32;
@@ -540,6 +580,24 @@ mod tests {
         });
         assert!(!successful.vector_unavailable);
         assert_eq!(successful.vector_scores, [3.]);
+    }
+    #[test]
+    fn failure_keeps_stage_times_and_times_the_running_stage() {
+        let mut out = NativeReadOutput::empty();
+        out.text_ids.push("text-hit".into());
+        out.unindexed = 7.;
+        out.candidate_count = 3;
+        out.candidate_ms = 5.;
+        out.vector_ms = 6.;
+        let started = Instant::now() - Duration::from_millis(40);
+        let failed = out.failure(Outcome::BudgetExceeded, (Stage::Mapping, started));
+        assert_eq!(failed.kind, Outcome::BudgetExceeded.tag());
+        assert!(failed.text_ids.is_empty());
+        assert_eq!(failed.unindexed, 0.);
+        assert_eq!(failed.candidate_count, 3);
+        assert_eq!((failed.candidate_ms, failed.vector_ms), (5., 6.));
+        assert!(failed.mapping_ms >= 40.);
+        assert_eq!(failed.text_ms, 0.);
     }
     #[test]
     #[cfg(feature = "test-sqlite")]

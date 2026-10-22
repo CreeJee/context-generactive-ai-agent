@@ -86,6 +86,7 @@ export const NativeReadOutput = Schema.Struct({
   textMs: elapsed,
   morphMs: elapsed,
   mappingMs: elapsed,
+  coverageMs: elapsed,
   inputLogicalBytes: Bytes,
   outputLogicalBytes: Bytes,
 });

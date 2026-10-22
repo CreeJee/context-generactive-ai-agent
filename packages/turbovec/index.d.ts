@@ -108,6 +108,8 @@ export interface NativeReadOutput {
   textMs: number;
   morphMs: number;
   mappingMs: number;
+  /** The unindexed and uninterpreted counts. */
+  coverageMs: number;
   inputLogicalBytes: number;
   outputLogicalBytes: number;
 }

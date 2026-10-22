@@ -272,7 +272,7 @@ const make = (tuning: SearchTuning) =>
           )
         : Effect.succeed([projectId]);
 
-    const collectSeeds = Effect.fnUntraced(function* (
+    const collectSeeds = Effect.fn("MemorySearch.collectSeeds")(function* (
       input: FindInput,
       allowed: readonly string[],
       limit: number,
@@ -315,6 +315,21 @@ const make = (tuning: SearchTuning) =>
         remainingMs: 2000,
         inputBudgetBytes: 1048576,
         outputBudgetBytes: 1048576,
+      });
+      // Where the read's time went, kept on a failed read too: the stage it stopped in is timed
+      // up to the failure.
+      yield* Effect.annotateCurrentSpan({
+        kind: result.kind,
+        allowedProjects: allowed.length,
+        shortTerms: grouped.short.length,
+        candidateCount: result.candidateCount,
+        sqliteExecutions: result.sqliteExecutions,
+        candidateMs: result.candidateMs,
+        vectorMs: result.vectorMs,
+        mappingMs: result.mappingMs,
+        textMs: result.textMs,
+        morphMs: result.morphMs,
+        coverageMs: result.coverageMs,
       });
       switch (result.kind) {
         case "cancelled":

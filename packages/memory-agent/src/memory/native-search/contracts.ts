@@ -83,6 +83,7 @@ export interface NativeStageMetrics {
   readonly textMs: number;
   readonly morphMs: number;
   readonly mappingMs: number;
+  readonly coverageMs: number;
   readonly sqliteExecutions: number;
   readonly inputLogicalBytes: number;
   readonly outputLogicalBytes: number;
