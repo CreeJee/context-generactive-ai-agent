@@ -200,8 +200,8 @@ describe("durable relayed approvals", () => {
                 SET payload_json = json_set(payload_json, '$.requester',
                   json_object('kind', 'subagent', 'subagentId', 'child', 'name', NULL))
                 WHERE workflow_name = 'RelayedApprovalExecution'`);
-              sqlite.exec(`DELETE FROM effect_sql_migrations WHERE migration_id > ${requesterMigration};
-                PRAGMA user_version = ${requesterMigration}`);
+              // Only this step runs again: replaying every later step would recreate their tables.
+              sqlite.exec(migrations[requesterMigration]!);
             }),
           (sqlite) => Effect.sync(() => sqlite.close()),
         );
