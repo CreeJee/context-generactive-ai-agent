@@ -317,8 +317,16 @@ export const planCardHold = Effect.fnUntraced(function* (
  * the owner decides the card's status from it.
  */
 export const BoardIntent = Schema.TaggedUnion({
-  /** Same column: the card takes the place of `at`, which ranks it in the Goal's queue. */
-  Reorder: { cardId: Schema.String, at: Schema.String },
+  /**
+   * Same column: the card takes the place of `at` in the project's order of cards, which the
+   * scheduler starts cards in. `atSessionId` names the conversation of `at` when it is another one
+   * of the project; left out, `at` is a card of the same Plan.
+   */
+  Reorder: {
+    cardId: Schema.String,
+    at: Schema.String,
+    atSessionId: Schema.optionalKey(Schema.String),
+  },
   /** A blocked card goes back on the queue with a fresh attempt record. */
   Requeue: { cardId: Schema.String },
   Hold: { cardId: Schema.String },

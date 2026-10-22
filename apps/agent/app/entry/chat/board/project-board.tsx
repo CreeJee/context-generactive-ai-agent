@@ -79,6 +79,7 @@ export function ProjectBoard({
         plan,
         decisions: inbox.filter((item) => item.sessionId === row.sessionId),
         loop: loop?.active === true ? loop : null,
+        ranks: row.ranks,
       },
     ];
   });
@@ -198,8 +199,8 @@ export function ProjectBoard({
 
 /**
  * One conversation's line in the board's status panel: its Plan, its loop and the actions that
- * belong to the whole Plan rather than to a card. Between Goals the scheduler shares card slots by
- * priority, so that is set here; card order stays inside each Goal.
+ * belong to the whole Plan rather than to a card. The Goal's priority, set here, is where its
+ * cards enter the project's order until a person drags them into place on the board.
  */
 function ConversationRow({
   projectId,

@@ -249,7 +249,6 @@ describe("durable provider retry", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const file = yield* tempFile;
-        yield* Scope.close((yield* open(file)).scope, Exit.void);
         const executionMigration = migrations.findIndex((step) =>
           step.includes("workflow execution state names its case under _tag"),
         );
@@ -258,6 +257,11 @@ describe("durable provider retry", () => {
           Effect.sync(() => new DatabaseSync(file)),
           (sqlite) =>
             Effect.sync(() => {
+              // The schema as 0.0.17 wrote it: every step before the execution migration, so the
+              // reopen below replays that migration and the ones after it on a database like that.
+              sqlite.exec("PRAGMA foreign_keys = OFF");
+              for (const step of migrations.slice(0, executionMigration)) sqlite.exec(step);
+              sqlite.exec(`PRAGMA user_version = ${executionMigration}`);
               // The state as 0.0.17 wrote it, with its case under kind.
               sqlite
                 .prepare("INSERT INTO chat_metadata (namespace, key, value) VALUES (?, 's', ?)")
@@ -265,8 +269,6 @@ describe("durable provider retry", () => {
                   "memory-agent/workflow-execution",
                   '{"kind":"ready","runId":"run-1","goalVersion":2,"planVersion":3,"noProgressRuns":1,"progress":{"completedSteps":["p1"],"evidence":["e1"],"toolResults":[]}}',
                 );
-              sqlite.exec(`DELETE FROM effect_sql_migrations WHERE migration_id > ${executionMigration};
-                PRAGMA user_version = ${executionMigration}`);
             }),
           (sqlite) => Effect.sync(() => sqlite.close()),
         );

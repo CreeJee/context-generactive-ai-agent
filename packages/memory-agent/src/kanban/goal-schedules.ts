@@ -11,13 +11,6 @@ import { VerdictFailure } from "./failures.ts";
 export const GoalPriority = Schema.Literals(["high", "normal", "low"]);
 export type GoalPriority = typeof GoalPriority.Type;
 
-/** How many slots a Goal of each priority takes per turn of the round-robin. */
-export const priorityWeight = {
-  high: 4,
-  normal: 2,
-  low: 1,
-} as const satisfies { readonly [Priority in GoalPriority]: number };
-
 /** Branches a project protects when the user has not chosen any. */
 export const defaultProtectedBranches = ["main", "staging"] as const;
 

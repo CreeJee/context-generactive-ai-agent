@@ -57,7 +57,10 @@ export const boardColumns: readonly CardStatus[] = [
 
 /** What dropping a card on a column means. The server decides the card's status from it. */
 export type DropOutcome = Data.TaggedEnum<{
-  /** Same column: the card takes the place of the card it was dropped on. */
+  /**
+   * Same column: the card takes the place of the card it was dropped on in the project's order,
+   * which may be a card of another conversation.
+   */
   Reorder: {};
   /**
    * Another column the person can ask for: hold, release or requeue. `lands` is where the card is
@@ -149,11 +152,21 @@ export const dropOutcome: {
 } & typeof dropOutcomeBody = EffectFunction.dual(3, dropOutcomeBody);
 
 /**
- * Dropping on another conversation's card: Plan order ranks cards inside their own Goal only, so
- * the drop is refused and the card's peek offers the move to that conversation instead.
+ * The shown cards in the project's order: by the rank the server gives each card, which is where
+ * the scheduler starts it, and cards without one after them as the boards list them. One board
+ * without ranks stays in Plan order.
  */
-export const foreignCardDrop = (): DropOutcome =>
-  refused("다른 대화의 카드와는 순서를 바꿀 수 없어요. 카드를 열어 다른 대화로 옮길 수 있어요.");
+export const inProjectOrder = (
+  entries: ReadonlyArray<{ readonly item: BoardItem; readonly rank: number | null }>,
+): readonly BoardItem[] =>
+  entries
+    .map((entry, index) => ({ ...entry, index }))
+    .sort((a, b) => {
+      if (a.rank !== null && b.rank !== null) return a.rank - b.rank || a.index - b.index;
+      if (a.rank === null && b.rank === null) return a.index - b.index;
+      return a.rank === null ? 1 : -1;
+    })
+    .map(({ item }) => item);
 
 /** Which card statuses can leave their Plan for another conversation's Plan. */
 const transferable: Readonly<Record<CardStatus, boolean>> = {

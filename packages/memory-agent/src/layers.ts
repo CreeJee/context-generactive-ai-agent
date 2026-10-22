@@ -35,6 +35,7 @@ import {
 } from "./kanban/card-queue.ts";
 import { KanbanOrchestrator } from "./kanban/orchestrator.ts";
 import { subagentCardAgentsLayer } from "./kanban/subagent-card-agent.ts";
+import { CardOrder } from "./kanban/card-order.ts";
 import { GoalSchedules } from "./kanban/goal-schedules.ts";
 import { BoardHealth } from "./kanban/board-health.ts";
 import { GoalMerges } from "./kanban/merge-queue.ts";
@@ -280,7 +281,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     BulkNodes.layer,
     SecretRedactor.layer,
     Workflows.layer,
-    Boards.layer,
+    Boards.layer.pipe(Layer.provide(CardOrder.layer)),
     WorkflowExecution.layer,
     goalExecutionLayer,
     providerRetryLayer,
@@ -373,6 +374,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
       Layer.mergeAll(
         CardQueueGate.layer,
         CardAttempts.layer,
+        CardOrder.layer,
         CardRuns.layer,
         GoalSchedules.layer,
         ownerWorkflowEngineLayer,

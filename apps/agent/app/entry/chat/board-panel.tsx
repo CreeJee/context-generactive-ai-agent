@@ -366,7 +366,7 @@ function BoardSheet({
           projectId={projectId}
           holder={holder}
           disabled={disabled}
-          boards={[{ sessionId, label: null, view, plan, decisions, loop }]}
+          boards={[{ sessionId, label: null, view, plan, decisions, loop, ranks: null }]}
           shown={[]}
           peek={peekCardId === null ? null : { sessionId, cardId: peekCardId }}
           onPeek={(card) => onPeek(card === null ? null : card.cardId)}
@@ -418,8 +418,9 @@ export function mergeStateLabel(state: GoalMergeState | null): string {
 }
 
 /**
- * How much of the project's card slots the Goal gets next to the other Goals. Cards are ordered
- * inside their Goal; between Goals this weight, not an order, decides who runs.
+ * Where the Goal's cards enter the project's order of cards before a person arranges them: cards
+ * nobody ranked yet come after every ranked card, higher priority first. Dragging a card on the
+ * project board ranks it, and from then on that order, not this, decides when it starts.
  */
 export function GoalPrioritySelect({
   id,

@@ -10,6 +10,7 @@ import {
   openKanbanOwner,
 } from "../testing/kanban.ts";
 import { CardAgentOutcome, type CardAgentRun } from "./card-agent.ts";
+import { CardOrder } from "./card-order.ts";
 import { GoalMergeState, GoalScheduleRefused, GoalSchedules } from "./goal-schedules.ts";
 import { DecisionAnswer, DecisionKind, HumanDecisions } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
@@ -47,7 +48,7 @@ const gates = (ids: readonly string[]) =>
     },
   );
 
-it.live("hands a freed slot to the other Goal and never runs more cards than the limit", () =>
+it.live("starts cards in the project's order across Goals and never runs more than the limit", () =>
   Effect.gen(function* () {
     const fixture = yield* kanbanFixture;
     const ids = ["a1", "a2", "a3", "b1", "b2", "b3"];
@@ -71,6 +72,7 @@ it.live("hands a freed slot to the other Goal and never runs more cards than the
     yield* run(
       Effect.gen(function* () {
         const orchestrator = yield* KanbanOrchestrator;
+        const cardOrder = yield* CardOrder;
         const first = yield* executingPlan(fixture, [card("a1"), card("a2"), card("a3")]);
         yield* orchestrator.start(first.sessionId);
         yield* eventually(Ref.get(started), (list) => list.length === 2);
@@ -80,7 +82,13 @@ it.live("hands a freed slot to the other Goal and never runs more cards than the
           card("b3"),
         ]);
         yield* orchestrator.start(second.sessionId);
-        // Goal A holds both slots; each slot it frees goes to whichever Goal is below its share.
+        // Nobody arranged the cards: the older Goal's cards all come first. A person then puts
+        // b1 before a3, and each freed slot goes to the next card in that order, whichever Goal.
+        yield* cardOrder.place(
+          first.projectId,
+          { sessionId: second.sessionId, cardId: "b1" },
+          { sessionId: first.sessionId, cardId: "a3" },
+        );
         for (const [release, next] of [
           ["a1", "b1"],
           ["a2", "a3"],

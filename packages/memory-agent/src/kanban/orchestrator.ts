@@ -861,9 +861,9 @@ const make = (options: KanbanOrchestratorOptions) =>
           });
         }
       }
-      // Every look reports what it wants, so the scheduler can share the slots among the Goals.
-      const granted = yield* scheduler.grant(goal, planned.length);
-      for (const step of planned.slice(0, granted)) {
+      // Every look reports the cards it could start; the scheduler picks the project's next ones.
+      const granted = yield* scheduler.grant(goal, planned);
+      for (const step of granted) {
         const started =
           step.status === "in_progress" ||
           (yield* move(goal, step.id, "ready", "in_progress", `card ${step.id} assigned`));

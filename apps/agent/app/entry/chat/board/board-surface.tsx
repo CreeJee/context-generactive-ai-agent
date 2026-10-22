@@ -28,6 +28,7 @@ import {
 import {
   boardCardKey,
   boardItem,
+  inProjectOrder,
   PendingMove,
   withPending,
   type BoardCardRef,
@@ -51,6 +52,11 @@ export interface SurfaceBoard {
   readonly plan: BoardPlan;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly loop: ActiveKanban | null;
+  /**
+   * Each card's place in the project's order of cards, from the project's board list; null when
+   * the surface shows one Plan, which keeps its own order.
+   */
+  readonly ranks: Readonly<Record<string, number>> | null;
 }
 
 export const errorText = (code: ApiErrorCode) => {
@@ -141,10 +147,13 @@ const pendingOf = (
       ? PendingMove.Status({ key: keyOf(cardId), to: landing.lands })
       : null;
   return BoardIntent.$match(sent.action.intent, {
-    Reorder: ({ cardId, at }) =>
+    Reorder: ({ cardId, at, atSessionId }) =>
       PendingMove.Order({
         key: keyOf(cardId),
-        index: items.findIndex((item) => item.key === keyOf(at)),
+        index: items.findIndex(
+          (item) =>
+            item.key === boardCardKey({ sessionId: atSessionId ?? sent.sessionId, cardId: at }),
+        ),
       }),
     Hold: moved,
     Release: moved,
@@ -218,9 +227,16 @@ export function BoardSurface({
   const boardOf = (sessionId: string) =>
     boards.find((board) => board.sessionId === sessionId) ?? null;
   const closedIn = (board: SurfaceBoard) => board.plan.status === "completed";
-  const items = boards
-    .filter((board) => shown.length === 0 || shown.includes(board.sessionId))
-    .flatMap((board) => board.view.cards.map((entry) => boardItem(board.sessionId, entry)));
+  const items = inProjectOrder(
+    boards
+      .filter((board) => shown.length === 0 || shown.includes(board.sessionId))
+      .flatMap((board) =>
+        board.view.cards.map((entry) => ({
+          item: boardItem(board.sessionId, entry),
+          rank: board.ranks?.[entry.card.id] ?? null,
+        })),
+      ),
+  );
   const pending = pendingOf(request, landing, items);
   const cards = withPending(items, pending);
   const itemOf = (ref: BoardCardRef) =>
@@ -322,7 +338,11 @@ export function BoardSurface({
               {
                 sessionId: item.sessionId,
                 action: KanbanAction.Intent({
-                  intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
+                  intent: BoardIntent.Reorder({
+                    cardId: item.card.id,
+                    at: at.card.id,
+                    atSessionId: at.sessionId,
+                  }),
                 }),
               },
               { onError: refused },

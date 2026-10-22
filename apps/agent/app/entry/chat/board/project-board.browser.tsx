@@ -41,6 +41,7 @@ const payments = {
   counts: { ...noCards, done: 1, in_progress: 1 },
   kanbanActive: true,
   updatedAt: "2026-10-21T01:00:00.000Z",
+  ranks: { a1: 0, a2: 1 },
 };
 const logging = {
   sessionId: "session-b",
@@ -49,6 +50,7 @@ const logging = {
   counts: { ...noCards, ready: 1 },
   kanbanActive: false,
   updatedAt: "2026-10-20T01:00:00.000Z",
+  ranks: { b1: 2 },
 };
 const boards = {
   "session-a": {

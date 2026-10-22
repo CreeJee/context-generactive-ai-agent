@@ -1872,6 +1872,20 @@ export const migrations: readonly string[] = [
       AND json_extract(value, '$.kind') IN
         ('idle', 'running', 'ready', 'retrying', 'blocked', 'stopped');
   `,
+  `
+  -- The project's one order of cards across its boards (docs/kanban-orchestration.md "프로젝트
+  -- 스케줄러"), as a person arranged it by dragging cards between conversations. The scheduler
+  -- starts cards in this order. A card without a row follows the card before it in its Plan, and a
+  -- Plan with no ranked card comes after every ranked one.
+  CREATE TABLE kanban_card_ranks (
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, session_id, card_id)
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
