@@ -79,7 +79,12 @@ export class NativeMemorySearchFailed extends Schema.TaggedError<NativeMemorySea
   {
     reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
   },
-) {}
+) {
+  // The model and logs read the reason; without it a failed search looks like an empty one.
+  override get message() {
+    return `Memory search stopped (${this.reason}).`;
+  }
+}
 
 const snippetLength = 300;
 const defaultLimit = 12;
