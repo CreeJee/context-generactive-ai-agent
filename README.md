@@ -197,7 +197,7 @@ pnpm build   # or: vp run build
 vp run dev
 ```
 
-현재 기기용 실행 파일을 빌드하고 확인합니다. Node 버전은 `.node-version`에 지정된 26.8.2입니다:
+현재 기기용 실행 파일을 빌드하고 확인합니다. Node 버전은 `.node-version`에 지정된 26.12.1입니다:
 
 ```bash
 cd apps/agent

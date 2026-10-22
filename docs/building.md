@@ -13,14 +13,14 @@
 
 ## 준비물
 
-| 도구                  | 용도                             | 설치                                                                                                                                     |
-| --------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Git                   | 저장소                           |                                                                                                                                          |
-| Vite+ (`vp`)          | Node 26.8.2, pnpm, 빌드와 테스트 | macOS/Linux `curl -fsSL https://vite.plus \| bash`, Windows(PowerShell) `irm https://vite.plus/ps1 \| iex`                               |
-| Rust (stable, rustup) | turbovec 네이티브 애드온         | https://rustup.rs                                                                                                                        |
-| C/C++ 빌드 도구       | Rust 링커, 네이티브 빌드         | macOS `xcode-select --install`, Windows Visual Studio Build Tools의 "C++를 사용한 데스크톱 개발", Linux `build-essential`(Debian/Ubuntu) |
+| 도구                  | 용도                              | 설치                                                                                                                                     |
+| --------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Git                   | 저장소                            |                                                                                                                                          |
+| Vite+ (`vp`)          | Node 26.12.1, pnpm, 빌드와 테스트 | macOS/Linux `curl -fsSL https://vite.plus \| bash`, Windows(PowerShell) `irm https://vite.plus/ps1 \| iex`                               |
+| Rust (stable, rustup) | turbovec 네이티브 애드온          | https://rustup.rs                                                                                                                        |
+| C/C++ 빌드 도구       | Rust 링커, 네이티브 빌드          | macOS `xcode-select --install`, Windows Visual Studio Build Tools의 "C++를 사용한 데스크톱 개발", Linux `build-essential`(Debian/Ubuntu) |
 
-- Node는 루트 `.node-version`(26.8.2)을 Vite+가 읽어 맞춥니다. 따로 설치하지 않아도 됩니다. 실행 파일 빌드(Node SEA)에 25.7 이상이 필요합니다.
+- Node는 루트 `.node-version`(26.12.1)을 Vite+가 읽어 맞춥니다. 따로 설치하지 않아도 됩니다. 실행 파일 빌드(Node SEA)에 25.7 이상이 필요합니다.
 - `cargo`가 PATH에 있어야 합니다(rustup은 `~/.cargo/bin`에 설치). 없으면 turbovec 빌드가 `spawnSync cargo ENOENT`로 멈춥니다.
 
 ## 빌드

@@ -34,7 +34,7 @@
 
 ### 개발 규칙 (2026-09-15)
 
-- Node는 루트 `.node-version`(26.8.2)으로 고정한다. vite-plus와 fnm(`--use-on-cd`)이 모두 이 파일을 읽어 셸, 테스트, 패키징이 같은 버전을 쓴다. 실행 파일 빌드(`vp pack --exe`, Node SEA)에 25.7 이상이 필요하고, 배포 런타임과 개발 런타임을 같게 두기 위해서다.
+- Node는 루트 `.node-version`(26.12.1)으로 고정한다. vite-plus와 fnm(`--use-on-cd`)이 모두 이 파일을 읽어 셸, 테스트, 패키징이 같은 버전을 쓴다. 실행 파일 빌드(`vp pack --exe`, Node SEA)에 25.7 이상이 필요하고, 배포 런타임과 개발 런타임을 같게 두기 위해서다.
 - 앱 개발 서버 인자는 `vp run dev --host 127.0.0.1 --port 5174`처럼 `--` 없이 넘긴다.
 - 모노레포 빌드 순서와 캐시는 turborepo를 두지 않고 Vite+의 Vite Task(`vp run`)로 한다. 이미 쓰는 도구에 `dependsOn`, 입력과 출력 캐시가 있어서, 태스크 그래프와 캐시를 두 곳에 나누지 않기 위해서다.
   - 루트 `build`(`pnpm build` 또는 `vp run build`)가 turbovec → memory-agent → agent 순서로 빌드한다. 각 패키지의 `build`와 memory-agent `test`, agent `package`는 workspace 의존성의 `build` 뒤에 돈다(`vite.config.ts`의 `run.tasks`).
@@ -2472,3 +2472,8 @@
 - API: `POST /api/projects/:project/kanban`은 `SetProtectedBranches`·`MoveGoal{sessionId, before}` 태그 명령을 받고 `{protectedBranches, goalOrder}`를 돌려준다. `POST /api/settings/kanban`은 `SetConcurrency`·`MoveProject{projectId, before}`를 받고 `{configured, effective, projectOrder}`를 돌려준다. `before`는 그 앞에 둘 대상, null은 맨 뒤. `GET /api/projects/:project/boards`의 행마다 `rank`(Goal 순서 인덱스)를 준다.
 - 보드: 프로젝트 보드에는 실행 중(`executing`)인 Plan의 카드만 올린다. 실행 전·완료 Plan은 헤더에 "보드 밖 Plan: 이름 (상태)"로 세션별로 이름만 보이고 누르면 그 대화로 간다(세션당 Plan은 하나라 세션별 목록이면 충분하다). 카드는 Goal 순서, 그 안에서 Plan 순서로 보인다. 대화별 상태 패널의 각 줄에 위로/아래로 버튼이 있어 Goal 순서를 바꾼다(새 Plan은 맨 아래로 들어와 바로 위로 올릴 수 있다). 카드 드래그 순서 변경은 같은 대화 안에서만 되고, 다른 대화 카드 위에 놓으면 거절하며 대화 순서는 패널에서 바꾸라고 안내한다. 이관(Transfer)은 그대로 peek에서 한다.
 - 설정: "칸반 실행" 페이지에 프로젝트 순서 목록(위로/아래로)을 둔다. 여러 프로젝트의 보드가 동시에 돌 때 빈 슬롯은 위 프로젝트부터 간다.
+
+## Node 고정판은 보안 릴리즈로 올린다 (2026-10-22)
+
+- `.node-version`을 26.8.2에서 26.12.1(2026-10-21 보안 릴리즈)로 올린다. CI는 `setup-vp`가 이 파일을 읽어 같은 판을 쓰고, 최신판을 따로 확인하는 입력은 두지 않는다. `package.json`의 `engines.node`도 같은 하한으로 맞춘다.
+- 이후 Node 보안 릴리즈가 나오면 같은 방식으로 `.node-version`만 올린다. 과거 측정 기록 문서의 버전 표기는 그대로 둔다.

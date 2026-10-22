@@ -59,7 +59,7 @@ vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄
 
 - 실행 파일: `context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]`. 폴더(없으면 실행한 위치)를 프로젝트로 추가하고 선택해 브라우저를 엽니다. 홈 폴더나 `/`(Finder 더블클릭)에서 실행하면 프로젝트 없이 엽니다. 앱이 이미 떠 있으면 새로 띄우지 않고 그 앱에서 폴더를 엽니다. `127.0.0.1`에만 열고, 루프백이 아닌 Host는 거부합니다. 에디터용 ACP는 `context-agent acp [--port 5173]`입니다.
 - 첫 실행에서 네이티브 패키지와 worker 자원을 `~/.context-generactive-agent/runtime/<해시>`에 풉니다.
-- 빌드는 대상 플랫폼의 기기에서 합니다. Node 26.8.2와 turbovec 빌드용 Rust가 필요하며, 윈도우에서는 MSVC 빌드 도구도 필요합니다. 서명은 ad-hoc만 합니다. 준비물, 릴리스, Linux는 [빌드 가이드](../../docs/building.md)를 봅니다.
+- 빌드는 대상 플랫폼의 기기에서 합니다. Node 26.12.1과 turbovec 빌드용 Rust가 필요하며, 윈도우에서는 MSVC 빌드 도구도 필요합니다. 서명은 ad-hoc만 합니다. 준비물, 릴리스, Linux는 [빌드 가이드](../../docs/building.md)를 봅니다.
 
 ## 화면
 
