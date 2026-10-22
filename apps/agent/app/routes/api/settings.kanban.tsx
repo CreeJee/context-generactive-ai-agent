@@ -64,10 +64,10 @@ export function action({ request }: Route.ActionArgs) {
             yield* projects.get(projectId);
             if (before !== null) yield* projects.get(before);
             yield* (yield* ProjectScheduler).moveProject(projectId, before);
-            // Other windows' kanban settings show the order too, so they read it again.
-            (yield* AppEvents).publishGlobal("kanban");
           }),
       });
+      // Other windows' kanban settings show both values, so they read them again.
+      (yield* AppEvents).publishGlobal("kanban");
       return yield* settings;
     }).pipe(answerKanbanFailures),
   );
