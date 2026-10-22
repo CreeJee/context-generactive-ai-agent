@@ -510,7 +510,10 @@ impl MemoryReadSession {
                     rank(format!("SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_fts MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.trigram_terms), input.text_k, &mut out.text_ids, false)?;
                 }
                 for term in &input.short_terms {
-                    rank(format!("SELECT n.id FROM nodes n WHERE {MEANINGFUL} AND instr(n.text,?)>0 AND n.project_id IN ({projects}) ORDER BY n.seq DESC LIMIT ?"), term.clone(), input.text_k, &mut out.text_ids, true)?;
+                    // `+` keeps SQLite off the project index: walking every project's nodes and
+                    // sorting all matches never stops early, while the newest-first rowid scan
+                    // stops at the LIMIT.
+                    rank(format!("SELECT n.id FROM nodes n WHERE {MEANINGFUL} AND instr(n.text,?)>0 AND +n.project_id IN ({projects}) ORDER BY n.seq DESC LIMIT ?"), term.clone(), input.text_k, &mut out.text_ids, true)?;
                 }
             }
             out.text_ms = ms(running.1);
