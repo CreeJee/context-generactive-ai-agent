@@ -365,6 +365,8 @@ impl MemoryReadSession {
             out.candidate_count = allowed.len() as u32;
             out.candidate_ms = ms(running.1);
             running = (Stage::Vector, Instant::now());
+            // The parent node of each hit in `out.vector_seqs`, same order.
+            let mut hit_parents = Vec::new();
             if let Some(query) = &input.query {
                 check()?;
                 let mut remaining = allowed.clone();
@@ -395,6 +397,7 @@ impl MemoryReadSession {
                         for (id, score) in hits.ids.iter().zip(&hits.scores) {
                             if let Some(parent) = parents.get(id) {
                                 if seen.insert(*parent) {
+                                    hit_parents.push(*parent);
                                     out.vector_seqs.push(id.to_string());
                                     out.vector_scores.push(*score as f64);
                                     if out.vector_seqs.len() >= input.vector_k as usize {
@@ -415,30 +418,22 @@ impl MemoryReadSession {
                     remaining.retain(|id| parents.get(id).is_some_and(|p| !seen.contains(p)));
                 }
                 if out.vector_unavailable {
+                    hit_parents.clear();
                     out.vector_seqs.clear();
                     out.vector_scores.clear();
                 }
             }
             out.vector_ms = ms(running.1);
             running = (Stage::Mapping, Instant::now());
-            if !out.vector_seqs.is_empty() {
-                let placeholders = vec!["?"; out.vector_seqs.len()].join(",");
-                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.id FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND {MEANINGFUL} AND COALESCE(c.vector_id,n.seq) IN ({placeholders}) AND n.project_id IN ({projects})");
-                let mut values = vec![Value::Text(input.embedder.clone())];
-                values.extend(
-                    out.vector_seqs
-                        .iter()
-                        .map(|s| {
-                            s.parse::<i64>()
-                                .map(Value::Integer)
-                                .map_err(|_| Outcome::IndexFailed)
-                        })
-                        .collect::<std::result::Result<Vec<_>, _>>()?,
-                );
-                values.extend(project_values());
+            if !hit_parents.is_empty() {
+                // The candidate read already applied embedder, kind, project and meaning in this
+                // snapshot, so the parents only need their ids. Matching the hits' vector ids
+                // instead walked every node of the allowed projects: no index covers that.
+                let placeholders = vec!["?"; hit_parents.len()].join(",");
+                let sql = format!("SELECT seq,id FROM nodes WHERE seq IN ({placeholders})");
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
-                    .query(params_from_iter(values))
+                    .query(params_from_iter(hit_parents.iter()))
                     .map_err(|_| Outcome::ReadFailed)?;
                 out.sqlite_executions += 1;
                 let mut mapped = HashMap::new();
@@ -452,16 +447,19 @@ impl MemoryReadSession {
                         return Err(Outcome::BudgetExceeded);
                     }
                     mapped.insert(
-                        row.get::<_, i64>(0)
-                            .map_err(|_| Outcome::ReadFailed)?
-                            .to_string(),
+                        row.get::<_, i64>(0).map_err(|_| Outcome::ReadFailed)?,
                         id.to_owned(),
                     );
                 }
                 let mut seqs = Vec::new();
                 let mut scores = Vec::new();
-                for (seq, score) in out.vector_seqs.iter().zip(&out.vector_scores) {
-                    if let Some(id) = mapped.remove(seq) {
+                for ((seq, score), parent) in out
+                    .vector_seqs
+                    .iter()
+                    .zip(&out.vector_scores)
+                    .zip(&hit_parents)
+                {
+                    if let Some(id) = mapped.remove(parent) {
                         out.vector_ids.push(id);
                         seqs.push(seq.clone());
                         scores.push(*score);
