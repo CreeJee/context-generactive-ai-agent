@@ -13,21 +13,16 @@ import {
 import { KanbanSettings } from "../config/kanban-settings.ts";
 import { Workflows, type PlanStep, type WorkflowStorageError } from "../workflow/workflow.ts";
 import { CardAttempts, type KanbanGoal, type KanbanStorageFailed } from "./card-attempts.ts";
-import { CardOrder } from "./card-order.ts";
-import {
-  GoalSchedules,
-  type GoalScheduleStorageFailed,
-  mergeReleases,
-  type GoalPriority,
-} from "./goal-schedules.ts";
+import { GoalOrder } from "./goal-order.ts";
+import { GoalSchedules, type GoalScheduleStorageFailed, mergeReleases } from "./goal-schedules.ts";
 import { HumanDecisions } from "./human-decision.ts";
 
 /**
  * The project scheduler (docs/kanban-orchestration.md "프로젝트 스케줄러"): a deterministic
- * service, not a model, that decides which cards take the card slots. It starts cards in the
- * project's one order of cards (`CardOrder`), which a person arranges across Goals, keeps Goals
- * that wait for another Goal's merge off the slots, and tells boards when their cards' expected
- * files overlap another Goal's cards.
+ * service, not a model, that decides which cards take the card slots. It walks the priority tree
+ * (`GoalOrder`: projects, then each project's Goals, then each Plan's cards) and starts the first
+ * cards that can start, keeps Goals that wait for another Goal's merge off the slots, and tells
+ * boards when their cards' expected files overlap another Goal's cards.
  *
  * What each Goal could start lives in memory: after a restart the next looks report it again.
  */
@@ -73,20 +68,20 @@ export type CrossGoalOverlap = Data.TaggedEnum<{
 }>;
 export const CrossGoalOverlap = Data.taggedEnum<CrossGoalOverlap>();
 
-/** A card a Goal could start now, with its place in its project's order. */
+/** A card a Goal could start now, with its place in the priority tree. */
 interface Candidate {
   readonly goal: KanbanGoal;
   readonly cardId: string;
-  /** A card left in progress continues before anything starts. */
-  readonly rank: number;
+  /** Project place, Goal place in its project, card place in its Plan. */
+  readonly key: readonly [number, number, number];
 }
 
-/**
- * Hands `free` slots to candidates in order: within a project the person's order, between
- * projects turn by turn. A Goal takes no more than its mode allows.
- */
+const byKey = (a: Candidate, b: Candidate) =>
+  a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.key[2] - b.key[2];
+
+/** Hands `free` slots to the candidates in order; a Goal takes no more than its mode allows. */
 const assign = (
-  lanes: ReadonlyArray<readonly Candidate[]>,
+  candidates: readonly Candidate[],
   held: ReadonlyMap<string, number>,
   free: number,
   limit: number,
@@ -94,19 +89,16 @@ const assign = (
   const given = new Map(held);
   const assigned = new Map<string, string[]>();
   let left = free;
-  const longest = Math.max(0, ...lanes.map((lane) => lane.length));
-  for (let turn = 0; turn < longest && left > 0; turn++)
-    for (const lane of lanes) {
-      const candidate = lane[turn];
-      if (candidate === undefined || left <= 0) continue;
-      const id = candidate.goal.goalInstanceId;
-      const cap = candidate.goal.mode === "sequential" ? 1 : limit;
-      const mine = given.get(id) ?? 0;
-      if (mine >= cap) continue;
-      given.set(id, mine + 1);
-      assigned.set(id, [...(assigned.get(id) ?? []), candidate.cardId]);
-      left -= 1;
-    }
+  for (const candidate of candidates) {
+    if (left <= 0) break;
+    const id = candidate.goal.goalInstanceId;
+    const cap = candidate.goal.mode === "sequential" ? 1 : limit;
+    const mine = given.get(id) ?? 0;
+    if (mine >= cap) continue;
+    given.set(id, mine + 1);
+    assigned.set(id, [...(assigned.get(id) ?? []), candidate.cardId]);
+    left -= 1;
+  }
   return assigned;
 };
 
@@ -116,7 +108,7 @@ const make = Effect.gen(function* () {
   const settings = yield* KanbanSettings;
   const workflows = yield* Workflows;
   const decisions = yield* HumanDecisions;
-  const cardOrder = yield* CardOrder;
+  const goalOrder = yield* GoalOrder;
   // The cards each Goal's last look could start.
   const demand = yield* Ref.make<ReadonlyMap<string, readonly PlanStep[]>>(new Map());
   const notices = yield* Ref.make<ReadonlyMap<string, readonly [string, string]>>(new Map());
@@ -142,6 +134,11 @@ const make = Effect.gen(function* () {
     const goals = (yield* attempts.activeGoals).filter((goal) => goal.projectId === projectId);
     yield* Effect.forEach(goals, (goal) => poke(goal.goalInstanceId), { discard: true });
   });
+
+  /** Wakes every board, after the order of projects changed. */
+  const pokeAll = Effect.flatMap(attempts.activeGoals, (goals) =>
+    Effect.forEach(goals, (goal) => poke(goal.goalInstanceId), { discard: true }),
+  );
 
   /**
    * What another Goal could start now: the cards its last look reported, as far as they are still
@@ -170,8 +167,8 @@ const make = Effect.gen(function* () {
     /**
      * Which of the cards the Goal could start (`planned`, in its Plan order) it may start now.
      * Every Goal's look reports its startable cards; the free slots go to the first cards in the
-     * project's order, so a Goal whose cards come later waits. Goals that got cards are woken to
-     * start them.
+     * priority tree, so a Goal placed lower waits while a higher one can use the slots. Goals that
+     * got cards are woken to start them.
      */
     grant: Effect.fn("ProjectScheduler.grant")(function* (
       goal: KanbanGoal,
@@ -182,20 +179,15 @@ const make = Effect.gen(function* () {
       const active = yield* attempts.activeGoals;
       const held = yield* attempts.outstanding;
       const known = yield* Ref.get(demand);
-      const projects = [...new Set(active.map((other) => other.projectId))];
-      const orders = new Map(
-        yield* Effect.forEach(projects, (projectId) =>
-          Effect.map(
-            cardOrder.order(projectId),
-            (order) =>
-              [
-                projectId,
-                new Map(order.map((ref, index) => [`${ref.sessionId}:${ref.cardId}`, index])),
-              ] as const,
-          ),
-        ),
+      const projectPlace = new Map(
+        (yield* goalOrder.projects).map((projectId, index) => [projectId, index] as const),
       );
-      const lanes = new Map(projects.map((projectId): [string, Candidate[]] => [projectId, []]));
+      const goalPlace = new Map<string, number>();
+      for (const projectId of new Set(active.map((other) => other.projectId)))
+        (yield* goalOrder.goals(projectId)).forEach((sessionId, index) =>
+          goalPlace.set(`${projectId}:${sessionId}`, index),
+        );
+      const candidates: Candidate[] = [];
       for (const other of active) {
         // A Goal waiting for another Goal's merge takes no slots.
         if ((yield* waitingOn(other.goalInstanceId)).length > 0) continue;
@@ -203,22 +195,21 @@ const make = Effect.gen(function* () {
           other.goalInstanceId === goal.goalInstanceId
             ? planned
             : yield* startable(other, known.get(other.goalInstanceId));
-        const order = orders.get(other.projectId);
-        for (const step of wanted)
-          lanes.get(other.projectId)?.push({
+        wanted.forEach((step, index) =>
+          candidates.push({
             goal: other,
             cardId: step.id,
-            rank:
-              step.status === "in_progress"
-                ? Number.NEGATIVE_INFINITY
-                : (order?.get(`${other.sessionId}:${step.id}`) ?? Number.POSITIVE_INFINITY),
-          });
+            key: [
+              projectPlace.get(other.projectId) ?? Number.POSITIVE_INFINITY,
+              goalPlace.get(`${other.projectId}:${other.sessionId}`) ?? Number.POSITIVE_INFINITY,
+              // A card left in progress continues before its Goal starts anything.
+              step.status === "in_progress" ? -1 : index,
+            ],
+          }),
+        );
       }
-      const sorted = projects.map((projectId) =>
-        (lanes.get(projectId) ?? []).toSorted((a, b) => a.rank - b.rank),
-      );
       const total = [...held.values()].reduce((sum, count) => sum + count, 0);
-      const assigned = assign(sorted, held, limit - total, limit);
+      const assigned = assign(candidates.toSorted(byKey), held, limit - total, limit);
       const mine = new Set(assigned.get(goal.goalInstanceId) ?? []);
       // The other Goals' cards are theirs to start: wake those Goals.
       yield* Effect.forEach(
@@ -336,14 +327,25 @@ const make = Effect.gen(function* () {
           .toSorted(),
       ),
 
-    /** Sets a Goal's priority and lets every board of its project look again. */
-    setPriority: Effect.fn("ProjectScheduler.setPriority")(function* (
-      goalInstanceId: string,
-      priority: GoalPriority,
+    /** Moves a conversation's Goal in its project's order and lets the project's boards look again. */
+    moveGoal: Effect.fn("ProjectScheduler.moveGoal")(function* (
+      projectId: string,
+      sessionId: string,
+      before: string | null,
     ) {
-      yield* schedules.setPriority(goalInstanceId, priority);
-      const schedule = yield* schedules.get(goalInstanceId);
-      if (Option.isSome(schedule)) yield* pokeProject(schedule.value.projectId);
+      const order = yield* goalOrder.moveGoal(projectId, sessionId, before);
+      yield* pokeProject(projectId);
+      return order;
+    }),
+
+    /** Moves a project in the order of projects and lets every board look again. */
+    moveProject: Effect.fn("ProjectScheduler.moveProject")(function* (
+      projectId: string,
+      before: string | null,
+    ) {
+      const order = yield* goalOrder.moveProject(projectId, before);
+      yield* pokeAll;
+      return order;
     }),
 
     /** Sets the Goals a Goal waits for; a cycle or a Goal of another project is refused. */

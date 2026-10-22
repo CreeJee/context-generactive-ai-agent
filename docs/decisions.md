@@ -2456,9 +2456,19 @@
 
 ## 전역 카드 순서 (2026-10-22)
 
+- (대체됨: "우선순위 트리 (2026-10-22)". 같은 날 되돌렸다. `kanban_card_ranks`는 다음 마이그레이션에서 지운다.)
 - 사용자 결정: 순서를 Goal 안에만 두면 "여러 Goal을 병렬로 돌린다"는 목적과 어긋난다. 프로젝트의 모든 Goal 카드를 한 전역 순서에 두고, 보드에서 대화 사이로도 끌어 순서를 바꾸며, 스케줄러는 Goal별 round-robin 대신 그 순서로 다음 카드를 고른다.
 - 저장: `kanban_card_ranks(project_id, session_id, card_id, rank)`. 사람이 카드를 끌 때마다 프로젝트 전체 순서를 다시 매겨 저장한다. 행이 없는 카드는 Plan에서 바로 앞 카드를 따라가고(새 카드가 앞 카드 뒤에 들어가도록), 순위 있는 카드가 하나도 없는 Plan은 순위 있는 카드 뒤에 Goal 우선순위(high→normal→low), 그다음 대화 생성 순으로 들어간다. Plan 안 순서는 항상 Plan 순서를 따른다(`kanban/card-order.ts` `mergeByRank`).
 - 스케줄러(`ProjectScheduler.grant`): 각 Goal의 look이 시작할 수 있는 카드 목록을 보고하면, 빈 슬롯(전역 상한 − 실행 중)을 프로젝트 전역 순서의 앞 카드부터 준다. 다른 Goal의 카드가 뽑히면 그 Goal을 깨운다. 순차 모드 Goal은 한 번에 하나, 다른 Goal의 merge를 기다리는 Goal은 슬롯을 잡지 않는다. 프로젝트가 여럿이면 프로젝트끼리 번갈아 준다. Goal 우선순위 가중치(`priorityWeight`)는 없앴다.
 - 드래그(`BoardIntent.Reorder{cardId, at, atSessionId?}`): 같은 열 안에서 어느 대화의 카드 위에 놓아도 된다. 카드는 전역 순서에서 `at`의 자리로 가고, 그 투영으로 자기 Plan 안 위치가 바뀌면 `MoveCard`로 Plan도 고친다. 열이 다르면 `reorder_across_columns`, 같은 프로젝트가 아닌 대화나 없는 카드면 `card_missing`. 열 자체에 놓으면 그 열(보이는 모든 대화)의 마지막 카드 뒤로 간다.
 - 화면: `GET /api/projects/:project/boards`가 대화마다 `ranks`(카드 id → 전역 순서 인덱스)를 주고, 프로젝트 보드는 그 순서로 카드를 보인다. 세션 보드 Sheet(Plan 하나)는 Plan 순서 그대로다. Goal 우선순위 Select는 남기되, 뜻은 "아직 순위 없는 그 Goal 카드가 전역 순서에 들어가는 자리"다.
 - 이관(Transfer)은 그대로 peek에서만 한다. 드래그는 순서, 이관은 Plan을 바꾸는 일이라 나눈다.
+
+## 우선순위 트리 (2026-10-22)
+
+- 사용자 결정: 칸반의 목적은 "여러 개의 Plan을 적절한 우선순위로 잘 돌려주는 LLM Task 오케스트레이터"다. 우선순위는 실행할 예정인 것의 계층이며, 전체가 트리 구조여야 하고, 새 Plan이 들어올 때 그 계층을 바꿀 수 있어야 한다. 돌리는 중에도 바꿀 수 있어야 한다. "전역 카드 순서 (2026-10-22)"는 이것으로 대체한다.
+- 트리: 프로젝트 → Goal(대화) → 카드. 프로젝트 순서(`kanban_project_ranks`)와 프로젝트 안 Goal 순서(`kanban_goal_ranks`, 대화 단위)는 사람이 정하고, 카드는 Plan 순서를 따른다. 자리를 정하지 않은 프로젝트·Goal은 정한 것들 뒤에 생성 순으로 선다(`kanban/goal-order.ts`, `GoalOrder`). Goal 우선순위 high/normal/low와 `SetPriority`는 없앴다(`kanban_goal_schedules.priority` 열은 남지만 읽지 않는다).
+- 스케줄러(`ProjectScheduler.grant`): 각 Goal의 look이 시작 가능한 카드를 보고하면, 빈 슬롯(전역 상한 − 실행 중)을 트리 순서의 첫 카드부터 준다. 앞 Goal이 슬롯을 다 못 쓰면 다음 Goal이 받아 병렬이 된다. 다른 Goal의 카드가 뽑히면 그 Goal을 깨운다. 순차 모드 Goal은 한 번에 하나, 다른 Goal의 merge를 기다리는 Goal은 슬롯을 잡지 않는다. 순서를 바꾸면 그 프로젝트(프로젝트 순서면 전체) 보드가 다시 look한다.
+- API: `POST /api/projects/:project/kanban`은 `SetProtectedBranches`·`MoveGoal{sessionId, before}` 태그 명령을 받고 `{protectedBranches, goalOrder}`를 돌려준다. `POST /api/settings/kanban`은 `SetConcurrency`·`MoveProject{projectId, before}`를 받고 `{configured, effective, projectOrder}`를 돌려준다. `before`는 그 앞에 둘 대상, null은 맨 뒤. `GET /api/projects/:project/boards`의 행마다 `rank`(Goal 순서 인덱스)를 준다.
+- 보드: 프로젝트 보드에는 실행 중(`executing`)인 Plan의 카드만 올린다. 실행 전·완료 Plan은 헤더에 "보드 밖 Plan: 이름 (상태)"로 세션별로 이름만 보이고 누르면 그 대화로 간다(세션당 Plan은 하나라 세션별 목록이면 충분하다). 카드는 Goal 순서, 그 안에서 Plan 순서로 보인다. 대화별 상태 패널의 각 줄에 위로/아래로 버튼이 있어 Goal 순서를 바꾼다(새 Plan은 맨 아래로 들어와 바로 위로 올릴 수 있다). 카드 드래그 순서 변경은 같은 대화 안에서만 되고, 다른 대화 카드 위에 놓으면 거절하며 대화 순서는 패널에서 바꾸라고 안내한다. 이관(Transfer)은 그대로 peek에서 한다.
+- 설정: "칸반 실행" 페이지에 프로젝트 순서 목록(위로/아래로)을 둔다. 여러 프로젝트의 보드가 동시에 돌 때 빈 슬롯은 위 프로젝트부터 간다.

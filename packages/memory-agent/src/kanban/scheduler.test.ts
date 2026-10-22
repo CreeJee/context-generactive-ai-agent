@@ -10,7 +10,6 @@ import {
   openKanbanOwner,
 } from "../testing/kanban.ts";
 import { CardAgentOutcome, type CardAgentRun } from "./card-agent.ts";
-import { CardOrder } from "./card-order.ts";
 import { GoalMergeState, GoalScheduleRefused, GoalSchedules } from "./goal-schedules.ts";
 import { DecisionAnswer, DecisionKind, HumanDecisions } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
@@ -48,7 +47,7 @@ const gates = (ids: readonly string[]) =>
     },
   );
 
-it.live("starts cards in the project's order across Goals and never runs more than the limit", () =>
+it.live("starts cards in the priority tree's order and never runs more than the limit", () =>
   Effect.gen(function* () {
     const fixture = yield* kanbanFixture;
     const ids = ["a1", "a2", "a3", "b1", "b2", "b3"];
@@ -72,7 +71,7 @@ it.live("starts cards in the project's order across Goals and never runs more th
     yield* run(
       Effect.gen(function* () {
         const orchestrator = yield* KanbanOrchestrator;
-        const cardOrder = yield* CardOrder;
+        const scheduler = yield* ProjectScheduler;
         const first = yield* executingPlan(fixture, [card("a1"), card("a2"), card("a3")]);
         yield* orchestrator.start(first.sessionId);
         yield* eventually(Ref.get(started), (list) => list.length === 2);
@@ -82,18 +81,14 @@ it.live("starts cards in the project's order across Goals and never runs more th
           card("b3"),
         ]);
         yield* orchestrator.start(second.sessionId);
-        // Nobody arranged the cards: the older Goal's cards all come first. A person then puts
-        // b1 before a3, and each freed slot goes to the next card in that order, whichever Goal.
-        yield* cardOrder.place(
-          first.projectId,
-          { sessionId: second.sessionId, cardId: "b1" },
-          { sessionId: first.sessionId, cardId: "a3" },
-        );
+        // Nobody placed the Goals: the older one comes first. A person then puts the new Goal on
+        // top, and each freed slot goes to its cards until it has none left to start.
+        yield* scheduler.moveGoal(first.projectId, second.sessionId, first.sessionId);
         for (const [release, next] of [
           ["a1", "b1"],
-          ["a2", "a3"],
-          ["b1", "b2"],
-          ["a3", "b3"],
+          ["a2", "b2"],
+          ["b1", "b3"],
+          ["b2", "a3"],
         ] as const) {
           const before = (yield* Ref.get(started)).length;
           yield* gate.open(release);

@@ -22,6 +22,24 @@ export function useProtectedBranchesMutation(projectId: string) {
   });
 }
 
+/** Moves a conversation's Goal in the project's order; the board list carries the new places. */
+export function useGoalOrderMutation(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      before,
+    }: {
+      readonly sessionId: string;
+      readonly before: string | null;
+    }) => api.moveGoal(projectId, sessionId, before),
+    onSuccess: (settings) =>
+      client.setQueryData(projectQueries.kanban(projectId).queryKey, settings),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: projectQueries.boards(projectId).queryKey }),
+  });
+}
+
 export type AgentChange = Data.TaggedEnum<{
   trust: {
     readonly scope: ExternalAgentView["scope"];

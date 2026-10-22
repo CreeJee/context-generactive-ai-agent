@@ -5,7 +5,7 @@ import { useState } from "react";
 import { render } from "vitest-browser-react";
 import { expect, vi } from "vite-plus/test";
 import "../../../app.css";
-import { BoardIntent } from "../../api";
+import { BoardIntent, ProjectKanbanCommand } from "../../api";
 import type { BoardCardRef } from "./board-moves";
 import { ProjectBoard } from "./project-board";
 
@@ -41,16 +41,26 @@ const payments = {
   counts: { ...noCards, done: 1, in_progress: 1 },
   kanbanActive: true,
   updatedAt: "2026-10-21T01:00:00.000Z",
-  ranks: { a1: 0, a2: 1 },
+  rank: 0,
 };
 const logging = {
   sessionId: "session-b",
   sessionTitle: null,
-  plan: { version: 1, status: "ready", summary: "로그 수집" },
+  plan: { version: 1, status: "executing", summary: "로그 수집" },
   counts: { ...noCards, ready: 1 },
   kanbanActive: false,
   updatedAt: "2026-10-20T01:00:00.000Z",
-  ranks: { b1: 2 },
+  rank: 1,
+};
+/** A Plan not executing yet: named on the board, its cards not shown. */
+const alerts = {
+  sessionId: "session-c",
+  sessionTitle: "알림 설계",
+  plan: { version: 1, status: "ready", summary: "알림 채널" },
+  counts: { ...noCards, ready: 2 },
+  kanbanActive: false,
+  updatedAt: "2026-10-19T01:00:00.000Z",
+  rank: 2,
 };
 const boards = {
   "session-a": {
@@ -62,6 +72,12 @@ const boards = {
   "session-b": {
     plan: logging.plan,
     cards: [card("b1", "로그 포맷", "ready")],
+    history: [],
+    pendingChanges: [],
+  },
+  "session-c": {
+    plan: alerts.plan,
+    cards: [card("c1", "채널 고르기", "ready"), card("c2", "템플릿", "ready")],
     history: [],
     pendingChanges: [],
   },
@@ -78,14 +94,18 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   if (request.method === "POST")
     return request.text().then((body) => {
       sent.push(body);
-      return Response.json({ applied: true });
+      return Response.json(
+        pathname === "/api/projects/project-1/kanban"
+          ? { protectedBranches: [], goalOrder: ["session-b", "session-a", "session-c"] }
+          : { applied: true },
+      );
     });
   if (pathname === "/api/projects/project-1/boards")
-    return Promise.resolve(Response.json([payments, logging]));
+    return Promise.resolve(Response.json([payments, logging, alerts]));
   if (pathname === "/api/projects/project-1/decisions") return Promise.resolve(Response.json([]));
-  const session = /^\/api\/sessions\/(session-[ab])\/(board|kanban)$/.exec(pathname);
+  const session = /^\/api\/sessions\/(session-[abc])\/(board|kanban)$/.exec(pathname);
   if (session?.[2] === "kanban") return Promise.resolve(Response.json({ active: false }));
-  if (session?.[1] === "session-a" || session?.[1] === "session-b")
+  if (session?.[1] === "session-a" || session?.[1] === "session-b" || session?.[1] === "session-c")
     return Promise.resolve(Response.json(boards[session[1]]));
   return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
 };
@@ -114,25 +134,41 @@ function Harness({ onOpenSession }: { readonly onOpenSession: (sessionId: string
   );
 }
 
-it.live("project board shows every conversation's cards on one board and moves a card", () =>
+it.live("project board shows the executing Plans in order, moves a Goal and moves a card", () =>
   Effect.gen(function* () {
     vi.stubGlobal("fetch", server);
     const opened = vi.fn();
     const screen = yield* sdkCall(() => render(<Harness onOpenSession={opened} />));
 
-    // Every conversation's cards share the columns; each card names its conversation.
+    // Executing Plans share the columns; each card names its conversation. A Plan not executing
+    // is only named, and its cards are not even read.
     yield* sdkCall(() => expect.element(screen.getByText("결제 요청")).toBeVisible());
     yield* sdkCall(() => expect.element(screen.getByText("로그 포맷")).toBeVisible());
     expect(requests).toContain("GET /api/sessions/session-a/board");
     expect(requests).toContain("GET /api/sessions/session-b/board");
+    expect(requests).not.toContain("GET /api/sessions/session-c/board");
+    yield* sdkCall(() => screen.getByRole("button", { name: "알림 설계 (준비 완료)" }).click());
+    expect(opened).toHaveBeenCalledWith("session-c");
 
-    // The status panel has a line per conversation; its "대화 열기" goes to that conversation.
-    yield* sdkCall(() => screen.getByRole("button", { name: "대화별 상태 · 동작" }).click());
+    // The status panel has a line per executing conversation in the priority tree's order; the
+    // arrows move a Goal, and "대화 열기" goes to that conversation.
+    yield* sdkCall(() => screen.getByRole("button", { name: "대화별 상태 · 순서 · 동작" }).click());
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "결제 모듈" })).toBeVisible(),
     );
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "제목 없는 대화" })).toBeVisible(),
+    );
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("button", { name: "결제 모듈 위로" })).toBeDisabled(),
+    );
+    yield* sdkCall(() => screen.getByRole("button", { name: "제목 없는 대화 위로" }).click());
+    yield* sdkCall(() =>
+      expect.poll(() => requests).toContain("POST /api/projects/project-1/kanban"),
+    );
+    const moves = yield* Effect.forEach(sent, (body) => decodeBody(body));
+    expect(moves.find(ProjectKanbanCommand.$is("MoveGoal"))).toEqual(
+      ProjectKanbanCommand.MoveGoal({ sessionId: "session-b", before: "session-a" }),
     );
     yield* sdkCall(() =>
       screen

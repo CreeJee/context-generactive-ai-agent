@@ -4,12 +4,10 @@ import { VerdictFailure } from "./failures.ts";
 
 /**
  * What the project scheduler stores about kanban Goals (docs/kanban-orchestration.md "프로젝트
- * 스케줄러"): each Goal's priority and target branch, the Goals it waits for, where its merge into
- * the target stands, and the branches a project never merges into on its own.
+ * 스케줄러"): each Goal's target branch, the Goals it waits for, where its merge into the target
+ * stands, and the branches a project never merges into on its own. Where a Goal stands among the
+ * project's Goals is the priority tree's (`GoalOrder`); the row's old priority column is unused.
  */
-
-export const GoalPriority = Schema.Literals(["high", "normal", "low"]);
-export type GoalPriority = typeof GoalPriority.Type;
 
 /** Branches a project protects when the user has not chosen any. */
 export const defaultProtectedBranches = ["main", "staging"] as const;
@@ -85,7 +83,6 @@ export const mergeReleases = (state: GoalMergeState | null) =>
 export interface GoalSchedule {
   readonly goalInstanceId: string;
   readonly projectId: string;
-  readonly priority: GoalPriority;
   readonly targetBranch: string | null;
   readonly upstreamPending: boolean;
   readonly merge: GoalMergeState | null;
@@ -124,7 +121,6 @@ export class GoalScheduleStorageFailed extends Schema.TaggedError<GoalScheduleSt
 const ScheduleRow = Schema.Struct({
   goal_instance_id: Schema.String,
   project_id: Schema.String,
-  priority: GoalPriority,
   target_branch: Schema.NullOr(Schema.String),
   upstream_pending: Schema.Literals([0, 1]),
   merge_json: Schema.NullOr(Schema.fromJsonString(GoalMergeState)),
@@ -140,7 +136,6 @@ const encodeBranches = Schema.encodeEffect(Schema.fromJsonString(ProtectedBranch
 const toSchedule = (row: typeof ScheduleRow.Type): GoalSchedule => ({
   goalInstanceId: row.goal_instance_id,
   projectId: row.project_id,
-  priority: row.priority,
   targetBranch: row.target_branch,
   upstreamPending: row.upstream_pending === 1,
   merge: row.merge_json,
@@ -185,16 +180,19 @@ const make = Effect.gen(function* () {
       Effect.map((found) => found.map(toSchedule)),
       Effect.mapError(failed),
     );
+  const columns = sql`goal_instance_id, project_id, target_branch, upstream_pending, merge_json,
+    verified_head`;
   const get = (goalInstanceId: string) =>
     Effect.map(
       schedules(
-        sql`SELECT * FROM kanban_goal_schedules WHERE goal_instance_id = ${goalInstanceId}`,
+        sql`SELECT ${columns} FROM kanban_goal_schedules WHERE goal_instance_id = ${goalInstanceId}`,
       ),
       (found) => Option.fromUndefinedOr(found[0]),
     );
   const forProject = (projectId: string) =>
     schedules(
-      sql`SELECT * FROM kanban_goal_schedules WHERE project_id = ${projectId} ORDER BY created_at`,
+      sql`SELECT ${columns} FROM kanban_goal_schedules WHERE project_id = ${projectId}
+          ORDER BY created_at`,
     );
   /** Dependency edges among the project's Goals. */
   const edges = (projectId: string) =>
@@ -223,9 +221,9 @@ const make = Effect.gen(function* () {
     }) {
       const at = yield* now;
       yield* sql`INSERT OR IGNORE INTO kanban_goal_schedules
-          (goal_instance_id, project_id, priority, target_branch, upstream_pending, merge_json,
+          (goal_instance_id, project_id, target_branch, upstream_pending, merge_json,
            verified_head, created_at, updated_at)
-          VALUES (${goal.goalInstanceId}, ${goal.projectId}, 'normal', ${goal.targetBranch}, 0,
+          VALUES (${goal.goalInstanceId}, ${goal.projectId}, ${goal.targetBranch}, 0,
             NULL, NULL, ${at}, ${at})`.pipe(Effect.mapError(failed));
     }),
 
@@ -234,13 +232,7 @@ const make = Effect.gen(function* () {
     edges,
 
     /** Every scheduled Goal, oldest first. */
-    all: schedules(sql`SELECT * FROM kanban_goal_schedules ORDER BY created_at`),
-
-    setPriority: (goalInstanceId: string, priority: GoalPriority) =>
-      touch(
-        (at) => sql`UPDATE kanban_goal_schedules SET priority = ${priority}, updated_at = ${at}
-            WHERE goal_instance_id = ${goalInstanceId}`,
-      ),
+    all: schedules(sql`SELECT ${columns} FROM kanban_goal_schedules ORDER BY created_at`),
 
     /**
      * Replaces the Goals this Goal waits for. They must be other Goals of the same project, and no

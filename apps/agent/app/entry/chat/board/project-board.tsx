@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { ChevronRightIcon, MessageSquareTextIcon, PlusIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  MessageSquareTextIcon,
+  PlusIcon,
+} from "lucide-react";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -8,7 +14,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
-import { Field, FieldLabel } from "../../../components/ui/field";
 import {
   Sheet,
   SheetContent,
@@ -17,11 +22,11 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet";
 import type { ProjectBoard as ProjectBoardRow } from "memory-agent";
+import { useGoalOrderMutation } from "../../queries/mutations/project";
 import { KanbanAction, useKanbanMutation } from "../../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../../queries/project";
 import { sessionQueries } from "../../queries/session";
 import { LoopHealthStatus } from "../../shared/loop-health";
-import { GoalPrioritySelect } from "../board-panel";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
 import { BoardSurface, editErrorText, type SurfaceBoard } from "./board-surface";
@@ -29,13 +34,16 @@ import { BoardSurface, editErrorText, type SurfaceBoard } from "./board-surface"
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
 const titleOf = (row: ProjectBoardRow) => row.sessionTitle ?? "제목 없는 대화";
+/** Only an executing Plan's cards are the scheduler's business, so only those are on the board. */
+const onBoard = (row: ProjectBoardRow) => row.plan.status === "executing";
 
 /**
- * The project's kanban board: every conversation's Plan on one board of the same seven columns,
- * running Plans first. Each card names its conversation; a filter shows one conversation's cards
- * at a time. Cards are dragged, opened and decided here as on their own board, keep their order
- * inside their own Plan, and move to another conversation's Plan from the card peek. The server
- * checks the conversation's lease for each change.
+ * The project's kanban board: every executing Plan on one board of the same seven columns, in the
+ * priority tree's order (the status panel moves a conversation's Goal up and down). Each card
+ * names its conversation; a filter shows one conversation's cards at a time. Cards are dragged,
+ * opened and decided here as on their own board, keep their order inside their own Plan, and move
+ * to another conversation's Plan from the card peek. Plans not executing are only named, with a
+ * way to their conversation. The server checks the conversation's lease for each change.
  */
 export function ProjectBoard({
   projectId,
@@ -55,8 +63,11 @@ export function ProjectBoard({
   readonly onClose: () => void;
 }) {
   const boards = useProjectBoardsQuery(projectId);
-  const rows = boards.data ?? [];
+  const everyRow = [...(boards.data ?? [])].sort((a, b) => a.rank - b.rank);
+  const rows = everyRow.filter(onBoard);
+  const waiting = everyRow.filter((row) => !onBoard(row));
   const inbox = useDecisionInboxQuery(projectId).data ?? [];
+  const order = useGoalOrderMutation(projectId);
   const views = useQueries({
     queries: rows.map((row) => sessionQueries.board(projectId, row.sessionId)),
   });
@@ -66,6 +77,7 @@ export function ProjectBoard({
   const [shown, setShown] = useState<readonly string[]>([]);
   const [adding, setAdding] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
   const surfaces = rows.flatMap((row, index): SurfaceBoard[] => {
     const view = views[index]?.data;
     const plan = view?.plan ?? null;
@@ -79,7 +91,7 @@ export function ProjectBoard({
         plan,
         decisions: inbox.filter((item) => item.sessionId === row.sessionId),
         loop: loop?.active === true ? loop : null,
-        ranks: row.ranks,
+        rank: row.rank,
       },
     ];
   });
@@ -92,6 +104,14 @@ export function ProjectBoard({
     setShown(
       shown.includes(sessionId) ? shown.filter((id) => id !== sessionId) : [...shown, sessionId],
     );
+  /** Puts the conversation's Goal in front of `before` among the project's Goals. */
+  const move = (sessionId: string, before: string | null) => {
+    setOrderError(null);
+    order.mutate(
+      { sessionId, before },
+      { onError: (error) => setOrderError(editErrorText(error)) },
+    );
+  };
 
   return (
     <Sheet
@@ -108,18 +128,34 @@ export function ProjectBoard({
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
               <span>
-                대화 {rows.length}개{running > 0 && ` · 실행 중 ${running}`}
+                실행 중인 대화 {rows.length}개{running > 0 && ` · 칸반 ${running}`}
               </span>
               <span>
                 완료 {done}/{total}
               </span>
               {inbox.length > 0 && <Badge variant="outline">판단 대기 {inbox.length}</Badge>}
               <span className="hidden sm:inline">
-                이 프로젝트 모든 대화의 카드를 한 보드에서 봐요. 순서는 같은 대화의 카드끼리 바꾸고,
-                카드를 열면 다른 대화로 옮길 수 있어요.
+                위쪽 대화의 카드부터 시작해요. 대화 순서는 대화별 상태 패널에서 바꾸고, 카드 순서는
+                같은 대화 안에서 바꿔요.
               </span>
             </span>
           </SheetDescription>
+          {waiting.length > 0 && (
+            <p role="status" className="flex flex-wrap items-center gap-1 text-xs">
+              <span className="text-muted-foreground">보드 밖 Plan {waiting.length}개:</span>
+              {waiting.map((row) => (
+                <Button
+                  key={row.sessionId}
+                  type="button"
+                  size="xs"
+                  variant="link"
+                  onClick={() => onOpenSession(row.sessionId)}
+                >
+                  {titleOf(row)} ({planStatusLabels[row.plan.status]})
+                </Button>
+              ))}
+            </p>
+          )}
           {rows.length > 1 && (
             <div role="group" aria-label="보이는 대화" className="mt-1 flex flex-wrap gap-1">
               <Button
@@ -149,11 +185,11 @@ export function ProjectBoard({
             <Collapsible className="rounded-md border">
               <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-                <span className="font-medium">대화별 상태 · 동작</span>
+                <span className="font-medium">대화별 상태 · 순서 · 동작</span>
                 {inbox.length > 0 && <Badge variant="outline">판단 대기 {inbox.length}</Badge>}
               </CollapsibleTrigger>
               <CollapsibleContent className="max-h-60 divide-y overflow-y-auto border-t">
-                {rows.map((row) => (
+                {rows.map((row, index) => (
                   <ConversationRow
                     key={row.sessionId}
                     projectId={projectId}
@@ -161,10 +197,26 @@ export function ProjectBoard({
                     row={row}
                     surface={surfaceOf(row.sessionId)}
                     decisions={inbox.filter((item) => item.sessionId === row.sessionId).length}
+                    moving={order.isPending}
+                    onMoveUp={
+                      index === 0
+                        ? null
+                        : () => move(row.sessionId, rows[index - 1]?.sessionId ?? null)
+                    }
+                    onMoveDown={
+                      index === rows.length - 1
+                        ? null
+                        : () => move(row.sessionId, rows[index + 2]?.sessionId ?? null)
+                    }
                     onAdd={() => setAdding(row.sessionId)}
                     onOpenSession={() => onOpenSession(row.sessionId)}
                   />
                 ))}
+                {orderError !== null && (
+                  <p className="px-3 py-2 text-xs text-destructive" role="alert">
+                    {orderError}
+                  </p>
+                )}
               </CollapsibleContent>
             </Collapsible>
           )}
@@ -174,7 +226,7 @@ export function ProjectBoard({
         )}
         {boards.data !== undefined && rows.length === 0 && (
           <p className="px-4 text-muted-foreground">
-            아직 보드가 없어요. 대화에서 계획을 세우면 보드가 생겨요.
+            실행 중인 Plan이 없어요. 대화에서 계획을 실행하면 보드에 올라와요.
           </p>
         )}
         {rows.length > 0 && (
@@ -198,9 +250,8 @@ export function ProjectBoard({
 }
 
 /**
- * One conversation's line in the board's status panel: its Plan, its loop and the actions that
- * belong to the whole Plan rather than to a card. The Goal's priority, set here, is where its
- * cards enter the project's order until a person drags them into place on the board.
+ * One conversation's line in the board's status panel: its place among the project's Goals, its
+ * Plan, its loop and the actions that belong to the whole Plan rather than to a card.
  */
 function ConversationRow({
   projectId,
@@ -208,6 +259,9 @@ function ConversationRow({
   row,
   surface,
   decisions,
+  moving,
+  onMoveUp,
+  onMoveDown,
   onAdd,
   onOpenSession,
 }: {
@@ -217,6 +271,12 @@ function ConversationRow({
   /** The conversation's board as the surface shows it; null until it has loaded. */
   readonly surface: SurfaceBoard | null;
   readonly decisions: number;
+  /** A move is on its way to the server. */
+  readonly moving: boolean;
+  /** Null at the top of the order. */
+  readonly onMoveUp: (() => void) | null;
+  /** Null at the bottom of the order. */
+  readonly onMoveDown: (() => void) | null;
   readonly onAdd: () => void;
   readonly onOpenSession: () => void;
 }) {
@@ -224,7 +284,6 @@ function ConversationRow({
   const [actionError, setActionError] = useState<string | null>(null);
   const title = titleOf(row);
   const loop = surface?.loop ?? null;
-  const schedule = loop?.schedule ?? null;
   const pendingChanges = surface?.view.pendingChanges.length ?? 0;
   const act = (action: KanbanAction) => {
     setActionError(null);
@@ -236,6 +295,28 @@ function ConversationRow({
       aria-label={`${title} 대화`}
       className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-xs"
     >
+      <span className="flex items-center">
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`${title} 위로`}
+          disabled={moving || onMoveUp === null}
+          onClick={() => onMoveUp?.()}
+        >
+          <ChevronUpIcon />
+        </Button>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`${title} 아래로`}
+          disabled={moving || onMoveDown === null}
+          onClick={() => onMoveDown?.()}
+        >
+          <ChevronDownIcon />
+        </Button>
+      </span>
       <h3 className="min-w-0 max-w-full truncate text-sm font-medium">{title}</h3>
       {row.kanbanActive ? (
         <Badge variant="secondary">칸반 실행 중</Badge>
@@ -255,19 +336,8 @@ function ConversationRow({
       </span>
       {decisions > 0 && <Badge variant="outline">판단 대기 {decisions}</Badge>}
       {pendingChanges > 0 && <Badge variant="outline">변경 요청 대기 {pendingChanges}</Badge>}
-      {schedule !== null && (
-        <Field orientation="horizontal" className="w-auto">
-          <FieldLabel htmlFor={`goal-priority-${row.sessionId}`}>우선순위</FieldLabel>
-          <GoalPrioritySelect
-            id={`goal-priority-${row.sessionId}`}
-            value={schedule.priority}
-            disabled={kanbanAction.isPending}
-            onChange={(priority) => act(KanbanAction.SetPriority({ priority }))}
-          />
-        </Field>
-      )}
       <span className="ml-auto flex flex-wrap items-center gap-1">
-        {loop === null && row.plan.status === "executing" && (
+        {loop === null && (
           <Button
             type="button"
             size="xs"
@@ -281,7 +351,7 @@ function ConversationRow({
           type="button"
           size="xs"
           variant="outline"
-          disabled={surface === null || surface.plan.status === "completed"}
+          disabled={surface === null}
           onClick={onAdd}
         >
           <PlusIcon data-icon="inline-start" />

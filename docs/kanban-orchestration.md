@@ -46,18 +46,18 @@ type BoardAuthor =
 
 드래그는 의도, 상태는 서버다. 보드는 드롭을 아래 의도 하나로 보내고(`BoardIntent`, `KanbanBoardActions.applyIntent`), 카드 상태는 owner가 정한다. 맞지 않는 의도는 리터럴 reason으로 거절한다.
 
-| 의도                                | 보드 드롭                | 처리                                                                                 | 거절 reason                             |
-| ----------------------------------- | ------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------- |
-| `Reorder(cardId, at, atSessionId?)` | 같은 열 안               | 프로젝트 전역 카드 순서에서 `at`의 자리로(다른 대화의 카드여도). Plan 순서는 그 투영 | `reorder_across_columns`·`card_missing` |
-| `Requeue`                           | 막힘 → 준비              | dead-letter item을 다시 열거나 실패 기록을 지우고 ready로                            | `card_not_blocked`, `not_kanban`        |
-| `Hold`                              | 준비 → 백로그            | `PlanStep.hold { by, at }`를 붙인다. 의존이 끝나도 backlog에 남아 배정 안 됨         | `card_not_waiting`, `card_held`         |
-| `Release`                           | 보류 카드 → 준비         | hold를 떼고 의존을 다시 따른다                                                       | `card_not_held`                         |
-| `ChangeRequest(cardId, …)`          | 진행 중 카드를 다른 열로 | 이동하지 않고 수정 요청을 쓰게 한 뒤 `UserChangeRequest`로 보낸다                    | `card_not_running`                      |
-| `Cancel`                            | (peek의 취소)            | 기존 `CancelCard`·중단 경로                                                          | 기존 보드 편집 거절                     |
+| 의도                       | 보드 드롭                | 처리                                                                         | 거절 reason                             |
+| -------------------------- | ------------------------ | ---------------------------------------------------------------------------- | --------------------------------------- |
+| `Reorder(cardId, at)`      | 같은 열 안               | 카드 순위 = Plan 순서 = Goal 안 배정 순서. `at`은 같은 Plan의 카드           | `reorder_across_columns`·`card_missing` |
+| `Requeue`                  | 막힘 → 준비              | dead-letter item을 다시 열거나 실패 기록을 지우고 ready로                    | `card_not_blocked`, `not_kanban`        |
+| `Hold`                     | 준비 → 백로그            | `PlanStep.hold { by, at }`를 붙인다. 의존이 끝나도 backlog에 남아 배정 안 됨 | `card_not_waiting`, `card_held`         |
+| `Release`                  | 보류 카드 → 준비         | hold를 떼고 의존을 다시 따른다                                               | `card_not_held`                         |
+| `ChangeRequest(cardId, …)` | 진행 중 카드를 다른 열로 | 이동하지 않고 수정 요청을 쓰게 한 뒤 `UserChangeRequest`로 보낸다            | `card_not_running`                      |
+| `Cancel`                   | (peek의 취소)            | 기존 `CancelCard`·중단 경로                                                  | 기존 보드 편집 거절                     |
 
 - 매핑이 없는 드롭(진행 중·검증·판단 필요·완료·막힘 열로, 판단 필요·검증·완료 카드에서)은 드래그 중 비활성과 이유를 보인다. 판단 필요 카드는 판단 응답으로 처리한다.
 - 보류는 재시작·같은 id의 replan 뒤에도 유지된다(Plan과 함께 `workflow_state_revisions`에 저장). 이유는 decisions.md "드래그는 의도, 상태는 서버 (2026-10-18)".
-- 화면은 채팅의 요약과 전체 폭 보드 Sheet(`?board`), 카드 peek(`?card`)로 나눈다. 상호작용은 decisions.md "칸반 보드 화면 (2026-10-18)". 프로젝트의 모든 보드는 사이드바 "칸반 보드"의 전체 보드(`?boards`, 한 보드에 모든 Plan의 카드, 카드 peek은 `?boardCard`)에서 함께 보고, 거기서 끈 순서가 전역 카드 순서다. decisions.md "프로젝트 보드를 한 보드로 합치고 카드를 다른 대화로 옮기기 (2026-10-22)", "전역 카드 순서 (2026-10-22)".
+- 화면은 채팅의 요약과 전체 폭 보드 Sheet(`?board`), 카드 peek(`?card`)로 나눈다. 상호작용은 decisions.md "칸반 보드 화면 (2026-10-18)". 프로젝트의 실행 중인 Plan은 사이드바 "칸반 보드"의 전체 보드(`?boards`, 한 보드에 실행 중인 Plan의 카드, 카드 peek은 `?boardCard`)에서 함께 보고, 실행 전 Plan은 거기서 이름만 보인다. decisions.md "프로젝트 보드를 한 보드로 합치고 카드를 다른 대화로 옮기기 (2026-10-22)", "우선순위 트리 (2026-10-22)".
 
 ## 실행
 
@@ -141,7 +141,7 @@ GoalChanged(v3 → v4)
 
 Goal 오케스트레이터만으로는 여러 Goal을 끝까지 자동으로 돌릴 수 없다. Goal 하나가 다른 Goal 때문에 멈추면 사람이 풀 때까지 기다리게 된다. 그래서 프로젝트 단위의 결정적 서비스(LLM 아님)를 첫 범위에 넣는다. 의미 판단은 Goal 오케스트레이터나 사람에게 넘긴다.
 
-- **전역 상한과 카드 순서:** 카드 큐 worker concurrency가 전역 동시 실행 수다. 프로젝트의 모든 Goal 카드는 한 전역 순서(`kanban_card_ranks`, `kanban/card-order.ts`)에 놓이고, 빈 슬롯은 그 순서의 앞 카드부터 받는다(Goal이 달라도). 사용자는 프로젝트 보드에서 대화 사이로도 카드를 끌어 순서를 바꾼다. 순위가 없는 카드는 Plan의 앞 카드를 따라가고, 순위가 하나도 없는 Goal의 카드는 순위 있는 카드 뒤에 Goal 우선순위(high→low)·생성 순으로 들어간다. 순차 모드 Goal은 한 번에 카드 하나만 받는다.
+- **전역 상한과 우선순위 트리:** 카드 큐 worker concurrency가 전역 동시 실행 수다. 우선순위는 프로젝트 → Goal(대화) → 카드의 트리다(`kanban_project_ranks`, `kanban_goal_ranks`, `kanban/goal-order.ts`). 빈 슬롯은 트리 순서로 첫 번째 시작 가능한 카드부터 받는다: 앞 프로젝트, 그 안의 앞 Goal, 그 Plan의 앞 카드. 앞 Goal이 슬롯을 다 못 쓰면(의존·파일 겹침·순차 모드) 다음 Goal이 받아 병렬이 된다. 사용자는 돌리는 중에도 프로젝트 순서(칸반 설정)와 Goal 순서(프로젝트 보드의 대화별 상태 패널)를 바꾸고, 새 Plan은 맨 아래로 들어와 바로 위로 올릴 수 있다. 자리를 정하지 않은 프로젝트·Goal은 정한 것들 뒤에 생성 순으로 선다. 순차 모드 Goal은 한 번에 카드 하나만 받는다.
 - **Goal 간 `dependsOn`:** 다른 Goal의 merge를 기다리는 Goal은 실행 슬롯을 잡지 않는다. 선행 Goal이 대상 브랜치에 merge되면 자동으로 이어 간다.
 - **merge queue:** 대상 브랜치별로 하나씩 처리한다(브랜치 흐름 5).
 - **upstream 변경 신호:** Goal 하나가 대상 브랜치에 merge되면, 같은 대상을 가진 진행 중 Goal에 알린다. 그 Goal은 Goal 브랜치에 대상 브랜치를 merge하고, 영향받는 카드만 다시 verify한다(Goal 변경과 같은 카드별 판정을 쓴다).

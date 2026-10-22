@@ -10,14 +10,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
-import { Field, FieldLabel } from "../../components/ui/field";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -29,7 +21,6 @@ import { Switch } from "../../components/ui/switch";
 import {
   type BoardView,
   type GoalMergeState,
-  type GoalPriority,
   type HumanDecisionRequest,
   type KanbanScheduleView,
 } from "../api";
@@ -366,7 +357,7 @@ function BoardSheet({
           projectId={projectId}
           holder={holder}
           disabled={disabled}
-          boards={[{ sessionId, label: null, view, plan, decisions, loop, ranks: null }]}
+          boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
           shown={[]}
           peek={peekCardId === null ? null : { sessionId, cardId: peekCardId }}
           onPeek={(card) => onPeek(card === null ? null : card.cardId)}
@@ -382,12 +373,6 @@ function BoardSheet({
 
 /** The card id Goal-level requests carry (memory-agent `goalDecisionCardId`). */
 const goalDecisionCardId = "@goal";
-
-const priorityItems = [
-  { value: "high", label: "높음" },
-  { value: "normal", label: "보통" },
-  { value: "low", label: "낮음" },
-] as const satisfies ReadonlyArray<{ readonly value: GoalPriority; readonly label: string }>;
 
 /** Why the scheduler stopped merging a Goal on its own. */
 const stoppedMergeTexts = {
@@ -417,47 +402,7 @@ export function mergeStateLabel(state: GoalMergeState | null): string {
   });
 }
 
-/**
- * Where the Goal's cards enter the project's order of cards before a person arranges them: cards
- * nobody ranked yet come after every ranked card, higher priority first. Dragging a card on the
- * project board ranks it, and from then on that order, not this, decides when it starts.
- */
-export function GoalPrioritySelect({
-  id,
-  value,
-  disabled,
-  onChange,
-}: {
-  readonly id: string;
-  readonly value: GoalPriority;
-  readonly disabled: boolean;
-  readonly onChange: (priority: GoalPriority) => void;
-}) {
-  return (
-    <Select
-      value={value}
-      items={priorityItems}
-      disabled={disabled}
-      onValueChange={(next) => {
-        const item = priorityItems.find((option) => option.value === next);
-        if (isTruthy(item)) onChange(item.value);
-      }}
-    >
-      <SelectTrigger id={id} size="sm" className="w-24">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {priorityItems.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-/** How the project scheduler runs this Goal: its priority, the Goals it waits for, its merge. */
+/** How the project scheduler runs this Goal: the Goals it waits for and its merge. */
 function GoalSchedulePanel({
   schedule,
   decisions,
@@ -483,15 +428,6 @@ function GoalSchedulePanel({
       className="space-y-2 rounded-md border px-3 py-2 text-muted-foreground"
     >
       <div className="flex flex-wrap items-center gap-3">
-        <Field orientation="horizontal" className="w-auto">
-          <FieldLabel htmlFor="goal-priority">Goal 우선순위</FieldLabel>
-          <GoalPrioritySelect
-            id="goal-priority"
-            value={schedule.priority}
-            disabled={disabled}
-            onChange={(priority) => onChange(KanbanAction.SetPriority({ priority }))}
-          />
-        </Field>
         <span>
           대상 브랜치: {schedule.targetBranch ?? "없음"} · {mergeStateLabel(schedule.merge)}
         </span>

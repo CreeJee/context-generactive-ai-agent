@@ -460,12 +460,13 @@ export {
 } from "./kanban/board-actions.ts";
 export {
   GoalMergeState,
-  GoalPriority,
   GoalScheduleRefused,
   GoalScheduleStorageFailed,
   GoalSchedules,
   ProtectedBranches,
 } from "./kanban/goal-schedules.ts";
+export { GoalOrder } from "./kanban/goal-order.ts";
+export { ProjectScheduler } from "./kanban/scheduler.ts";
 export { KanbanSettings, KanbanSettingsRefused } from "./config/kanban-settings.ts";
 export { KanbanConcurrency } from "./config/global-config.ts";
 export { PlanDependenciesRejected, type PlanDependencyIssue } from "./workflow/plan-schedule.ts";

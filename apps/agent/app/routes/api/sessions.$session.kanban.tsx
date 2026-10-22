@@ -3,7 +3,6 @@ import {
   AppEvents,
   BoardAuthor,
   BoardIntent,
-  GoalPriority,
   KanbanBoardActions,
   KanbanOrchestrator,
   SessionLeases,
@@ -19,7 +18,6 @@ import type { Route } from "./+types/sessions.$session.kanban";
 const KanbanCommand = Schema.TaggedUnion({
   Start: {},
   RestartLoop: {},
-  SetPriority: { priority: GoalPriority },
   SetDependencies: { dependsOn: Schema.Array(Schema.String) },
 });
 const KanbanAction = Schema.Union([KanbanCommand, BoardIntent]);
@@ -98,12 +96,6 @@ export function action({ request, params }: Route.ActionArgs) {
           applyIntent(intent).pipe(
             Effect.tap(() => events.publishSession(intent.toSessionId, "run-state")),
           ),
-        SetPriority: ({ priority }) =>
-          Effect.gen(function* () {
-            yield* actions.setPriority(params.session, priority);
-            yield* events.publishSession(params.session, "run-state");
-            return Response.json({ priority });
-          }),
         SetDependencies: (command) =>
           Effect.gen(function* () {
             const dependsOn = yield* actions.setDependencies(params.session, command.dependsOn);

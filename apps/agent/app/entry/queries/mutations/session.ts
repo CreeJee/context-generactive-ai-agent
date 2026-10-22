@@ -5,7 +5,6 @@ import {
   BoardIntent,
   type BoardEdit,
   type DecisionAnswer,
-  type GoalPriority,
   type HumanDecisionRequest,
   type WorkflowAction,
   type WorkflowPhase,
@@ -70,7 +69,6 @@ export type KanbanAction = Data.TaggedEnum<{
   Start: {};
   RestartLoop: {};
   Intent: { readonly intent: BoardIntent };
-  SetPriority: { readonly priority: GoalPriority };
   SetDependencies: { readonly dependsOn: readonly string[] };
 }>;
 export const KanbanAction = Data.taggedEnum<KanbanAction>();
@@ -80,7 +78,6 @@ const sendKanbanAction = (sessionId: string, holder: string, action: KanbanActio
     Start: () => api.startKanban(sessionId, holder),
     RestartLoop: () => api.restartKanbanLoop(sessionId, holder),
     Intent: ({ intent }) => api.boardIntent(sessionId, holder, intent),
-    SetPriority: ({ priority }) => api.setGoalPriority(sessionId, holder, priority),
     SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, holder, dependsOn),
   });
 

@@ -20,7 +20,6 @@ import type {
   KanbanBoardView,
   KanbanScheduleView,
   GoalMergeState,
-  GoalPriority,
   ProviderModel,
   EmbeddingChoice,
   EmbeddingOverview,
@@ -83,7 +82,6 @@ import {
 type KanbanCommand = Data.TaggedEnum<{
   Start: {};
   RestartLoop: {};
-  SetPriority: { readonly priority: GoalPriority };
   SetDependencies: { readonly dependsOn: readonly string[] };
 }>;
 const KanbanCommand = Data.taggedEnum<KanbanCommand>();
@@ -205,7 +203,6 @@ export type {
   CardStatus,
   KanbanScheduleView,
   GoalMergeState,
-  GoalPriority,
   DecisionInboxItem,
   DecisionKind,
   HumanDecisionRequest,
@@ -395,10 +392,37 @@ export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 /** When long conversations start being summarized, as a percent of the context window. */
 export type ConversationSettings = { readonly summaryStartPercent: number };
-/** Kanban cards run at once across every Goal: the user's value, if any, and the one in use. */
-export type KanbanSettings = { readonly configured: number | null; readonly effective: number };
-/** Branches a project's Goals never merge into on their own. */
-export type ProjectKanbanSettings = { readonly protectedBranches: readonly string[] };
+/**
+ * Kanban cards run at once across every Goal: the user's value, if any, and the one in use; and
+ * the projects in the order the scheduler serves them.
+ */
+export type KanbanSettings = {
+  readonly configured: number | null;
+  readonly effective: number;
+  readonly projectOrder: readonly string[];
+};
+/** The commands `/api/settings/kanban` reads. */
+export type KanbanSettingsCommand = Data.TaggedEnum<{
+  SetConcurrency: { readonly concurrency: number | null };
+  /** The project goes in front of `before`, or last. */
+  MoveProject: { readonly projectId: string; readonly before: string | null };
+}>;
+export const KanbanSettingsCommand = Data.taggedEnum<KanbanSettingsCommand>();
+/**
+ * Branches a project's Goals never merge into on their own, and the project's Goals (conversations
+ * with workflow state) in the order the scheduler serves them.
+ */
+export type ProjectKanbanSettings = {
+  readonly protectedBranches: readonly string[];
+  readonly goalOrder: readonly string[];
+};
+/** The commands `/api/projects/:project/kanban` reads. */
+export type ProjectKanbanCommand = Data.TaggedEnum<{
+  SetProtectedBranches: { readonly protectedBranches: readonly string[] };
+  /** The conversation's Goal goes in front of `before`, or last. */
+  MoveGoal: { readonly sessionId: string; readonly before: string | null };
+}>;
+export const ProjectKanbanCommand = Data.taggedEnum<ProjectKanbanCommand>();
 /** Which memory a run may reach beyond its own project; both start off. */
 export type RecallSettings = {
   readonly crossProjectRecall: boolean;
@@ -735,14 +759,6 @@ export const api = {
       KanbanCommand.RestartLoop(),
       { [sessionHolderHeader]: holder },
     ),
-  /** How the Goal shares card slots with the project's other Goals. */
-  setGoalPriority: (sessionId: string, holder: string, priority: GoalPriority) =>
-    call<{ readonly priority: GoalPriority }>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      KanbanCommand.SetPriority({ priority }),
-      { [sessionHolderHeader]: holder },
-    ),
   /** The Goals this Goal waits for; an empty list lifts the wait. */
   setGoalDependencies: (sessionId: string, holder: string, dependsOn: readonly string[]) =>
     call<{ readonly dependsOn: readonly string[] }>(
@@ -882,13 +898,33 @@ export const api = {
   kanbanSettings: () => call<KanbanSettings>("GET", "/api/settings/kanban"),
   /** null goes back to the machine default. */
   setKanbanConcurrency: (concurrency: number | null) =>
-    call<KanbanSettings>("POST", "/api/settings/kanban", { concurrency }),
+    call<KanbanSettings>(
+      "POST",
+      "/api/settings/kanban",
+      KanbanSettingsCommand.SetConcurrency({ concurrency }),
+    ),
+  /** Puts the project in front of `before` (or last) in the scheduler's order of projects. */
+  moveProject: (projectId: string, before: string | null) =>
+    call<KanbanSettings>(
+      "POST",
+      "/api/settings/kanban",
+      KanbanSettingsCommand.MoveProject({ projectId, before }),
+    ),
   projectKanban: (projectId: string) =>
     call<ProjectKanbanSettings>("GET", `/api/projects/${encodeURIComponent(projectId)}/kanban`),
   setProtectedBranches: (projectId: string, protectedBranches: readonly string[]) =>
-    call<ProjectKanbanSettings>("POST", `/api/projects/${encodeURIComponent(projectId)}/kanban`, {
-      protectedBranches,
-    }),
+    call<ProjectKanbanSettings>(
+      "POST",
+      `/api/projects/${encodeURIComponent(projectId)}/kanban`,
+      ProjectKanbanCommand.SetProtectedBranches({ protectedBranches }),
+    ),
+  /** Puts the conversation's Goal in front of `before` (or last) among the project's Goals. */
+  moveGoal: (projectId: string, sessionId: string, before: string | null) =>
+    call<ProjectKanbanSettings>(
+      "POST",
+      `/api/projects/${encodeURIComponent(projectId)}/kanban`,
+      ProjectKanbanCommand.MoveGoal({ sessionId, before }),
+    ),
 
   imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
   importAction: (command: ImportCommand) =>

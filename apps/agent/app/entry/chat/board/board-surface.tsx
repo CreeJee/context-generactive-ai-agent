@@ -53,10 +53,10 @@ export interface SurfaceBoard {
   readonly decisions: readonly HumanDecisionRequest[];
   readonly loop: ActiveKanban | null;
   /**
-   * Each card's place in the project's order of cards, from the project's board list; null when
-   * the surface shows one Plan, which keeps its own order.
+   * The conversation's place among the project's Goals, from the project's board list; null when
+   * the surface shows one Plan.
    */
-  readonly ranks: Readonly<Record<string, number>> | null;
+  readonly rank: number | null;
 }
 
 export const errorText = (code: ApiErrorCode) => {
@@ -147,13 +147,10 @@ const pendingOf = (
       ? PendingMove.Status({ key: keyOf(cardId), to: landing.lands })
       : null;
   return BoardIntent.$match(sent.action.intent, {
-    Reorder: ({ cardId, at, atSessionId }) =>
+    Reorder: ({ cardId, at }) =>
       PendingMove.Order({
         key: keyOf(cardId),
-        index: items.findIndex(
-          (item) =>
-            item.key === boardCardKey({ sessionId: atSessionId ?? sent.sessionId, cardId: at }),
-        ),
+        index: items.findIndex((item) => item.key === keyOf(at)),
       }),
     Hold: moved,
     Release: moved,
@@ -233,7 +230,7 @@ export function BoardSurface({
       .flatMap((board) =>
         board.view.cards.map((entry) => ({
           item: boardItem(board.sessionId, entry),
-          rank: board.ranks?.[entry.card.id] ?? null,
+          rank: board.rank,
         })),
       ),
   );
@@ -338,11 +335,7 @@ export function BoardSurface({
               {
                 sessionId: item.sessionId,
                 action: KanbanAction.Intent({
-                  intent: BoardIntent.Reorder({
-                    cardId: item.card.id,
-                    at: at.card.id,
-                    atSessionId: at.sessionId,
-                  }),
+                  intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
                 }),
               },
               { onError: refused },

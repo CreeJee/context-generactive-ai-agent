@@ -36,6 +36,7 @@ import {
   cardStatusLabels,
   DropOutcome,
   dropOutcome,
+  foreignCardDrop,
   type BoardItem,
   type DropContext,
 } from "./board-moves";
@@ -191,7 +192,14 @@ export function KanbanBoard({
   /** What dropping `item` on `over` (a column or a card) would do. */
   const outcomeFor = (item: BoardItem, over: UniqueIdentifier): DropOutcome | null => {
     const status = statusOf(over);
-    return status === null ? null : dropOutcome(item.card, status, contextOf(item));
+    if (status === null) return null;
+    const base = dropOutcome(item.card, status, contextOf(item));
+    const target = itemOf(over);
+    return DropOutcome.$is("Reorder")(base) &&
+      target !== null &&
+      target.sessionId !== item.sessionId
+      ? foreignCardDrop()
+      : base;
   };
   const overStatus = overId === null ? null : statusOf(overId);
   const overOutcome = active === null || overId === null ? null : outcomeFor(active, overId);
@@ -231,8 +239,13 @@ export function KanbanBoard({
     if (item === null || over === null || to === null || outcome === null) return;
     return DropOutcome.$match(outcome, {
       Reorder: () => {
-        // Dropped on the column itself: the card goes last in that column, whichever Plans show.
-        const target = over.id === columnId(to) ? byStatus(to).at(-1) : itemOf(over.id);
+        // Dropped on the column itself: the card goes last among its own Plan's cards there.
+        const target =
+          over.id === columnId(to)
+            ? byStatus(to)
+                .filter((other) => other.sessionId === item.sessionId)
+                .at(-1)
+            : itemOf(over.id);
         if (target === undefined || target === null || target.key === item.key) return;
         return onReorder(item, target);
       },

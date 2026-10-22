@@ -69,6 +69,21 @@ export function useKanbanSettingsMutation() {
   });
 }
 
+/** Moves a project in the scheduler's order of projects. */
+export function useProjectOrderMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      before,
+    }: {
+      readonly projectId: string;
+      readonly before: string | null;
+    }) => api.moveProject(projectId, before),
+    onSuccess: (settings) => client.setQueryData(globalQueries.kanban().queryKey, settings),
+  });
+}
+
 export function useRecallSettingsMutation() {
   const client = useQueryClient();
   return useMutation({

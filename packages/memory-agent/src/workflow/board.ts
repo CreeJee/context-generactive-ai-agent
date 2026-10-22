@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { CardOrder } from "../kanban/card-order.ts";
+import { GoalOrder } from "../kanban/goal-order.ts";
 import { UserChange, UserChangeRequestStatus, type UserChangeRequest } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
 import {
@@ -48,8 +48,8 @@ export interface ProjectBoard {
   readonly kanbanActive: boolean;
   /** When the Plan was last saved. */
   readonly updatedAt: string;
-  /** Each card's place in the project's one order of cards, which the scheduler starts them in. */
-  readonly ranks: Readonly<Record<string, number>>;
+  /** The conversation's place among the project's Goals in the priority tree, from 0. */
+  readonly rank: number;
 }
 
 /** Revisions read to attribute cards; one more is the baseline of the oldest. */
@@ -120,7 +120,7 @@ export class Boards extends Context.Service<
     Boards,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const cardOrder = yield* CardOrder;
+      const goalOrder = yield* GoalOrder;
       const current = SqlSchema.findOneOption({
         Request: Schema.String,
         Result: Schema.Struct({ state_json: Schema.String }),
@@ -159,9 +159,7 @@ export class Boards extends Context.Service<
           Effect.gen(function* () {
             const rows = yield* projectBoards(projectId);
             const rankOf = new Map(
-              (yield* cardOrder.order(projectId)).map(
-                (ref, rank) => [`${ref.sessionId}:${ref.cardId}`, rank] as const,
-              ),
+              (yield* goalOrder.goals(projectId)).map((sessionId, rank) => [sessionId, rank]),
             );
             const boards = yield* Effect.forEach(rows, (row) =>
               Effect.map(
@@ -181,12 +179,7 @@ export class Boards extends Context.Service<
                           counts: countedBy(plan.steps),
                           kanbanActive: row.kanban_active === 1,
                           updatedAt: row.updated_at,
-                          ranks: Object.fromEntries(
-                            plan.steps.flatMap((step) => {
-                              const rank = rankOf.get(`${row.session_id}:${step.id}`);
-                              return rank === undefined ? [] : [[step.id, rank] as const];
-                            }),
-                          ),
+                          rank: rankOf.get(row.session_id) ?? rows.length,
                         },
                       ],
               ),

@@ -17,7 +17,6 @@ import {
   type KanbanGoal,
   type KanbanMode,
 } from "./card-attempts.ts";
-import { CardOrder, projection } from "./card-order.ts";
 import { cardQueueName } from "./card-queue.ts";
 import { CardHoldReason } from "./failures.ts";
 import {
@@ -29,7 +28,7 @@ import {
 import { KanbanOrchestrator } from "./orchestrator.ts";
 import { CardWorktrees, WorktreeDisposition } from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
-import { GoalSchedules, type GoalMergeState, type GoalPriority } from "./goal-schedules.ts";
+import { GoalSchedules, type GoalMergeState } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
 import { BoardHealth } from "./board-health.ts";
 import type { LoopHealth } from "../runtime/loop-health.ts";
@@ -112,9 +111,11 @@ export interface KanbanGoalOption {
   readonly merge: GoalMergeState | null;
 }
 
-/** How the project scheduler treats the board's Goal. */
+/**
+ * How the project scheduler treats the board's Goal. Its place in the priority tree is the
+ * project board's business (`GoalOrder`), not the Goal's own.
+ */
 export interface KanbanScheduleView {
-  readonly priority: GoalPriority;
   /** The branch the Goal merges into; none when the board started on a detached HEAD. */
   readonly targetBranch: string | null;
   readonly dependsOn: readonly string[];
@@ -168,7 +169,6 @@ const make = Effect.gen(function* () {
   const decisions = yield* HumanDecisions;
   const schedules = yield* GoalSchedules;
   const scheduler = yield* ProjectScheduler;
-  const cardOrder = yield* CardOrder;
   const sessions = yield* Sessions;
   const health = yield* BoardHealth;
 
@@ -206,7 +206,6 @@ const make = Effect.gen(function* () {
       }),
     );
     return {
-      priority: schedule.priority,
       targetBranch: schedule.targetBranch,
       dependsOn: edges.get(goal.goalInstanceId) ?? [],
       waitingOn: yield* scheduler.waitingOn(goal.goalInstanceId),
@@ -454,13 +453,12 @@ const make = Effect.gen(function* () {
         const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
         if (steps.some((step) => step.id !== card.id && step.dependsOn.includes(card.id)))
           return yield* refuse("card_has_dependents");
-        const [source, target] = yield* Effect.all([
-          sessions.get(sessionId),
-          sessions.get(toSessionId).pipe(
-            Effect.asSome,
-            Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
-          ),
-        ]);
+        // Two reads, not `Effect.all` over a tuple: that contextual type loses the error types.
+        const source = yield* sessions.get(sessionId);
+        const target = yield* sessions.get(toSessionId).pipe(
+          Effect.asSome,
+          Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
+        );
         if (Option.isNone(target) || target.value.projectId !== source.projectId)
           return yield* refuse("transfer_target_invalid");
         const targetPlan = (yield* workflows.get(toSessionId)).plan;
@@ -486,43 +484,19 @@ const make = Effect.gen(function* () {
         return yield* applied;
       });
       return yield* Match.valueTags(intent, {
-        /**
-         * The card takes the place of `at` in the project's order of cards, which may be a card of
-         * another conversation of the project. Its Plan then keeps the order's projection on its
-         * own cards, and every board of the project looks again.
-         */
-        Reorder: Effect.fnUntraced(function* ({ at, atSessionId }) {
-          const atSession = atSessionId ?? sessionId;
-          const projectId = (yield* sessions.get(sessionId)).projectId;
-          if (atSession !== sessionId) {
-            const other = yield* sessions.get(atSession).pipe(
-              Effect.asSome,
-              Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
-            );
-            if (Option.isNone(other) || other.value.projectId !== projectId)
-              return yield* refuse("card_missing");
-          }
-          const target = ((yield* workflows.get(atSession)).plan?.steps ?? []).find(
-            (step) => step.id === at,
-          );
+        /** The card takes the place of `at` in its own Plan: cards are ordered inside their Goal. */
+        Reorder: Effect.fnUntraced(function* ({ at }) {
+          const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
+          const index = steps.findIndex((step) => step.id === at);
+          const target = steps[index];
           if (target === undefined) return yield* refuse("card_missing");
           if (target.status !== card.status) return yield* refuse("reorder_across_columns");
-          const order = yield* cardOrder.place(
-            projectId,
-            { sessionId, cardId: card.id },
-            { sessionId: atSession, cardId: at },
+          const result = yield* workflows.editBoard(
+            sessionId,
+            BoardEdit.cases.MoveCard.make({ planVersion, cardId: card.id, index }),
+            author,
           );
-          const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
-          const index = projection(order, sessionId).indexOf(card.id);
-          const result =
-            index < 0 || index === steps.findIndex((step) => step.id === card.id)
-              ? yield* applied
-              : yield* workflows.editBoard(
-                  sessionId,
-                  BoardEdit.cases.MoveCard.make({ planVersion, cardId: card.id, index }),
-                  author,
-                );
-          yield* scheduler.pokeProject(projectId);
+          yield* poke;
           return result;
         }),
         Requeue: Effect.fnUntraced(function* () {
@@ -737,15 +711,6 @@ const make = Effect.gen(function* () {
         schedule: yield* scheduleView(goal.value),
         loop: yield* health.get(goalInstanceId),
       });
-    }),
-
-    /** Sets how the Goal shares card slots with the project's other Goals. */
-    setPriority: Effect.fn("KanbanBoardActions.setPriority")(function* (
-      sessionId: string,
-      priority: GoalPriority,
-    ) {
-      const goal = yield* board(sessionId);
-      yield* scheduler.setPriority(goal.goalInstanceId, priority);
     }),
 
     /**

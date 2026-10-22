@@ -57,10 +57,7 @@ export const boardColumns: readonly CardStatus[] = [
 
 /** What dropping a card on a column means. The server decides the card's status from it. */
 export type DropOutcome = Data.TaggedEnum<{
-  /**
-   * Same column: the card takes the place of the card it was dropped on in the project's order,
-   * which may be a card of another conversation.
-   */
+  /** Same column: the card takes the place of the card of its own Plan it was dropped on. */
   Reorder: {};
   /**
    * Another column the person can ask for: hold, release or requeue. `lands` is where the card is
@@ -152,9 +149,8 @@ export const dropOutcome: {
 } & typeof dropOutcomeBody = EffectFunction.dual(3, dropOutcomeBody);
 
 /**
- * The shown cards in the project's order: by the rank the server gives each card, which is where
- * the scheduler starts it, and cards without one after them as the boards list them. One board
- * without ranks stays in Plan order.
+ * The shown cards in the priority tree's order: by their Goal's place in the project, and inside
+ * a Goal as its Plan lists them. One board without a place stays in Plan order.
  */
 export const inProjectOrder = (
   entries: ReadonlyArray<{ readonly item: BoardItem; readonly rank: number | null }>,
@@ -167,6 +163,13 @@ export const inProjectOrder = (
       return a.rank === null ? 1 : -1;
     })
     .map(({ item }) => item);
+
+/**
+ * Dropping on another conversation's card: cards are ordered inside their own Goal, and Goals
+ * are ordered in the status panel, so the drop is refused and says where the order lives.
+ */
+export const foreignCardDrop = (): DropOutcome =>
+  refused("다른 대화의 카드와는 순서를 바꿀 수 없어요. 대화 순서는 대화별 상태 패널에서 바꿔요.");
 
 /** Which card statuses can leave their Plan for another conversation's Plan. */
 const transferable: Readonly<Record<CardStatus, boolean>> = {

@@ -19,7 +19,7 @@ import {
   type CardVerification,
   type GoalVerification,
 } from "../kanban/card-agent.ts";
-import { CardOrder } from "../kanban/card-order.ts";
+import { GoalOrder } from "../kanban/goal-order.ts";
 import { GoalSchedules } from "../kanban/goal-schedules.ts";
 import { BoardHealth } from "../kanban/board-health.ts";
 import { GoalMerges } from "../kanban/merge-queue.ts";
@@ -107,8 +107,8 @@ const kanbanOwnerBase = (fixture: KanbanFixture, cores: number) =>
         Workflows.layer,
         HumanDecisions.layer,
         CardAttempts.layer,
-        CardOrder.layer,
         CardRuns.layer,
+        GoalOrder.layer,
         GoalSchedules.layer,
         CardWorktrees.layer(fixture.worktrees),
         Sessions.layer.pipe(Layer.provideMerge(Projects.layer)),

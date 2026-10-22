@@ -1886,6 +1886,26 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (project_id, session_id, card_id)
   );
   `,
+  `
+  -- The priority tree replaces the order of cards across Goals (decisions.md "우선순위 트리
+  -- (2026-10-22)"): projects in one order, each project's Goals (its conversations with a Plan)
+  -- in one order, cards in Plan order below. A person moves projects and Goals while boards run;
+  -- one without a row comes after the placed ones, oldest first. The scheduler starts cards in
+  -- this order. kanban_goal_schedules.priority stays but nothing reads it any more.
+  DROP TABLE kanban_card_ranks;
+  CREATE TABLE kanban_goal_ranks (
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, session_id)
+  );
+  CREATE TABLE kanban_project_ranks (
+    project_id TEXT PRIMARY KEY,
+    rank INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
