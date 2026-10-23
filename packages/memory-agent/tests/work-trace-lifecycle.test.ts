@@ -136,6 +136,7 @@ describe("Work Trace task lifecycle", () => {
               path: "secret.txt",
               sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             }),
+            mediaType: "text/plain",
             verification: "verified",
           });
           yield* trace.transitionAttempt(
@@ -173,6 +174,7 @@ describe("Work Trace task lifecycle", () => {
           });
           expect((yield* trace.artifactsForTask(handle.taskId))[0]).toMatchObject({
             locator: null,
+            mediaType: null,
             verification: "source_deleted",
             sourceDeletedAt: expect.any(Number),
           });

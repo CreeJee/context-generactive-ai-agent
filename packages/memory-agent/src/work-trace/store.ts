@@ -1803,7 +1803,7 @@ const make = Effect.gen(function* () {
     const taskId = operation.target_id;
     yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
       WHERE id = ${operation.id}`);
-    const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL,
+    const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL, media_type = NULL,
         verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
       WHERE task_id = ${taskId}`)).changes;
     yield* run(sql`DELETE FROM chat_metadata
