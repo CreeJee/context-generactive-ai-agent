@@ -1906,6 +1906,12 @@ export const migrations: readonly string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  `
+  -- Deleting a node makes SQLite look in imported_nodes for a row that still references it. With
+  -- no index on node_id every deleted node read the whole table, so deleting a conversation of 16
+  -- thousand nodes took minutes and held the write lock the whole time.
+  CREATE INDEX imported_nodes_node ON imported_nodes(node_id);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

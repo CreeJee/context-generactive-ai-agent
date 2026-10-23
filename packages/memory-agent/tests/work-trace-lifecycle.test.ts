@@ -271,6 +271,25 @@ describe("Work Trace task lifecycle", () => {
           yield* sqlRun(
             "INSERT INTO nodes_morph (rowid, terms) SELECT seq, 'private lifecycle' FROM nodes WHERE id = 'user-1'",
           );
+          // Another conversation's node, linked to this one and imported like it, stays.
+          yield* sqlRun(
+            "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, ?)",
+            DateTime.formatIso(DateTime.makeUnsafe(0)),
+          );
+          yield* sqlRun(
+            `INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
+         VALUES ('other-1', 'p1', 's2', 'parent-2', 'user', 'other conversation', '{}', ?)`,
+            DateTime.formatIso(DateTime.makeUnsafe(0)),
+          );
+          yield* sqlRun(
+            `INSERT INTO edges (from_id, to_id, kind, origin, weight, created_at)
+         VALUES ('other-1', 'user-1', 'related', 'llm', 1, ?)`,
+            DateTime.formatIso(DateTime.makeUnsafe(0)),
+          );
+          yield* sqlRun(
+            `INSERT INTO imported_nodes (source, external_id, node_id)
+         VALUES ('codex', 'line-1', 'user-1'), ('codex', 'line-2', 'other-1')`,
+          );
           yield* sqlRun(
             "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES ('s1', '[]', 1)",
           );
@@ -338,6 +357,15 @@ describe("Work Trace task lifecycle", () => {
               "SELECT count(*) AS count FROM nodes_morph WHERE nodes_morph MATCH 'lifecycle'",
             ),
           ).toEqual({ count: 0 });
+          expect(yield* sqlGet("SELECT count(*) AS count FROM edges")).toEqual({ count: 0 });
+          expect(yield* sqlGet("SELECT group_concat(node_id) AS ids FROM imported_nodes")).toEqual({
+            ids: "other-1",
+          });
+          expect(
+            yield* sqlGet(
+              "SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH 'conversation'",
+            ),
+          ).toEqual({ count: 1 });
         }),
       ),
   );

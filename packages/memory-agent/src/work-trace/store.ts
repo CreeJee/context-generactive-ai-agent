@@ -273,7 +273,6 @@ const SessionLifecycleRow = Schema.Struct({
   project_id: Schema.String,
   archived_at: Schema.NullOr(Schema.String),
 });
-const NodePurgeRow = Schema.Struct({ seq: Schema.Finite, id: Schema.String, text: Schema.String });
 const PendingLifecycleRow = Schema.Struct({
   id: Schema.String,
   target_kind: Schema.Literals(["task", "session"]),
@@ -314,7 +313,6 @@ const decodeFinalAnswerNotificationRows = Schema.decodeUnknownEffect(
   Schema.Array(FinalAnswerNotificationRow),
 );
 const decodeSessionLifecycle = Schema.decodeUnknownEffect(Schema.UndefinedOr(SessionLifecycleRow));
-const decodeNodePurgeRows = Schema.decodeUnknownEffect(Schema.Array(NodePurgeRow));
 const decodeRunIds = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run_id: Schema.String })),
 );
@@ -1597,29 +1595,26 @@ const make = Effect.gen(function* () {
     now: number,
   ) {
     const sessionId = operation.target_id;
-    const nodeRows = yield* decodeNodePurgeRows(
-      yield* sql`SELECT seq, id, text FROM nodes WHERE session_id = ${sessionId} ORDER BY seq`,
-    );
     const subagentRows = yield* decodeIds(
       yield* sql`SELECT id FROM subagents WHERE session_id = ${sessionId}`,
     );
-    for (const node of nodeRows) {
-      yield* run(sql`INSERT INTO nodes_fts(nodes_fts, rowid, text)
-        VALUES ('delete', ${node.seq}, ${node.text})`);
-      yield* run(
-        sql`DELETE FROM interpretations WHERE node_id = ${node.id} OR target_id = ${node.id}`,
-      );
-      yield* run(sql`DELETE FROM edges WHERE from_id = ${node.id} OR to_id = ${node.id}`);
-      yield* run(sql`DELETE FROM node_refs WHERE node_id = ${node.id}`);
-      yield* run(sql`DELETE FROM node_attachments WHERE node_id = ${node.id}`);
-      yield* run(sql`DELETE FROM imported_nodes WHERE node_id = ${node.id}`);
-      yield* run(sql`DELETE FROM interpret_jobs WHERE node_id = ${node.id}`);
-      yield* run(sql`DELETE FROM node_vectors WHERE node_seq = ${node.seq}`);
-      yield* run(sql`DELETE FROM node_morphs WHERE node_seq = ${node.seq}`);
-      yield* run(sql`DELETE FROM nodes_morph WHERE rowid = ${node.seq}`);
-      yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq = ${node.seq}`);
-    }
-    yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`);
+    // One statement per table over all of the session's nodes: a statement per node kept the write
+    // lock for minutes on a long conversation.
+    const ids = sql`SELECT id FROM nodes WHERE session_id = ${sessionId}`;
+    const seqs = sql`SELECT seq FROM nodes WHERE session_id = ${sessionId}`;
+    yield* run(sql`INSERT INTO nodes_fts(nodes_fts, rowid, text)
+      SELECT 'delete', seq, text FROM nodes WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM interpretations WHERE node_id IN (${ids}) OR target_id IN (${ids})`);
+    yield* run(sql`DELETE FROM edges WHERE from_id IN (${ids}) OR to_id IN (${ids})`);
+    yield* run(sql`DELETE FROM node_refs WHERE node_id IN (${ids})`);
+    yield* run(sql`DELETE FROM node_attachments WHERE node_id IN (${ids})`);
+    yield* run(sql`DELETE FROM imported_nodes WHERE node_id IN (${ids})`);
+    yield* run(sql`DELETE FROM interpret_jobs WHERE node_id IN (${ids})`);
+    yield* run(sql`DELETE FROM node_vectors WHERE node_seq IN (${seqs})`);
+    yield* run(sql`DELETE FROM node_morphs WHERE node_seq IN (${seqs})`);
+    yield* run(sql`DELETE FROM nodes_morph WHERE rowid IN (${seqs})`);
+    yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq IN (${seqs})`);
+    const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`)).changes;
     yield* run(sql`DELETE FROM chat_metadata WHERE namespace = 'background-task-result'
       AND key IN (SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId})`);
     const threadIds = [sessionId, ...subagentRows.map((row) => `subagent-${row.id}`)];
@@ -1639,10 +1634,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM session_workflows WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
-    const purgedCounts = yield* encodeJson({
-      nodes: nodeRows.length,
-      subagents: subagentRows.length,
-    });
+    const purgedCounts = yield* encodeJson({ nodes, subagents: subagentRows.length });
     const retainedKinds = yield* encodeJson([
       "task_tombstones",
       "answer_claims",
