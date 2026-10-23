@@ -2514,3 +2514,10 @@
 - AI 경로: `close_plan{reason}` 도구를 Plan·Execute·Verify 단계에 준다. `update_workflow_progress`는 Plan 단계에 없어서 준비 단계 Plan을 닫을 수 없기 때문에 따로 둔다. 작성자는 그 run의 `Orchestrator`다.
 - 칸반: 보드 루프가 닫힌 Plan을 보면 그 Goal의 실행 중 카드 agent와 통합을 멈추고, 보드를 stopped로 바꾸고, 사람 판단 대기를 `card_stopped`로 닫고 스케줄러에서 뺀다. 사용자 경로는 저장 뒤 루프를 바로 깨우고, AI 경로는 다음 look(최대 poll 간격)에 처리된다. 끝난 작업트리 정리는 Goal이 바뀔 때(Superseded)와 같이 하지 않는다.
 - 프로젝트 보드 목록(`Boards.list`)은 완료되거나 닫힌 Plan을 빼고 돌려준다. "우선순위 트리 (2026-10-22)"의 "보드 밖 Plan"에는 이제 실행 전 Plan만 보인다. 끝난 Plan은 자기 대화의 보드와 워크플로 패널에서 "완료"·"닫음"으로 계속 보인다.
+
+## Goal을 실행한 대화는 아직 지우지 않는다 (2026-10-23)
+
+- 임시 결정이다. Goal을 실행한 대화를 지우려면 그 Goal 기록(`workflow_goal_instances` catalog, run binding, owner RPC 영수증, read recovery, Goal worker 세대·native artifact)도 지워야 한다. 그런데 이 기록은 트리거와 NO ACTION 외래 키로 불변이게 만들어져 있어, 대화 삭제의 cascade가 `goal instance is immutable`에 막혀 실패했다. 실패한 삭제가 남자 시작 복구가 매번 같은 오류로 채팅 서비스 전체를 멈췄다.
+- 이 기록을 영수증까지 지울지, 대화는 묘비로 남길지 정하기 전까지 Goal을 실행한 대화의 삭제는 `goal_history`로 막는다. 요청은 실행을 멈추거나 작업을 지우기 전에 409로 거절한다. 이미 기록된 삭제는 finalize가 `blocked`/`goal_history`로 바꾸고, 그 대화의 작업은 지우지 않는다. 보관은 그대로 할 수 있다.
+- 시작 복구(`recoverLifecycleOperations`)는 lifecycle 작업 하나가 실패해도 `work_trace_lifecycle_not_recovered` 로그만 남기고 나머지 작업과 서비스 시작을 계속한다. 실패한 작업은 다음 시작에 다시 시도한다.
+- 대화 삭제는 노드마다 13개 문장을 돌리지 않고, 표마다 한 문장으로 그 대화의 노드를 지운다. `imported_nodes(node_id)`에 인덱스가 없어 노드 하나를 지울 때마다 FK 검사가 14.7만 행을 다 읽었다. 그래서 16,372노드 대화가 몇 분 동안 쓰기 락을 쥐었고, import 워커가 `database is locked`로 실패했다. 인덱스(schema 71)와 집합 삭제를 넣은 뒤로 9,740노드 대화가 5초에 지워진다.

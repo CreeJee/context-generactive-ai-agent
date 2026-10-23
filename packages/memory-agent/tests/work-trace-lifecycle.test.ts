@@ -369,4 +369,49 @@ describe("Work Trace task lifecycle", () => {
         }),
       ),
   );
+
+  it.effect("keeps a conversation that ran a Goal and leaves an earlier delete blocked", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const handle = yield* start(trace);
+        yield* trace.transitionAttempt(handle, "s1", "completed", "attempt_completed", "Completed");
+        // Recorded before the conversation ran a Goal, as an earlier build could.
+        const earlier = yield* trace.requestSessionLifecycle({
+          sessionId: "s1",
+          intent: "delete",
+          idempotencyKey: "delete-session-1",
+        });
+        const operationId = pendingOperationId(earlier);
+        if (operationId === null) return;
+        yield* sqlRun(
+          `INSERT INTO workflow_goal_instances (goal_instance_id, session_id, created_at)
+           VALUES ('goal-1', 's1', ?)`,
+          DateTime.formatIso(DateTime.makeUnsafe(0)),
+        );
+
+        yield* trace.recoverLifecycleOperations();
+        expect(
+          yield* sqlGet(
+            "SELECT status, blocker FROM lifecycle_operations WHERE id = ?",
+            operationId,
+          ),
+        ).toEqual({ status: "blocked", blocker: "goal_history" });
+        expect(yield* sqlGet("SELECT count(*) AS count FROM sessions WHERE id = 's1'")).toEqual({
+          count: 1,
+        });
+        expect(
+          yield* sqlGet("SELECT deleted_at FROM work_tasks WHERE id = ?", handle.taskId),
+        ).toEqual({ deleted_at: null });
+        expect(
+          yield* trace.requestSessionLifecycle({
+            sessionId: "s1",
+            intent: "delete",
+            idempotencyKey: "delete-session-2",
+          }),
+        ).toEqual(LifecycleRequest.blocked({ blocker: "goal_history" }));
+      }),
+    ),
+  );
 });

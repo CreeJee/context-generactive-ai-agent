@@ -1549,6 +1549,17 @@ const make = Effect.gen(function* () {
       completedAt: row.completed_at,
     });
 
+  /**
+   * Whether the conversation ran a Goal. Its Goal instances are an immutable catalog that run
+   * bindings and owner receipts point to, so deleting the conversation cannot remove them yet.
+   */
+  const ranGoal = (sessionId: string) =>
+    Effect.map(
+      first(sql`SELECT 1 AS found FROM workflow_goal_instances
+        WHERE session_id = ${sessionId} LIMIT 1`),
+      isTruthy,
+    );
+
   const requestSessionLifecycle = (input: {
     readonly sessionId: string;
     readonly intent: LifecycleIntent;
@@ -1565,6 +1576,9 @@ const make = Effect.gen(function* () {
         ),
       );
       if (session === undefined) return LifecycleRequest.blocked({ blocker: "session_not_found" });
+      // Refused before anything stops or any task is deleted.
+      if (input.intent === "delete" && (yield* ranGoal(input.sessionId)))
+        return LifecycleRequest.blocked({ blocker: "goal_history" });
       if (input.intent === "restore" && session.archived_at === null)
         return LifecycleRequest.blocked({ blocker: "session_not_archived" });
       if (input.intent === "archive" && session.archived_at !== null)
@@ -1675,6 +1689,13 @@ const make = Effect.gen(function* () {
             WHERE id = ${operation.target_id}`);
           break;
         case "delete": {
+          // A request recorded before the conversation ran a Goal, or by an earlier build.
+          if (yield* ranGoal(operation.target_id)) {
+            yield* run(sql`UPDATE lifecycle_operations SET status = 'blocked',
+                blocker = 'goal_history', updated_at = ${now}
+              WHERE id = ${operationId}`);
+            return LifecycleOutcome.blocked({ blocker: "goal_history", operationId });
+          }
           const remaining = (yield* decodeId(
             yield* first(sql`SELECT coalesce(max(id), '') AS id FROM work_tasks
               WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL`),
@@ -1867,37 +1888,48 @@ const make = Effect.gen(function* () {
       });
     }).pipe(sql.withTransaction);
 
-  /** Finishes lifecycle operations a crash left between request and completion. */
+  /** Finishes one lifecycle operation a crash left between request and completion. */
+  const recoverLifecycleOperation = Effect.fnUntraced(function* (
+    operation: typeof PendingLifecycleRow.Type,
+  ) {
+    if (operation.target_kind === "task") return yield* finalizeTaskLifecycle(operation.id);
+    // A conversation that ran a Goal keeps its tasks; its finalize records why it stays.
+    if (operation.intent === "delete" && !(yield* ranGoal(operation.target_id))) {
+      const tasks = yield* decodeIds(
+        yield* sql`SELECT id FROM work_tasks
+          WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL
+          ORDER BY created_at, id`,
+      );
+      for (const task of tasks) {
+        const requested = yield* requestTaskLifecycle({
+          sessionId: operation.target_id,
+          taskId: task.id,
+          intent: "delete",
+          idempotencyKey: `session:${operation.id}:task:${task.id}`,
+        });
+        if (!LifecycleRequest.$is("completed")(requested) && isTruthy(requested.operationId))
+          yield* finalizeTaskLifecycle(requested.operationId);
+      }
+    }
+    return yield* finalizeSessionLifecycle(operation.id);
+  });
+
+  /**
+   * Finishes lifecycle operations a crash left between request and completion. One that fails is
+   * tried again on the next start; it must not stop the others or the service starting this.
+   */
   const recoverLifecycleOperations = Effect.fnUntraced(function* () {
     const pending = yield* decodePendingLifecycleRows(
       yield* sql`SELECT id, target_kind, target_id, intent FROM lifecycle_operations
         WHERE status IN ('requested', 'cancelling', 'waiting_for_stop', 'purging', 'blocked')
         ORDER BY CASE target_kind WHEN 'task' THEN 0 ELSE 1 END, requested_at, id`,
     );
-    for (const operation of pending) {
-      if (operation.target_kind === "task") {
-        yield* finalizeTaskLifecycle(operation.id);
-        continue;
-      }
-      if (operation.intent === "delete") {
-        const tasks = yield* decodeIds(
-          yield* sql`SELECT id FROM work_tasks
-            WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL
-            ORDER BY created_at, id`,
-        );
-        for (const task of tasks) {
-          const requested = yield* requestTaskLifecycle({
-            sessionId: operation.target_id,
-            taskId: task.id,
-            intent: "delete",
-            idempotencyKey: `session:${operation.id}:task:${task.id}`,
-          });
-          if (!LifecycleRequest.$is("completed")(requested) && isTruthy(requested.operationId))
-            yield* finalizeTaskLifecycle(requested.operationId);
-        }
-      }
-      yield* finalizeSessionLifecycle(operation.id);
-    }
+    for (const operation of pending)
+      yield* recoverLifecycleOperation(operation).pipe(
+        Effect.catch(
+          logFailure("work_trace_lifecycle_not_recovered", { operationId: operation.id }),
+        ),
+      );
   });
 
   const archiveTask = (sessionId: string, taskId: string) =>
