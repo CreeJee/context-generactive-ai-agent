@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { EventType } from "@tanstack/ai";
+import { DISCOVERY_TOOL_NAME, EventType } from "@tanstack/ai";
 import { Cause, DateTime, Effect, Option, Schema, Stream } from "effect";
 import type {
   AdapterYieldChunk,
@@ -51,6 +51,29 @@ export type ScriptedResponder = (
 
 const model = "scripted-1";
 
+/** Ids of the discovery calls this adapter makes for a responder. */
+const ownDiscovery = "scripted-discovery-";
+
+/** The tools a request lists by name only, as TanStack's discovery tool names them. */
+const lazyToolNames = (tools: TextOptions<Record<string, never>>["tools"]) => {
+  const discovery = (tools ?? []).find((tool) => tool.name === DISCOVERY_TOOL_NAME);
+  const listed = /Available tools: \[([^\]]*)\]/.exec(discovery?.description ?? "");
+  return isTruthy(listed?.[1]) ? listed[1].split(", ") : [];
+};
+
+/** The conversation as the responder wrote it, without the discovery calls made for it. */
+const withoutOwnDiscovery = (messages: readonly ModelMessage[]) =>
+  messages.flatMap((message): ModelMessage[] => {
+    if (message.role === "tool")
+      return message.toolCallId?.startsWith(ownDiscovery) === true ? [] : [message];
+    const calls = message.toolCalls ?? [];
+    const kept = calls.filter((call) => !call.id.startsWith(ownDiscovery));
+    if (kept.length === calls.length) return [message];
+    if (kept.length > 0) return [{ ...message, toolCalls: kept }];
+    const { toolCalls: _, ...rest } = message;
+    return isTruthy(message.content) ? [rest] : [];
+  });
+
 export class ScriptedTextAdapter extends BaseTextAdapter<
   typeof model,
   Record<string, never>,
@@ -60,6 +83,10 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
   readonly name = "scripted";
   readonly invocations: AdapterInvocation[] = [];
   readonly #respond: ScriptedResponder;
+  /** How many turns the responder has scripted; discovery turns are not among them. */
+  #responded = 0;
+  /** Turns that call lazy tools, waiting for the discovery made for them. */
+  readonly #afterDiscovery = new Map<string, ScriptedTurn>();
 
   constructor(turns: readonly ScriptedTurn[] | ScriptedResponder) {
     super({}, model);
@@ -78,7 +105,42 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
 
   chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const invocations = this.invocations;
-    const respond = this.#respond;
+    const afterDiscovery = this.#afterDiscovery;
+    // A responder scripts the calls it wants; like a model, this adapter first asks for the lazy
+    // tools among them, then makes the calls once their schemas are sent.
+    const respond = (invocation: AdapterInvocation) => {
+      const last = invocation.messages.at(-1);
+      const waiting =
+        last?.role === "tool" && isTruthy(last.toolCallId)
+          ? afterDiscovery.get(last.toolCallId)
+          : undefined;
+      if (isTruthy(waiting)) {
+        afterDiscovery.delete(last!.toolCallId!);
+        return waiting;
+      }
+      const index = this.#responded++;
+      return this.#respond({
+        ...invocation,
+        index,
+        messages: withoutOwnDiscovery(invocation.messages),
+      });
+    };
+    const lazy = lazyToolNames(options.tools);
+    const discoveryFor = (turn: ScriptedTurn, index: number): ScriptedTurn => {
+      const toolNames = (turn.toolCalls ?? [])
+        .map((call) => call.name)
+        .filter(
+          (name) =>
+            lazy.includes(name) && !(options.tools ?? []).some((tool) => tool.name === name),
+        );
+      if (toolNames.length === 0) return turn;
+      // Unique across runs, as the run's stored transcript keeps it after a restart.
+      const id = `${ownDiscovery}${options.runId ?? "run"}-${index}`;
+      afterDiscovery.set(id, turn);
+      return {
+        toolCalls: [{ id, name: DISCOVERY_TOOL_NAME, arguments: JSON.stringify({ toolNames }) }],
+      };
+    };
     const stream = Stream.unwrap(
       Effect.gen(function* () {
         const index = invocations.length;
@@ -99,12 +161,15 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
             try: () => ({ response: respond(invocation) }),
             catch: (cause) => new Cause.UnknownError(cause),
           });
-          const turn = yield* Effect.isEffect(response)
+          const scripted = yield* Effect.isEffect(response)
             ? response
             : Effect.tryPromise({
                 try: () => Promise.resolve(response),
                 catch: (cause) => new Cause.UnknownError(cause),
               });
+          const turn = discoveryFor(scripted, index);
+          // A turn waits once, when it is sent with its calls.
+          if (turn !== scripted) return turn;
           const waitFor = turn.waitFor;
           if (waitFor !== undefined)
             yield* Effect.isEffect(waitFor)

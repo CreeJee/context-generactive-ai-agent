@@ -738,6 +738,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
             break;
         }
         tab.client.dispose();
+        const asked = session.invocations().length;
         yield* env.reopen;
         expect(yield* statusOf(session.id)).toMatchObject({
           running: null,
@@ -749,7 +750,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
         expect(reloaded.client.getSessionGenerating()).toBe(false);
         expect(reloaded.client.getInterrupts()).toEqual([]);
         expect(reloaded.client.getError()).toBeUndefined();
-        expect(session.invocations()).toHaveLength(1);
+        expect(session.invocations()).toHaveLength(asked);
       }),
   );
 });

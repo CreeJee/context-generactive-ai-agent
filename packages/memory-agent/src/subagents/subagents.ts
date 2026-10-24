@@ -38,6 +38,7 @@ import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { errorTag } from "../tools/failure.ts";
+import { lazily } from "../tools/lazy.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import {
@@ -1504,7 +1505,7 @@ const make = Effect.gen(function* () {
       };
 
       return {
-        tools: [runTool, resumeTool, reportsTool, waitTool, adoptTool],
+        tools: [runTool, lazily(resumeTool), reportsTool, waitTool, adoptTool],
         middleware,
       };
     },

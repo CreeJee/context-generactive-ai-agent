@@ -18,6 +18,7 @@ import { ChatState } from "../chat-state/chat-state.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
+import { lazily } from "./lazy.ts";
 import { toToolSchema } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { onRun, runTrace } from "../runtime/run-trace.ts";
@@ -406,18 +407,20 @@ const make = Effect.gen(function* () {
               }),
             ),
           ),
-          toolDefinition({
-            name: "cancel_background_task",
-            description:
-              "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
-            inputSchema: toToolSchema(ResultInput),
-          }).server(({ taskId }) =>
-            run(
-              Effect.gen(function* () {
-                yield* owned(sessionId, taskId);
-                yield* FiberMap.remove(fibers, taskId);
-                return { taskId, status: "stopped" as const };
-              }),
+          lazily(
+            toolDefinition({
+              name: "cancel_background_task",
+              description:
+                "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
+              inputSchema: toToolSchema(ResultInput),
+            }).server(({ taskId }) =>
+              run(
+                Effect.gen(function* () {
+                  yield* owned(sessionId, taskId);
+                  yield* FiberMap.remove(fibers, taskId);
+                  return { taskId, status: "stopped" as const };
+                }),
+              ),
             ),
           ),
         ];

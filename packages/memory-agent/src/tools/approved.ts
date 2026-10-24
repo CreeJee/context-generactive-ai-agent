@@ -294,7 +294,7 @@ const make = Effect.gen(function* () {
         if (approval === "gate") {
           const [save, write, remove] = reviewedToolDefinitions;
           return [
-            save.server(saveShellSkill),
+            lazily(save.server(saveShellSkill)),
             runSkillDefinition.server(runSkill),
             lazily(write.server(writeOutsideFile)),
             lazily(remove.server(deleteOutsideFile)),
@@ -302,7 +302,7 @@ const make = Effect.gen(function* () {
         }
         const [save, write, remove] = approvalToolDefinitions;
         return [
-          save.server(saveShellSkill),
+          lazily(save.server(saveShellSkill)),
           runSkillDefinition.server(runSkill),
           lazily(write.server(writeOutsideFile)),
           lazily(remove.server(deleteOutsideFile)),

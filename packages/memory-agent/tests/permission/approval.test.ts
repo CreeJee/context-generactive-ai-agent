@@ -63,11 +63,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       expect(result!.runId).toBe(call!.runId);
       expect(result!.detail).toMatchObject({ toolName: "save_shell_skill", ok: true });
 
-      // The durable app run resumes with the approved tool result in a fresh model invocation.
-      expect(invocations.length - before).toBe(2);
-      expect(invocations[before + 1]?.messages.some((message) => message.role === "tool")).toBe(
-        true,
-      );
+      // The model asks for save_shell_skill and calls it; the durable app run resumes with the
+      // approved tool result in a fresh model invocation.
+      expect(invocations.length - before).toBe(3);
+      expect(invocations.at(-1)?.messages.at(-1)?.role).toBe("tool");
     }),
   );
 
@@ -143,8 +142,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
 
         const reloaded = yield* chatClient(sessionId, "restore");
         yield* reloaded.pendingInterrupt;
+        // The turn that asked for save_shell_skill, and the one that called it.
         expect(reloaded.client.getMessages().map((message) => message.role)).toEqual([
           "user",
+          "assistant",
           "assistant",
         ]);
         expect(reloaded.client.getInterrupts()[0]).toMatchObject({

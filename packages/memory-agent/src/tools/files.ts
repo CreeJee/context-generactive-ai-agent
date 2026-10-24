@@ -24,6 +24,7 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { HiddenReplaceFailure, mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
 import { runTrace } from "../runtime/run-trace.ts";
 import { guardedWith } from "./failure.ts";
+import { lazily } from "./lazy.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const fileToolNames = [
@@ -509,7 +510,7 @@ const make = Effect.gen(function* () {
           ),
         );
 
-        return [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] as const;
+        return [listFiles, searchFiles, readFile, writeFile, editFile, lazily(deleteFile)] as const;
       }),
   };
 });
