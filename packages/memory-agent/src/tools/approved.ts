@@ -47,7 +47,7 @@ import { toToolSchema } from "./schema.ts";
 export const runSkillDefinition = toolDefinition({
   name: "run_skill",
   description:
-    "Run a project shell skill's scripts/run.sh with arguments ($1, $2, …, never shell-parsed). A script runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_shell_skill. It runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host, save the skill again with that host in network. Returns the output and exit status, or a taskId if still running after yieldMs (default 1000); retrieve the final result with get_background_result. A running receipt does not prove success.",
+    "Run a project shell skill's scripts/run.sh. A script runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_shell_skill. It runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host the job needs, save the skill again with that host in network. Returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.",
   inputSchema: toToolSchema(RunSkillInput),
 });
 

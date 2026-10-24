@@ -92,11 +92,8 @@ export const subagentInstructions = `You can delegate with run_subagent (a one-o
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
 - Before delegating, reserve a concrete independent task for yourself and assign separate ownership to each child. After dispatch, immediately do your own task while children run; delegation is not a reason to stop working.
 - Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Completion notifications arrive before your next model step, or trigger a follow-up when you are idle. Do not repeatedly poll for progress.
-- wait_subagents defaults to a nonblocking status check (timeoutMs 0). If it returns pending, continue independent work. Set a positive bounded timeout only when no useful independent work remains and your next step depends on a child's result. A positive timeout pauses your model turn. Waiting returns status, not reports.
-- Retrieve finished answers with get_subagent_reports for a batch, or get_subagent_report for one. Skip status checks when a completion notification already identifies the attempt. A receipt, notification, or wait result is not a reviewed report.
-- Retry a failed or interrupted task only with its trace task/attempt ids. Never set confirmUncertain unless the user explicitly accepts the listed possible duplicate side effects.
-- A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.
-- Before a final answer after reviewing subagent reports, call adopt_subagent_reports with only the reports actually used. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer.`;
+- When a completion notification already identifies the attempt, retrieve its report without checking status first.
+- A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.`;
 
 /** What the child is told about itself. Its task comes from the parent agent, not the user. */
 export const childInstructions: {
@@ -170,8 +167,7 @@ const WaitSubagentsInput = Schema.Struct({
     Schema.check(Schema.isBetween({ minimum: 0, maximum: 120_000 })),
     Schema.withDecodingDefaultTypeKey(Effect.succeed(0)),
   ).annotate({
-    description:
-      "Default 0 returns immediately so you can continue independent work. A positive value pauses your turn; use only when the next step requires a child result and no independent work remains.",
+    description: "Milliseconds to wait; 0 (the default) only checks.",
   }),
 });
 
@@ -248,7 +244,7 @@ const AdoptSubagentReportsInput = Schema.Struct({
   reflectedNotificationIds: Schema.Array(Schema.String)
     .pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])))
     .annotate({
-      description: "Delivered status notification ids that affected the final answer.",
+      description: "Delivered status notification ids.",
     }),
 });
 
@@ -1420,7 +1416,7 @@ const make = Effect.gen(function* () {
       const adoptTool = toolDefinition({
         name: "adopt_subagent_reports",
         description:
-          "Declare which reviewed subagent reports are actually used in the upcoming final answer. Call after review and before answering.",
+          "Declare which reviewed subagent reports are actually used in the upcoming final answer. Call after review and before answering. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer.",
         inputSchema: toToolSchema(AdoptSubagentReportsInput),
       }).server((input) => {
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
