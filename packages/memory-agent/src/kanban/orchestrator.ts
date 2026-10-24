@@ -434,7 +434,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         {
           // Trimmed so the draft satisfies CardText: a stored title may carry edge whitespace.
           title: `Resolve conflicts: ${card.title.trim()}`,
-          description: `Card ${card.id} could not join the Goal branch because ${listed} changed there too. Re-apply its change on the current Goal branch. Its work is on branch ctx/card/${goal.goalInstanceId}/${card.id}; read it with read-only git commands (git diff, git show). Do not commit; the owner commits your work.\n\n${card.description}`,
+          description: `Card ${card.id} could not join the Goal branch because ${listed} changed there too. Re-apply its change on the current Goal branch. ${workspace(goal).earlierWork(cardRef(goal, card.id))} Do not commit; the owner commits your work.\n\n${card.description}`,
           dependsOn: card.dependsOn,
           acceptanceCriteria: card.acceptanceCriteria,
           ...Struct.pick(card, ["outcome", "boundaries", "requiredEvidence"]),

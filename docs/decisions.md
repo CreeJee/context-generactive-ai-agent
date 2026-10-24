@@ -2562,5 +2562,6 @@
 
 - 사용자 결정: `CardWorktrees`의 계약을 `CardWorktreesApi`로 적어 두고(`kanban/worktree.ts`), git 구현은 `kanban/git-worktrees.ts`의 `gitCardWorktreesLayer`로 옮긴다. 지금까지는 service 타입을 git 구현(`make`)의 반환에서 추론해서 계약이 구현을 따라 바뀌었다. 나중에 LayerFS 같은 다른 작업트리 백엔드를 붙일 때 호출부(card-queue·orchestrator·merge-queue·board-actions)는 두고 Layer만 바꾸려는 것이다. LayerFS 연동은 LayerFS가 패키지로 배포되고 내구성 있는 저장 프로필이 생기면 다시 본다.
 - 계약에서 git 용어를 뺀다. `CardWorktree`는 카드 도구가 보는 모양(`toolRoot`, `deniedRoots`)만 남기고, repository·branch·폴더 경로는 git 구현 안에만 둔다. `prepareGoal`은 값을 돌려주지 않는다. `pushGoalBranch`는 push한 브랜치 이름을 돌려주고, merge queue는 그 이름으로 pull request를 연다. 브랜치 이름 규칙(`ctx/goal/<id>`)은 git 구현만 안다.
-- 남겨 둔 git 용어: 실패 사유 `GitFailed`는 보드와 failure code가 쓰는 이름이라 그대로 둔다. 충돌 해결 카드 설명에 넣는 카드 브랜치 이름(`ctx/card/<goal>/<card>`)도 오케스트레이터에 남아 있다.
+- 충돌 해결 카드 설명에서 원래 카드의 작업이 어디 있는지 알려 주는 문장은 구현이 쓴다(`earlierWork`). git 구현은 카드 브랜치 이름과 읽기 전용 git 명령을 알려 준다. 오케스트레이터는 브랜치 이름을 모른다.
+- 남겨 둔 git 용어: 실패 사유 `GitFailed`는 보드와 failure code가 쓰는 이름이라 그대로 둔다.
 - 실행 모드도 같은 계약으로 고른다. 작업트리를 만들 수 없는 프로젝트의 Goal은 `sequentialWorkspace`가 맡는다. 카드는 프로젝트 자체에서 돌고(도구 루트는 프로젝트, 막는 폴더 없음), 커밋·정리·통합할 것이 없다. card-queue·orchestrator·board-actions는 `cardWorkspace(worktrees, goal.mode)`로 고른 것만 부르고, `mode === "worktree"` 분기와 `worktree: null`을 두지 않는다. 검증의 `worktree`만 카드 작업트리가 사라졌을 때 null로 남는다. Goal 브랜치 쪽(merge queue, 대상 브랜치 기록)은 worktree Goal에만 있어서 mode를 그대로 본다.

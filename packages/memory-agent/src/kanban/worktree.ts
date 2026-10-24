@@ -217,6 +217,8 @@ export interface CardWorkspace {
     card: CardRef,
     title: string,
   ) => Effect.Effect<CardIntegration, CardWorktreeFailed>;
+  /** Where a card's work stays once it leaves the board, told to the card that re-applies it. */
+  readonly earlierWork: (card: CardRef) => string;
 }
 
 /** Card worktrees together with the Goal branch they join and its way into the user's branch. */
@@ -284,6 +286,7 @@ export const sequentialWorkspace: CardWorkspace = {
   commitWork: () => Effect.succeedNone,
   syncWithGoal: () => Effect.succeed(GoalSync.UpToDate()),
   squashIntoGoal: () => Effect.succeed(CardIntegration.NoChanges()),
+  earlierWork: () => "Its changes are in the project as it is now.",
 };
 
 /** Where a Goal's cards run, by the mode its board started in. */

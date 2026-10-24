@@ -568,6 +568,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       );
     }),
 
+    /** Cancelled and conflicting cards keep their branch; git can read it from any worktree. */
+    earlierWork: (card: CardRef) =>
+      `Its work is on branch ${cardBranchName(card.goalInstanceId, card.cardId)}; read it with read-only git commands (git diff, git show).`,
+
     currentBranch: Effect.fn("CardWorktrees.currentBranch")(function* (projectRoot: string) {
       const output = yield* run("goal_branch", projectRoot, [
         "symbolic-ref",
