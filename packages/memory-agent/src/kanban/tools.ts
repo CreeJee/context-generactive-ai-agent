@@ -1,5 +1,5 @@
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { AppEvents } from "../events/app-events.ts";
 import { toToolSchema } from "../tools/schema.ts";
@@ -28,29 +28,27 @@ import type { KanbanAttentionReason } from "./orchestrator.ts";
 
 const CardId = Schema.String.annotate({ description: "A card id on the board." });
 
-const SplitCardInput = Schema.Struct({
-  cardId: CardId,
-  parts: Schema.Array(CardDraft).pipe(Schema.check(Schema.isMinLength(2))),
+/** One change to the board; the tool description says what each does. */
+const KanbanEdit = Schema.TaggedUnion({
+  Split: {
+    cardId: CardId,
+    parts: Schema.Array(CardDraft).pipe(Schema.check(Schema.isMinLength(2))),
+  },
+  Merge: {
+    cardIds: Schema.Array(CardId).pipe(Schema.check(Schema.isMinLength(2))),
+    card: CardDraft,
+  },
+  Cancel: { cardId: CardId },
+  Move: {
+    cardId: CardId,
+    from: CardStatus.annotate({ description: "The status the board shows for the card now." }),
+    to: CardStatus,
+  },
+  Requeue: { cardId: CardId },
+  SettleChangeRequest: { requestId: Schema.Int, decision: ChangeDecision },
+  ApplyGoalChange: { verdicts: Schema.Array(GoalChangeVerdict) },
 });
-const MergeCardsInput = Schema.Struct({
-  cardIds: Schema.Array(CardId).pipe(Schema.check(Schema.isMinLength(2))),
-  card: CardDraft,
-});
-const CardInput = Schema.Struct({ cardId: CardId });
-const MoveCardInput = Schema.Struct({
-  cardId: CardId,
-  from: CardStatus.annotate({ description: "The status the board shows for the card now." }),
-  to: CardStatus,
-});
-const SettleChangeRequestInput = Schema.Struct({
-  requestId: Schema.Int,
-  decision: ChangeDecision,
-});
-const ApplyGoalChangeInput = Schema.Struct({
-  verdicts: Schema.Array(GoalChangeVerdict).annotate({
-    description: "One verdict per card that is not done; a card without one continues.",
-  }),
-});
+const EditBoardInput = Schema.Struct({ edit: KanbanEdit });
 const ReadBoardInput = Schema.Struct({});
 
 /** What a board change can fail with; refusals are answered to the model, the rest fail the call. */
@@ -117,84 +115,36 @@ const make = Effect.gen(function* () {
         ),
       );
 
-      const splitCard = toolDefinition({
-        name: "split_card",
-        description:
-          "Replace a card that is not running with smaller cards. The parts keep the card's dependencies, and cards that depended on it wait for every part.",
-        inputSchema: toToolSchema(SplitCardInput),
-      }).server((input) =>
-        change((actions) => actions.splitCard(sessionId, input.cardId, input.parts, author)),
-      );
-      const mergeCards = toolDefinition({
-        name: "merge_cards",
-        description:
-          "Replace cards that are not running with one card that does all of their work. Cards that depended on any of them depend on the new card.",
-        inputSchema: toToolSchema(MergeCardsInput),
-      }).server((input) =>
-        change((actions) => actions.mergeCards(sessionId, input.cardIds, input.card, author)),
-      );
-      const cancelCard = toolDefinition({
-        name: "cancel_card",
-        description:
-          "Take a card off the board. A running attempt is stopped; the card's work stays on its branch.",
-        inputSchema: toToolSchema(CardInput),
-      }).server((input) =>
-        change((actions) => actions.cancelCard(sessionId, input.cardId, author)),
-      );
-      const moveCard = toolDefinition({
-        name: "move_card",
-        description:
-          "Move a card between statuses. Moving a running card stops its attempt. Moving a blocked card back to ready after replanning it starts a new failure streak; the next repeated failure goes to a person.",
-        inputSchema: toToolSchema(MoveCardInput),
-      }).server((input) =>
+      const editBoard = toolDefinition({
+        name: "edit_kanban_board",
+        description: `Change the kanban board; edit._tag picks the change:
+- Split: replace a card that is not running with smaller cards. The parts keep its dependencies, and cards that depended on it wait for every part.
+- Merge: replace cards that are not running with one card that does all of their work. Cards that depended on any of them depend on the new card.
+- Cancel: take a card off the board. A running attempt is stopped; the card's work stays on its branch.
+- Move: move a card between statuses. Moving a running card stops its attempt. Moving a blocked card back to ready after replanning it starts a new failure streak; the next repeated failure goes to a person.
+- Requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
+- SettleChangeRequest: settle a user's pending change to a running card. Apply continues the card with the change at once, Reassign applies it and restarts the card in a fresh agent conversation, Reject keeps the card as it is and records your reason for the user.
+- ApplyGoalChange: after the Goal changed, give one verdict per card that is not done (a card without one continues): Continue, Amend (change the card and tell its agent), Stop (block it with a reason), Replace (a new card takes its place) or NeedsDecision (a person decides). New assignments resume once this is saved.`,
+        inputSchema: toToolSchema(EditBoardInput),
+      }).server(({ edit }) =>
         change((actions) =>
-          actions.moveCard(
-            sessionId,
-            { cardId: input.cardId, from: input.from, to: input.to },
-            author,
-          ),
+          Match.valueTags(edit, {
+            Split: ({ cardId, parts }) => actions.splitCard(sessionId, cardId, parts, author),
+            Merge: ({ cardIds, card }) => actions.mergeCards(sessionId, cardIds, card, author),
+            Cancel: ({ cardId }) => actions.cancelCard(sessionId, cardId, author),
+            Move: ({ cardId, from, to }) =>
+              actions.moveCard(sessionId, { cardId, from, to }, author),
+            Requeue: ({ cardId }) =>
+              Effect.map(actions.requeueCard(sessionId, cardId, author), (requeued) => ({
+                requeued,
+              })),
+            SettleChangeRequest: ({ requestId, decision }) =>
+              actions.settleChangeRequest(sessionId, requestId, decision, author),
+            ApplyGoalChange: ({ verdicts }) => actions.applyGoalChange(sessionId, verdicts, author),
+          }),
         ),
       );
-      const settleChangeRequest = toolDefinition({
-        name: "settle_change_request",
-        description:
-          "Settle a user's pending change to a running card: Apply continues the card with the change at once, Reassign applies it and restarts the card in a fresh agent conversation, Reject keeps the card as it is and records your reason for the user.",
-        inputSchema: toToolSchema(SettleChangeRequestInput),
-      }).server((input) =>
-        change((actions) =>
-          actions.settleChangeRequest(sessionId, input.requestId, input.decision, author),
-        ),
-      );
-      const applyGoalChange = toolDefinition({
-        name: "apply_goal_change",
-        description:
-          "After the Goal changed, classify every card that is not done against the new Goal: Continue, Amend (change the card and tell its agent), Stop (block it with a reason), Replace (a new card takes its place) or NeedsDecision (a person decides). New assignments resume once this is saved.",
-        inputSchema: toToolSchema(ApplyGoalChangeInput),
-      }).server((input) =>
-        change((actions) => actions.applyGoalChange(sessionId, input.verdicts, author)),
-      );
-      const requeueCard = toolDefinition({
-        name: "requeue_card",
-        description:
-          "Put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.",
-        inputSchema: toToolSchema(CardInput),
-      }).server((input) =>
-        change((actions) =>
-          Effect.map(actions.requeueCard(sessionId, input.cardId, author), (requeued) => ({
-            requeued,
-          })),
-        ),
-      );
-      return [
-        readBoard,
-        splitCard,
-        mergeCards,
-        cancelCard,
-        moveCard,
-        settleChangeRequest,
-        applyGoalChange,
-        requeueCard,
-      ];
+      return [readBoard, editBoard];
     },
   };
 });
@@ -207,15 +157,15 @@ export class KanbanTools extends Context.Service<KanbanTools, Effect.Success<typ
 }
 
 export const kanbanInstructions = `This Goal runs as a kanban board. The owner's loop assigns ready cards to card agents in separate git worktrees, verifies each finished card and squashes it into the Goal branch; you do not execute cards yourself and do not mark card progress with update_workflow_progress.
-Your part is what the loop cannot decide. Read the board with read_kanban_board, then:
-- A blocked card with a replan request: split, merge, edit or cancel it, then move it back to ready.
-- A user's change request to a running card: settle it with settle_change_request (Apply, Reassign or Reject with a reason).
-- A changed Goal: classify every card that is not done with apply_goal_change; new assignments wait for it.
-- A blocked card whose deliveries ran out: requeue_card once the cause is understood.
+Your part is what the loop cannot decide. Read the board with read_kanban_board, then change it with edit_kanban_board:
+- A blocked card with a replan request: Split, Merge, edit or Cancel it, then Move it back to ready.
+- A user's change request to a running card: SettleChangeRequest (Apply, Reassign or Reject with a reason).
+- A changed Goal: ApplyGoalChange for every card that is not done; new assignments wait for it.
+- A blocked card whose deliveries ran out: Requeue once the cause is understood.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 
 const reasonText = {
-  goal_changed: "The Goal changed: classify the cards with apply_goal_change.",
+  goal_changed: "The Goal changed: classify the cards with edit_kanban_board ApplyGoalChange.",
   replan_requested: "A card keeps failing and asks to be replanned.",
   change_requested: "A user asked to change a running card: settle it.",
   cards_done:

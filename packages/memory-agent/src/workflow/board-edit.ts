@@ -20,7 +20,8 @@ export const CardDraft = Schema.Struct({
   risk: Schema.optionalKey(CardRisk),
   requiredEvidence: Schema.optionalKey(Schema.Array(Schema.String)),
   humanDecision: Schema.optionalKey(Schema.String),
-});
+  // A tool that takes several cards states the shape once, as a JSON Schema definition.
+}).annotate({ identifier: "CardDraft" });
 export type CardDraft = typeof CardDraft.Type;
 
 /** Fields the user changes on a card. An absent key keeps the value; null clears a contract field. */

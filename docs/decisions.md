@@ -2540,3 +2540,4 @@
 - discover 호출과 결과는 일이 아니므로 메모리 노드로 남기지 않는다. 화면에는 "도구 불러오기"로 보인다.
 - 이 단계 뒤 총 5,188(시스템 1,421, 도구 3,690, 도구 23개)이다. 시작점 7,176에서 28% 줄었다.
 - 사용자 결정: `get_subagent_report`는 없애고 `get_subagent_reports`(attempt 하나도 받는다)로 합친다. 옛 이름은 기록된 것을 읽는 자리에만 남는다: 중단된 run의 읽기 복구(`owner-read-recovery`), 과거 run 판정의 읽기 도구 분류(`effects.ts`의 `retiredToolEffects`), 오래된 대화의 compaction 미리보기.
+- 사용자 결정: 칸반 보드를 바꾸는 도구 일곱 개(split·merge·cancel·move·requeue·settle_change_request·apply_goal_change)는 `edit_kanban_board` 하나로 합친다. 입력은 `edit` 태그 유니온이다(`Split`·`Merge`·`Cancel`·`Move`·`Requeue`·`SettleChangeRequest`·`ApplyGoalChange`). 그냥 합치면 `CardDraft` 스키마가 유니온 갈래마다 인라인돼 오히려 커져서(1,822 → 1,904), `CardDraft`에 `identifier`를 붙여 JSON Schema 정의로 한 번만 싣는다. 칸반 도구는 1,822 → 1,626 토큰, 8개 → 2개다.
