@@ -91,13 +91,13 @@ const make = Effect.gen(function* () {
   const cardSetting = Effect.fnUntraced(function* (
     sessionId: string,
     projectId: string,
-    worktree: CardWorktree | null,
+    worktree: CardWorktree,
   ) {
     yield* sessions.get(sessionId);
     const project = yield* projects.get(projectId);
     const selection = yield* active.selected;
     return {
-      project: worktree === null ? project : cardToolProject(project, worktree),
+      project: cardToolProject(project, worktree),
       selection: Option.fromNullishOr(selection),
     };
   });
@@ -174,7 +174,7 @@ const make = Effect.gen(function* () {
     function* (input: {
       readonly sessionId: string;
       readonly projectId: string;
-      readonly worktree: CardWorktree | null;
+      readonly worktree: CardWorktree;
       /** Each verification is its own run: Work Trace refuses a second invocation under one run. */
       readonly runPrefix: string;
       readonly agent: string;

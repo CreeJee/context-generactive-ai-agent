@@ -188,8 +188,8 @@ export interface CardWorkspace {
    * the card continues. While the scope is open nothing settles the worktree away.
    */
   readonly lease: (card: CardRef) => Effect.Effect<CardWorktree, CardWorktreeFailed, Scope.Scope>;
-  /** The card's worktree when it exists. */
-  readonly find: (card: CardRef) => Effect.Effect<Option.Option<CardWorktree>, CardWorktreeFailed>;
+  /** The card's worktree as it is now; `WorktreeMissing` when it is gone. */
+  readonly present: (card: CardRef) => Effect.Effect<CardWorktree, CardWorktreeFailed>;
   /** Applies the retention rule for a card that left execution; see {@link WorktreeDisposition}. */
   readonly settle: (
     card: CardRef,
@@ -281,7 +281,7 @@ const projectItself = (card: CardRef): CardWorktree => ({
  */
 export const sequentialWorkspace: CardWorkspace = {
   lease: (card) => Effect.succeed(projectItself(card)),
-  find: (card) => Effect.succeedSome(projectItself(card)),
+  present: (card) => Effect.succeed(projectItself(card)),
   settle: () => Effect.succeed(WorktreeSettlement.Retained()),
   commitWork: () => Effect.succeedNone,
   syncWithGoal: () => Effect.succeed(GoalSync.UpToDate()),

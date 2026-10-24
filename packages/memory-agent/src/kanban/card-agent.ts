@@ -58,8 +58,7 @@ export interface CardVerification {
   readonly projectId: string;
   readonly goalInstanceId: string;
   readonly card: PlanStep;
-  /** The card's worktree, or none when it is gone; the verifier then reads the project. */
-  readonly worktree: CardWorktree | null;
+  readonly worktree: CardWorktree;
   /** What the card's agent reported for the attempt being verified. */
   readonly report: string;
 }

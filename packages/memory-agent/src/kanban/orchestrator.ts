@@ -40,7 +40,13 @@ import {
 } from "./card-queue.ts";
 import { PersistedQueueItems } from "./persisted-queue-store.ts";
 import { boardOps } from "./board-ops.ts";
-import { cardWorkspace, CardWorktrees, WorktreeDisposition, type CardRef } from "./worktree.ts";
+import {
+  cardWorkspace,
+  CardWorktrees,
+  WorktreeDisposition,
+  type CardRef,
+  type CardWorktree,
+} from "./worktree.ts";
 import {
   DecisionCloseScope,
   DecisionKind,
@@ -501,22 +507,20 @@ const make = (options: KanbanOrchestratorOptions) =>
           Failed: ({ failure }) => Effect.as(failCard(goal, cardId, "verify", failure), true),
         });
       });
-      // Each round verifies the card as it now is; a sync with a moved Goal branch needs another.
-      for (let round = 0; round < 3; round++) {
-        const card = yield* verifying;
-        if (card === undefined) return;
+      /** Verifies the card in its worktree once. True once the card is settled; false asks for another round. */
+      const verifyIn = Effect.fnUntraced(function* (card: PlanStep, worktree: CardWorktree) {
         const verdict = yield* verifier.verify({
           sessionId: goal.sessionId,
           projectId: goal.projectId,
           goalInstanceId: goal.goalInstanceId,
           card,
-          worktree: Option.getOrNull(yield* workspace(goal).find(cardRef(goal, cardId))),
+          worktree,
           report,
         });
         // A card amended or held while it was verified: the verdict is about work that no longer
         // counts, so nothing joins the Goal branch on it.
-        if ((yield* verifying) === undefined) return;
-        const settled = yield* Match.valueTags(verdict, {
+        if ((yield* verifying) === undefined) return true;
+        return yield* Match.valueTags(verdict, {
           Failed: ({ failure }) =>
             Effect.as(
               failCard(
@@ -529,6 +533,22 @@ const make = (options: KanbanOrchestratorOptions) =>
             ),
           Passed: ({ evidence }) => integrate(card, evidence),
         });
+      });
+      // Each round verifies the card as it now is; a sync with a moved Goal branch needs another.
+      for (let round = 0; round < 3; round++) {
+        const card = yield* verifying;
+        if (card === undefined) return;
+        // A card whose worktree is gone is not verified anywhere else; it fails, and its next
+        // attempt leases the worktree again.
+        const settled = yield* workspace(goal)
+          .present(cardRef(goal, cardId))
+          .pipe(
+            Effect.matchEffect({
+              onFailure: (failure) =>
+                Effect.as(failCard(goal, cardId, "verify", worktreeFailure(failure)), true),
+              onSuccess: (worktree) => verifyIn(card, worktree),
+            }),
+          );
         if (settled) return;
       }
       return yield* failCard(

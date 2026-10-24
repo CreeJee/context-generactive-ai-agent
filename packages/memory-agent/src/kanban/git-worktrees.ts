@@ -376,11 +376,9 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         () => Ref.update(leases, HashSet.remove(cardKey(card))),
       ).pipe(Effect.map((worktree) => toolView(card.projectRoot, worktree))),
 
-    find: (card: CardRef) =>
-      Effect.map(lookup("lease", card), (found) =>
-        found.state === "present"
-          ? Option.some(toolView(card.projectRoot, found.worktree))
-          : Option.none<CardWorktree>(),
+    present: (card: CardRef) =>
+      Effect.map(presentWorktree("lease", card), (worktree) =>
+        toolView(card.projectRoot, worktree),
       ),
 
     settle: Effect.fn("CardWorktrees.settle")(function* (

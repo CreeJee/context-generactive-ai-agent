@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, FileSystem, Layer, Option, Path } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -147,7 +147,9 @@ it.live(
         );
         expect(yield* fs.exists(other.toolRoot)).toBe(false);
         expect(yield* git(project, "show", "ctx/card/g1/c2:draft.txt")).toBe("draft");
-        expect(yield* worktrees.find(cancelled)).toEqual(Option.none());
+        expect((yield* Effect.flip(worktrees.present(cancelled))).reason).toEqual(
+          CardWorktreeFailedReason.cases.WorktreeMissing.make({}),
+        );
 
         expect(yield* git(project, "status", "--porcelain")).toBe(userStatus);
         expect(yield* git(project, "branch", "--show-current")).toBe("main");
@@ -224,8 +226,8 @@ it.live(
         const conflict = yield* Effect.flip(worktrees.syncWithGoal(card("c")));
         expect(conflict).toBeInstanceOf(CardIntegrationConflict);
         expect(conflict).toMatchObject({ files: ["a.txt"] });
-        const cWorktree = yield* worktrees.find(card("c"));
-        expect(yield* git(Option.getOrThrow(cWorktree).toolRoot, "status", "--porcelain")).toBe("");
+        const cWorktree = yield* worktrees.present(card("c"));
+        expect(yield* git(cWorktree.toolRoot, "status", "--porcelain")).toBe("");
         expect(yield* git(project, "branch", "--show-current")).toBe("main");
       }),
     ),
