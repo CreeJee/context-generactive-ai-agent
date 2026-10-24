@@ -66,6 +66,83 @@ const start = Effect.fnUntraced(function* (trace: WorkTraceStore["Service"]) {
   return handle;
 });
 
+/** What a conversation's Goal run leaves: catalog, owner receipts, worker pins, board and queue. */
+const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: string, runId: string) {
+  const executionId = `execution-${runId}`;
+  yield* sqlRun("INSERT INTO workflow_goal_identities VALUES (?, ?, 'now')", sessionId, goalId);
+  const { lastInsertRowid: revision } = yield* sqlRun(
+    `INSERT INTO workflow_state_revisions
+       (session_id, state_json, goal_version, provenance, created_at, goal_instance_id)
+     VALUES (?, '{}', 1, 'recorded', 'now', ?)`,
+    sessionId,
+    goalId,
+  );
+  yield* sqlRun(
+    "INSERT INTO workflow_run_bindings VALUES (?, ?, ?, 1, NULL, ?, 'now')",
+    runId,
+    sessionId,
+    goalId,
+    revision,
+  );
+  yield* sqlRun(
+    `INSERT INTO owner_workflow_executions (execution_id, workflow_name, payload_json, status)
+     VALUES (?, 'GoalExecution', json_object('identity', json_object('sessionId', ?)), 'suspended')`,
+    executionId,
+    sessionId,
+  );
+  yield* sqlRun(
+    `INSERT INTO owner_rpc_operations
+       (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
+     VALUES (?, 'key', 1, '{}', 1, '{}', 'succeeded')`,
+    runId,
+  );
+  yield* sqlRun(
+    `INSERT INTO owner_read_recoveries
+       (receipt_id, run_id, session_id, goal_instance_id, workflow_revision_id, operation_id,
+        operation_fingerprint, authorization_fingerprint, run_key, finished_at, execution_id,
+        execution_result_json, execution_payload_json, assessment_id, policy, confirmation,
+        backup_reference, created_at)
+     VALUES (?, ?, ?, ?, ?, 1, '{}', '{}', 'key', 1, ?, '{}', '{}', ?,
+       'background-result-read-v1', 'confirm_read_only_and_continue_without_replay', 'backup', 1)`,
+    `receipt-${runId}`,
+    runId,
+    sessionId,
+    goalId,
+    revision,
+    executionId,
+    "0".repeat(64),
+  );
+  yield* sqlRun(
+    "INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, 'file:///worker.mjs', 'now')",
+    goalId,
+    `generation-${goalId}`,
+    "0".repeat(64),
+  );
+  yield* sqlRun(
+    "INSERT INTO workflow_goal_native_artifacts VALUES (?, 'file:///native.mjs', 'hash', 'v1', 'source', 'now')",
+    goalId,
+  );
+  yield* sqlRun(
+    `INSERT INTO kanban_goals (goal_instance_id, session_id, project_id, project_root, mode,
+       goal_version, status, created_at, updated_at)
+     VALUES (?, ?, 'p1', '/tmp/p1', 'sequential', 1, 'stopped', 1, 1)`,
+    goalId,
+    sessionId,
+  );
+  yield* sqlRun(
+    "INSERT INTO kanban_cards (goal_instance_id, card_id) VALUES (?, 'card-1')",
+    goalId,
+  );
+  yield* sqlRun(
+    `INSERT INTO persisted_queue_items
+       (queue_name, id, element_json, state, visible_at, created_at, updated_at)
+     VALUES ('DurableQueue/KanbanCard', ?, json_object('payload', json_object('sessionId', ?)),
+       'completed', 0, 0, 0)`,
+    `item-${goalId}`,
+    sessionId,
+  );
+});
+
 describe("Work Trace task lifecycle", () => {
   it.effect(
     "serializes active archive, waits for cancellation, and restores execution status",
@@ -370,48 +447,135 @@ describe("Work Trace task lifecycle", () => {
       ),
   );
 
-  it.effect("keeps a conversation that ran a Goal and leaves an earlier delete blocked", () =>
+  it.effect("deletes a conversation's Goal history with it and keeps another's immutable", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
         yield* seed();
-        const handle = yield* start(trace);
-        yield* trace.transitionAttempt(handle, "s1", "completed", "attempt_completed", "Completed");
-        // Recorded before the conversation ran a Goal, as an earlier build could.
-        const earlier = yield* trace.requestSessionLifecycle({
+        yield* sqlRun(
+          "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, 'now')",
+        );
+        yield* Effect.forEach(["1", "2"], (n) => goalHistory(`s${n}`, `goal-${n}`, `run-${n}`), {
+          discard: true,
+        });
+        // s1's Goal waits for s2's; the wait goes with s1.
+        yield* sqlRun(`INSERT INTO kanban_goal_dependencies (goal_instance_id, depends_on, created_at)
+          VALUES ('goal-1', 'goal-2', 1)`);
+
+        const requested = yield* trace.requestSessionLifecycle({
           sessionId: "s1",
           intent: "delete",
           idempotencyKey: "delete-session-1",
         });
-        const operationId = pendingOperationId(earlier);
+        const operationId = pendingOperationId(requested);
         if (operationId === null) return;
-        yield* sqlRun(
-          `INSERT INTO workflow_goal_instances (goal_instance_id, session_id, created_at)
-           VALUES ('goal-1', 's1', ?)`,
-          DateTime.formatIso(DateTime.makeUnsafe(0)),
-        );
-
-        yield* trace.recoverLifecycleOperations();
         expect(
-          yield* sqlGet(
-            "SELECT status, blocker FROM lifecycle_operations WHERE id = ?",
-            operationId,
-          ),
-        ).toEqual({ status: "blocked", blocker: "goal_history" });
-        expect(yield* sqlGet("SELECT count(*) AS count FROM sessions WHERE id = 's1'")).toEqual({
-          count: 1,
+          LifecycleOutcome.$is("completed")(yield* trace.finalizeSessionLifecycle(operationId)),
+        ).toBe(true);
+
+        // Only s2's rows are left.
+        expect(
+          yield* sqlGet(`SELECT
+            (SELECT count(*) FROM workflow_goal_instances) AS goals,
+            (SELECT count(*) FROM workflow_run_bindings) AS bindings,
+            (SELECT count(*) FROM owner_rpc_operations) AS receipts,
+            (SELECT count(*) FROM owner_read_recoveries) AS recoveries,
+            (SELECT count(*) FROM workflow_goal_worker_generations) AS generations,
+            (SELECT count(*) FROM workflow_goal_native_artifacts) AS natives,
+            (SELECT count(*) FROM owner_workflow_executions) AS executions,
+            (SELECT count(*) FROM kanban_goals) AS boards,
+            (SELECT count(*) FROM kanban_cards) AS cards,
+            (SELECT count(*) FROM kanban_goal_dependencies) AS dependencies,
+            (SELECT count(*) FROM persisted_queue_items) AS items,
+            (SELECT count(*) FROM goal_history_purges) AS permits`),
+        ).toEqual({
+          goals: 1,
+          bindings: 1,
+          receipts: 1,
+          recoveries: 1,
+          generations: 1,
+          natives: 1,
+          executions: 1,
+          boards: 1,
+          cards: 1,
+          dependencies: 0,
+          items: 1,
+          permits: 0,
         });
         expect(
-          yield* sqlGet("SELECT deleted_at FROM work_tasks WHERE id = ?", handle.taskId),
-        ).toEqual({ deleted_at: null });
+          yield* sqlGet("SELECT group_concat(goal_instance_id) AS ids FROM kanban_goals"),
+        ).toEqual({ ids: "goal-2" });
         expect(
-          yield* trace.requestSessionLifecycle({
-            sessionId: "s1",
-            intent: "delete",
-            idempotencyKey: "delete-session-2",
-          }),
-        ).toEqual(LifecycleRequest.blocked({ blocker: "goal_history" }));
+          yield* sqlGet(
+            "SELECT json_extract(purged_counts, '$.goals') AS goals FROM purge_receipts WHERE target_id = 's1'",
+          ),
+        ).toEqual({ goals: 1 });
+        const refused = yield* Effect.flip(
+          sqlRun("DELETE FROM workflow_goal_instances WHERE goal_instance_id = 'goal-2'"),
+        );
+        expect(String(refused.reason.cause)).toContain("goal instance is immutable");
       }),
     ),
+  );
+
+  it.effect(
+    "keeps a conversation another running board waits for, and blocks an earlier delete",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const trace = yield* WorkTraceStore;
+          yield* seed();
+          const handle = yield* start(trace);
+          yield* trace.transitionAttempt(
+            handle,
+            "s1",
+            "completed",
+            "attempt_completed",
+            "Completed",
+          );
+          // Recorded before s2's board came to wait for s1's Goal.
+          const earlier = yield* trace.requestSessionLifecycle({
+            sessionId: "s1",
+            intent: "delete",
+            idempotencyKey: "delete-session-1",
+          });
+          const operationId = pendingOperationId(earlier);
+          if (operationId === null) return;
+          expect(yield* trace.pendingSessionDeletes).toEqual(["s1"]);
+          yield* sqlRun(
+            "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, 'now')",
+          );
+          yield* sqlRun("INSERT INTO workflow_goal_identities VALUES ('s1', 'goal-1', 'now')");
+          yield* sqlRun("INSERT INTO workflow_goal_identities VALUES ('s2', 'goal-2', 'now')");
+          yield* sqlRun(`INSERT INTO kanban_goals (goal_instance_id, session_id, project_id,
+            project_root, mode, goal_version, status, created_at, updated_at)
+          VALUES ('goal-2', 's2', 'p1', '/tmp/p1', 'sequential', 1, 'active', 1, 1)`);
+          yield* sqlRun(`INSERT INTO kanban_goal_dependencies (goal_instance_id, depends_on, created_at)
+          VALUES ('goal-2', 'goal-1', 1)`);
+
+          yield* trace.recoverLifecycleOperations();
+          expect(
+            yield* sqlGet(
+              "SELECT status, blocker FROM lifecycle_operations WHERE id = ?",
+              operationId,
+            ),
+          ).toEqual({ status: "blocked", blocker: "goal_dependents" });
+          // Startup leaves its board running while the delete stays blocked.
+          expect(yield* trace.pendingSessionDeletes).toEqual([]);
+          expect(yield* sqlGet("SELECT count(*) AS count FROM sessions WHERE id = 's1'")).toEqual({
+            count: 1,
+          });
+          expect(
+            yield* sqlGet("SELECT deleted_at FROM work_tasks WHERE id = ?", handle.taskId),
+          ).toEqual({ deleted_at: null });
+          expect(
+            yield* trace.requestSessionLifecycle({
+              sessionId: "s1",
+              intent: "delete",
+              idempotencyKey: "delete-session-2",
+            }),
+          ).toEqual(LifecycleRequest.blocked({ blocker: "goal_dependents" }));
+        }),
+      ),
   );
 });

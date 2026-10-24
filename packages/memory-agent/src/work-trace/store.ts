@@ -1550,13 +1550,16 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * Whether the conversation ran a Goal. Its Goal instances are an immutable catalog that run
-   * bindings and owner receipts point to, so deleting the conversation cannot remove them yet.
+   * Whether a running board of another conversation's Goal waits for one of this conversation's
+   * Goals to merge. Deleting this conversation would end that wait without the merge.
    */
-  const ranGoal = (sessionId: string) =>
+  const goalDependents = (sessionId: string) =>
     Effect.map(
-      first(sql`SELECT 1 AS found FROM workflow_goal_instances
-        WHERE session_id = ${sessionId} LIMIT 1`),
+      first(sql`SELECT 1 AS found FROM kanban_goal_dependencies d
+        JOIN workflow_goal_instances g ON g.goal_instance_id = d.depends_on
+        JOIN kanban_goals k ON k.goal_instance_id = d.goal_instance_id
+        WHERE g.session_id = ${sessionId} AND k.session_id <> ${sessionId} AND k.status = 'active'
+        LIMIT 1`),
       isTruthy,
     );
 
@@ -1577,8 +1580,8 @@ const make = Effect.gen(function* () {
       );
       if (session === undefined) return LifecycleRequest.blocked({ blocker: "session_not_found" });
       // Refused before anything stops or any task is deleted.
-      if (input.intent === "delete" && (yield* ranGoal(input.sessionId)))
-        return LifecycleRequest.blocked({ blocker: "goal_history" });
+      if (input.intent === "delete" && (yield* goalDependents(input.sessionId)))
+        return LifecycleRequest.blocked({ blocker: "goal_dependents" });
       if (input.intent === "restore" && session.archived_at === null)
         return LifecycleRequest.blocked({ blocker: "session_not_archived" });
       if (input.intent === "archive" && session.archived_at !== null)
@@ -1603,6 +1606,47 @@ const make = Effect.gen(function* () {
         completedAt: null,
       });
     }).pipe(sql.withTransaction);
+
+  /**
+   * Deletes the Goal history of a conversation being deleted: owner receipts, run bindings, the Goal
+   * catalog, and what its boards and durable executions kept. Its permit lets only this
+   * transaction delete the rows that stay immutable otherwise. Gives how many Goals went.
+   */
+  const purgeGoalHistory = Effect.fnUntraced(function* (sessionId: string) {
+    const goals = sql`SELECT goal_instance_id FROM workflow_goal_instances
+      WHERE session_id = ${sessionId}`;
+    const executions = sql`SELECT execution_id FROM owner_workflow_executions
+      WHERE coalesce(json_extract(payload_json, '$.sessionId'),
+        json_extract(payload_json, '$.identity.sessionId')) = ${sessionId}`;
+    yield* run(sql`INSERT INTO goal_history_purges (session_id) VALUES (${sessionId})`);
+    yield* run(sql`DELETE FROM owner_read_recoveries WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM owner_rpc_operations WHERE run_id IN
+      (SELECT run_id FROM workflow_run_bindings WHERE session_id = ${sessionId})`);
+    yield* run(sql`DELETE FROM workflow_new_goal_requests WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM workflow_run_bindings WHERE session_id = ${sessionId}`);
+    yield* run(
+      sql`DELETE FROM workflow_goal_worker_generations WHERE goal_instance_id IN (${goals})`,
+    );
+    yield* run(
+      sql`DELETE FROM workflow_goal_native_artifacts WHERE goal_instance_id IN (${goals})`,
+    );
+    yield* run(sql`DELETE FROM kanban_cards WHERE goal_instance_id IN (${goals})`);
+    yield* run(sql`DELETE FROM kanban_card_attempts WHERE goal_instance_id IN (${goals})`);
+    yield* run(sql`DELETE FROM kanban_card_runs WHERE goal_instance_id IN (${goals})`);
+    yield* run(sql`DELETE FROM kanban_decision_followups WHERE goal_instance_id IN (${goals})`);
+    yield* run(sql`DELETE FROM kanban_goal_schedules WHERE goal_instance_id IN (${goals})`);
+    yield* run(sql`DELETE FROM kanban_goal_dependencies
+      WHERE goal_instance_id IN (${goals}) OR depends_on IN (${goals})`);
+    yield* run(sql`DELETE FROM kanban_goal_ranks WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM persisted_queue_items WHERE CASE WHEN json_valid(element_json)
+      THEN json_extract(element_json, '$.payload.sessionId') END = ${sessionId}`);
+    yield* run(sql`DELETE FROM human_decision_closures WHERE execution_id IN (${executions})`);
+    yield* run(sql`DELETE FROM owner_workflow_executions WHERE execution_id IN (${executions})`);
+    const purged = (yield* run(sql`DELETE FROM workflow_goal_instances
+      WHERE session_id = ${sessionId}`)).changes;
+    yield* run(sql`DELETE FROM goal_history_purges WHERE session_id = ${sessionId}`);
+    return purged;
+  });
 
   const purgeSession = Effect.fnUntraced(function* (
     operation: typeof LifecycleOperationRow.Type,
@@ -1645,10 +1689,11 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM permission_reviews WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM queued_messages WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM imported_sessions WHERE session_id = ${sessionId}`);
+    const goals = yield* purgeGoalHistory(sessionId);
     yield* run(sql`DELETE FROM session_workflows WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
-    const purgedCounts = yield* encodeJson({ nodes, subagents: subagentRows.length });
+    const purgedCounts = yield* encodeJson({ nodes, subagents: subagentRows.length, goals });
     const retainedKinds = yield* encodeJson([
       "task_tombstones",
       "answer_claims",
@@ -1689,12 +1734,12 @@ const make = Effect.gen(function* () {
             WHERE id = ${operation.target_id}`);
           break;
         case "delete": {
-          // A request recorded before the conversation ran a Goal, or by an earlier build.
-          if (yield* ranGoal(operation.target_id)) {
+          // A request recorded before another Goal came to wait for this conversation's Goal.
+          if (yield* goalDependents(operation.target_id)) {
             yield* run(sql`UPDATE lifecycle_operations SET status = 'blocked',
-                blocker = 'goal_history', updated_at = ${now}
+                blocker = 'goal_dependents', updated_at = ${now}
               WHERE id = ${operationId}`);
-            return LifecycleOutcome.blocked({ blocker: "goal_history", operationId });
+            return LifecycleOutcome.blocked({ blocker: "goal_dependents", operationId });
           }
           const remaining = (yield* decodeId(
             yield* first(sql`SELECT coalesce(max(id), '') AS id FROM work_tasks
@@ -1893,8 +1938,8 @@ const make = Effect.gen(function* () {
     operation: typeof PendingLifecycleRow.Type,
   ) {
     if (operation.target_kind === "task") return yield* finalizeTaskLifecycle(operation.id);
-    // A conversation that ran a Goal keeps its tasks; its finalize records why it stays.
-    if (operation.intent === "delete" && !(yield* ranGoal(operation.target_id))) {
+    // A conversation another Goal waits for keeps its tasks; its finalize records why it stays.
+    if (operation.intent === "delete" && !(yield* goalDependents(operation.target_id))) {
       const tasks = yield* decodeIds(
         yield* sql`SELECT id FROM work_tasks
           WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL
@@ -1914,6 +1959,27 @@ const make = Effect.gen(function* () {
     return yield* finalizeSessionLifecycle(operation.id);
   });
 
+  /** Lifecycle operations still between request and completion. */
+  const unfinishedLifecycle = sql`status IN
+    ('requested', 'cancelling', 'waiting_for_stop', 'purging', 'blocked')`;
+
+  /**
+   * Conversations whose unfinished delete recovery takes on. One another Goal still waits for is
+   * left out: its delete stays blocked, and its own board keeps running.
+   */
+  const pendingSessionDeletes = Effect.flatMap(
+    Effect.flatMap(
+      sql`SELECT DISTINCT target_id AS id FROM lifecycle_operations
+        WHERE target_kind = 'session' AND intent = 'delete' AND ${unfinishedLifecycle}`,
+      decodeIds,
+    ),
+    (rows) =>
+      Effect.filter(
+        rows.map((row) => row.id),
+        (sessionId) => Effect.map(goalDependents(sessionId), (waited) => !waited),
+      ),
+  );
+
   /**
    * Finishes lifecycle operations a crash left between request and completion. One that fails is
    * tried again on the next start; it must not stop the others or the service starting this.
@@ -1921,7 +1987,7 @@ const make = Effect.gen(function* () {
   const recoverLifecycleOperations = Effect.fnUntraced(function* () {
     const pending = yield* decodePendingLifecycleRows(
       yield* sql`SELECT id, target_kind, target_id, intent FROM lifecycle_operations
-        WHERE status IN ('requested', 'cancelling', 'waiting_for_stop', 'purging', 'blocked')
+        WHERE ${unfinishedLifecycle}
         ORDER BY CASE target_kind WHEN 'task' THEN 0 ELSE 1 END, requested_at, id`,
     );
     for (const operation of pending)
@@ -2259,6 +2325,7 @@ const make = Effect.gen(function* () {
     finalizeSessionLifecycle,
     requestTaskLifecycle,
     finalizeTaskLifecycle,
+    pendingSessionDeletes,
     recoverLifecycleOperations,
     archiveTask,
     claimRetries,

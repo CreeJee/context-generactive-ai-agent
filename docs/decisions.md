@@ -2532,6 +2532,7 @@
 - 이 기록을 영수증까지 지울지, 대화는 묘비로 남길지 정하기 전까지 Goal을 실행한 대화의 삭제는 `goal_history`로 막는다. 요청은 실행을 멈추거나 작업을 지우기 전에 409로 거절한다. 이미 기록된 삭제는 finalize가 `blocked`/`goal_history`로 바꾸고, 그 대화의 작업은 지우지 않는다. 보관은 그대로 할 수 있다.
 - 시작 복구(`recoverLifecycleOperations`)는 lifecycle 작업 하나가 실패해도 `work_trace_lifecycle_not_recovered` 로그만 남기고 나머지 작업과 서비스 시작을 계속한다. 실패한 작업은 다음 시작에 다시 시도한다.
 - 대화 삭제는 노드마다 13개 문장을 돌리지 않고, 표마다 한 문장으로 그 대화의 노드를 지운다. `imported_nodes(node_id)`에 인덱스가 없어 노드 하나를 지울 때마다 FK 검사가 14.7만 행을 다 읽었다. 그래서 16,372노드 대화가 몇 분 동안 쓰기 락을 쥐었고, import 워커가 `database is locked`로 실패했다. 인덱스(schema 71)와 집합 삭제를 넣은 뒤로 9,740노드 대화가 5초에 지워진다.
+- `goal_history` 차단은 "Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)"로 바뀌었다. 시작 복구와 집합 삭제는 그대로다.
 
 ## 시스템 프롬프트와 도구 설명은 규칙을 한 곳에만 둔다 (2026-10-24)
 
@@ -2575,3 +2576,14 @@
 - 실행 모드도 같은 계약으로 고른다. 작업트리를 만들 수 없는 프로젝트의 Goal은 `sequentialWorkspace`가 맡는다. 카드는 프로젝트 자체에서 돌고(도구 루트는 프로젝트, 막는 폴더 없음), 커밋·정리·통합할 것이 없다. card-queue·orchestrator·board-actions는 `cardWorkspace(worktrees, goal.mode)`로 고른 것만 부르고, `mode === "worktree"` 분기와 `worktree: null`을 두지 않는다. 검증의 `worktree`만 카드 작업트리가 사라졌을 때 null로 남는다. Goal 브랜치 쪽(merge queue, 대상 브랜치 기록)은 worktree Goal에만 있어서 mode를 그대로 본다.
 - 검증할 카드의 작업트리가 사라졌으면 사용자 프로젝트에서 검증하지 않는다. 전에는 작업트리를 못 찾으면 검증 agent가 프로젝트 자체를 읽어 다른 코드를 통과시킬 수 있었다. 이제 `present`가 `WorktreeMissing`으로 실패하고, 카드는 그 실패로 사다리를 오른다. 다음 attempt가 작업트리를 다시 lease한다(git 구현은 카드 브랜치에서 다시 만든다). 검증 입력의 `worktree`는 null이 아니다.
 - 카드 agent와 검증 agent 안내는 실행 모드를 가리지 않게 쓴다. "카드의 git worktree" 대신 "이 카드가 일하는 폴더"라고 하고, 커밋은 owner가 맡는다고만 한다. sequential 카드는 프로젝트 자체에서 돌고 owner가 커밋하지 않는데, 전 안내는 git worktree와 owner 커밋을 약속했다.
+
+## Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)
+
+- 사용자 결정: Goal은 대부분 사용자에게 결정을 묻지 않고 진행된다. 메모리가 붙들 근거는 어느 분기에서 Plan이 왜 바뀌었는가 같은 것이고, 실행 기록 자체는 근거가 아니다. 그래서 Goal을 실행한 대화를 지우면 그 Goal 기록도 같이 지운다. 대화를 묘비로 남겨 기록을 보존하는 안은 쓰지 않는다. "Goal을 실행한 대화는 아직 지우지 않는다 (2026-10-23)"의 `goal_history` 차단은 없앤다.
+- owner RPC 영수증, read recovery, run binding, worker 세대·native artifact를 불변으로 둔 것은 끊긴 run을 이어 갈 때 부작용이 두 번 일어나지 않게 하려는 것이다. 이 기록을 읽는 코드는 모두 run이나 대화 단위로 찾아 읽는다. 대화가 지워지면 이어 갈 run도, 읽을 곳도 없다.
+- 불변은 그대로 둔다. Goal catalog·worker 세대·native artifact·read recovery의 삭제 트리거는 `goal_history_purges`에 그 대화의 허가 행이 있을 때만 통과시킨다(schema 72). 대화 purge가 한 트랜잭션 안에서 허가 행을 쓰고, 지우고, 허가 행을 지운다. `nodes_immutable`이 `node_project_moves` 허가 행으로 프로젝트 이동만 통과시키는 것과 같은 방식이다.
+- purge는 이 순서로 지운다: read recovery → owner RPC 영수증 → 새 Goal 요청 → run binding(run event·dispatch·uncertain 확인은 cascade) → worker 세대·native artifact → `goal_instance_id`만 들고 FK가 없는 칸반 행(cards·card attempts·card runs·decision followups·goal schedules, dependencies는 양쪽 방향) → `kanban_goal_ranks` → 카드 큐 항목 → 그 대화의 durable 실행(`owner_workflow_executions`와 cascade되는 activity·deferred·clock, human decision closure) → Goal catalog. identity·revision·`kanban_goals`·board change request는 대화 행을 지울 때 cascade로 지워진다. purge 영수증의 `purged_counts`에 `goals`를 센다.
+- 지우기 전에 Goal 실행을 멈춘다. 삭제 요청은 대화의 run을 멈추기 전에 그 대화의 칸반 보드부터 멈춘다(`KanbanOrchestrator.stopSession`). 닫힌 Plan과 같이 실행 중인 카드 agent와 통합을 멈추고, 보드를 stopped로 바꾸고, 사람 판단 대기를 `card_stopped`로 닫고, 스케줄러에서 뺀다. 보드 look을 잡고 하므로 그사이 카드가 다시 시작되지 않는다. 보드 loop는 owner와 함께 채팅 서비스보다 먼저 시작되므로, 시작 복구도 끝나지 않은 대화 삭제가 있으면 그 대화의 보드를 먼저 멈춘다. 멈추지 못하면 로그만 남기고 복구를 계속한다.
+- 다른 대화의 실행 중인 보드가 이 대화 Goal의 merge를 기다리면(`kanban_goal_dependencies`) 삭제를 `goal_dependents`로 막는다. 스케줄러는 사라진 Goal을 기다리지 않으므로, 지우면 merge 없이 기다림이 풀린다. 요청은 아무것도 멈추기 전에 409로 거절한다. 이미 기록된 삭제는 finalize가 blocked로 바꾸고 작업을 지우지 않는다. 의존은 기다리는 쪽 보드에서 풀 수 있다.
+- 디스크에 있는 것은 지우지 않는다. 칸반 Goal·카드 브랜치와 작업트리는 사용자 저장소의 상태이고, Goal worker 자산 파일도 그대로 둔다.
+- 실제 DB 복사본에서 16,372노드·Goal 1개 대화의 purge는 한 트랜잭션에 7.7초 걸렸다. 대부분은 전부터 있던 노드 삭제(FTS 3초, edge 1.5초)이고 Goal 기록은 0.8초다. import 워커가 busy_timeout(5초)에 한 번 걸려도 loop 재시도(10초부터)가 받는다.

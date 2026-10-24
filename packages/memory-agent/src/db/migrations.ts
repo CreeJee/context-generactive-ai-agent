@@ -1912,6 +1912,32 @@ export const migrations: readonly string[] = [
   -- thousand nodes took minutes and held the write lock the whole time.
   CREATE INDEX imported_nodes_node ON imported_nodes(node_id);
   `,
+  `
+  -- Deleting a conversation that ran a Goal deletes its Goal history with it (decided 2026-10-25).
+  -- The history stays immutable otherwise: a delete passes only while that conversation's purge
+  -- holds a permit, which it writes and removes in its own transaction.
+  CREATE TABLE goal_history_purges (session_id TEXT PRIMARY KEY);
+  DROP TRIGGER workflow_goal_instances_no_delete;
+  CREATE TRIGGER workflow_goal_instances_no_delete BEFORE DELETE ON workflow_goal_instances
+    WHEN NOT EXISTS (SELECT 1 FROM goal_history_purges WHERE session_id = OLD.session_id)
+    BEGIN SELECT RAISE(ABORT, 'goal instance is immutable'); END;
+  DROP TRIGGER workflow_goal_worker_generations_no_delete;
+  CREATE TRIGGER workflow_goal_worker_generations_no_delete BEFORE DELETE ON workflow_goal_worker_generations
+    WHEN NOT EXISTS (SELECT 1 FROM goal_history_purges p
+      JOIN workflow_goal_instances g ON g.session_id = p.session_id
+      WHERE g.goal_instance_id = OLD.goal_instance_id)
+    BEGIN SELECT RAISE(ABORT, 'goal source generation is immutable'); END;
+  DROP TRIGGER workflow_goal_native_artifacts_no_delete;
+  CREATE TRIGGER workflow_goal_native_artifacts_no_delete BEFORE DELETE ON workflow_goal_native_artifacts
+    WHEN NOT EXISTS (SELECT 1 FROM goal_history_purges p
+      JOIN workflow_goal_instances g ON g.session_id = p.session_id
+      WHERE g.goal_instance_id = OLD.goal_instance_id)
+    BEGIN SELECT RAISE(ABORT, 'native registration is immutable'); END;
+  DROP TRIGGER owner_read_recoveries_no_delete;
+  CREATE TRIGGER owner_read_recoveries_no_delete BEFORE DELETE ON owner_read_recoveries
+    WHEN NOT EXISTS (SELECT 1 FROM goal_history_purges WHERE session_id = OLD.session_id)
+    BEGIN SELECT RAISE(ABORT, 'read recovery receipt is retained'); END;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

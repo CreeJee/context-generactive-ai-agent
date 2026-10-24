@@ -211,8 +211,8 @@ export function App() {
       Match.valueTags(pending, {
         waiting_for_stop: () => "실행이 멈추기를 기다리고 있어요. 아직 대화를 바꾸지 않았어요.",
         blocked: ({ blocker }) =>
-          blocker === "goal_history"
-            ? "Goal을 실행한 대화는 아직 지울 수 없어요. 보관은 할 수 있어요."
+          blocker === "goal_dependents"
+            ? "다른 Goal 보드가 이 대화의 Goal이 merge되기를 기다리고 있어요. 그 보드에서 의존을 먼저 풀어 주세요."
             : "지금은 대화를 바꿀 수 없어요. 실행 상태를 확인한 뒤 다시 시도하세요.",
       }),
     );

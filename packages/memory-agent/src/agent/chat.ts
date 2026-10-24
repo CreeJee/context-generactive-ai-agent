@@ -793,6 +793,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
   const knowledge = yield* KnowledgePromotions;
+  // A delete a crash left unfinished stops the conversation's boards first, as asking for it does.
+  // Their loops started with the owner, before this.
+  yield* Effect.forEach(
+    yield* workTrace.pendingSessionDeletes.pipe(
+      fallbackLogged("kanban_boards_not_stopped", (): readonly string[] => []),
+    ),
+    (sessionId) =>
+      kanbanOrchestrator
+        .stopSession(sessionId)
+        .pipe(Effect.catch(logFailure("kanban_board_not_stopped", { sessionId }))),
+    { discard: true },
+  );
   yield* workTrace.recoverLifecycleOperations();
   yield* attachments.purgeOrphans;
   const places: SettingsPlaces = { storageRoot: (yield* StorageRoot).path };
@@ -3105,6 +3117,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (LifecycleRequest.$is("completed")(requested)) {
           return json(200, requested);
         }
+        // A running board would start its cards again after their runs stop.
+        yield* kanbanOrchestrator.stopSession(sessionId);
         yield* stopSessionRuns(sessionId);
         for (const task of yield* workTrace.taskTree(sessionId)) {
           if (task.deletedAt !== null) continue;
