@@ -56,6 +56,7 @@
     "eval:compaction": "node --no-warnings eval/compaction-cli.ts",
     "eval:structured-memory": "node --no-warnings eval/structured-memory.ts",
     "eval:memory-lab": "node --no-warnings eval/memory-research-lab.ts",
+    "eval:prompt-overhead": "node --no-warnings eval/prompt-overhead.ts",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
