@@ -16,7 +16,7 @@ import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { RunFailureText } from "./run-failure";
@@ -256,9 +256,11 @@ function ChatPanel({
   // keeps the board, so the summary holding it stays mounted.
   const [boardLocation] = useQueryStates({ board: parseAsBoolean, card: parseAsString });
   const boardOpen = boardLocation.board === true || boardLocation.card !== null;
-  const resumeTraceMutation = useResumeTraceTaskMutation(projectId, sessionId, holder);
-  const archiveTraceMutation = useArchiveTraceTaskMutation(projectId, sessionId, holder);
-  const deleteTraceMutation = useDeleteTraceTaskMutation(projectId, sessionId, holder);
+  // `mutateAsync` is the same function on every render, so the task actions built on it keep their
+  // identity and a message renders again only for a change of its own.
+  const { mutateAsync: resumeTrace } = useResumeTraceTaskMutation(projectId, sessionId, holder);
+  const { mutateAsync: archiveTrace } = useArchiveTraceTaskMutation(projectId, sessionId, holder);
+  const { mutateAsync: deleteTrace } = useDeleteTraceTaskMutation(projectId, sessionId, holder);
   const compactMutation = useCompactSessionMutation(projectId, sessionId, holder);
   const readOnly = lease.state !== "mine";
   const backendRestartRequired = useBackendRestartRequired();
@@ -492,90 +494,101 @@ function ChatPanel({
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const resumeTask = (task: TraceTaskView, confirmUncertain: boolean) =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const attemptId = task.latestAttemptId;
-        if (!isTruthy(attemptId)) return ResumeActionResult.failed();
-        return yield* Effect.gen(function* () {
-          const result = yield* uiPromise(() =>
-            resumeTraceMutation.mutateAsync({
-              taskId: task.id,
-              attemptId,
-              confirmUncertain,
-            }),
-          );
-          if (ResumeTaskResult.guards.queued(result)) {
-            setNotice(done("다시 시도 요청을 저장했어요. 다음 실행에서 새 attempt로 시작해요."));
-            return ResumeActionResult.queued();
-          }
-          if (result.reason !== "uncertain_side_effect")
-            setNotice(
-              problem(
-                result.reason === "stale_attempt"
-                  ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
-                  : result.reason === "attempt_alive"
-                    ? "이미 실행 중인 attempt가 있어요."
-                    : "이 작업은 지금 다시 시도할 수 없어요.",
-              ),
+  const resumeTask = useCallback(
+    (task: TraceTaskView, confirmUncertain: boolean) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          const attemptId = task.latestAttemptId;
+          if (!isTruthy(attemptId)) return ResumeActionResult.failed();
+          return yield* Effect.gen(function* () {
+            const result = yield* uiPromise(() =>
+              resumeTrace({
+                taskId: task.id,
+                attemptId,
+                confirmUncertain,
+              }),
             );
-          return ResumeActionResult.blocked({ reason: result.reason });
+            if (ResumeTaskResult.guards.queued(result)) {
+              setNotice(done("다시 시도 요청을 저장했어요. 다음 실행에서 새 attempt로 시작해요."));
+              return ResumeActionResult.queued();
+            }
+            if (result.reason !== "uncertain_side_effect")
+              setNotice(
+                problem(
+                  result.reason === "stale_attempt"
+                    ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
+                    : result.reason === "attempt_alive"
+                      ? "이미 실행 중인 attempt가 있어요."
+                      : "이 작업은 지금 다시 시도할 수 없어요.",
+                ),
+              );
+            return ResumeActionResult.blocked({ reason: result.reason });
+          }).pipe(
+            Effect.catchTag("UnknownError", () =>
+              Effect.sync(() => {
+                setNotice(problem("다시 시도 요청을 저장하지 못했어요."));
+                return ResumeActionResult.failed();
+              }),
+            ),
+          );
+        }),
+      ),
+    [resumeTrace],
+  );
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const archiveTask = useCallback(
+    (task: TraceTaskView) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          const result = yield* uiPromise(() => archiveTrace(task.id));
+          if (ArchiveTaskResult.guards.completed(result)) {
+            setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
+            return ArchiveActionResult.archived();
+          }
+          setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+          return ArchiveTaskResult.guards.blocked(result)
+            ? ArchiveActionResult.blocked({ reason: result.blocker })
+            : ArchiveActionResult.failed();
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
-              setNotice(problem("다시 시도 요청을 저장하지 못했어요."));
-              return ResumeActionResult.failed();
+              setNotice(problem("작업을 보관하지 못했어요."));
+              return ArchiveActionResult.failed();
             }),
           ),
-        );
-      }),
-    );
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const archiveTask = (task: TraceTaskView) =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const result = yield* uiPromise(() => archiveTraceMutation.mutateAsync(task.id));
-        if (ArchiveTaskResult.guards.completed(result)) {
-          setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
-          return ArchiveActionResult.archived();
-        }
-        setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
-        return ArchiveTaskResult.guards.blocked(result)
-          ? ArchiveActionResult.blocked({ reason: result.blocker })
-          : ArchiveActionResult.failed();
-      }).pipe(
-        Effect.catchTag("UnknownError", () =>
-          Effect.sync(() => {
-            setNotice(problem("작업을 보관하지 못했어요."));
-            return ArchiveActionResult.failed();
-          }),
         ),
       ),
-    );
+    [archiveTrace],
+  );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const deleteTask = (task: TraceTaskView) =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const result = yield* uiPromise(() => deleteTraceMutation.mutateAsync(task.id));
-        if (ArchiveTaskResult.guards.completed(result)) {
-          setNotice(done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."));
-          return DeleteActionResult.deleted();
-        }
-        setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
-        return ArchiveTaskResult.guards.blocked(result)
-          ? DeleteActionResult.blocked({ reason: result.blocker })
-          : DeleteActionResult.failed();
-      }).pipe(
-        Effect.catchTag("UnknownError", () =>
-          Effect.sync(() => {
-            setNotice(problem("작업 원본을 삭제하지 못했어요."));
-            return DeleteActionResult.failed();
-          }),
+  const deleteTask = useCallback(
+    (task: TraceTaskView) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          const result = yield* uiPromise(() => deleteTrace(task.id));
+          if (ArchiveTaskResult.guards.completed(result)) {
+            setNotice(
+              done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."),
+            );
+            return DeleteActionResult.deleted();
+          }
+          setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+          return ArchiveTaskResult.guards.blocked(result)
+            ? DeleteActionResult.blocked({ reason: result.blocker })
+            : DeleteActionResult.failed();
+        }).pipe(
+          Effect.catchTag("UnknownError", () =>
+            Effect.sync(() => {
+              setNotice(problem("작업 원본을 삭제하지 못했어요."));
+              return DeleteActionResult.failed();
+            }),
+          ),
         ),
       ),
-    );
+    [deleteTrace],
+  );
 
   const ready = draftImages.images.filter(DraftImage.$is("ready"));
   const uploading = draftImages.images.some(DraftImage.$is("uploading"));

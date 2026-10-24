@@ -6,7 +6,7 @@ import type { UIMessage } from "@tanstack/ai-react";
 import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
@@ -251,7 +251,7 @@ const archivableTaskStatuses: readonly TraceTaskView["status"][] = [
   "cancelled",
 ];
 
-function TaskSummaryCard({
+const TaskSummaryCard = memo(function TaskSummaryCard({
   task,
   connection,
   readOnly,
@@ -413,7 +413,7 @@ function TaskSummaryCard({
       </div>
     </section>
   );
-}
+});
 
 function ToolCallView({
   call,
@@ -457,7 +457,7 @@ function ToolCallView({
   );
 }
 
-function ToolCallCard({
+const ToolCallCard = memo(function ToolCallCard({
   call,
   result,
   awaitingApproval,
@@ -500,12 +500,8 @@ function ToolCallCard({
       </CollapsibleContent>
     </Collapsible>
   );
-}
+});
 
-/**
- * One chat message. Assistant text renders as Markdown (`streaming` while it is still arriving);
- * user text stays exactly as typed. Tool calls show what was looked up and what came back.
- */
 /**
  * A message the running answer took in (steered, or at a tool call). It shows where the saved
  * conversation will have it, until the run ends and the conversation is read again.
@@ -518,17 +514,7 @@ export function DeliveredMessageView({ message }: { message: QueuedMessage }) {
   return <UserMessageBody text={message.text} images={images} />;
 }
 
-export function MessageView({
-  message,
-  streaming,
-  awaitingApproval,
-  tasks,
-  traceConnection,
-  readOnly,
-  onResumeTask,
-  onArchiveTask,
-  onDeleteTask,
-}: {
+type MessageViewProps = {
   message: UIMessage;
   streaming: boolean;
   /** Tool call ids with an approval card open. */
@@ -539,7 +525,44 @@ export function MessageView({
   onResumeTask: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
   onArchiveTask: (task: TraceTaskView) => Promise<ArchiveActionResult>;
   onDeleteTask: (task: TraceTaskView) => Promise<DeleteActionResult>;
-}) {
+};
+
+/**
+ * Whether a message would show the same. The approval and task lists belong to the whole session,
+ * so only what this message's own tool calls read from them counts.
+ */
+const sameMessageView = (previous: MessageViewProps, next: MessageViewProps) =>
+  previous.message === next.message &&
+  previous.streaming === next.streaming &&
+  previous.traceConnection === next.traceConnection &&
+  previous.readOnly === next.readOnly &&
+  previous.onResumeTask === next.onResumeTask &&
+  previous.onArchiveTask === next.onArchiveTask &&
+  previous.onDeleteTask === next.onDeleteTask &&
+  next.message.parts.every(
+    (part) =>
+      part.type !== "tool-call" ||
+      (previous.awaitingApproval.includes(part.id) === next.awaitingApproval.includes(part.id) &&
+        taskForToolCall(previous.tasks, part.id) === taskForToolCall(next.tasks, part.id)),
+  );
+
+/**
+ * One chat message. Assistant text renders as Markdown (`streaming` while it is still arriving);
+ * user text stays exactly as typed. Tool calls show what was looked up and what came back. A
+ * streaming answer renders only itself: the other messages keep their render unless something
+ * they show changed.
+ */
+export const MessageView = memo(function MessageView({
+  message,
+  streaming,
+  awaitingApproval,
+  tasks,
+  traceConnection,
+  readOnly,
+  onResumeTask,
+  onArchiveTask,
+  onDeleteTask,
+}: MessageViewProps) {
   const isUser = message.role === "user";
 
   if (isUser) {
@@ -600,4 +623,4 @@ export function MessageView({
       </div>
     </div>
   );
-}
+}, sameMessageView);
