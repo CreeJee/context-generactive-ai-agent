@@ -728,10 +728,10 @@ testAgent()("server workflow action policy", (it) => {
             id,
           );
         // Each advertised decision must match what the server does with the same persisted state.
-        const matches = Effect.fnUntraced(function* (
+        const matches = Effect.fnUntraced(function* <A, E>(
           current: WorkflowState,
           decision: ReturnType<typeof workflowActions>["phases"]["chat"],
-          attempt: Effect.Effect<unknown, unknown>,
+          attempt: Effect.Effect<A, E>,
         ) {
           yield* reset(current);
           const result = yield* Effect.result(attempt);

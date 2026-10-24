@@ -22,6 +22,7 @@ import {
   SheetTitle,
 } from "~/components/ui/sheet";
 import { Separator } from "~/components/ui/separator";
+import { koreanTimeOfDayOf } from "../shared/local-time";
 import { failureLabel } from "../session/attempt-failure";
 import type { TraceConnection } from "../session/work-trace";
 import { useProjectTraceConnection } from "../session/use-project-trace-connection";
@@ -150,7 +151,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
         {task.heartbeat !== null && (
           <p className="mt-2 text-xs text-muted-foreground">
             {heartbeatLabel[task.heartbeat.state]} · {task.heartbeat.step} ·{" "}
-            {new Date(task.heartbeat.at).toLocaleTimeString()}
+            {koreanTimeOfDayOf(task.heartbeat.at)}
           </p>
         )}
         {task.latestFailure !== null && (

@@ -1,4 +1,4 @@
-import { Console, Effect } from "effect";
+import { Console, Effect, Schema } from "effect";
 import { OAuthCheckFailed, OAuthCheckReason } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
@@ -54,7 +54,7 @@ try {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("OPENAI_LOGIN_CHECK passed"));
 } catch (error) {
-  if (error instanceof OAuthHarnessError)
+  if (Schema.is(OAuthHarnessError)(error))
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
     Effect.runSync(
       Console.error(

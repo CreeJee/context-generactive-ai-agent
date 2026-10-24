@@ -20,9 +20,17 @@ const koreanShortDateTime = {
   minute: "numeric",
 } as const;
 
+/** The fields `toLocaleTimeString` shows: hour, minute and second. */
+const koreanTimeOfDay = {
+  locale: "ko-KR",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+} as const;
+
 const formatTimestamp = (
   timestamp: string | number,
-  options: typeof koreanDateTime | typeof koreanShortDateTime,
+  options: typeof koreanDateTime | typeof koreanShortDateTime | typeof koreanTimeOfDay,
 ) =>
   Option.match(DateTime.make(timestamp), {
     onNone: () => "Invalid Date",
@@ -32,6 +40,10 @@ const formatTimestamp = (
 /** A server timestamp as Korean local date and time; an unparsable one reads as `Invalid Date`. */
 export const koreanLocalTime = (timestamp: string | number): string =>
   formatTimestamp(timestamp, koreanDateTime);
+
+/** A server timestamp as Korean local time of day; an unparsable one reads as `Invalid Date`. */
+export const koreanTimeOfDayOf = (timestamp: string | number): string =>
+  formatTimestamp(timestamp, koreanTimeOfDay);
 
 /** A server timestamp as Korean local month, day and minute; an unparsable one reads as `Invalid Date`. */
 export const koreanShortTime = (timestamp: string): string =>

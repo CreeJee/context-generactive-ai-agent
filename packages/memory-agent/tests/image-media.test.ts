@@ -207,7 +207,7 @@ describe("ImageMediaWorkflow", () => {
       const result = yield* Effect.result(workflow.generate(request));
       const failed = Result.isFailure(result) && result.failure;
       expect(failed).toBeInstanceOf(ImageMediaExecutionFailed);
-      const reroute = failed instanceof ImageMediaExecutionFailed ? failed.reroute : undefined;
+      const reroute = Schema.is(ImageMediaExecutionFailed)(failed) ? failed.reroute : undefined;
       expect(ImageRerouteConfirmation.$is("confirmation_required")(reroute)).toBe(true);
       expect(failed).toMatchObject({ reroute: { alternatives: [] } });
     }),

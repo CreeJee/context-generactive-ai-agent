@@ -1,6 +1,17 @@
 import { chat } from "@tanstack/ai";
 import { AuthConnectionState } from "../providers/contracts.ts";
-import { Context, Crypto, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Crypto,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
 
@@ -144,7 +155,7 @@ const make = Effect.gen(function* () {
                 stream: true,
               }),
             ),
-            (cause) => cause,
+            (cause) => new Cause.UnknownError(cause),
           ).pipe(
             Stream.timeoutOrElse({
               duration: silenceLimit,

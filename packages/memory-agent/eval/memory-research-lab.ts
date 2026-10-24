@@ -13,6 +13,7 @@
 // stage is skipped with the reason instead of failing the whole run.
 import {
   Cause,
+  Console,
   Context,
   Duration,
   Effect,
@@ -139,7 +140,7 @@ const stages: readonly Stage[] = [
     morph: fakeMorphLayer,
     text: true,
   },
-  ...(embedVariant
+  ...(embedVariant !== null
     ? [
         {
           name: "real-embed",
@@ -173,7 +174,7 @@ const stages: readonly Stage[] = [
         } satisfies Stage,
       ]
     : []),
-  ...(embedVariant && kiwiAvailable
+  ...(embedVariant !== null && kiwiAvailable
     ? [
         {
           name: "full",
@@ -190,7 +191,7 @@ const stages: readonly Stage[] = [
 ];
 
 const skipped: readonly { readonly name: string; readonly reason: string }[] = [
-  ...(embedVariant
+  ...(embedVariant !== null
     ? []
     : [
         {
@@ -402,23 +403,25 @@ const top3 = (result: StageResult | undefined, setName: string): number | null =
  * degraded/unindexed signals are the expected state, not failures. */
 const withoutEmbedder = (name: string) => name === "fts-only" || name === "morph-only";
 
+const print = (text: string) => runOAuthNodeEffect(Console.log(text));
+
 const only = process.argv.slice(2).find((argument) => argument !== "--");
 const results: StageOutcome[] = [];
 for (const stage of stages) {
   if (only !== undefined && stage.name !== only) continue;
   const outcome = await runStage(stage);
   results.push(outcome);
-  console.log(`\n== stage ${stage.name} — ${stage.detail} ==`);
+  await print(`\n== stage ${stage.name} — ${stage.detail} ==`);
   if (outcome.kind === "failed") {
-    console.log(`  failed: ${outcome.reason}`);
+    await print(`  failed: ${outcome.reason}`);
     continue;
   } else {
     const ok = outcome;
     for (const set of ok.sets)
-      console.log(
+      await print(
         `  ${set.name.padEnd(9)}: top1 ${set.top1}/${set.total} top3 ${set.top3}/${set.total} top5 ${set.top5}/${set.total} MRR ${set.mrr} | index ${ok.indexMs}ms, search ${set.searchMsPerQuery}ms/query (max ${set.maxQueryMs}ms), embed ${ok.embedMsPerQuery}ms/query`,
       );
-    console.log(
+    await print(
       `  unindexed ${ok.unindexed}${withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : ""} | degraded ${
         ok.degraded.length > 0
           ? ok.degraded.join(",") +
@@ -427,14 +430,14 @@ for (const stage of stages) {
       }`,
     );
     if (ok.sets.some((set) => set.missCount > 0)) {
-      console.log(
+      await print(
         `  misses (처음 ${Math.min(6, Math.max(...ok.sets.map((set) => set.missCount)))}개):`,
       );
-      for (const set of ok.sets) for (const miss of set.misses) console.log(`    ${miss}`);
+      for (const set of ok.sets) for (const miss of set.misses) await print(`    ${miss}`);
     }
   }
 }
-for (const entry of skipped) console.log(`\n== stage ${entry.name} — skipped: ${entry.reason} ==`);
+for (const entry of skipped) await print(`\n== stage ${entry.name} — skipped: ${entry.reason} ==`);
 
 // Verdict: which stage explains what the numbers show. Every line names the comparison behind it.
 const ok = (name: string) => {
@@ -510,8 +513,8 @@ if (unindexedStages.length > 0)
   lines.push(
     `- 인덱싱이 끝까지 비우지 못한 단계: ${unindexedStages.join(", ")} — indexAll 드레인 실패 의심`,
   );
-console.log("\n== verdict ==");
-for (const line of lines) console.log(line);
-console.log(
+await print("\n== verdict ==");
+for (const line of lines) await print(line);
+await print(
   "\n모델 단계(real-embed, morph-only, full)는 스토리지 루트의 모델 파일을 읽을 수 있어야 실행됩니다. 샌드박스 안에서는 건너뛰어질 수 있습니다.",
 );

@@ -717,8 +717,10 @@ const make = Effect.gen(function* () {
           );
           if (Result.isFailure(connected))
             return ExternalPromptOutcome.unavailable({
-              failure: yield* redactor.hideDetail(
-                connectFailure(rejectionError(connected.failure)),
+              failure: yield* connected.failure.pipe(
+                rejectionError,
+                connectFailure,
+                redactor.hideDetail,
               ),
             });
           const live = connected.success;

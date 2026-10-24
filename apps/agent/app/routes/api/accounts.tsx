@@ -89,40 +89,38 @@ export function action({ request }: Route.ActionArgs) {
         (!isTruthy(accountId) || accountId.length > 128)
       )
         return reply({ error: "invalid_account_id" }, 400);
-      return yield* Effect.gen(function* () {
-        const profiles = yield* OAuthProfiles;
-        const manager = yield* OAuthAccountLogins;
-        const events = yield* AppEvents;
-        if (intent === "add") {
-          const started = yield* accountLogin("start", () => manager.start(provider, label!));
-          // The login finishes in another tab; pages hear it instead of polling.
-          yield* Effect.forkDetach(
-            accountLogin("settle", () => manager.settled(provider)).pipe(
-              Effect.catch(logFailure("Account login did not settle")),
-              Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
-            ),
-          );
-          return reply(SubscriptionView.subscription(started));
-        }
-        if (intent === "cancel")
-          return reply(
-            SubscriptionView.subscription(
-              yield* accountLogin("cancel", () => manager.cancel(provider)),
-            ),
-          );
-        switch (intent) {
-          case "remove":
-            yield* profiles.remove(provider, accountId!);
-            break;
-          case "rename":
-            yield* profiles.rename(provider, accountId!, label!);
-            break;
-          case "select":
-            yield* profiles.select(provider, accountId!);
-            break;
-        }
-        return reply(SubscriptionView.subscription(yield* manager.profiles(provider)));
-      });
+      const profiles = yield* OAuthProfiles;
+      const manager = yield* OAuthAccountLogins;
+      const events = yield* AppEvents;
+      if (intent === "add") {
+        const started = yield* accountLogin("start", () => manager.start(provider, label!));
+        // The login finishes in another tab; pages hear it instead of polling.
+        yield* Effect.forkDetach(
+          accountLogin("settle", () => manager.settled(provider)).pipe(
+            Effect.catch(logFailure("Account login did not settle")),
+            Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
+          ),
+        );
+        return reply(SubscriptionView.subscription(started));
+      }
+      if (intent === "cancel")
+        return reply(
+          SubscriptionView.subscription(
+            yield* accountLogin("cancel", () => manager.cancel(provider)),
+          ),
+        );
+      switch (intent) {
+        case "remove":
+          yield* profiles.remove(provider, accountId!);
+          break;
+        case "rename":
+          yield* profiles.rename(provider, accountId!, label!);
+          break;
+        case "select":
+          yield* profiles.select(provider, accountId!);
+          break;
+      }
+      return reply(SubscriptionView.subscription(yield* manager.profiles(provider)));
     }).pipe(
       // Never expose keychain/native OAuth errors or tokens to the browser.
       answerAccountFailures,

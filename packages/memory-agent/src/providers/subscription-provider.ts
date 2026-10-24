@@ -317,7 +317,7 @@ export function createSubscriptionProvider(
       Effect.map(connectionState),
       Effect.catchIf(
         (failure): failure is Cause.UnknownError & { readonly cause: OAuthHarnessError } =>
-          failure.cause instanceof OAuthHarnessError &&
+          Schema.is(OAuthHarnessError)(failure.cause) &&
           failure.cause.code === "credential_store_unavailable",
         (failure) => Effect.succeed(failureState(failure.cause)),
       ),
@@ -335,7 +335,7 @@ export function createSubscriptionProvider(
     const started = yield* Effect.result(nativePromise(() => client.startLogin()));
     if (Result.isFailure(started)) {
       const error = started.failure.cause;
-      loginError = failureState(error instanceof OAuthHarnessError ? error : null);
+      loginError = failureState(Schema.is(OAuthHarnessError)(error) ? error : null);
       return loginError;
     }
     const attempt = started.success;
@@ -347,7 +347,7 @@ export function createSubscriptionProvider(
       (error) => {
         if (pending !== attempt) return;
         pending = null;
-        loginError = failureState(error instanceof OAuthHarnessError ? error : null);
+        loginError = failureState(Schema.is(OAuthHarnessError)(error) ? error : null);
       },
     );
     return AuthConnectionState.pending({ provider, authorizationUrl: attempt.authorizationUrl });

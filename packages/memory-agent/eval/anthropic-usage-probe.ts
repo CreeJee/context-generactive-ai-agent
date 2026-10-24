@@ -1,4 +1,4 @@
-import { Console, Data, Effect } from "effect";
+import { Console, Data, Effect, Schema } from "effect";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 import { anthropicSubscriptionUsageProbe } from "../src/oauth/subscription-usage-probe.ts";
@@ -35,8 +35,8 @@ const program = Effect.gen(function* () {
   }).pipe(
     Effect.map((result) => ({ outcome: "response", ...result })),
     Effect.catch((failure) => {
-      const error = failure instanceof OAuthHarnessError ? failure : failure.cause;
-      return error instanceof OAuthHarnessError
+      const error = Schema.is(OAuthHarnessError)(failure) ? failure : failure.cause;
+      return Schema.is(OAuthHarnessError)(error)
         ? Effect.succeed({
             outcome: "error",
             code: error.code,

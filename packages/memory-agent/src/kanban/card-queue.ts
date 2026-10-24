@@ -244,7 +244,7 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
     }),
   ).pipe(
     Effect.catchTag("CardWorktreeFailed", (failure) =>
-      Effect.succeed(failedWith(worktreeFailure(failure))),
+      failure.pipe(worktreeFailure, failedWith, Effect.succeed),
     ),
   );
 });

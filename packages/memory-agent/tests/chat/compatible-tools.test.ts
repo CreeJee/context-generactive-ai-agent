@@ -43,10 +43,9 @@ const requests: ChatRequest[] = [];
 const endpoint: typeof fetch = (input, init) => {
   if (!(input instanceof Request ? input.url : input.toString()).endsWith("/chat/completions"))
     return Promise.resolve(Response.json({ object: "list", data: [] }));
-  const request = Schema.decodeUnknownSync(ChatRequest)(init?.body);
-  requests.push(request);
-  return Promise.resolve(
-    request.messages.some((message) => message.role === "tool")
+  const answer = (request: ChatRequest) => {
+    requests.push(request);
+    return request.messages.some((message) => message.role === "tool")
       ? sse(chunk({ role: "assistant", content: "done" }), chunk({}, "stop"))
       : sse(
           chunk({ role: "assistant", content: "기록을 먼저 확인하겠습니다." }),
@@ -61,8 +60,9 @@ const endpoint: typeof fetch = (input, init) => {
             ],
           }),
           chunk({}, "tool_calls"),
-        ),
-  );
+        );
+  };
+  return Effect.runPromise(Effect.map(Schema.decodeUnknownEffect(ChatRequest)(init?.body), answer));
 };
 
 testAgent({

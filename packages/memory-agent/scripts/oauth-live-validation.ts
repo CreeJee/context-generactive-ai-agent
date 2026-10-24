@@ -1,4 +1,4 @@
-import { Config, Console, Effect } from "effect";
+import { Config, Console, Effect, Schema } from "effect";
 import { OAuthCheckFailed, OAuthCheckReason } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
@@ -91,7 +91,7 @@ try {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.log("OPENAI_VALIDATION tool_call_passed"));
 } catch (error) {
-  const code = error instanceof OAuthHarnessError ? error.code : "validation_failed";
+  const code = Schema.is(OAuthHarnessError)(error) ? error.code : "validation_failed";
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(Console.error(`OPENAI_VALIDATION failed ${code}`));
   process.exitCode = 1;

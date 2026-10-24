@@ -10,6 +10,7 @@ import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { appFetch } from "../../shared/backend-restart";
+import { koreanLocalTime } from "../../shared/local-time";
 import { PageError, PageHeader, shortPath } from "../shared";
 
 class ImprovementRequestFailed extends Schema.TaggedError<ImprovementRequestFailed>()(
@@ -222,7 +223,7 @@ export function ImprovementSettings() {
       ) : (
         <>
           <FieldDescription>
-            {new Date(latest.generatedAt).toLocaleString()}에 찾은 결과예요.
+            {koreanLocalTime(latest.generatedAt)}에 찾은 결과예요.
           </FieldDescription>
           {latest.reports.length === 0 ? (
             <FieldDescription>git 저장소인 열린 프로젝트가 없어요.</FieldDescription>

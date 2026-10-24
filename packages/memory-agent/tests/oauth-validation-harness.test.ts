@@ -1243,7 +1243,7 @@ describe("OAuth callback safety", () => {
 
         const thrown = yield* sdkCall(() => completion);
         expect(thrown).toBeInstanceOf(OAuthHarnessError);
-        const message = thrown instanceof OAuthHarnessError ? String(thrown) : "";
+        const message = Schema.is(OAuthHarnessError)(thrown) ? String(thrown) : "";
         expect(message).toContain("state_mismatch");
         expect(message).not.toContain("authorization-code-secret");
         expect(message).not.toContain("attacker-state-secret");
@@ -1272,7 +1272,7 @@ describe("OAuth callback safety", () => {
         yield* (yield* testHttpClient()).get(String(callback));
 
         const thrown = yield* sdkCall(() => completion);
-        expect(thrown instanceof OAuthHarnessError ? String(thrown) : "").toContain(
+        expect(Schema.is(OAuthHarnessError)(thrown) ? String(thrown) : "").toContain(
           "state_mismatch",
         );
       }),

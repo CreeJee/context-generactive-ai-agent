@@ -178,7 +178,8 @@ export const completionEvidence = Effect.gen(function* () {
     state: WorkflowState,
     mappings: readonly CriterionMapping[],
     recorderRunId: string,
-    pendingRecorder = false,
+    // Annotated: `fnUntraced` types an unannotated defaulted parameter as `any`.
+    pendingRecorder: boolean = false,
   ) {
     const goal = state.goal;
     const plan = state.plan;

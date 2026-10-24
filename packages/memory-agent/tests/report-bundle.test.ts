@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { BundleEvent, ReportBundle } from "../src/report/bundle-contract.ts";
@@ -23,7 +23,8 @@ const seededSession = Effect.fnUntraced(function* (runs: number) {
       VALUES (${run}, ${session.id}, ${failed ? "failed" : "completed"}, ${1_000 + index},
         ${1_500 + index}, ${failed ? `upstream said API_KEY=${secret}` : null},
         ${failed ? "provider_failed" : null})`;
-    const at = (offset: number) => new Date(1_000 + index * 10 + offset).toISOString();
+    const at = (offset: number) =>
+      DateTime.formatIso(DateTime.makeUnsafe(1_000 + index * 10 + offset));
     const node = (
       id: string,
       kind: string,

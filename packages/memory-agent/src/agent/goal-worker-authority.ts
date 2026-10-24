@@ -46,7 +46,8 @@ export const goalWorkerAuthority = Effect.gen(function* () {
     execute: (runId) =>
       sql`SELECT generation FROM workflow_worker_dispatches WHERE run_id = ${runId}`,
   });
-  const active = Effect.fnUntraced(function* (claim: RunBinding, finalization = false) {
+  // Annotated: `fnUntraced` types an unannotated defaulted parameter as `any`.
+  const active = Effect.fnUntraced(function* (claim: RunBinding, finalization: boolean = false) {
     const row = Option.getOrUndefined(yield* binding(claim.runId));
     if (
       row === undefined ||

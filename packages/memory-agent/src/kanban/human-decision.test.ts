@@ -1,5 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Effect, FileSystem, Option, Path, Result } from "effect";
+import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { freshSession, TestEnv, testAgent } from "../../tests/support/test-env.ts";
 import { sqlGet, sqlRun } from "../../tests/support/sql.ts";
@@ -161,7 +161,7 @@ testAgent()("human decisions", (it) => {
         Effect.flip,
       );
       expect(
-        misdirected.map((error) => (error instanceof HumanDecisionRefused ? error.reason : error)),
+        misdirected.map((error) => (Schema.is(HumanDecisionRefused)(error) ? error.reason : error)),
       ).toEqual([
         "request_mismatch",
         "request_mismatch",

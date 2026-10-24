@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import {
   Context,
+  DateTime,
   Deferred,
   Effect,
   FileSystem,
@@ -83,7 +84,7 @@ const fixture = Effect.fnUntraced(function* () {
         id,
         project.id,
         '{"toolName":"Bash","ok":false,"importedFrom":"claude-code"}',
-        new Date().toISOString(),
+        DateTime.formatIso(yield* DateTime.now),
       );
   });
   yield* Effect.provideContext(seed, services);
