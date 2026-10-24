@@ -368,7 +368,7 @@ describe("sidebar disclosures", () => {
           model: {
             id: "served-model",
             contextWindow: 32768,
-            outputBudget: 4096,
+            outputBudget: null,
             toolCalling: true,
           },
         },
