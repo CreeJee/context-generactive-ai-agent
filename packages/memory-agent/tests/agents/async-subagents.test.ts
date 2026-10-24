@@ -424,13 +424,13 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const first = yield* receiptFrom(
         yield* send(
           sessionId,
-          'call message_subagent {"agent":"helper","message":"nap first dispatch only"}',
+          'call run_subagent {"agent":"helper","task":"nap first dispatch only"}',
         ),
       );
       const second = yield* receiptFrom(
         yield* send(
           sessionId,
-          'call message_subagent {"agent":"helper","message":"nap queued dispatch only"}',
+          'call run_subagent {"agent":"helper","task":"nap queued dispatch only"}',
         ),
       );
       expect(first.subagentId).toBe(second.subagentId);

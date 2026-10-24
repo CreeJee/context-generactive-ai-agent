@@ -99,7 +99,6 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         // No nesting, and nothing the parent does not have.
         for (const tool of [
           "run_subagent",
-          "message_subagent",
           "update_goal",
           "update_plan",
           "update_workflow_progress",
@@ -236,10 +235,10 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
   it.effect("a named child keeps its own conversation across the session's runs", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession();
-      yield* send(sessionId, 'call message_subagent {"agent":"helper","message":"first task"}');
+      yield* send(sessionId, 'call run_subagent {"agent":"helper","task":"first task"}');
       const second = yield* send(
         sessionId,
-        'call message_subagent {"agent":"helper","message":"second task"}',
+        'call run_subagent {"agent":"helper","task":"second task"}',
       );
       expect(second).toContain("child done: second task (earlier user messages: 1)");
       const children = yield* (yield* Subagents).list(sessionId);

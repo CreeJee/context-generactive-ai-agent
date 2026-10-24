@@ -25,7 +25,7 @@
 - child는 `ChatState.middleware()`를 사용하므로 transcript와 TanStack child `chat_runs`는 저장되지만, 부모 tool call ID와 child run 사이의 명시적 join은 없다.
 - named subagent를 재호출하면 같은 `subagents` 행의 `last_task`, `last_answer`, 상태를 덮어쓴다. 각 작업 실행은 구조화된 이력으로 남지 않는다.
 - 프로세스 시작 시 `running` subagent 행은 `interrupted`로 바뀐다. 자동 재개 또는 명시적 resume API는 없다.
-- 실행 중 named child에 대한 `message_subagent`는 provider `steer`를 시도한다. idle child의 후속 메시지는 동일 thread transcript를 사용하는 새 child run이다.
+- 실행 중 named child에 대한 `run_subagent {agent}`는 provider `steer`를 시도한다. idle child의 후속 메시지는 동일 thread transcript를 사용하는 새 child run이다.
 
 ## 세 가지 resume의 경계
 

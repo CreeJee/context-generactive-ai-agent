@@ -58,7 +58,6 @@ import { childTools } from "./role.ts";
 
 export const subagentToolNames = [
   "run_subagent",
-  "message_subagent",
   "resume_subagent",
   "get_subagent_reports",
   "wait_subagents",
@@ -86,7 +85,7 @@ export class SubagentAdoptionRejected extends Schema.TaggedError<SubagentAdoptio
 const adoptionRejected = (reason: SubagentAdoptionRejected["reason"]) =>
   SubagentAdoptionRejected.make({ reason, message: adoptionMessages[reason] });
 
-export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt that retries a failed or interrupted task).
+export const subagentInstructions = `You can delegate with run_subagent (a one-off task, or with agent a named helper that keeps its own conversation in this session) and resume_subagent (a new attempt that retries a failed or interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
 - Before delegating, reserve a concrete independent task for yourself and assign separate ownership to each child. After dispatch, immediately do your own task while children run; delegation is not a reason to stop working.
@@ -113,10 +112,20 @@ function childInstructionsBody(name: string | null, instructions: string | null)
 
 const RunSubagentInput = Schema.Struct({
   task: Schema.NonEmptyString.annotate({
-    description: "The complete task. The subagent sees nothing else from this conversation.",
+    description:
+      "The complete task, or the next message to a named helper. A new subagent sees nothing else from this conversation.",
   }),
+  agent: Schema.optionalKey(
+    Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,40}$/))).annotate({
+      description:
+        "Name of a helper that keeps its own conversation in this session: a new name creates it, an existing one continues it. Omit for a one-off task.",
+    }),
+  ),
   instructions: Schema.optionalKey(
-    Schema.String.annotate({ description: "Extra standing instructions for this subagent." }),
+    Schema.String.annotate({
+      description:
+        "Extra standing instructions for this subagent. For a named helper they replace the previous ones; omit to keep them.",
+    }),
   ),
   ownership: Schema.optionalKey(
     Schema.Array(Schema.NonEmptyString).annotate({
@@ -127,18 +136,6 @@ const RunSubagentInput = Schema.Struct({
   acceptanceCriteria: Schema.optionalKey(
     Schema.Array(Schema.NonEmptyString).annotate({
       description: "Concrete outcomes and checks to report before considering the task complete.",
-    }),
-  ),
-});
-
-const MessageSubagentInput = Schema.Struct({
-  agent: Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,40}$/))).annotate({
-    description: "Name of the subagent. A new name creates it; an existing one continues it.",
-  }),
-  message: Schema.NonEmptyString.annotate({ description: "The task or follow-up message." }),
-  instructions: Schema.optionalKey(
-    Schema.String.annotate({
-      description: "Replaces the subagent's extra instructions. Omit to keep the previous ones.",
     }),
   ),
 });
@@ -1236,7 +1233,11 @@ const make = Effect.gen(function* () {
       let deliveredNotificationIds = binding.deliveredParentNotificationIds;
       let adoptionDraft: AdoptionDraft | null = null;
 
-      const start = (toolCallId: string, name: string, argumentsJson: string) => {
+      const start = (
+        toolCallId: string,
+        name: "run_subagent" | "resume_subagent",
+        argumentsJson: string,
+      ) => {
         const existing = Option.getOrUndefined(MutableHashMap.get(started, toolCallId));
         if (isTruthy(existing)) return existing;
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -1246,25 +1247,6 @@ const make = Effect.gen(function* () {
               const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
                 argumentsJson || "{}",
               );
-              if (name === "run_subagent") {
-                // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                const input = EffectFunction.flow(
-                  Schema.decodeUnknownResult(RunSubagentInput),
-                  Result.getOrThrow,
-                )(parsed);
-                const instructions = [
-                  input.instructions,
-                  isTruthy(input.ownership?.length)
-                    ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
-                    : null,
-                  isTruthy(input.acceptanceCriteria?.length)
-                    ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
-                    : null,
-                ]
-                  .filter((part) => part !== undefined && part !== null)
-                  .join("\n");
-                return yield* startOneOff(binding, toolCallId, input.task, instructions || null);
-              }
               if (name === "resume_subagent") {
                 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
                 const input = EffectFunction.flow(
@@ -1275,16 +1257,35 @@ const make = Effect.gen(function* () {
               }
               // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
               const input = EffectFunction.flow(
-                Schema.decodeUnknownResult(MessageSubagentInput),
+                Schema.decodeUnknownResult(RunSubagentInput),
                 Result.getOrThrow,
               )(parsed);
-              return yield* startNamed(
-                binding,
-                toolCallId,
-                input.agent,
-                input.message,
-                input.instructions,
-              );
+              // Ownership and acceptance belong to this task: a one-off keeps them as its standing
+              // instructions, a named helper gets them with the message.
+              const taskTerms = [
+                isTruthy(input.ownership?.length)
+                  ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
+                  : null,
+                isTruthy(input.acceptanceCriteria?.length)
+                  ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
+                  : null,
+              ].filter((part) => part !== null);
+              return yield* isTruthy(input.agent)
+                ? startNamed(
+                    binding,
+                    toolCallId,
+                    input.agent,
+                    [input.task, ...taskTerms].join("\n\n"),
+                    input.instructions,
+                  )
+                : startOneOff(
+                    binding,
+                    toolCallId,
+                    input.task,
+                    [input.instructions, ...taskTerms]
+                      .filter((part) => part !== undefined)
+                      .join("\n") || null,
+                  );
             }),
           ))();
         outcome.catch(() => undefined);
@@ -1295,19 +1296,10 @@ const make = Effect.gen(function* () {
       const runTool = toolDefinition({
         name: "run_subagent",
         description:
-          "Start one background task and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_reports. It shares the workspace, model and permissions; it cannot start subagents.",
+          "Start one background task, a one-off or for a named helper, and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_reports. It shares the workspace, model and permissions; it cannot start subagents.",
         inputSchema: toToolSchema(RunSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "run_subagent", JSON.stringify(input)),
-      );
-
-      const messageTool = toolDefinition({
-        name: "message_subagent",
-        description:
-          "Create a named background subagent or continue one from earlier in this session, and immediately return a running receipt.",
-        inputSchema: toToolSchema(MessageSubagentInput),
-      }).server((input, context) =>
-        start(context?.toolCallId ?? randomUUID(), "message_subagent", JSON.stringify(input)),
       );
 
       const resumeTool = toolDefinition({
@@ -1512,7 +1504,7 @@ const make = Effect.gen(function* () {
       };
 
       return {
-        tools: [runTool, messageTool, resumeTool, reportsTool, waitTool, adoptTool],
+        tools: [runTool, resumeTool, reportsTool, waitTool, adoptTool],
         middleware,
       };
     },

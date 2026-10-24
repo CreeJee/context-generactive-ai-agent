@@ -71,7 +71,7 @@ const client = createSubscriptionOAuthClient({
     isTruthy(selectedProfile) ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
   ),
 });
-const baseline = `You can delegate with run_subagent and message_subagent. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Use wait_subagents when needed and retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
+const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Use wait_subagents when needed and retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
 const frames = Schema.fromJsonString(
   Schema.Struct({
     type: Schema.String,

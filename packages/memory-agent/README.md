@@ -15,7 +15,7 @@ src/
   kagi/         선택 Kagi Search·Extract 클라이언트와 켜기/끄기·키 등록
   mcp/          MCP 설정 파일(공통·프로젝트) 읽기, 신뢰, 연결, 도구 변환
   skills/       기본(이 패키지의 skills/)·~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
-  subagents/    run_subagent·message_subagent: 자식 chat 실행, 병렬 시작, 승인 중계, 기록
+  subagents/    run_subagent(일회성·이름 있는 helper): 자식 chat 실행, 병렬 시작, 승인 중계, 기록
   acp/          ACP 에이전트 다리(에디터 ↔ 실행 중인 앱 HTTP API)
   external-agents/  외부 ACP 에이전트(Codex 등) 설정·신뢰·연결·재연결 정책
   approvals/    run을 멈추지 못하는 승인 요청 중계(서브에이전트·외부 에이전트)
@@ -90,7 +90,7 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 | `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
 | `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
 | `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님   |
-| `run_subagent`, `message_subagent`                               | 없음 | 자식의 승인 필요 호출은 페이지에서 따로 승인   |
+| `run_subagent`                                                   | 없음 | 자식의 승인 필요 호출은 페이지에서 따로 승인   |
 | `delegate_to_agent`                                              | 필요 | 신뢰한 외부 ACP 에이전트에 작업 위임           |
 
 권한 모드는 프로젝트마다 고릅니다.

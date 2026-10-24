@@ -43,6 +43,7 @@ const toolLabels = {
   kagi_extract: "웹 페이지 읽기",
   read_skill: "skill 읽기",
   run_subagent: "서브에이전트 실행",
+  // Calls recorded before run_subagent took a helper name.
   message_subagent: "서브에이전트에게 메시지 보내기",
   delegate_to_agent: "외부 에이전트에게 맡기기",
   // TanStack's discovery call for a tool sent by name only.

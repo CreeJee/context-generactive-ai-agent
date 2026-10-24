@@ -34,7 +34,6 @@ export const builtinToolEffects = {
   get_background_result: "read",
   cancel_background_task: "effectful",
   run_subagent: "effectful",
-  message_subagent: "effectful",
   resume_subagent: "effectful",
   read_subagent_tool_result: "read",
   // Report caches are run-local; durable review/adoption is a separate middleware RPC.

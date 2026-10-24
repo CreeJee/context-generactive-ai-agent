@@ -33,6 +33,7 @@ const views = HashMap.fromIterable<string, ToolView>([
   ["kagi_extract", { title: "웹 페이지 읽기", kind: "fetch" }],
   ["read_skill", { title: "skill 읽기", kind: "read" }],
   ["run_subagent", { title: "서브에이전트 실행", kind: "other" }],
+  // Calls recorded before run_subagent took a helper name.
   ["message_subagent", { title: "서브에이전트에게 메시지 보내기", kind: "other" }],
   ["delegate_to_agent", { title: "외부 에이전트에게 맡기기", kind: "other" }],
 ]);
