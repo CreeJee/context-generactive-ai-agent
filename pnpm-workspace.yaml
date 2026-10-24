@@ -86,6 +86,11 @@ catalog:
   # @ttsc/graph speaks a protocol tied to its ttsc release: pinned together, upgraded together.
   ttsc: 0.34.1
   "@ttsc/graph": 0.34.1
+  # The code sandbox's engine: the core plus the build with its WASM inside the JS, so the bundled
+  # worker needs no file next to it.
+  quickjs-emscripten-core: 0.32.0
+  "@jitl/quickjs-singlefile-mjs-release-sync": 0.32.0
+  sucrase: 3.35.1
 # Effect comes from pkg.pr.new URLs, and @effect/platform-node pulls them in as subdependencies.
 # pnpm has no per-package allowlist, so this stays off until Effect resolves from the registry.
 blockExoticSubdeps: false

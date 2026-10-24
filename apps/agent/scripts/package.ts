@@ -416,6 +416,8 @@ const program = Effect.gen(function* () {
       source: join(memoryAgent, "src", "shell", "sandbox-worker.ts"),
       packages: true,
     },
+    // QuickJS comes in its single-file build, with its WASM inside the JS.
+    "code-worker": { source: join(memoryAgent, "src", "code", "worker.ts"), packages: true },
     "kiwi-worker": {
       source: join(memoryAgent, "src", "memory", "morph", "kiwi-worker.ts"),
       packages: false,

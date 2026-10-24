@@ -43,7 +43,8 @@
     "./import-worker": "./src/imports/worker.ts",
     "./redact-worker": "./src/secrets/redact-worker.ts",
     "./native-search-worker": "./src/memory/native-search/worker.ts",
-    "./sandbox-worker": "./src/shell/sandbox-worker.ts"
+    "./sandbox-worker": "./src/shell/sandbox-worker.ts",
+    "./code-worker": "./src/code/worker.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -65,6 +66,7 @@
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
     "@huggingface/transformers": "catalog:",
+    "@jitl/quickjs-singlefile-mjs-release-sync": "catalog:",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@napi-rs/keyring": "catalog:",
@@ -85,7 +87,9 @@
     "js-tiktoken": "catalog:",
     "kiwi-nlp": "catalog:",
     "minimatch": "catalog:",
+    "quickjs-emscripten-core": "catalog:",
     "sharp": "catalog:",
+    "sucrase": "catalog:",
     "turbovec": "workspace:*",
     "undici": "catalog:",
     "vite": "catalog:",

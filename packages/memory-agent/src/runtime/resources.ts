@@ -84,7 +84,8 @@ export type RuntimeWorker =
   | "import-worker"
   | "redact-worker"
   | "native-search-worker"
-  | "sandbox-worker";
+  | "sandbox-worker"
+  | "code-worker";
 
 /** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
 export function runtimeArtifact(name: "artifact-manifest.json" | "native.mjs") {
