@@ -124,6 +124,8 @@ const make = (timeoutMs: number) =>
             const cancel = Effect.callback<void>((resume) => {
               const onAbort = () => resume(Effect.void);
               signal.addEventListener("abort", onAbort, { once: true });
+              // An abort that came while the execution id was hashed fired its event already.
+              if (signal.aborted) onAbort();
               return Effect.sync(() => signal.removeEventListener("abort", onAbort));
             }).pipe(
               Effect.andThen(provideEngine(RelayedApprovalExecution.interrupt(executionId))),
