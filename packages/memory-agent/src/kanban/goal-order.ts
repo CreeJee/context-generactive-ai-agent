@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Function as EffectFunction, Layer, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { GoalScheduleStorageFailed, GoalScheduleStorageReason } from "./goal-schedules.ts";
 
@@ -13,17 +13,20 @@ import { GoalScheduleStorageFailed, GoalScheduleStorageReason } from "./goal-sch
  * `order` with `item` put in front of `before`, or last when `before` is null. An item or a
  * `before` that is not in the order leaves it as it is.
  */
-export const moved = (
+export const moved: {
+  (item: string, before: string | null): (order: readonly string[]) => readonly string[];
+} & typeof movedBody = EffectFunction.dual(3, movedBody);
+function movedBody(
   order: readonly string[],
   item: string,
   before: string | null,
-): readonly string[] => {
+): readonly string[] {
   if (!order.includes(item) || item === before) return order;
   const rest = order.filter((other) => other !== item);
   const at = before === null ? rest.length : rest.indexOf(before);
   if (at < 0) return order;
   return [...rest.slice(0, at), item, ...rest.slice(at)];
-};
+}
 
 const SessionRow = Schema.Struct({ session_id: Schema.String });
 const ProjectRow = Schema.Struct({ id: Schema.String });

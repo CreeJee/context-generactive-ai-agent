@@ -1,5 +1,5 @@
 import { EventType, type StreamChunk } from "@tanstack/ai";
-import { Cause, Clock, Effect, Schema, Stream } from "effect";
+import { Cause, Clock, Effect, Function as EffectFunction, Schema, Stream } from "effect";
 import { nativeStream } from "../runtime/native-stream.ts";
 import type { SecretRedactor } from "../secrets/redactor.ts";
 import { RepeatedToolCall } from "../tools/repeat-guard.ts";
@@ -9,11 +9,16 @@ import { RepeatedToolCall } from "../tools/repeat-guard.ts";
  * and its secrets hidden, before the page, the editor or the durable log reads it. The code is
  * kept; the page words it and shows the message only under the error's details.
  */
-export const withShownRunErrors = (
+export const withShownRunErrors: {
+  (
+    chunks: AsyncIterable<StreamChunk>,
+  ): (redactor: SecretRedactor["Service"]) => ReturnType<typeof withShownRunErrorsBody>;
+} & typeof withShownRunErrorsBody = EffectFunction.dual(2, withShownRunErrorsBody);
+function withShownRunErrorsBody(
   redactor: SecretRedactor["Service"],
   chunks: AsyncIterable<StreamChunk>,
-) =>
-  nativeStream(
+) {
+  return nativeStream(
     Stream.fromAsyncIterable(chunks, (cause) => new Cause.UnknownError(cause)).pipe(
       // A run the repeat guard stopped ends with its own code; thrown, the SDK words it as unknown.
       Stream.catchTag("UnknownError", (error) => {
@@ -44,3 +49,4 @@ export const withShownRunErrors = (
       }),
     ),
   );
+}

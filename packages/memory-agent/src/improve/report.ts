@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { ItemInterpretation, type ReportedItem, reportedTitle, sourceLabels } from "./contracts.ts";
 
 /** What each kind of item asks to change when the model could not read it. */
@@ -67,12 +68,18 @@ const itemSection = (repository: string, item: ReportedItem, index: number) =>
     ...item.excerpts.flatMap((excerpt) => [quote(excerpt), ""]),
   ].join("\n");
 
+/** One repository and the improvement items found in it. */
+interface FoundItems {
+  readonly repository: string;
+  readonly items: readonly ReportedItem[];
+}
+
 /** One repository's improvement items as a document another agent or tool can act on. */
-export const improvementReport = (
-  found: { readonly repository: string; readonly items: readonly ReportedItem[] },
-  generatedAt: string,
-) =>
-  [
+export const improvementReport: {
+  (generatedAt: string): (found: FoundItems) => string;
+} & typeof improvementReportBody = EffectFunction.dual(2, improvementReportBody);
+function improvementReportBody(found: FoundItems, generatedAt: string): string {
+  return [
     `# 개선 항목: ${found.repository}`,
     "",
     `${generatedAt}에 이 저장소의 최근 사용 기록에서 찾은 개선 항목이다. 항목마다 작업 명세를 그대로 에이전트에게 넘길 수 있다.`,
@@ -81,3 +88,4 @@ export const improvementReport = (
       ? ["고칠 만한 반복된 정정이나 실패가 없다.", ""]
       : found.items.map((item, index) => itemSection(found.repository, item, index))),
   ].join("\n");
+}

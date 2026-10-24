@@ -1,5 +1,5 @@
 import type { Cause } from "effect";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Function as EffectFunction, Match, Schema } from "effect";
 import { OAuthHarnessError, OAuthProfileRejected, OAuthProfileStoreFailed } from "memory-agent";
 
 /**
@@ -19,14 +19,17 @@ const isManagerFailure = Schema.is(
  * Runs one of the account login manager's Promise operations. The manager rejects with its typed
  * failure, which is recovered here so the route can answer it by tag.
  */
-export const accountLogin = <A>(
-  operation: AccountLoginFailed["operation"],
-  run: () => Promise<A>,
-) =>
-  Effect.tryPromise({
+export const accountLogin: {
+  <A>(
+    run: () => Promise<A>,
+  ): (operation: AccountLoginFailed["operation"]) => ReturnType<typeof accountLoginBody<A>>;
+} & typeof accountLoginBody = EffectFunction.dual(2, accountLoginBody);
+function accountLoginBody<A>(operation: AccountLoginFailed["operation"], run: () => Promise<A>) {
+  return Effect.tryPromise({
     try: run,
     catch: (cause) => (isManagerFailure(cause) ? cause : AccountLoginFailed.make({ operation })),
   });
+}
 
 /** Every expected failure the subscription account routes answer. */
 export type AccountRouteFailure =

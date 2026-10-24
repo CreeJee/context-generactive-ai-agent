@@ -1,4 +1,12 @@
-import { Cause, Deferred, Effect, FileSystem, Random, Schema } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  FileSystem,
+  Function as EffectFunction,
+  Random,
+  Schema,
+} from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { messageText } from "../../src/messages/text.ts";
 import { type PermissionMode, Projects } from "../../src/projects/projects.ts";
@@ -16,8 +24,14 @@ export const sdk = <A>(operation: () => A | PromiseLike<A>) =>
     catch: (cause) => new Cause.UnknownError(cause),
   });
 
-export const until = <E = never, R = never>(condition: WaitCondition<E, R>, what: string) =>
-  waitUntil(condition, what, 6_000);
+export const until: {
+  (
+    what: string,
+  ): <E = never, R = never>(condition: WaitCondition<E, R>) => ReturnType<typeof untilBody<E, R>>;
+} & typeof untilBody = EffectFunction.dual(2, untilBody);
+function untilBody<E = never, R = never>(condition: WaitCondition<E, R>, what: string) {
+  return waitUntil(condition, what, 6_000);
+}
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 

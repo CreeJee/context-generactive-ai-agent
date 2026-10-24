@@ -4,6 +4,7 @@ import {
   Crypto,
   Duration,
   Effect,
+  Function as EffectFunction,
   Layer,
   Match,
   Option,
@@ -103,11 +104,14 @@ interface Outgoing {
 }
 
 /** Whether a defect goes out now, counting what its fingerprint held back. */
-export const admitDefect = (
+export const admitDefect: {
+  (fingerprint: string, now: number): (state: AdmissionState) => ReturnType<typeof admitDefectBody>;
+} & typeof admitDefectBody = EffectFunction.dual(3, admitDefectBody);
+function admitDefectBody(
   state: AdmissionState,
   fingerprint: string,
   now: number,
-): { readonly count: Option.Option<number>; readonly state: AdmissionState } => {
+): { readonly count: Option.Option<number>; readonly state: AdmissionState } {
   const previous = state.seen.get(fingerprint) ?? { sentAt: null, unsent: 0 };
   const unsent = previous.unsent + 1;
   const sentTimes = state.sentTimes.filter((at) => now - at < Duration.toMillis("1 minute"));
@@ -129,7 +133,7 @@ export const admitDefect = (
           sentTimes,
         },
       };
-};
+}
 
 const make = Effect.gen(function* () {
   const delivery = yield* ReportDelivery;

@@ -1,4 +1,4 @@
-import { Effect, Array as EffectArray } from "effect";
+import { Effect, Array as EffectArray, Function as EffectFunction } from "effect";
 import { Embedder } from "../memory/embedding/embedder.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { ImprovementItem } from "./contracts.ts";
@@ -36,13 +36,17 @@ const dot = (a: Float32Array, b: Float32Array) =>
  * Groups by leader: each vector joins the first group whose first member is similar enough,
  * otherwise it starts a group. Returns member indexes per group, in input order.
  */
-export const clusterByVector = (vectors: readonly Float32Array[], threshold: number) =>
-  vectors.reduce<number[][]>((groups, vector, index) => {
+export const clusterByVector: {
+  (threshold: number): (vectors: readonly Float32Array[]) => number[][];
+} & typeof clusterByVectorBody = EffectFunction.dual(2, clusterByVectorBody);
+function clusterByVectorBody(vectors: readonly Float32Array[], threshold: number) {
+  return vectors.reduce<number[][]>((groups, vector, index) => {
     const home = groups.find((group) => dot(vectors[group[0]], vector) >= threshold);
     return home === undefined
       ? [...groups, [index]]
       : groups.map((group) => (group === home ? [...group, index] : group));
   }, []);
+}
 
 type Correction = typeof Signal.cases.correction.Type;
 type ToolFailure = typeof Signal.cases.tool_failure.Type;

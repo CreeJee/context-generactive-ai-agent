@@ -1,4 +1,4 @@
-import { Data } from "effect";
+import { Data, Function as EffectFunction } from "effect";
 import { BundleEvent, runHasFailure, runPlace, type ReportBundle } from "memory-agent/definitions";
 import { bundleGaps } from "./report-bundle";
 import { diagnosisFailureText, DiagnosisText } from "./report-diagnosis";
@@ -75,7 +75,10 @@ export function reportText({
  * Text for copying or saving: the draft followed by the whole bundle, so a pasted report carries
  * the same evidence the webhook attaches.
  */
-export function shareableText(text: string, evidence: DraftEvidence): string {
+export const shareableText: {
+  (evidence: DraftEvidence): (text: string) => string;
+} & typeof shareableTextBody = EffectFunction.dual(2, shareableTextBody);
+function shareableTextBody(text: string, evidence: DraftEvidence): string {
   return DraftEvidence.$match(evidence, {
     none: () => text,
     failed: () => text,

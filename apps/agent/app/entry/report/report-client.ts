@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Function as EffectFunction, Schema } from "effect";
 import {
   ReportBundle,
   ReportDeliveryResult,
@@ -7,6 +7,12 @@ import {
   ReportDiagnosisInput,
 } from "memory-agent/definitions";
 import { appFetch } from "../shared/backend-restart";
+
+/** The draft the user reviewed and the evidence bundle they previewed with it. */
+interface ReviewedReport {
+  readonly text: string;
+  readonly evidence: ReportBundle | null;
+}
 
 export class ReportRequestFailed extends Schema.TaggedError<ReportRequestFailed>()(
   "ReportRequestFailed",
@@ -107,11 +113,12 @@ export function makeReportClient(fetcher: typeof fetch) {
     url: "/api/reports/delivery",
     init: { cache: "no-store" },
   });
+  const sendReportBody = (report: ReviewedReport, resend: boolean) =>
+    deliver(ReportDeliveryResult, DeliveryCommand.cases.send.make({ ...report, resend }));
   /** Sends the reviewed draft, with the evidence bundle the user previewed as its attachment. */
-  const sendReport = (
-    report: { readonly text: string; readonly evidence: ReportBundle | null },
-    resend: boolean,
-  ) => deliver(ReportDeliveryResult, DeliveryCommand.cases.send.make({ ...report, resend }));
+  const sendReport: {
+    (resend: boolean): (report: ReviewedReport) => ReturnType<typeof sendReportBody>;
+  } & typeof sendReportBody = EffectFunction.dual(2, sendReportBody);
 
   /** Turns sending defects to the developer webhook on or off; answers the new status. */
   const setDefectReports = (enabled: boolean) =>

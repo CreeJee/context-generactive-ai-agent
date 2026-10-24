@@ -75,7 +75,10 @@ export class FullLoopAdmissionRejected extends Schema.TaggedError<FullLoopAdmiss
   }
 }
 
-export function reject(member: string, reason: FullLoopAdmissionReasonName): never {
+export const reject: {
+  (reason: FullLoopAdmissionReasonName): (member: string) => never;
+} & typeof rejectBody = EffectFunction.dual(2, rejectBody);
+function rejectBody(member: string, reason: FullLoopAdmissionReasonName): never {
   throw FullLoopAdmissionRejected.make({
     member,
     reason: FullLoopAdmissionReason.cases[reason].make({}),

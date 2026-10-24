@@ -1,4 +1,4 @@
-import { Array as EffectArray, Data, Effect, Schema } from "effect";
+import { Array as EffectArray, Data, Effect, Function as EffectFunction, Schema } from "effect";
 import { stepProgressStatus, type StepProgressStatus } from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
@@ -77,13 +77,18 @@ export const validatePlanDependencies = Effect.fnUntraced(function* (
 });
 
 /** Status of a card not started yet: ready once every known dependency is done, unless held. */
-export const notStartedStatus = (
+export const notStartedStatus: {
+  (
+    isDone: (id: string) => boolean,
+  ): (steps: readonly DependencyStep[]) => ReturnType<typeof notStartedStatusBody>;
+} & typeof notStartedStatusBody = EffectFunction.dual(2, notStartedStatusBody);
+function notStartedStatusBody(
   steps: readonly DependencyStep[],
   isDone: (id: string) => boolean,
-): ((step: DependencyStep) => "ready" | "backlog") => {
+): (step: DependencyStep) => "ready" | "backlog" {
   const edges = knownDependencies(steps);
   return (step) => (step.hold === undefined && edges(step).every(isDone) ? "ready" : "backlog");
-};
+}
 
 export interface UnmetDependency {
   readonly id: string;

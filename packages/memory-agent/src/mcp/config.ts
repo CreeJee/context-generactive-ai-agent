@@ -156,15 +156,18 @@ export class MissingVariable extends Schema.TaggedError<MissingVariable>()("Miss
 const variablePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 /** Replaces `${NAME}` with the app's environment, so secrets can stay out of the file. */
-export const expandVariablesResult = (
+export const expandVariablesResult: {
+  (env: NodeJS.ProcessEnv): (value: string) => Result.Result<string, MissingVariable>;
+} & typeof expandVariablesResultBody = EffectFunction.dual(2, expandVariablesResultBody);
+function expandVariablesResultBody(
   value: string,
   env: NodeJS.ProcessEnv,
-): Result.Result<string, MissingVariable> => {
+): Result.Result<string, MissingVariable> {
   for (const [, name] of value.matchAll(variablePattern))
     if (name !== undefined && env[name] === undefined)
       return Result.fail(MissingVariable.make({ variable: name }));
   return Result.succeed(value.replace(variablePattern, (_, name: string) => env[name] ?? ""));
-};
+}
 
 /** `expandVariablesResult` for synchronous SDK transport builders, which throw the typed error. */
 export const expandVariables: {

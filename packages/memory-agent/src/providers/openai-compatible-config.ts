@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Function as EffectFunction, Schema } from "effect";
 
 /** Used when the server never reports the model's real context window. */
 export const OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW = 32_000;
@@ -130,24 +130,33 @@ export const selectedCompatibleAccount = (accounts: CompatibleAccounts) =>
   accounts.accounts.find((account) => account.id === accounts.selected) ?? null;
 
 /** Whether the selected endpoint registered this model with tool calling on. */
-export const compatibleToolCalling = (
+export const compatibleToolCalling: {
+  (modelId: string): (settings: Parameters<typeof compatibleAccountsOf>[0]) => boolean;
+} & typeof compatibleToolCallingBody = EffectFunction.dual(2, compatibleToolCallingBody);
+function compatibleToolCallingBody(
   settings: Parameters<typeof compatibleAccountsOf>[0],
   modelId: string,
-) =>
-  selectedCompatibleAccount(compatibleAccountsOf(settings))?.models.find(
-    (model) => model.id === modelId,
-  )?.toolCalling === true;
+) {
+  return (
+    selectedCompatibleAccount(compatibleAccountsOf(settings))?.models.find(
+      (model) => model.id === modelId,
+    )?.toolCalling === true
+  );
+}
 
 /** An endpoint's model joined with its connection, or null when it is not registered there. */
-export const compatibleEndpointModel = (
+export const compatibleEndpointModel: {
+  (modelId: string): (account: CompatibleAccount) => OpenAICompatibleConfiguration | null;
+} & typeof compatibleEndpointModelBody = EffectFunction.dual(2, compatibleEndpointModelBody);
+function compatibleEndpointModelBody(
   account: CompatibleAccount,
   modelId: string,
-): OpenAICompatibleConfiguration | null => {
+): OpenAICompatibleConfiguration | null {
   const found = account.models.find((model) => model.id === modelId);
   if (found === undefined) return null;
   const { id, ...limits } = found;
   return { ...limits, baseUrl: account.baseUrl, model: id };
-};
+}
 
 export const CompatibleAccountStatus = Schema.Struct({
   id: Schema.String,

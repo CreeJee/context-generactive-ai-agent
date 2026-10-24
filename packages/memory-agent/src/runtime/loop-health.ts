@@ -1,4 +1,4 @@
-import { Cause, Data, Effect, Schedule, Schema } from "effect";
+import { Cause, Data, Effect, Function as EffectFunction, Schedule, Schema } from "effect";
 import { tagOf } from "./failure-tag.ts";
 import { logDefect, logFailure } from "./logged-failures.ts";
 
@@ -20,7 +20,11 @@ export type LoopHealth = typeof LoopHealth.Type;
 
 export const healthyLoop: LoopHealth = LoopHealth.cases.Healthy.make({});
 
-export const sameLoopHealth = Schema.toEquivalence(LoopHealth);
+const loopHealthEquivalence = Schema.toEquivalence(LoopHealth);
+export const sameLoopHealth: {
+  (that: LoopHealth): (self: LoopHealth) => boolean;
+  (self: LoopHealth, that: LoopHealth): boolean;
+} = EffectFunction.dual(2, loopHealthEquivalence);
 
 /** Whether the loop stopped and waits for a person to restart it. */
 export const loopStopped = LoopHealth.match({

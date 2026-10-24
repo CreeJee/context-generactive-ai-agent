@@ -1,4 +1,4 @@
-import { Cause, Effect, Match, Option } from "effect";
+import { Cause, Effect, Function as EffectFunction, Match, Option, Schema } from "effect";
 import { DefectReporter } from "./defect-reporter.ts";
 import { reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
 
@@ -15,45 +15,67 @@ const tagged = <E extends { readonly _tag: string }>(annotations: Annotations, e
   error: tagOf(error),
 });
 
+/** The data-first call names the message; the pipeable one gives only the annotations. */
+const messageFirst = (args: IArguments) => Schema.is(Schema.String)(args[0]);
+
 /** Logs an expected failure by its tag only, for a step whose failure ends nothing else. */
-export const logFailure =
-  (message: string, annotations: Annotations = {}) =>
-  <E extends { readonly _tag: string }>(error: E) =>
+export const logFailure: {
+  (annotations: Annotations): (message: string) => ReturnType<typeof logFailureBody>;
+  (message: string): ReturnType<typeof logFailureBody>;
+  (message: string, annotations: Annotations): ReturnType<typeof logFailureBody>;
+} = EffectFunction.dual(messageFirst, logFailureBody);
+function logFailureBody(message: string, annotations: Annotations = {}) {
+  return <E extends { readonly _tag: string }>(error: E) =>
     Effect.logWarning(message, tagged(annotations, error));
+}
 
 /**
  * Answers an expected failure the caller can do without with `fallback`. Defects pass through.
  */
-export const fallbackLogged =
-  <B>(message: string, fallback: () => B) =>
-  <A, E extends { readonly _tag: string }, R>(
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A | B, never, R> =>
+export const fallbackLogged: {
+  <B>(fallback: () => B): (message: string) => WithFallback<B>;
+} & typeof fallbackLoggedBody = EffectFunction.dual(2, fallbackLoggedBody);
+function fallbackLoggedBody<B>(message: string, fallback: () => B): WithFallback<B> {
+  return (effect) =>
     Effect.catch(effect, (error) => Effect.as(logFailure(message)(error), fallback()));
+}
+type WithFallback<B> = <A, E extends { readonly _tag: string }, R>(
+  effect: Effect.Effect<A, E, R>,
+) => Effect.Effect<A | B, never, R>;
 
 /**
  * Ends a best-effort step whose expected failure changes nothing for its owner, such as a cleanup
  * that a later step or the process exit makes moot. It logs at debug level; defects pass through.
  */
-export const ignoreLogged =
-  (message: string, annotations: Annotations = {}) =>
-  <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+export const ignoreLogged: {
+  (annotations: Annotations): (message: string) => ReturnType<typeof ignoreLoggedBody>;
+  (message: string): ReturnType<typeof ignoreLoggedBody>;
+  (message: string, annotations: Annotations): ReturnType<typeof ignoreLoggedBody>;
+} = EffectFunction.dual(messageFirst, ignoreLoggedBody);
+function ignoreLoggedBody(message: string, annotations: Annotations = {}) {
+  return <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.asVoid,
       Effect.catch((error) => Effect.logDebug(message, tagged(annotations, error))),
     );
+}
 
 /**
  * Logs a defect by the `Defect` tag only and hands it to the defect reporter. Every defect an owner
  * records instead of letting it end the process goes through here.
  */
-export const logDefect =
-  (message: string, annotations: Annotations = {}) =>
-  (cause: Cause.Cause<unknown>) =>
+export const logDefect: {
+  (annotations: Annotations): (message: string) => ReturnType<typeof logDefectBody>;
+  (message: string): ReturnType<typeof logDefectBody>;
+  (message: string, annotations: Annotations): ReturnType<typeof logDefectBody>;
+} = EffectFunction.dual(messageFirst, logDefectBody);
+function logDefectBody(message: string, annotations: Annotations = {}) {
+  return (cause: Cause.Cause<unknown>) =>
     Effect.gen(function* () {
       yield* Effect.logError(message, { ...annotations, error: "Defect" });
       yield* (yield* DefectReporter).report({ message, annotations, cause });
     });
+}
 
 /**
  * A cause as its failures' tags, for text a person or model reads and for logs. A tagged reason,
