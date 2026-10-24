@@ -56,3 +56,151 @@ Both modes also passed the same fixed-body tool open/close/scroll, delayed catal
 ## Verification repairs
 
 The first instrumented run lacked DOM types for browser callbacks; the harness now explicitly references the DOM lib without changing repository compiler settings. The first Profiler wrapper lost the named `MessageView` export, causing a fixture locator timeout; inspecting the actual dev module and preserving its export fixed the harness. Both were verification setup failures, not proof of product latency regressions. Targeted format/lint/type checks and subsequent real-browser comparisons passed.
+
+## Streaming tick / scroll / prepend cost attribution (2026-10-21)
+
+A fixed-data fixture measures what one streaming tick, one upward scroll, and one older-page
+prepend each cost on a 400-message history, separating React render/commit from CDP layout/style
+work and long tasks. The table below holds the raw numbers. The harness was a one-off Playwright
+script against the dev server `5173` (chromium `--single-process`); it and its per-run JSON are
+not kept in the repository.
+
+- Fixture: route-fulfilled `/api/*` — 400 alternating user/assistant text messages served
+  through the real `/api/chat` GET paging shape (20 newest + `page: {truncated, cursor}`), lease
+  `mine`, run-state idle, a one-frame SSE tick after 1.2 s. No app source, dependency file, DB,
+  or real server run changes.
+- Instrumentation: a dev-module wrapper counts every `MessageView` render per message id;
+  a second counter sits at the `ChatHistory` `messages.map` call site (`HistoryRow`), separating
+  the map callback from the `MessageView` body itself; a dev-module wrapper on the react-dom
+  prebundle renames `commitRoot` → `commitRootImpl` and times every commit through a
+  same-signature wrapper (`__uiProbeCommit`); CDP `Performance.getMetrics` deltas cover
+  TaskDuration, ScriptDuration, LayoutDuration, RecalcStyleDuration, Layout/RecalcStyle counts
+  and Nodes; a `longtask` PerformanceObserver covers 50 ms+ tasks. Ticks and scroll windows are
+  measured inside fresh pages, each with an 800 ms settle before the window and a no-content
+  baseline run of the same send path.
+
+Raw numbers (both runs, CDP deltas; render totals are per-message counts summed):
+
+| Window                          | Run | TaskDuration Δ | Layout Δ | RecalcStyle Δ | Layout/style count |    MessageView renders (total) | commits (count / total ms / max) | long tasks         |
+| ------------------------------- | --- | -------------: | -------: | ------------: | ------------------ | -----------------------------: | -------------------------------- | ------------------ |
+| hydration                       | 1   |          0.798 |    0.019 |         0.031 | 10 / 22            |                            440 | 20 / 130.2 / 52.7                | 139, 59, 63, 68 ms |
+| hydration                       | 2   |          0.836 |    0.039 |         0.065 | 11 / 22            |                            360 | 21 / 110.5 / 62                  | 131, 68, 64 ms     |
+| tick − baseline                 | 1   |          0.038 |    0.018 |        0.0001 | 1 / −8             |                            204 | 3 / 2.9 / 0.5                    | one 60 ms          |
+| tick − baseline                 | 2   |          0.103 |    0.058 |         0.002 | 1 / −4             |                              4 | 0 / 75.4 / 26.5                  | one 111 ms         |
+| small scroll (crossed sentinel) | 1   |          0.051 |   0.0004 |         0.001 | 2 / 4              |                            480 | 25 / 88.3 / 37                   | none               |
+| prepend                         | 1   |          0.108 |   0.0004 |         0.001 | 2 / 4              |                            720 | 31 / 91.7 / 37                   | none               |
+| small scroll (crossed sentinel) | 2   |          0.046 |   0.0006 |         0.001 | 2 / 4              |                            440 | 28 / 110.2 / 47.2                | none               |
+| prepend                         | 2   |          0.078 |   0.0005 |         0.001 | 2 / 4              |                            680 | 34 / 113.5 / 47.2                | none               |
+| site-split: tick window         | 3   |          0.165 |    0.073 |         0.007 | 5 / 30             | 1128 (28/message × 2 counters) | 23 / 192.6 / 77.5                | one 118 ms         |
+| site-split: prepend             | 3   |          0.099 |   0.0004 |         0.001 | 2 / 4              |                           1360 | 36 / 124.4 / 62                  | none               |
+
+Findings:
+
+- **The last message is not the only renderer.** On every send every mounted `MessageView`
+  re-renders the same number of times (run 1: 46 each; run 2: 40 each), because `MessageView`
+  is not memoized and its props (tasks, approvals, trace connection) are recreated by
+  `ChatPanel` on each SDK state change. The streaming tick confirms this: existing messages'
+  render counts rise by the same +10 (run 1 tick − baseline) as the last message's own
+  renders rise (18 vs 16, 14 vs 12). The site-split runs show identical counts at the
+  `HistoryRow` map call site and inside the `MessageView` body (tick window: 26/26 then 28/28
+  per message on both sides, 4/4 for the new turn), so the counts are genuine `MessageView`
+  body re-renders, not the parent re-invoking its render callback. The hypothesis "only the
+  last message renders during streaming" is excluded.
+- **Re-render churn, not offscreen layout/paint, dominates; the tick adds one extra layout
+  pass.** The tick-minus-baseline render delta is small (204 / 4 additional component renders
+  across 2.8 s; per existing message only +10/+0), while its CDP delta is LayoutDuration
+  0.018/0.058 ms with exactly one extra layout pass and an unchanged layout/style count
+  (−8/−4, within counter noise) — plus a single 60/111 ms long task that only the tick case
+  produces. The commit distribution inside the tick window is top-heavy across three samples:
+  23–24 commits totaling ~120–193 ms with a 54–78 ms maximum and a ~16–58 ms second tier, so a
+  few commits carry the cost instead of the render fan-out. Scroll and prepend stay
+  layout-cheap (LayoutDuration ≤ 0.001 ms, 2/4 layout/style counts) while their ScriptDuration
+  is the largest single component (0.04–0.095 ms deltas). Neither case shows paint-scale
+  layout cost: the dominant cause is re-render churn (every message, every state change), and
+  the streaming tick additionally pays one offscreen-marked layout pass inside a long task —
+  both, with re-render as the ruling share.
+- **Limits.** Dev build, dev-server prebundles, single-process headless chromium, route-fulfilled
+  fixtures (no real model, no DB); the SSE tick arrives as one body after 1.2 s rather than
+  incremental chunks; commit timings include all commits in the window (SDK/lease/queue state
+  updates included), not only the history subtree; the "small scroll" window crossed the top
+  sentinel in every run (count 20→40), so its numbers are prepend-adjacent and the prepend row
+  is the cleaner (c) measurement; RecalcStyleCount can go negative across a window because CDP
+  counters are process-wide and other tasks (lease renewals, SSE) run between snapshots; an
+  earlier sample shared one stray 125.9 ms commit between its scroll and prepend
+  windows (counter not reset between them) and was rerun with the reset in place;
+  the runs of one day are reported raw without aggregation.
+
+## Message memo, a content-visibility trial and virtualization (2026-10-24)
+
+The same fixture shape as the 2026-10-21 run: 400 alternating text messages behind the real
+`/api/chat` paging shape, every `/api` request answered by Playwright, so no backend or DB is
+reached. A "rich" variant gives each assistant message a heading, two paragraphs, a list and a
+code block (about 480 px each). Development build on the dev server `5173`, headless chromium
+`--single-process`, 1280×800, two runs per row. Each window opens a fresh page and settles for
+1.2 s first.
+
+- Counters: the browser-delivered `message.tsx` and `chat-history.tsx` modules get the same two
+  render counters as on 10-21 (the `MessageView` body, the `messages.map` call site).
+- React work: a DevTools-hook stub sums each commit's root `actualDuration`. This is render work;
+  it is not commit-phase time and is not comparable with the 10-21 commit timer.
+- CDP `Performance.getMetrics` deltas and a `longtask` observer, as on 10-21.
+- The tick window is one send plus one SSE body with start, four content deltas and finish,
+  read 2.2 s later. The harness was a one-off and is not kept in the repository.
+
+`MessageView`, `ToolCallCard` and `TaskSummaryCard` are now memoized. `MessageView` compares the
+message by reference and, from the session-wide approval and task lists, only what its own tool
+calls read. The three task actions keep their identity through `useCallback` over `mutateAsync`.
+
+| Plain fixture                                           |  Before (2602d49a) |    Memo (9336e6bc) |
+| ------------------------------------------------------- | -----------------: | -----------------: |
+| Tick: existing messages' `MessageView` renders, 20 rows |      520 (26 each) |                  0 |
+| Tick: new user / assistant message renders              |            24 / 20 |             4 / 12 |
+| Tick: React render in the window (commits)              | 155–165 ms (15–16) | 109–115 ms (15–16) |
+| Tick: largest commit                                    |           19–24 ms |           12–16 ms |
+| Small scroll (20 → 40 rows): `MessageView` renders      |                 80 |                 40 |
+| Prepend (40 → 60 rows): `MessageView` renders           |                240 |                 40 |
+| Prepend: React render                                   |           62–76 ms |           49–51 ms |
+| Tick with 202 rows mounted: React render                |                  – |         148–156 ms |
+
+- The `messages.map` callback still runs for every row on every commit (26 times per row in the
+  tick window). `ChatHistory` renders with `ChatPanel` and hands each row a new element; the memo
+  compare then skips the body. With 202 rows mounted this adds about 3 ms per commit (about
+  0.017 ms per row).
+- Unchanged in both runs: the view stays at the bottom after the tick (0 px from the bottom); the
+  reading row stays at 24 px across a prepend; each 150 px upward step moves the reading row by
+  exactly 150 px.
+
+`content-visibility: auto` was tried on each row, with `contain-intrinsic-size: auto 2.5rem`. The
+estimate comes from the stored history: of 37,716 rows, 89% are assistant steps with a median of
+one tool call and no text (a collapsed tool card, about 30 px); user rows have a median of
+45 characters (one line, about 40 px).
+
+| Window                                                                | Memo only                | Memo + content-visibility |
+| --------------------------------------------------------------------- | ------------------------ | ------------------------- |
+| Small scroll, plain: Layout / layouts / style recalcs                 | 0.4 ms / 2 / 4           | 0.6 ms / 5–6 / 9–10       |
+| Prepend, plain                                                        | 0.4–0.5 ms / 2 / 4       | 0.5–0.6 ms / 4 / 7        |
+| Prepend, rich                                                         | 2.0–2.1 ms / 6 / 9       | 1.5–1.7 ms / 6–7 / 9–10   |
+| Width change, 200 rich rows mounted: Layout / RecalcStyle             | 16–23 ms / 14–25 ms      | 4.5–9 ms / 6–14 ms        |
+| 4,000 px upward scroll, 200 rich rows: Layout / RecalcStyle / layouts | 5.5–6.3 ms / 8–11 ms / 9 | 8.7–13 ms / 13–18 ms / 14 |
+
+Findings:
+
+- **Re-rendering every message was the cost, and memo removes it.** A streaming tick now renders
+  only the messages that changed. The render work left in the window (about 110 ms over 15–16
+  commits) was not split by subtree: it covers `ChatPanel` and its other children as well as the
+  row loop above.
+- **content-visibility is not adopted.** It pays off only when every mounted row is laid out
+  again, such as a window or sidebar width change. On the common path, scrolling up through the
+  history, it adds layout as rows come on screen. With 20-row pages, mounted rows stay in the tens
+  to low hundreds. Paint containment also clips what overflows a row, and it makes each row a
+  stacking context. Streamdown's table copy and download menus (`absolute top-full`, not portaled)
+  under a short table at the end of a message would be cut off or covered by the next row. In
+  chromium, an absolutely positioned child past a `content-visibility: auto` box is not
+  hit-testable unless `overflow-clip-margin` is set.
+- **Virtualization is not reintroduced.** After memo, mounting more rows costs about 0.017 ms per
+  row per commit. The 2026-09-25 reasons against it (heights that keep changing while Markdown
+  streams, `measureElement`) still hold. Look at it again only if people keep many hundreds of
+  rows mounted.
+- **Limits.** Development build; the frames arrive in one SSE body; render counts and React
+  render time include every commit in the window, not only the history subtree; CDP counters are
+  process-wide, so small layout and style counts can move by one or two between runs.
