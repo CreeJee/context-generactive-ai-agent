@@ -141,7 +141,7 @@ describe("project improvement discovery", () => {
           "tool_result",
           "Error: cannot open /e.ts",
           recent,
-          JSON.stringify({ toolName: "read_file", ok: false }),
+          '{"toolName":"read_file","ok":false}',
         );
         yield* failed("declined", "The user doesn't want to proceed with this tool use.", recent);
         yield* node(
@@ -149,7 +149,7 @@ describe("project improvement discovery", () => {
           "tool_result",
           "Error: cannot open /d.ts",
           recent,
-          JSON.stringify({ toolName: "Bash", ok: true }),
+          '{"toolName":"Bash","ok":true}',
         );
 
         const signals = yield* collectSignals(["p1"], "2026-10-01T00:00:00.000Z");

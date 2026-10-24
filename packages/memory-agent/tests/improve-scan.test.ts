@@ -82,7 +82,7 @@ const fixture = Effect.fnUntraced(function* () {
          VALUES (?, ?, 's1', 'tool_result', 'Error: cannot open /a.ts', ?, ?)`,
         id,
         project.id,
-        JSON.stringify({ toolName: "Bash", ok: false, importedFrom: "claude-code" }),
+        '{"toolName":"Bash","ok":false,"importedFrom":"claude-code"}',
         new Date().toISOString(),
       );
   });
@@ -102,7 +102,15 @@ const settled = (improvement: ProjectImprovement["Service"]) =>
 const live = <A, E>(
   name: string,
   body: () => Effect.Effect<A, E, Scope.Scope | FileSystem.FileSystem | Path.Path>,
-) => it.live(name, () => body().pipe(Effect.provide(NodeServices.layer), Effect.scoped), 30_000);
+) =>
+  it.live(
+    name,
+    () =>
+      Effect.flatMap(Layer.build(NodeServices.layer), (context) =>
+        Effect.provideContext(body(), context),
+      ).pipe(Effect.scoped),
+    30_000,
+  );
 
 live("a second start joins the running scan, and a stopped scan records nothing", () =>
   Effect.gen(function* () {

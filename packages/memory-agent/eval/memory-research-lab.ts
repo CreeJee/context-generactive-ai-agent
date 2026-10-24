@@ -11,9 +11,17 @@
 //   full        the local model + Kiwi + trigram                     → the production configuration
 // Model stages need the model files under the real storage root; where they are unreadable the
 // stage is skipped with the reason instead of failing the whole run.
-import { mkdtempSync, rmSync, statSync } from "node:fs";
-import { Cause, Context, Duration, Effect, Layer, MutableHashMap, Option } from "effect";
-import { runNativeEffect } from "../src/runtime/native-effect.ts";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  MutableHashMap,
+  Option,
+} from "effect";
+import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -47,7 +55,7 @@ const repoRoot = join(process.cwd(), "..", "..");
 // Temp roots live under the repo's gitignored node_modules: restricted environments may deny
 // the system tmpdir and the real storage root alike.
 const tmpBase = join(repoRoot, "node_modules", ".vp-tmp");
-const labPrefix = join(tmpBase, "memory-research-lab-");
+const labPrefix = "memory-research-lab-";
 
 const home = defaultStorageRoot;
 const quint8File = join(home, "models", localModel.id, modelFile("quint8"));
@@ -56,13 +64,13 @@ const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.dir
 const dimensions = localModel.dimensions;
 
 /** Readable now, or the reason a model-dependent stage has to be skipped. */
-const readable = (file: string): boolean => {
-  try {
-    return statSync(file).size > 0;
-  } catch {
-    return false;
-  }
-};
+const readable = (file: string): Promise<boolean> =>
+  runOAuthNodeEffect(
+    Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(file)).pipe(
+      Effect.map((info) => Number(info.size) > 0),
+      Effect.orElseSucceed(() => false),
+    ),
+  );
 
 const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
@@ -113,12 +121,12 @@ interface Stage {
   readonly embedNanos: { value: bigint };
 }
 
-const embedVariant = readable(quint8File)
+const embedVariant = (await readable(quint8File))
   ? ("quint8" as const)
-  : readable(fp32File)
+  : (await readable(fp32File))
     ? ("fp32" as const)
     : null;
-const kiwiAvailable = readable(kiwiFile);
+const kiwiAvailable = await readable(kiwiFile);
 
 const stages: readonly Stage[] = [
   {
@@ -335,9 +343,10 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const evaluateStage = Effect.fn("lab.stage")(function* (stage: Stage) {
-  // Sync: the node process may die before Effect finalizers would run; a stale temp root only
-  // costs disk, while a leaked one inside the FS module could block the next run.
-  const base = mkdtempSync(`${labPrefix}`);
+  const fs = yield* FileSystem.FileSystem;
+  // Not scoped: the node process may die before Effect finalizers would run; a stale temp root
+  // only costs disk, while a leaked one inside the FS module could block the next run.
+  const base = yield* fs.makeTempDirectory({ directory: tmpBase, prefix: labPrefix });
   // The stage runs inside the layer's own scope: scoping the build alone would release the one
   // SQLite connection before the stage runs (eval/recall.ts owns its scope the same way).
   const outcome = yield* Effect.scoped(
@@ -378,11 +387,11 @@ const evaluateStage = Effect.fn("lab.stage")(function* (stage: Stage) {
       } satisfies StageOutcome);
     }),
   );
-  if (outcome.kind === "ok") rmSync(base, { recursive: true, force: true });
+  if (outcome.kind === "ok") yield* fs.remove(base, { recursive: true, force: true });
   return outcome;
 });
 
-const runStage = (stage: Stage): Promise<StageOutcome> => runNativeEffect(evaluateStage(stage));
+const runStage = (stage: Stage): Promise<StageOutcome> => runOAuthNodeEffect(evaluateStage(stage));
 
 const top3 = (result: StageResult | undefined, setName: string): number | null => {
   const set = result?.sets.find((entry) => entry.name === setName);

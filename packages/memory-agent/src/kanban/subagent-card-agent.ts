@@ -18,6 +18,7 @@ import {
   CardVerdict,
   CardVerifier,
   GoalVerifier,
+  type CardAgentRun,
   type CardVerification,
   type GoalVerification,
 } from "./card-agent.ts";
@@ -111,8 +112,8 @@ const make = Effect.gen(function* () {
   const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
 
   const agent = CardAgent.of({
-    run: (run) =>
-      Effect.gen(function* () {
+    run: Effect.fnUntraced(
+      function* (run: CardAgentRun) {
         const { project, selection } = yield* cardSetting(
           run.sessionId,
           run.projectId,
@@ -159,27 +160,27 @@ const make = Effect.gen(function* () {
           }),
         );
         // Its session, project or run records failed; the error stays in the logs only.
-      }).pipe(
-        // A database failure also names its kind (lock, constraint, ...), never its statement.
-        Effect.catchTag("SqlError", (error) => unavailable("SqlError", errorTag(error.reason))),
-        Effect.catch((error) => unavailable(errorTag(error), null)),
-        // The card run's tool calls join this span's trace.
-        Effect.withSpan("CardAgent.run"),
-      ),
+      },
+      // A database failure also names its kind (lock, constraint, ...), never its statement.
+      Effect.catchTag("SqlError", (error) => unavailable("SqlError", errorTag(error.reason))),
+      Effect.catch((error) => unavailable(errorTag(error), null)),
+      // The card run's tool calls join this span's trace.
+      Effect.withSpan("CardAgent.run"),
+    ),
   });
 
   /** One read-only verifier run that must record a verdict. */
-  const runVerifier = (input: {
-    readonly sessionId: string;
-    readonly projectId: string;
-    readonly worktree: CardWorktree | null;
-    /** Each verification is its own run: Work Trace refuses a second invocation under one run. */
-    readonly runPrefix: string;
-    readonly agent: string;
-    readonly message: string;
-    readonly instructions: string;
-  }) =>
-    Effect.gen(function* () {
+  const runVerifier = Effect.fnUntraced(
+    function* (input: {
+      readonly sessionId: string;
+      readonly projectId: string;
+      readonly worktree: CardWorktree | null;
+      /** Each verification is its own run: Work Trace refuses a second invocation under one run. */
+      readonly runPrefix: string;
+      readonly agent: string;
+      readonly message: string;
+      readonly instructions: string;
+    }) {
       const runId = `${input.runPrefix}:${yield* crypto.randomUUIDv7()}`;
       const { project, selection } = yield* cardSetting(
         input.sessionId,
@@ -243,16 +244,16 @@ const make = Effect.gen(function* () {
             : VerdictFailure.cases.NotFinished.make({}),
         ),
       );
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.as(
-          Effect.logWarning("Kanban verifier unavailable", { error: errorTag(error) }),
-          rejected(VerdictFailure.cases.Unavailable.make({})),
-        ),
+    },
+    Effect.catch((error) =>
+      Effect.as(
+        Effect.logWarning("Kanban verifier unavailable", { error: errorTag(error) }),
+        rejected(VerdictFailure.cases.Unavailable.make({})),
       ),
-      // The verifier run's tool calls join this span's trace.
-      Effect.withSpan("CardAgent.verify"),
-    );
+    ),
+    // The verifier run's tool calls join this span's trace.
+    Effect.withSpan("CardAgent.verify"),
+  );
 
   const verify = (input: CardVerification) =>
     runVerifier({

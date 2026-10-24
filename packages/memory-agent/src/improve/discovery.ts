@@ -73,9 +73,9 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
       Effect.flatMap((found) =>
         found
-          ? Effect.succeed(Option.some(folder))
+          ? Effect.succeedSome(folder)
           : path.dirname(folder) === folder
-            ? Effect.succeed(Option.none())
+            ? Effect.succeedNone
             : repositoryTop(path.dirname(folder)),
       ),
     );

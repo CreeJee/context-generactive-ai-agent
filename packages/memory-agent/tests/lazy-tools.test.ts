@@ -51,17 +51,18 @@ testAgent({ testProvider: { responder } })("lazy tools", (it) => {
       yield* fs.writeFileString(file, "OUTSIDE CONTENT\n");
       yield* selectTestModel();
       const session = yield* freshSession;
+      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+        threadId: session,
+        runId: `${session}:read`,
+        messages: [{ id: `${session}:read`, role: "user", content: `read ${file}` }],
+        tools: [],
+        context: [],
+      });
       const response = yield* (yield* AgentChat).handle(
         new Request("http://127.0.0.1/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            threadId: session,
-            runId: `${session}:read`,
-            messages: [{ id: `${session}:read`, role: "user", content: `read ${file}` }],
-            tools: [],
-            context: [],
-          }),
+          body,
         }),
         session,
       );

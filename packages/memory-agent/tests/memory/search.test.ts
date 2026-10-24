@@ -179,8 +179,12 @@ testAgent()("MemorySearch.find", (it) => {
             ),
         },
       });
-      const result = yield* find({ query: "SQLite", projectId: project.id }).pipe(
-        Effect.provide(MemorySearch.layer.pipe(Layer.provide(failingElsewhere))),
+      const result = yield* Effect.scoped(
+        Effect.flatMap(
+          Layer.build(MemorySearch.layer.pipe(Layer.provide(failingElsewhere))),
+          (search) =>
+            Effect.provideContext(find({ query: "SQLite", projectId: project.id }), search),
+        ),
       );
       expect(result.degraded).toEqual(["other-projects"]);
       expect(result.otherProjectsSkipped).toEqual({
