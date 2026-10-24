@@ -2606,3 +2606,22 @@
   - 1.0 SDK는 tool call마다 스트림 출처를 담은 `metadata`를 붙인다. owner의 관찰 기록에는 이것이 없다. owner는 worker가 보낸 tool call을 id·type·이름·인자로만 대조한다. hook에는 여전히 owner 자신의 기록을 넘긴다.
   - 1.0 persistence는 `onConfig`에서 재개 상태를 함수(`Symbol.for("tanstack.ai.durableResume")`)로 돌려준다. `chat()`은 onConfig 체인 뒤에 그 함수를 부른다. 함수는 worker로 갈 수 없어서, owner가 자기 도구로 부르고 그 결과를 `resumeToolState`로 보낸다. 이 처리가 없으면 승인 뒤 재개한 Goal run이 승인을 잃는다. 이 심볼은 `@tanstack/ai`와 `@tanstack/ai-persistence` 사이의 내부 약속이다. 그래서 1.x 업그레이드 때 승인 재개 테스트로 확인한다.
 - MCP: `@tanstack/ai-mcp` 1.0은 프로토콜 협상을 `auto`로 고정한다. 그래서 stdio 서버에 연결할 때마다 SDK가 짧게 사는 복제 프로세스로 `server/discover`를 먼저 묻는다. 서버 프로세스는 연결 한 번에 두 번 시작된다. 2025 프로토콜 서버는 도구 목록 한 번에 `tools/list`를 두 번 받는다(SDK 캐시 채우기). TanStack이 고른 기본값이므로 따른다. 시작이 무거운 서버가 문제가 되면 `prior`로 협상을 건너뛸 수 있다.
+
+## 모델이 쓴 TypeScript로 도구를 묶어 부른다 (2026-10-25)
+
+- 사용자 결정: 셸 스킬의 목적은 셸뿐 아니라 다른 작업도 코드로 자동화하는 것이다. TanStack code mode의 방식(모델이 쓴 TypeScript가 도구를 함수로 부른다)과 snippet 방식(이름 있는 코드를 저장해 다시 부른다)을 가져온다. 저장·목록·호출은 이 앱의 skills 체계로 한다. 목적에 맞춘 뾰족한 도구를 쓴다는 원칙은 그대로다. sh보다 ts가 쓰기 쉬우므로 ts를 먼저 한다.
+- 실행기는 TanStack QuickJS driver 대신 직접 만든다(`code/sandbox.ts`, `code/worker.ts`). 이유는 세 가지다.
+  - QuickJS는 부른 thread에서 동기로 돈다. 서버 thread에서는 바쁜 프로그램이 시간이 다할 때까지 모든 요청을 막는다. 깊은 재귀는 thread의 stack을 넘겨 Node를 죽인다. 그래서 프로그램마다 새 worker thread에서 돌리고, 끝나면 worker를 멈춘다.
+  - TanStack driver의 WASM 경로(`new URL("emscripten-module.wasm", import.meta.url)`)는 실행 파일 번들에 넣을 수 없다. single-file 빌드(`@jitl/quickjs-singlefile-mjs-release-sync`)는 WASM을 JS 안에 담아서 worker 번들 하나로 끝난다.
+  - Effect AI로 옮길 수 있게 실행기는 TanStack·zod에 기대지 않는다. TanStack에 닿는 곳은 도구 파일(`tools/code.ts`) 하나다.
+- 엔진은 `quickjs-emscripten-core` 0.32와 single-file mjs 빌드다. TypeScript는 sucrase로 타입만 지워서 줄 번호가 그대로다. 한계는 메모리 128MB, QuickJS stack 256KB(512KB에서는 Node의 stack이 먼저 넘쳤다), console 200줄·16,000자, 반환값 JSON 64,000자다.
+- 프로그램은 `console`과 받은 함수만 쓴다. 파일·네트워크·프로세스·타이머·import는 없다. 값은 JSON 텍스트로 경계를 넘는다. 실패한 호출은 도구의 메시지(`code: detail`)를 가진 Error로 던져지고, 프로그램이 잡을 수 있다.
+- 시간 제한은 worker가 interrupt handler와 대기 timeout으로 지킨다. worker가 보고하지 못하면 호출 쪽이 2초 더 기다린 뒤 끊는다.
+- `run_code`는 즉석 실험과 한 번짜리 묶음 작업용 도구다. 입력은 `code`와 `timeoutSeconds`(기본 60, 최대 600)다.
+  - 프로그램은 그 run의 도구를 `external_<이름>`으로 부른다. 지금 모드에서 묻는 도구는 부르지 못한다. ask·auto 모드의 승인·검토 대상(`gatedToolNames`, MCP·위임 도구)과 TanStack 승인 도구가 그렇다. full 모드는 묻지 않으므로 부를 수 있다. 식별자가 될 수 없는 이름의 도구도 빠진다.
+  - run 자체를 움직이는 도구(Goal·Plan·workflow, subagent, 백그라운드 작업, 위임, 보드 편집, 카드 판정, 메모리 채택)는 모델에게 남긴다. 그 표는 `programCallable`이고, 새 builtin 도구마다 결정을 요구한다.
+  - 프로그램 안의 `run_skill`은 background 없이 끝까지 돈다. 프로그램은 백그라운드 작업을 기다릴 방법이 없다.
+  - 중첩 호출은 미들웨어를 거치지 않는다. 그래서 승인·검토는 묻는 도구를 빼서 지킨다. 입력은 엔진처럼 도구의 Standard Schema로 검사한다. id는 `<run_code 호출 id>#n`이다. 프로그램이 끝나면 남은 호출의 signal도 멈춘다.
+  - 프로그램은 모델이 직접 부를 때와 같은 도구를 부른다. 그래서 도구 결과의 비밀도 똑같이 가려진다. 메인 채팅은 `withHiddenResults`로 감싼 도구를 묶고, `run_code` 결과도 다시 가린다.
+  - 결과는 `{ status: "returned", value, logs }`, `{ status: "threw", error, logs }`, `{ status: "timed_out", logs }` 중 하나다. 프로그램이 던진 것은 도구 실패가 아니라 결과다. sandbox가 돌지 못하면 `sandbox_failed`로 실패한다.
+  - 메인 채팅, subagent(칸반 카드 agent·검증 포함), Goal worker(owner가 실행)에 둔다. report 세션에는 두지 않는다. Plan·Verify에는 둔다. 프로그램은 그 단계의 도구만 부르므로 단계의 경계를 넘지 않는다.

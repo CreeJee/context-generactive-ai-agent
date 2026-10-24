@@ -102,6 +102,7 @@ import type { PermissionClassifier } from "../permissions/classifier.ts";
 import type { PermissionReviews } from "../permissions/reviews.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
+import { CodeTools } from "../tools/code.ts";
 import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
 import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
@@ -212,7 +213,7 @@ import {
   ResumeRequest,
   WorkTraceStore,
 } from "../work-trace/store.ts";
-import { BackgroundTasks } from "../tools/background.ts";
+import { BackgroundTasks, type BackgroundBinding } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
 import {
   initialReportEvidence,
@@ -735,6 +736,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const redactor = yield* SecretRedactor;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
+  const codeTools = yield* CodeTools;
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
@@ -2001,22 +2003,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Plan/Verify have a hard mutation boundary. Verify additionally receives only the shell skill tools
         // from the approved tool set so it can execute builds and tests without editing source.
         // This is enforced by omitting tools, not by relying on the prompt.
-        const phaseApprovedTools =
-          reportSource !== null
-            ? []
-            : workflowReadOnly
-              ? workflow.phase === "verify"
-                ? (yield* approvedTools.forProject(project, undefined, {
-                    sessionId,
-                    runId,
-                    abortSignal: abortController.signal,
-                  })).filter((tool) => HashSet.has(verificationToolNames, tool.name))
-                : []
-              : yield* approvedTools.forProject(project, undefined, {
-                  sessionId,
-                  runId,
-                  abortSignal: abortController.signal,
-                });
+        const phaseApproved = (binding?: BackgroundBinding) =>
+          reportSource !== null || (workflowReadOnly && workflow.phase !== "verify")
+            ? Effect.succeed([])
+            : Effect.map(approvedTools.forProject(project, undefined, binding), (tools) =>
+                workflowReadOnly
+                  ? tools.filter((tool) => HashSet.has(verificationToolNames, tool.name))
+                  : tools,
+              );
+        const phaseApprovedTools = yield* phaseApproved({
+          sessionId,
+          runId,
+          abortSignal: abortController.signal,
+        });
         const memoryScope: MemoryToolScope = (yield* recallScope).crossProject
           ? "allowed-projects"
           : "project";
@@ -2208,6 +2207,24 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ],
           abortController.signal,
         );
+        // A program calls the run's tools as the model would, except the ones that ask first. Its
+        // run_skill runs to the end: a program has no way to wait on a background task.
+        const programTools =
+          reportSource !== null
+            ? []
+            : redactor.withHiddenResults([
+                yield* codeTools.forTools(
+                  [
+                    ...reads.tools.filter((tool) => tool.name !== "run_skill"),
+                    ...redactor.withHiddenResults(
+                      (yield* phaseApproved()).filter((tool) => tool.name === "run_skill"),
+                    ),
+                  ],
+                  project.permissionMode === "full"
+                    ? HashSet.empty()
+                    : HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
+                ),
+              ]);
         const window = () => runtime.contextWindow(selection.model);
         let compactionStage: CompactionStage = "none";
         const workflowLifecycle = workflowAfterRun(
@@ -2297,6 +2314,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? []
             : [
                 ...reads.tools,
+                ...programTools,
                 ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
               ];
         // The page sends only the new turn, so earlier images are found in the stored messages.

@@ -27,6 +27,8 @@ export const builtinToolEffects = {
   save_shell_skill: "effectful",
   run_skill: "effectful",
   read_skill: "read",
+  // A program may call any of the run's effectful tools.
+  run_code: "effectful",
   // Remote calls can incur charges even when the response fails.
   kagi_search: "effectful",
   kagi_extract: "effectful",

@@ -37,6 +37,7 @@ import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
+import { CodeTools } from "../tools/code.ts";
 import { errorTag } from "../tools/failure.ts";
 import { lazily } from "../tools/lazy.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
@@ -365,6 +366,7 @@ const make = Effect.gen(function* () {
   const reviews = yield* PermissionReviews;
   const relayed = yield* RelayedApprovals;
   const trace = yield* WorkTraceStore;
+  const codeTools = yield* CodeTools;
 
   // A child cut off by a restart is not rerun on its own (R18).
   yield* sql`UPDATE subagents SET status = 'interrupted', updated_at = ${yield* Clock.currentTimeMillis}
@@ -648,8 +650,16 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+          const ownTools = [...childTools(binding.tools), readChildResult];
           const reads = parallelReads(
-            [...childTools(binding.tools), readChildResult],
+            [
+              ...ownTools,
+              // The calls that would wait on the relay gate stay with the child.
+              yield* codeTools.forTools(
+                ownTools,
+                binding.project.permissionMode === "full" ? HashSet.empty() : binding.gated,
+              ),
+            ],
             controller.signal,
           );
           const childContext: ChatMiddleware = {

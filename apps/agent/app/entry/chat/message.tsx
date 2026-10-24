@@ -37,6 +37,7 @@ const toolLabels = {
   run_shell: "셸 실행",
   save_shell_skill: "셸 스킬 저장",
   run_skill: "셸 스킬 실행",
+  run_code: "코드 실행",
   write_outside_file: "프로젝트 밖 파일 쓰기",
   delete_outside_file: "프로젝트 밖 파일 삭제",
   kagi_search: "웹 검색",

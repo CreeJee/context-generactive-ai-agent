@@ -96,6 +96,7 @@ import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { ShellSkills } from "./skills/shell-skills.ts";
 import { BackgroundTasks } from "./tools/background.ts";
+import { CodeTools } from "./tools/code.ts";
 import { FileTools } from "./tools/files.ts";
 import { DelegateTools } from "./tools/delegate.ts";
 import { KagiTools } from "./tools/kagi.ts";
@@ -405,7 +406,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
       ),
     ),
     Layer.provideMerge(retrieval),
-    Layer.provideMerge(BackgroundTasks.layer),
+    Layer.provideMerge(Layer.mergeAll(BackgroundTasks.layer, CodeTools.layer)),
     Layer.provideMerge(memory),
     Layer.provideMerge(stores),
     Layer.provideMerge(foundation),

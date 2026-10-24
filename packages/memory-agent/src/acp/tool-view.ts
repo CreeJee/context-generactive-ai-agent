@@ -27,6 +27,7 @@ const views = HashMap.fromIterable<string, ToolView>([
   ["run_shell", { title: "셸 실행", kind: "execute" }],
   ["save_shell_skill", { title: "셸 스킬 저장", kind: "edit" }],
   ["run_skill", { title: "셸 스킬 실행", kind: "execute" }],
+  ["run_code", { title: "코드 실행", kind: "execute" }],
   ["write_outside_file", { title: "프로젝트 밖 파일 쓰기", kind: "edit" }],
   ["delete_outside_file", { title: "프로젝트 밖 파일 삭제", kind: "delete" }],
   ["kagi_search", { title: "웹 검색", kind: "fetch" }],
