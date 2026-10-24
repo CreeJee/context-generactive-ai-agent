@@ -1,11 +1,14 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Cause, Effect, FileSystem, Option, Path } from "effect";
+import { toolDefinition } from "@tanstack/ai";
+import { Cause, Effect, FileSystem, HashSet, Option, Path, Schema } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { expect, test } from "vite-plus/test";
-import { builtinOverlap } from "../src/skills/shell-skills.ts";
+import { builtinOverlap } from "../src/skills/code-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
+import { CodeTools } from "../src/tools/code.ts";
+import { toToolSchema } from "../src/tools/schema.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
 import { inRun } from "./support/run-span.ts";
 import { sdk } from "./agents/agent-env.ts";
@@ -32,7 +35,7 @@ test("a script that only wraps built-in tools is refused, a filter after a build
   expect(Option.isNone(builtinOverlap("git log --oneline -20"))).toBe(true);
 });
 
-testAgent()("shell skills", (it) => {
+testAgent()("code skills", (it) => {
   it.effect("an approved script runs with its arguments; an edited one is refused", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
@@ -41,7 +44,7 @@ testAgent()("shell skills", (it) => {
         save.execute!({
           name: "echo-args",
           description: "Print the arguments",
-          script: 'printf "%s|" "$@"',
+          program: { runtime: "sh", script: 'printf "%s|" "$@"' },
         }),
       );
       expect(
@@ -63,6 +66,47 @@ testAgent()("shell skills", (it) => {
       );
       expect(yield* sdk(() => runFull.execute!({ name: "echo-args" }))).toMatchObject({
         stdout: "changed",
+      });
+    }),
+  );
+
+  it.effect("a ts skill runs its program on checked input; a program cannot run one", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const [save, run] = yield* inRun((yield* ApprovedTools).forProject(project, "gate"));
+      const echo = toolDefinition({
+        name: "echo_text",
+        description: "echo_text",
+        inputSchema: toToolSchema(Schema.Struct({ text: Schema.String })),
+      }).server(({ text }) => ({ text }));
+      const programs = yield* (yield* CodeTools).forTools([echo, run], HashSet.empty());
+      const runSkill = programs.codeSkills(project, run);
+      expect(
+        yield* sdk(() =>
+          save.execute!({
+            name: "shout",
+            description: "Echo a text in capitals",
+            program: {
+              runtime: "ts",
+              code: "const { text } = await external_echo_text({ text: input.text.toUpperCase() });\nreturn text;",
+              input: {
+                type: "object",
+                properties: { text: { type: "string" } },
+                required: ["text"],
+              },
+            },
+          }),
+        ),
+      ).toMatchObject({ runtime: "ts", input: "{ text: string }" });
+      expect(yield* sdk(() => runSkill.execute!({ name: "shout", input: { text: "hi" } }))).toEqual(
+        { status: "returned", value: "HI", logs: [] },
+      );
+      expect(yield* rejection(sdk(() => runSkill.execute!({ name: "shout" })))).toMatchObject({
+        message: expect.stringContaining("invalid_input"),
+      });
+      // What a program gets as external_run_skill runs sh skills only.
+      expect(yield* rejection(sdk(() => run.execute!({ name: "shout" })))).toMatchObject({
+        message: expect.stringContaining("ts_skill"),
       });
     }),
   );
@@ -89,9 +133,12 @@ testAgent()("shell skills", (it) => {
               save.execute!({
                 name: "fetch-local",
                 description: "Fetch the local test server",
-                // Loopback skips the proxy unless told otherwise; through it, it stands in for a host.
-                script: `curl -fsS --max-time 5 ${proxied ? "--noproxy ''" : ""} "http://127.0.0.1:$1/"`,
-                network,
+                program: {
+                  runtime: "sh",
+                  // Loopback skips the proxy unless told otherwise; through it, it stands in for a host.
+                  script: `curl -fsS --max-time 5 ${proxied ? "--noproxy ''" : ""} "http://127.0.0.1:$1/"`,
+                  network,
+                },
               }),
             );
             return yield* sdk(() => run.execute!({ name: "fetch-local", args: [String(port)] }));
@@ -117,7 +164,10 @@ testAgent()("shell skills", (it) => {
           save.execute!({
             name: "touch-around",
             description: "Write a skill file, then read the file named by $1",
-            script: 'echo x > .agents/skills/echo-args/SKILL.md; wc -c < "$1"',
+            program: {
+              runtime: "sh",
+              script: 'echo x > .agents/skills/echo-args/SKILL.md; wc -c < "$1"',
+            },
           }),
         );
         expect(

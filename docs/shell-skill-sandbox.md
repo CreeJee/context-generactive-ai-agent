@@ -2,6 +2,8 @@
 
 2026-10-14. 결정 요약은 [decisions.md "셸 스킬 샌드박스 (#22)"](./decisions.md#셸-스킬-샌드박스-22-2026-10-14)에 있다. 이 문서는 배경, 구조, 정책, 검증, 남은 한계를 함께 적는다.
 
+2026-10-25: 셸 스킬은 코드 스킬의 sh 종류가 됐다. 저장 도구는 `save_code_skill`(`program: { runtime: "sh", script, network }`)이고, 이 문서의 샌드박스는 sh 스킬에 그대로 적용된다. ts 스킬은 이 샌드박스가 아니라 코드 샌드박스(QuickJS)에서 돈다. 결정은 decisions.md "셸 스킬을 코드 스킬로 넓힌다"에 있다.
+
 ## 배경
 
 - `run_shell`을 없애고 호스트 명령은 프로젝트 셸 스킬(`.agents/skills/<name>/scripts/run.sh`)로만 실행한다. 관련 결정은 decisions.md의 "`run_shell`을 셸 스킬로 바꿈"이다.
@@ -33,7 +35,7 @@
 
 ### 스킬마다 정확한 호스트 목록
 
-- `save_shell_skill`에 `network`를 받는다. 항목 형식은 다음과 같다.
+- `save_code_skill`의 sh 프로그램이 `network`를 받는다. 항목 형식은 다음과 같다.
   - 소문자 호스트: `registry.npmjs.org`
   - 와일드카드: `*.github.com`
   - 포트 지정: `api.example.com:443`
@@ -73,7 +75,7 @@
 
 ```
 run_skill
-  └ ShellSkills.runnable      승인된 텍스트 + 첫 줄의 호스트
+  └ CodeSkills.runnable       승인된 텍스트 + 첫 줄의 호스트
   └ sandboxPolicy             프로젝트·저장소·홈 기준 정책
   └ runSandboxed (Scope)
        ├ scratch TMPDIR       acquireRelease로 생성·삭제
@@ -105,7 +107,7 @@ run_skill
 
 | 항목     | 허용                                                                                                                                                            | 차단                                                                                                                                                                                                                                                                      |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 쓰기     | 프로젝트, `/tmp`, 시스템 임시 폴더, `~/.npm`, `~/.cache`, `~/Library/Caches`, pnpm, yarn, bun, deno, cargo registry·git, go mod, gradle·m2 캐시, `~/.vite-plus` | 프로젝트 `.agents/skills`(스킬은 `save_shell_skill`로만 바뀜). srt 기본: 셸 설정, `.git/hooks`, `.git/config`, `.vscode` 등                                                                                                                                               |
+| 쓰기     | 프로젝트, `/tmp`, 시스템 임시 폴더, `~/.npm`, `~/.cache`, `~/Library/Caches`, pnpm, yarn, bun, deno, cargo registry·git, go mod, gradle·m2 캐시, `~/.vite-plus` | 프로젝트 `.agents/skills`(스킬은 `save_code_skill`로만 바뀜). srt 기본: 셸 설정, `.git/hooks`, `.git/config`, `.vscode` 등                                                                                                                                                |
 | 읽기     | 그 밖의 전체                                                                                                                                                    | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, gh·gcloud·1Password·Copilot 설정, cargo 자격증명, codex·Claude·Gemini 로그인, `~/.mcp-auth`, 키체인, 쿠키, 브라우저 프로필, 앱 저장소 폴더 |
 | 네트워크 | 스킬 `network`의 호스트. 루프백 포트 바인딩·접속은 `localhost`를 적었을 때만                                                                                    | 그 밖의 전체. ssh 기반 git은 프록시를 지나지 못하므로 https remote를 쓴다                                                                                                                                                                                                 |
 
@@ -117,7 +119,7 @@ run_skill
 
 ## 검증
 
-- `tests/shell-skills.test.ts`(macOS)
+- `tests/code-skills.test.ts`(macOS)
   - 프록시를 거친 목록 밖 호스트는 차단되고 `<sandbox_violations>`가 붙는다.
   - 목록에 넣은 IP는 허용된다.
   - 루프백은 기본으로 막히고 `localhost`를 적으면 열린다.

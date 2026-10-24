@@ -50,7 +50,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       );
       expect(auto).toContain("reviewed before each call: routine requested work runs");
       expect(auto).toMatch(
-        /Today is 2026-09-1[56] \(.+\)\. Shell skill scripts run with \/bin\/sh on /,
+        /Today is 2026-09-1[56] \(.+\)\. Scripts of sh skills run with \/bin\/sh on /,
       );
       expect(auto).not.toContain("read-only");
       expect(yield* workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
@@ -61,7 +61,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       ).toContain("run without approval");
       // Where the app keeps its own settings, and that its storage is not for the file tools.
       expect(auto).toContain(`the memory database in ${storage}.`);
-      expect(auto).toContain("Neither the file tools nor shell skill scripts open that folder");
+      expect(auto).toContain("Neither the file tools nor sh skill scripts open that folder");
     }),
   );
 
@@ -115,7 +115,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       expect(tab.client.getInterrupts()[0]).toMatchObject({
         kind: "generic",
         definitionId: "permission-review",
-        payload: { toolName: "save_shell_skill", reason: "검토 결과: ask" },
+        payload: { toolName: "save_code_skill", reason: "검토 결과: ask" },
       });
       expect(yield* shellResult()).toBeUndefined();
       tab.client.resolveInterrupts((item) => {

@@ -14,7 +14,7 @@ every project, the second to the current one:
 - App settings such as the model and web search: `<storage root>/config.json`
 
 Settings in the project can be changed with the file tools. The storage root also holds the
-account login and the memory database, so neither the file tools nor shell skill scripts open it:
+account login and the memory database, so neither the file tools nor sh skill scripts open it:
 for a file there, show the user the exact change to make. Never print keys or tokens these files
 hold.
 

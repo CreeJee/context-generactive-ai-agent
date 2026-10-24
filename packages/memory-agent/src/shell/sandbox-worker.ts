@@ -1,4 +1,4 @@
-// One sandboxed shell-skill run, in its own worker thread. The sandbox runtime keeps one policy,
+// One sandboxed sh skill run, in its own worker thread. The sandbox runtime keeps one policy,
 // one filtering proxy and one violation store per module instance, so a worker per run keeps
 // concurrent runs from sharing an allowlist. The host spawns the wrapped command itself and keeps
 // this worker alive, serving the proxy, until the command has exited. In a checkout Node runs this

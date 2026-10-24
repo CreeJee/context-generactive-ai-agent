@@ -67,6 +67,6 @@ from.
 
 If the user explicitly needs a PNG (an OG image, a favicon), draw the SVG first, then tell them
 it needs converting. Do not shell out to Pillow or ImageMagick without checking they exist:
-host commands run only through approved shell skills and those packages are usually missing. Python's standard library
+host commands run only through approved sh skills and those packages are usually missing. Python's standard library
 can write a PNG (`zlib` + `struct`) when the shapes are simple enough to rasterise by hand, but
 prefer handing over the SVG.

@@ -35,8 +35,10 @@ const toolLabels = {
   search_outside_file: "프로젝트 밖 파일 검색",
   // Calls recorded before shell skills replaced it.
   run_shell: "셸 실행",
+  // Calls recorded before code skills replaced it.
   save_shell_skill: "셸 스킬 저장",
-  run_skill: "셸 스킬 실행",
+  save_code_skill: "코드 스킬 저장",
+  run_skill: "코드 스킬 실행",
   run_code: "코드 실행",
   write_outside_file: "프로젝트 밖 파일 쓰기",
   delete_outside_file: "프로젝트 밖 파일 삭제",

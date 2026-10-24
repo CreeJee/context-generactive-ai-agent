@@ -2,7 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { reviewInstructions, routineShellVerdict } from "./classifier.ts";
 
 const shell = (script: string) =>
-  routineShellVerdict("save_shell_skill", JSON.stringify({ name: "check", script }));
+  routineShellVerdict(
+    "save_code_skill",
+    JSON.stringify({ name: "check", program: { runtime: "sh", script } }),
+  );
 
 describe("routine shell verdict", () => {
   it.each([
@@ -37,15 +40,27 @@ describe("routine shell verdict", () => {
   it("leaves a routine script with network hosts to the reviewer", () => {
     expect(
       routineShellVerdict(
-        "save_shell_skill",
-        JSON.stringify({ name: "install", script: "pnpm i", network: ["registry.npmjs.org"] }),
+        "save_code_skill",
+        JSON.stringify({
+          name: "install",
+          program: { runtime: "sh", script: "pnpm i", network: ["registry.npmjs.org"] },
+        }),
       ),
     ).toBeUndefined();
   });
 
-  it("only classifies save_shell_skill", () => {
+  it("only classifies the sh programs of save_code_skill", () => {
     expect(
-      routineShellVerdict("write_outside_file", JSON.stringify({ script: "pnpm i" })),
+      routineShellVerdict(
+        "write_outside_file",
+        JSON.stringify({ program: { runtime: "sh", script: "pnpm i" } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      routineShellVerdict(
+        "save_code_skill",
+        JSON.stringify({ name: "check", program: { runtime: "ts", code: "pnpm i" } }),
+      ),
     ).toBeUndefined();
   });
 

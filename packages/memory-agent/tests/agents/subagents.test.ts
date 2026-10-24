@@ -260,7 +260,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         "the child's approval",
       );
       const [request] = yield* relayed.pending(sessionId);
-      expect(request).toMatchObject({ toolName: "save_shell_skill", askedBy: "every_call" });
+      expect(request).toMatchObject({ toolName: "save_code_skill", askedBy: "every_call" });
       expect(ApprovalRequester.guards.subagent(request!.requester)).toBe(true);
       expect(request!.requester).toMatchObject({ name: null });
       expect(yield* relayed.answer("another-session", request!.id, true)).toBe(false);

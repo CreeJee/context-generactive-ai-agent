@@ -9,11 +9,11 @@ import { permissionReviewInterrupt } from "memory-agent/definitions";
 export const navigationInterrupt = (threadId: string): ReturnType<typeof withInterruptBinding> => {
   const payload = {
     toolCallId: `nav-call-${threadId}`,
-    toolName: "save_shell_skill",
+    toolName: "save_code_skill",
     arguments: JSON.stringify({
       name: "nav-check",
       description: "Navigation fixture",
-      script: `echo ${threadId}`,
+      program: { runtime: "sh", script: `echo ${threadId}` },
     }),
     reason: `NAV-APPROVAL-${threadId}`,
   };

@@ -415,10 +415,10 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
   it.effect("does not start another turn while a tool approval is pending", () =>
     Effect.gen(function* () {
       const session = yield* executing([
-        call("shell", "save_shell_skill", {
+        call("shell", "save_code_skill", {
           name: "check",
           description: "Check the implementation",
-          script: "printf approved",
+          program: { runtime: "sh", script: "printf approved" },
           reason: "Check the implementation",
         }),
       ]);

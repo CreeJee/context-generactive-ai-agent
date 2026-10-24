@@ -2,10 +2,11 @@ import {
   isStandardSchema,
   parseWithStandardSchema,
   toolDefinition,
+  validateJsonSchema,
   type AnyServerTool,
   type ToolExecutionContext,
 } from "@tanstack/ai";
-import { Context, Duration, Effect, HashSet, Layer, Predicate, Schema } from "effect";
+import { Context, Duration, Effect, HashSet, Layer, Option, Predicate, Schema } from "effect";
 import {
   CodeSandbox,
   ProgramCallFailed,
@@ -14,14 +15,22 @@ import {
   type ProgramFunction,
 } from "../code/sandbox.ts";
 import { JsonValue } from "../json.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
+import type { Project } from "../projects/projects.ts";
+import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
+import { defaultTimeoutSeconds, maxTimeoutSeconds } from "../shell/run.ts";
+import { CodeSkills, SavedProgram, type InputSchema } from "../skills/code-skills.ts";
 import { isTruthy } from "../truthy.ts";
+import { RunSkillInput } from "./definitions.ts";
 import type { builtinToolEffects } from "./effects.ts";
-import { ToolFailed, toolFailedOf } from "./failure.ts";
+import { guardedEffect, ToolFailed, toolFailedOf } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
 
-const defaultTimeoutSeconds = 60;
-const maxTimeoutSeconds = 600;
+/** run_code's time: a program for the step at hand, unlike a skill's build or test run. */
+const runCodeSeconds = { initial: 60, most: 600 };
+/** A ts skill's time, as a sh skill's. */
+const skillSeconds = { initial: defaultTimeoutSeconds, most: maxTimeoutSeconds };
+const secondsOf = (asked: number | undefined, limits: { initial: number; most: number }) =>
+  Duration.seconds(Math.min(Math.max(1, asked ?? limits.initial), limits.most));
 
 const RunCodeInput = Schema.Struct({
   code: Schema.NonEmptyString.annotate({
@@ -29,7 +38,7 @@ const RunCodeInput = Schema.Struct({
   }),
   timeoutSeconds: Schema.optionalKey(
     Schema.Int.annotate({
-      description: `Stop the program after this long, waiting on its calls included. ${defaultTimeoutSeconds} by default, at most ${maxTimeoutSeconds}.`,
+      description: `Stop the program after this long, waiting on its calls included. ${runCodeSeconds.initial} by default, at most ${runCodeSeconds.most}.`,
     }),
   ),
 });
@@ -57,7 +66,7 @@ const programCallable = {
   search_outside_file: true,
   write_outside_file: true,
   delete_outside_file: true,
-  save_shell_skill: true,
+  save_code_skill: true,
   run_skill: true,
   read_skill: true,
   kagi_search: true,
@@ -203,12 +212,37 @@ const functionsFor = (tools: readonly Callable[], context: ToolExecutionContext 
   );
 };
 
+const decodeRunSkill = Schema.decodeUnknownOption(RunSkillInput);
+const decodeInput = Schema.decodeUnknownEffect(JsonValue);
+
+const inputRejected = (detail: string) =>
+  ToolFailed.make({ code: "invalid_input", tag: "SkillInputRejected", detail });
+
+/** The input a ts skill gets: what run_skill was given, checked against the schema it declares. */
+const skillInput = (
+  schema: Option.Option<InputSchema>,
+  input: NonNullable<(typeof RunSkillInput.Type)["input"]>,
+): Effect.Effect<JsonValue, ToolFailed> =>
+  Option.match(
+    Option.flatMapNullishOr(schema, (declared) => validateJsonSchema(declared, input).issues),
+    {
+      onNone: () =>
+        decodeInput(input).pipe(
+          Effect.mapError(() => inputRejected("The input is not plain JSON.")),
+        ),
+      onSome: (issues) =>
+        Effect.fail(inputRejected(issues.map((issue) => issue.message).join("; "))),
+    },
+  );
+
 const make = Effect.gen(function* () {
   const sandbox = yield* CodeSandbox;
+  const codeSkills = yield* CodeSkills;
   return {
     /**
-     * `run_code` over a run's tools. A program may call each one that runs without asking in this
-     * run (`asking` names those that ask: approvals, reviews) and that does not steer the run.
+     * Programs over a run's tools: `run_code`, and `codeSkills` to give a run_skill the ts skills.
+     * A program may call each tool that runs without asking in this run (`asking` names those that
+     * ask: approvals, reviews) and that does not steer the run.
      */
     forTools: (tools: readonly AnyServerTool[], asking: HashSet.HashSet<string>) =>
       Effect.map(Effect.context<never>(), (caller) => {
@@ -221,25 +255,62 @@ const make = Effect.gen(function* () {
             ? [{ name, inputSchema, execute }]
             : [],
         );
-        return toolDefinition({
-          name: "run_code",
-          description: describe(callable.map(({ name }) => name)),
-          inputSchema: toToolSchema(RunCodeInput),
-        }).server(({ code, timeoutSeconds }, context) =>
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          runNativeEffectWith(caller)(
-            sandbox
-              .run(
-                { code, input: null },
-                functionsFor(callable, context),
-                Duration.seconds(
-                  Math.min(Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds), maxTimeoutSeconds),
-                ),
-              )
-              .pipe(Effect.flatMap(resultOf), Effect.mapError(sandboxFailure)),
-            { signal: context?.abortSignal },
+        const run = (
+          code: string,
+          input: JsonValue,
+          timeout: Duration.Duration,
+          context: ToolExecutionContext | undefined,
+        ) =>
+          sandbox
+            .run({ code, input }, functionsFor(callable, context), timeout)
+            .pipe(Effect.flatMap(resultOf), Effect.mapError(sandboxFailure));
+        return {
+          runCode: toolDefinition({
+            name: "run_code",
+            description: describe(callable.map(({ name }) => name)),
+            inputSchema: toToolSchema(RunCodeInput),
+          }).server(({ code, timeoutSeconds }, context) =>
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            runNativeEffectWith(caller)(
+              run(code, null, secondsOf(timeoutSeconds, runCodeSeconds), context),
+              { signal: context?.abortSignal },
+            ),
           ),
-        );
+
+          /**
+           * `runSkill` that also runs `project`'s ts skills, as programs over these tools, and its
+           * sh skills as before. Any other tool comes back as it is.
+           */
+          codeSkills: (project: Project, runSkill: AnyServerTool): AnyServerTool => {
+            const execute = runSkill.execute;
+            if (runSkill.name !== "run_skill" || !isTruthy(execute)) return runSkill;
+            return {
+              ...runSkill,
+              execute: (args, context?: ToolExecutionContext) =>
+                Option.match(decodeRunSkill(args), {
+                  // The engine checked the arguments; what it let through, the tool reports.
+                  onNone: () => Promise.resolve(execute(args, context)),
+                  onSome: ({ name, input = {}, timeoutSeconds }) =>
+                    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                    runNativeEffectWith(caller)(
+                      guardedEffect(
+                        name,
+                        Effect.flatMap(codeSkills.runnable(project, name), (saved) =>
+                          SavedProgram.$match(saved, {
+                            sh: () => nativePromise(() => Promise.resolve(execute(args, context))),
+                            ts: ({ code, input: schema }) =>
+                              Effect.flatMap(skillInput(schema, input), (value) =>
+                                run(code, value, secondsOf(timeoutSeconds, skillSeconds), context),
+                              ),
+                          }),
+                        ),
+                      ),
+                      { signal: context?.abortSignal },
+                    ),
+                }),
+            };
+          },
+        };
       }),
   };
 });
@@ -248,5 +319,8 @@ const make = Effect.gen(function* () {
 export class CodeTools extends Context.Service<CodeTools, Effect.Success<typeof make>>()(
   "memory-agent/tools/code/CodeTools",
 ) {
-  static readonly layer = Layer.effect(CodeTools, make).pipe(Layer.provide(CodeSandbox.layer));
+  static readonly layer = Layer.effect(CodeTools, make).pipe(
+    Layer.provide(CodeSandbox.layer),
+    Layer.provide(CodeSkills.layer),
+  );
 }

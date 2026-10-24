@@ -67,7 +67,7 @@ export {
 } from "../queue/queue-state.ts";
 
 /** Skill names as the Agent Skills format spells them: lowercase words joined by hyphens. */
-const ShellSkillName = Schema.String.check(
+const SkillName = Schema.String.check(
   Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   Schema.isMaxLength(64),
 );
@@ -78,26 +78,55 @@ export const NetworkHost = Schema.String.check(
   Schema.isMaxLength(253),
 );
 
-export const SaveShellSkillInput = Schema.Struct({
-  name: ShellSkillName.annotate({
+/** A JSON object as the model writes it: a skill's input, or the JSON Schema that describes it. */
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
+
+/** A ts skill: a program that calls the run's tools, as run_code runs one. */
+export const TsSkillProgram = Schema.Struct({
+  runtime: Schema.Literal("ts"),
+  code: Schema.NonEmptyString.annotate({
     description:
-      "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, git-recent-changes).",
+      "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.",
+  }),
+  input: Schema.optionalKey(
+    JsonObject.annotate({
+      description:
+        'JSON Schema of `input`, of type "object"; every run is checked against it. Omit when the skill takes no input.',
+    }),
+  ),
+});
+
+/** A sh skill: a script, the only way a host command runs. */
+export const ShSkillProgram = Schema.Struct({
+  runtime: Schema.Literal("sh"),
+  script: Schema.NonEmptyString.annotate({
+    description:
+      "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+  }),
+  network: Schema.optionalKey(
+    Schema.Array(NetworkHost).check(Schema.isMaxLength(32)).annotate({
+      description:
+        'The only hosts the script may connect to, exactly as it needs them (e.g. "registry.npmjs.org", "*.github.com", "api.example.com:443"). Omit for no network; localhost only if listed.',
+    }),
+  ),
+});
+
+export const SaveCodeSkillInput = Schema.Struct({
+  name: SkillName.annotate({
+    description:
+      "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).",
   }),
   description: Schema.NonEmptyString.annotate({
     description:
       "One line on what the skill does and when to use it; it is listed so later runs can find it.",
   }),
-  script: Schema.NonEmptyString.annotate({
+  program: Schema.Union([TsSkillProgram, ShSkillProgram]).annotate({
     description:
-      "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+      "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.",
   }),
   usage: Schema.optionalKey(
-    Schema.String.annotate({ description: "What the arguments mean and what the output shows." }),
-  ),
-  network: Schema.optionalKey(
-    Schema.Array(NetworkHost).check(Schema.isMaxLength(32)).annotate({
-      description:
-        'The only hosts the script may connect to, exactly as it needs them (e.g. "registry.npmjs.org", "*.github.com", "api.example.com:443"). Omit for no network; localhost only if listed.',
+    Schema.String.annotate({
+      description: "What the input or arguments mean and what the result shows.",
     }),
   ),
   reason: Schema.optionalKey(
@@ -108,27 +137,30 @@ export const SaveShellSkillInput = Schema.Struct({
 });
 
 export const RunSkillInput = Schema.Struct({
-  name: ShellSkillName.annotate({ description: "A project shell skill's name." }),
+  name: SkillName.annotate({ description: "A project code skill's name." }),
+  input: Schema.optionalKey(
+    JsonObject.annotate({ description: "A ts skill's input, as its Input in the list says." }),
+  ),
   args: Schema.optionalKey(
     Schema.Array(Schema.String).annotate({
-      description: "Arguments, passed as $1, $2, … without shell parsing.",
+      description: "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
     }),
   ),
   workdir: Schema.optionalKey(
     Schema.String.annotate({
       description:
-        'Project-relative directory or absolute directory below /tmp to run in. Defaults to the project root (".").',
+        'A sh skill\'s directory to run in: project-relative, or absolute below /tmp. Defaults to the project root (".").',
     }),
   ),
   timeoutSeconds: Schema.optionalKey(
     Schema.Int.annotate({
-      description: "Stop the script after this long. 120 by default, at most 1800.",
+      description: "Stop the skill after this long. 120 by default, at most 1800.",
     }),
   ),
   yieldMs: Schema.optionalKey(
     Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 30_000 }))).annotate({
       description:
-        "Return a background taskId if unfinished after this many milliseconds (default 1000; 0 dispatches at once). Separate from timeoutSeconds.",
+        "A sh skill returns a background taskId if unfinished after this many milliseconds (default 1000; 0 dispatches at once). Separate from timeoutSeconds.",
     }),
   ),
 });
@@ -160,11 +192,11 @@ export const DeleteOutsideFileInput = Schema.Struct({
   ),
 });
 
-const saveShellSkill = {
-  name: "save_shell_skill",
+const saveCodeSkill = {
+  name: "save_code_skill",
   description:
-    "Save a project shell skill (.agents/skills/<name>/ with SKILL.md and scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap what the file tools already do. Scripts run sandboxed: they write only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reach only the hosts in network. Saving asks for approval of the exact script and host list; later runs of the unchanged script, with any arguments, do not ask. Saving under an existing shell skill's name replaces it. Read the shell-skill-writing skill before the first save in a conversation.",
-  inputSchema: toToolSchema(SaveShellSkillInput),
+    "Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.",
+  inputSchema: toToolSchema(SaveCodeSkillInput),
 } as const;
 
 const writeOutsideFile = {
@@ -183,12 +215,12 @@ const deleteOutsideFile = {
 
 /** Names of the tools that never run without an approval, in either permission mode. */
 export const gatedToolNames = HashSet.fromIterable([
-  saveShellSkill.name,
+  saveCodeSkill.name,
   writeOutsideFile.name,
   deleteOutsideFile.name,
 ]);
 
-export const saveShellSkillDefinition = toolDefinition({ ...saveShellSkill, needsApproval: true });
+export const saveCodeSkillDefinition = toolDefinition({ ...saveCodeSkill, needsApproval: true });
 export const writeOutsideFileDefinition = toolDefinition({
   ...writeOutsideFile,
   needsApproval: true,
@@ -203,7 +235,7 @@ export const deleteOutsideFileDefinition = toolDefinition({
  * Register these with `useChat({ tools })` so approval requests can be answered.
  */
 export const approvalToolDefinitions = [
-  saveShellSkillDefinition,
+  saveCodeSkillDefinition,
   writeOutsideFileDefinition,
   deleteOutsideFileDefinition,
 ] as const;
@@ -213,7 +245,7 @@ export const approvalToolDefinitions = [
  * middleware decides each call instead, and asks the user through {@link permissionReviewInterrupt}.
  */
 export const reviewedToolDefinitions = [
-  toolDefinition({ ...saveShellSkill, needsApproval: false }),
+  toolDefinition({ ...saveCodeSkill, needsApproval: false }),
   toolDefinition({ ...writeOutsideFile, needsApproval: false }),
   toolDefinition({ ...deleteOutsideFile, needsApproval: false }),
 ] as const;

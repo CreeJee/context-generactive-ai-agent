@@ -24,7 +24,7 @@ export function skillsInstructions(skills: readonly Skill[]) {
     .slice(0, maxListedSkills)
     .map((skill) => `- ${skill.name} (${skill.scope}): ${skill.description}`)
     .join("\n");
-  return `Skills are instructions for particular tasks: built into this app (builtin), written by the user, or installed from elsewhere. When a task matches a skill's description, call read_skill before doing it. A project skill with scripts/run.sh is a shell skill: run it with run_skill instead of reading it first when its description fits.
+  return `Skills are instructions for particular tasks: built into this app (builtin), written by the user, or installed from elsewhere. When a task matches a skill's description, call read_skill before doing it. A project skill with scripts/run.ts or scripts/run.sh is a code skill: run it with run_skill instead of reading it first when its description fits. A ts skill takes the input its description's "Input:" shows; a sh skill takes args.
 
 Available skills:
 ${listed}`;

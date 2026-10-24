@@ -29,7 +29,7 @@ const kinds = (nodes: Nodes["Service"], sessionId: string) =>
   Effect.map(nodes.session(sessionId), (session) => session.map((node) => node.kind));
 
 testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gated tools", (it) => {
-  it.effect("saving a shell skill waits for approval, then resumes the durable app run", () =>
+  it.effect("saving a code skill waits for approval, then resumes the durable app run", () =>
     Effect.gen(function* () {
       const { provider } = yield* TestEnv;
       const invocations = provider!.adapter.invocations;
@@ -38,11 +38,11 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const { sessionId, tab } = yield* pendingApproval();
       expect(tab.client.getInterrupts()[0]).toMatchObject({
         kind: "tool-approval",
-        toolName: "save_shell_skill",
+        toolName: "save_code_skill",
         originalArgs: {
           name: "approved-output",
           description: "Print the approved output",
-          script: "printf approved-output",
+          program: { runtime: "sh", script: "printf approved-output" },
           reason: "check the shell",
         },
       });
@@ -61,9 +61,9 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       ]);
       const [, , call, result] = yield* nodes.session(sessionId);
       expect(result!.runId).toBe(call!.runId);
-      expect(result!.detail).toMatchObject({ toolName: "save_shell_skill", ok: true });
+      expect(result!.detail).toMatchObject({ toolName: "save_code_skill", ok: true });
 
-      // The model asks for save_shell_skill and calls it; the durable app run resumes with the
+      // The model asks for save_code_skill and calls it; the durable app run resumes with the
       // approved tool result in a fresh model invocation.
       expect(invocations.length - before).toBe(3);
       expect(invocations.at(-1)?.messages.at(-1)?.role).toBe("tool");
@@ -80,7 +80,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const result = (yield* (yield* Nodes).session(sessionId)).find(
         (node) => node.kind === "tool_result",
       );
-      expect(result?.detail).toMatchObject({ toolName: "save_shell_skill", ok: false });
+      expect(result?.detail).toMatchObject({ toolName: "save_code_skill", ok: false });
     }),
   );
 
@@ -125,7 +125,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const tab = yield* chatClient(sessionId, "send");
       yield* tab.send("please use the shell");
       yield* tab.pendingInterrupt;
-      expect(tab.client.getInterrupts()[0]).toMatchObject({ toolName: "save_shell_skill" });
+      expect(tab.client.getInterrupts()[0]).toMatchObject({ toolName: "save_code_skill" });
       tab.client.resolveInterrupts(true);
       yield* tab.answered("Shell said", "the Verify shell result");
       expect(tab.text()).toContain("approved-output");
@@ -142,7 +142,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
 
         const reloaded = yield* chatClient(sessionId, "restore");
         yield* reloaded.pendingInterrupt;
-        // The turn that asked for save_shell_skill, and the one that called it.
+        // The turn that asked for save_code_skill, and the one that called it.
         expect(reloaded.client.getMessages().map((message) => message.role)).toEqual([
           "user",
           "assistant",
@@ -150,7 +150,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
         ]);
         expect(reloaded.client.getInterrupts()[0]).toMatchObject({
           kind: "tool-approval",
-          toolName: "save_shell_skill",
+          toolName: "save_code_skill",
         });
         reloaded.client.resolveInterrupts(true);
         yield* reloaded.answered("Shell said", "the answer after the reload");

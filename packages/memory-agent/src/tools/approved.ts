@@ -30,13 +30,18 @@ import {
   type CommandResult,
 } from "../shell/run.ts";
 import { runSandboxed, sandboxPolicy, type SandboxUnavailable } from "../shell/sandbox.ts";
-import { ShellSkills, skillCommand } from "../skills/shell-skills.ts";
+import {
+  CodeSkillRejected,
+  CodeSkills,
+  SavedProgram,
+  skillCommand,
+} from "../skills/code-skills.ts";
 import {
   approvalToolDefinitions,
   reviewedToolDefinitions,
   RunSkillInput,
   type DeleteOutsideFileInput,
-  type SaveShellSkillInput,
+  type SaveCodeSkillInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
 import { runTrace } from "../runtime/run-trace.ts";
@@ -44,11 +49,11 @@ import { guardedWith } from "./failure.ts";
 import { lazily } from "./lazy.ts";
 import { toToolSchema } from "./schema.ts";
 
-/** Not gated per call: the script it runs was approved when it was saved. */
+/** Not gated per call: the program it runs was approved when it was saved. */
 export const runSkillDefinition = toolDefinition({
   name: "run_skill",
   description:
-    "Run a project shell skill's scripts/run.sh. A script runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_shell_skill. It runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host the job needs, save the skill again with that host in network. Returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.",
+    "Run a project code skill. A skill runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_code_skill. A ts skill takes input, checked against its schema, and returns what its program returned, as run_code does. A sh skill takes args and runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host the job needs, save the skill again with that host in network. It returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.",
   inputSchema: toToolSchema(RunSkillInput),
 });
 
@@ -118,7 +123,7 @@ function resolveShellWorkingDirectoryBody(
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const background = yield* BackgroundTasks;
-  const shellSkills = yield* ShellSkills;
+  const codeSkills = yield* CodeSkills;
   const fileSystem = yield* FileSystem.FileSystem;
 
   return {
@@ -135,17 +140,14 @@ const make = Effect.gen(function* () {
     ) =>
       Effect.map(runTrace, (caller) => {
         const guarded = guardedWith(caller);
-        const saveShellSkill = ({
+        const saveCodeSkill = ({
           name,
           description,
-          script,
+          program,
           usage,
-          network = [],
-        }: typeof SaveShellSkillInput.Type) =>
+        }: typeof SaveCodeSkillInput.Type) =>
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          guarded(name, () =>
-            shellSkills.save(project, { name, description, script, usage, network }),
-          );
+          guarded(name, () => codeSkills.save(project, { name, description, usage, program }));
 
         const runSkill = (
           { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
@@ -154,7 +156,21 @@ const make = Effect.gen(function* () {
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
           guarded(name, () =>
             Effect.gen(function* () {
-              const runnable = yield* shellSkills.runnable(project, name);
+              // A ts skill is run by `CodeTools`, which knows the run's tools; one reaches here
+              // only from a program, which runs sh skills alone.
+              const runnable = yield* SavedProgram.$match(
+                yield* codeSkills.runnable(project, name),
+                {
+                  ts: () =>
+                    Effect.fail(
+                      CodeSkillRejected.make({
+                        reason: "ts_skill",
+                        detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
+                      }),
+                    ),
+                  sh: (saved) => Effect.succeed(saved),
+                },
+              );
               const command = skillCommand(name, runnable.text, args);
               const label = [name, ...args].join(" ");
               const directory = yield* resolveShellWorkingDirectory(
@@ -294,7 +310,7 @@ const make = Effect.gen(function* () {
         if (approval === "gate") {
           const [save, write, remove] = reviewedToolDefinitions;
           return [
-            lazily(save.server(saveShellSkill)),
+            lazily(save.server(saveCodeSkill)),
             runSkillDefinition.server(runSkill),
             lazily(write.server(writeOutsideFile)),
             lazily(remove.server(deleteOutsideFile)),
@@ -302,7 +318,7 @@ const make = Effect.gen(function* () {
         }
         const [save, write, remove] = approvalToolDefinitions;
         return [
-          lazily(save.server(saveShellSkill)),
+          lazily(save.server(saveCodeSkill)),
           runSkillDefinition.server(runSkill),
           lazily(write.server(writeOutsideFile)),
           lazily(remove.server(deleteOutsideFile)),
@@ -311,7 +327,7 @@ const make = Effect.gen(function* () {
   };
 });
 
-/** Shell skills and outside writes: saving a skill and every outside write is approval-gated. */
+/** Code skills and outside writes: saving a skill and every outside write is approval-gated. */
 export class ApprovedTools extends Context.Service<ApprovedTools, Effect.Success<typeof make>>()(
   "memory-agent/tools/approved/ApprovedTools",
 ) {

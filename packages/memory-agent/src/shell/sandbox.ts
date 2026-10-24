@@ -80,8 +80,8 @@ const cacheHomePaths = [
 ] as const;
 
 /**
- * What a shell skill's script may touch. Writes: the project, temp folders and caches, but not the
- * project's skills, which change only through `save_shell_skill`. Reads: everything except
+ * What a sh skill's script may touch. Writes: the project, temp folders and caches, but not the
+ * project's skills, which change only through `save_code_skill`. Reads: everything except
  * credential stores and the app's own storage. Network: only the script's approved hosts.
  * Loopback ports (local test and dev servers) only when the hosts include `localhost`, because that
  * also reaches every local service, this app's own server included. The sandbox runtime adds its

@@ -12,7 +12,7 @@ const refusalHints = HashMap.fromIterable<string, string>([
     "Project file tools take relative paths with / separators and no . or .. segments; outside tools take absolute paths.",
   ],
   ["credential", "Credential files are never read or changed, even with approval."],
-  ["git_internal", "Files inside .git are not changed directly; run git through a shell skill."],
+  ["git_internal", "Files inside .git are not changed directly; run git through a sh skill."],
   ["inside_project", "The path is inside the project; use the project file tools instead."],
   [
     "outside_tool_root",

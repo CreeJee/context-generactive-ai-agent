@@ -24,7 +24,7 @@ export const builtinToolEffects = {
   search_outside_file: "read",
   write_outside_file: "effectful",
   delete_outside_file: "effectful",
-  save_shell_skill: "effectful",
+  save_code_skill: "effectful",
   run_skill: "effectful",
   read_skill: "read",
   // A program may call any of the run's effectful tools.
@@ -63,6 +63,8 @@ export const builtinToolEffects = {
 const retiredToolEffects = {
   // Replaced by get_subagent_reports with one attempt.
   get_subagent_report: "read",
+  // Replaced by save_code_skill, which also saves ts skills.
+  save_shell_skill: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
 export const readOnlyToolNames = HashSet.fromIterable(

@@ -651,14 +651,15 @@ const make = Effect.gen(function* () {
             ),
           );
           const ownTools = [...childTools(binding.tools), readChildResult];
+          // The calls that would wait on the relay gate stay with the child.
+          const programs = yield* codeTools.forTools(
+            ownTools,
+            binding.project.permissionMode === "full" ? HashSet.empty() : binding.gated,
+          );
           const reads = parallelReads(
             [
-              ...ownTools,
-              // The calls that would wait on the relay gate stay with the child.
-              yield* codeTools.forTools(
-                ownTools,
-                binding.project.permissionMode === "full" ? HashSet.empty() : binding.gated,
-              ),
+              ...ownTools.map((tool) => programs.codeSkills(binding.project, tool)),
+              programs.runCode,
             ],
             controller.signal,
           );

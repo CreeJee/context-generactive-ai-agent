@@ -79,19 +79,20 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 
 ## 도구와 권한
 
-| 도구                                                             | 승인 | 비고                                           |
-| ---------------------------------------------------------------- | ---- | ---------------------------------------------- |
-| `find_memory`, `read_evidence`, `trace_evidence`                 | 없음 | 보이지 않는 프로젝트의 노드는 숨김             |
-| `list_files`, `search_files`, `read_file`                        | 없음 | 프로젝트 상대 경로, Git 프로젝트는 ignore 반영 |
-| `write_file`, `edit_file`, `delete_file`                         | 없음 | 읽을 때 받은 sha256이 같을 때만 변경           |
-| `list_outside_files`, `read_outside_file`, `search_outside_file` | 없음 | 프로젝트 밖 절대 경로, 읽기 전용               |
-| `save_shell_skill`, `write_outside_file`, `delete_outside_file`  | 필요 | 권한 모드에 따라 승인                          |
-| `run_skill`                                                      | 없음 | 승인된 스크립트만, 샌드박스·승인 호스트 안에서 |
-| `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
-| `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
-| `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님   |
-| `run_subagent`                                                   | 없음 | 자식의 승인 필요 호출은 페이지에서 따로 승인   |
-| `delegate_to_agent`                                              | 필요 | 신뢰한 외부 ACP 에이전트에 작업 위임           |
+| 도구                                                             | 승인 | 비고                                                                        |
+| ---------------------------------------------------------------- | ---- | --------------------------------------------------------------------------- |
+| `find_memory`, `read_evidence`, `trace_evidence`                 | 없음 | 보이지 않는 프로젝트의 노드는 숨김                                          |
+| `list_files`, `search_files`, `read_file`                        | 없음 | 프로젝트 상대 경로, Git 프로젝트는 ignore 반영                              |
+| `write_file`, `edit_file`, `delete_file`                         | 없음 | 읽을 때 받은 sha256이 같을 때만 변경                                        |
+| `list_outside_files`, `read_outside_file`, `search_outside_file` | 없음 | 프로젝트 밖 절대 경로, 읽기 전용                                            |
+| `save_code_skill`, `write_outside_file`, `delete_outside_file`   | 필요 | 권한 모드에 따라 승인                                                       |
+| `run_skill`                                                      | 없음 | 승인된 프로그램만. ts는 코드 샌드박스에서, sh는 샌드박스·승인 호스트 안에서 |
+| `run_code`                                                       | 없음 | 모델이 쓴 TS 프로그램, 묻지 않는 도구만 함수로 부름                         |
+| `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금                               |
+| `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트                                     |
+| `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님                                |
+| `run_subagent`                                                   | 없음 | 자식의 승인 필요 호출은 페이지에서 따로 승인                                |
+| `delegate_to_agent`                                              | 필요 | 신뢰한 외부 ACP 에이전트에 작업 위임                                        |
 
 권한 모드는 프로젝트마다 고릅니다.
 

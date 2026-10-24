@@ -2625,3 +2625,25 @@
   - 프로그램은 모델이 직접 부를 때와 같은 도구를 부른다. 그래서 도구 결과의 비밀도 똑같이 가려진다. 메인 채팅은 `withHiddenResults`로 감싼 도구를 묶고, `run_code` 결과도 다시 가린다.
   - 결과는 `{ status: "returned", value, logs }`, `{ status: "threw", error, logs }`, `{ status: "timed_out", logs }` 중 하나다. 프로그램이 던진 것은 도구 실패가 아니라 결과다. sandbox가 돌지 못하면 `sandbox_failed`로 실패한다.
   - 메인 채팅, subagent(칸반 카드 agent·검증 포함), Goal worker(owner가 실행)에 둔다. report 세션에는 두지 않는다. Plan·Verify에는 둔다. 프로그램은 그 단계의 도구만 부르므로 단계의 경계를 넘지 않는다.
+
+## 셸 스킬을 코드 스킬로 넓힌다 (2026-10-25)
+
+- 사용자 결정: `save_shell_skill`을 `save_code_skill`로 바꾼다. 스킬은 ts와 sh 두 종류다. `program`은 `{ runtime: "ts", code, input? }` 또는 `{ runtime: "sh", script, network? }`다. 부르는 도구는 `run_skill` 하나다. ts 스킬은 `input`을, sh 스킬은 `args`를 받는다.
+- `@tanstack/ai-code-mode-snippets` 패키지는 쓰지 않는다. 그 모델(이름 있는 코드, 입력 스키마, 목적별 단위)만 skills 체계로 가져온다. 그래서 저장·목록·승인·다른 에이전트의 읽기가 셸 스킬과 같다.
+- 저장 위치는 `.agents/skills/<name>/`의 `SKILL.md`와 `scripts/run.ts` 또는 `scripts/run.sh`다.
+  - 스킬 하나는 프로그램 하나다. 다른 종류로 다시 저장하면 이전 파일을 지운다. 둘 다 있으면 ts를 쓴다.
+  - 같은 이름으로 저장하면 바꾼다. 스크립트가 없는 일반 skill 이름은 덮어쓰지 않는다(`not_code_skill`).
+- ts 프로그램은 run_code와 같은 형식(async 함수 본문)이다. 입력 스키마는 파일 첫 줄 `// run_skill input: <JSON Schema>`에 쓴다.
+  - sh의 network 줄처럼 승인 텍스트의 일부다. 그래서 스키마도 같은 sha256으로 승인된다. 모델이 code에 이 줄을 직접 쓰면 거절한다(`input_line`).
+  - 스키마는 `type: "object"`만 받는다(`input_schema`). run_skill은 실행 전에 TanStack `validateJsonSchema`로 입력을 검사한다(`invalid_input`).
+  - 스킬 목록은 SKILL.md description 끝의 `Input: <서명>.`(예: `{ text: string }`)으로 부르는 법을 보여 준다. 서명이 300자를 넘으면 스키마 위치만 알린다.
+- 승인은 sh와 같은 표(`shell_skill_approvals`, 이름은 그대로)와 규칙을 쓴다. ask는 저장을 승인받고, auto는 검토하고, full은 기록하지 않는다.
+  - ts 스킬은 auto의 일상 명령 자동 허용을 타지 않고 늘 모델 검토로 간다. 검토 지침은 ts 프로그램이 도구 호출을 하나씩 묻지 않는다는 점을 적고, 입력이 작업 밖의 파일을 지우거나 덮어쓰게 할 수 있으면 ask하게 한다.
+  - 승인 카드는 코드와 입력 스키마, 그리고 프로그램이 부를 수 있는 도구의 범위를 보여 준다.
+- ts 스킬은 `CodeTools.codeSkills`가 감싼 run_skill이 코드 샌드박스에서 돌린다. 프로그램이 부를 수 있는 도구는 그 run의 run_code와 같다. 시간은 sh 스킬과 같다(기본 120초, 최대 1,800초).
+- v1의 한계
+  - ts 스킬은 백그라운드로 넘어가지 않는다. 끝날 때까지 run_skill이 기다린다.
+  - 프로그램(run_code와 ts 스킬) 안의 run_skill은 sh 스킬만 돌린다. 프로그램이 ts 스킬을 부르면 `ts_skill`로 거절한다.
+- OpenAI 호환 provider는 `save_code_skill`과 `run_skill`을 `strict: false`로 보낸다. 두 입력에 열린 객체(ts 입력과 그 스키마)가 있고, `program`의 anyOf 변형에 선택 필드가 있어서다. 입력은 TanStack이 도구 스키마로 검사하므로 동작은 같다. 개발 모드에서는 run마다 도구별로 TanStack 경고가 한 번 남는다.
+- `save_shell_skill`은 기록 표시용으로만 남긴다(`retiredToolEffects`, 도구 보기 제목). 이전 형식(최상위 `script`)의 호출은 받지 않는다. 이미 저장된 `scripts/run.sh` 스킬과 그 승인은 sh 스킬로 그대로 돈다.
+- 작성 지침 skill은 `code-skill-writing`으로 바꾸고 ts 프로그램 작성법을 더한다. ts 프로그램은 저장 전에 run_code로 먼저 시험하게 한다.

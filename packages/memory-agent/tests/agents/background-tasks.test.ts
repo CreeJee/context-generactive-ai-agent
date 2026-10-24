@@ -337,7 +337,11 @@ testAgent()("background shell across restart", (it) => {
         const [save, shell] = yield* inRun((yield* ApprovedTools).forProject(project, "gate", run));
         const script = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
         yield* sdk(() =>
-          save.execute!({ name: "wait-release", description: "Wait for release", script }),
+          save.execute!({
+            name: "wait-release",
+            description: "Wait for release",
+            program: { runtime: "sh", script },
+          }),
         );
         const receipt = yield* Schema.decodeUnknownEffect(Receipt)(
           yield* sdk(() =>

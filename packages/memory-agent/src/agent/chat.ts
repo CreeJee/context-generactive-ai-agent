@@ -327,21 +327,21 @@ const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
   const today = dayjs(now).format("YYYY-MM-DD");
   const shell = yield* hostShell(process.env);
   return `The current project is "${project.name}" at ${project.root}.
-- Today is ${today} (${timeZone}). Shell skill scripts run with /bin/sh on ${process.platform} (the user's shell is ${shell}).
+- Today is ${today} (${timeZone}). Scripts of sh skills run with /bin/sh on ${process.platform} (the user's shell is ${shell}).
 - File tools take paths relative to that root. Read a file before changing it and pass its sha256, so newer edits by the user are never overwritten.
 - Prefer edit_file for small changes and write_file for new files or full rewrites.
 - Files outside the project can be listed, read and searched with the *_outside_* tools and absolute paths.
 - ${
     project.permissionMode === "full"
-      ? "Full permission mode is enabled: save_shell_skill, run_skill, write_outside_file and delete_outside_file run without approval. Path, credential and .git restrictions still apply. Give a short reason for host operations."
+      ? "Full permission mode is enabled: save_code_skill, run_skill, write_outside_file and delete_outside_file run without approval. Path, credential and .git restrictions still apply. Give a short reason for host operations."
       : project.permissionMode === "auto"
-        ? "save_shell_skill, write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach."
-        : "save_shell_skill, write_outside_file and delete_outside_file wait for the user's approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way."
+        ? "save_code_skill, write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach."
+        : "save_code_skill, write_outside_file and delete_outside_file wait for the user's approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way."
   }
-- Host commands run only as project shell skills: run a listed one with run_skill, or save a purpose-specific one with save_shell_skill. Never print secrets.
+- Host commands run only as sh code skills, and work you will repeat with your tools can be a ts code skill: run a listed one with run_skill, or save a purpose-specific one with save_code_skill. Work of many tool calls that you do once goes in run_code. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
-- This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor shell skill scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
+- This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor sh skill scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
 });
 
 export const workspaceInstructions: {
@@ -538,7 +538,7 @@ const workflowReadToolNames = HashSet.fromIterable([
   "record_workflow_blocker",
 ]);
 /** Verify can execute checks, but cannot mutate source files or install dependencies. */
-const verificationToolNames = HashSet.fromIterable(["save_shell_skill", "run_skill"]);
+const verificationToolNames = HashSet.fromIterable(["save_code_skill", "run_skill"]);
 
 type InternalFollowup = Data.TaggedEnum<{
   notification: {};
@@ -2000,7 +2000,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               decider: "user",
             }),
           );
-        // Plan/Verify have a hard mutation boundary. Verify additionally receives only the shell skill tools
+        // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code skill tools
         // from the approved tool set so it can execute builds and tests without editing source.
         // This is enforced by omitting tools, not by relying on the prompt.
         const phaseApproved = (binding?: BackgroundBinding) =>
@@ -2194,37 +2194,37 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
           gated: HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
         });
+        // The board's tools are the parent's alone; card agents never change the board.
+        const boardTools =
+          onKanbanBoard && !workflowReadOnly ? kanbanTools.forSession(sessionId, runId) : [];
+        // A program calls the run's tools as the model would, except the ones that ask first. Its
+        // run_skill runs a sh skill to the end: a program has no way to wait on a background task.
+        const programs = yield* codeTools.forTools(
+          [
+            ...sharedTools,
+            ...boardTools,
+            ...redactor.withHiddenResults([
+              ...phaseApprovedTools.filter((tool) => tool.name !== "run_skill"),
+              ...(yield* phaseApproved()).filter((tool) => tool.name === "run_skill"),
+            ]),
+          ],
+          project.permissionMode === "full"
+            ? HashSet.empty()
+            : HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
+        );
         // Read-only calls of one step run at once instead of one after another.
         const reads = parallelReads(
           [
             ...sharedTools,
-            // The board's tools are the parent's alone; card agents never change the board.
-            ...(onKanbanBoard && !workflowReadOnly ? kanbanTools.forSession(sessionId, runId) : []),
+            ...boardTools,
             ...redactor.withHiddenResults([
-              ...phaseApprovedTools,
+              ...phaseApprovedTools.map((tool) => programs.codeSkills(project, tool)),
               ...(workflowReadOnly || reportSource !== null ? [] : children.tools),
+              ...(reportSource !== null ? [] : [programs.runCode]),
             ]),
           ],
           abortController.signal,
         );
-        // A program calls the run's tools as the model would, except the ones that ask first. Its
-        // run_skill runs to the end: a program has no way to wait on a background task.
-        const programTools =
-          reportSource !== null
-            ? []
-            : redactor.withHiddenResults([
-                yield* codeTools.forTools(
-                  [
-                    ...reads.tools.filter((tool) => tool.name !== "run_skill"),
-                    ...redactor.withHiddenResults(
-                      (yield* phaseApproved()).filter((tool) => tool.name === "run_skill"),
-                    ),
-                  ],
-                  project.permissionMode === "full"
-                    ? HashSet.empty()
-                    : HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
-                ),
-              ]);
         const window = () => runtime.contextWindow(selection.model);
         let compactionStage: CompactionStage = "none";
         const workflowLifecycle = workflowAfterRun(
@@ -2314,7 +2314,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? []
             : [
                 ...reads.tools,
-                ...programTools,
                 ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
               ];
         // The page sends only the new turn, so earlier images are found in the stored messages.

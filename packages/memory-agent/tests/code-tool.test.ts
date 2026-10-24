@@ -1,4 +1,3 @@
-import { layer } from "@effect/vitest";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Effect, HashSet, Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -6,6 +5,7 @@ import { CodeTools } from "../src/tools/code.ts";
 import { ToolFailed } from "../src/tools/failure.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
 import { isTruthy } from "../src/truthy.ts";
+import { testAgent } from "./support/test-env.ts";
 
 const plain = (name: string, needsApproval = false) =>
   toolDefinition({
@@ -33,10 +33,13 @@ const tools: AnyServerTool[] = [
   ),
 ];
 
-layer(CodeTools.layer, { excludeTestServices: true })("run_code", (it) => {
+testAgent()("run_code", (it) => {
   it.effect("a program calls the run's tools, but none that ask or steer the run", () =>
     Effect.gen(function* () {
-      const runCode = yield* (yield* CodeTools).forTools(tools, HashSet.make("write_outside_file"));
+      const { runCode } = yield* (yield* CodeTools).forTools(
+        tools,
+        HashSet.make("write_outside_file"),
+      );
       expect(runCode.description).toContain("Available: external_echo_text, external_read_file.");
       const execute = runCode.execute;
       if (!isTruthy(execute)) throw new Error("run_code has no server side");
