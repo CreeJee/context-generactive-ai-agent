@@ -121,6 +121,13 @@ const make = Effect.gen(function* () {
       SELECT a.* FROM node_attachments l JOIN attachments a ON a.id = l.attachment_id
       WHERE l.node_id = ${nodeId} ORDER BY l.position`,
   });
+  const selectSessionImages = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: Schema.Struct({ held: Schema.Literals([0, 1]) }),
+    execute: (sessionId) => sql`SELECT EXISTS (
+      SELECT 1 FROM nodes n JOIN node_attachments l ON l.node_id = n.id
+      WHERE n.session_id = ${sessionId} AND n.kind = 'user') AS held`,
+  });
   // One statement decides and deletes, so a link added meanwhile keeps its blob.
   const deleteOrphans = SqlSchema.findAll({
     Request: Schema.Void,
@@ -372,6 +379,10 @@ const make = Effect.gen(function* () {
 
     forNode: (nodeId: string) =>
       Effect.map(selectForNode(nodeId), (rows) => rows.map(toAttachment)),
+
+    /** Whether a user message of the session carried an image. */
+    inSession: (sessionId: string) =>
+      Effect.map(selectSessionImages(sessionId), ({ held }) => held === 1),
 
     /** Removes content-addressed blobs only after their last message reference is gone. */
     purgeOrphans: Effect.gen(function* () {

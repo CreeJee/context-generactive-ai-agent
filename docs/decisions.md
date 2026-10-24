@@ -2545,3 +2545,4 @@
 - 드물게 쓰는 도구 네 개도 lazy로 보낸다: `save_shell_skill`(한 번 저장한 셸 스킬은 `run_skill`로 다시 쓴다), `resume_subagent`(실패·중단된 작업에만), `cancel_background_task`, `delete_file`. 모델이 discover 없이 부르면 TanStack이 discover하라는 오류를 돌려주므로 한 번 더 왕복할 뿐이다. 승인·자동 검토·Verify 단계의 도구 선별은 이름으로 걸리므로 그대로다. `run_skill`과 `get_background_result`는 빌드·테스트에 늘 쓰므로 그대로 둔다.
 - 테스트의 스크립트 모델(`ScriptedTextAdapter`)도 실제 모델처럼 lazy 도구를 먼저 discover하고 부른다. responder는 자기가 원하는 호출만 쓰고, 어댑터가 만든 discover 호출은 responder가 보는 대화에서 빠진다.
 - 이 단계 뒤 총 4,316(시스템 1,418, 도구 2,821, 도구 17개)이다. 시작점 7,176에서 40% 줄었다.
+- 첨부 이미지 안내(`attachmentInstructions`, "#1"은 첫 이미지)는 대화에 이미지가 있을 때만 싣는다: 이번 턴에 붙었거나, 이 세션의 사용자 노드에 연결된 첨부가 있을 때(`Attachments.inSession`). 페이지는 새 턴만 보내고 이전 대화는 서버 저장소가 채우므로 요청 메시지만 보면 이전 이미지를 놓친다. 이미지가 처음 붙는 run에서 프롬프트 캐시가 한 번 깨진다. 상태를 못 읽으면 싣는다. 이 단계 뒤 총 4,256이다.

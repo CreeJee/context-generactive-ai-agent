@@ -1,6 +1,6 @@
 import { Effect, MutableRef, Option, Schedule, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
+import { AgentChat, attachmentInstructions } from "../../src/agent/chat.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
 import { attachmentUrl } from "../../src/attachments/urls.ts";
@@ -247,6 +247,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       expect(
         invocations()[0]?.messages.find((message) => message.role === "user")?.content,
       ).toEqual([{ type: "text", content: "look at #1 please" }, inlineImage]);
+      expect(invocations()[0]?.systemPrompts.join("\n")).toContain(attachmentInstructions);
 
       // A later turn replays the earlier image as inline data the provider can read.
       yield* sdk(() => tab.client.sendMessage("look at it again"));
@@ -258,6 +259,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
             : [],
         ),
       ).toEqual([inlineImage]);
+      expect(invocations()[1]?.systemPrompts.join("\n")).toContain(attachmentInstructions);
 
       // The stored transcript shows the image again after a reload.
       const session = yield* nodes.session(sessionId);
@@ -269,6 +271,17 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
         (nodeId) => images.find((entry) => entry.nodeId === nodeId)?.found ?? [],
       );
       expect(firstUser?.parts).toEqual([{ type: "text", content: "look at #1 please" }, part]);
+    }),
+  );
+
+  it.effect("a conversation without images gets no image instructions", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const sessionId = yield* freshSession;
+      const invocations = yield* invocationsOf(sessionId);
+      const response = yield* post(sessionId, "hi");
+      yield* sdk(() => response.text());
+      expect(invocations()[0]?.systemPrompts.join("\n")).not.toContain(attachmentInstructions);
     }),
   );
 

@@ -2284,10 +2284,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ...reads.tools,
                 ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
               ];
+        // The page sends only the new turn, so earlier images are found in the stored messages.
+        const holdsImages =
+          attached.length > 0 ||
+          (yield* attachments
+            .inSession(sessionId)
+            .pipe(fallbackLogged("Session images unknown", () => true)));
         const executionTurn: ChatExecutionTurn<typeof runAdapter> = {
           messages,
           systemPrompts: promptLayout(standingPrompts, contextPrompts, [
-            attachmentInstructions,
+            ...(holdsImages ? [attachmentInstructions] : []),
             ...(!workflowReadOnly ? [subagentInstructions] : []),
           ]),
           threadId,
