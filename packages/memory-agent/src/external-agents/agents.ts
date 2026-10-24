@@ -472,7 +472,7 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.timeoutOrElse({
               duration: connectTimeoutMs,
-              orElse: () => Effect.fail(new ExternalAgentInitializeTimedOut()),
+              orElse: () => Effect.fail(ExternalAgentInitializeTimedOut.make()),
             }),
           );
           const live: Live = {
@@ -677,7 +677,7 @@ const make = Effect.gen(function* () {
         link.failures = 0;
         yield* Effect.tryPromise({
           try: () => attempt(project, agent, link),
-          catch: (cause) => new ExternalAgentOperationFailed({ operation: "reconnect", cause }),
+          catch: (cause) => ExternalAgentOperationFailed.make({ operation: "reconnect", cause }),
         }).pipe(Effect.catchTag("ExternalAgentOperationFailed", () => Effect.void));
         return yield* overview(project);
       }),

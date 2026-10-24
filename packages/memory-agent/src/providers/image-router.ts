@@ -193,16 +193,16 @@ const finiteUnit = (value: number) => Number.isFinite(value) && value >= 0 && va
 
 function validateInput(input: RankImageRoutesInput): ImageRoutingInvalidRequest | undefined {
   if (!Number.isInteger(input.intent.sourceImageCount) || input.intent.sourceImageCount < 0)
-    return new ImageRoutingInvalidRequest({ reason: "invalid_source_image_count" });
+    return ImageRoutingInvalidRequest.make({ reason: "invalid_source_image_count" });
   if (
     input.policy.maximumEstimatedCostUsd !== undefined &&
     (!Number.isFinite(input.policy.maximumEstimatedCostUsd) ||
       input.policy.maximumEstimatedCostUsd < 0)
   )
-    return new ImageRoutingInvalidRequest({ reason: "invalid_cost_ceiling" });
+    return ImageRoutingInvalidRequest.make({ reason: "invalid_cost_ceiling" });
   for (const fact of input.facts)
     if (!finiteUnit(fact.quality) || !finiteUnit(fact.speed))
-      return new ImageRoutingInvalidRequest({
+      return ImageRoutingInvalidRequest.make({
         reason: "invalid_route_fact_score",
         routeId: fact.routeId,
       });
@@ -350,12 +350,11 @@ function makeImageRouterBody(
     Effect.gen(function* () {
       const snapshot = yield* catalog.snapshot;
       const chat = yield* catalog.chat(request.initiatorChatRouteId).pipe(
-        Effect.mapError(
-          () =>
-            new ImageRoutingInvalidRequest({
-              reason: "unknown_initiator_route",
-              routeId: request.initiatorChatRouteId,
-            }),
+        Effect.mapError(() =>
+          ImageRoutingInvalidRequest.make({
+            reason: "unknown_initiator_route",
+            routeId: request.initiatorChatRouteId,
+          }),
         ),
       );
       const consentByRoute = MutableHashMap.empty<string, CrossProviderMediaConsentMode>();
@@ -407,16 +406,16 @@ function makeImageRouterBody(
           : result.ranking.find((score) => score.eligible);
       if (request.policy.mode === "fixed") {
         if (request.policy.fixedRouteId === undefined)
-          return yield* new FixedImageRouteRejected({
+          return yield* FixedImageRouteRejected.make({
             reason: FixedImageRouteRejectedReason.cases.RouteIdMissing.make({}),
           });
         if (selectedScore === undefined)
-          return yield* new FixedImageRouteRejected({
+          return yield* FixedImageRouteRejected.make({
             routeId: request.policy.fixedRouteId,
             reason: FixedImageRouteRejectedReason.cases.RouteAbsent.make({}),
           });
         if (!selectedScore.eligible)
-          return yield* new FixedImageRouteRejected({
+          return yield* FixedImageRouteRejected.make({
             routeId: request.policy.fixedRouteId,
             reason: FixedImageRouteRejectedReason.cases.Ineligible.make({
               reasons: selectedScore.reasons,
@@ -424,7 +423,7 @@ function makeImageRouterBody(
           });
       }
       if (selectedScore === undefined)
-        return yield* new ImageRouteUnavailable({ ranking: result.ranking });
+        return yield* ImageRouteUnavailable.make({ ranking: result.ranking });
       const route = Option.getOrUndefined(
         MutableHashMap.get(result.routeById, selectedScore.routeId),
       )!;

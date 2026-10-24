@@ -60,9 +60,9 @@ export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTur
 const failureOf = ExternalPromptOutcome.$match({
   completed: (): ExternalAgentTurnFailed | null => null,
   cancelled: () => null,
-  unavailable: ({ failure }) => new ExternalAgentTurnFailed(failure),
-  failed: ({ failure }) => new ExternalAgentTurnFailed(failure),
-  disconnected: () => new ExternalAgentTurnFailed({ code: "disconnected", detail: null }),
+  unavailable: ({ failure }) => ExternalAgentTurnFailed.make(failure),
+  failed: ({ failure }) => ExternalAgentTurnFailed.make(failure),
+  disconnected: () => ExternalAgentTurnFailed.make({ code: "disconnected", detail: null }),
 });
 
 /**

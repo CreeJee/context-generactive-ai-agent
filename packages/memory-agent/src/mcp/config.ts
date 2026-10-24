@@ -162,7 +162,7 @@ export const expandVariablesResult = (
 ): Result.Result<string, MissingVariable> => {
   for (const [, name] of value.matchAll(variablePattern))
     if (name !== undefined && env[name] === undefined)
-      return Result.fail(new MissingVariable({ variable: name }));
+      return Result.fail(MissingVariable.make({ variable: name }));
   return Result.succeed(value.replace(variablePattern, (_, name: string) => env[name] ?? ""));
 };
 

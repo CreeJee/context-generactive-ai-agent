@@ -762,7 +762,7 @@ describe("OpenAI compatible settings", () => {
       yield* TestClock.adjust("15 seconds");
       assertFailure(
         yield* Fiber.join(discovery),
-        new OpenAICompatibleFailed({ operation: "models" }),
+        OpenAICompatibleFailed.make({ operation: "models" }),
       );
       expect(signal?.aborted).toBe(true);
     }),

@@ -82,7 +82,7 @@ const windowsTokenProxyEffect = Effect.fn("OAuth.windowsTokenProxy")(function* (
         Stream.runForEach((chunk) =>
           Effect.gen(function* () {
             size += chunk.byteLength;
-            if (size > 2048) return yield* new ProxyOutputTooLarge();
+            if (size > 2048) return yield* ProxyOutputTooLarge.make();
             output += decoder.decode(chunk, { stream: true });
           }),
         ),

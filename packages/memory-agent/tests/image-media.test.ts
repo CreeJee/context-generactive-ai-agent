@@ -200,7 +200,7 @@ describe("ImageMediaWorkflow", () => {
         router: router,
         executor: {
           generate: () =>
-            Effect.fail(new DirectImageExecutionFailed({ reason: "provider_rejected" })),
+            Effect.fail(DirectImageExecutionFailed.make({ reason: "provider_rejected" })),
         },
         attachments: attachmentStore([]),
       });

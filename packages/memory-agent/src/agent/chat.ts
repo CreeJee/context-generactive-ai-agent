@@ -309,7 +309,7 @@ export class AgentOperationFailed extends Schema.TaggedError<AgentOperationFaile
 const agentPromise = <A>(operation: AgentOperation, evaluate: () => PromiseLike<A>) =>
   Effect.tryPromise({
     try: evaluate,
-    catch: (cause) => new AgentOperationFailed({ operation, cause }),
+    catch: (cause) => AgentOperationFailed.make({ operation, cause }),
   });
 
 /**
@@ -3247,7 +3247,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ? Stream.runDrain(
             Stream.fromReadableStream({
               evaluate: () => response.body!,
-              onError: (cause) => new AgentOperationFailed({ operation: "drain-followup", cause }),
+              onError: (cause) => AgentOperationFailed.make({ operation: "drain-followup", cause }),
             }),
           )
         : Effect.void;

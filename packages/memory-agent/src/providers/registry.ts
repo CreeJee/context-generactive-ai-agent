@@ -50,18 +50,18 @@ const providerRegistryFromBody = (
     subscriptionDependencies: (provider) =>
       MutableHashMap.has(byProvider, provider) && subscriptionDependencies !== undefined
         ? subscriptionDependencies(provider)
-        : Effect.fail(new ProviderUnavailable({ provider })),
+        : Effect.fail(ProviderUnavailable.make({ provider })),
     get: (provider) => {
       const configuration = Option.getOrUndefined(MutableHashMap.get(byProvider, provider));
       return isTruthy(configuration)
         ? Effect.succeed(configuration)
-        : Effect.fail(new ProviderUnavailable({ provider }));
+        : Effect.fail(ProviderUnavailable.make({ provider }));
     },
     runtime: (provider) => {
       const runtime = Option.getOrUndefined(MutableHashMap.get(runtimeByProvider, provider));
       return isTruthy(runtime)
         ? Effect.succeed(runtime)
-        : Effect.fail(new ProviderUnavailable({ provider }));
+        : Effect.fail(ProviderUnavailable.make({ provider }));
     },
   };
 };

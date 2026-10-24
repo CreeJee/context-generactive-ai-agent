@@ -230,7 +230,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
               : subscriptions.get(provider),
           runtime: (provider: ProviderId) =>
             provider === compatible.provider
-              ? settings.runtime.pipe(Effect.mapError(() => new ProviderUnavailable({ provider })))
+              ? settings.runtime.pipe(Effect.mapError(() => ProviderUnavailable.make({ provider })))
               : subscriptions.runtime(provider),
         };
       }),

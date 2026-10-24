@@ -173,7 +173,7 @@ const credentialFor = (stored: string | null, baseUrl: string): string | null =>
     onSome: (value) => (value.baseUrl === baseUrl ? value.key : null),
   });
 };
-const invalidSettings = () => new OpenAICompatibleFailed({ operation: "validation" });
+const invalidSettings = () => OpenAICompatibleFailed.make({ operation: "validation" });
 export const validateCompatibleConnection = Effect.fnUntraced(function* (
   input: CompatibleConnectionInput,
 ): Effect.fn.Return<CompatibleConnectionInput, OpenAICompatibleFailed> {
@@ -244,13 +244,13 @@ function makeOpenAICompatibleSettingsBody(
   const updates = Semaphore.makeUnsafe(1);
   // Keyring calls cannot be cancelled once started. Never retry an uncertain write automatically.
   const attempt = <A>(operation: OpenAICompatibleFailed["operation"], run: () => Promise<A>) =>
-    Effect.tryPromise({ try: run, catch: () => new OpenAICompatibleFailed({ operation }) });
+    Effect.tryPromise({ try: run, catch: () => OpenAICompatibleFailed.make({ operation }) });
   const accountsOf = Effect.map(config.read, compatibleAccountsOf);
   /** The selected endpoint, which compatible runs, catalogs and model selection use. */
   const read = Effect.map(accountsOf, selectedCompatibleAccount);
   const findAccount = (all: CompatibleAccounts, id: string) =>
     Effect.fromNullishOr(all.accounts.find((account) => account.id === id)).pipe(
-      Effect.mapError(() => new OpenAICompatibleFailed({ operation: "missing" })),
+      Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "missing" })),
     );
   const storedKey = (account: CompatibleAccount) =>
     attempt("keychain", () => keys(account.credentialEntry).get());
@@ -269,7 +269,7 @@ function makeOpenAICompatibleSettingsBody(
       Effect.gen(function* () {
         if (keyWrite !== null) yield* keyWrite;
         yield* configWrite.pipe(
-          Effect.mapError(() => new OpenAICompatibleFailed({ operation: "partial" })),
+          Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "partial" })),
         );
       }),
     );
@@ -347,7 +347,7 @@ function makeOpenAICompatibleSettingsBody(
           : compatibleHostLabel(baseUrl);
         const id = yield* oauthProtocolCrypto
           .randomUUIDv4()
-          .pipe(Effect.mapError(() => new OpenAICompatibleFailed({ operation: "account_id" })));
+          .pipe(Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "account_id" })));
         const account: CompatibleAccount = {
           id,
           label,
@@ -382,7 +382,7 @@ function makeOpenAICompatibleSettingsBody(
         const moved = account.baseUrl !== baseUrl;
         // Never carry an old endpoint's credential to a different server implicitly.
         if (moved && apiKey === undefined && existing !== null)
-          return yield* new OpenAICompatibleFailed({ operation: "validation" });
+          return yield* OpenAICompatibleFailed.make({ operation: "validation" });
         yield* writeBoth(
           apiKey === undefined || (apiKey === null && existing === null)
             ? null
@@ -485,7 +485,7 @@ function makeOpenAICompatibleSettingsBody(
       Effect.mapError((failure) =>
         Schema.is(OpenAICompatibleFailed)(failure) && failure.operation === "missing"
           ? failure
-          : new OpenAICompatibleFailed({ operation }),
+          : OpenAICompatibleFailed.make({ operation }),
       ),
     );
   const fetchJson = <A, I>(
@@ -498,10 +498,10 @@ function makeOpenAICompatibleSettingsBody(
       const response = yield* attempt(operation, () =>
         fetcher(url, { ...init, redirect: "error" }),
       );
-      if (!response.ok) return yield* new OpenAICompatibleFailed({ operation });
+      if (!response.ok) return yield* OpenAICompatibleFailed.make({ operation });
       return yield* Schema.decodeUnknownEffect(schema)(
         yield* attempt(operation, () => response.json()),
-      ).pipe(Effect.mapError(() => new OpenAICompatibleFailed({ operation })));
+      ).pipe(Effect.mapError(() => OpenAICompatibleFailed.make({ operation })));
     });
   /**
    * The endpoint's model list, for suggestions when registering a model. Reasoning efforts it
@@ -528,7 +528,7 @@ function makeOpenAICompatibleSettingsBody(
             const account = all.accounts.find((item) => item.id === id);
             if (account === undefined) return ids;
             if (account.baseUrl !== requested)
-              return yield* new OpenAICompatibleFailed({ operation: "models" });
+              return yield* OpenAICompatibleFailed.make({ operation: "models" });
             const models = account.models.map(({ reasoning: _previous, ...model }) => {
               const reasoning = readCompatibleReasoning(model.id, page);
               return reasoning === undefined ? model : { ...model, reasoning };
@@ -553,7 +553,7 @@ function makeOpenAICompatibleSettingsBody(
     request("test", id, ({ account, headers, signal }) =>
       Effect.gen(function* () {
         const settings = compatibleEndpointModel(account, modelId);
-        if (settings === null) return yield* new OpenAICompatibleFailed({ operation: "missing" });
+        if (settings === null) return yield* OpenAICompatibleFailed.make({ operation: "missing" });
         const completion = yield* fetchJson(
           "test",
           Schema.Struct({
@@ -575,7 +575,7 @@ function makeOpenAICompatibleSettingsBody(
           },
         );
         if (completion.choices.length === 0)
-          return yield* new OpenAICompatibleFailed({ operation: "test" });
+          return yield* OpenAICompatibleFailed.make({ operation: "test" });
         return { ok: true as const };
       }),
     );
@@ -615,7 +615,7 @@ function makeOpenAICompatibleSettingsBody(
         isTruthy(account)
           ? AuthConnectionState["signed-in"]({ provider })
           : AuthConnectionState["signed-out"]({ provider }),
-      ).pipe(Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "auth" }))),
+      ).pipe(Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "auth" }))),
       connect: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
       cancel: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
       disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider })),
@@ -636,7 +636,7 @@ function makeOpenAICompatibleSettingsBody(
           return settings === null ? [] : [model(settings, index === 0)];
         });
       }).pipe(
-        Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "catalog" })),
+        Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "catalog" })),
       ),
       selected: Effect.map(config.read, (settings) => {
         const endpoint = selectedEndpoint(settings)?.endpoint ?? null;
@@ -660,20 +660,20 @@ function makeOpenAICompatibleSettingsBody(
         updates.withPermit(
           Effect.gen(function* () {
             const account = yield* read.pipe(
-              Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "model" })),
+              Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" })),
             );
             const settings = isTruthy(account) ? compatibleEndpointModel(account, id) : null;
             if (
               !isTruthy(settings) ||
               !model(settings, false).supportedReasoningEfforts.includes(effort)
             )
-              return yield* new ModelUnavailable({ provider, model: id, reasoningEffort: effort });
+              return yield* ModelUnavailable.make({ provider, model: id, reasoningEffort: effort });
             const selection = { provider, model: id, reasoningEffort: effort };
             yield* config
               .update(selection)
               .pipe(
-                Effect.mapError(
-                  () => new ProviderOperationFailed({ provider, operation: "model" }),
+                Effect.mapError(() =>
+                  ProviderOperationFailed.make({ provider, operation: "model" }),
                 ),
               );
             return selection;
@@ -696,7 +696,7 @@ function makeOpenAICompatibleSettingsBody(
         !model(settings, false).supportedReasoningEfforts.includes(selection.reasoningEffort)
       )
         // The SDK builds adapters synchronously; this typed failure is its thrown error.
-        throw new ModelUnavailable({
+        throw ModelUnavailable.make({
           provider,
           model: selection.model,
           reasoningEffort: selection.reasoningEffort,
@@ -726,11 +726,11 @@ function makeOpenAICompatibleSettingsBody(
             Effect.gen(function* () {
               const credential = yield* nativePromise(() => pinnedKey);
               if (runAbort.signal.aborted)
-                return yield* new CompatibleRunRequestFailed({
+                return yield* CompatibleRunRequestFailed.make({
                   reason: CompatibleRunRequestFailedReason.cases.Cancelled.make({}),
                 });
               if (credential.failed)
-                return yield* new CompatibleRunRequestFailed({
+                return yield* CompatibleRunRequestFailed.make({
                   reason: CompatibleRunRequestFailedReason.cases.KeychainUnavailable.make({}),
                 });
               const key = credential.value;
@@ -784,7 +784,7 @@ function makeOpenAICompatibleSettingsBody(
                 Math.ceil(estimatedInput) + reservedOutput(settings.outputBudget) >
                 settings.contextWindow
               )
-                return yield* new CompatibleRunRequestFailed({
+                return yield* CompatibleRunRequestFailed.make({
                   reason: CompatibleRunRequestFailedReason.cases.ContextLimitExceeded.make({}),
                 });
               return yield* Effect.gen(function* () {
@@ -821,7 +821,7 @@ function makeOpenAICompatibleSettingsBody(
                         codes.push(current.code);
                       current = current.cause;
                     }
-                    const error = new CompatibleRunRequestFailed({
+                    const error = CompatibleRunRequestFailed.make({
                       reason: CompatibleRunRequestFailedReason.cases.Transport.make({ codes }),
                       cause,
                     });
@@ -880,7 +880,7 @@ function makeOpenAICompatibleSettingsBody(
                   if (next.done === true) return yield* Cause.done();
                   const chunk = next.value;
                   if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
-                    return yield* new CompatibleRunRequestFailed({
+                    return yield* CompatibleRunRequestFailed.make({
                       reason: CompatibleRunRequestFailedReason.cases.ToolCallingDisabled.make({}),
                     });
                   yield* observe(chunk);

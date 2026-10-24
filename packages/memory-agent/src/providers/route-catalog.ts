@@ -207,25 +207,23 @@ const sourceFromServices = Effect.gen(function* () {
 
       for (const provider of [...providers.providers].toSorted()) {
         const configuration = yield* providers.get(provider).pipe(
-          Effect.mapError(
-            (cause) =>
-              new RouteCatalogRefreshFailed({
-                provider,
-                operation: "provider",
-                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                cause,
-              }),
+          Effect.mapError((cause) =>
+            RouteCatalogRefreshFailed.make({
+              provider,
+              operation: "provider",
+              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+              cause,
+            }),
           ),
         );
         const status = yield* configuration.auth.status.pipe(
-          Effect.mapError(
-            (cause) =>
-              new RouteCatalogRefreshFailed({
-                provider,
-                operation: "auth",
-                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                cause,
-              }),
+          Effect.mapError((cause) =>
+            RouteCatalogRefreshFailed.make({
+              provider,
+              operation: "auth",
+              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+              cause,
+            }),
           ),
         );
         const connection = providerConnection(provider);
@@ -237,19 +235,18 @@ const sourceFromServices = Effect.gen(function* () {
         );
         MutableHashMap.set(authByProvider, provider, authentication);
         const models = yield* configuration.models.list.pipe(
-          Effect.mapError(
-            (cause) =>
-              new RouteCatalogRefreshFailed({
-                provider,
-                operation: "models",
-                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                cause,
-              }),
+          Effect.mapError((cause) =>
+            RouteCatalogRefreshFailed.make({
+              provider,
+              operation: "models",
+              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+              cause,
+            }),
           ),
         );
         for (const model of models) {
           if (model.provider !== provider)
-            return yield* new RouteCatalogRefreshFailed({
+            return yield* RouteCatalogRefreshFailed.make({
               provider,
               operation: "models",
               reason: RouteCatalogRefreshFailedReason.cases.ProviderMismatch.make({}),
@@ -279,14 +276,13 @@ const sourceFromServices = Effect.gen(function* () {
             "vendor-native": ({ vendor }) =>
               tools.resolve({ provider: vendor, model: model.id }).pipe(
                 Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
-                Effect.mapError(
-                  (cause) =>
-                    new RouteCatalogRefreshFailed({
-                      provider,
-                      operation: "tools",
-                      reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                      cause,
-                    }),
+                Effect.mapError((cause) =>
+                  RouteCatalogRefreshFailed.make({
+                    provider,
+                    operation: "tools",
+                    reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+                    cause,
+                  }),
                 ),
               ),
           });
@@ -318,13 +314,12 @@ const sourceFromServices = Effect.gen(function* () {
         .pipe(Config.option)
         .parse(ConfigProvider.fromEnv())
         .pipe(
-          Effect.mapError(
-            (cause) =>
-              new RouteCatalogRefreshFailed({
-                operation: "config",
-                reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                cause,
-              }),
+          Effect.mapError((cause) =>
+            RouteCatalogRefreshFailed.make({
+              operation: "config",
+              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+              cause,
+            }),
           ),
         );
       const openAIAuth =
@@ -402,7 +397,7 @@ function makeRouteCatalogBody(
     ): Effect.Effect<Route, UnknownCatalogRoute> => {
       const route = routes.find((candidate) => candidate.id === id);
       return route === undefined
-        ? Effect.fail(new UnknownCatalogRoute({ routeType, id }))
+        ? Effect.fail(UnknownCatalogRoute.make({ routeType, id }))
         : Effect.succeed(route);
     };
     return {
@@ -419,7 +414,7 @@ function makeRouteCatalogBody(
           const chatRoute = yield* find("chat", snapshot.chat, chatRouteId);
           const mediaRoute = yield* find("media", snapshot.media, mediaRouteId);
           if (!mediaRoute.operations.includes("generate"))
-            return yield* new IncompatibleCatalogRoutes({
+            return yield* IncompatibleCatalogRoutes.make({
               chatRouteId,
               mediaRouteId,
               reason: "media_generation_unsupported",

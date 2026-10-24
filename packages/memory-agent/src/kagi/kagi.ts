@@ -64,15 +64,15 @@ export class KagiFailed extends Schema.TaggedError<KagiFailed>()("KagiFailed", {
 const failureForStatus = (status: number): KagiFailed => {
   switch (status) {
     case 400:
-      return new KagiFailed({ reason: "invalid_request", status });
+      return KagiFailed.make({ reason: "invalid_request", status });
     case 401:
-      return new KagiFailed({ reason: "unauthorized", status });
+      return KagiFailed.make({ reason: "unauthorized", status });
     case 403:
-      return new KagiFailed({ reason: "forbidden", status });
+      return KagiFailed.make({ reason: "forbidden", status });
     case 429:
-      return new KagiFailed({ reason: "rate_limited", status });
+      return KagiFailed.make({ reason: "rate_limited", status });
     default:
-      return new KagiFailed({
+      return KagiFailed.make({
         reason: status >= 500 ? "server_error" : "invalid_response",
         status,
       });
@@ -164,7 +164,7 @@ const make = (options: KagiOptions) =>
           .get("kagi-api-key")
           .pipe(Effect.catchTag("SecretStoreFailed", () => Effect.succeed(null)));
         if (!isTruthy(settings.kagiEnabled) || key === null)
-          return yield* new KagiFailed({ reason: "not_enabled", status: null });
+          return yield* KagiFailed.make({ reason: "not_enabled", status: null });
         const fetch = yield* FetchHttpClient.Fetch;
         const response = yield* client
           .execute(
@@ -186,17 +186,17 @@ const make = (options: KagiOptions) =>
                 signal: AbortSignal.any(init?.signal == null ? [signal] : [signal, init.signal]),
               });
             }),
-            Effect.mapError(() => new KagiFailed({ reason: "unavailable", status: null })),
+            Effect.mapError(() => KagiFailed.make({ reason: "unavailable", status: null })),
           );
         if (response.status < 200 || response.status >= 300)
           return yield* failureForStatus(response.status);
         const json = yield* response.json.pipe(
-          Effect.mapError(
-            () => new KagiFailed({ reason: "invalid_response", status: response.status }),
+          Effect.mapError(() =>
+            KagiFailed.make({ reason: "invalid_response", status: response.status }),
           ),
         );
         return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
-          Effect.mapError(() => new KagiFailed({ reason: "invalid_response", status: 200 })),
+          Effect.mapError(() => KagiFailed.make({ reason: "invalid_response", status: 200 })),
         );
       }).pipe(Effect.scoped);
 
@@ -215,7 +215,7 @@ const make = (options: KagiOptions) =>
       setEnabled: (enabled: boolean) =>
         Effect.gen(function* () {
           if (enabled && (yield* secrets.get("kagi-api-key")) === null)
-            return yield* new KagiKeyMissing();
+            return yield* KagiKeyMissing.make();
           yield* config.update({ kagiEnabled: enabled });
           return yield* status;
         }),

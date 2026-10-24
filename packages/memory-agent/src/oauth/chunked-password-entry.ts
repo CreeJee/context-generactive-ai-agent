@@ -59,9 +59,8 @@ const manifest = (
 ): Effect.Effect<Manifest | null, CredentialFragmentsFailed> =>
   value == null || !value.startsWith(manifestPrefix)
     ? Effect.succeed(null)
-    : Effect.fromOption(
-        decodeManifest(value.slice(manifestPrefix.length)),
-        () => new CredentialFragmentsFailed({ reason: "invalid_manifest" }),
+    : Effect.fromOption(decodeManifest(value.slice(manifestPrefix.length)), () =>
+        CredentialFragmentsFailed.make({ reason: "invalid_manifest" }),
       );
 
 /** Keep every fragment in the OS vault, and publish a new generation only after all writes succeed. */
@@ -118,10 +117,10 @@ function createChunkedPasswordEntryBody(
               return password;
             const latest = (yield* nativePromise(() => root.getPassword())) ?? undefined;
             if (latest === encoded)
-              return yield* new CredentialFragmentsFailed({ reason: "incomplete_fragments" });
+              return yield* CredentialFragmentsFailed.make({ reason: "incomplete_fragments" });
             encoded = latest;
           }
-          return yield* new CredentialFragmentsFailed({ reason: "changed_while_reading" });
+          return yield* CredentialFragmentsFailed.make({ reason: "changed_while_reading" });
         }),
       ),
     setPassword: (password) =>
@@ -140,7 +139,7 @@ function createChunkedPasswordEntryBody(
               digest: yield* digest(password),
             };
             if (next.count > 256)
-              return yield* new CredentialFragmentsFailed({ reason: "fragment_limit" });
+              return yield* CredentialFragmentsFailed.make({ reason: "fragment_limit" });
             yield* Effect.gen(function* () {
               for (let index = 0; index < next.count; index++) {
                 const entry = chunk(next, index);

@@ -309,8 +309,8 @@ export const selectTestModel = Effect.fn("selectTestModel")(function* (
   yield* config
     .update({ provider: "openai", model, reasoningEffort: effort })
     .pipe(
-      Effect.mapError(
-        () => new ProviderOperationFailed({ provider: "openai", operation: "model" }),
+      Effect.mapError(() =>
+        ProviderOperationFailed.make({ provider: "openai", operation: "model" }),
       ),
     );
   return { provider: "openai" as const, model, reasoningEffort: effort };
@@ -385,18 +385,18 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
           select: (model: string, reasoningEffort?: string) => {
             const found = models.find((candidate) => candidate.id === model);
             if (!isTruthy(found))
-              return Effect.fail(new ModelUnavailable({ provider: "openai", model }));
+              return Effect.fail(ModelUnavailable.make({ provider: "openai", model }));
             const effort = reasoningEffort ?? found.defaultReasoningEffort;
             if (!found.supportedReasoningEfforts.includes(effort))
               return Effect.fail(
-                new ModelUnavailable({ provider: "openai", model, reasoningEffort: effort }),
+                ModelUnavailable.make({ provider: "openai", model, reasoningEffort: effort }),
               );
             return Effect.map(
               config
                 .update({ provider: "openai", model, reasoningEffort: effort })
                 .pipe(
-                  Effect.mapError(
-                    () => new ProviderOperationFailed({ provider: "openai", operation: "model" }),
+                  Effect.mapError(() =>
+                    ProviderOperationFailed.make({ provider: "openai", operation: "model" }),
                   ),
                 ),
               () => ({ provider: "openai" as const, model, reasoningEffort: effort }),

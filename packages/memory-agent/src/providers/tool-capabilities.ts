@@ -499,11 +499,11 @@ function makeProviderToolCapabilityRegistryBody(
     const byId = MutableHashMap.empty<string, AnyProviderToolDescriptor>();
     for (const entry of descriptors) {
       if (entry.id !== `${entry.provider}:${entry.kind}`)
-        return yield* new ProviderToolMetadataFailure({
+        return yield* ProviderToolMetadataFailure.make({
           reason: ProviderToolMetadataFailureReason.cases.InvalidId.make({ id: entry.id }),
         });
       if (MutableHashMap.has(byId, entry.id))
-        return yield* new ProviderToolMetadataFailure({
+        return yield* ProviderToolMetadataFailure.make({
           reason: ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id: entry.id }),
         });
       MutableHashMap.set(byId, entry.id, entry);
@@ -512,7 +512,7 @@ function makeProviderToolCapabilityRegistryBody(
     for (const model of models) {
       const key = `${model.provider}:${model.model}`;
       if (MutableHashMap.has(byModel, key))
-        return yield* new ProviderToolMetadataFailure({
+        return yield* ProviderToolMetadataFailure.make({
           reason: ProviderToolMetadataFailureReason.cases.DuplicateModel.make({
             provider: model.provider,
             model: model.model,
@@ -526,7 +526,7 @@ function makeProviderToolCapabilityRegistryBody(
       get: (id) => {
         const found = Option.getOrUndefined(MutableHashMap.get(byId, id));
         return found === undefined
-          ? Effect.fail(new UnknownProviderTool({ id }))
+          ? Effect.fail(UnknownProviderTool.make({ id }))
           : Effect.succeed(found);
       },
       filter: (query) => filterProviderTools(stableDescriptors, query),
@@ -536,7 +536,7 @@ function makeProviderToolCapabilityRegistryBody(
         );
         if (supported === undefined)
           return Effect.fail(
-            new UnknownProviderToolModel({ provider: query.provider, model: query.model }),
+            UnknownProviderToolModel.make({ provider: query.provider, model: query.model }),
           );
         const account =
           query.accountToolKinds === undefined

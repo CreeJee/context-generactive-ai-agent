@@ -68,7 +68,7 @@ export class DirectImageExecutor extends Context.Service<
   static readonly layerFrom = (api: DirectImageExecutorApi) =>
     Layer.succeed(DirectImageExecutor, api);
   static readonly unavailableLayer = DirectImageExecutor.layerFrom({
-    generate: () => Effect.fail(new DirectImageExecutionFailed({ reason: "not_configured" })),
+    generate: () => Effect.fail(DirectImageExecutionFailed.make({ reason: "not_configured" })),
   });
   static readonly openAIEnvironmentLayer = Layer.effect(
     DirectImageExecutor,
@@ -81,15 +81,15 @@ export class DirectImageExecutor extends Context.Service<
               yield* Config.option(Config.String("OPENAI_API_KEY"))
                 .parse(ConfigProvider.fromEnv())
                 .pipe(
-                  Effect.mapError(
-                    (cause) => new DirectImageExecutionFailed({ reason: "not_configured", cause }),
+                  Effect.mapError((cause) =>
+                    DirectImageExecutionFailed.make({ reason: "not_configured", cause }),
                   ),
                 ),
             );
             if (key === undefined)
-              return yield* new DirectImageExecutionFailed({ reason: "not_configured" });
+              return yield* DirectImageExecutionFailed.make({ reason: "not_configured" });
             if (!ImageExecutorModel.$is("explicit")(decision.executorMediaModel))
-              return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
+              return yield* DirectImageExecutionFailed.make({ reason: "invalid_output" });
             const model = decision.executorMediaModel.model;
             const fetch = yield* FetchHttpClient.Fetch;
             const response = yield* client
@@ -112,28 +112,28 @@ export class DirectImageExecutor extends Context.Service<
                     ),
                   });
                 }),
-                Effect.mapError(
-                  (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
+                Effect.mapError((cause) =>
+                  DirectImageExecutionFailed.make({ reason: "network", cause }),
                 ),
               );
             if (response.status < 200 || response.status >= 300)
-              return yield* new DirectImageExecutionFailed({
+              return yield* DirectImageExecutionFailed.make({
                 reason: "provider_rejected",
                 status: response.status,
               });
             const raw = yield* response.json.pipe(
-              Effect.mapError(
-                (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
+              Effect.mapError((cause) =>
+                DirectImageExecutionFailed.make({ reason: "network", cause }),
               ),
             );
             const value = yield* Schema.decodeUnknownEffect(OpenAIImageResponse)(raw).pipe(
-              Effect.mapError(
-                (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
+              Effect.mapError((cause) =>
+                DirectImageExecutionFailed.make({ reason: "network", cause }),
               ),
             );
             const encoded = value.data[0]?.b64_json;
             if (encoded === undefined)
-              return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
+              return yield* DirectImageExecutionFailed.make({ reason: "invalid_output" });
             const result: DirectImageExecutionResult = {
               bytes: Uint8Array.from(Buffer.from(encoded, "base64")),
               contentType: "image/png",
@@ -252,19 +252,19 @@ function makeImageMediaWorkflowBody(
     generate: (request) =>
       Effect.gen(function* () {
         if (!request.approved)
-          return yield* new ImageMediaApprovalRequired({ reason: "paid_execution" });
+          return yield* ImageMediaApprovalRequired.make({ reason: "paid_execution" });
         const prompt = request.prompt.trim();
         if (prompt.length === 0)
-          return yield* new ImageMediaUnavailable({ reason: "prompt_empty" });
+          return yield* ImageMediaUnavailable.make({ reason: "prompt_empty" });
         if (isTruthy(catalog))
           yield* catalog.refresh.pipe(
-            Effect.mapError(
-              (cause) => new ImageMediaUnavailable({ reason: "catalog_refresh_failed", cause }),
+            Effect.mapError((cause) =>
+              ImageMediaUnavailable.make({ reason: "catalog_refresh_failed", cause }),
             ),
           );
         const status = yield* feature.status.pipe(
-          Effect.mapError(
-            (cause) => new ImageMediaUnavailable({ reason: "settings_unavailable", cause }),
+          Effect.mapError((cause) =>
+            ImageMediaUnavailable.make({ reason: "settings_unavailable", cause }),
           ),
         );
         const policy =
@@ -287,8 +287,8 @@ function makeImageMediaWorkflowBody(
             policy,
           })
           .pipe(
-            Effect.mapError(
-              (cause) => new ImageMediaUnavailable({ reason: "no_direct_route", cause }),
+            Effect.mapError((cause) =>
+              ImageMediaUnavailable.make({ reason: "no_direct_route", cause }),
             ),
           );
         const gate = decideImageContext({
@@ -297,11 +297,11 @@ function makeImageMediaWorkflowBody(
           route: decision,
         });
         if (!gate.directWorkflowAllowed)
-          return yield* new ImageMediaUnavailable({ reason: "context_denied" });
+          return yield* ImageMediaUnavailable.make({ reason: "context_denied" });
         const revalidateCrossProviderConsent = Effect.gen(function* () {
           if (!decision.crossProvider) return;
           if (crossProviderConsent === undefined)
-            return yield* new ImageMediaUnavailable({ reason: "consent_service_unavailable" });
+            return yield* ImageMediaUnavailable.make({ reason: "consent_service_unavailable" });
           const consent = yield* crossProviderConsent
             .decide({
               initiatorProvider: decision.initiatorProvider,
@@ -309,20 +309,20 @@ function makeImageMediaWorkflowBody(
               capability: "media.image.generate",
             })
             .pipe(
-              Effect.mapError(
-                (cause) => new ImageMediaUnavailable({ reason: "consent_read_failed", cause }),
+              Effect.mapError((cause) =>
+                ImageMediaUnavailable.make({ reason: "consent_read_failed", cause }),
               ),
             );
           if (consent.mode === "disabled")
-            return yield* new ImageMediaUnavailable({ reason: "consent_disabled" });
+            return yield* ImageMediaUnavailable.make({ reason: "consent_disabled" });
           if (consent.mode === "always") return;
           const runId =
             request.runId ??
             (yield* oauthProtocolCrypto
               .randomUUIDv4()
               .pipe(
-                Effect.mapError(
-                  (cause) => new ImageMediaUnavailable({ reason: "run_id_failed", cause }),
+                Effect.mapError((cause) =>
+                  ImageMediaUnavailable.make({ reason: "run_id_failed", cause }),
                 ),
               ));
           const expected: CrossProviderMediaRunApproval = {
@@ -340,7 +340,7 @@ function makeImageMediaWorkflowBody(
             approval.executorMediaRouteId !== expected.executorMediaRouteId ||
             approval.capability !== expected.capability
           )
-            return yield* new ImageMediaApprovalRequired({
+            return yield* ImageMediaApprovalRequired.make({
               reason: "cross_provider",
               approval: expected,
             });
@@ -353,8 +353,8 @@ function makeImageMediaWorkflowBody(
               policy: { mode: "auto", preference: "balanced" },
             })
             .pipe(
-              Effect.mapError(
-                (cause) => new ImageMediaUnavailable({ reason: "reroute_unavailable", cause }),
+              Effect.mapError((cause) =>
+                ImageMediaUnavailable.make({ reason: "reroute_unavailable", cause }),
               ),
             );
 
@@ -370,7 +370,7 @@ function makeImageMediaWorkflowBody(
           .pipe(
             Effect.catch((cause) =>
               Effect.flatMap(reroute(cause.reason), (confirmation) =>
-                Effect.fail(new ImageMediaExecutionFailed({ cause, reroute: confirmation })),
+                Effect.fail(ImageMediaExecutionFailed.make({ cause, reroute: confirmation })),
               ),
             ),
           );
@@ -379,16 +379,15 @@ function makeImageMediaWorkflowBody(
           output.bytes.byteLength > maximumGeneratedImageBytes ||
           !HashSet.has(supportedOutputTypes, output.contentType)
         )
-          return yield* new ImageMediaExecutionFailed({
-            cause: new DirectImageExecutionFailed({ reason: "invalid_output" }),
+          return yield* ImageMediaExecutionFailed.make({
+            cause: DirectImageExecutionFailed.make({ reason: "invalid_output" }),
             reroute: yield* reroute("invalid_output"),
           });
         const attachment = yield* attachments
           .save(output.bytes)
           .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ImageMediaUnavailable({ reason: "attachment_persistence_failed", cause }),
+            Effect.mapError((cause) =>
+              ImageMediaUnavailable.make({ reason: "attachment_persistence_failed", cause }),
             ),
           );
         return {

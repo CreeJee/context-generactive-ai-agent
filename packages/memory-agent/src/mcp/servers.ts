@@ -159,7 +159,7 @@ const withTimeout = <A>(promise: Promise<A>, ms: number, step: McpStepTimedOut["
   nativePromise(() => promise).pipe(
     Effect.timeoutOrElse({
       duration: ms,
-      orElse: () => Effect.fail(new McpStepTimedOut({ step })),
+      orElse: () => Effect.fail(McpStepTimedOut.make({ step })),
     }),
   );
 
@@ -490,7 +490,7 @@ const make = Effect.gen(function* () {
         if (!entry.shadowed)
           yield* Effect.tryPromise({
             try: () => discover(project, entry.server),
-            catch: (cause) => new McpOperationFailed({ operation: "trust", cause }),
+            catch: (cause) => McpOperationFailed.make({ operation: "trust", cause }),
           });
         return yield* overview(project);
       }),
@@ -511,7 +511,7 @@ const make = Effect.gen(function* () {
           (entry) =>
             Effect.tryPromise({
               try: () => discover(project, entry.server),
-              catch: (cause) => new McpOperationFailed({ operation: "tools", cause }),
+              catch: (cause) => McpOperationFailed.make({ operation: "tools", cause }),
             }),
           { concurrency: "unbounded" },
         );

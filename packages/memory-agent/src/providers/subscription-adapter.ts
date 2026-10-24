@@ -458,7 +458,7 @@ function providerEventsWithPromptCacheFallback(
       Stream.mapEffect((event) =>
         Effect.gen(function* () {
           if (provider === "anthropic" && isPromptCacheRejection(event))
-            return yield* new ProviderFeatureRejectedError({
+            return yield* ProviderFeatureRejectedError.make({
               provider: "anthropic",
               feature: "prompt-cache",
               status: null,

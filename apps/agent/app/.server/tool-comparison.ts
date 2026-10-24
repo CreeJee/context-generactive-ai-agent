@@ -31,7 +31,7 @@ function comparisonProviderLayerBody(
   guard: ComparisonRequestGuard,
 ) {
   const unavailable = (provider: ModelSelection["provider"]) =>
-    Effect.fail(new ProviderUnavailable({ provider }));
+    Effect.fail(ProviderUnavailable.make({ provider }));
   const registry: ProviderRegistryApi = {
     providers: [selection.provider],
     get: (provider) =>
@@ -39,14 +39,14 @@ function comparisonProviderLayerBody(
         ? unavailable(provider)
         : Effect.map(owner.get(provider), (configuration) => {
             const rejectAuth = Effect.fail(
-              new ProviderOperationFailed({ provider, operation: "auth" }),
+              ProviderOperationFailed.make({ provider, operation: "auth" }),
             );
             const rejectModel = Effect.fail(
-              new ProviderOperationFailed({ provider, operation: "model" }),
+              ProviderOperationFailed.make({ provider, operation: "model" }),
             );
             const list = Effect.try({
               try: guard.beforeCatalog,
-              catch: () => new ProviderOperationFailed({ provider, operation: "catalog" }),
+              catch: () => ProviderOperationFailed.make({ provider, operation: "catalog" }),
             }).pipe(Effect.andThen(configuration.models.list));
             return {
               provider,
@@ -84,7 +84,7 @@ function comparisonProviderLayerBody(
                 requested.model !== selection.model ||
                 requested.reasoningEffort !== selection.reasoningEffort
               )
-                throw new ProviderOperationFailed({ provider, operation: "model" });
+                throw ProviderOperationFailed.make({ provider, operation: "model" });
               const adapter = runtime.adapter(selection);
               // The subscription runtime issues a fresh adapter per run. Keep its receiver and
               // lease intact; wrap that run's streaming method without replacing the owner client.

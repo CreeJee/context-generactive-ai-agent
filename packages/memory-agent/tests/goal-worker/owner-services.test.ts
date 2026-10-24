@@ -503,7 +503,7 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
         Effect.provideService(ProviderRegistry, {
           ...registry,
           subscriptionDependencies: (provider) =>
-            Effect.fail(new ProviderUnavailable({ provider })),
+            Effect.fail(ProviderUnavailable.make({ provider })),
         }),
       );
       expect(response.status).toBe(503);

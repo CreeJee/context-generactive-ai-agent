@@ -581,7 +581,7 @@ describe("subscription model adapters", () => {
               (function* () {
                 bodies.push(body);
                 if (bodies.length === 1)
-                  throw new ProviderFeatureRejectedError({
+                  throw ProviderFeatureRejectedError.make({
                     provider: "anthropic",
                     feature: "prompt-cache",
                     status: 400,

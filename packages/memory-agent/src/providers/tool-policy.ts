@@ -264,32 +264,32 @@ function denial(
     has(app.disabledToolIds, tool.id) ||
     (app.enabledToolIds && !has(app.enabledToolIds, tool.id)) === true
   )
-    return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "app_disabled" });
+    return ProviderToolPolicyDenied.make({ toolId: tool.id, reason: "app_disabled" });
   if (
     has(user.disabledToolIds, tool.id) ||
     (user.enabledToolIds && !has(user.enabledToolIds, tool.id)) === true
   )
-    return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "user_disabled" });
+    return ProviderToolPolicyDenied.make({ toolId: tool.id, reason: "user_disabled" });
   if (
     (app.allowedCategories && !has(app.allowedCategories, tool.category)) === true ||
     (user.allowedCategories && !has(user.allowedCategories, tool.category)) === true
   )
-    return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "category_denied" });
+    return ProviderToolPolicyDenied.make({ toolId: tool.id, reason: "category_denied" });
   if (
     tool.dataAccess.includes("public_network") &&
     (app.allowNetwork === false || user.allowNetwork === false)
   )
-    return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "network_denied" });
+    return ProviderToolPolicyDenied.make({ toolId: tool.id, reason: "network_denied" });
   if (
     tool.dataAccess.includes("provider_files") &&
     (app.allowProviderFiles !== true || user.allowProviderFiles !== true)
   )
-    return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "provider_files_denied" });
+    return ProviderToolPolicyDenied.make({ toolId: tool.id, reason: "provider_files_denied" });
   if (
     classifyProviderToolRisk(tool) === "high" &&
     (app.allowHighRisk !== true || user.allowHighRisk !== true)
   )
-    return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "high_risk_disabled" });
+    return ProviderToolPolicyDenied.make({ toolId: tool.id, reason: "high_risk_disabled" });
   return null;
 }
 const noTrustedAuthority: ProviderToolTrustedAuthority = Object.freeze({
@@ -383,7 +383,7 @@ function validateSandbox(
 ): Effect.Effect<string | null, ValidationFailure> {
   return Effect.gen(function* () {
     if (Object.keys(options).some((key) => !HashSet.has(executionOptionKeys, key)))
-      return yield* new ProviderToolOptionsViolation({
+      return yield* ProviderToolOptionsViolation.make({
         toolId: tool.id,
         reason: "unknown_policy_option",
       });
@@ -395,7 +395,7 @@ function validateSandbox(
         requirement === "principal_storage_required",
     );
     if (appManaged && sandbox === undefined)
-      return yield* new ProviderToolSandboxViolation({
+      return yield* ProviderToolSandboxViolation.make({
         toolId: tool.id,
         reason: "trusted_profile_required",
       });
@@ -403,22 +403,21 @@ function validateSandbox(
       sandbox === undefined
         ? undefined
         : yield* canonicalPathEffect(sandbox.workspaceRoot).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderToolSandboxViolation({
-                  toolId: tool.id,
-                  reason: "workspace_root_unavailable",
-                  cause,
-                }),
+            Effect.mapError((cause) =>
+              ProviderToolSandboxViolation.make({
+                toolId: tool.id,
+                reason: "workspace_root_unavailable",
+                cause,
+              }),
             ),
           );
     if (tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true)
-      return yield* new ProviderToolSandboxViolation({
+      return yield* ProviderToolSandboxViolation.make({
         toolId: tool.id,
         reason: "isolated_compute_required",
       });
     if (tool.sandbox.includes("isolated_desktop_required") && sandbox?.isolatedDesktop !== true)
-      return yield* new ProviderToolSandboxViolation({
+      return yield* ProviderToolSandboxViolation.make({
         toolId: tool.id,
         reason: "isolated_desktop_required",
       });
@@ -427,14 +426,17 @@ function validateSandbox(
       tool.sandbox.includes("provider_hosted") === false &&
       sandbox?.network !== "restricted"
     )
-      return yield* new ProviderToolSandboxViolation({ toolId: tool.id, reason: "network_denied" });
+      return yield* ProviderToolSandboxViolation.make({
+        toolId: tool.id,
+        reason: "network_denied",
+      });
     const environment = options.environmentNames ?? [];
     if (
       environment.length > 0 &&
       (sandbox?.environment !== "allowlisted_names" ||
         environment.some((name) => !sandbox.allowedEnvironmentNames.includes(name)))
     )
-      return yield* new ProviderToolSandboxViolation({
+      return yield* ProviderToolSandboxViolation.make({
         toolId: tool.id,
         reason: "environment_denied",
       });
@@ -450,34 +452,34 @@ function validateSandbox(
         value !== undefined &&
         (!Number.isSafeInteger(value) || value <= 0 || maximum === undefined || value > maximum)
       )
-        return yield* new ProviderToolOptionsViolation({
+        return yield* ProviderToolOptionsViolation.make({
           toolId: tool.id,
           reason: `${name}_limit_invalid`,
         });
     if ((options.paths?.length ?? 0) > 0 && !appManaged)
-      return yield* new ProviderToolSandboxViolation({
+      return yield* ProviderToolSandboxViolation.make({
         toolId: tool.id,
         reason: "local_access_not_applicable",
       });
     for (const request of options.paths ?? []) {
       if (Object.keys(request).some((key) => !HashSet.has(pathRequestKeys, key)))
-        return yield* new ProviderToolOptionsViolation({
+        return yield* ProviderToolOptionsViolation.make({
           toolId: tool.id,
           reason: "path_request_invalid",
         });
       if (root === undefined)
-        return yield* new ProviderToolSandboxViolation({
+        return yield* ProviderToolSandboxViolation.make({
           toolId: tool.id,
           reason: "trusted_profile_required",
         });
       if (oauthProtocolPath.isAbsolute(request.path))
-        return yield* new ProviderToolPathViolation({
+        return yield* ProviderToolPathViolation.make({
           toolId: tool.id,
           path: request.path,
           reason: "absolute_path",
         });
       if (isCredentialPath(request.path))
-        return yield* new ProviderToolPathViolation({
+        return yield* ProviderToolPathViolation.make({
           toolId: tool.id,
           path: request.path,
           reason: "credential_path",
@@ -486,7 +488,7 @@ function validateSandbox(
         Effect.catchTags({
           PathRejected: (rejection) =>
             Effect.fail(
-              new ProviderToolPathViolation({
+              ProviderToolPathViolation.make({
                 toolId: tool.id,
                 path: request.path,
                 reason: rejection.reason,
@@ -494,7 +496,7 @@ function validateSandbox(
             ),
           PlatformError: (cause) =>
             Effect.fail(
-              new ProviderToolPathViolation({
+              ProviderToolPathViolation.make({
                 toolId: tool.id,
                 path: request.path,
                 reason: "inspection_failed",
@@ -552,7 +554,7 @@ function makeProviderToolPolicyBody(
     context: ProviderToolPolicyContext,
     reason: ProviderToolUnsupported["reason"],
   ) =>
-    new ProviderToolUnsupported({
+    ProviderToolUnsupported.make({
       toolId,
       provider: context.provider,
       model: context.model,
@@ -600,7 +602,7 @@ function makeProviderToolPolicyBody(
             decision.allowed
               ? Effect.void
               : Effect.fail(
-                  new ProviderToolPolicyDenied({
+                  ProviderToolPolicyDenied.make({
                     toolId: tool.id,
                     reason: "feature_flag_disabled",
                   }),
@@ -622,7 +624,7 @@ function makeProviderToolPolicyBody(
           input.policy.provider !== input.provider ||
           tool.kind !== input.kind
         )
-          return yield* new ProviderToolOptionsViolation({
+          return yield* ProviderToolOptionsViolation.make({
             toolId: input.toolId,
             reason: "tool_identity_mismatch",
           });
@@ -634,7 +636,7 @@ function makeProviderToolPolicyBody(
           return yield* unsupported(input.toolId, input.policy, "model_unsupported");
         const accountTools = yield* resolveAccount(input.policy);
         if (!accountTools.some((entry) => entry.id === tool.id))
-          return yield* new ProviderToolCapabilityDenied({
+          return yield* ProviderToolCapabilityDenied.make({
             toolId: input.toolId,
             provider: input.policy.provider,
             model: input.policy.model,
@@ -645,11 +647,11 @@ function makeProviderToolPolicyBody(
         const exposed = publicDescriptor(tool);
         if (exposed.requiresApproval) {
           if (input.approval === "not_requested")
-            return yield* new ProviderToolApprovalRequired({ toolId: input.toolId });
+            return yield* ProviderToolApprovalRequired.make({ toolId: input.toolId });
           if (input.approval === "denied")
-            return yield* new ProviderToolApprovalDenied({ toolId: input.toolId });
+            return yield* ProviderToolApprovalDenied.make({ toolId: input.toolId });
           if (input.approval === "cancelled")
-            return yield* new ProviderToolApprovalCancelled({ toolId: input.toolId });
+            return yield* ProviderToolApprovalCancelled.make({ toolId: input.toolId });
         }
         const workspaceRoot = yield* validateSandbox(tool, input.options, sandbox);
         return Object.freeze({ tool: exposed, workspaceRoot });
@@ -1200,39 +1202,38 @@ function makeProviderToolRuntimeBody(
             requestKeys.some((key) => key !== "id" && key !== "args") ||
             !Array.isArray(request.args)
           )
-            return yield* new ProviderToolFactoryOptionsFailure({
+            return yield* ProviderToolFactoryOptionsFailure.make({
               toolId: String(request.id),
               reason: "invalid_request",
             });
           if (!request.id.startsWith(`${context.provider}:`))
-            return yield* new ProviderToolFactoryOptionsFailure({
+            return yield* ProviderToolFactoryOptionsFailure.make({
               toolId: request.id,
               reason: "provider_mismatch",
             });
           if (!validateProviderFactoryArgs(request.id, request.args))
-            return yield* new ProviderToolOptionsViolation({
+            return yield* ProviderToolOptionsViolation.make({
               toolId: request.id,
               reason: "invalid_factory_options",
             });
           if (!HashSet.has(allowed, request.id))
-            return yield* new ProviderToolNotExposed({
+            return yield* ProviderToolNotExposed.make({
               toolId: request.id,
               provider: context.provider,
               model: context.model,
             });
           const descriptor = yield* registry.get(request.id).pipe(
-            Effect.mapError(
-              () =>
-                new ProviderToolNotExposed({
-                  toolId: request.id,
-                  provider: context.provider,
-                  model: context.model,
-                }),
+            Effect.mapError(() =>
+              ProviderToolNotExposed.make({
+                toolId: request.id,
+                provider: context.provider,
+                model: context.model,
+              }),
             ),
           );
           const tool = yield* Effect.tryPromise({
             try: () => Promise.resolve(invokeProviderFactory(descriptor, request.args)),
-            catch: (cause) => new ProviderToolFactoryFailure({ toolId: request.id, cause }),
+            catch: (cause) => ProviderToolFactoryFailure.make({ toolId: request.id, cause }),
           });
           // SAFETY: registry.get returned the same provider-qualified id carried by the request.
           output.push({ id: request.id, descriptor, tool } as ComposedProviderTool);
@@ -1242,13 +1243,12 @@ function makeProviderToolRuntimeBody(
     execute: (request) =>
       Effect.gen(function* () {
         const descriptor = yield* registry.get(request.toolId).pipe(
-          Effect.mapError(
-            () =>
-              new ProviderToolNotExposed({
-                toolId: request.toolId,
-                provider: request.policy.provider,
-                model: request.policy.model,
-              }),
+          Effect.mapError(() =>
+            ProviderToolNotExposed.make({
+              toolId: request.toolId,
+              provider: request.policy.provider,
+              model: request.policy.model,
+            }),
           ),
         );
         const decision = yield* policyService.revalidateExecution({
@@ -1266,7 +1266,7 @@ function makeProviderToolRuntimeBody(
           const envelope = runtimeEnvelope(request, descriptor, status, result);
           return Effect.tryPromise({
             try: () => Promise.resolve(request.onLifecycle?.(envelope)),
-            catch: (cause) => new ProviderToolLifecycleFailure({ toolId: request.toolId, cause }),
+            catch: (cause) => ProviderToolLifecycleFailure.make({ toolId: request.toolId, cause }),
           });
         };
         if (descriptor.execution === "caller_loop") {
@@ -1284,7 +1284,7 @@ function makeProviderToolRuntimeBody(
           return pending;
         }
         if (request.operation === undefined)
-          return yield* new ProviderToolOperationFailure({
+          return yield* ProviderToolOperationFailure.make({
             toolId: request.toolId,
             reason: "operation_missing",
           });
@@ -1295,7 +1295,7 @@ function makeProviderToolRuntimeBody(
               ? Promise.resolve<ProviderToolLease>({ release: () => undefined })
               : Promise.resolve(request.acquire(signal)),
           catch: (cause) =>
-            new ProviderToolLeaseFailure({ toolId: request.toolId, phase: "acquire", cause }),
+            ProviderToolLeaseFailure.make({ toolId: request.toolId, phase: "acquire", cause }),
         });
         const use = Effect.gen(function* () {
           yield* lifecycle("running", { raw: undefined });
@@ -1312,7 +1312,7 @@ function makeProviderToolRuntimeBody(
                 }),
               ),
             catch: (cause) =>
-              new ProviderToolOperationFailure({
+              ProviderToolOperationFailure.make({
                 toolId: request.toolId,
                 reason: "operation_failed",
                 cause,
@@ -1323,7 +1323,7 @@ function makeProviderToolRuntimeBody(
           const completed = runtimeEnvelope(request, descriptor, "succeeded", operationExit.value);
           yield* Effect.tryPromise({
             try: () => Promise.resolve(request.onLifecycle?.(completed)),
-            catch: (cause) => new ProviderToolLifecycleFailure({ toolId: request.toolId, cause }),
+            catch: (cause) => ProviderToolLifecycleFailure.make({ toolId: request.toolId, cause }),
           });
           return completed;
         });
@@ -1338,7 +1338,7 @@ function makeProviderToolRuntimeBody(
             yield* Effect.tryPromise({
               try: () => Promise.resolve(lease.release()),
               catch: (cause) =>
-                new ProviderToolLeaseFailure({ toolId: request.toolId, phase: "release", cause }),
+                ProviderToolLeaseFailure.make({ toolId: request.toolId, phase: "release", cause }),
             });
             return yield* Exit.isSuccess(useExit)
               ? Effect.succeed(useExit.value)

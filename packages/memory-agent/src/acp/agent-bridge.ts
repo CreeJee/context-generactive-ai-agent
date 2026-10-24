@@ -352,9 +352,8 @@ export function startAcpAgent(options: {
     const root = yield* oauthProtocolFileSystem
       .realPath(cwd)
       .pipe(
-        Effect.mapError(
-          () =>
-            new EditorRequestRefused({ reason: EditorRefusal.cases.FolderNotFound.make({ cwd }) }),
+        Effect.mapError(() =>
+          EditorRequestRefused.make({ reason: EditorRefusal.cases.FolderNotFound.make({ cwd }) }),
         ),
       );
     const project = (yield* nativePromise(() => api.projects())).find(
@@ -362,7 +361,7 @@ export function startAcpAgent(options: {
     );
     // Registering a project widens what the file tools may touch, so only the app's page does it.
     if (!isTruthy(project))
-      return yield* new EditorRequestRefused({
+      return yield* EditorRequestRefused.make({
         reason: EditorRefusal.cases.ProjectNotRegistered.make({ root }),
       });
     return project;
@@ -536,11 +535,11 @@ export function startAcpAgent(options: {
         Effect.gen(function* () {
           const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
           if (!isTruthy(session))
-            return yield* new EditorRequestRefused({
+            return yield* EditorRequestRefused.make({
               reason: EditorRefusal.cases.SessionNotOpen.make({}),
             });
           if (isTruthy(session.turn))
-            return yield* new EditorRequestRefused({
+            return yield* EditorRequestRefused.make({
               reason: EditorRefusal.cases.TurnInProgress.make({}),
             });
           const turn: PromptTurn = {
@@ -610,7 +609,7 @@ export function startAcpAgent(options: {
             const error = session.chat.getError();
             const failure = turn.failure ?? (isTruthy(error) ? chatFailure(error) : null);
             if (isTruthy(failure))
-              return yield* new EditorRequestRefused({
+              return yield* EditorRequestRefused.make({
                 reason: EditorRefusal.cases.RunFailed.make(failure),
               });
             return { stopReason: "end_turn" as const satisfies StopReason };

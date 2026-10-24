@@ -172,7 +172,7 @@ export const createKeychainProfileCredentialStore = (profileId: string): Credent
     )
   )
     // Synchronous store factory: callers hold no error channel here.
-    throw new OAuthProfileIdRejected();
+    throw OAuthProfileIdRejected.make();
   // Preserve the original 'subscription-oauth' entry for rollback until migration is verified.
   return createKeychainCredentialStore((provider) =>
     keychainEntry(provider, `subscription-oauth-${profileId}`),
@@ -1107,7 +1107,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           Effect.catchTag("UnknownError", () => Effect.succeed("")),
         );
         if (/cache[_ -]?control|prompt[_ -]?cach/i.test(responseText))
-          return yield* new ProviderFeatureRejectedError({
+          return yield* ProviderFeatureRejectedError.make({
             provider: "anthropic",
             feature: "prompt-cache",
             status: response.status,

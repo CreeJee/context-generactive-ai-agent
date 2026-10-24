@@ -230,7 +230,7 @@ const anthropicInstalledCatalog = [
 const operationFailure = (
   provider: SubscriptionAccountProvider,
   operation: "auth" | "catalog" | "model",
-) => new ProviderOperationFailed({ provider, operation });
+) => ProviderOperationFailed.make({ provider, operation });
 
 const fromPromise = <A>(
   provider: SubscriptionAccountProvider,
@@ -495,10 +495,10 @@ export function createSubscriptionProvider(
         Effect.gen(function* () {
           const models = yield* list;
           const found = models.find((candidate) => candidate.id === model);
-          if (!isTruthy(found)) return yield* new ModelUnavailable({ provider, model });
+          if (!isTruthy(found)) return yield* ModelUnavailable.make({ provider, model });
           const effort = reasoningEffort ?? found.defaultReasoningEffort;
           if (!found.supportedReasoningEfforts.includes(effort))
-            return yield* new ModelUnavailable({
+            return yield* ModelUnavailable.make({
               provider,
               model,
               reasoningEffort: effort,
