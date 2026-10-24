@@ -2535,3 +2535,7 @@
 - 도구 목록은 run 시작 때 상태로 정하고 run 안에서는 바꾸지 않는다. full-loop worker는 미들웨어가 도구를 바꾸는 것을 `ToolReplacement`로 거절하고, run 중간에 바뀐 도구 목록은 프롬프트 캐시도 깬다. 그래서 같은 run 안에서 필요해질 수 있는 도구(subagent 후속, 백그라운드 결과)는 늘 둔다.
 - `promote_memory_candidate`는 프로젝트에 채택된 final-answer claim이 있을 때만, `use_promoted_memory`는 저장된 프로젝트 메모리가 있을 때만 준다(`KnowledgePromotions.promotionState`). 둘 다 이전 run의 결과에만 작용하기 때문이다. 상태를 못 읽으면 둘 다 준다. 빠진 도구의 규칙 줄은 `memoryInstructions`에서도 뺀다. subagent에는 지금처럼 둘 다 주지 않는다.
 - 이 단계 뒤 총 5,793(시스템 1,419, 도구 4,297, 도구 27개)이다.
+- 드물게 쓰는 프로젝트 밖 파일 도구 다섯 개(`list_outside_files`·`read_outside_file`·`search_outside_file`·`write_outside_file`·`delete_outside_file`)는 TanStack lazy 도구로 보낸다(`tools/lazy.ts`의 `lazily`). 요청에는 이름만 가고, 모델이 `__lazy__tool__discovery__`로 요청하면 그 run부터 설명·스키마가 붙는다. discover한 도구는 대화 기록에서 다시 찾아 다음 run에도 붙는다. 그 도구 목록 변경은 캐시를 한 번 깬다. 승인·자동 검토는 이름으로 걸리므로 그대로다.
+- full-loop worker는 도구를 이름·설명·스키마로만 옮기므로 lazy가 빠지고 모두 그대로 보낸다. 동작은 같고 줄어들지만 않는다.
+- discover 호출과 결과는 일이 아니므로 메모리 노드로 남기지 않는다. 화면에는 "도구 불러오기"로 보인다.
+- 이 단계 뒤 총 5,188(시스템 1,421, 도구 3,690, 도구 23개)이다. 시작점 7,176에서 28% 줄었다.

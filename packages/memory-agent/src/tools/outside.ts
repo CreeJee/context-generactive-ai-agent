@@ -11,6 +11,7 @@ import type { Project } from "../projects/projects.ts";
 import { runTrace } from "../runtime/run-trace.ts";
 import { guardedWith } from "./failure.ts";
 import { listPageSize } from "./files.ts";
+import { lazily } from "./lazy.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const outsideReadToolNames = [
@@ -250,7 +251,7 @@ const make = Effect.gen(function* () {
           ),
         );
 
-        return [listOutside, readOutsideFile, searchOutsideFile] as const;
+        return [lazily(listOutside), lazily(readOutsideFile), lazily(searchOutsideFile)] as const;
       }),
   };
 });

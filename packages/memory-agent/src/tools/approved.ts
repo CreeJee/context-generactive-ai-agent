@@ -41,6 +41,7 @@ import {
 } from "./definitions.ts";
 import { runTrace } from "../runtime/run-trace.ts";
 import { guardedWith } from "./failure.ts";
+import { lazily } from "./lazy.ts";
 import { toToolSchema } from "./schema.ts";
 
 /** Not gated per call: the script it runs was approved when it was saved. */
@@ -295,16 +296,16 @@ const make = Effect.gen(function* () {
           return [
             save.server(saveShellSkill),
             runSkillDefinition.server(runSkill),
-            write.server(writeOutsideFile),
-            remove.server(deleteOutsideFile),
+            lazily(write.server(writeOutsideFile)),
+            lazily(remove.server(deleteOutsideFile)),
           ] as const;
         }
         const [save, write, remove] = approvalToolDefinitions;
         return [
           save.server(saveShellSkill),
           runSkillDefinition.server(runSkill),
-          write.server(writeOutsideFile),
-          remove.server(deleteOutsideFile),
+          lazily(write.server(writeOutsideFile)),
+          lazily(remove.server(deleteOutsideFile)),
         ] as const;
       }),
   };

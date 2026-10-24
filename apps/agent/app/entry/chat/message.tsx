@@ -45,6 +45,8 @@ const toolLabels = {
   run_subagent: "서브에이전트 실행",
   message_subagent: "서브에이전트에게 메시지 보내기",
   delegate_to_agent: "외부 에이전트에게 맡기기",
+  // TanStack's discovery call for a tool sent by name only.
+  __lazy__tool__discovery__: "도구 불러오기",
 } satisfies Record<string, string>;
 
 /** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */

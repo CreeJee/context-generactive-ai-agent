@@ -10,6 +10,7 @@ import { MutableHashMap, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import { isDiscoveryCall } from "../tools/lazy.ts";
 import { Nodes, type Node, type NodeDetail } from "./nodes.ts";
 import { refsInArguments } from "./refs.ts";
 
@@ -182,9 +183,11 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     onToolPhaseComplete(ctx, info) {
       return run(
         Effect.gen(function* () {
+          // Asking for a lazy tool's schema is not part of the work, so it is not remembered.
+          const toolCalls = info.toolCalls.filter((call) => !isDiscoveryCall(call.function.name));
           // A declined approval fires no after-call hook, and a call skipped by middleware reports
           // ok; the result itself says whether the tool really ran.
-          const calls = info.toolCalls.map((call) => {
+          const calls = toolCalls.map((call) => {
             const result = info.results.find((entry) => entry.toolCallId === call.id);
             if (!isTruthy(result)) return { call, result, ok: true, resultText: "" };
             const reported = Option.getOrUndefined(MutableHashMap.get(outcomes, call.id));
@@ -223,13 +226,12 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
           yield* Effect.gen(function* () {
             // A run resumed after an approval replays calls recorded by the interrupted run.
             const recorded = MutableHashMap.empty<string, Node>();
-            for (const call of info.toolCalls) {
+            for (const call of toolCalls) {
               const node = yield* nodes.toolNode(binding.sessionId, "tool_call", call.id);
               if (isTruthy(node)) MutableHashMap.set(recorded, call.id, node);
             }
             const needsAssistant =
-              ctx.accumulatedContent.length > 0 ||
-              MutableHashMap.size(recorded) < info.toolCalls.length;
+              ctx.accumulatedContent.length > 0 || MutableHashMap.size(recorded) < toolCalls.length;
             const assistant = needsAssistant ? yield* appendAssistant(assistantText) : null;
 
             for (const [index, { call, result, ok }] of calls.entries()) {
