@@ -95,6 +95,7 @@ const Call = Schema.Union([
       offset: Schema.optionalKey(Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
     }),
   }),
+  // A run interrupted before get_subagent_reports took over single reports.
   Schema.Struct({
     name: Schema.Literal("get_subagent_report"),
     toolCallId: Schema.NonEmptyString,

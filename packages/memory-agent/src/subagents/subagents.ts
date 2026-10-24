@@ -60,7 +60,6 @@ export const subagentToolNames = [
   "run_subagent",
   "message_subagent",
   "resume_subagent",
-  "get_subagent_report",
   "get_subagent_reports",
   "wait_subagents",
 ] as const;
@@ -1296,7 +1295,7 @@ const make = Effect.gen(function* () {
       const runTool = toolDefinition({
         name: "run_subagent",
         description:
-          "Start one background task and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_report. It shares the workspace, model and permissions; it cannot start subagents.",
+          "Start one background task and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_reports. It shares the workspace, model and permissions; it cannot start subagents.",
         inputSchema: toToolSchema(RunSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "run_subagent", JSON.stringify(input)),
@@ -1321,27 +1320,10 @@ const make = Effect.gen(function* () {
       );
 
       const reportResults = MutableHashMap.empty<string, readonly SubagentReport[]>();
-      const reportTool = toolDefinition({
-        name: "get_subagent_report",
-        description:
-          "Retrieve one exact subagent attempt's report in this session. Returns running if unfinished. Only completed reports retrieved here can be adopted; notifications and wait results do not count as review.",
-        inputSchema: toToolSchema(AttemptInput),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server((input, context) =>
-        runEffect(
-          Effect.gen(function* () {
-            const result = yield* nativePromise(() =>
-              getReport(binding.sessionId, input.taskId, input.attemptId),
-            );
-            MutableHashMap.set(reportResults, context?.toolCallId ?? "", [result]);
-            return result;
-          }),
-        ),
-      );
       const reportsTool = toolDefinition({
         name: "get_subagent_reports",
         description:
-          "Retrieve a batch of exact attempt reports concurrently. Unfinished attempts return running. Successful completed reports are reviewed individually and may be adopted; retrieval does not adopt them.",
+          "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running. Only completed reports retrieved here can be adopted; notifications and wait results do not count as review, and retrieval does not adopt them.",
         inputSchema: toToolSchema(AttemptsInput),
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       }).server((raw, context) =>
@@ -1474,7 +1456,7 @@ const make = Effect.gen(function* () {
                 systemPrompts: [
                   ...config.systemPrompts,
                   [
-                    "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports or get_subagent_report, and background operation results with get_background_result before using them:",
+                    "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:",
                     ...notifications.map(
                       (notification) =>
                         `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
@@ -1487,8 +1469,7 @@ const make = Effect.gen(function* () {
         },
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onAfterToolCall(_ctx, info) {
-          if (!["get_subagent_report", "get_subagent_reports"].includes(info.toolName) || !info.ok)
-            return;
+          if (info.toolName !== "get_subagent_reports" || !info.ok) return;
           // Only this run's memory of what it reviewed gates adoption; reviews are not stored.
           for (const outcome of Option.getOrUndefined(
             MutableHashMap.get(reportResults, info.toolCallId),
@@ -1531,7 +1512,7 @@ const make = Effect.gen(function* () {
       };
 
       return {
-        tools: [runTool, messageTool, resumeTool, reportTool, reportsTool, waitTool, adoptTool],
+        tools: [runTool, messageTool, resumeTool, reportsTool, waitTool, adoptTool],
         middleware,
       };
     },

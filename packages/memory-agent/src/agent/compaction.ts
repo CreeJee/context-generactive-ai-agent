@@ -606,9 +606,15 @@ function lightweightToolResultsBody(
     const name = Option.getOrUndefined(MutableHashMap.get(names, message.toolCallId));
     if (
       !isTruthy(name) ||
-      !["run_skill", "run_shell", "list_files", "search_files", "get_subagent_report"].includes(
-        name,
-      )
+      // run_shell and get_subagent_report are in history recorded before their replacements.
+      ![
+        "run_skill",
+        "run_shell",
+        "list_files",
+        "search_files",
+        "get_subagent_reports",
+        "get_subagent_report",
+      ].includes(name)
     )
       return message;
     const preview = (text: string, length = 800) => {

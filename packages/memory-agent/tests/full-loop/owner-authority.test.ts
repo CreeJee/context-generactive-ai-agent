@@ -983,7 +983,7 @@ testAgent()("full-loop owner tool read/write semantics", (it) => {
     20000,
   );
 
-  it.effect.each(["get_subagent_report", "get_subagent_reports", "wait_subagents"] as const)(
+  it.effect.each(["get_subagent_reports", "wait_subagents"] as const)(
     "missing subagent reports through the real worker return a settled read failure (%s)",
     (name) =>
       Effect.gen(function* () {
@@ -1019,10 +1019,6 @@ testAgent()("full-loop owner tool read/write semantics", (it) => {
         let input: Schema.Json;
         let failingModule: string;
         switch (name) {
-          case "get_subagent_report":
-            input = attempts[0]!;
-            failingModule = "subagents.ts";
-            break;
           case "get_subagent_reports":
             input = { attempts };
             failingModule = "subagents.ts";

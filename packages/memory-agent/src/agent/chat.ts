@@ -2146,7 +2146,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...(kanbanFollowup !== null ? [kanbanAttentionPrompt(kanbanFollowup.reasons)] : []),
           ...(notificationFollowup
             ? [
-                "This is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports or get_subagent_report and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.",
+                "This is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.",
               ]
             : []),
         ];

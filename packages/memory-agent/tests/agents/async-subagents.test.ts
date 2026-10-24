@@ -41,9 +41,17 @@ const RunSpans = Schema.Array(
 const jsonTail = (answer: string) => answer.slice(answer.indexOf("{"));
 const receiptFrom = (answer: string) =>
   Schema.decodeEffect(Schema.fromJsonString(Receipt))(jsonTail(answer));
+/** The one report a get_subagent_reports call for a single attempt returned. */
 const reportFrom = (answer: string) =>
-  Schema.decodeEffect(Schema.fromJsonString(Report))(jsonTail(answer));
+  Effect.map(
+    Schema.decodeEffect(Schema.fromJsonString(Schema.Struct({ reports: Schema.Tuple([Report]) })))(
+      jsonTail(answer),
+    ),
+    ({ reports: [report] }) => report,
+  );
 const idsOf = ({ taskId, attemptId }: typeof Ids.Type) => ({ taskId, attemptId });
+/** get_subagent_reports for one attempt, as the model calls it. */
+const oneAttempt = (ids: typeof Ids.Type) => ({ attempts: [idsOf(ids)] });
 
 const toolCall = (id: string, name: string, args: JsonValue) =>
   Effect.map(encodeJson(args), (json): ScriptedTurn => ({
@@ -123,7 +131,7 @@ const asyncTurn = Effect.fnUntraced(
         case "call-adopt-report":
           return { text: "Used the reviewed report." };
         default:
-          return yield* toolCall("call-review-report", "get_subagent_report", ids);
+          return yield* toolCall("call-review-report", "get_subagent_reports", oneAttempt(ids));
       }
     }
     return yield* heldDefaultTurn(invocation);
@@ -325,7 +333,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const ids = idsOf(yield* receiptFrom(yield* send(sessionId, "dispatch only")));
       const wait = (options: { readonly timeoutMs?: number }) =>
         callTool(sessionId, "wait_subagents", { attempts: [ids], ...options });
-      expect(yield* callTool(sessionId, "get_subagent_report", ids)).toContain(
+      expect(yield* callTool(sessionId, "get_subagent_reports", oneAttempt(ids))).toContain(
         '"status":"running"',
       );
       expect(yield* wait({ timeoutMs: 0 })).toContain('"status":"pending"');
@@ -437,10 +445,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       yield* turns.release("nap first");
       yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(first)], timeoutMs: 5000 });
       const firstReport = yield* reportFrom(
-        yield* callTool(sessionId, "get_subagent_report", idsOf(first)),
+        yield* callTool(sessionId, "get_subagent_reports", oneAttempt(first)),
       );
       const secondReport = yield* reportFrom(
-        yield* callTool(sessionId, "get_subagent_report", idsOf(second)),
+        yield* callTool(sessionId, "get_subagent_reports", oneAttempt(second)),
       );
       expect(firstReport.answer).toContain("nap first");
       expect(secondReport.status).toBe("cancelled");
@@ -490,7 +498,7 @@ testAgent({ testProvider })("subagent reports across restart", (it) => {
       yield* turns.release("nap");
       yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(receipt)], timeoutMs: 5000 });
       const before = yield* reportFrom(
-        yield* callTool(sessionId, "get_subagent_report", idsOf(receipt)),
+        yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt)),
       );
       const notificationId = yield* trace.notifyParent({
         taskId: receipt.taskId,
@@ -512,7 +520,7 @@ testAgent({ testProvider })("subagent reports across restart", (it) => {
         )).map((entry) => entry.id),
       ).toContain(notificationId);
       expect(
-        yield* reportFrom(yield* callTool(sessionId, "get_subagent_report", idsOf(receipt))),
+        yield* reportFrom(yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt))),
       ).toEqual(before);
     }),
   );

@@ -38,7 +38,6 @@ export const builtinToolEffects = {
   resume_subagent: "effectful",
   read_subagent_tool_result: "read",
   // Report caches are run-local; durable review/adoption is a separate middleware RPC.
-  get_subagent_report: "read",
   get_subagent_reports: "read",
   // Reads status/cursor and registers a cancellable waiter; never consumes notifications.
   wait_subagents: "read",
@@ -65,8 +64,14 @@ export const builtinToolEffects = {
   record_card_verdict: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
+/** Built-ins since replaced, whose calls are still in recorded runs and history. */
+const retiredToolEffects = {
+  // Replaced by get_subagent_reports with one attempt.
+  get_subagent_report: "read",
+} as const satisfies Record<string, "read" | "effectful">;
+
 export const readOnlyToolNames = HashSet.fromIterable(
-  Object.entries(builtinToolEffects).flatMap(([name, effect]) => {
+  Object.entries({ ...builtinToolEffects, ...retiredToolEffects }).flatMap(([name, effect]) => {
     switch (effect) {
       case "read":
         return [name];

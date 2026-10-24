@@ -148,7 +148,6 @@ export const defaultTestResponder = (
     // model waits by choice; production dispatch tools no longer block their parent turn.
     if (!instructions.includes("You are a subagent") && !user.includes("dispatch only")) {
       const receipts = tools.flatMap((message) => {
-        if (message.toolCallId === "call-get_subagent_report") return [];
         try {
           const value = JSON.parse(toolText(message));
           return value.status === "running" && isTruthy(value.taskId) && isTruthy(value.attemptId)
@@ -175,21 +174,22 @@ export const defaultTestResponder = (
                 }),
               ),
             )(Option.getOrUndefined(MutableHashMap.get(byId, "call-wait-children"))!);
-            const toolCalls = yield* Effect.forEach(result.attempts, (attempt, index) =>
-              Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(attempt).pipe(
-                Effect.map((argumentsJson) => ({
-                  id: `call-report-${index}`,
-                  name: "get_subagent_report",
-                  arguments: argumentsJson,
-                })),
-              ),
-            );
-            return { toolCalls };
+            return call("call-reports", "get_subagent_reports", {
+              attempts: result.attempts.map(({ taskId, attemptId }) => ({ taskId, attemptId })),
+            });
           }).pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
         );
       }
-      if ([...MutableHashMap.keys(byId)].some((id) => id.startsWith("call-report-")))
-        return { text: [...MutableHashMap.values(byId)].join(" | ") };
+      // One part per report, as when each was retrieved on its own.
+      const reports = Option.getOrUndefined(MutableHashMap.get(byId, "call-reports"));
+      if (isTruthy(reports)) {
+        const parsed = JSON.parse(reports);
+        return {
+          text: Array.isArray(parsed.reports)
+            ? parsed.reports.map((report: Json) => JSON.stringify(report)).join(" | ")
+            : reports,
+        };
+      }
     }
     if (MutableHashMap.has(byId, "call-memory")) {
       const found = JSON.parse(Option.getOrUndefined(MutableHashMap.get(byId, "call-memory"))!);

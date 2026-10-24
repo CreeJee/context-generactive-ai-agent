@@ -71,7 +71,7 @@ const client = createSubscriptionOAuthClient({
     isTruthy(selectedProfile) ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
   ),
 });
-const baseline = `You can delegate with run_subagent and message_subagent. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Use wait_subagents when needed and retrieve its report with get_subagent_report before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
+const baseline = `You can delegate with run_subagent and message_subagent. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Use wait_subagents when needed and retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
 const frames = Schema.fromJsonString(
   Schema.Struct({
     type: Schema.String,
@@ -283,9 +283,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     waitArguments: calls
       .filter((call) => call.function.name === "wait_subagents")
       .map((call) => call.function.arguments),
-    reportCalls: calls.filter((call) =>
-      ["get_subagent_report", "get_subagent_reports"].includes(call.function.name),
-    ).length,
+    reportCalls: calls.filter((call) => call.function.name === "get_subagent_reports").length,
     toolCalls: calls.map((call) => call.function.name),
     correctTotals: answer.includes("10") && answer.includes("18"),
     answer,
