@@ -2566,3 +2566,4 @@
 - 남겨 둔 git 용어: 실패 사유 `GitFailed`는 보드와 failure code가 쓰는 이름이라 그대로 둔다.
 - 실행 모드도 같은 계약으로 고른다. 작업트리를 만들 수 없는 프로젝트의 Goal은 `sequentialWorkspace`가 맡는다. 카드는 프로젝트 자체에서 돌고(도구 루트는 프로젝트, 막는 폴더 없음), 커밋·정리·통합할 것이 없다. card-queue·orchestrator·board-actions는 `cardWorkspace(worktrees, goal.mode)`로 고른 것만 부르고, `mode === "worktree"` 분기와 `worktree: null`을 두지 않는다. 검증의 `worktree`만 카드 작업트리가 사라졌을 때 null로 남는다. Goal 브랜치 쪽(merge queue, 대상 브랜치 기록)은 worktree Goal에만 있어서 mode를 그대로 본다.
 - 검증할 카드의 작업트리가 사라졌으면 사용자 프로젝트에서 검증하지 않는다. 전에는 작업트리를 못 찾으면 검증 agent가 프로젝트 자체를 읽어 다른 코드를 통과시킬 수 있었다. 이제 `present`가 `WorktreeMissing`으로 실패하고, 카드는 그 실패로 사다리를 오른다. 다음 attempt가 작업트리를 다시 lease한다(git 구현은 카드 브랜치에서 다시 만든다). 검증 입력의 `worktree`는 null이 아니다.
+- 카드 agent와 검증 agent 안내는 실행 모드를 가리지 않게 쓴다. "카드의 git worktree" 대신 "이 카드가 일하는 폴더"라고 하고, 커밋은 owner가 맡는다고만 한다. sequential 카드는 프로젝트 자체에서 돌고 owner가 커밋하지 않는데, 전 안내는 git worktree와 owner 커밋을 약속했다.

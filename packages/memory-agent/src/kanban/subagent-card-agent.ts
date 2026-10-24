@@ -27,20 +27,21 @@ import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.t
 
 /**
  * Production card agents: each card attempt and each verification is a named session subagent
- * whose file and shell tools are rooted at the card worktree. The owner commits and integrates
- * the card's work; the sandbox does not let the agent write to the repository's git data.
+ * whose file and shell tools are rooted at the card worktree, or at the project itself when its
+ * cards run one at a time. The owner commits and integrates a worktree card's work; the sandbox
+ * does not let the agent write to the repository's git data. The instructions hold for both.
  */
 
 const cardInstructions = [
-  "You carry out one card of a kanban board. Your file and shell tools are rooted at the card's own git worktree.",
-  "- Do the card's work in that worktree and nowhere else. Other cards run in other worktrees at the same time.",
-  "- Do not commit, branch, merge or otherwise change git state; the owner commits your work when you finish. Read-only git commands (git status, git diff, git log, git show) are fine.",
+  "You carry out one card of a kanban board. Your file and shell tools are rooted at the folder this card works in.",
+  "- Do the card's work in that folder and nowhere else. Other cards may run at the same time in folders of their own.",
+  "- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine.",
   "- When the card is done, reply with a short report of what you changed and how you checked it against the acceptance criteria.",
   "- If you cannot finish, say exactly what is missing; do not claim the card is done.",
 ].join("\n");
 
 const verifierInstructions = [
-  "You verify one finished card of a kanban board. Your tools are rooted at the card's git worktree; read its files and run its checks, but change nothing.",
+  "You verify one finished card of a kanban board. Your tools are rooted at the folder holding the card's work; read its files and run its checks, but change nothing.",
   "- Check every acceptance criterion and every piece of required evidence. Run the project's tests or builds when a criterion depends on them.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
 ].join("\n");
@@ -123,7 +124,7 @@ const make = Effect.gen(function* () {
         const message = [
           ...(run.continuation
             ? [
-                "You worked on this card before and were cut off. Your earlier changes are already in the worktree: check what is there before you change anything, and do not redo work that is done.",
+                "You worked on this card before and were cut off. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
               ]
             : []),
           ...listed("The orchestrator changed the card since your last run", run.notes),
