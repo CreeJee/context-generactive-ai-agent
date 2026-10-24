@@ -2587,3 +2587,22 @@
 - 다른 대화의 실행 중인 보드가 이 대화 Goal의 merge를 기다리면(`kanban_goal_dependencies`) 삭제를 `goal_dependents`로 막는다. 스케줄러는 사라진 Goal을 기다리지 않으므로, 지우면 merge 없이 기다림이 풀린다. 요청은 아무것도 멈추기 전에 409로 거절한다. 이미 기록된 삭제는 finalize가 blocked로 바꾸고 작업을 지우지 않는다. 의존은 기다리는 쪽 보드에서 풀 수 있다.
 - 디스크에 있는 것은 지우지 않는다. 칸반 Goal·카드 브랜치와 작업트리는 사용자 저장소의 상태이고, Goal worker 자산 파일도 그대로 둔다.
 - 실제 DB 복사본에서 16,372노드·Goal 1개 대화의 purge는 한 트랜잭션에 7.7초 걸렸다. 대부분은 전부터 있던 노드 삭제(FTS 3초, edge 1.5초)이고 Goal 기록은 0.8초다. import 워커가 busy_timeout(5초)에 한 번 걸려도 loop 재시도(10초부터)가 받는다.
+
+## TanStack 패키지를 1.0으로 올림 (2026-10-24)
+
+- 사용자 결정: `@tanstack/ai` 계열을 모두 1.0.0으로 올린다. 다른 TanStack 패키지도 최신으로 올린다(`react-query` 5.104.5, `react-virtual` 3.14.22). `@tanstack/ai-mcp` 1.0은 MCP v2 패키지를 쓴다. 그래서 `@modelcontextprotocol/sdk` 대신 `@modelcontextprotocol/client`·`@modelcontextprotocol/server` 2.x를 쓴다.
+- 패치 두 개를 1.0에 맞춰 다시 만들었다.
+  - `@tanstack/ai`: 1.0도 도구가 던진 실패를 `{ error: message }`로 고정한다. 1.0의 `onAfterToolCall`은 `replaceResult`로 결과를 바꿀 수 있다. 하지만 `chat()`을 부르는 곳이 대화·Goal worker·subagent·BTW 등 여럿이라, 모두에 미들웨어를 붙이지 않고 같은 한 줄 패치를 둔다.
+  - `@tanstack/openai-base`: responses 스트림은 1.0에서 `options.runId`를 쓰도록 고쳐졌다. chat completions(스트림·구조화 출력)와 responses 구조화 출력은 여전히 자기 id를 쓴다. 이 세 곳만 패치한다.
+- `threadId`가 필수가 되었다. 서버의 `chat()` 호출과 화면의 `useChat`은 이미 넘기고 있었다. ACP 브리지의 `ChatClient`는 세션 id를 thread로 넘긴다. 압축의 leave-out 전략은 `CompactionContext`에 `threadId`·`addUsage`를 요구한다. 그래서 `compactEffect`가 대화의 thread id를 받는다. 이 전략은 모델을 부르지 않으므로 사용량은 보고하지 않는다. 쓰이지 않던 Promise 래퍼 `compact`는 지웠다.
+- `chat({ stream: false })`는 문자열 대신 `ChatResult`(`text`, `chunks`)를 돌려준다.
+- 모델 표:
+  - 런타임 도구 능력 표(`model-tool-capabilities.ts`)를 1.0 메타데이터로 다시 만들었다. 1.0은 OpenAI computer 도구에 `computer`(런타임 이름)도 함께 적는다. 등록된 도구 종류만 고르므로 결과는 그대로다.
+  - 1.0 이미지 모델 목록에서 DALL·E 2·3이 빠졌다. 그래서 그 직접 이미지 경로도 없어진다. `gpt-image-2.5-flare`·`gpt-image-2.5-sunburst`가 더해진다(편집 16장, 마스크 지원). 이미지 경로는 매번 자동으로 고르므로 저장된 선택은 없다.
+- 영속화: 1.0 conformance는 activity store를 요구한다. 이 앱은 AG-UI activity를 내지 않으므로 store를 두지 않고 conformance에서 뺀다. 0.61이 저장한 interrupt에는 이미 binding이 있어서 1.0에서도 이어진다.
+- 사용량: 1.0에서 TanStack Anthropic 어댑터의 `promptTokens`는 캐시 읽기·쓰기를 포함한다. 이 앱의 Anthropic 대화는 TanStack 어댑터가 아니라 구독 어댑터(`oauth/protocol.ts`)로 간다. 그래서 사용량 장부의 `separate` 의미는 바뀌지 않는다.
+- 거절한 승인: 1.0은 모델에 `{ error: "User declined tool execution" }`을 준다(0.61은 `approved: false`). 기록은 그대로 실패 결과로 남는다.
+- Goal worker 경계(owner↔worker)는 1.0 프로토콜에 맞춘다. TanStack의 Durable Runs·Takeover는 sandbox 실행을 다른 호스트가 이어받는 기능이다. 그래서 owner 부작용을 한 번만 실행하는 이 경계를 대신하지 않는다.
+  - 1.0 SDK는 tool call마다 스트림 출처를 담은 `metadata`를 붙인다. owner의 관찰 기록에는 이것이 없다. owner는 worker가 보낸 tool call을 id·type·이름·인자로만 대조한다. hook에는 여전히 owner 자신의 기록을 넘긴다.
+  - 1.0 persistence는 `onConfig`에서 재개 상태를 함수(`Symbol.for("tanstack.ai.durableResume")`)로 돌려준다. `chat()`은 onConfig 체인 뒤에 그 함수를 부른다. 함수는 worker로 갈 수 없어서, owner가 자기 도구로 부르고 그 결과를 `resumeToolState`로 보낸다. 이 처리가 없으면 승인 뒤 재개한 Goal run이 승인을 잃는다. 이 심볼은 `@tanstack/ai`와 `@tanstack/ai-persistence` 사이의 내부 약속이다. 그래서 1.x 업그레이드 때 승인 재개 테스트로 확인한다.
+- MCP: `@tanstack/ai-mcp` 1.0은 프로토콜 협상을 `auto`로 고정한다. 그래서 stdio 서버에 연결할 때마다 SDK가 짧게 사는 복제 프로세스로 `server/discover`를 먼저 묻는다. 서버 프로세스는 연결 한 번에 두 번 시작된다. 2025 프로토콜 서버는 도구 목록 한 번에 `tools/list`를 두 번 받는다(SDK 캐시 채우기). TanStack이 고른 기본값이므로 따른다. 시작이 무거운 서버가 문제가 되면 `prior`로 협상을 건너뛸 수 있다.

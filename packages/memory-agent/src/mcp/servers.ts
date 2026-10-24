@@ -4,8 +4,8 @@ import { Cause, Function as EffectFunction } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { AnyServerTool } from "@tanstack/ai";
 import { createMCPClient, type MCPClient } from "@tanstack/ai-mcp";
 import {

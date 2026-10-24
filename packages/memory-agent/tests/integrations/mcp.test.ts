@@ -74,6 +74,9 @@ const fakeServer = Effect.fnUntraced(function* (root: string) {
   };
 });
 
+/** A connection starts the fake server twice: the SDK's protocol check, then the session. */
+const serverStartTimeout = 20_000;
+
 /** Trust and live connections belong to a project, so each test registers its own. */
 const freshProject = Effect.gen(function* () {
   const env = yield* TestEnv;
@@ -94,137 +97,153 @@ const stubEnv = (values: Record<string, string>) =>
   );
 
 testAgent()("MCP servers of a project", (it) => {
-  it.effect("concurrent discovery shares one tools/list request", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const servers = yield* McpServers;
-      const { project, fake } = yield* freshProject;
-      const listLog = path.join(project.root, "mcp-lists.log");
-      yield* writeJson(fake.config, {
-        mcpServers: { fake: fake.entry({ FAKE_MCP_LIST_LOG: listLog }) },
-      });
-      yield* servers.setTrusted(project, "project", "fake", true);
-      const before = (yield* lines(listLog)).length;
-      const [left, right] = yield* Effect.all(
-        [inRun(servers.tools(project)), inRun(servers.tools(project))],
-        {
-          concurrency: "unbounded",
-        },
-      );
-      expect(left.map((tool) => tool.name)).toEqual(right.map((tool) => tool.name));
-      expect(yield* lines(listLog)).toHaveLength(before + 1);
-    }),
+  it.effect(
+    "concurrent discovery shares one listing",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        const listLog = path.join(project.root, "mcp-lists.log");
+        yield* writeJson(fake.config, {
+          mcpServers: { fake: fake.entry({ FAKE_MCP_LIST_LOG: listLog }) },
+        });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        // Trusting lists the tools once. A listing of a server on the 2025 protocol is two
+        // tools/list requests: the SDK lists again to fill its own cache.
+        const listing = (yield* lines(listLog)).length;
+        const [left, right] = yield* Effect.all(
+          [inRun(servers.tools(project)), inRun(servers.tools(project))],
+          {
+            concurrency: "unbounded",
+          },
+        );
+        expect(left.map((tool) => tool.name)).toEqual(right.map((tool) => tool.name));
+        expect(yield* lines(listLog)).toHaveLength(2 * listing);
+      }),
+    serverStartTimeout,
   );
 
-  it.effect("removing a configured server closes its live process", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const servers = yield* McpServers;
-      const { project, fake } = yield* freshProject;
-      yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
-      yield* servers.setTrusted(project, "project", "fake", true);
-      const pid = Number((yield* fs.readFileString(fake.log)).trim().split(" ")[1]);
-      yield* writeJson(fake.config, { mcpServers: {} });
-      expect((yield* servers.overview(project)).servers).toEqual([]);
-      yield* until(() => !processAlive(pid), "the removed MCP server to stop");
-      expect(yield* inRun(servers.tools(project))).toEqual([]);
-    }),
+  it.effect(
+    "removing a configured server closes its live process",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        // The last start is the session. The first is the SDK's protocol check, already stopped.
+        const pid = Number((yield* lines(fake.log)).at(-1)?.split(" ")[1]);
+        yield* writeJson(fake.config, { mcpServers: {} });
+        expect((yield* servers.overview(project)).servers).toEqual([]);
+        yield* until(() => !processAlive(pid), "the removed MCP server to stop");
+        expect(yield* inRun(servers.tools(project))).toEqual([]);
+      }),
+    serverStartTimeout,
   );
 
-  it.effect("a server runs in the project with only the configured environment", () =>
-    Effect.gen(function* () {
-      const servers = yield* McpServers;
-      const { project, fake } = yield* freshProject;
-      yield* stubEnv({ SHOULD_NOT_LEAK: "inherited", FAKE_TOKEN_SOURCE: "expanded-token" });
-      yield* writeJson(fake.config, {
-        mcpServers: { fake: fake.entry({ FAKE_MCP_TOKEN: "${FAKE_TOKEN_SOURCE}" }) },
-      });
-      yield* servers.setTrusted(project, "project", "fake", true);
-      const where = (yield* inRun(servers.tools(project))).find(
-        (tool) => tool.name === mcpToolName("fake", "where"),
-      );
-      const result = yield* sdk(() => Promise.resolve(where?.execute?.({})));
-      expect(
-        yield* Schema.decodeEffect(
-          Schema.fromJsonString(
-            Schema.Struct({
-              cwd: Schema.String,
-              token: Schema.String,
-              inheritedSecret: Schema.Null,
-            }),
-          ),
-        )(String(result)),
-      ).toEqual({ cwd: project.root, token: "expanded-token", inheritedSecret: null });
-    }),
+  it.effect(
+    "a server runs in the project with only the configured environment",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* stubEnv({ SHOULD_NOT_LEAK: "inherited", FAKE_TOKEN_SOURCE: "expanded-token" });
+        yield* writeJson(fake.config, {
+          mcpServers: { fake: fake.entry({ FAKE_MCP_TOKEN: "${FAKE_TOKEN_SOURCE}" }) },
+        });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const where = (yield* inRun(servers.tools(project))).find(
+          (tool) => tool.name === mcpToolName("fake", "where"),
+        );
+        const result = yield* sdk(() => Promise.resolve(where?.execute?.({})));
+        expect(
+          yield* Schema.decodeEffect(
+            Schema.fromJsonString(
+              Schema.Struct({
+                cwd: Schema.String,
+                token: Schema.String,
+                inheritedSecret: Schema.Null,
+              }),
+            ),
+          )(String(result)),
+        ).toEqual({ cwd: project.root, token: "expanded-token", inheritedSecret: null });
+      }),
+    serverStartTimeout,
   );
 });
 
 // The global `mcp.json` and its trust are shared by every project, so these tests own an agent.
 testAgent()("MCP trust of the global and project configuration", (it) => {
-  it.effect("configured servers start only after the user trusts that exact configuration", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const { project, storage } = yield* TestEnv;
-      const servers = yield* McpServers;
-      const fake = yield* fakeServer(project.root);
-      yield* writeJson(path.join(storage, "mcp.json"), {
-        mcpServers: {
-          fake: fake.entry({ API_TOKEN: "${NOT_SHOWN}" }),
-          docs: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "x" } },
-        },
-      });
-      yield* writeJson(fake.config, { mcpServers: { docs: fake.entry() } });
-      const listed = yield* servers.overview(project);
-      expect(listed.servers).toEqual([
-        expect.objectContaining({
-          scope: "global",
-          name: "fake",
-          transport: "stdio",
-          envNames: ["FAKE_MCP_LOG", "API_TOKEN"],
-          shadowed: false,
-          state: McpServerState.untrusted(),
-        }),
-        expect.objectContaining({
-          scope: "global",
-          name: "docs",
-          transport: "http",
-          headerNames: ["Authorization"],
-          shadowed: true,
-        }),
-        expect.objectContaining({
-          scope: "project",
-          name: "docs",
-          state: McpServerState.untrusted(),
-        }),
-      ]);
-      // Values of the environment and headers never leave the server.
-      expect(yield* encodeJson(listed)).not.toContain("NOT_SHOWN");
-      expect(yield* inRun(servers.tools(project))).toEqual([]);
-      expect(yield* fake.starts).toBe(0);
-      // `fake` needs NOT_SHOWN, which the environment does not have: trusting reports why it failed.
-      const failed = yield* servers.setTrusted(project, "global", "fake", true);
-      expect(failed.servers[0]?.state).toEqual(
-        McpServerState.failed({ failure: { code: "missing_env", detail: "NOT_SHOWN" } }),
-      );
-      const trusted = yield* servers.setTrusted(project, "project", "docs", true);
-      expect(trusted.servers[2]?.state).toEqual(
-        McpServerState.connected({ tools: ["echo", "where"] }),
-      );
-      expect(yield* fake.starts).toBe(1);
-      const tools = yield* inRun(servers.tools(project));
-      expect(tools.map((tool) => tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
-      expect(yield* fake.starts).toBe(1);
-      // A changed configuration is not the one the user trusted.
-      yield* writeJson(fake.config, {
-        mcpServers: { docs: { ...fake.entry(), args: [fake.script, "--changed"] } },
-      });
-      expect((yield* servers.overview(project)).servers[2]?.state).toEqual(
-        McpServerState.changed(),
-      );
-      expect(yield* inRun(servers.tools(project))).toEqual([]);
-      const untrusted = yield* servers.setTrusted(project, "project", "docs", false);
-      expect(untrusted.servers[2]?.state).toEqual(McpServerState.untrusted());
-    }),
+  it.effect(
+    "configured servers start only after the user trusts that exact configuration",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const { project, storage } = yield* TestEnv;
+        const servers = yield* McpServers;
+        const fake = yield* fakeServer(project.root);
+        yield* writeJson(path.join(storage, "mcp.json"), {
+          mcpServers: {
+            fake: fake.entry({ API_TOKEN: "${NOT_SHOWN}" }),
+            docs: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "x" } },
+          },
+        });
+        yield* writeJson(fake.config, { mcpServers: { docs: fake.entry() } });
+        const listed = yield* servers.overview(project);
+        expect(listed.servers).toEqual([
+          expect.objectContaining({
+            scope: "global",
+            name: "fake",
+            transport: "stdio",
+            envNames: ["FAKE_MCP_LOG", "API_TOKEN"],
+            shadowed: false,
+            state: McpServerState.untrusted(),
+          }),
+          expect.objectContaining({
+            scope: "global",
+            name: "docs",
+            transport: "http",
+            headerNames: ["Authorization"],
+            shadowed: true,
+          }),
+          expect.objectContaining({
+            scope: "project",
+            name: "docs",
+            state: McpServerState.untrusted(),
+          }),
+        ]);
+        // Values of the environment and headers never leave the server.
+        expect(yield* encodeJson(listed)).not.toContain("NOT_SHOWN");
+        expect(yield* inRun(servers.tools(project))).toEqual([]);
+        expect(yield* fake.starts).toBe(0);
+        // `fake` needs NOT_SHOWN, which the environment does not have: trusting reports why it failed.
+        const failed = yield* servers.setTrusted(project, "global", "fake", true);
+        expect(failed.servers[0]?.state).toEqual(
+          McpServerState.failed({ failure: { code: "missing_env", detail: "NOT_SHOWN" } }),
+        );
+        const trusted = yield* servers.setTrusted(project, "project", "docs", true);
+        expect(trusted.servers[2]?.state).toEqual(
+          McpServerState.connected({ tools: ["echo", "where"] }),
+        );
+        // A connection starts the server twice: a short-lived copy answers which protocol it
+        // speaks (`server/discover`), then the session starts.
+        expect(yield* fake.starts).toBe(2);
+        const tools = yield* inRun(servers.tools(project));
+        expect(tools.map((tool) => tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
+        expect(yield* fake.starts).toBe(2);
+        // A changed configuration is not the one the user trusted.
+        yield* writeJson(fake.config, {
+          mcpServers: { docs: { ...fake.entry(), args: [fake.script, "--changed"] } },
+        });
+        expect((yield* servers.overview(project)).servers[2]?.state).toEqual(
+          McpServerState.changed(),
+        );
+        expect(yield* inRun(servers.tools(project))).toEqual([]);
+        const untrusted = yield* servers.setTrusted(project, "project", "docs", false);
+        expect(untrusted.servers[2]?.state).toEqual(McpServerState.untrusted());
+      }),
+    serverStartTimeout,
   );
 });
 
@@ -289,62 +308,71 @@ const mcpChat = Effect.fnUntraced(function* (mode: "ask" | "auto") {
 testAgent({ testProvider: { responder: sessionScopedResponder } })(
   "MCP tool calls in a chat",
   (it) => {
-    it.effect("ask mode asks before every MCP call and runs it once approved", () =>
-      Effect.gen(function* () {
-        const { client, text, send, pendingInterrupt, finished, session, callId } =
-          yield* mcpChat("ask");
-        const nodes = yield* Nodes;
-        yield* send('call mcp_fake__echo {"text":"hi from mcp"}');
-        yield* pendingInterrupt;
-        expect(client.getInterrupts()[0]).toMatchObject({
-          kind: "generic",
-          definitionId: "permission-review",
-          payload: { toolName: "mcp_fake__echo" },
-        });
-        expect((yield* nodes.session(session)).some((node) => node.kind === "tool_result")).toBe(
-          false,
-        );
-        client.resolveInterrupts((item) => {
-          if (item.kind === "generic") item.resolveInterrupt({ approved: true });
-        });
-        yield* finished;
-        expect(text()).toContain("echo: hi from mcp");
-        expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
-          decision: "approved",
-          decidedBy: "user",
-        });
-      }),
+    it.effect(
+      "ask mode asks before every MCP call and runs it once approved",
+      () =>
+        Effect.gen(function* () {
+          const { client, text, send, pendingInterrupt, finished, session, callId } =
+            yield* mcpChat("ask");
+          const nodes = yield* Nodes;
+          yield* send('call mcp_fake__echo {"text":"hi from mcp"}');
+          yield* pendingInterrupt;
+          expect(client.getInterrupts()[0]).toMatchObject({
+            kind: "generic",
+            definitionId: "permission-review",
+            payload: { toolName: "mcp_fake__echo" },
+          });
+          expect((yield* nodes.session(session)).some((node) => node.kind === "tool_result")).toBe(
+            false,
+          );
+          client.resolveInterrupts((item) => {
+            if (item.kind === "generic") item.resolveInterrupt({ approved: true });
+          });
+          yield* finished;
+          expect(text()).toContain("echo: hi from mcp");
+          expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
+            decision: "approved",
+            decidedBy: "user",
+          });
+        }),
+      serverStartTimeout,
     );
 
-    it.effect("a declined MCP call never reaches the server", () =>
-      Effect.gen(function* () {
-        const { client, text, send, pendingInterrupt, finished, session } = yield* mcpChat("ask");
-        yield* send('call mcp_fake__echo {"text":"never"}');
-        yield* pendingInterrupt;
-        client.resolveInterrupts((item) => {
-          if (item.kind === "generic") item.resolveInterrupt({ approved: false });
-        });
-        yield* finished;
-        expect(text()).not.toContain("echo: never");
-        expect(
-          (yield* (yield* Nodes).session(session)).find((node) => node.kind === "tool_result")
-            ?.detail,
-        ).toMatchObject({ ok: false, permission: { decision: "denied" } });
-      }),
+    it.effect(
+      "a declined MCP call never reaches the server",
+      () =>
+        Effect.gen(function* () {
+          const { client, text, send, pendingInterrupt, finished, session } = yield* mcpChat("ask");
+          yield* send('call mcp_fake__echo {"text":"never"}');
+          yield* pendingInterrupt;
+          client.resolveInterrupts((item) => {
+            if (item.kind === "generic") item.resolveInterrupt({ approved: false });
+          });
+          yield* finished;
+          expect(text()).not.toContain("echo: never");
+          expect(
+            (yield* (yield* Nodes).session(session)).find((node) => node.kind === "tool_result")
+              ?.detail,
+          ).toMatchObject({ ok: false, permission: { decision: "denied" } });
+        }),
+      serverStartTimeout,
     );
 
-    it.effect("auto mode sends MCP calls through the permission review", () =>
-      Effect.gen(function* () {
-        const { client, text, send, finished, session, callId } = yield* mcpChat("auto");
-        yield* send('call mcp_fake__echo {"text":"reviewed"}');
-        yield* finished;
-        expect(client.getInterrupts()).toHaveLength(0);
-        expect(text()).toContain("echo: reviewed");
-        expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
-          decision: "allow",
-          decidedBy: "classifier",
-        });
-      }),
+    it.effect(
+      "auto mode sends MCP calls through the permission review",
+      () =>
+        Effect.gen(function* () {
+          const { client, text, send, finished, session, callId } = yield* mcpChat("auto");
+          yield* send('call mcp_fake__echo {"text":"reviewed"}');
+          yield* finished;
+          expect(client.getInterrupts()).toHaveLength(0);
+          expect(text()).toContain("echo: reviewed");
+          expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
+            decision: "allow",
+            decidedBy: "classifier",
+          });
+        }),
+      serverStartTimeout,
     );
   },
 );

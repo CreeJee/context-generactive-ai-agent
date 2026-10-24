@@ -333,6 +333,7 @@ export function startAcpAgent(options: {
       renew,
       turn: null,
       chat: new ChatClient({
+        threadId: sessionId,
         tools: approvalToolDefinitions,
         interrupts: [permissionReviewInterrupt],
         initialMessages: messages,

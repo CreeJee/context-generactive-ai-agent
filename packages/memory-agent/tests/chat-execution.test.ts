@@ -26,6 +26,7 @@ test("owner capabilities override untyped turn fields without rebuilding owner i
   // Simulates JavaScript callers supplying fields excluded from the typed turn contract.
   const turn = {
     messages,
+    threadId: "thread",
     runId: "owner-run",
     adapter: new ScriptedTextAdapter([{ text: "unused" }]),
     tools: ["untrusted"],

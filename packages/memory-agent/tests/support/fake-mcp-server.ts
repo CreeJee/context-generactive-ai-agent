@@ -2,9 +2,8 @@ import { NodeFileSystem } from "@effect/platform-node";
 import { Cause, Config, Effect, FileSystem, Layer, Schema } from "effect";
 import { isTruthy } from "../../src/truthy.ts";
 // A small stdio MCP server for tests. Records each start in $FAKE_MCP_LOG when set.
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Server } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 // The native MCP SDK owns the process stdio transport; its callbacks await domain Effects.
 await Effect.runPromise(
@@ -26,7 +25,7 @@ await Effect.runPromise(
         { capabilities: { tools: {} } },
       );
 
-      server.setRequestHandler(ListToolsRequestSchema, () =>
+      server.setRequestHandler("tools/list", () =>
         runNative(
           Effect.gen(function* () {
             if (isTruthy(listLog)) yield* fs.writeFileString(listLog, "list\n", { flag: "a" });
@@ -52,7 +51,7 @@ await Effect.runPromise(
         ),
       );
 
-      server.setRequestHandler(CallToolRequestSchema, (request) =>
+      server.setRequestHandler("tools/call", (request) =>
         runNative(
           Effect.gen(function* () {
             switch (request.params.name) {

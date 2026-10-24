@@ -40,9 +40,10 @@ function freshPersistence() {
 }
 
 // The TanStack contract suite: full-replace threads, idempotent runs and interrupts, ordering,
-// NULL clears for durable-run fields, composite metadata keys. Generation stores are not used.
+// NULL clears for durable-run fields, composite metadata keys. Generation stores are not used,
+// and no run emits AG-UI activities, so there is no activity store.
 runPersistenceConformance("sqlite chat state", freshPersistence, {
-  skip: ["generationRuns", "artifacts", "blobs"],
+  skip: ["generationRuns", "artifacts", "blobs", "activities"],
 });
 
 it.live("does not persist empty user text, preserving tool-only answers and media", () =>

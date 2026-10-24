@@ -147,7 +147,7 @@ export class ReportDiagnoser extends Context.Service<
           }),
         );
         return yield* parseDiagnosis(
-          answer,
+          answer.text,
           input.bundle === null ? new Set() : bundlePlaces(input.bundle),
         );
       });

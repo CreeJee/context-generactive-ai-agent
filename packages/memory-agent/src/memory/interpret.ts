@@ -281,7 +281,9 @@ const make = Effect.gen(function* () {
           orElse: () => Effect.fail(InterpretationFailed.make({ reason: "model_call_failed" })),
         }),
       );
-      const labelled = Option.getOrUndefined(decodeAnswer(answer.match(/\{[\s\S]*\}/)?.[0] ?? ""));
+      const labelled = Option.getOrUndefined(
+        decodeAnswer(answer.text.match(/\{[\s\S]*\}/)?.[0] ?? ""),
+      );
       if (!isTruthy(labelled))
         return yield* InterpretationFailed.make({ reason: "unreadable_answer" });
 

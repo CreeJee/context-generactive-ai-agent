@@ -71,6 +71,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
         const runId = `${session.id}:run`;
         yield* drain(
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([
               {
                 text: "먼저 README를 읽고 테스트를 실행할게요.",
@@ -165,6 +166,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
         }));
         yield* drain(
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([
               {
                 text: "",
@@ -208,6 +210,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           });
           yield* drain(
             chat({
+              threadId: "thread",
               adapter: new ScriptedTextAdapter([
                 {
                   toolCalls: [
@@ -250,6 +253,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
         const runId = `${session.id}:fail`;
         yield* drain(
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([
               { text: "설명을 시작하면, 먼저", failAfterText: "provider connection reset" },
             ]),
@@ -330,6 +334,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               });
               yield* drain(
                 chat({
+                  threadId: "thread",
                   adapter: new ScriptedTextAdapter([
                     {
                       text: `starting ${secret}`,
@@ -392,6 +397,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           });
           yield* drain(
             chat({
+              threadId: "thread",
               adapter: new ScriptedTextAdapter([{ text: "owner answer" }]),
               messages: [{ role: "user", content: "hello" }],
               middleware: [middleware],

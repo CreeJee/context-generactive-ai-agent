@@ -394,52 +394,15 @@ export interface Compacted {
  * and validated older summary blocks replace raw turns regardless of conversation size. Past
  * `leaveOutAt` the oldest messages are left out. The saved conversation is never changed.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-function compactBody(
-  messages: readonly ModelMessage[],
-  state: CompactionState,
-  sources: CompactionSources,
-  budget: Budget,
-  early = false,
-): Promise<Compacted> {
-  return Effect.runPromise(compactEffect({ messages, state, sources, budget, early }));
-}
-
-export const compact: {
-  (
-    messages: readonly ModelMessage[],
-    state: CompactionState,
-    sources: CompactionSources,
-    budget: Budget,
-  ): Promise<Compacted>;
-  (
-    messages: readonly ModelMessage[],
-    state: CompactionState,
-    sources: CompactionSources,
-    budget: Budget,
-    early: boolean | undefined,
-  ): Promise<Compacted>;
-  (
-    state: CompactionState,
-    sources: CompactionSources,
-    budget: Budget,
-  ): (messages: readonly ModelMessage[]) => Promise<Compacted>;
-  (
-    state: CompactionState,
-    sources: CompactionSources,
-    budget: Budget,
-    early: boolean | undefined,
-  ): (messages: readonly ModelMessage[]) => Promise<Compacted>;
-} = EffectFunction.dual((args) => Array.isArray(args[0]), compactBody);
-
 export const compactEffect = Effect.fnUntraced(function* (options: {
+  readonly threadId: string;
   readonly messages: readonly ModelMessage[];
   readonly state: CompactionState;
   readonly sources: CompactionSources;
   readonly budget: Budget;
   readonly early?: boolean;
 }) {
-  const { messages, state, sources, budget, early = false } = options;
+  const { threadId, messages, state, sources, budget, early = false } = options;
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
   let sent = messages;
@@ -499,9 +462,12 @@ export const compactEffect = Effect.fnUntraced(function* (options: {
       reason: "EvictionFailed",
       evaluate: () =>
         Promise.resolve(
+          // Leaving messages out makes no model call, so it has no usage to report.
           leaveOutOldest(sent, {
             maxTokens: budget.leaveOutAt,
             estimate: estimateTokens,
+            addUsage: EffectFunction.constVoid,
+            threadId,
           }),
         ),
     });
@@ -761,6 +727,7 @@ function compactionBody(
             : 0;
           const restoredContext = restored?.[0];
           const { messages, stage } = yield* compactEffect({
+            threadId: ctx.threadId,
             messages: isTruthy(restored) ? restored.slice(1) : config.messages,
             state: isTruthy(restored)
               ? {
@@ -866,7 +833,7 @@ const compactByHandBody = <E>(
 ): Effect.Effect<CompactResult, CompactionFailed | E> =>
   Effect.gen(function* () {
     const initial = yield* compactionStateEffect({ metadata, threadId });
-    const before = yield* compactEffect({ messages, state: initial, sources, budget });
+    const before = yield* compactEffect({ threadId, messages, state: initial, sources, budget });
     const outcome = yield* summarize();
     const state = yield* compactionStateEffect({ metadata, threadId });
     const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
@@ -883,6 +850,7 @@ const compactByHandBody = <E>(
       evaluate: () => metadata.set(manualCompactionNamespace, threadId, manual),
     });
     const after = yield* compactEffect({
+      threadId,
       messages,
       state: { ...state, manual },
       sources,

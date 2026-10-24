@@ -342,7 +342,7 @@ describe("ProviderToolPolicy", () => {
           }),
           execution({ toolId: "openai:not-real", kind: "not-real" }),
           execution({
-            policy: basePolicy({ model: "computer-use-preview" }),
+            policy: basePolicy({ model: "gpt-5-codex" }),
             toolId: "openai:web_search",
             kind: "web_search",
           }),

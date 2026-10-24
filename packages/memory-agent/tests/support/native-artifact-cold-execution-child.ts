@@ -120,6 +120,7 @@ await Effect.runPromise(
           );
           yield* sdkCall(() =>
             chat({
+              threadId: "thread",
               adapter: new ScriptedTextAdapter([{ text: runId }]),
               messages: [{ role: "user", content: runId }],
               runId,

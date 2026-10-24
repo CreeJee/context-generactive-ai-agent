@@ -60,6 +60,7 @@ const gatedRun = (
 ) =>
   sdkPromise((abortController) =>
     chat({
+      threadId: "thread",
       adapter: new ScriptedTextAdapter([
         { toolCalls: [{ id, name: tool.name, arguments: argumentsJson }] },
         { text: "finished" },

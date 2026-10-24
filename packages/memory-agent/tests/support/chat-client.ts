@@ -56,6 +56,7 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
     switch (connection) {
       case "send":
         return new ChatClient({
+          threadId: sessionId,
           tools,
           interrupts,
           connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {

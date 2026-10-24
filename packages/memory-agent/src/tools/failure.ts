@@ -31,7 +31,7 @@ const refusalHints = HashMap.fromIterable<string, string>([
 ]);
 
 /**
- * Where the patched SDK (`patches/@tanstack__ai@0.61.0.patch`) finds the result a failed tool
+ * Where the patched SDK (`patches/@tanstack__ai@1.0.0.patch`) finds the result a failed tool
  * gives the model, in place of `{ error: message }`.
  */
 export const toolResultKey = Symbol.for("tanstack-ai.toolResult");

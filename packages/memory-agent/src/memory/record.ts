@@ -32,9 +32,10 @@ interface ToolOutcome {
 const isString = Schema.is(Schema.String);
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 /**
- * A result that reports the work did not succeed: a thrown tool (`{ error }`), a declined approval
- * (`{ approved: false }` from the client), a shell command that did not exit cleanly, or an
- * external agent that did not finish. Goal completion only counts results recorded as ok.
+ * A result that reports the work did not succeed: a thrown tool or a declined tool approval
+ * (`{ error }`), a denied permission review (`{ approved: false }`), a shell command that did not
+ * exit cleanly, or an external agent that did not finish. Goal completion only counts results
+ * recorded as ok.
  */
 const isErrorResult = Schema.is(
   Schema.Union([

@@ -215,6 +215,7 @@ describe("OpenAI compatible settings", () => {
           yield* Stream.runForEach(
             Stream.fromAsyncIterable(
               adapter.chatStream({
+                threadId: "thread",
                 logger: resolveDebugOption(false),
                 model: configuration.model,
                 messages: [{ role: "user", content }],
@@ -551,6 +552,7 @@ describe("OpenAI compatible settings", () => {
               yield* Stream.runForEach(
                 Stream.fromAsyncIterable(
                   adapter.chatStream({
+                    threadId: "thread",
                     logger: resolveDebugOption(false),
                     model: configuration.model,
                     messages: [{ role: "user", content: "hi" }],
@@ -1017,6 +1019,7 @@ describe("OpenAI compatible settings", () => {
           Stream.runForEach(
             Stream.fromAsyncIterable(
               adapter.chatStream({
+                threadId: "thread",
                 logger: resolveDebugOption(false),
                 model: configuration.model,
                 messages: [{ role: "user", content: "hi" }],
@@ -1055,6 +1058,7 @@ describe("OpenAI compatible settings", () => {
         yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
         const iterator = adapter
           .chatStream({
+            threadId: "thread",
             logger: resolveDebugOption(false),
             model: configuration.model,
             messages: [{ role: "user", content: "hi" }],
@@ -1124,6 +1128,7 @@ describe("OpenAI compatible settings", () => {
           yield* Stream.runForEach(
             Stream.fromAsyncIterable(
               adapter.chatStream({
+                threadId: "thread",
                 logger: resolveDebugOption(false),
                 model: configuration.model,
                 messages: [{ role: "user", content: "hi" }],
@@ -1226,6 +1231,7 @@ describe("OpenAI compatible settings", () => {
                 const chunks = yield* Stream.runCollect(
                   Stream.fromAsyncIterable(
                     (yield* f.api.runtime).adapter(selection).chatStream({
+                      threadId: "thread",
                       logger: resolveDebugOption(false),
                       model: configuration.model,
                       messages: [{ role: "user", content: "hello" }],
@@ -1271,6 +1277,7 @@ describe("OpenAI compatible settings", () => {
             const chunks = yield* Stream.runCollect(
               Stream.fromAsyncIterable(
                 adapter.chatStream({
+                  threadId: "thread",
                   logger: resolveDebugOption(false),
                   model: configuration.model,
                   messages: [{ role: "user", content: "x".repeat(100_000) }],

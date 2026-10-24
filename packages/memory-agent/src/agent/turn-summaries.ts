@@ -127,7 +127,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       Effect.timeout(summaryTimeoutMs),
       Effect.mapError((cause) => TurnSummaryFailed.make({ operation: "model", cause })),
     );
-    const text = answer.trim();
+    const text = answer.text.trim();
     if (text.length === 0) return yield* TurnSummaryFailed.make({ operation: "empty-answer" });
     return text.slice(0, summaryCharacters);
   });
@@ -163,6 +163,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         const runtime = yield* active.runtime(selection);
         const threshold = (runtime.contextWindow(selection.model) * (yield* startPercent)) / 100;
         const unsummarized = yield* compactEffect({
+          threadId: sessionId,
           messages,
           state: { manual: state.manual, blocks: [] },
           sources,

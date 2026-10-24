@@ -181,7 +181,7 @@ describe("subscription model adapters", () => {
         });
         const events = yield* Stream.runCollect(
           Stream.fromAsyncIterable(
-            adapter.chatStream({ ...options, model: "model-1", logger }),
+            adapter.chatStream({ threadId: "thread", ...options, model: "model-1", logger }),
             (cause) => new Cause.UnknownError(cause),
           ),
         );
@@ -601,7 +601,7 @@ describe("subscription model adapters", () => {
 
       const events = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
-          adapter.chatStream({ ...options, model: "model-1", logger }),
+          adapter.chatStream({ threadId: "thread", ...options, model: "model-1", logger }),
           (cause) => new Cause.UnknownError(cause),
         ),
       );
@@ -727,7 +727,7 @@ describe("subscription model adapters", () => {
         reasoningEffort: "medium",
       });
       const stream = adapter
-        .chatStream({ ...options, model: "model-1", logger })
+        .chatStream({ threadId: "thread", ...options, model: "model-1", logger })
         [Symbol.asyncIterator]();
       yield* sdkCall(() => stream.next());
       yield* sdkCall(() =>
@@ -768,7 +768,7 @@ describe("subscription model adapters", () => {
         const failure = yield* Effect.flip(
           Stream.runDrain(
             Stream.fromAsyncIterable(
-              adapter.chatStream({ ...options, model: "model-1", logger }),
+              adapter.chatStream({ threadId: "thread", ...options, model: "model-1", logger }),
               (cause) => new Cause.UnknownError(cause),
             ),
           ),
@@ -819,11 +819,7 @@ describe("subscription model adapters", () => {
 
       const events = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
-          adapter.chatStream({
-            ...options,
-            model: "model-1",
-            logger,
-          }),
+          adapter.chatStream({ threadId: "thread", ...options, model: "model-1", logger }),
           (cause) => new Cause.UnknownError(cause),
         ),
       );
@@ -879,6 +875,7 @@ describe("subscription model adapters", () => {
       });
       const stream = adapter
         .chatStream({
+          threadId: "thread",
           ...options,
           model: "model-1",
           logger,
@@ -926,7 +923,13 @@ describe("subscription model adapters", () => {
         reasoningEffort: "medium",
       });
       const stream = adapter
-        .chatStream({ ...options, model: "model-1", logger, abortController: controller })
+        .chatStream({
+          threadId: "thread",
+          ...options,
+          model: "model-1",
+          logger,
+          abortController: controller,
+        })
         [Symbol.asyncIterator]();
       expect((yield* sdkCall(() => stream.next())).value).toMatchObject({
         type: EventType.RUN_STARTED,
@@ -981,11 +984,7 @@ describe("subscription model adapters", () => {
 
       const events = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
-          adapter.chatStream({
-            ...options,
-            model: "model-1",
-            logger,
-          }),
+          adapter.chatStream({ threadId: "thread", ...options, model: "model-1", logger }),
           (cause) => new Cause.UnknownError(cause),
         ),
       );

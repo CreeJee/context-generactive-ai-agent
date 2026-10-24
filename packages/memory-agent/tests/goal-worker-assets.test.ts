@@ -74,7 +74,7 @@ const boot = Effect.fn("bootGoalWorker")(
         {
           capability: { ...capability, token: presentedToken },
           lastOperationId: 0,
-          turn: { messages: [] },
+          turn: { messages: [], threadId: "thread" },
           tools: [],
           middleware: [],
           adapter: { name: "test", model: "test" },

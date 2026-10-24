@@ -69,11 +69,7 @@ const collect = (events: readonly NormalizedStreamEvent[]) => {
   return runNativeEffect(
     Stream.runCollect(
       Stream.fromAsyncIterable(
-        adapter.chatStream({
-          model: "fixture",
-          messages: [],
-          logger,
-        }),
+        adapter.chatStream({ threadId: "thread", model: "fixture", messages: [], logger }),
         (cause) => new Cause.UnknownError(cause),
       ),
     ),
@@ -209,6 +205,7 @@ test("owner abort during an unfinished public summary ends silently without fals
       const chunks = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
           adapter.chatStream({
+            threadId: "thread",
             model: "fixture",
             messages: [],
             logger,

@@ -191,9 +191,12 @@ catalogs:
     '@huggingface/transformers':
       specifier: 4.3.1
       version: 4.3.1
-    '@modelcontextprotocol/sdk':
-      specifier: 1.32.1
-      version: 1.32.1
+    '@modelcontextprotocol/client':
+      specifier: ^2.3.1
+      version: 2.3.1
+    '@modelcontextprotocol/server':
+      specifier: ^2.3.1
+      version: 2.3.1
     '@napi-rs/keyring':
       specifier: 2.1.1
       version: 2.1.1
@@ -231,32 +234,32 @@ catalogs:
       specifier: ^4.3.3
       version: 4.3.3
     '@tanstack/ai':
-      specifier: ^0.61.0
-      version: 0.61.0
+      specifier: ^1.0.0
+      version: 1.0.0
     '@tanstack/ai-anthropic':
-      specifier: 0.19.1
-      version: 0.19.1
+      specifier: 1.0.0
+      version: 1.0.0
     '@tanstack/ai-client':
-      specifier: ^0.35.1
-      version: 0.35.1
+      specifier: ^1.0.0
+      version: 1.0.0
     '@tanstack/ai-compaction':
-      specifier: ^0.1.9
-      version: 0.1.17
+      specifier: ^1.0.0
+      version: 1.0.0
     '@tanstack/ai-mcp':
-      specifier: 0.4.6
-      version: 0.4.6
+      specifier: 1.0.0
+      version: 1.0.0
     '@tanstack/ai-openai':
-      specifier: ^0.24.1
-      version: 0.24.1
+      specifier: ^1.0.0
+      version: 1.0.0
     '@tanstack/ai-persistence':
-      specifier: ^0.6.7
-      version: 0.6.7
+      specifier: ^1.0.0
+      version: 1.0.0
     '@tanstack/ai-react':
-      specifier: 0.29.1
-      version: 0.29.1
+      specifier: 1.0.0
+      version: 1.0.0
     '@tanstack/react-query':
-      specifier: ^5.104.3
-      version: 5.104.3
+      specifier: ^5.104.5
+      version: 5.104.5
     '@ttsc/graph':
       specifier: 0.34.1
       version: 0.34.1
@@ -384,8 +387,8 @@ overrides:
 patchedDependencies:
   '@effect/platform-node-shared@4.0.3': c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56
   '@effect/platform-node@4.0.3': fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a
-  '@tanstack/ai@0.61.0': 2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0
-  '@tanstack/openai-base@0.11.1': 490b8dd867bc73c1e37ab46bceb1a80f5a3e6a366dbb6d38194e8d0943169654
+  '@tanstack/ai@1.0.0': d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88
+  '@tanstack/openai-base@1.0.0': 97bafdd42d359e1e6213813a35ff4130b0ebbb1144bdab05332d7a20186c075a
   effect@4.0.3: 7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16
   react-simplikit@0.3.3: 9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3
 
@@ -395,7 +398,7 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
       '@effect/platform-node-shared':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7
         version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))
@@ -410,7 +413,7 @@ importers:
         version: 0.2.1(eslint@10.10.0(jiti@2.7.0))
       '@ttsc/graph':
         specifier: 'catalog:'
-        version: 0.34.1(ttsc@0.34.1(typescript@7.0.2))(zod@4.6.7)
+        version: 0.34.1(@cfworker/json-schema@4.1.1)(ttsc@0.34.1(typescript@7.0.2))(zod@4.6.7)
       '@vitest/browser-playwright':
         specifier: 'catalog:'
         version: 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(playwright@1.64.1)(vitest@5.0.5)
@@ -431,7 +434,7 @@ importers:
         version: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
       vite-plus:
         specifier: 'catalog:'
-        version: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+        version: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
       vitest-browser-react:
         specifier: 'catalog:'
         version: 2.3.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vitest@5.0.5)
@@ -458,7 +461,7 @@ importers:
         version: 3.2.2(react@19.3.1)
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
       '@fontsource-variable/inter':
         specifier: 'catalog:'
         version: 5.3.0
@@ -476,16 +479,16 @@ importers:
         version: 2.0.0(react@19.3.1)
       '@tanstack/ai':
         specifier: 'catalog:'
-        version: 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
+        version: 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
-        version: 0.24.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
+        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
       '@tanstack/ai-react':
         specifier: 'catalog:'
-        version: 0.29.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
+        version: 1.0.0(@opentelemetry/api@1.10.0)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
       '@tanstack/react-query':
         specifier: 'catalog:'
-        version: 5.104.3(react@19.3.1)
+        version: 5.104.5(@types/react@19.3.0)(react@19.3.1)
       class-variance-authority:
         specifier: 'catalog:'
         version: 0.7.1
@@ -536,7 +539,7 @@ importers:
         version: 0.3.3(patch_hash=9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3)(react@19.3.1)
       shadcn:
         specifier: ^4.22.0
-        version: 4.22.0
+        version: 4.22.0(@cfworker/json-schema@4.1.1)
       streamdown:
         specifier: 'catalog:'
         version: 2.7.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -582,7 +585,7 @@ importers:
         version: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
       vite-plus:
         specifier: 'catalog:'
-        version: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+        version: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
 
   packages/memory-agent:
     dependencies:
@@ -594,16 +597,19 @@ importers:
         version: 0.0.79
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.53.3
       '@huggingface/transformers':
         specifier: 'catalog:'
         version: 4.3.1(@types/node@26.6.5)
-      '@modelcontextprotocol/sdk':
+      '@modelcontextprotocol/client':
         specifier: 'catalog:'
-        version: 1.32.1(zod@4.6.7)
+        version: 2.3.1
+      '@modelcontextprotocol/server':
+        specifier: 'catalog:'
+        version: 2.3.1
       '@napi-rs/keyring':
         specifier: 'catalog:'
         version: 2.1.1
@@ -621,25 +627,25 @@ importers:
         version: 1.1.0
       '@tanstack/ai':
         specifier: 'catalog:'
-        version: 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
+        version: 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
       '@tanstack/ai-anthropic':
         specifier: 'catalog:'
-        version: 0.19.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(zod@4.6.7)
+        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(zod@4.6.7)
       '@tanstack/ai-client':
         specifier: 'catalog:'
-        version: 0.35.1(zod@4.6.7)
+        version: 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
       '@tanstack/ai-compaction':
         specifier: 'catalog:'
-        version: 0.1.17(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))
+        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))
       '@tanstack/ai-mcp':
         specifier: 'catalog:'
-        version: 0.4.6(zod@4.6.7)
+        version: 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
-        version: 0.24.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
+        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
       '@tanstack/ai-persistence':
         specifier: 'catalog:'
-        version: 0.6.7(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(vitest@5.0.5)
+        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(vitest@5.0.5)
       cross-spawn:
         specifier: 'catalog:'
         version: 7.0.6
@@ -672,7 +678,7 @@ importers:
         version: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
       vite-plus:
         specifier: 'catalog:'
-        version: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+        version: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
     devDependencies:
       '@effect/vitest':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
@@ -694,13 +700,13 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
       effect:
         specifier: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
         version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
       vite-plus:
         specifier: 'catalog:'
-        version: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+        version: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
 
   packages/utils:
     devDependencies:
@@ -718,7 +724,7 @@ importers:
         version: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
       vite-plus:
         specifier: 'catalog:'
-        version: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+        version: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
 
 packages:
 
@@ -740,8 +746,8 @@ packages:
     engines: {node: '>=22.12.0'}
     hasBin: true
 
-  '@anthropic-ai/sdk@0.97.1':
-    resolution: {integrity: sha512-wOf7AUeJPitcVpvKO4UMu63mWH5SaVipkGd7OOQJt/G6VYGlV8D2Gp9dLxOrttDJh/9gqPqdaBwDGcBevumeAg==}
+  '@anthropic-ai/sdk@0.135.0':
+    resolution: {integrity: sha512-WWrdL57JhU5KoynpTjt9GXK6k7ud9nPw2uw/Trn+oBXh6s0KpjhAccWZm2Qxw08ARYG1UDQj5iC+JO42j1rt/g==}
     hasBin: true
     peerDependencies:
       zod: ^4.6.7
@@ -917,6 +923,9 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@cfworker/json-schema@4.1.1':
+    resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
 
   '@dnd-kit/accessibility@3.1.1':
     resolution: {integrity: sha512-2P+YgaXF+gRsIihwwY1gCsQSYnu9Zyj2py8kY5fFvUM1qm2WA2u639R6YNVfU4GWr+ZM5mqEsfHZZLoRONbemw==}
@@ -1286,6 +1295,14 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
+  '@modelcontextprotocol/client@2.3.1':
+    resolution: {integrity: sha512-mIGZXpHsjnZ6lD+gD/WCMpR5k8yVQQ8nNFH1N0Srf7AvnwTUMYD6pvTY8ng2+He5FfV7YMZLmrjL7cLa/cc3dQ==}
+    engines: {node: '>=20'}
+
+  '@modelcontextprotocol/core@2.3.1':
+    resolution: {integrity: sha512-laVmIhPGpWi7rG9q+0UigblRN0Hws/Yjlb6qLFtVqryXVLkc4h+yN8z731POD2LnAGQlFe7/tXhUm7Bi0YB91g==}
+    engines: {node: '>=20'}
+
   '@modelcontextprotocol/sdk@1.32.1':
     resolution: {integrity: sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==}
     engines: {node: '>=18'}
@@ -1295,6 +1312,10 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@modelcontextprotocol/server@2.3.1':
+    resolution: {integrity: sha512-e59MfWuSssj6DoQ96JCTqdW1AXT5/XtnTl0WWd6MU1Ka434fFUGGosCLJbGNySDhHGvxQWoRWK137FXYFkYNWw==}
+    engines: {node: '>=20'}
 
   '@napi-rs/keyring-darwin-arm64@2.1.1':
     resolution: {integrity: sha512-H6uxAztj6GSDwnh/1JDHCtAqWvBTr+0+FGwOOw+rY568z7vFOqrJTTboePFuAnJSO7kNvq+yuyXJ9B5Ueco4yA==}
@@ -1388,6 +1409,10 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opentelemetry/api@1.10.0':
+    resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
+    engines: {node: '>=8.0.0'}
 
   '@oxc-parser/binding-android-arm-eabi@0.148.0':
     resolution: {integrity: sha512-pHASv9g5pASxb7akHERZNSkrEqPhFaUix98o7d9hbTpolnnFWl7UiRrcMhCsV1+iVO4/cJwKsbKRJTFNs2tdBQ==}
@@ -2388,49 +2413,54 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/ai-anthropic@0.19.1':
-    resolution: {integrity: sha512-4SVCPUc8Jwfb3JQcds1oMKKPhsb28Lb3tD0RyFsaZt7umZiQ8jnnvLe8UhfsZRAtgpHHFbIdQP827xS4CeuPgA==}
+  '@tanstack/ai-anthropic@1.0.0':
+    resolution: {integrity: sha512-YeJoyaSJ4wSqALXHfIX5Lxd9CulqwqU55bcNaLaqPPut+X6eH96aFXhX2qRhUOvH9vhK/8r7MmIroE/dpICBww==}
     peerDependencies:
       '@anthropic-ai/vertex-sdk': ^0.19.0
-      '@tanstack/ai': ^0.61.0
+      '@tanstack/ai': ^1.0.0
     peerDependenciesMeta:
       '@anthropic-ai/vertex-sdk':
         optional: true
 
-  '@tanstack/ai-client@0.35.1':
-    resolution: {integrity: sha512-v+2cqVQP5ni5bYHXBkbbD1rrpufsxcqjzyZr0qPexv6TUJa1fmRAgbb8/jdQI5pqmhvbR1nOP38ZiJBj2oWcxg==}
+  '@tanstack/ai-client@1.0.0':
+    resolution: {integrity: sha512-lPba8LAMmJn7X/D6LongAR4RfwWv/6I/XJPiYKZ8C235VKQMN1ZszhswyFOCIDYJzgzO1N7azHTwoEwSohR48Q==}
 
-  '@tanstack/ai-compaction@0.1.17':
-    resolution: {integrity: sha512-wGvAEUQ5GmzdEfHGVAthfjqVZeYYpyCLfc+7/tlpCgolCbjO8aemDOj0MvhQ3qCsBr1Kkwj/twL5lJJ2SreUUA==}
+  '@tanstack/ai-compaction@1.0.0':
+    resolution: {integrity: sha512-UEnCgeCi78pTATi0cvFWM7XPoFebuQV2rptV2lm08g+DoD4WF2bTBJEoXpauUwLIIYaBc/rbAww7vvdRfqebVA==}
     peerDependencies:
-      '@tanstack/ai': ^0.68.0
+      '@tanstack/ai': ^1.0.0
 
-  '@tanstack/ai-event-client@0.13.1':
-    resolution: {integrity: sha512-lCPcshu6Sd4tFNeMSr+HXgdqCGupYU2cpJZVUent4GkFx41dXzrBaKkwOgkji6olDBT99OBagWCce1NZ15XeJA==}
+  '@tanstack/ai-event-client@1.0.0':
+    resolution: {integrity: sha512-RXlk6XkIYU4n25QYoCmETKiFjPnEpwvQv5Ve62pdtHaEVP//VZUdwGSRGCf/PATgwYdib8FT49tPmqnKtXPDhw==}
 
-  '@tanstack/ai-mcp@0.4.6':
-    resolution: {integrity: sha512-ycVrXeCvXJdzIx11CG+6NId+3QiXAAhUDGlfSJH0Nk9P4wO7O/QnLJUPvfZ+MMDxjCV/+u3/UvWj9QWF0qiXNA==}
+  '@tanstack/ai-mcp@1.0.0':
+    resolution: {integrity: sha512-HPjtpK1nb7WKaAr5cE1/DlcDR/BJyLYeYoMcuS64V7ZefCJvF/6Dj0yb+Elt9B4dZpJ85SWRBzNyf7qGjJI1hQ==}
     hasBin: true
-
-  '@tanstack/ai-openai@0.24.1':
-    resolution: {integrity: sha512-GKeBQb5u+x5kZ9F2iDg0Lz31S9LzhYmeyIAxlKAO99N0Di/pDM69WbfDZbKdV7VIUeoTrI5Jqj5lhbm6+TMLPQ==}
     peerDependencies:
-      '@tanstack/ai': ^0.61.0
+      '@tanstack/ai-harness': ^0.1.0
+    peerDependenciesMeta:
+      '@tanstack/ai-harness':
+        optional: true
 
-  '@tanstack/ai-persistence@0.6.7':
-    resolution: {integrity: sha512-poQqHYp4uU1VYyckrjndE0dhU96cjqzRyXYsjSEnrNFYEFBJJeSgoZ0bqVv1D6gYaFpmisSir079hWguSL8RWQ==}
+  '@tanstack/ai-openai@1.0.0':
+    resolution: {integrity: sha512-p0blsUs98FSnIXgYk8KMAbyBTWCHdZj4PyvhrUuO3vU4aNAnjlwunDyrqVhmP8gXA3k0oSUru4UAmXXKnN5j4g==}
     peerDependencies:
-      '@tanstack/ai': ^0.61.0
+      '@tanstack/ai': ^1.0.0
+
+  '@tanstack/ai-persistence@1.0.0':
+    resolution: {integrity: sha512-IS+KFKm64fSGpL3wVIWK1d/OuB31NhNjVImCIdrFMYT6K4IEPfHvQchRzxXBeK4xUta5iki9bdOkQnvHjRQQmA==}
+    peerDependencies:
+      '@tanstack/ai': ^1.0.0
       vitest: 5.0.5
     peerDependenciesMeta:
       vitest:
         optional: true
 
-  '@tanstack/ai-react@0.29.1':
-    resolution: {integrity: sha512-lDMeROpDqJyZmWAUv1bXOHfYRXoK2nrxGUR1rPIGvXI+Dw0KyfAgev1qGcWnPVy58szVyIArE9Vqh95CjMqN0A==}
+  '@tanstack/ai-react@1.0.0':
+    resolution: {integrity: sha512-PFX+M5JoP69/16UnkT4MOL6iRNywi8QVecaDdRJLwX2MnVHjFArD6HFFyU7LOgf5IxLuqXd8XpODI6imgVRrDA==}
     peerDependencies:
       '@mcp-ui/client': ^7
-      '@tanstack/ai': ^0.61.0
+      '@tanstack/ai': ^1.0.0
       '@types/react': '>=18.0.0'
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
@@ -2440,11 +2470,11 @@ packages:
       react-dom:
         optional: true
 
-  '@tanstack/ai-utils@0.4.2':
-    resolution: {integrity: sha512-ucSgSK9kLloInqr/7s0VZlp1IFtbpgPnskISvnLXti/hc8koqXc4Zv9pfTTc8V80WzIKYWMf+ZgSIDeFM50eCw==}
+  '@tanstack/ai-utils@1.0.0':
+    resolution: {integrity: sha512-0Nl9rUmS3zTGKP8dPmyS2zJ18mieAheKqS9V+390vjViJvD6kpP+1gdCdHkNUqQsSzSFvb32QW8bkTVCAOv0qA==}
 
-  '@tanstack/ai@0.61.0':
-    resolution: {integrity: sha512-9CHWeai5sFGkKZj/P3gS2yi8ccQerdMnlmWULS2nlBnSd0v4v3AKE9bC2AuiCJx7RXvsExvSH7GyO/Ayg5k3Rg==}
+  '@tanstack/ai@1.0.0':
+    resolution: {integrity: sha512-kqHkfJPLmNwZ5+dwC5cCZy4UASfIEVToBBSccRUP2ued2g1/TytZkTOHMlNsbVca2Q1pJ/pQfdQkQ7xwhze8qw==}
     engines: {node: '>=18'}
     peerDependencies:
       '@opentelemetry/api': '>=1.9.0'
@@ -2468,18 +2498,25 @@ packages:
       react:
         optional: true
 
-  '@tanstack/openai-base@0.11.1':
-    resolution: {integrity: sha512-lUnS1zp4adziKfvt+FS+kAojQx+8O8dZo0rw8BIYK3ikjA+P/JJz3atUS9nYhsHRXOcD6+NolxTSV6ulg1cJPg==}
+  '@tanstack/openai-base@1.0.0':
+    resolution: {integrity: sha512-PCihnJASpykPy72tI3VkZX1VI4AxutXPRzr/yyWsCXPXnM7NIN8Nc/YgLqkYm+2wNDNQumX4vXge2iIsoYF+KQ==}
     peerDependencies:
-      '@tanstack/ai': ^0.61.0
+      '@tanstack/ai': ^1.0.0
 
-  '@tanstack/query-core@5.104.3':
-    resolution: {integrity: sha512-DZY9TuJAOgU3UyHUhXb4CcTYEHNZszlwkPg4VViIwTxOKzLprPUU+rbaPZQd3srqkGOtpaDdKpW972UV/LKlcg==}
+  '@tanstack/query-core@5.104.5':
+    resolution: {integrity: sha512-Q94gI8Opd+CbdVNOdj8ZCyV8WqLYitrDq1t96Xc8WZT6lY0r5iRnJLXYDxMex7EEf2v+mXvn4FcjaBKSxXZQ9A==}
 
-  '@tanstack/react-query@5.104.3':
-    resolution: {integrity: sha512-5Ts1ImwJKqoJgPkLxl9WrPQy1JEoEmti3MaaODCfBamHUGFk57IFrc+AIksPq+BAm10EsroX56qm398Z42LG7w==}
+  '@tanstack/react-query@5.104.5':
+    resolution: {integrity: sha512-RORgFe052U+93weaNuqg7qHq7vNVNzXN/VrXqD4bbAuQCWUqOl2lV5Ui9flWk5CVvMyL/Bh27QWhzwH0aaOx9g==}
     peerDependencies:
+      '@types/react': ^18 || ^19
       react: ^18 || ^19
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+
+  '@tanstack/store@0.11.2':
+    resolution: {integrity: sha512-sJ4mjol8uQsHV0gOJzzjwXfh2Fwm+Sz0+8deqiTm4jGbMdjzNSW+xZCFm0kUa870uhd8yi+DpKnZb5Kc4apa0Q==}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -3576,6 +3613,9 @@ packages:
     resolution: {integrity: sha512-7MptL8U0cqcFdzIzwOTHoilX9x5BrNqye7Z/LuC7kCMRio1EMSyqRK3BEAUD7sXRq4iT4AzTVuZdhgQ2TCvYLg==}
     engines: {node: '>=8.6.0'}
 
+  fast-json-patch@3.1.1:
+    resolution: {integrity: sha512-vf6IHUX2SBcA+5/+4883dsIjpBTqmfBjmYiWK1savxQmFk4JfBMLa7ynTYOs1Rolp/T1betJxHiGD3g1Mn8lUQ==}
+
   fast-json-stable-stringify@2.1.0:
     resolution: {integrity: sha512-lhd/wF+Lk98HZoTCtlVraHtfh5XYijIjalXck7saUtuanSDyLMxnHhSXEDJqHxD7msR8D0uCmqlkwjCV8xvwHw==}
 
@@ -4575,13 +4615,16 @@ packages:
     resolution: {integrity: sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==}
     engines: {node: '>=12'}
 
-  openai@6.49.0:
-    resolution: {integrity: sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg==}
+  openai@7.43.0:
+    resolution: {integrity: sha512-fBjKaDFG8AVfkGYoIo/E+xNRlNk7nx2nQ9GoQtXfePzPjg4QcT6nejkhXayJnEwSpFGfthOrAPI2KXj5yAqg9A==}
+    engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
-      ws: ^8.18.0
+      google-auth-library: '>=9.15.1 <11'
+      undici: '>=5 <9'
+      ws: ^8.21.0
       zod: ^4.6.7
     peerDependenciesMeta:
       '@aws-sdk/credential-provider-node':
@@ -4589,6 +4632,10 @@ packages:
       '@smithy/hash-node':
         optional: true
       '@smithy/signature-v4':
+        optional: true
+      google-auth-library:
+        optional: true
+      undici:
         optional: true
       ws:
         optional: true
@@ -5555,8 +5602,9 @@ snapshots:
       node-forge: 1.4.0
       zod: 3.25.76
 
-  '@anthropic-ai/sdk@0.97.1(zod@4.6.7)':
+  '@anthropic-ai/sdk@0.135.0(zod@4.6.7)':
     dependencies:
+      '@opentelemetry/api': 1.10.0
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
@@ -5789,6 +5837,8 @@ snapshots:
       keyv: 5.6.0
     optional: true
 
+  '@cfworker/json-schema@4.1.1': {}
+
   '@dnd-kit/accessibility@3.1.1(react@19.3.1)':
     dependencies:
       react: 19.3.1
@@ -5844,11 +5894,11 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0)':
+  '@effect/platform-node@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))':
     dependencies:
       '@effect/platform-node-shared': https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))
       effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
-      redis: 6.3.0
+      redis: 6.3.0(@opentelemetry/api@1.10.0)
       undici: 8.12.2
     transitivePeerDependencies:
       - bufferutil
@@ -5888,7 +5938,7 @@ snapshots:
   '@effect/vitest@https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(vitest@5.0.5)':
     dependencies:
       effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -6129,7 +6179,21 @@ snapshots:
   '@keyv/serialize@1.1.1':
     optional: true
 
-  '@modelcontextprotocol/sdk@1.32.1(zod@4.6.7)':
+  '@modelcontextprotocol/client@2.3.1':
+    dependencies:
+      '@modelcontextprotocol/core': 2.3.1
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      jose: 6.2.12
+      pkce-challenge: 5.0.1
+      zod: 4.6.7
+
+  '@modelcontextprotocol/core@2.3.1':
+    dependencies:
+      zod: 4.6.7
+
+  '@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7)':
     dependencies:
       '@hono/node-server': 2.1.1(hono@4.13.7)
       ajv: 8.20.0
@@ -6148,8 +6212,15 @@ snapshots:
       raw-body: 3.0.2
       zod: 4.6.7
       zod-to-json-schema: 3.25.2(zod@4.6.7)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
+
+  '@modelcontextprotocol/server@2.3.1':
+    dependencies:
+      '@modelcontextprotocol/core': 2.3.1
+      zod: 4.6.7
 
   '@napi-rs/keyring-darwin-arm64@2.1.1':
     optional: true
@@ -6213,6 +6284,8 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.3
+
+  '@opentelemetry/api@1.10.0': {}
 
   '@oxc-parser/binding-android-arm-eabi@0.148.0':
     optional: true
@@ -6681,23 +6754,25 @@ snapshots:
     optionalDependencies:
       typescript: 7.0.2
 
-  '@redis/bloom@6.3.0(@redis/client@6.3.0)':
+  '@redis/bloom@6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))':
     dependencies:
-      '@redis/client': 6.3.0
+      '@redis/client': 6.3.0(@opentelemetry/api@1.10.0)
 
-  '@redis/client@6.3.0': {}
+  '@redis/client@6.3.0(@opentelemetry/api@1.10.0)':
+    optionalDependencies:
+      '@opentelemetry/api': 1.10.0
 
-  '@redis/json@6.3.0(@redis/client@6.3.0)':
+  '@redis/json@6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))':
     dependencies:
-      '@redis/client': 6.3.0
+      '@redis/client': 6.3.0(@opentelemetry/api@1.10.0)
 
-  '@redis/search@6.3.0(@redis/client@6.3.0)':
+  '@redis/search@6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))':
     dependencies:
-      '@redis/client': 6.3.0
+      '@redis/client': 6.3.0(@opentelemetry/api@1.10.0)
 
-  '@redis/time-series@6.3.0(@redis/client@6.3.0)':
+  '@redis/time-series@6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))':
     dependencies:
-      '@redis/client': 6.3.0
+      '@redis/client': 6.3.0(@opentelemetry/api@1.10.0)
 
   '@remix-run/node-fetch-server@0.14.1': {}
 
@@ -6891,65 +6966,68 @@ snapshots:
       tailwindcss: 4.3.3
       vite: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
 
-  '@tanstack/ai-anthropic@0.19.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(zod@4.6.7)':
+  '@tanstack/ai-anthropic@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(zod@4.6.7)':
     dependencies:
-      '@anthropic-ai/sdk': 0.97.1(zod@4.6.7)
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
-      '@tanstack/ai-utils': 0.4.2
+      '@anthropic-ai/sdk': 0.135.0(zod@4.6.7)
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      '@tanstack/ai-utils': 1.0.0
     transitivePeerDependencies:
       - zod
 
-  '@tanstack/ai-client@0.35.1(zod@4.6.7)':
+  '@tanstack/ai-client@1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
-      '@tanstack/ai-event-client': 0.13.1
-      '@tanstack/ai-utils': 0.4.2
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      '@tanstack/ai-event-client': 1.0.0
+      '@tanstack/ai-utils': 1.0.0
+      '@tanstack/store': 0.11.2
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - zod
 
-  '@tanstack/ai-compaction@0.1.17(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))':
+  '@tanstack/ai-compaction@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))':
     dependencies:
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
 
-  '@tanstack/ai-event-client@0.13.1':
+  '@tanstack/ai-event-client@1.0.0':
     dependencies:
       '@tanstack/devtools-event-client': 0.4.4
 
-  '@tanstack/ai-mcp@0.4.6(zod@4.6.7)':
+  '@tanstack/ai-mcp@1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
+      '@modelcontextprotocol/client': 2.3.1
+      '@modelcontextprotocol/server': 2.3.1
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      jose: 6.2.12
     transitivePeerDependencies:
-      - '@cfworker/json-schema'
       - '@opentelemetry/api'
-      - supports-color
       - zod
 
-  '@tanstack/ai-openai@0.24.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)':
+  '@tanstack/ai-openai@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
-      '@tanstack/ai-utils': 0.4.2
-      '@tanstack/openai-base': 0.11.1(patch_hash=490b8dd867bc73c1e37ab46bceb1a80f5a3e6a366dbb6d38194e8d0943169654)(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)
-      openai: 6.49.0(ws@8.22.0)(zod@4.6.7)
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      '@tanstack/ai-utils': 1.0.0
+      '@tanstack/openai-base': 1.0.0(patch_hash=97bafdd42d359e1e6213813a35ff4130b0ebbb1144bdab05332d7a20186c075a)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
+      openai: 7.43.0(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
+      - google-auth-library
+      - undici
       - ws
       - zod
 
-  '@tanstack/ai-persistence@0.6.7(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(vitest@5.0.5)':
+  '@tanstack/ai-persistence@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(vitest@5.0.5)':
     dependencies:
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
-      '@tanstack/ai-utils': 0.4.2
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      '@tanstack/ai-utils': 1.0.0
     optionalDependencies:
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
-  '@tanstack/ai-react@0.29.1(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
+  '@tanstack/ai-react@1.0.0(@opentelemetry/api@1.10.0)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
-      '@tanstack/ai-client': 0.35.1(zod@4.6.7)
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      '@tanstack/ai-client': 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
       '@tanstack/markdown': 0.0.13(react@19.3.1)
       '@types/react': 19.3.0
       react: 19.3.1
@@ -6960,15 +7038,19 @@ snapshots:
       - octane
       - zod
 
-  '@tanstack/ai-utils@0.4.2': {}
+  '@tanstack/ai-utils@1.0.0': {}
 
-  '@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)':
+  '@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)':
     dependencies:
       '@ag-ui/core': 1.0.0(zod@4.6.7)
+      '@cfworker/json-schema': 4.1.1
       '@standard-schema/spec': 1.1.0
-      '@tanstack/ai-event-client': 0.13.1
-      '@tanstack/ai-utils': 0.4.2
+      '@tanstack/ai-event-client': 1.0.0
+      '@tanstack/ai-utils': 1.0.0
+      fast-json-patch: 3.1.1
       partial-json: 0.1.7
+    optionalDependencies:
+      '@opentelemetry/api': 1.10.0
     transitivePeerDependencies:
       - zod
 
@@ -6978,24 +7060,30 @@ snapshots:
     optionalDependencies:
       react: 19.3.1
 
-  '@tanstack/openai-base@0.11.1(patch_hash=490b8dd867bc73c1e37ab46bceb1a80f5a3e6a366dbb6d38194e8d0943169654)(@tanstack/ai@0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7))(ws@8.22.0)(zod@4.6.7)':
+  '@tanstack/openai-base@1.0.0(patch_hash=97bafdd42d359e1e6213813a35ff4130b0ebbb1144bdab05332d7a20186c075a)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)':
     dependencies:
-      '@tanstack/ai': 0.61.0(patch_hash=2dae4ed9e8f283b5e5df4d6a211c5d6efaa8dda01e1c4191085490953cc007b0)(zod@4.6.7)
-      '@tanstack/ai-utils': 0.4.2
-      openai: 6.49.0(ws@8.22.0)(zod@4.6.7)
+      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
+      '@tanstack/ai-utils': 1.0.0
+      openai: 7.43.0(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
+      - google-auth-library
+      - undici
       - ws
       - zod
 
-  '@tanstack/query-core@5.104.3': {}
+  '@tanstack/query-core@5.104.5': {}
 
-  '@tanstack/react-query@5.104.3(react@19.3.1)':
+  '@tanstack/react-query@5.104.5(@types/react@19.3.0)(react@19.3.1)':
     dependencies:
-      '@tanstack/query-core': 5.104.3
+      '@tanstack/query-core': 5.104.5
       react: 19.3.1
+    optionalDependencies:
+      '@types/react': 19.3.0
+
+  '@tanstack/store@0.11.2': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -7045,10 +7133,10 @@ snapshots:
   '@ttsc/graph-win32-x64@0.34.1':
     optional: true
 
-  '@ttsc/graph@0.34.1(ttsc@0.34.1(typescript@7.0.2))(zod@4.6.7)':
+  '@ttsc/graph@0.34.1(@cfworker/json-schema@4.1.1)(ttsc@0.34.1(typescript@7.0.2))(zod@4.6.7)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
-      '@typia/mcp': 15.2.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))
+      '@modelcontextprotocol/sdk': 1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7)
+      '@typia/mcp': 15.2.0(@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7))
       ttsc: 0.34.1(typescript@7.0.2)
       typia: 15.2.0(ttsc@0.34.1(typescript@7.0.2))
     optionalDependencies:
@@ -7201,9 +7289,9 @@ snapshots:
 
   '@typia/interface@15.2.0': {}
 
-  '@typia/mcp@15.2.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))':
+  '@typia/mcp@15.2.0(@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7))':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
+      '@modelcontextprotocol/sdk': 1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7)
       '@typia/interface': 15.2.0
       '@typia/utils': 15.2.0
 
@@ -7227,7 +7315,7 @@ snapshots:
       '@vitest/mocker': 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
       playwright: 1.64.1
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -7239,7 +7327,7 @@ snapshots:
       '@testing-library/dom': 10.4.2
       '@testing-library/user-event': 14.6.7(@testing-library/dom@10.4.2)
       '@vitest/browser': 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(vitest@5.0.5)
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -7256,7 +7344,7 @@ snapshots:
       pngjs: 7.0.0
       sirv: 3.0.2
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
@@ -7294,7 +7382,7 @@ snapshots:
       pathe: 2.0.3
       sirv: 3.0.2
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
   '@vitest/utils@5.0.5':
     dependencies:
@@ -7959,6 +8047,8 @@ snapshots:
       glob-parent: 5.1.2
       merge2: 1.4.1
       micromatch: 4.0.8
+
+  fast-json-patch@3.1.1: {}
 
   fast-json-stable-stringify@2.1.0:
     optional: true
@@ -9081,8 +9171,9 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.49.0(ws@8.22.0)(zod@4.6.7):
+  openai@7.43.0(undici@8.12.2)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
+      undici: 8.12.2
       ws: 8.22.0
       zod: 4.6.7
 
@@ -9159,7 +9250,7 @@ snapshots:
       '@oxc-transform-react/binding-win32-ia32-msvc': 0.154.0
       '@oxc-transform-react/binding-win32-x64-msvc': 0.154.0
 
-  oxfmt@0.73.0(vite-plus@1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)):
+  oxfmt@0.73.0(vite-plus@1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)):
     dependencies:
       tinypool: 2.2.0
     optionalDependencies:
@@ -9182,7 +9273,7 @@ snapshots:
       '@oxfmt/binding-win32-arm64-msvc': 0.73.0
       '@oxfmt/binding-win32-ia32-msvc': 0.73.0
       '@oxfmt/binding-win32-x64-msvc': 0.73.0
-      vite-plus: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+      vite-plus: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
 
   oxlint-tsgolint@7.0.2004:
     optionalDependencies:
@@ -9193,7 +9284,7 @@ snapshots:
       '@oxlint-tsgolint/win32-arm64': 7.0.2004
       '@oxlint-tsgolint/win32-x64': 7.0.2004
 
-  oxlint@1.88.0(oxlint-tsgolint@7.0.2004)(vite-plus@1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)):
+  oxlint@1.88.0(oxlint-tsgolint@7.0.2004)(vite-plus@1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)):
     optionalDependencies:
       '@oxlint/binding-android-arm-eabi': 1.88.0
       '@oxlint/binding-android-arm64': 1.88.0
@@ -9215,7 +9306,7 @@ snapshots:
       '@oxlint/binding-win32-ia32-msvc': 1.88.0
       '@oxlint/binding-win32-x64-msvc': 1.88.0
       oxlint-tsgolint: 7.0.2004
-      vite-plus: 1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
+      vite-plus: 1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1)
 
   p-limit@2.3.0:
     dependencies:
@@ -9455,13 +9546,13 @@ snapshots:
       tiny-invariant: 1.3.3
       tslib: 2.8.1
 
-  redis@6.3.0:
+  redis@6.3.0(@opentelemetry/api@1.10.0):
     dependencies:
-      '@redis/bloom': 6.3.0(@redis/client@6.3.0)
-      '@redis/client': 6.3.0
-      '@redis/json': 6.3.0(@redis/client@6.3.0)
-      '@redis/search': 6.3.0(@redis/client@6.3.0)
-      '@redis/time-series': 6.3.0(@redis/client@6.3.0)
+      '@redis/bloom': 6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))
+      '@redis/client': 6.3.0(@opentelemetry/api@1.10.0)
+      '@redis/json': 6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))
+      '@redis/search': 6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))
+      '@redis/time-series': 6.3.0(@redis/client@6.3.0(@opentelemetry/api@1.10.0))
     transitivePeerDependencies:
       - '@node-rs/xxhash'
       - '@opentelemetry/api'
@@ -9618,14 +9709,14 @@ snapshots:
 
   setprototypeof@1.2.0: {}
 
-  shadcn@4.22.0:
+  shadcn@4.22.0(@cfworker/json-schema@4.1.1):
     dependencies:
       '@babel/core': 7.29.7
       '@babel/parser': 7.29.8
       '@babel/plugin-transform-typescript': 7.29.7(@babel/core@7.29.7)
       '@babel/preset-typescript': 7.29.7(@babel/core@7.29.7)
       '@dotenvx/dotenvx': 1.75.1
-      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
+      '@modelcontextprotocol/sdk': 1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7)
       '@shadcn/registry': 0.2.0
       '@types/validate-npm-package-name': 4.0.2
       browserslist: 4.29.3
@@ -10074,7 +10165,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-plus@1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1):
+  vite-plus@1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1):
     dependencies:
       '@oxc-project/types': 0.154.0
       '@oxlint/plugins': 1.88.0
@@ -10085,11 +10176,11 @@ snapshots:
       '@vitest/snapshot': 5.0.5
       '@vitest/spy': 5.0.5
       '@vitest/utils': 5.0.5
-      oxfmt: 0.73.0(vite-plus@1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1))
-      oxlint: 1.88.0(oxlint-tsgolint@7.0.2004)(vite-plus@1.3.0(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1))
+      oxfmt: 0.73.0(vite-plus@1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1))
+      oxlint: 1.88.0(oxlint-tsgolint@7.0.2004)(vite-plus@1.3.0(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(jiti@2.7.0)(playwright@1.64.1)(typescript@7.0.2)(yaml@2.9.1))
       oxlint-tsgolint: 7.0.2004
       vite: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
     optionalDependencies:
       '@vitest/browser-playwright': 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(playwright@1.64.1)(vitest@5.0.5)
       '@voidzero-dev/vite-plus-darwin-arm64': 1.3.0
@@ -10140,12 +10231,12 @@ snapshots:
     dependencies:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
-      vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
+      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
     optionalDependencies:
       '@types/react': 19.3.0
       '@types/react-dom': 19.3.0(@types/react@19.3.0)
 
-  vitest@5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)):
+  vitest@5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
@@ -10162,6 +10253,7 @@ snapshots:
       vite: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
       why-is-node-running: 3.2.1
     optionalDependencies:
+      '@opentelemetry/api': 1.10.0
       '@types/node': 26.6.5
       '@vitest/browser-playwright': 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(playwright@1.64.1)(vitest@5.0.5)
       '@vitest/browser-preview': 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(vitest@5.0.5)

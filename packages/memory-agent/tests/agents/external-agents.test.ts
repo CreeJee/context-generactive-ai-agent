@@ -294,6 +294,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           Effect.sync(
             () =>
               new ChatClient({
+                threadId: "thread",
                 tools: approvalToolDefinitions,
                 interrupts: [permissionReviewInterrupt],
                 connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {

@@ -70,6 +70,7 @@ describe("parallel read-only tool calls", () => {
         yield* sdkPromiseWithController(
           () =>
             chat({
+              threadId: "thread",
               adapter,
               messages: [{ role: "user", content: "go" }],
               tools: reads.tools,

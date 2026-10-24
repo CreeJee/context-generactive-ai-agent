@@ -4,11 +4,11 @@ Symbol.for("tanstack-ai.toolResult") (memory-agent's ToolFailed), use it instead
 and onAfterToolCall still gets ok: false. Redo this patch when @tanstack/ai is upgraded.
 
 diff --git a/dist/esm/activities/chat/tools/tool-calls.js b/dist/esm/activities/chat/tools/tool-calls.js
-index be146e30a827771c31ba3fbdbe02e9da4b6fb6dc..2574ae661a2bb4b10447bb3aad0fca5d6dbafc00 100644
+index 61c8cf2f02637a5908b9df697a607c45accabc1a..31a62a0be0954d3f09a2c561daae46c56bc03e34 100644
 --- a/dist/esm/activities/chat/tools/tool-calls.js
 +++ b/dist/esm/activities/chat/tools/tool-calls.js
-@@ -394,7 +394,7 @@ async function* executeServerTool(toolCall, tool, toolName, input, context, pend
- 		results.push({
+@@ -450,7 +450,7 @@ async function* executeServerTool(toolCall, tool, toolName, input, context, pend
+ 		await pushResultAndRunAfterHook(results, {
  			toolCallId: toolCall.id,
  			toolName,
 -			result: { error: message },

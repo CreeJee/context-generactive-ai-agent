@@ -137,6 +137,7 @@ const ownerRun = Effect.fnUntraced(function* (
   });
   yield* sdkCall(() =>
     chat({
+      threadId: "thread",
       adapter: new ScriptedTextAdapter([
         { toolCalls: [{ id: "shared-call", name: "probe", arguments: "{}" }] },
         { text: `answer-${index}` },

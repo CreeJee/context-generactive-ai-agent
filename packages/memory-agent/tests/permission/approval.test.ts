@@ -75,7 +75,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const { sessionId, tab } = yield* pendingApproval();
       tab.client.resolveInterrupts(false);
       yield* tab.answered("Shell said", "the answer after declining");
-      expect(tab.text()).toContain('"approved":false');
+      expect(tab.text()).toContain("User declined tool execution");
       expect(tab.text()).not.toContain("approved-output");
       const result = (yield* (yield* Nodes).session(sessionId)).find(
         (node) => node.kind === "tool_result",

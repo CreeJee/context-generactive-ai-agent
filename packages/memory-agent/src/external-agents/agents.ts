@@ -8,7 +8,7 @@ import type {
   SessionUpdate,
   StopReason,
 } from "@agentclientprotocol/sdk";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SdkStreams } from "../acp/web-streams.ts";
 import {

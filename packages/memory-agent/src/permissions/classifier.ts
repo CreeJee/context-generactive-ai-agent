@@ -162,7 +162,7 @@ const make = Effect.gen(function* () {
           stream: false,
         }),
       );
-      const json = answer.match(/\{[\s\S]*\}/)?.[0] ?? "";
+      const json = answer.text.match(/\{[\s\S]*\}/)?.[0] ?? "";
       const verdict = Option.getOrUndefined(decodeVerdict(json));
       return verdict === undefined ? fallback : { ...verdict, decidedBy: "classifier" as const };
     },

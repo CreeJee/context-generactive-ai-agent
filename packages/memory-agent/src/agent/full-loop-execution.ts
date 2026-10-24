@@ -242,6 +242,48 @@ const toolInput = (
     }
   });
 
+/**
+ * A tool call as the owner observes it. The worker's SDK also gives each call `metadata` (the
+ * stream source it stamps), which no owner observation has, so decoding leaves it out.
+ */
+const observedToolCall = Schema.decodeUnknownOption(
+  Schema.Struct({
+    id: Schema.String,
+    type: Schema.Literal("function"),
+    function: Schema.Struct({ name: Schema.String, arguments: Schema.String }),
+  }),
+);
+/** Whether a tool call a worker names is the call the owner observed. */
+// Worker hook payloads are untrusted; the decoder above is their boundary.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters
+const sameToolCall = (observed: unknown, call: unknown) =>
+  Option.exists(observedToolCall(observed), (expected) =>
+    Option.contains(observedToolCall(call), expected),
+  );
+
+/**
+ * TanStack AI persistence returns its resume state from `onConfig` as a function under this
+ * registered symbol, for `chat()` to call after the onConfig chain. A function cannot reach the
+ * worker, so the owner calls it and sends the state it returns.
+ */
+const durableResume = Symbol.for("tanstack.ai.durableResume");
+/** An `onConfig` patch as the worker can receive it: the resume state in place of its function. */
+// SDK config patches cross the worker boundary as JSON; their shape belongs to TanStack AI.
+const workerConfigPatch = (patch: any, tools: ReadonlyArray<Tool>) =>
+  Option.fromNullishOr(patch?.[durableResume]).pipe(
+    Option.filter((resume) => resume instanceof Function),
+    Option.match({
+      onNone: () => Effect.succeed(patch),
+      onSome: (resume) => {
+        const { [durableResume]: _resume, ...rest } = patch;
+        return Effect.map(
+          nativePromise(() => Promise.resolve(resume(tools))),
+          (resumeToolState) => (isTruthy(resumeToolState) ? { ...rest, resumeToolState } : rest),
+        );
+      },
+    }),
+  );
+
 /** Complete SDK loop in worker_threads. No worker restart or operation replay is performed.
  * Unsupported object-identity SDK capabilities are rejected before worker admission.
  */
@@ -377,7 +419,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               streamId: randomUUID(),
               runId: owner.capability.runId,
               threadId: owner.capability.sessionId,
-              conversationId: owner.capability.sessionId,
               activity: "chat",
               provider: adapterName,
               model: adapterModel,
@@ -488,13 +529,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               return approval === true || approval?.approved === true;
             };
             const phaseCall = (call: any) => {
-              const observed = grants.toolCalls().find((entry) => Equal.equals(entry, call));
+              const observed = grants.toolCalls().find((entry) => sameToolCall(entry, call));
               if (isTruthy(observed)) return observed;
               if (!isTruthy(ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id)))
                 return undefined;
               return ownerContext.messages
                 .flatMap((message: any) => message.toolCalls ?? [])
-                .find((entry: any) => Equal.equals(entry, call));
+                .find((entry: any) => sameToolCall(entry, call));
             };
             const configuredMiddleware = MutableHashSet.empty<number>();
             const firstConfigMiddleware = middleware.findIndex((mw) =>
@@ -604,7 +645,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   if (
                     !isTruthy(completed) ||
                     input.info.toolName !== completed.toolName ||
-                    !Equal.equals(input.info.toolCall, completed.toolCall)
+                    !sameToolCall(completed.toolCall, input.info.toolCall)
                   )
                     return false;
                 }
@@ -1180,6 +1221,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           return yield* refused(refusal.UnknownMiddlewareHook.make({}));
                         const result = yield* nativePromise(() =>
                           Promise.resolve(hook.call(mw, ctx, info)),
+                        ).pipe(
+                          Effect.filterOrElse(
+                            () => input.hook !== "onConfig",
+                            (patch) => workerConfigPatch(patch, ownerTools),
+                          ),
                         );
                         if (input.hook === "setup")
                           for (const handle of mw.provides ?? []) {

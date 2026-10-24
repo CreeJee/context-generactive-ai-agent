@@ -140,7 +140,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("ACP agent br
 
       const rejected = yield* editor("reject");
       yield* rejected.prompt(yield* rejected.newSession, "shell: printf never");
-      expect(rejected.text()).toContain('"approved":false');
+      expect(rejected.text()).toContain("User declined tool execution");
     }),
   );
 

@@ -57,11 +57,11 @@ interface DirectImageModelCapability {
 }
 
 const directModelCapabilities = {
+  "gpt-image-2.5-flare": { images: true, maximumSourceImages: 16, mask: true },
+  "gpt-image-2.5-sunburst": { images: true, maximumSourceImages: 16, mask: true },
   "gpt-image-2": { images: true, maximumSourceImages: 16, mask: true },
   "gpt-image-1": { images: true, maximumSourceImages: 16, mask: true },
   "gpt-image-1-mini": { images: true, maximumSourceImages: 16, mask: true },
-  "dall-e-3": { images: false, maximumSourceImages: 0, mask: false },
-  "dall-e-2": { images: true, maximumSourceImages: 1, mask: true },
 } as const satisfies Record<OpenAIImageModel, DirectImageModelCapability>;
 
 /**

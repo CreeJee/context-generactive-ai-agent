@@ -67,6 +67,7 @@ describe("compact", () => {
           { role: "user", content: "current question" },
         ];
         const result = yield* compactEffect({
+          threadId: "thread",
           messages,
           state: {
             manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -89,6 +90,7 @@ describe("compact", () => {
   it.effect("drops a tool result when compaction has removed its matching tool call", () =>
     Effect.gen(function* () {
       const result = yield* compactEffect({
+        threadId: "thread",
         messages: [
           { role: "assistant", content: "earlier call was compacted" },
           { role: "tool", toolCallId: "orphaned", content: "result without a call" },
@@ -136,6 +138,7 @@ describe("compact", () => {
         { role: "user", content: "continue" },
       ];
       const result = yield* compactEffect({
+        threadId: "thread",
         messages,
         state: fresh,
         sources: noSources,
@@ -177,6 +180,7 @@ describe("compact", () => {
         ];
         const original = structuredClone(messages);
         const result = yield* compactEffect({
+          threadId: "thread",
           messages,
           state: fresh,
           sources: noSources,
@@ -209,6 +213,7 @@ describe("compact", () => {
             }),
         };
         const compacted = yield* compactEffect({
+          threadId: "thread",
           messages: answeredShell,
           state: fresh,
           sources,
@@ -222,6 +227,7 @@ describe("compact", () => {
         expect(compacted.messages.at(-1)).toEqual({ role: "user", content: "current question" });
         let intactCalls = 0;
         yield* compactEffect({
+          threadId: "thread",
           messages: [{ role: "user", content: "uncompacted" }],
           state: fresh,
           sources: {
@@ -232,6 +238,7 @@ describe("compact", () => {
         });
         expect(intactCalls).toBe(0);
         const fallback = yield* compactEffect({
+          threadId: "thread",
           messages: answeredShell,
           state: fresh,
           sources: {

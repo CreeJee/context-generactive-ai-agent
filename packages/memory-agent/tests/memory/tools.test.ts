@@ -758,6 +758,7 @@ testAgent()("memory tools per run", (it) => {
       const finish = (middleware: NonNullable<typeof first.middleware>) =>
         call(() =>
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([{ text: "fixture answer" }]),
             messages: [],
             middleware: [middleware],

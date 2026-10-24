@@ -56,7 +56,7 @@ describe("ProviderToolCapabilityRegistry", () => {
   });
 
   effectTest.effect(
-    "fails closed for unknown tools, unknown models, and Anthropic tools:[] models",
+    "fails closed for unknown tools and unknown models, and resolves no tools for tools:[] models",
     () =>
       Effect.gen(function* () {
         const result = yield* withDefault(
@@ -67,8 +67,8 @@ describe("ProviderToolCapabilityRegistry", () => {
               registry.resolve({ provider: "anthropic", model: "claude-not-real" }),
             );
             const empty = yield* registry.resolve({
-              provider: "anthropic",
-              model: "claude-opus-5-fast",
+              provider: "openai",
+              model: "gpt-6-sol-pro",
             });
             return { unknownTool, unknownModel, empty };
           }),
@@ -105,7 +105,7 @@ describe("ProviderToolCapabilityRegistry", () => {
           return {
             full: yield* ids("gpt-5.2"),
             subset: yield* ids("gpt-5-codex"),
-            single: yield* ids("computer-use-preview"),
+            single: yield* ids("gpt-4o-search-preview"),
             empty: yield* ids("gpt-audio"),
             accountIntersection: yield* ids("gpt-5.2", ["web_search", "shell", "not_real"]),
           };
@@ -132,7 +132,7 @@ describe("ProviderToolCapabilityRegistry", () => {
         "openai:mcp",
         "openai:shell",
       ]);
-      expect(resolved.single).toEqual(["openai:computer_use"]);
+      expect(resolved.single).toEqual(["openai:web_search_preview"]);
       expect(resolved.empty).toEqual([]);
       expect(resolved.accountIntersection).toEqual(["openai:shell", "openai:web_search"]);
     }),

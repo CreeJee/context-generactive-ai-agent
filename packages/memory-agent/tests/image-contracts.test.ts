@@ -59,9 +59,6 @@ describe("image route contracts", () => {
       ),
     );
     expect(byModel["gpt-image-2"]?.input.maximumSourceImages).toBe(16);
-    expect(byModel["dall-e-2"]?.input.maximumSourceImages).toBe(1);
-    expect(byModel["dall-e-3"]?.operations).toEqual(["generate"]);
-    expect(byModel["dall-e-3"]?.input.images).toBe(false);
   });
 
   it("requires persistence and defers MIME to provider options or byte detection", () => {

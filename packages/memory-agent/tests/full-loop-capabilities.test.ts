@@ -346,6 +346,7 @@ test("preflight rejects unsupported continuation before dispatching any owner ca
   const preflight = () =>
     preflightFullLoopExecution(
       {
+        threadId: "thread",
         messages: [],
         resume: [{ interruptId: "approval", status: "resolved", payload: { approved: true } }],
       },

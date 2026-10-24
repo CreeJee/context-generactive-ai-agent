@@ -33,7 +33,7 @@ const chat: ChatRoute = {
 };
 
 function media(
-  model: "gpt-image-2" | "gpt-image-1-mini" | "dall-e-3",
+  model: "gpt-image-2" | "gpt-image-1-mini" | "gpt-image-1",
   options: { readonly edit?: boolean; readonly production?: boolean } = {},
 ): MediaRoute {
   const edit = options.edit ?? true;
@@ -83,7 +83,7 @@ function media(
 
 const quality = media("gpt-image-2");
 const cheap = media("gpt-image-1-mini");
-const fast = media("dall-e-3", { edit: false });
+const fast = media("gpt-image-1", { edit: false });
 const routes = [quality, cheap, fast] as const;
 const facts: readonly ImageRouteFact[] = [
   {

@@ -292,6 +292,7 @@ testAgent()("MemorySearch.find", (it) => {
       yield* Stream.runDrain(
         Stream.fromAsyncIterable(
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([
               { toolCalls: [call("c1", "find_memory", { query: "SQLite 결정" })] },
               {

@@ -50,6 +50,7 @@ it.live(
       ]);
       yield* sdkCall(() =>
         chat({
+          threadId: "thread",
           adapter,
           messages: [{ role: "user", content: "go" }],
           stream: false,
@@ -93,6 +94,7 @@ it.live("each run refreshes the root and catalog without blocking tool execution
     ]);
     yield* sdkCall(() =>
       chat({
+        threadId: "thread",
         adapter: first,
         messages: [],
         stream: false,
@@ -112,6 +114,7 @@ it.live("each run refreshes the root and catalog without blocking tool execution
     const next = new ScriptedTextAdapter([{ text: "done" }]);
     yield* sdkCall(() =>
       chat({
+        threadId: "thread",
         adapter: next,
         messages: [],
         stream: false,
@@ -132,6 +135,7 @@ it.live("a project without any AGENTS.md adds no prompt", () =>
     const adapter = new ScriptedTextAdapter([{ text: "done" }]);
     yield* sdkCall(() =>
       chat({
+        threadId: "thread",
         adapter,
         messages: [],
         systemPrompts: ["BASE"],
@@ -151,7 +155,13 @@ it.live("linked instruction files are refused before their content reaches the m
     const adapter = new ScriptedTextAdapter([{ text: "done" }]);
     const outcome = yield* Effect.result(
       sdkCall(() =>
-        chat({ adapter, messages: [], stream: false, middleware: [projectInstructions(root)] }),
+        chat({
+          threadId: "thread",
+          adapter,
+          messages: [],
+          stream: false,
+          middleware: [projectInstructions(root)],
+        }),
       ),
     );
     Result.match(outcome, {

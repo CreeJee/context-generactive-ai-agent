@@ -47,6 +47,7 @@ for (const kind of ["responder", "promise", "delay", "effect-responder", "effect
       );
       const chunks = Stream.fromAsyncIterable(
         adapter.chatStream({
+          threadId: "thread",
           model: "scripted-1",
           messages: [],
           abortController: controller,
@@ -74,6 +75,7 @@ it.live("a rejected wait preserves its original failure", () =>
       Stream.runCollect(
         Stream.fromAsyncIterable(
           adapter.chatStream({
+            threadId: "thread",
             model: "scripted-1",
             messages: [],
             logger: resolveDebugOption(false),
@@ -100,6 +102,7 @@ it.live("closing the SDK iterator interrupts a pending turn", () =>
     );
     const iterator = adapter
       .chatStream({
+        threadId: "thread",
         model: "scripted-1",
         messages: [],
         logger: resolveDebugOption(false),
@@ -122,6 +125,7 @@ it.live("a mid-turn failure preserves the already delivered text chunks", () =>
       Stream.runDrain(
         Stream.fromAsyncIterable(
           adapter.chatStream({
+            threadId: "thread",
             model: "scripted-1",
             messages: [],
             logger: resolveDebugOption(false),

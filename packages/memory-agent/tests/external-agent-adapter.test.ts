@@ -21,6 +21,7 @@ it.effect("cancellation releases an empty queue even when the native agent has n
     const { controller: abortController } = yield* sdkCancellation;
     const iterator = adapter
       .chatStream({
+        threadId: "thread",
         model: "fixture",
         messages: [],
         abortController,

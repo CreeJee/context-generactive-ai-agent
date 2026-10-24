@@ -287,6 +287,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         expect(embedderOwners.count).toBe(owners);
         yield* sdkCall(() =>
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([{ text: runId }]),
             messages: [{ role: "user", content: runId }],
             runId,
@@ -362,6 +363,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         ]);
         yield* sdkCall(() =>
           chat({
+            threadId: "thread",
             adapter,
             messages: [],
             runId: `${sessionId}-${label}`,
@@ -507,6 +509,7 @@ layer(NativeBundles.layer.pipe(Layer.provideMerge(TestEnv.layer({ embedder: coun
         // Finishing a fresh run before retrieval/use must not inherit the previous usedDraft.
         const finish = sdkCall(() =>
           chat({
+            threadId: "thread",
             adapter: new ScriptedTextAdapter([{ text: label }]),
             messages: [],
             runId,

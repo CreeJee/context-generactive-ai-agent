@@ -28,6 +28,7 @@ it.effect(
       const collect = Effect.fnUntraced(function* () {
         return yield* Stream.fromAsyncIterable(
           (yield* api.runtime).adapter(selection).chatStream({
+            threadId: "thread",
             logger: resolveDebugOption(false),
             model: "manual",
             messages: [{ role: "user", content: "lookup" }],

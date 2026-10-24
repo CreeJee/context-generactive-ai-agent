@@ -142,6 +142,7 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMess
     blocks: summaryBlocks(userIndexes(messages).length),
   };
   const result = yield* compactEffect({
+    threadId: "thread",
     messages,
     state,
     sources: {
