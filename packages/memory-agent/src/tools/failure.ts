@@ -95,6 +95,8 @@ export const toolFailure: {
   (path: string): (error: Error) => ReturnType<typeof toolFailureBody>;
 } & typeof toolFailureBody = EffectFunction.dual(2, toolFailureBody);
 function toolFailureBody(error: Error, path: string): ToolFailed {
+  // Already what the model reads. Its `code` field would otherwise pass for a system error's.
+  if (Schema.is(ToolFailed)(error)) return error;
   const tag = errorTag(error);
   const reason = Schema.is(PathRejected)(error)
     ? error.reason
@@ -113,7 +115,7 @@ function toolFailureBody(error: Error, path: string): ToolFailed {
   if (systemError !== undefined)
     return ToolFailed.make({ code: "io_error", tag, detail: `${path} (${systemError.code})` });
   // Tool-authored messages already follow the `reason: detail` form.
-  if (Schema.is(ToolFailed)(error) || toolAuthored.test(error.message)) return toolFailedOf(error);
+  if (toolAuthored.test(error.message)) return toolFailedOf(error);
   return ToolFailed.make({ code: "io_error", tag, detail: `${path} (unknown)` });
 }
 
