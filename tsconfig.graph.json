@@ -1,0 +1,23 @@
+{
+  // One program over every workspace for the @ttsc/graph MCP server. Type errors here do not
+  // matter; resolution does, so it mirrors the bundler-style imports and aliases of apps/agent.
+  "extends": "./tsconfig.json",
+  "include": [
+    "*.ts",
+    "apps/*/**/*",
+    "apps/agent/.react-router/types/**/*",
+    "packages/*/**/*",
+    "tools/**/*"
+  ],
+  "exclude": ["**/node_modules", "**/dist", "**/build"],
+  "compilerOptions": {
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "jsx": "react-jsx",
+    "paths": {
+      "~/*": ["./apps/agent/app/*"]
+    },
+    "rootDirs": ["./apps/agent", "./apps/agent/.react-router/types"]
+  }
+}

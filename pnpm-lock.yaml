@@ -257,6 +257,9 @@ catalogs:
     '@tanstack/react-query':
       specifier: ^5.104.3
       version: 5.104.3
+    '@ttsc/graph':
+      specifier: 0.34.1
+      version: 0.34.1
     '@types/cross-spawn':
       specifier: 6.0.6
       version: 6.0.6
@@ -344,6 +347,9 @@ catalogs:
     ts-pattern:
       specifier: ^5.9.2
       version: 5.9.2
+    ttsc:
+      specifier: 0.34.1
+      version: 0.34.1
     tw-animate-css:
       specifier: ^1.4.0
       version: 1.4.0
@@ -402,6 +408,9 @@ importers:
       '@shadcn/lint':
         specifier: 'catalog:'
         version: 0.2.1(eslint@10.10.0(jiti@2.7.0))
+      '@ttsc/graph':
+        specifier: 'catalog:'
+        version: 0.34.1(ttsc@0.34.1(typescript@7.0.2))(zod@4.6.7)
       '@vitest/browser-playwright':
         specifier: 'catalog:'
         version: 5.0.5(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(playwright@1.64.1)(vitest@5.0.5)
@@ -411,6 +420,9 @@ importers:
       playwright:
         specifier: 'catalog:'
         version: 1.64.1
+      ttsc:
+        specifier: 'catalog:'
+        version: 0.34.1(typescript@7.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -2482,6 +2494,82 @@ packages:
   '@ts-morph/common@0.27.0':
     resolution: {integrity: sha512-Wf29UqxWDpc+i61k3oIOzcUfQt79PIT9y/MWfAGlrkjg6lBC1hwDECLXPVJAhWjiGbfBCxZd65F/LIZF3+jeJQ==}
 
+  '@ttsc/darwin-arm64@0.34.1':
+    resolution: {integrity: sha512-0V0kdvtoBN8FmWhVA8jpbGen0EYQE81wiMn75ivLuhvF544fs/jYCNi9P5kNOzH/DpCoyDe3W4+YyJZMaLY3gQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@ttsc/darwin-x64@0.34.1':
+    resolution: {integrity: sha512-yjSWopxlpWokYKhMTZAla1PpNgcPPFVWZ5p9RlwH1ZgmTbmjn1cj2RY0E5vvtUjWaYhMxk/5HfSPuvYHyDpgIg==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@ttsc/graph-darwin-arm64@0.34.1':
+    resolution: {integrity: sha512-gGwL910emlcKJSUyt73Vp9CfpMQTie6KPpPk82xfjB5N/DV5+1nhPKISsw+vGFHLdlYpCBEwwYdm6ojBaynrFQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@ttsc/graph-darwin-x64@0.34.1':
+    resolution: {integrity: sha512-TzFPAWWE7rSsswi9uWdmgbdKl2tjLXSdd1hpLGHqbXS88YDInRyEyOOwNKlEv4NNKbTdy7pOQfzbK1zqCpLK8w==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@ttsc/graph-linux-arm64@0.34.1':
+    resolution: {integrity: sha512-/Av7ur5dYQV8d63OfbFVxdEu17oFNUeSoVRmEi2zs7U0UAKuvJ4Lp76+B1HYRvqU7xUYXc5aRv7UAZ0hhuXwnQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@ttsc/graph-linux-arm@0.34.1':
+    resolution: {integrity: sha512-Gl8jUakFB/W6Favl6mfzOubxruxfCezOkLUsxC+mj2XKIK6mGqlDEh0ot5aO0EvhktEUwvRqzUrbLLJOljO/Ww==}
+    cpu: [arm]
+    os: [linux]
+
+  '@ttsc/graph-linux-x64@0.34.1':
+    resolution: {integrity: sha512-KgMRIvZCnyh05Qt2YgDMmAKGCcyMCuevw2T/7vTqxcGLFwLXYHEdu0R1JrinAc3kHA2Fe1NanVbMxQ7WPlAKZg==}
+    cpu: [x64]
+    os: [linux]
+
+  '@ttsc/graph-win32-arm64@0.34.1':
+    resolution: {integrity: sha512-1vcjYg2MH5EK9m9eSpoMZkQN8NJ4Yi1Fa1mZi5WacFKuVm6yVdR3zPukZbj8ixvBUpJQkn8vg8WhfjhgXKZ2cg==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@ttsc/graph-win32-x64@0.34.1':
+    resolution: {integrity: sha512-QTTyPOKTor1wulJJVLOmUytZFyWjDczM56kzOoZdjb1OvFsQmGc39wu2+HGhUu7jBUslY2UJh7lZRKwtxo1xgQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@ttsc/graph@0.34.1':
+    resolution: {integrity: sha512-uH2jzDL6AJSZ0m18oT53BolSDL6Oo8n9rOpHMfGZcB8vOrdoEsIWMcp3c43ZaDLVwFp5+h3T6lfZMHZwGBtdGQ==}
+    hasBin: true
+    peerDependencies:
+      ttsc: ^0.34.1
+
+  '@ttsc/linux-arm64@0.34.1':
+    resolution: {integrity: sha512-5bJiTf2jXv5No9MXWbuvOpEh4+CfNWIqxbwR5GFcTQn9NGpQAOhB3RJnl3XCtyrvTHRM2Q1suW40gvKfVf+sIA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@ttsc/linux-arm@0.34.1':
+    resolution: {integrity: sha512-TZ1xkLar5XfJoPeWu/e1htXNjSblY1GV+Mp8xWaTQ1x/+27qhI7dVG9D1G6uHQV3cTD2ZYA/psURNGKjngxVbw==}
+    cpu: [arm]
+    os: [linux]
+
+  '@ttsc/linux-x64@0.34.1':
+    resolution: {integrity: sha512-gCXTiK63S6tuSGoAKyGy4MoXuAOHUhYaMjulFRZ0mVAFYaUdwpO2EY4TIpL9wL3sqUuNYoNdGkAqeFs+vDQBeQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@ttsc/win32-arm64@0.34.1':
+    resolution: {integrity: sha512-Pm797k07lV9GpCelGumkNUh4tMoG3/kt85sj03g/k4/Kw6evt9MrbjxU7uT2xXQk7z4WLJMhdeE3JVFNkuey2A==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@ttsc/win32-x64@0.34.1':
+    resolution: {integrity: sha512-c4jIBbU6/ThZdvUf8oyLC6BI8xiALydVcYyzwZF6zbDBfgYPoKj12h9CZ52Ywh3MSIaeuoIqfjbzhvboIXHllQ==}
+    cpu: [x64]
+    os: [win32]
+
   '@types/aria-query@5.0.4':
     resolution: {integrity: sha512-rfT93uj5s0PRL7EzccGMs3brplhcrghnDoV26NqKhCAS1hVo+WdNsPvE/yb6ilfr5hi2MEk6d5EWJTKdxg8jVw==}
 
@@ -2660,6 +2748,17 @@ packages:
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
+
+  '@typia/interface@15.2.0':
+    resolution: {integrity: sha512-EKdncUPwDRqlYz5CbhfvW7btWTjFYJUGKi3c4ltGYZuxjhzKV9QhMSdRauOByBabBQ0F2ALeGradjG/52szC5g==}
+
+  '@typia/mcp@15.2.0':
+    resolution: {integrity: sha512-bnxdAWd6cd+3BHI2qPVgAtEfmeekwfgoiyxeJOqw9GTQptbpkwrAlonUhR4BV7LgErTtLww0UYzPVc1QSgBz/w==}
+    peerDependencies:
+      '@modelcontextprotocol/sdk': '>=1.12.0'
+
+  '@typia/utils@15.2.0':
+    resolution: {integrity: sha512-e943Xh00v9kZ4NXzHJqLou4hS9gRyH3L7u6079WeroZ1W6oFWy3lK89h11zY0XLqAfaTTGKPFCOK9o1wl7K+Fw==}
 
   '@ungap/structured-clone@1.4.0':
     resolution: {integrity: sha512-1mEZtMKPM09vDmQt5y7YvmN2+DFTP7Tg0EWXdic8/C6VRnpb33e4ghisCIE3WZjsE2N8mf+QV1Zqh7ZFYLWInQ==}
@@ -2923,6 +3022,11 @@ packages:
     peerDependencies:
       acorn: ^6.0.0 || ^7.0.0 || ^8.0.0
 
+  acorn@8.16.0:
+    resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
+
   acorn@8.18.0:
     resolution: {integrity: sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ==}
     engines: {node: '>=0.4.0'}
@@ -3093,6 +3197,9 @@ packages:
   chokidar@5.0.0:
     resolution: {integrity: sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw==}
     engines: {node: '>= 20.19.0'}
+
+  cjs-module-lexer@2.2.1:
+    resolution: {integrity: sha512-Ca8swihM+/4yKecYHY52kgJd300hi2lADU/a1RxNTRe+RJ9jvqQlESpbz9DnG9mowez8qwXHB8qYdIUw9e+F5Q==}
 
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
@@ -3290,6 +3397,10 @@ packages:
   dotenv@17.4.2:
     resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
     engines: {node: '>=12'}
+
+  drange@1.1.1:
+    resolution: {integrity: sha512-pYxfDYpued//QpnLIm4Avk7rsNtAtQkUES2cwAYSvD/wd2pKD71gN2Ebj3e7klzXwjocvE8c5vx/1fxwpqmSxA==}
+    engines: {node: '>=4'}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -4711,6 +4822,10 @@ packages:
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
 
+  randexp@0.5.3:
+    resolution: {integrity: sha512-U+5l2KrcMNOUPYvazA3h5ekF80FHTUG+87SEAmHZmolh1M+i/WyTCxVzmi+tidIa1tM4BSe8g2Y/D3loWDjj+w==}
+    engines: {node: '>=4'}
+
   range-parser@1.3.0:
     resolution: {integrity: sha512-hek2mFQpPuI4E1BBKrSto+BU3e3x4xuarsbiwr3+lf7p44juvFMV0XFWQAP3xUyqXA4RrXLIoaSUGbSt056ZMw==}
     engines: {node: '>= 0.6'}
@@ -4855,6 +4970,10 @@ packages:
   restore-cursor@5.1.0:
     resolution: {integrity: sha512-oMA2dcrw6u0YfxJQXm342bFKX/E4sG9rbTzO9ptUcR/e8A33cHuvStiYOwH7fszkZlZ1z/ta9AAoPk2F4qIOHA==}
     engines: {node: '>=18'}
+
+  ret@0.2.2:
+    resolution: {integrity: sha512-M0b3YWQs7R3Z917WRQy1HHA7Ba7D8hvZg6UE5mLykJxQVE2ju0IXbGlaHPPlkY+WN7wFP+wUMXmBFA0aV6vYGQ==}
+    engines: {node: '>=4'}
 
   reusify@1.1.0:
     resolution: {integrity: sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==}
@@ -5113,6 +5232,13 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  ttsc@0.34.1:
+    resolution: {integrity: sha512-F5R8b2+/OvaDLyqxCEhOkGAm256pO2tOL+P1E3o+wYeU20k3FRRQMWuVN+Ne4XrDVz8lBxusJV93AhInoPltUA==}
+    engines: {node: '>=22.15.0'}
+    hasBin: true
+    peerDependencies:
+      typescript: '>=7.0.0 || >=7.1.0-0'
+
   tw-animate-css@1.4.0:
     resolution: {integrity: sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ==}
 
@@ -5136,6 +5262,14 @@ packages:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
     hasBin: true
+
+  typia@15.2.0:
+    resolution: {integrity: sha512-NFaDYeGkc3qizU9NKBfj9WVLD/5HtlcpyLP7PDVzuQ3U/aL1vXOEb663N7IwZIijJZ2g8TjEhB3OnPibelopig==}
+    peerDependencies:
+      ttsc: '>=0.34.1'
+    peerDependenciesMeta:
+      ttsc:
+        optional: true
 
   unconfig-core@7.5.0:
     resolution: {integrity: sha512-Su3FauozOGP44ZmKdHy2oE6LPjk51M/TRRjHv2HNCWiDvfvCoxC2lno6jevMA91MYAdCdwP05QnWdWpSbncX/w==}
@@ -6884,6 +7018,67 @@ snapshots:
       minimatch: 10.2.6
       path-browserify: 1.0.1
 
+  '@ttsc/darwin-arm64@0.34.1':
+    optional: true
+
+  '@ttsc/darwin-x64@0.34.1':
+    optional: true
+
+  '@ttsc/graph-darwin-arm64@0.34.1':
+    optional: true
+
+  '@ttsc/graph-darwin-x64@0.34.1':
+    optional: true
+
+  '@ttsc/graph-linux-arm64@0.34.1':
+    optional: true
+
+  '@ttsc/graph-linux-arm@0.34.1':
+    optional: true
+
+  '@ttsc/graph-linux-x64@0.34.1':
+    optional: true
+
+  '@ttsc/graph-win32-arm64@0.34.1':
+    optional: true
+
+  '@ttsc/graph-win32-x64@0.34.1':
+    optional: true
+
+  '@ttsc/graph@0.34.1(ttsc@0.34.1(typescript@7.0.2))(zod@4.6.7)':
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
+      '@typia/mcp': 15.2.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))
+      ttsc: 0.34.1(typescript@7.0.2)
+      typia: 15.2.0(ttsc@0.34.1(typescript@7.0.2))
+    optionalDependencies:
+      '@ttsc/graph-darwin-arm64': 0.34.1
+      '@ttsc/graph-darwin-x64': 0.34.1
+      '@ttsc/graph-linux-arm': 0.34.1
+      '@ttsc/graph-linux-arm64': 0.34.1
+      '@ttsc/graph-linux-x64': 0.34.1
+      '@ttsc/graph-win32-arm64': 0.34.1
+      '@ttsc/graph-win32-x64': 0.34.1
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - supports-color
+      - zod
+
+  '@ttsc/linux-arm64@0.34.1':
+    optional: true
+
+  '@ttsc/linux-arm@0.34.1':
+    optional: true
+
+  '@ttsc/linux-x64@0.34.1':
+    optional: true
+
+  '@ttsc/win32-arm64@0.34.1':
+    optional: true
+
+  '@ttsc/win32-x64@0.34.1':
+    optional: true
+
   '@types/aria-query@5.0.4': {}
 
   '@types/chai@5.2.3':
@@ -7003,6 +7198,18 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  '@typia/interface@15.2.0': {}
+
+  '@typia/mcp@15.2.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))':
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
+      '@typia/interface': 15.2.0
+      '@typia/utils': 15.2.0
+
+  '@typia/utils@15.2.0':
+    dependencies:
+      '@typia/interface': 15.2.0
 
   '@ungap/structured-clone@1.4.0': {}
 
@@ -7189,6 +7396,8 @@ snapshots:
       acorn: 8.18.0
     optional: true
 
+  acorn@8.16.0: {}
+
   acorn@8.18.0:
     optional: true
 
@@ -7368,6 +7577,8 @@ snapshots:
     dependencies:
       readdirp: 5.1.1
 
+  cjs-module-lexer@2.2.1: {}
+
   class-variance-authority@0.7.1:
     dependencies:
       clsx: 2.1.1
@@ -7519,6 +7730,8 @@ snapshots:
       is-obj: 2.0.0
 
   dotenv@17.4.2: {}
+
+  drange@1.1.1: {}
 
   dunder-proto@1.0.1:
     dependencies:
@@ -9168,6 +9381,11 @@ snapshots:
 
   queue-microtask@1.2.3: {}
 
+  randexp@0.5.3:
+    dependencies:
+      drange: 1.1.1
+      ret: 0.2.2
+
   range-parser@1.3.0: {}
 
   raw-body@3.0.2:
@@ -9340,6 +9558,8 @@ snapshots:
     dependencies:
       onetime: 7.0.0
       signal-exit: 4.1.0
+
+  ret@0.2.2: {}
 
   reusify@1.1.0: {}
 
@@ -9670,6 +9890,21 @@ snapshots:
 
   tslib@2.8.1: {}
 
+  ttsc@0.34.1(typescript@7.0.2):
+    dependencies:
+      acorn: 8.16.0
+      cjs-module-lexer: 2.2.1
+      typescript: 7.0.2
+    optionalDependencies:
+      '@ttsc/darwin-arm64': 0.34.1
+      '@ttsc/darwin-x64': 0.34.1
+      '@ttsc/linux-arm': 0.34.1
+      '@ttsc/linux-arm64': 0.34.1
+      '@ttsc/linux-x64': 0.34.1
+      '@ttsc/win32-arm64': 0.34.1
+      '@ttsc/win32-x64': 0.34.1
+      fsevents: 2.3.3
+
   tw-animate-css@1.4.0: {}
 
   type-check@0.4.0:
@@ -9709,6 +9944,14 @@ snapshots:
       '@typescript/typescript-sunos-x64': 7.0.2
       '@typescript/typescript-win32-arm64': 7.0.2
       '@typescript/typescript-win32-x64': 7.0.2
+
+  typia@15.2.0(ttsc@0.34.1(typescript@7.0.2)):
+    dependencies:
+      '@typia/interface': 15.2.0
+      '@typia/utils': 15.2.0
+      randexp: 0.5.3
+    optionalDependencies:
+      ttsc: 0.34.1(typescript@7.0.2)
 
   unconfig-core@7.5.0:
     dependencies:

@@ -1,6 +1,10 @@
 [mcp_servers.motion]
 url = "https://mcp.motion.dev"
 
+[mcp_servers.ttsc-graph]
+command = "pnpm"
+args = ["exec", "ttsc-graph", "--tsconfig", "tsconfig.graph.json"]
+
 [mcp_servers.shadcn]
 command = "pnpx"
 args = [

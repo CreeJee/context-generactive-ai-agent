@@ -3,6 +3,10 @@
     "motion": {
       "type": "http",
       "url": "https://mcp.motion.dev"
+    },
+    "ttsc-graph": {
+      "command": "pnpm",
+      "args": ["exec", "ttsc-graph", "--tsconfig", "tsconfig.graph.json"]
     }
   }
 }
