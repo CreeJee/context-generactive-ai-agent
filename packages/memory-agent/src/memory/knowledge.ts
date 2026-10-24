@@ -215,6 +215,18 @@ const make = Effect.gen(function* () {
       ORDER BY u.created_at, CASE u.kind WHEN 'retrieved' THEN 0 ELSE 1 END, u.id`,
   });
 
+  const presence = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: Schema.Struct({
+      adopted_claims: Schema.Literals([0, 1]),
+      promoted: Schema.Literals([0, 1]),
+    }),
+    execute: (projectId) => sql`SELECT
+      EXISTS (SELECT 1 FROM final_answer_claims WHERE project_id = ${projectId}) AS adopted_claims,
+      EXISTS (SELECT 1 FROM memory_candidates
+        WHERE project_id = ${projectId} AND memory_node_id IS NOT NULL) AS promoted`,
+  });
+
   const toView = (row: typeof CandidateRow.Type) =>
     Effect.map(evidenceFor(row.id), (evidence): MemoryCandidateView => ({
       id: row.id,
@@ -396,7 +408,26 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  return { promote, recordRetrieval, recordUsed, candidatesForTask, usageForTask };
+  /**
+   * Whether the project has anything the promotion tools act on: an adopted final-answer claim to
+   * promote, or saved project memory whose use is declared.
+   */
+  const promotionState = (projectId: string) =>
+    stored(
+      Effect.map(presence(projectId), (row) => ({
+        adoptedClaims: row.adopted_claims === 1,
+        promotedMemory: row.promoted === 1,
+      })),
+    );
+
+  return {
+    promote,
+    recordRetrieval,
+    recordUsed,
+    candidatesForTask,
+    usageForTask,
+    promotionState,
+  };
 });
 
 /** User-governed bridge from adopted final-answer claims into durable project memory. */

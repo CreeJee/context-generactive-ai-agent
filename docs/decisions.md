@@ -2532,3 +2532,6 @@
 - 필요할 때만 쓰는 안내는 시스템 프롬프트에 두지 않고, 그 안내가 필요한 순간에 읽히는 곳에 둔다. 앱 설정 파일 목록은 builtin 스킬 `app-settings`로 옮기고, 작업 공간 안내에는 저장소 경로와 "그 폴더는 파일 도구·셸 스킬이 열지 않는다"는 한 줄만 남긴다. 스킬을 어떻게 대할지(지침이지 허가가 아니다, 딸린 파일을 읽는 도구)는 목록이 아니라 `read_skill` 결과의 `note`에 싣는다. builtin 스킬의 파일(LICENSE 등)은 읽으라고 하지 않는다.
 - AGENTS.md가 하나도 없는 프로젝트에는 AGENTS.md 안내 블록을 싣지 않는다. 루트 문서나 하위 문서가 있을 때만 그 부분을 싣는다.
 - 이 단계 뒤 총 6,165(시스템 1,491, 도구 4,597)이다.
+- 도구 목록은 run 시작 때 상태로 정하고 run 안에서는 바꾸지 않는다. full-loop worker는 미들웨어가 도구를 바꾸는 것을 `ToolReplacement`로 거절하고, run 중간에 바뀐 도구 목록은 프롬프트 캐시도 깬다. 그래서 같은 run 안에서 필요해질 수 있는 도구(subagent 후속, 백그라운드 결과)는 늘 둔다.
+- `promote_memory_candidate`는 프로젝트에 채택된 final-answer claim이 있을 때만, `use_promoted_memory`는 저장된 프로젝트 메모리가 있을 때만 준다(`KnowledgePromotions.promotionState`). 둘 다 이전 run의 결과에만 작용하기 때문이다. 상태를 못 읽으면 둘 다 준다. 빠진 도구의 규칙 줄은 `memoryInstructions`에서도 뺀다. subagent에는 지금처럼 둘 다 주지 않는다.
+- 이 단계 뒤 총 5,793(시스템 1,419, 도구 4,297, 도구 27개)이다.

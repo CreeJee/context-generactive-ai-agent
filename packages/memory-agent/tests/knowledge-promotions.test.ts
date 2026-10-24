@@ -56,6 +56,11 @@ describe("Work Trace knowledge promotion", () => {
           kind: "user",
           text: "Save this project decision.",
         });
+        // The promotion tools are offered only once there is something for them to act on.
+        expect(yield* knowledge.promotionState("p1")).toEqual({
+          adoptedClaims: false,
+          promotedMemory: false,
+        });
         const handle = yield* trace.startAttempt({
           sessionId: "s1",
           parentRunId: "parent-1",
@@ -90,6 +95,10 @@ describe("Work Trace knowledge promotion", () => {
         );
         expect(rejected).toBeInstanceOf(MemoryPromotionRejected);
         expect(rejected).toMatchObject({ reason: "claim_not_adopted" });
+        expect(yield* knowledge.promotionState("p1")).toEqual({
+          adoptedClaims: true,
+          promotedMemory: false,
+        });
 
         const candidate = yield* knowledge.promote({
           projectId: "p1",
@@ -113,6 +122,10 @@ describe("Work Trace knowledge promotion", () => {
           kind: "topic",
           text: "Use SQLite for durable Work Trace state.",
           detail: { memoryCandidateId: candidate.id, authorizedByUserNodeId: user.id },
+        });
+        expect(yield* knowledge.promotionState("p1")).toEqual({
+          adoptedClaims: true,
+          promotedMemory: true,
         });
 
         expect(
