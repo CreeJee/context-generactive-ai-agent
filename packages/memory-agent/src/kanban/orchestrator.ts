@@ -771,6 +771,25 @@ const make = (options: KanbanOrchestratorOptions) =>
       );
     });
 
+    /**
+     * Stops a board: its running cards and integrations stop, the board is stopped so its loop
+     * ends at the next look, and its people's waits close with the cards.
+     */
+    const halt = Effect.fnUntraced(function* (goal: KanbanGoal, steps: readonly PlanStep[]) {
+      const { goalInstanceId } = goal;
+      for (const step of steps) {
+        yield* runs.stop(goalInstanceId, step.id);
+        yield* FiberMap.remove(integrations, `${goalInstanceId}:${step.id}`);
+      }
+      yield* attempts.stopGoal(goalInstanceId);
+      yield* decisions.close(
+        DecisionCloseScope.Goal({ sessionId: goal.sessionId, goalInstanceId }),
+        "card_stopped",
+      );
+      yield* scheduler.forget(goalInstanceId);
+      yield* scheduler.clearNotices(goalInstanceId);
+    });
+
     /** One look at a board: take up outcomes, then assign what may run. */
     const tick = Effect.fnUntraced(function* (goalInstanceId: string) {
       const found = yield* attempts.goal(goalInstanceId);
@@ -789,17 +808,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       if (state.plan?.status === "closed") {
         // A closed Plan runs no card again: its running cards stop, its board stops and its
         // people's waits close with the cards.
-        for (const step of state.plan.steps) {
-          yield* runs.stop(goalInstanceId, step.id);
-          yield* FiberMap.remove(integrations, `${goalInstanceId}:${step.id}`);
-        }
-        yield* attempts.stopGoal(goalInstanceId);
-        yield* decisions.close(
-          DecisionCloseScope.Goal({ sessionId: goal.sessionId, goalInstanceId }),
-          "card_stopped",
-        );
-        yield* scheduler.forget(goalInstanceId);
-        yield* scheduler.clearNotices(goalInstanceId);
+        yield* halt(goal, state.plan.steps);
         return "stopped" as const;
       }
       const reasons: KanbanAttentionReason[] = [];
@@ -1086,6 +1095,16 @@ const make = (options: KanbanOrchestratorOptions) =>
 
       /** Stops a card's running attempt; its delivery completes as Stopped. */
       stopAttempt: (goalInstanceId: string, cardId: string) => runs.stop(goalInstanceId, cardId),
+
+      /**
+       * Stops the conversation's running boards before it is deleted, as a closed Plan stops them.
+       * No look runs meanwhile, so none starts a card after its board stopped.
+       */
+      stopSession: Effect.fn("KanbanOrchestrator.stopSession")(function* (sessionId: string) {
+        const goals = (yield* attempts.activeGoals).filter((goal) => goal.sessionId === sessionId);
+        const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
+        yield* Effect.forEach(goals, (goal) => halt(goal, steps), { discard: true });
+      }, looking.withPermits(1)),
 
       /**
        * Puts a blocked card whose attempt was dead-lettered back on the queue: the same item with

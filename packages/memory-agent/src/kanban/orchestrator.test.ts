@@ -969,3 +969,41 @@ it.live(
     }).pipe(withNode),
   gitTimeout,
 );
+
+it.live(
+  "stops a conversation's running card and board before it returns",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* kanbanFixture;
+      const started = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      const run = yield* openOwner(
+        fixture,
+        () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(stopped, undefined)),
+          ),
+        yield* Effect.scope,
+      );
+      yield* run(
+        Effect.gen(function* () {
+          const board = yield* startBoard(fixture, [card("a")]);
+          yield* Deferred.await(started);
+          const { running } = yield* CardRuns;
+          yield* eventually(FiberMap.has(running, `${board.goalInstanceId}:a`), Boolean);
+
+          // A deleted conversation's records go right after this; nothing may still run then.
+          yield* (yield* KanbanOrchestrator).stopSession(board.sessionId);
+          expect(yield* Deferred.isDone(stopped)).toBe(true);
+          expect(
+            Option.exists(
+              yield* (yield* CardAttempts).goal(board.goalInstanceId),
+              (goal) => goal.active,
+            ),
+          ).toBe(false);
+        }),
+      );
+    }).pipe(withNode),
+  gitTimeout,
+);
