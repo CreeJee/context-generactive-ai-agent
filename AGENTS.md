@@ -40,15 +40,15 @@ release. Add a tool name to select part of the graph. For example, run
 
 - 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고, 코드에 `_tag` 토큰을 손으로 쓰지 마시오. TS 유니온은 `Data.TaggedEnum`/`Data.taggedEnum<X>()`로 정의해 생성은 `X.A({...})`, 분기는 `X.$match`, 검사는 `X.$is("A")`로 하시오. Schema 유니온은 `Schema.TaggedUnion({ A: {...} })`로 정의해 생성은 `X.cases.A.make({...})`, 분기는 `X.match`/`matchOrElse`, 검사는 `X.guards.A`로 하시오. Effect 자체 타입은 그 모듈의 함수(`Exit.isFailure`, `Result.isSuccess`, `Effect.catchTag`/`catchReason`, `Predicate.isTagged`)를 쓰고, 모든 경우를 처리하게 하시오. `switch`는 새로 쓰지 마시오. `"key" in obj` 식 판별은 쓰지 마시오. 남길 수 있는 `_tag`는 제네릭 제약(`E extends { readonly _tag: string }`)과 외부 라이브러리 타입 경계뿐이오.
 - 확정한 제품과 설계 결정은 [docs/decisions.md](docs/decisions.md)에 날짜와 함께 남기시오.
-
-## CodeGraph로 코드 탐색하기
-
-- 저장소 루트에 `.codegraph/`가 있으면 코드의 위치·구조·호출 관계를 찾거나 수정할 코드를 읽을 때 `grep`, `rg`, `find`, 파일 직접 읽기보다 CodeGraph를 먼저 사용하시오. 셸을 사용할 수 있어도 이 순서를 지키시오.
-- MCP 도구가 있으면 `codegraph_explore`를 호출하시오. `query`에는 질문, 심볼 이름 또는 파일 경로를 넣으시오. 예: `codegraph_explore({ query: "workspaceInstructions" })`, `codegraph_explore({ query: "packages/memory-agent/src/agent/project-instructions.ts" })`. 다른 저장소를 탐색할 때는 `projectPath`에 그 저장소의 절대 경로를 지정하시오.
-- 결과의 줄 번호가 있는 소스와 호출 관계를 탐색 근거로 사용하시오. 필요한 코드가 빠졌으면 더 구체적인 심볼이나 파일 경로로 다시 질의하시오. 이미 반환된 코드를 확인하기 위해 같은 파일을 다시 읽거나 grep하지 마시오.
-- CodeGraph가 다루지 않는 문서·설정·일반 텍스트, 결과에서 빠진 특정 내용, 재색인 대기 경고가 표시된 파일은 직접 읽거나 검색할 수 있다.
-- 동기화가 안되어있으면 `codegraph init` 를 실행해함
 - 타입으로 확인되지않는 테스트만 만들어야하며, 타입으로 확인이 되는경우 과감히 지워야함
+
+## ttsc-graph로 코드 탐색하기
+
+- TypeScript 코드의 위치·구조·호출 관계·타입 관계를 찾을 때는 `grep`, `rg`, 파일 직접 읽기보다 `ttsc-graph` MCP의 `inspect_typescript_graph`를 먼저 사용하시오. 그래프는 `tsconfig.graph.json` 하나로 apps·packages·tools 전체를 컴파일러가 해석한 결과다.
+- 요청 종류(`overview`, `tour`, `entrypoints`, `lookup`, `trace`, `details`, `escape`)와 쓰는 법은 서버가 MCP 초기화 응답으로 알려 준다. 그 안내를 따르시오.
+- 그래프는 소스 본문을 돌려주지 않는다. 고칠 코드는 결과의 span(파일·줄)을 근거로 그 범위만 읽으시오. 반환된 노드·엣지·시그니처를 확인하려고 같은 내용을 다시 grep하지 마시오.
+- 문서·설정·일반 텍스트처럼 TypeScript 밖의 내용과 정확한 문자열 검색은 직접 읽거나 `rg`로 찾으시오.
+- 따로 색인하는 단계는 없다. 서버가 질의마다 디스크의 현재 상태에 맞춘다. 워크스페이스나 path alias를 추가하면 `tsconfig.graph.json`의 `include`·`paths`에도 반영하시오.
 
 ## Effect 지침
 

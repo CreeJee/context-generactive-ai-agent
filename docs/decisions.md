@@ -2053,6 +2053,13 @@
 - 주제 정리는 후보 큐부터 순서대로 읽고 노드를 기본 키로 조회한다. 큐가 비었을 때 전체 nodes를 훑지 않는다. 진행 위치·배치 트랜잭션·벡터 제거 재시도는 유지한다.
 - 같은 실제 DB의 읽기 전용 비교에서 파일 읽기 4건의 후보 조회는 1,469ms → 25ms, 빈 주제 큐 조회는 62.6ms → 0.022ms였다. 이는 쿼리 측정이다. 수정본 재시작 후 별도로 측정한 캐시 만료 usage HTTP 응답은 OpenAI 1.34초·Anthropic 0.52초였고, 캐시 적중은 약 0.09초, 모델 목록은 약 0.11초였다. 초기화가 포함된 재시작 직후 첫 usage 응답은 각각 5.52초·2.80초였다. 모두 단일 로컬 관측값이며 분포 측정은 아니다.
 
+### 코드 탐색 MCP는 codegraph 대신 ttsc-graph (2026-10-25)
+
+- 에이전트의 코드 탐색 도구를 codegraph에서 `@ttsc/graph`로 바꾼다. tree-sitter 파싱 대신 TypeScript 컴파일러가 해석한 그래프라 path alias·workspace 패키지·barrel re-export를 거친 엣지가 실제 선언에 닿고, 응답이 소스 본문 대신 이름·엣지·span만 담아 저장소 크기에 따라 커지지 않는다. 별도 색인(`codegraph init`)도 없다.
+- 그래프는 루트의 `tsconfig.graph.json` 하나로 만든다. 루트 `tsconfig.json`(nodenext)으로는 apps/agent의 확장자 없는 import와 `~/` alias가 풀리지 않는다. 같은 저장소에서 루트 설정은 867파일·엣지 58,702개, 그래프 전용 설정은 937파일·엣지 65,449개였고, route loader에서 memory-agent로 가는 호출 경로는 그래프 전용 설정에서만 이어졌다. 첫 질의는 그래프를 만드느라 약 20초, 이후 질의는 1~3초였다.
+- MCP 서버는 `pnpm exec ttsc-graph`로 띄운다. 문서의 `npx -y @ttsc/graph`는 루트 `devEngines`(pnpm) 때문에 npm이 `EBADDEVENGINES`로 거부한다. `ttsc`와 `@ttsc/graph`는 서버 프로토콜이 릴리스에 묶여 있어 catalog에 같은 버전으로 고정한다.
+- ttsc의 나머지 기능은 지금 쓰지 않는다. `ttsc` CLI·`ttsx`·`@ttsc/unplugin`·VS Code 확장은 `compilerOptions.plugins`의 모든 항목에 `transform`을 요구해서, apps/agent와 memory-agent의 `@effect/language-service` 항목에서 `plugin entry is missing a string "transform" field`로 멈춘다. `@ttsc/lint`·format은 oxlint·oxfmt와 겹치고, `@ttsc/evidence`는 `@ttsc/lint`를 호스트로 요구한다.
+
 ## 테스트
 
 ### 테스트의 고정 대기 줄이기 (2026-09-29)
