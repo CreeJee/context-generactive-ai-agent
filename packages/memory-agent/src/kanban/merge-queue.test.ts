@@ -125,7 +125,7 @@ it.live(
         agent: (agent) => Effect.as(write(agent, "a1.txt", "a1\n"), finished),
         verifyGoal: (input) =>
           Effect.gen(function* () {
-            const head = yield* headOf(input.checkout.path);
+            const head = yield* headOf(input.checkout.toolRoot);
             const seen = yield* Ref.getAndUpdate(heads, (list) => [...list, head]);
             if (seen.length === 0) {
               yield* Deferred.succeed(entered, undefined);
@@ -293,7 +293,7 @@ it.live(
           Effect.as(write(agent, `${agent.card.id}.txt`, `${agent.card.id}\n`), finished),
         verifyGoal: (input) =>
           Effect.gen(function* () {
-            const head = yield* headOf(input.checkout.path);
+            const head = yield* headOf(input.checkout.toolRoot);
             const seen = yield* Ref.getAndUpdate(checks, (list) => [
               ...list,
               { goal: input.goalInstanceId, head },

@@ -2557,3 +2557,9 @@
 - 결과 비교에서 호출마다 새로 채워지는 값(목록의 `snapshot`, 명령의 `durationMs`)은 뺀다. 그대로 두면 같은 것을 찾은 호출도 늘 달라 보인다.
 - 멈춘 run은 취소가 아니라 실패로 보인다. 저장된 run에는 code `repeated_tool_call`이 남고, 화면은 그 code로 안내 문구를 고른다. 실행 중이던 화면도 같은 code의 `RUN_ERROR`를 받는다(`withShownRunErrors`가 던져진 오류를 code 있는 `RUN_ERROR`로 바꾼다). 지난 run 실패 안내(`RunNotice.failed`)는 알려진 code면 그 문구를 보이고 서버 메시지는 접어 둔다. 일반 실패(`run_failed`)는 지금처럼 메시지를 보인다.
 - 메인 채팅, subagent(칸반 카드 agent·검증 포함), BTW에 건다. 승인 게이트보다 앞에 둬서 거절할 반복이 자동 검토나 사용자 승인으로 가지 않는다. subagent attempt는 `RepeatedToolCall` 실패 사유로 끝나고, 부모에게도 그 code가 간다.
+
+## 칸반 작업트리는 계약과 git 구현을 나눈다 (2026-10-24)
+
+- 사용자 결정: `CardWorktrees`의 계약을 `CardWorktreesApi`로 적어 두고(`kanban/worktree.ts`), git 구현은 `kanban/git-worktrees.ts`의 `gitCardWorktreesLayer`로 옮긴다. 지금까지는 service 타입을 git 구현(`make`)의 반환에서 추론해서 계약이 구현을 따라 바뀌었다. 나중에 LayerFS 같은 다른 작업트리 백엔드를 붙일 때 호출부(card-queue·orchestrator·merge-queue·board-actions)는 두고 Layer만 바꾸려는 것이다. LayerFS 연동은 LayerFS가 패키지로 배포되고 내구성 있는 저장 프로필이 생기면 다시 본다.
+- 계약에서 git 용어를 뺀다. `CardWorktree`는 카드 도구가 보는 모양(`toolRoot`, `deniedRoots`)만 남기고, repository·branch·폴더 경로는 git 구현 안에만 둔다. `prepareGoal`은 값을 돌려주지 않는다. `pushGoalBranch`는 push한 브랜치 이름을 돌려주고, merge queue는 그 이름으로 pull request를 연다. 브랜치 이름 규칙(`ctx/goal/<id>`)은 git 구현만 안다.
+- 남겨 둔 git 용어: 실패 사유 `GitFailed`는 보드와 failure code가 쓰는 이름이라 그대로 둔다. 충돌 해결 카드 설명에 넣는 카드 브랜치 이름(`ctx/card/<goal>/<card>`)도 오케스트레이터에 남아 있다.

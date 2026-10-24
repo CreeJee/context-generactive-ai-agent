@@ -257,7 +257,7 @@ it.live(
       // a continued the earlier conversation in the same worktree and did not write again; b never ran.
       const runs = yield* Ref.get(continued);
       expect(
-        runs.map((agent) => [agent.card.id, agent.continuation, agent.worktree?.path]),
+        runs.map((agent) => [agent.card.id, agent.continuation, agent.worktree?.toolRoot]),
       ).toEqual([["a", true, worktreeOf("a")]]);
       expect((yield* Ref.get(writes)).toSorted()).toEqual(["a", "b"]);
       expect(yield* goalFile(fixture, board.goalInstanceId, "a.out")).toBe("a");

@@ -22,7 +22,7 @@ import {
   persistedQueueStoreLayer,
 } from "./kanban/persisted-queue-store.ts";
 import { HumanDecisions } from "./kanban/human-decision.ts";
-import { CardWorktrees } from "./kanban/worktree.ts";
+import { gitCardWorktreesLayer } from "./kanban/git-worktrees.ts";
 import { KanbanBoardActions } from "./kanban/board-actions.ts";
 import { CardAttempts } from "./kanban/card-attempts.ts";
 import {
@@ -262,7 +262,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     persistedQueueStore,
     persistedQueueCleanupLayer().pipe(Layer.provide(persistedQueueStore)),
     KanbanSettings.layer(),
-    CardWorktrees.layer(options.kanbanWorktreesBase),
+    gitCardWorktreesLayer(options.kanbanWorktreesBase),
     HumanDecisions.layer,
   );
   const stores = Layer.mergeAll(

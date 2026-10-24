@@ -26,7 +26,7 @@ import {
   HumanDecisions,
 } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
-import { CardWorktrees, goalBranchName, type GoalRef } from "./worktree.ts";
+import { CardWorktrees, type GoalRef } from "./worktree.ts";
 import { BoardHealth } from "./board-health.ts";
 
 /**
@@ -118,8 +118,9 @@ const make = Effect.gen(function* () {
     yield* setMerge(goal, merge.PullRequestPending.make({}));
     const pushed = yield* worktrees
       .pushGoalBranch(goalRef(goal))
-      .pipe(Effect.catchTag("CardWorktreeFailed", () => Effect.succeed(false)));
-    if (!pushed) return yield* setMerge(goal, merge.PullRequestFailed.make({ stage: "push" }));
+      .pipe(Effect.catchTag("CardWorktreeFailed", () => Effect.succeedNone));
+    if (Option.isNone(pushed))
+      return yield* setMerge(goal, merge.PullRequestFailed.make({ stage: "push" }));
     const gh = yield* findExecutable("gh").pipe(Effect.provideService(FileSystem.FileSystem, fs));
     const statement = (yield* workflows.get(goal.sessionId)).goal?.statement ?? "Kanban Goal";
     const created =
@@ -131,7 +132,7 @@ const make = Effect.gen(function* () {
             "--base",
             target,
             "--head",
-            goalBranchName(goal.goalInstanceId),
+            pushed.value,
             "--title",
             statement.slice(0, 200),
             "--body",

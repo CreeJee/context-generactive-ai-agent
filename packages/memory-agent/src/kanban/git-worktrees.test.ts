@@ -20,6 +20,7 @@ import {
   WorktreeDisposition,
   WorktreeSettlement,
 } from "./worktree.ts";
+import { gitCardWorktreesLayer } from "./git-worktrees.ts";
 
 /** Builds a layer in the test's scope and provides what it made. */
 const provideLayer =
@@ -46,7 +47,7 @@ const fixture = Effect.gen(function* () {
   yield* fs.writeFileString(path.join(project, "a.txt"), "one\n");
   yield* git(project, "add", "a.txt");
   yield* git(project, "commit", "--quiet", "-m", "start");
-  const layer = CardWorktrees.layer(path.join(home, "worktrees")).pipe(
+  const layer = gitCardWorktreesLayer(path.join(home, "worktrees")).pipe(
     Layer.provide(StorageRoot.layer(path.join(home, ".context-generactive-agent"))),
   );
   return { fs, path, home, project, layer };
@@ -97,24 +98,26 @@ it.live(
         const userStatus = yield* git(project, "status", "--porcelain");
         const userHead = yield* git(project, "rev-parse", "HEAD");
 
-        const goal = yield* worktrees.prepareGoal({ projectRoot: project, goalInstanceId: "g1" });
-        expect(goal).toMatchObject({ branch: "ctx/goal/g1", head: userHead });
+        yield* worktrees.prepareGoal({ projectRoot: project, goalInstanceId: "g1" });
+        expect(yield* git(project, "rev-parse", "ctx/goal/g1")).toBe(userHead);
         const card = { projectRoot: project, goalInstanceId: "g1", cardId: "c1" };
         const cancelled = { ...card, cardId: "c2" };
 
         const leased = yield* Effect.scoped(
           Effect.gen(function* () {
             const worktree = yield* worktrees.lease(card);
-            expect(worktree.path).toBe(path.join(home, "worktrees", "g1", "c1"));
-            expect(yield* git(worktree.path, "branch", "--show-current")).toBe("ctx/card/g1/c1");
-            expect(yield* fs.readFileString(path.join(worktree.path, "a.txt"))).toBe("one\n");
+            expect(worktree.toolRoot).toBe(path.join(home, "worktrees", "g1", "c1"));
+            expect(yield* git(worktree.toolRoot, "branch", "--show-current")).toBe(
+              "ctx/card/g1/c1",
+            );
+            expect(yield* fs.readFileString(path.join(worktree.toolRoot, "a.txt"))).toBe("one\n");
             expect((yield* Effect.flip(worktrees.lease(card))).reason).toEqual(
               CardWorktreeFailedReason.cases.InUse.make({}),
             );
             expect(
               (yield* Effect.flip(worktrees.settle(card, WorktreeDisposition.Done()))).reason,
             ).toEqual(CardWorktreeFailedReason.cases.InUse.make({}));
-            yield* fs.writeFileString(path.join(worktree.path, "progress.txt"), "half\n");
+            yield* fs.writeFileString(path.join(worktree.toolRoot, "progress.txt"), "half\n");
             return worktree;
           }),
         );
@@ -124,8 +127,8 @@ it.live(
           WorktreeSettlement.Retained(),
         );
         const again = yield* Effect.scoped(worktrees.lease(card));
-        expect(again.path).toBe(leased.path);
-        expect(yield* fs.readFileString(path.join(again.path, "progress.txt"))).toBe("half\n");
+        expect(again.toolRoot).toBe(leased.toolRoot);
+        expect(yield* fs.readFileString(path.join(again.toolRoot, "progress.txt"))).toBe("half\n");
         expect(
           (yield* Effect.flip(worktrees.settle(card, WorktreeDisposition.Done()))).reason,
         ).toEqual(CardWorktreeFailedReason.cases.WorktreeDirty.make({}));
@@ -133,16 +136,16 @@ it.live(
         expect(yield* worktrees.settle(card, WorktreeDisposition.Done())).toEqual(
           WorktreeSettlement.Removed({ branchKept: false }),
         );
-        expect(yield* fs.exists(leased.path)).toBe(false);
+        expect(yield* fs.exists(leased.toolRoot)).toBe(false);
         expect(yield* git(project, "branch", "--list", "ctx/card/g1/c1")).toBe("");
 
         // Cancelled work stays recoverable on the card branch.
         const other = yield* Effect.scoped(worktrees.lease(cancelled));
-        yield* fs.writeFileString(path.join(other.path, "draft.txt"), "draft\n");
+        yield* fs.writeFileString(path.join(other.toolRoot, "draft.txt"), "draft\n");
         expect(yield* worktrees.settle(cancelled, WorktreeDisposition.Cancelled())).toEqual(
           WorktreeSettlement.Removed({ branchKept: true }),
         );
-        expect(yield* fs.exists(other.path)).toBe(false);
+        expect(yield* fs.exists(other.toolRoot)).toBe(false);
         expect(yield* git(project, "show", "ctx/card/g1/c2:draft.txt")).toBe("draft");
         expect(yield* worktrees.find(cancelled)).toEqual(Option.none());
 
@@ -159,13 +162,13 @@ it.live(
     run(({ fs, path, project }) =>
       Effect.gen(function* () {
         const worktrees = yield* CardWorktrees;
-        const goal = yield* worktrees.prepareGoal({ projectRoot: project, goalInstanceId: "g2" });
+        yield* worktrees.prepareGoal({ projectRoot: project, goalInstanceId: "g2" });
         const card = (cardId: string) => ({ projectRoot: project, goalInstanceId: "g2", cardId });
         const edit = (cardId: string, file: string, text: string) =>
           Effect.scoped(
             Effect.gen(function* () {
               const worktree = yield* worktrees.lease(card(cardId));
-              yield* fs.writeFileString(path.join(worktree.path, file), text);
+              yield* fs.writeFileString(path.join(worktree.toolRoot, file), text);
               yield* worktrees.commitWork(card(cardId), `${cardId} work`);
             }),
           );
@@ -207,7 +210,7 @@ it.live(
           project,
           "log",
           "--format=%s|%(trailers:key=Ctx-Card,valueonly)",
-          `${goal.head}..ctx/goal/g2`,
+          "main..ctx/goal/g2",
         );
         expect(
           history
@@ -222,7 +225,7 @@ it.live(
         expect(conflict).toBeInstanceOf(CardIntegrationConflict);
         expect(conflict).toMatchObject({ files: ["a.txt"] });
         const cWorktree = yield* worktrees.find(card("c"));
-        expect(yield* git(Option.getOrThrow(cWorktree).path, "status", "--porcelain")).toBe("");
+        expect(yield* git(Option.getOrThrow(cWorktree).toolRoot, "status", "--porcelain")).toBe("");
         expect(yield* git(project, "branch", "--show-current")).toBe("main");
       }),
     ),
@@ -250,9 +253,9 @@ it.live(
         const notes = path.join(home, "notes");
         yield* fs.makeDirectory(notes);
 
-        expect(tools.root).toBe(own.path);
+        expect(tools.root).toBe(own.toolRoot);
         expect((yield* resolveProjectPath(tools.root, "a.txt", "file")).absolute).toBe(
-          path.join(own.path, "a.txt"),
+          path.join(own.toolRoot, "a.txt"),
         );
         const outside = (target: string, kind: "file" | "directory" | "new-or-file") =>
           resolveFencedOutsidePath(tools.toolFence, tools.root, storage, target, kind).pipe(
@@ -261,12 +264,12 @@ it.live(
           );
         expect(
           yield* Effect.all([
-            outside(path.join(other.path, "a.txt"), "file"),
+            outside(path.join(other.toolRoot, "a.txt"), "file"),
             outside(path.join(project, "a.txt"), "file"),
             // A parent would list sibling worktrees.
             outside(path.join(home, "worktrees", "g3"), "directory"),
             outside(path.join(storage, "config.json"), "new-or-file"),
-            outside(path.join(own.path, "a.txt"), "file"),
+            outside(path.join(own.toolRoot, "a.txt"), "file"),
             outside(notes, "directory"),
           ]),
         ).toEqual([

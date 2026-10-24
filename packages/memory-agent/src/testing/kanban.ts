@@ -33,6 +33,7 @@ import {
   cardQueueWorkerLayer,
   CardRuns,
 } from "../kanban/card-queue.ts";
+import { gitCardWorktreesLayer } from "../kanban/git-worktrees.ts";
 import { persistedQueueStoreLayer } from "../kanban/persisted-queue-store.ts";
 import { CardWorktrees } from "../kanban/worktree.ts";
 import { Projects } from "../projects/projects.ts";
@@ -109,7 +110,7 @@ const kanbanOwnerBase = (fixture: KanbanFixture, cores: number) =>
         CardRuns.layer,
         GoalOrder.layer,
         GoalSchedules.layer,
-        CardWorktrees.layer(fixture.worktrees),
+        gitCardWorktreesLayer(fixture.worktrees),
         Sessions.layer.pipe(Layer.provideMerge(Projects.layer)),
         AppEvents.layer,
       ),
