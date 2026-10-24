@@ -1,4 +1,4 @@
-import { DateTime, Effect, Path } from "effect";
+import { DateTime, Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { workspaceInstructions } from "../../src/agent/chat.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -41,9 +41,8 @@ const shellRequest = Effect.fnUntraced(function* (command: string) {
 testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permission mode", (it) => {
   it.effect("workspace instructions say what the permission mode allows, with date and shell", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const { project, storage, home } = yield* TestEnv;
-      const places = { storageRoot: storage, globalSkills: path.join(home, ".agents", "skills") };
+      const { project, storage } = yield* TestEnv;
+      const places = { storageRoot: storage };
       const auto = yield* workspaceInstructions(
         { ...project, permissionMode: "auto" },
         places,
@@ -61,13 +60,8 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
         yield* workspaceInstructions({ ...project, permissionMode: "full" }, places),
       ).toContain("run without approval");
       // Where the app keeps its own settings, and that its storage is not for the file tools.
-      expect(auto).toContain(
-        `MCP servers: ${path.join(storage, "mcp.json")}, ${path.join(project.root, ".mcp.json")}`,
-      );
-      expect(auto).toContain(
-        `${path.join(storage, "agents.json")}, ${path.join(project.root, ".agents", "agents.json")}`,
-      );
-      expect(auto).toContain("neither the file tools nor shell skill scripts open it");
+      expect(auto).toContain(`the memory database in ${storage}.`);
+      expect(auto).toContain("Neither the file tools nor shell skill scripts open that folder");
     }),
   );
 

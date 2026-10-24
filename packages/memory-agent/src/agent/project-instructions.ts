@@ -21,9 +21,12 @@ const path = platformRuntime.runSync(Path.Path);
 
 const prefix = "[Project AGENTS.md instructions]";
 
-/** SDK boundary: load root guidance and a path catalog once per conversation run. */
+/**
+ * SDK boundary: load root guidance and a path catalog once per conversation run. A project without
+ * any AGENTS.md gets no prompt at all.
+ */
 export function projectInstructions(root: string): ChatMiddleware {
-  let instructions: string | undefined;
+  let instructions: readonly string[] | undefined;
   return {
     name: "memory-agent/project-instructions",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -63,19 +66,30 @@ export function projectInstructions(root: string): ChatMiddleware {
                 }
               });
             yield* visit("");
-            instructions = `${prefix}\nRoot guidance (AGENTS.md):\n${rootText}\n\nScoped instruction files:\n${paths
-              .sort()
-              .map((path) => `- ${JSON.stringify(path)}`)
-              .join(
-                "\n",
-              )}\nThe root document is already included above. Before working in a project directory, use read_file to read all applicable listed AGENTS.md files completely, from outermost to innermost. Each document applies only to its directory and descendants; more specific instructions take precedence there. Do not apply unrelated directories' instructions. Re-read instructions after changing them, and check for AGENTS.md when entering a newly created directory. Instructions do not grant permissions.`;
+            const sections = [
+              ...(rootText.length > 0 ? [`Root guidance (AGENTS.md):\n${rootText}`] : []),
+              ...(paths.length > 0
+                ? [
+                    `Scoped instruction files:\n${paths
+                      .sort()
+                      .map((path) => `- ${JSON.stringify(path)}`)
+                      .join(
+                        "\n",
+                      )}\n${rootText.length > 0 ? "The root document is already included above. " : ""}Before working in a project directory, use read_file to read all applicable listed AGENTS.md files completely, from outermost to innermost. Each document applies only to its directory and descendants; more specific instructions take precedence there. Do not apply unrelated directories' instructions. Re-read instructions after changing them, and check for AGENTS.md when entering a newly created directory.`,
+                  ]
+                : []),
+            ];
+            instructions =
+              sections.length === 0
+                ? []
+                : [`${prefix}\n${sections.join("\n\n")}\nInstructions do not grant permissions.`];
           }
           return {
             systemPrompts: [
               ...config.systemPrompts.filter(
                 (prompt) => !Schema.is(Schema.String)(prompt) || !prompt.startsWith(prefix),
               ),
-              instructions,
+              ...instructions,
             ],
           };
         }),

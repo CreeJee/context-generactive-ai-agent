@@ -119,13 +119,14 @@ testAgent()("global and project skills", (it) => {
         ]);
         const tools = yield* inRun((yield* SkillTools).forProject(project));
         expect(tools.instructions).toContain("- review (project): Project review.");
-        expect(tools.instructions).toContain("guidance, not permission");
         const read = tools.tools[0]?.execute;
+        // How to treat a skill comes with the skill read, not with the list.
         expect(yield* sdk(() => read?.({ name: "review" }))).toMatchObject({
           scope: "project",
           directory: path.join(local, "review"),
           files: ["checklist.md"],
           instructions: "Project rules.",
+          note: expect.stringMatching(/guidance, not permission.*with read_file\.$/),
         });
         expect(yield* sdk(() => read?.({ name: "linked" }))).toEqual({
           error: "skill_not_found",

@@ -34,9 +34,6 @@ import {
   type UIMessage,
 } from "@tanstack/ai";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { path } from "../runtime/synchronous-path.ts";
-const { join } = path;
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import dayjs from "dayjs";
 import {
@@ -113,9 +110,6 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
 import type { Worker } from "node:worker_threads";
-import { globalAgentsFile, projectAgentsFile } from "../external-agents/config.ts";
-import { globalMcpFile, projectMcpFile } from "../mcp/config.ts";
-import { projectSkillsDirectory, Skills } from "../skills/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
@@ -267,7 +261,6 @@ const goalSourceFailure = (
 /** Where this app keeps settings the model may be asked about. */
 export interface SettingsPlaces {
   readonly storageRoot: string;
-  readonly globalSkills: string;
 }
 
 const AgentOperation = Schema.Literals([
@@ -299,20 +292,10 @@ const agentPromise = <A>(operation: AgentOperation, evaluate: () => PromiseLike<
     catch: (cause) => new AgentOperationFailed({ operation, cause }),
   });
 
-/** The app's own settings files, and how the model may (and may not) reach them. */
-function settingsInstructions(project: Project, places: SettingsPlaces) {
-  return `This app (context-agent) keeps its own settings in these places. The first of each pair applies to every project, the second to this one:
-- External ACP agents: ${globalAgentsFile(places.storageRoot)}, ${projectAgentsFile(project.root)}
-- MCP servers: ${globalMcpFile(places.storageRoot)}, ${projectMcpFile(project.root)}
-- Skills (one folder with a SKILL.md each): ${places.globalSkills}, ${projectSkillsDirectory(project.root)}
-- App settings such as the model and web search: ${join(places.storageRoot, "config.json")}
-- Settings in the project can be changed with the file tools. ${places.storageRoot} also holds the account login and the memory database, so neither the file tools nor shell skill scripts open it: for a file there, show the user the exact change to make. Never print keys or tokens these files hold.
-- An agent or MCP server that is added or changed does nothing until the user trusts it in the app's settings.`;
-}
-
 /**
  * Where the file tools work, how to change files without losing the user's edits, the current
- * date and shell, and where the app keeps its own settings.
+ * date and shell, and where the app keeps its own settings. Each settings file is listed in the
+ * app-settings skill, read only when a setting is changed.
  */
 const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
   project: Project,
@@ -337,8 +320,7 @@ const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
 - Host commands run only as project shell skills: run a listed one with run_skill, or save a purpose-specific one with save_shell_skill. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
-
-${settingsInstructions(project, places)}`;
+- This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor shell skill scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
 });
 
 export const workspaceInstructions: {
@@ -793,10 +775,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const knowledge = yield* KnowledgePromotions;
   yield* workTrace.recoverLifecycleOperations();
   yield* attachments.purgeOrphans;
-  const places: SettingsPlaces = {
-    storageRoot: (yield* StorageRoot).path,
-    globalSkills: (yield* Skills).globalDirectory,
-  };
+  const places: SettingsPlaces = { storageRoot: (yield* StorageRoot).path };
   const liveRuns = yield* createLiveRuns;
   const cancellations = yield* SdkCancellations;
   const goalWorker = yield* GoalWorkerConfiguration;

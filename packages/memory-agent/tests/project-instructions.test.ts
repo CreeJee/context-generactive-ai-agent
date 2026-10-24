@@ -125,6 +125,24 @@ it.live("each run refreshes the root and catalog without blocking tool execution
   }).pipe(withTestPlatform),
 );
 
+it.live("a project without any AGENTS.md adds no prompt", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "project-instructions-" });
+    const adapter = new ScriptedTextAdapter([{ text: "done" }]);
+    yield* sdkCall(() =>
+      chat({
+        adapter,
+        messages: [],
+        systemPrompts: ["BASE"],
+        stream: false,
+        middleware: [projectInstructions(root)],
+      }),
+    );
+    expect(adapter.invocations[0]!.systemPrompts).toEqual(["BASE"]);
+  }).pipe(withTestPlatform),
+);
+
 it.live("linked instruction files are refused before their content reaches the model", () =>
   Effect.gen(function* () {
     const { root, fs, path } = yield* fixture();
