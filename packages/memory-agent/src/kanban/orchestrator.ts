@@ -40,7 +40,7 @@ import {
 } from "./card-queue.ts";
 import { PersistedQueueItems } from "./persisted-queue-store.ts";
 import { boardOps } from "./board-ops.ts";
-import { CardWorktrees, WorktreeDisposition, type CardRef } from "./worktree.ts";
+import { cardWorkspace, CardWorktrees, WorktreeDisposition, type CardRef } from "./worktree.ts";
 import {
   DecisionCloseScope,
   DecisionKind,
@@ -176,6 +176,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       goalInstanceId: goal.goalInstanceId,
       cardId,
     });
+    const workspace = (goal: KanbanGoal) => cardWorkspace(worktrees, goal.mode);
     const stepOf = (state: WorkflowState, cardId: string) =>
       Option.fromUndefinedOr(state.plan?.steps.find((step) => step.id === cardId));
 
@@ -356,32 +357,40 @@ const make = (options: KanbanOrchestratorOptions) =>
     });
 
     const squash = (goal: KanbanGoal, card: PlanStep) =>
-      worktrees.squashIntoGoal(cardRef(goal, card.id), card.title).pipe(
-        Effect.map((result) =>
-          Match.valueTags(result, {
-            Integrated: ({ commit }): Integration => Integration.Integrated({ commit }),
-            AlreadyIntegrated: ({ commit }): Integration => Integration.Integrated({ commit }),
-            NoChanges: (): Integration => Integration.Integrated({ commit: null }),
-          }),
-        ),
-        Effect.catchReason(
-          "CardWorktreeFailed",
-          "GoalAdvanced",
-          () => Effect.succeed<Integration>(Integration.GoalAdvanced()),
-          (_, failure) =>
-            Effect.succeed<Integration>(Integration.Failed({ failure: worktreeFailure(failure) })),
-        ),
-      );
+      workspace(goal)
+        .squashIntoGoal(cardRef(goal, card.id), card.title)
+        .pipe(
+          Effect.map((result) =>
+            Match.valueTags(result, {
+              Integrated: ({ commit }): Integration => Integration.Integrated({ commit }),
+              AlreadyIntegrated: ({ commit }): Integration => Integration.Integrated({ commit }),
+              NoChanges: (): Integration => Integration.Integrated({ commit: null }),
+            }),
+          ),
+          Effect.catchReason(
+            "CardWorktreeFailed",
+            "GoalAdvanced",
+            () => Effect.succeed<Integration>(Integration.GoalAdvanced()),
+            (_, failure) =>
+              Effect.succeed<Integration>(
+                Integration.Failed({ failure: worktreeFailure(failure) }),
+              ),
+          ),
+        );
     const sync = (goal: KanbanGoal, card: PlanStep) =>
-      worktrees.syncWithGoal(cardRef(goal, card.id)).pipe(
-        Effect.as<Integration>(Integration.Synced()),
-        Effect.catchTags({
-          CardIntegrationConflict: (conflict) =>
-            Effect.succeed<Integration>(Integration.Conflict({ files: conflict.files })),
-          CardWorktreeFailed: (failure) =>
-            Effect.succeed<Integration>(Integration.Failed({ failure: worktreeFailure(failure) })),
-        }),
-      );
+      workspace(goal)
+        .syncWithGoal(cardRef(goal, card.id))
+        .pipe(
+          Effect.as<Integration>(Integration.Synced()),
+          Effect.catchTags({
+            CardIntegrationConflict: (conflict) =>
+              Effect.succeed<Integration>(Integration.Conflict({ files: conflict.files })),
+            CardWorktreeFailed: (failure) =>
+              Effect.succeed<Integration>(
+                Integration.Failed({ failure: worktreeFailure(failure) }),
+              ),
+          }),
+        );
 
     /**
      * A conflicting card is re-applied by a resolution card on the current Goal branch, which takes
@@ -439,8 +448,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       }));
       // The conflicting card's branch stays as the resolution card's reference.
       yield* ops.replaceCards(goal.sessionId, [card.id], [resolution.value.id], author);
-      if (goal.mode === "worktree")
-        yield* worktrees.settle(cardRef(goal, card.id), WorktreeDisposition.Cancelled());
+      yield* workspace(goal).settle(cardRef(goal, card.id), WorktreeDisposition.Cancelled());
     });
 
     /** Verifies a finished card and puts it on the Goal branch, syncing when the Goal moved. */
@@ -464,10 +472,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       });
       /** Puts a verified card on the Goal branch. True once the card is settled; false asks for another round. */
       const integrate = Effect.fnUntraced(function* (card: PlanStep, evidence: readonly string[]) {
-        const squashed: Integration =
-          goal.mode === "worktree"
-            ? yield* squash(goal, card)
-            : Integration.Integrated({ commit: null });
+        const squashed = yield* squash(goal, card);
         const integration = Predicate.isTagged(squashed, "GoalAdvanced")
           ? yield* sync(goal, card)
           : squashed;
@@ -481,8 +486,8 @@ const make = (options: KanbanOrchestratorOptions) =>
                 "done",
                 `card ${cardId} integrated${commit === null ? " (no changes)" : ` as ${commit}`}; evidence: ${evidence.join("; ")}`,
               );
-              if (moved && goal.mode === "worktree")
-                yield* worktrees.settle(cardRef(goal, cardId), WorktreeDisposition.Done());
+              if (moved)
+                yield* workspace(goal).settle(cardRef(goal, cardId), WorktreeDisposition.Done());
               yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
                 ...current,
                 failureStreak: 0,
@@ -505,9 +510,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           projectId: goal.projectId,
           goalInstanceId: goal.goalInstanceId,
           card,
-          worktree: Option.getOrNull(
-            goal.mode === "worktree" ? yield* worktrees.find(cardRef(goal, cardId)) : Option.none(),
-          ),
+          worktree: Option.getOrNull(yield* workspace(goal).find(cardRef(goal, cardId))),
           report,
         });
         // A card amended or held while it was verified: the verdict is about work that no longer
@@ -564,8 +567,11 @@ const make = (options: KanbanOrchestratorOptions) =>
         // its work on the card branch.
         Stopped: () =>
           Effect.as(
-            Option.isNone(card) && goal.mode === "worktree"
-              ? worktrees.settle(cardRef(goal, attempt.cardId), WorktreeDisposition.Cancelled())
+            Option.isNone(card)
+              ? workspace(goal).settle(
+                  cardRef(goal, attempt.cardId),
+                  WorktreeDisposition.Cancelled(),
+                )
               : Effect.void,
             true,
           ),

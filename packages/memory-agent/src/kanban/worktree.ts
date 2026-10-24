@@ -1,7 +1,8 @@
-import { Context, Data, Schema } from "effect";
+import { Context, Data, Effect, Schema } from "effect";
 import { Function as EffectFunction } from "effect";
-import type { Effect, Option, Scope } from "effect";
+import type { Option, Scope } from "effect";
 import type { Fenced } from "../files/paths.ts";
+import type { KanbanMode } from "./card-attempts.ts";
 
 /**
  * The contract of kanban card worktrees (docs/kanban-orchestration.md "실행", "브랜치 흐름"). A Goal
@@ -266,3 +267,31 @@ export interface CardWorktreesApi extends CardWorkspace {
 export class CardWorktrees extends Context.Service<CardWorktrees, CardWorktreesApi>()(
   "memory-agent/kanban/worktree/CardWorktrees",
 ) {}
+
+const projectItself = (card: CardRef): CardWorktree => ({
+  toolRoot: card.projectRoot,
+  deniedRoots: [],
+});
+
+/**
+ * The cards of a project that cannot have worktrees: each runs in the project itself, one at a
+ * time, so its work is already where it belongs and there is nothing to keep, commit or merge.
+ */
+export const sequentialWorkspace: CardWorkspace = {
+  lease: (card) => Effect.succeed(projectItself(card)),
+  find: (card) => Effect.succeedSome(projectItself(card)),
+  settle: () => Effect.succeed(WorktreeSettlement.Retained()),
+  commitWork: () => Effect.succeedNone,
+  syncWithGoal: () => Effect.succeed(GoalSync.UpToDate()),
+  squashIntoGoal: () => Effect.succeed(CardIntegration.NoChanges()),
+};
+
+/** Where a Goal's cards run, by the mode its board started in. */
+export const cardWorkspace: {
+  (mode: KanbanMode): (worktrees: CardWorkspace) => CardWorkspace;
+  (worktrees: CardWorkspace, mode: KanbanMode): CardWorkspace;
+} = EffectFunction.dual(
+  2,
+  (worktrees: CardWorkspace, mode: KanbanMode): CardWorkspace =>
+    ({ worktree: worktrees, sequential: sequentialWorkspace })[mode],
+);

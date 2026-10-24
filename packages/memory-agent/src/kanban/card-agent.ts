@@ -18,10 +18,10 @@ export interface CardAgentRun {
   readonly card: PlanStep;
   readonly attemptNo: number;
   /**
-   * The card worktree the agent's file and shell tools are rooted at, or none when the project
-   * cannot have worktrees and its cards run one at a time in the project itself.
+   * Where the agent's file and shell tools are rooted: the card worktree, or the project itself
+   * when the project cannot have worktrees and its cards run one at a time.
    */
-  readonly worktree: CardWorktree | null;
+  readonly worktree: CardWorktree;
   /**
    * The card ran before: the agent continues from the same worktree and conversation instead of
    * starting over. Files written earlier are already there and are not written again blindly.
@@ -58,6 +58,7 @@ export interface CardVerification {
   readonly projectId: string;
   readonly goalInstanceId: string;
   readonly card: PlanStep;
+  /** The card's worktree, or none when it is gone; the verifier then reads the project. */
   readonly worktree: CardWorktree | null;
   /** What the card's agent reported for the attempt being verified. */
   readonly report: string;

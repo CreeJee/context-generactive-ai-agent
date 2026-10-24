@@ -101,7 +101,7 @@ it.live(
       /** Writes its file only when it is not there yet, like an agent reading the worktree first. */
       const writeOnce = (agent: CardAgentRun) =>
         Effect.gen(function* () {
-          const file = path.join(agent.worktree?.toolRoot ?? "", "card.txt");
+          const file = path.join(agent.worktree.toolRoot, "card.txt");
           if (!(yield* fs.exists(file))) {
             yield* fs.writeFileString(file, "work\n");
             yield* Ref.update(writes, (count) => count + 1);

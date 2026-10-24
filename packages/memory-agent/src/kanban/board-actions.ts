@@ -26,7 +26,7 @@ import {
   type DecisionCloseReason,
 } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
-import { CardWorktrees, WorktreeDisposition } from "./worktree.ts";
+import { cardWorkspace, CardWorktrees, WorktreeDisposition } from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { GoalSchedules, type GoalMergeState } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
@@ -265,12 +265,10 @@ const make = Effect.gen(function* () {
     yield* Effect.forEach(
       cardIds,
       (cardId) =>
-        goal.mode === "worktree"
-          ? worktrees.settle(
-              { projectRoot: goal.projectRoot, goalInstanceId: goal.goalInstanceId, cardId },
-              WorktreeDisposition.Cancelled(),
-            )
-          : Effect.void,
+        cardWorkspace(worktrees, goal.mode).settle(
+          { projectRoot: goal.projectRoot, goalInstanceId: goal.goalInstanceId, cardId },
+          WorktreeDisposition.Cancelled(),
+        ),
       { discard: true },
     );
   });

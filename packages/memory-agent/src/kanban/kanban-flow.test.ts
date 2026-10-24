@@ -73,7 +73,7 @@ const writer = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   return (agent: CardAgentRun, file: string, text: string) =>
-    fs.writeFileString(path.join(agent.worktree?.toolRoot ?? "", file), text).pipe(Effect.orDie);
+    fs.writeFileString(path.join(agent.worktree.toolRoot, file), text).pipe(Effect.orDie);
 });
 
 const status = (cards: ReadonlyArray<PlanStep>, id: string) =>
@@ -189,7 +189,7 @@ it.live(
       /** Writes the card's file only when it is not there yet, like an agent reading its worktree. */
       const writeOnce = (agent: CardAgentRun) =>
         Effect.gen(function* () {
-          const file = path.join(agent.worktree?.toolRoot ?? "", `${agent.card.id}.out`);
+          const file = path.join(agent.worktree.toolRoot, `${agent.card.id}.out`);
           if (yield* fs.exists(file)) return;
           yield* fs.writeFileString(file, `${agent.card.id}\n`);
           yield* Ref.update(writes, (list) => [...list, agent.card.id]);
@@ -257,7 +257,7 @@ it.live(
       // a continued the earlier conversation in the same worktree and did not write again; b never ran.
       const runs = yield* Ref.get(continued);
       expect(
-        runs.map((agent) => [agent.card.id, agent.continuation, agent.worktree?.toolRoot]),
+        runs.map((agent) => [agent.card.id, agent.continuation, agent.worktree.toolRoot]),
       ).toEqual([["a", true, worktreeOf("a")]]);
       expect((yield* Ref.get(writes)).toSorted()).toEqual(["a", "b"]);
       expect(yield* goalFile(fixture, board.goalInstanceId, "a.out")).toBe("a");

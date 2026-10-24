@@ -25,7 +25,7 @@ import {
   KanbanStorageReason,
   type CardAttemptKey,
 } from "./card-attempts.ts";
-import { CardWorktrees, type CardWorktree } from "./worktree.ts";
+import { cardWorkspace, CardWorktrees } from "./worktree.ts";
 import { CardFailure, worktreeFailure } from "./failures.ts";
 
 /**
@@ -187,17 +187,11 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
     goalInstanceId: payload.goalInstanceId,
     cardId: payload.cardId,
   };
+  const workspace = cardWorkspace(worktrees, goal.value.mode);
 
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      let worktree: CardWorktree | null = null;
-      switch (goal.value.mode) {
-        case "worktree":
-          worktree = yield* worktrees.lease(cardRef);
-          break;
-        case "sequential":
-          break;
-      }
+      const worktree = yield* workspace.lease(cardRef);
       const fiber = yield* FiberMap.run(
         runs.running,
         `${payload.goalInstanceId}:${payload.cardId}`,
@@ -231,9 +225,7 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
         // commits its work to the card branch.
         Finished: ({ report }) =>
           Effect.map(
-            worktree === null
-              ? Effect.succeed(Option.none<string>())
-              : worktrees.commitWork(cardRef, `${card.title}\n\nattempt ${payload.attemptNo}`),
+            workspace.commitWork(cardRef, `${card.title}\n\nattempt ${payload.attemptNo}`),
             (commit) =>
               CardAttemptOutcome.cases.Completed.make({
                 report,

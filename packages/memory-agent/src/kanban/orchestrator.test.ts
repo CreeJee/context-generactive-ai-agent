@@ -109,7 +109,7 @@ const writer = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   return (agent: CardAgentRun, file: string, text: string) =>
-    fs.writeFileString(path.join(agent.worktree?.toolRoot ?? "", file), text).pipe(Effect.orDie);
+    fs.writeFileString(path.join(agent.worktree.toolRoot, file), text).pipe(Effect.orDie);
 });
 
 const status = (cards: ReadonlyArray<PlanStep>, id: string) =>

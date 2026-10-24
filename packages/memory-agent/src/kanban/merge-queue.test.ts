@@ -46,7 +46,7 @@ const writer = Effect.gen(function* () {
   const path = yield* Path.Path;
   return (agent: CardAgentRun, file: string, text: string) =>
     Effect.gen(function* () {
-      const target = path.join(agent.worktree?.toolRoot ?? "", file);
+      const target = path.join(agent.worktree.toolRoot, file);
       yield* fs.makeDirectory(path.dirname(target), { recursive: true });
       yield* fs.writeFileString(target, text);
     }).pipe(Effect.orDie);
