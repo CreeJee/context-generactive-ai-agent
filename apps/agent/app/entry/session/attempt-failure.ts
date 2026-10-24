@@ -15,6 +15,7 @@ const reasonLabel = Match.type<AttemptFailure["reason"]>().pipe(
   Match.tagsExhaustive({
     ModelRunError: () => "모델이 오류를 보냈어요",
     ModelStreamFailed: () => "모델 응답 스트림이 끊겼어요",
+    RepeatedToolCall: () => "결과가 바뀌지 않는 같은 도구 호출을 되풀이해서 멈췄어요",
     AgentCrashed: () => "에이전트 실행이 비정상 종료됐어요",
     HeartbeatLost: () => "에이전트가 응답을 멈췄어요",
     ServerRestarted: () => "서버가 다시 시작돼 실행이 멈췄어요",

@@ -57,6 +57,8 @@ export const RunFailureCode = Schema.Literals([
   "worker_execution_failed",
   /** The run's output could not be recorded, so the page stopped receiving it. */
   "run_record_failed",
+  /** The model kept repeating a tool call whose result could not change. */
+  "repeated_tool_call",
   "run_failed",
 ]);
 export type RunFailureCode = typeof RunFailureCode.Type;
@@ -87,5 +89,7 @@ export const runFailureText = {
   worker_execution_failed: "에이전트 실행이 실패했어요. 이 실행은 자동으로 다시 하지 않아요.",
   run_record_failed:
     "응답을 기록하지 못해 이 화면으로 더 보내지 못했어요. 실행은 계속될 수 있으니 보드와 작업 기록을 확인해 주세요.",
+  repeated_tool_call:
+    "모델이 결과가 바뀌지 않는 같은 도구 호출을 계속 되풀이해서 실행을 멈췄어요. 요청을 바꿔서 다시 보내 주세요.",
   run_failed: "응답하는 중에 오류가 났어요.",
 } as const satisfies Record<RunFailureCode, string>;

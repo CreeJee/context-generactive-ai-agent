@@ -40,6 +40,7 @@ import type { Project } from "../projects/projects.ts";
 import { errorTag } from "../tools/failure.ts";
 import { lazily } from "../tools/lazy.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
+import { RepeatedToolCall, repeatGuard } from "../tools/repeat-guard.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import {
   ArtifactLocator,
@@ -723,6 +724,8 @@ const make = Effect.gen(function* () {
           const middleware: ChatMiddleware[] = [
             ...chatState.middleware(),
             projectInstructions(binding.project.root),
+            // Before the gate, so a refused repeat is never reviewed or relayed to the user.
+            repeatGuard(),
             relayGate(binding, row, handle, controller.signal),
             traceMiddleware,
             reads.middleware,
@@ -775,9 +778,12 @@ const make = Effect.gen(function* () {
         }).pipe(
           // A failed stream is recorded by code. Defects and interruption end the child run; its
           // launcher records a defect as a crash.
-          Effect.catch(() =>
+          Effect.catch((error) =>
             Effect.sync(() => {
-              ended.failure = AttemptFailureReason.cases.ModelStreamFailed.make({});
+              ended.failure =
+                Cause.isUnknownError(error) && Schema.is(RepeatedToolCall)(error.cause)
+                  ? AttemptFailureReason.cases.RepeatedToolCall.make({})
+                  : AttemptFailureReason.cases.ModelStreamFailed.make({});
             }),
           ),
         );

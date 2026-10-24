@@ -1,5 +1,10 @@
 import { Data, Function as EffectFunction } from "effect";
-import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
+import {
+  runFailureCodeOf,
+  serverRestartedCode,
+  type RunFailureCode,
+  type SessionRunState,
+} from "memory-agent/definitions";
 import { WorkflowExecutionState } from "../api";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
@@ -9,7 +14,8 @@ export type RunNotice = Data.TaggedEnum<{
   restarted: {};
   /** Cut off by a restart before it ran any tool; a new run continues the Plan at `at`. */
   resuming: { readonly at: number };
-  failed: { readonly message: string };
+  /** `code` picks the wording; a general failure (`run_failed`) shows its message. */
+  failed: { readonly message: string; readonly code: RunFailureCode };
   /** The server is still answering, but this page is no longer receiving it. */
   detached: {};
   /** Stopped partway without an approval to answer. */
@@ -44,7 +50,10 @@ function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice 
     case "aborted":
       return RunNotice.cancelled();
     case "failed":
-      return RunNotice.failed({ message: lastRun.error?.message ?? "알 수 없는 오류" });
+      return RunNotice.failed({
+        message: lastRun.error?.message ?? "알 수 없는 오류",
+        code: runFailureCodeOf(lastRun.error?.code),
+      });
     case "interrupted":
       return page.waitingForApproval ? null : RunNotice.stopped();
     case "completed":

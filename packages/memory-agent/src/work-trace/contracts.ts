@@ -139,6 +139,8 @@ export const AttemptFailureReason = Schema.TaggedUnion({
   ModelRunError: {},
   /** The model stream itself failed. */
   ModelStreamFailed: {},
+  /** The model kept repeating a tool call whose result could not change. */
+  RepeatedToolCall: {},
   /** The child's own runtime died: a defect, or a store write it could not finish. */
   AgentCrashed: {},
   /** The attempt stopped beating without settling. */
@@ -164,6 +166,7 @@ export type AttemptFailureReason = typeof AttemptFailureReason.Type;
 export const attemptFailureCode = AttemptFailureReason.match({
   ModelRunError: () => "ModelRunError",
   ModelStreamFailed: () => "ModelStreamFailed",
+  RepeatedToolCall: () => "RepeatedToolCall",
   AgentCrashed: () => "AgentCrashed",
   HeartbeatLost: () => "HeartbeatLost",
   ServerRestarted: () => "ServerRestarted",

@@ -6,6 +6,7 @@ import { failureTags } from "../runtime/logged-failures.ts";
 import { incomingUserTurn } from "../agent/chat.ts";
 import { createChatExecution } from "../agent/chat-execution.ts";
 import { withShownRunErrors } from "../agent/run-errors.ts";
+import { repeatGuard } from "../tools/repeat-guard.ts";
 import { createLiveRuns } from "../agent/live-runs.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { modelImages } from "../attachments/model-images.ts";
@@ -147,6 +148,7 @@ const make = Effect.gen(function* () {
           middleware: [
             withPersistence(threads.persistence),
             btwToolGuard,
+            repeatGuard(),
             modelImages(attachments, runEffect),
             runtime.runMiddleware(),
           ],

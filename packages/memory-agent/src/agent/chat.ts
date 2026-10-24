@@ -112,6 +112,7 @@ import { SkillTools } from "../tools/skills.ts";
 import type { Worker } from "node:worker_threads";
 import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
+import { repeatGuard } from "../tools/repeat-guard.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
@@ -1951,6 +1952,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // After chat state, so steered messages are added to the transcript it has just saved.
           delivery.forRun({ projectId, sessionId, runId }),
           ...(!(reportSource !== null) ? [projectInstructions(project.root)] : []),
+          // Before the gate, so a refused repeat is never reviewed or put to the user.
+          repeatGuard(),
         ];
         // Trusted external ACP agents (R17); every delegation is gated below.
         const delegation =

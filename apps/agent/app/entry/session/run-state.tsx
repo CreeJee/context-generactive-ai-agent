@@ -1,7 +1,9 @@
 import { RefreshCwIcon } from "lucide-react";
+import { runFailureText } from "memory-agent/definitions";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Marker, MarkerContent } from "~/components/ui/marker";
+import { FailureDetails } from "../shared/failure-details";
 import { koreanLocalTime } from "../shared/local-time";
 import { RunNotice } from "./run-notice";
 
@@ -36,10 +38,19 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
         </AlertDescription>
       </Alert>
     ),
-    failed: ({ message }) => (
+    failed: ({ message, code }) => (
       <Alert variant="destructive">
         <AlertTitle>마지막 답변이 실패했어요</AlertTitle>
-        <AlertDescription>{message}</AlertDescription>
+        <AlertDescription>
+          {code === "run_failed" ? (
+            message
+          ) : (
+            <>
+              <p>{runFailureText[code]}</p>
+              <FailureDetails detail={message} />
+            </>
+          )}
+        </AlertDescription>
       </Alert>
     ),
     detached: () => (
