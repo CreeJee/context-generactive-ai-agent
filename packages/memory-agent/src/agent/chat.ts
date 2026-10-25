@@ -88,7 +88,7 @@ import {
 } from "../providers/subscription-runtime.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { ProviderToolRuntime } from "../providers/tool-policy.ts";
-import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
+import { McpServers, mcpInstructionsForMode, type McpRunTools } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
@@ -338,7 +338,8 @@ const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
         ? "save_code_skill, write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach."
         : "save_code_skill, write_outside_file and delete_outside_file wait for the user's approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way."
   }
-- Host commands run only as sh code skills, and work you will repeat with your tools can be a ts code skill: run a listed one with run_skill, or save a purpose-specific one with save_code_skill. Work of many tool calls that you do once goes in run_code. Never print secrets.
+- Use the tool made for the question first: a listed skill or an MCP tool whose description fits, such as a code graph for where code is and what calls what, before generic file searches and reads. search_files is for exact text (tool names, SQL, test values, prose); read_file is for a known file or range. When a fitting tool misses, ask it again with narrower terms, such as the names it did return, before switching tools.
+- Host commands run only as sh code skills, and work you will repeat with your tools can be a ts code skill: run a listed one with run_skill, or save a purpose-specific one with save_code_skill. run_code batches calls you do once: it runs the tools you would pick anyway and is never a reason to pick a different one. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
 - This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor sh skill scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
@@ -1923,8 +1924,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = reportSource !== null ? [] : yield* kagiTools.tools;
         // A report session never connects external MCP servers or loads additional skills.
-        const mcpTools =
-          workflowReadOnly || reportSource !== null ? [] : yield* mcpServers.tools(project);
+        const mcp: McpRunTools =
+          workflowReadOnly || reportSource !== null
+            ? { tools: [], guides: [] }
+            : yield* mcpServers.tools(project);
+        const mcpTools = mcp.tools;
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
@@ -2083,7 +2087,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...(reportSource !== null ? [reportAnalysisInstructions] : [memoryRulesFor(tools)]),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
           ...(!workflowReadOnly && mcpTools.length > 0
-            ? [mcpInstructionsForMode(project.permissionMode)]
+            ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
             : []),
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
         ];

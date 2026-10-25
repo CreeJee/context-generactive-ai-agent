@@ -103,7 +103,7 @@ const identifierName = /^[A-Za-z0-9_]+$/;
 
 const describe = (names: readonly string[]) =>
   [
-    "Run a TypeScript program that calls your tools, for work that takes many calls: loop over files, run calls at once with Promise.all, keep only what matters and return that.",
+    "Run a TypeScript program that calls your tools, for work that takes many calls of the tools you would pick anyway: loop over items, run calls at once with Promise.all, keep only what matters and return that.",
     "The code is the body of an async function: use await, and return a JSON value.",
     "Call a tool as `await external_<tool name>(input)` with the input that tool takes; it returns the tool's result, and a failed call throws an Error with the tool's message.",
     "console.log lines come back with the result. The program reaches nothing else: no files, network, processes, imports or timers.",

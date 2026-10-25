@@ -22,7 +22,7 @@ await Effect.runPromise(
         yield* fs.writeFileString(startLog, "start " + process.pid + "\n", { flag: "a" });
       const server = new Server(
         { name: "fake", version: "1.0.0" },
-        { capabilities: { tools: {} } },
+        { capabilities: { tools: {} }, instructions: "Call echo to repeat text back." },
       );
 
       server.setRequestHandler("tools/list", () =>

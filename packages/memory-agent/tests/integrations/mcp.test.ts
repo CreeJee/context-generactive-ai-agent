@@ -118,7 +118,7 @@ testAgent()("MCP servers of a project", (it) => {
             concurrency: "unbounded",
           },
         );
-        expect(left.map((tool) => tool.name)).toEqual(right.map((tool) => tool.name));
+        expect(left.tools.map((tool) => tool.name)).toEqual(right.tools.map((tool) => tool.name));
         expect(yield* lines(listLog)).toHaveLength(2 * listing);
       }),
     serverStartTimeout,
@@ -137,7 +137,7 @@ testAgent()("MCP servers of a project", (it) => {
         yield* writeJson(fake.config, { mcpServers: {} });
         expect((yield* servers.overview(project)).servers).toEqual([]);
         yield* until(() => !processAlive(pid), "the removed MCP server to stop");
-        expect(yield* inRun(servers.tools(project))).toEqual([]);
+        expect((yield* inRun(servers.tools(project))).tools).toEqual([]);
       }),
     serverStartTimeout,
   );
@@ -153,7 +153,7 @@ testAgent()("MCP servers of a project", (it) => {
           mcpServers: { fake: fake.entry({ FAKE_MCP_TOKEN: "${FAKE_TOKEN_SOURCE}" }) },
         });
         yield* servers.setTrusted(project, "project", "fake", true);
-        const where = (yield* inRun(servers.tools(project))).find(
+        const where = (yield* inRun(servers.tools(project))).tools.find(
           (tool) => tool.name === mcpToolName("fake", "where"),
         );
         const result = yield* sdk(() => Promise.resolve(where?.execute?.({})));
@@ -215,7 +215,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         ]);
         // Values of the environment and headers never leave the server.
         expect(yield* encodeJson(listed)).not.toContain("NOT_SHOWN");
-        expect(yield* inRun(servers.tools(project))).toEqual([]);
+        expect((yield* inRun(servers.tools(project))).tools).toEqual([]);
         expect(yield* fake.starts).toBe(0);
         // `fake` needs NOT_SHOWN, which the environment does not have: trusting reports why it failed.
         const failed = yield* servers.setTrusted(project, "global", "fake", true);
@@ -229,8 +229,10 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         // A connection starts the server twice: a short-lived copy answers which protocol it
         // speaks (`server/discover`), then the session starts.
         expect(yield* fake.starts).toBe(2);
-        const tools = yield* inRun(servers.tools(project));
+        const { tools, guides } = yield* inRun(servers.tools(project));
         expect(tools.map((tool) => tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
+        // What the server said at connect about its tools goes to the run, under the configured name.
+        expect(guides).toEqual([{ server: "docs", text: "Call echo to repeat text back." }]);
         expect(yield* fake.starts).toBe(2);
         // A changed configuration is not the one the user trusted.
         yield* writeJson(fake.config, {
@@ -239,7 +241,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         expect((yield* servers.overview(project)).servers[2]?.state).toEqual(
           McpServerState.changed(),
         );
-        expect(yield* inRun(servers.tools(project))).toEqual([]);
+        expect((yield* inRun(servers.tools(project))).tools).toEqual([]);
         const untrusted = yield* servers.setTrusted(project, "project", "docs", false);
         expect(untrusted.servers[2]?.state).toEqual(McpServerState.untrusted());
       }),
