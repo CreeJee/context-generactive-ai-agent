@@ -18,7 +18,7 @@ function renderPlanComposer() {
       draft=""
       onDraftChange={() => {}}
       editingId={null}
-      slashContext={{ agents: [], models: [], skills: [] }}
+      slashContext={{ agents: [], models: [], efforts: [], skills: [] }}
       draftImages={draftImages}
       queueItems={[]}
       imageSettings={null}

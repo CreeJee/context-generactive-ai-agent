@@ -97,7 +97,7 @@ export interface SlashSupport {
   readonly run: (
     command: Data.TaggedEnum.Value<
       SlashCommand,
-      "new" | "agent" | "mode" | "model" | "settings" | "report"
+      "new" | "agent" | "mode" | "model" | "effort" | "settings" | "report"
     >,
   ) => Promise<void>;
 }
@@ -847,6 +847,7 @@ function ChatPanel({
           agent: outsidePanel,
           mode: outsidePanel,
           model: outsidePanel,
+          effort: outsidePanel,
           settings: outsidePanel,
           report: outsidePanel,
         });

@@ -8,6 +8,8 @@ export type SlashCommand = Data.TaggedEnum<{
   agent: { readonly agent: string };
   mode: { readonly mode: PermissionMode };
   model: { readonly model: string };
+  /** The reasoning effort of the selected model. */
+  effort: { readonly effort: string };
   settings: {};
   report: {};
   cancel: {};
@@ -26,10 +28,13 @@ export type SlashCommand = Data.TaggedEnum<{
 }>;
 export const SlashCommand = Data.taggedEnum<SlashCommand>();
 
+/** Where a command's choices come from. */
+type ChoiceSource = "agents" | "modes" | "models" | "efforts" | "skills";
+
 /** What a command's argument may be, so suggestions can offer the right values. */
 type Argument = Data.TaggedEnum<{
   none: {};
-  choice: { readonly from: "agents" | "modes" | "models" | "skills" };
+  choice: { readonly from: ChoiceSource };
   text: { readonly placeholder: string };
 }>;
 const Argument = Data.taggedEnum<Argument>();
@@ -66,6 +71,11 @@ export const commandSpecs: readonly CommandSpec[] = [
   { name: "status", description: "현재 목표와 계획 상태 보기", argument: Argument.none() },
   { name: "mode", description: "권한 모드 바꾸기", argument: Argument.choice({ from: "modes" }) },
   { name: "model", description: "모델 바꾸기", argument: Argument.choice({ from: "models" }) },
+  {
+    name: "effort",
+    description: "추론 강도 바꾸기",
+    argument: Argument.choice({ from: "efforts" }),
+  },
   { name: "settings", description: "설정 열기", argument: Argument.none() },
   {
     name: "report",
@@ -79,6 +89,8 @@ export const commandSpecs: readonly CommandSpec[] = [
 export interface SlashContext {
   readonly agents: readonly string[];
   readonly models: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+  /** Efforts of the selected model; none when there is no model or it offers no choice. */
+  readonly efforts: ReadonlyArray<{ readonly id: string; readonly label: string }>;
   readonly skills: ReadonlyArray<{ readonly name: string; readonly description: string }>;
 }
 
@@ -98,7 +110,7 @@ export interface Suggestion {
   readonly runnable: boolean;
 }
 
-function choices(from: "agents" | "modes" | "models" | "skills", context: SlashContext) {
+function choices(from: ChoiceSource, context: SlashContext) {
   switch (from) {
     case "agents":
       return context.agents.map((agent) => ({ id: agent, label: agent }));
@@ -106,6 +118,8 @@ function choices(from: "agents" | "modes" | "models" | "skills", context: SlashC
       return modes;
     case "models":
       return context.models;
+    case "efforts":
+      return context.efforts;
     case "skills":
       return context.skills.map((skill) => ({ id: skill.name, label: skill.description }));
   }
@@ -215,7 +229,7 @@ function parseSlashBody(draft: string, context: SlashContext): SlashParse {
   const [value = "", ...others] = rest.split(/\s+/);
   const trailing = rest.slice(value.length).trim();
 
-  const known = (from: "agents" | "modes" | "models" | "skills") =>
+  const known = (from: ChoiceSource) =>
     choices(from, context).some((choice) => choice.id === value);
   // Whole sentences per command, so each noun gets its own particle.
   const needValue = (choose: string, unknown: string): SlashParse =>
@@ -258,6 +272,12 @@ function parseSlashBody(draft: string, context: SlashContext): SlashParse {
       return known("models")
         ? SlashParse.command({ command: SlashCommand.model({ model: value }) })
         : needValue("모델을 골라 주세요.", "쓸 수 있는 모델 목록에 없어요");
+    case "effort":
+      if (context.efforts.length === 0)
+        return SlashParse.incomplete({ reason: "선택한 모델은 추론 강도를 고를 수 없어요." });
+      return known("efforts")
+        ? SlashParse.command({ command: SlashCommand.effort({ effort: value }) })
+        : needValue("추론 강도를 골라 주세요.", "선택한 모델에 없는 추론 강도예요");
     case "skill":
       return known("skills")
         ? SlashParse.command({

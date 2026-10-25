@@ -58,6 +58,7 @@ import { cn } from "~/lib/utils";
 import type { ProviderModel, ModelSelection, PermissionMode, Project, Session } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
+import { effortChoices } from "./providers";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -77,6 +78,7 @@ export function ModelSection({
   onSelect: (model: string, reasoningEffort?: string) => void;
 }) {
   const current = models.find((model) => model.id === selection?.model);
+  const efforts = current && selection ? effortChoices(selection, current) : [];
   return (
     <Section title="모델">
       <DataListItem term="모델">
@@ -97,37 +99,26 @@ export function ModelSection({
           </SelectContent>
         </Select>
       </DataListItem>
-      {current &&
-        selection &&
-        (selection.provider !== "openai-compatible" ||
-          current.supportedReasoningEfforts.length > 1) && (
-          <DataListItem term="추론">
-            <Select
-              value={selection.reasoningEffort}
-              items={current.supportedReasoningEfforts.map((effort) => ({
-                value: effort,
-                label:
-                  selection.provider === "openai-compatible" && effort === "default"
-                    ? "서버 기본값"
-                    : `추론 ${effort}`,
-              }))}
-              onValueChange={(value) => value && onSelect(current.id, value)}
-            >
-              <SelectTrigger className="w-full" size="sm" aria-label="추론 강도">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {current.supportedReasoningEfforts.map((effort) => (
-                  <SelectItem key={effort} value={effort}>
-                    {selection.provider === "openai-compatible" && effort === "default"
-                      ? "서버 기본값"
-                      : `추론 ${effort}`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </DataListItem>
-        )}
+      {current && selection && efforts.length > 0 && (
+        <DataListItem term="추론">
+          <Select
+            value={selection.reasoningEffort}
+            items={efforts.map(({ id, label }) => ({ value: id, label }))}
+            onValueChange={(value) => value && onSelect(current.id, value)}
+          >
+            <SelectTrigger className="w-full" size="sm" aria-label="추론 강도">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {efforts.map(({ id, label }) => (
+                <SelectItem key={id} value={id}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </DataListItem>
+      )}
       {!(selection !== null) && (
         <DataListItem term="추론">
           <p className="pt-1.5 text-xs text-muted-foreground">모델을 선택하세요.</p>

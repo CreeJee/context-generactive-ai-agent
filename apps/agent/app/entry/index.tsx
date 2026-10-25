@@ -68,7 +68,7 @@ import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
 import { ReportLink, reportHref } from "./report/report-link";
-import { providerLabels } from "./navigation/providers";
+import { effortChoices, providerLabels } from "./navigation/providers";
 
 const locationParsers = {
   project: parseAsString,
@@ -337,10 +337,23 @@ export function App() {
       }),
     );
 
+  // `/effort` changes the model the sidebar shows, as the sidebar's effort selector does.
+  const shownSelection = selection?.provider === provider ? selection : null;
+  const shownModel = models.find((model) => model.id === shownSelection?.model);
+  const slashEfforts =
+    shownSelection === null || shownModel === undefined
+      ? []
+      : effortChoices(shownSelection, shownModel).map((choice) =>
+          choice.id === shownSelection.reasoningEffort
+            ? { ...choice, label: `${choice.label} (현재)` }
+            : choice,
+        );
+
   const slash: SlashSupport = {
     context: {
       agents: slashAgents,
       models: models.map((model) => ({ id: model.id, label: model.displayName })),
+      efforts: slashEfforts,
       skills: slashSkills,
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -357,6 +370,10 @@ export function App() {
               Effect.asVoid,
             ),
           model: ({ model }) => uiPromise(() => selectModel(model)),
+          effort: ({ effort }) =>
+            shownSelection === null
+              ? Effect.void
+              : uiPromise(() => selectModel(shownSelection.model, effort)),
         }),
       ),
   };

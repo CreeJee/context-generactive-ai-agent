@@ -1521,6 +1521,8 @@
 - 나머지는 앱이 바로 실행한다. 값이 없거나 모르는 값이면 실행하지 않고 이유를 보여준다.
 - 우리 명령이 아닌 `/`로 시작하는 글(예: `/usr/local`)은 평소 메시지로 보낸다. 이미지가 붙은 입력은 명령으로 읽지 않는다.
 - 목록은 shadcn `command`(cmdk)로 그리고, 파싱, 제안은 `slash-commands.ts`의 순수 함수로 테스트한다.
+- `/effort <강도>`를 더한다(2026-10-25). 사이드바에 보이는 선택 모델의 추론 강도만 바꾸고 모델은 그대로 둔다. 고를 수 있는 값과 표시는 사이드바 추론 선택기와 같은 `effortChoices`에서 나오고, 지금 쓰는 강도에는 "(현재)"를 붙인다. 강도를 공개하지 않은 호환 모델처럼 고를 값이 없으면 실행하지 않고 그 이유를 보여준다.
+  - 이유: 대화 중에는 `/model`로 모델만 바꿀 수 있고, 강도는 접힌 사이드바 패널을 열어야 바꿀 수 있었다.
 
 ### 도구 성능 (2026-09-15)
 
@@ -2060,6 +2062,13 @@
 - 그래프는 루트의 `tsconfig.graph.json` 하나로 만든다. 루트 `tsconfig.json`(nodenext)으로는 apps/agent의 확장자 없는 import와 `~/` alias가 풀리지 않는다. 같은 저장소에서 루트 설정은 867파일·엣지 58,702개, 그래프 전용 설정은 937파일·엣지 65,449개였고, route loader에서 memory-agent로 가는 호출 경로는 그래프 전용 설정에서만 이어졌다. 첫 질의는 그래프를 만드느라 약 20초, 이후 질의는 1~3초였다.
 - MCP 서버는 `pnpm exec ttsc-graph`로 띄운다. 문서의 `npx -y @ttsc/graph`는 루트 `devEngines`(pnpm) 때문에 npm이 `EBADDEVENGINES`로 거부한다. `ttsc`와 `@ttsc/graph`는 서버 프로토콜이 릴리스에 묶여 있어 catalog에 같은 버전으로 고정한다.
 - ttsc의 나머지 기능은 지금 쓰지 않는다. `ttsc` CLI·`ttsx`·`@ttsc/unplugin`·VS Code 확장은 `compilerOptions.plugins`의 모든 항목에 `transform`을 요구해서, apps/agent와 memory-agent의 `@effect/language-service` 항목에서 `plugin entry is missing a string "transform" field`로 멈춘다. `@ttsc/lint`·format은 oxlint·oxfmt와 겹치고, `@ttsc/evidence`는 `@ttsc/lint`를 호스트로 요구한다.
+
+### 질문에 맞는 전용 도구를 먼저 고르게 한다 (2026-10-25)
+
+- 배경: 코드 흐름을 묻는 대화에서 모델이 codegraph를 한 번 부른 뒤 `search_files`로 넘어갔다. 질의어(`runtime`, `server`)가 관계없는 파일을 끌어왔고, 도구 이름 `run_skill`은 코드에서 문자열일 뿐 구현은 `runSkill`에 있었다. 앱 지침은 `run_code`·`run_skill`을 이름으로 짚는데 MCP 지침은 신뢰와 승인만 말했고, 서버가 연결 때 보내는 사용 안내(instructions)는 모델에 전달되지 않았다.
+- MCP 서버가 연결 handshake에서 보낸 instructions를 서버 이름으로 감싸 MCP 시스템 지침 뒤에 붙인다. 도구를 하나라도 내놓은 서버의 것만 넣고, 서버마다 8,000자에서 자른다. 매 run의 시스템 프롬프트에 들어가기 때문이다. 이 안내는 그 서버 도구의 사용법일 뿐 권한을 주지 않고 사용자 말이나 앱 규칙을 넘지 않는다고 함께 적는다. subagent도 같은 지침을 받는다.
+- 작업 공간 지침에 도구 고르는 순서를 둔다. 설명이 맞는 skill이나 MCP 도구를 일반 파일 검색·읽기보다 먼저 쓰고, `search_files`는 정확한 문자열에, `read_file`은 아는 파일과 범위에 쓴다. 맞는 도구가 빗나가면 받은 이름으로 좁혀 다시 묻는다. `run_code`는 한 번 할 호출을 묶는 수단이라 도구를 바꿀 이유가 되지 않는다고 적고, `run_code` 설명도 같은 뜻으로 고친다.
+- 루트 AGENTS.md의 코드 탐색 지침을 이 앱의 도구 이름(`search_files`, `read_file`, `mcp_…`)으로도 적고 질의 요령을 더한다.
 
 ## 테스트
 

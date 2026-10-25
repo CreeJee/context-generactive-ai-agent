@@ -14,6 +14,10 @@ const context: SlashContext = {
     { id: "gpt-5.5", label: "GPT-5.5" },
     { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
   ],
+  efforts: [
+    { id: "low", label: "추론 low" },
+    { id: "high", label: "추론 high (현재)" },
+  ],
   skills: [
     { name: "review", description: "변경을 검토" },
     { name: "new", description: "새 문서 틀 만들기" },
@@ -76,6 +80,14 @@ describe("slash command parsing", () => {
     expect(SlashParse.$is("incomplete")(parseSlash("/agent claude", context))).toBe(true);
     expect(SlashParse.$is("incomplete")(parseSlash("/mode", context))).toBe(true);
     expect(SlashParse.$is("incomplete")(parseSlash("/recall", context))).toBe(true);
+    expect(parseSlash("/effort high", context)).toEqual(
+      SlashParse.command({ command: SlashCommand.effort({ effort: "high" }) }),
+    );
+    expect(SlashParse.$is("incomplete")(parseSlash("/effort max", context))).toBe(true);
+    // A model without an effort choice says so rather than asking for a value it cannot take.
+    expect(parseSlash("/effort high", { ...context, efforts: [] })).toEqual(
+      SlashParse.incomplete({ reason: "선택한 모델은 추론 강도를 고를 수 없어요." }),
+    );
     expect(parseSlash("/goal 결제 실패를 줄이고 싶어", context)).toEqual(
       SlashParse.command({
         command: SlashCommand.workflow({ phase: "goal", request: "결제 실패를 줄이고 싶어" }),
