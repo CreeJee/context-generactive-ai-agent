@@ -44,12 +44,17 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## ttsc-graph와 CodeGraph로 코드 탐색하기
 
-두 MCP를 함께 쓴다. 코드의 위치·구조·호출 관계를 찾거나 고칠 코드를 읽을 때는 `grep`, `rg`, `find`, 파일 직접 읽기보다 이 둘을 먼저 사용하시오.
+두 MCP를 함께 쓴다. 코드의 위치·구조·호출 관계를 찾거나 고칠 코드를 읽을 때는 텍스트 검색(`search_files`, `rg`, `grep`, `find`)이나 파일 직접 읽기(`read_file`)보다 이 둘을 먼저 사용하시오. 이 앱(context-agent)에서는 `mcp_ttsc-graph__inspect_typescript_graph`, `mcp_codegraph__codegraph_explore`라는 이름으로 보인다.
 
 - 구조·흐름·호출 관계·타입 관계·영향 범위처럼 TypeScript 심볼 사이의 관계를 묻는 질문에는 `ttsc-graph` MCP의 `inspect_typescript_graph`를 사용하시오. 그래프는 `tsconfig.graph.json` 하나로 apps·packages·tools 전체를 컴파일러가 해석한 결과이고, 소스 본문 없이 이름·엣지·시그니처·span만 돌려준다. 요청 종류(`overview`, `tour`, `entrypoints`, `lookup`, `trace`, `details`, `escape`)와 쓰는 법은 서버가 MCP 초기화 응답으로 알려 준다.
 - 고칠 코드의 원문을 읽을 때는 저장소 루트에 `.codegraph/`가 있으면 CodeGraph의 `codegraph_explore`를 사용하시오. `query`에는 질문, 심볼 이름 또는 파일 경로를 넣으시오. 예: `codegraph_explore({ query: "workspaceInstructions" })`, `codegraph_explore({ query: "packages/memory-agent/src/agent/project-instructions.ts" })`. 다른 저장소를 탐색할 때는 `projectPath`에 그 저장소의 절대 경로를 지정하시오.
-- 받은 소스·노드·엣지·시그니처를 확인하려고 같은 파일을 다시 읽거나 grep하지 마시오. 필요한 내용이 빠졌으면 더 구체적인 심볼이나 파일 경로로 다시 질의하시오.
-- 문서·설정·일반 텍스트처럼 TypeScript 밖의 내용, 정확한 문자열 검색, CodeGraph가 재색인 대기 경고를 표시한 파일은 직접 읽거나 `rg`로 찾으시오.
+- 질의 요령:
+  - 질의에는 심볼 이름이나 파일 경로를 넣으시오. `server`, `runtime`, `instructions`처럼 여러 파일에 흔한 낱말은 관계없는 파일을 끌어오므로 빼시오.
+  - 도구 이름(`run_skill`), API 경로, SQL 컬럼처럼 코드에 문자열로만 나오는 이름에서 시작할 때는 텍스트 검색으로 그 문자열을 다루는 심볼(예: `run_skill` → `runSkill`)을 먼저 찾고, 그 심볼로 그래프에 질의하시오.
+  - 결과에 찾던 심볼이 없으면 텍스트 검색으로 넘어가기 전에, 결과에 나온 이름으로 좁혀 한 번 더 질의하시오.
+  - `run_code`로 호출을 묶을 때도 도구는 같은 기준으로 고르시오. 묶는다는 이유로 그래프 질의를 텍스트 검색으로 바꾸지 마시오.
+- 받은 소스·노드·엣지·시그니처를 확인하려고 같은 파일을 다시 읽거나 텍스트 검색하지 마시오. 필요한 내용이 빠졌으면 더 구체적인 심볼이나 파일 경로로 다시 질의하시오.
+- 문서·설정·일반 텍스트처럼 TypeScript 밖의 내용, 정확한 문자열 검색, CodeGraph가 재색인 대기 경고를 표시한 파일은 직접 읽거나 `search_files`·`rg`로 찾으시오.
 - ttsc-graph는 따로 색인하지 않고 질의마다 디스크의 현재 상태에 맞춘다. 워크스페이스나 path alias를 추가하면 `tsconfig.graph.json`의 `include`·`paths`에도 반영하시오. CodeGraph가 동기화되어 있지 않으면 `codegraph init`을 실행하시오.
 
 ## Effect 지침
