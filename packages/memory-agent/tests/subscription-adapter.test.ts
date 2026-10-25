@@ -298,6 +298,23 @@ describe("subscription model adapters", () => {
       decodeProviderEvent(
         "anthropic",
         JSON.stringify({
+          type: "message_start",
+          message: {
+            usage: { input_tokens: 2, cache_read_input_tokens: 30, cache_creation_input_tokens: 5 },
+          },
+        }),
+      ),
+    ).toEqual(
+      NormalizedStreamEvent.usage({
+        promptTokens: 37,
+        cachedPromptTokens: 30,
+        cacheWriteTokens: 5,
+      }),
+    );
+    expect(
+      decodeProviderEvent(
+        "anthropic",
+        JSON.stringify({
           type: "content_block_delta",
           index: 0,
           delta: { type: "signature_delta", signature: "signed" },
@@ -524,6 +541,15 @@ describe("subscription model adapters", () => {
     });
     expect(request).not.toHaveProperty("prompt_cache_key");
     expect(request).not.toHaveProperty("cache_control");
+    expect(
+      JSON.parse(
+        subscriptionRequest({
+          provider: "openai",
+          selection: { provider: "openai", model: "model-1", reasoningEffort: "high" },
+          options: { ...options, promptCache: { retention: "short", key: "thread-1" } },
+        }),
+      ),
+    ).toMatchObject({ prompt_cache_key: "thread-1" });
     expect(JSON.stringify(request)).not.toContain("messageFingerprint");
     expect(JSON.stringify(request)).not.toContain("toolFingerprint");
     expect(request.input).toContainEqual({
@@ -601,7 +627,13 @@ describe("subscription model adapters", () => {
 
       const events = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
-          adapter.chatStream({ threadId: "thread", ...options, model: "model-1", logger }),
+          adapter.chatStream({
+            threadId: "thread",
+            ...options,
+            promptCache: { retention: "short", key: "thread" },
+            model: "model-1",
+            logger,
+          }),
           (cause) => new Cause.UnknownError(cause),
         ),
       );
@@ -666,7 +698,6 @@ describe("subscription model adapters", () => {
           systemPrompts: [],
           tools: [],
         },
-        requestOptions: { promptCache: "disabled" },
       }),
     );
 
@@ -1016,7 +1047,7 @@ describe("subscription model adapters", () => {
       subscriptionRequest({
         provider: "anthropic",
         selection: { provider: "anthropic", model: "model-1", reasoningEffort: "medium" },
-        options: options,
+        options: { ...options, promptCache: { retention: "short" } },
       }),
     );
     expect(request).toMatchObject({
@@ -1025,7 +1056,7 @@ describe("subscription model adapters", () => {
         {
           type: "text",
           text: "Follow the rules.",
-          cache_control: { type: "ephemeral", ttl: "1h" },
+          cache_control: { type: "ephemeral" },
         },
       ],
       stream: true,
@@ -1033,7 +1064,7 @@ describe("subscription model adapters", () => {
     });
     expect(request.tools.at(-1)).toMatchObject({
       name: "lookup",
-      cache_control: { type: "ephemeral", ttl: "1h" },
+      cache_control: { type: "ephemeral" },
     });
     expect(providerProtocols.anthropic.modelHeaders["anthropic-beta"]).toContain(
       "prompt-caching-scope-2026-01-05",
@@ -1062,6 +1093,7 @@ describe("subscription model adapters", () => {
           tool_use_id: "call-1",
           content: "result",
           is_error: false,
+          cache_control: { type: "ephemeral" },
         },
       ],
     });

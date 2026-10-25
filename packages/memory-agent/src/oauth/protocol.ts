@@ -200,9 +200,11 @@ export type NormalizedStreamEvent = Data.TaggedEnum<{
     readonly text: string;
   };
   usage: {
+    /** The whole input, cache reads and writes included. */
     readonly promptTokens?: number;
     readonly completionTokens?: number;
     readonly cachedPromptTokens?: number;
+    readonly cacheWriteTokens?: number;
   };
   error: {
     readonly code: string;
@@ -406,6 +408,7 @@ const AnthropicWireEvent = Schema.Union([
       usage: Schema.Struct({
         input_tokens: Schema.Finite,
         cache_read_input_tokens: Schema.optional(Schema.Finite),
+        cache_creation_input_tokens: Schema.optional(Schema.Finite),
       }),
     }),
   }),
@@ -501,11 +504,18 @@ function decodeProviderEventBody(
       onSome: (event): NormalizedStreamEvent | null => {
         if (event.type === "content_block_delta" && event.delta.type === "text_delta")
           return NormalizedStreamEvent.text({ text: event.delta.text });
-        if (event.type === "message_start")
+        if (event.type === "message_start") {
+          const usage = event.message.usage;
+          // Anthropic's `input_tokens` counts only the uncached part of the input.
           return NormalizedStreamEvent.usage({
-            promptTokens: event.message.usage.input_tokens,
-            ...optionalProperty("cachedPromptTokens", event.message.usage.cache_read_input_tokens),
+            promptTokens:
+              usage.input_tokens +
+              (usage.cache_read_input_tokens ?? 0) +
+              (usage.cache_creation_input_tokens ?? 0),
+            ...optionalProperty("cachedPromptTokens", usage.cache_read_input_tokens),
+            ...optionalProperty("cacheWriteTokens", usage.cache_creation_input_tokens),
           });
+        }
         if (event.type === "message_delta")
           return NormalizedStreamEvent.usage({ completionTokens: event.usage.output_tokens });
         if (event.type === "error")

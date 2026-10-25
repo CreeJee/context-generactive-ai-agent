@@ -760,6 +760,8 @@ const make = Effect.gen(function* () {
             ],
             threadId,
             runId: handle.chatRunId,
+            // Same 1-hour cache as the main conversation.
+            promptCache: "long",
             abortController: controller,
             middleware,
           });

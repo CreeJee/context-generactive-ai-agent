@@ -2337,6 +2337,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           parentRunId,
           resume,
           interrupts: [permissionReviewInterrupt],
+          // Replies often come after the 5-minute cache ends, so the conversation is kept for 1 hour.
+          promptCache: "long",
         };
         const capabilities: ChatExecutionCapabilities<typeof runAdapter> = {
           model: { adapter: runAdapter, agentLoopStrategy: runtime.agentLoop },

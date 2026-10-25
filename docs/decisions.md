@@ -1962,6 +1962,12 @@
 - 사이드바 접힌 프로필은 `공급자 / 모델`만, 연결 이상 시에만 상태를 덧붙인다. 펼치면 구독 공급자의 `계정 목록`에서 계정 추가·전환·이름 변경·해제와 계정별 한도 상태를 본다. 목록·한도 조회는 펼쳤을 때만 실행한다. 한도 조회 요청 자체의 실패는 `조회 불가`와 구분해 표시한다.
 - 접힌 프로젝트 표시는 선택된 프로젝트 이름만 보이고, 접근성 이름은 `프로젝트 <이름>`으로 맥락을 유지한다. 선택이 없으면 `프로젝트 선택`을 보인다.
 
+### 프로젝트 보관 해제·폴더 열기·콤보박스 선택 (2026-10-25)
+
+- 프로젝트 선택은 Select 대신 검색되는 콤보박스(shadcn `combobox`)다. 보관한 프로젝트는 같은 목록의 `보관된 프로젝트` 묶음에 나오고, 고르면 보관 해제(`hidden: false`)한 뒤 그 프로젝트로 옮긴다. 보관된 목록은 `GET /api/projects?hidden=1`이다. 같은 폴더를 다시 추가해 되살리는 기존 경로도 그대로 둔다.
+- 프로젝트 추가 버튼은 `폴더 열기`다. 서버(`POST /api/projects/pick`)가 실행 중인 기기의 폴더 대화상자(macOS `osascript choose folder`, Windows `FolderBrowserDialog`, Linux `zenity`·`kdialog`)를 띄우고 고른 경로만 돌려준다. 등록은 기존 `POST /api/projects`와 경로 검사를 그대로 거친다. 로컬 앱이라 서버 기기가 사용자 기기다.
+- 이미 목록에 있는 폴더를 고르면 그 프로젝트를 선택한다. 대화상자가 없는 호스트이거나 고른 폴더가 거부되면 경로 입력 대화상자를 연다(거부 사유와 고른 경로를 채워서). 취소하면 아무것도 하지 않는다.
+
 ## 배포·개발 환경·성능
 
 ### 배포: 실행 파일 (2026-09-15)
@@ -2656,3 +2662,17 @@
 - OpenAI 호환 provider는 `save_code_skill`과 `run_skill`을 `strict: false`로 보낸다. 두 입력에 열린 객체(ts 입력과 그 스키마)가 있고, `program`의 anyOf 변형에 선택 필드가 있어서다. 입력은 TanStack이 도구 스키마로 검사하므로 동작은 같다. 개발 모드에서는 run마다 도구별로 TanStack 경고가 한 번 남는다.
 - `save_shell_skill`은 기록 표시용으로만 남긴다(`retiredToolEffects`, 도구 보기 제목). 이전 형식(최상위 `script`)의 호출은 받지 않는다. 이미 저장된 `scripts/run.sh` 스킬과 그 승인은 sh 스킬로 그대로 돈다.
 - 작성 지침 skill은 `code-skill-writing`으로 바꾸고 ts 프로그램 작성법을 더한다. ts 프로그램은 저장 전에 run_code로 먼저 시험하게 한다.
+
+## 구독 어댑터가 `chat()`의 promptCache를 따른다 (2026-10-25)
+
+- 사용자 결정: 구독 어댑터(`SubscriptionTextAdapter`)의 프롬프트 캐시를 [TanStack AI 문서](https://tanstack.com/ai/latest/docs/advanced/prompt-caching#what-each-provider-gets)대로 `chat({ promptCache })`에서 받는다. "요청 구성, compact와 프롬프트 캐시"(2026-09-21)의 cache marker 규칙을 대체한다.
+  - 이전에는 `promptCache`를 무시하고 system과 마지막 tool에만 1시간 marker를 고정으로 붙였다. 대화 기록은 캐시되지 않았다. 한 스레드에서 호출마다 약 113k 입력이 캐시 밖이었고, 캐시 읽기는 약 24k(system+tool)에 머물렀다.
+- Anthropic은 TanStack `anthropicText`와 같은 자리에 marker를 붙인다. system 블록, 마지막 tool, 마지막 user 메시지의 마지막 블록(text·image·tool_result)이다. `'short'`는 `{ type: "ephemeral" }`, `'long'`은 `ttl: "1h"`이고, `'none'`이나 값이 없으면 붙이지 않는다. marker가 거부되면 `'none'` 요청으로 한 번 다시 보내는 규칙은 그대로다.
+- ChatGPT 구독 Responses 요청은 `prompt_cache_key`(TanStack이 정한 key, 보통 threadId, 64자까지)를 보낸다. `'none'`이면 보내지 않는다.
+  - TanStack `openaiText`는 짧은 retention의 key를 `api.openai.com`에만 보낸다. 같은 ChatGPT Codex 백엔드에 jcode가 세션 id를 key로 보내므로 이 백엔드는 key를 받는 것으로 본다.
+  - retention 필드(`prompt_cache_retention`, `prompt_cache_options`)는 이 백엔드에서 계약이 확인되지 않아 보내지 않는다.
+- 메인 채팅 turn과 subagent는 `promptCache: "long"`(1시간)을 쓴다. 사용자 답이 5분 캐시가 끝난 뒤에 오는 일이 많다. 요약·분류 같은 보조 호출은 기본값 `'short'`를 쓴다.
+- usage는 TanStack 정의를 따른다. Anthropic `promptTokens`는 캐시 밖 입력, 캐시 읽기, 캐시 쓰기의 합이다. 캐시 쓰기는 `promptTokensDetails.cacheWriteTokens`로 보고한다.
+  - 대화가 캐시되면 Anthropic의 `input_tokens`가 거의 0이 된다. 그래서 context 사용량과 compact 판단은 전체 입력을 봐야 한다.
+  - API usage 장부의 Anthropic 행은 계속 캐시 밖 입력만 저장한다(`cache_mode = 'separate'`). 기존 행과 뜻이 같다.
+- OpenAI 호환 provider는 그대로 둔다. TanStack 호환 어댑터도 캐시 필드를 보내지 않는다.

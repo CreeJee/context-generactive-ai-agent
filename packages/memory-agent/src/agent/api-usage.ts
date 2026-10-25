@@ -160,16 +160,22 @@ const collectApiUsageBody = (
   name: "memory-agent/api-usage",
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   onUsage(ctx, usage) {
+    const read = usage.promptTokensDetails?.cachedTokens;
+    const write = usage.promptTokensDetails?.cacheWriteTokens;
     return runNativeEffect(
       Effect.asVoid(
         ledger.record({
           ...source,
           runId: ctx.runId,
           threadId: ctx.threadId,
-          inputTokens: usage.promptTokens,
+          // `promptTokens` is the whole input; an Anthropic row keeps only its uncached part.
+          inputTokens:
+            source.provider === "anthropic"
+              ? usage.promptTokens - (read ?? 0) - (write ?? 0)
+              : usage.promptTokens,
           outputTokens: usage.completionTokens,
-          ...optionalProperty("cacheReadTokens", usage.promptTokensDetails?.cachedTokens),
-          ...optionalProperty("cacheWriteTokens", usage.promptTokensDetails?.cacheWriteTokens),
+          ...optionalProperty("cacheReadTokens", read),
+          ...optionalProperty("cacheWriteTokens", write),
         }),
       ),
     );

@@ -193,8 +193,11 @@ const program = Effect.gen(function* () {
             subscriptionRequest({
               provider: "anthropic",
               selection,
-              options: { messages: [{ role: "user", content }], systemPrompts: [system] },
-              requestOptions: { promptCache: "disabled" },
+              options: {
+                messages: [{ role: "user", content }],
+                systemPrompts: [system],
+                promptCache: { retention: "none" },
+              },
             }),
           );
           const body = yield* Schema.encodeEffect(wire)({ ...request, max_tokens: outputLimit });

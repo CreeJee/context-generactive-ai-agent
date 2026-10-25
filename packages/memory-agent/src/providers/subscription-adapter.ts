@@ -1,4 +1,5 @@
 import { isTruthy } from "../truthy.ts";
+import { optionalProperty } from "../optional-property.ts";
 import {
   EventType,
   convertSchemaToJsonSchema,
@@ -6,6 +7,8 @@ import {
   type AdapterYieldChunk,
   type DefaultMessageMetadataByModality,
   type ModelMessage,
+  type PromptCacheRetention,
+  type ResolvedPromptCache,
   type TextOptions,
   type TokenUsage,
 } from "@tanstack/ai";
@@ -50,8 +53,6 @@ type WireBlock =
         | { readonly type: "base64"; readonly media_type: string; readonly data: string }
         | { readonly type: "url"; readonly url: string };
     };
-
-type WireContent = string | WireBlock[];
 
 const openAiReasoningPrefix = "openai-reasoning:";
 const maxEncryptedReasoningCharacters = 32 * 1024 * 1024;
@@ -129,9 +130,9 @@ const openAiContent = (
   return blocks;
 };
 
-const anthropicContent = (content: ModelMessage["content"]): WireContent => {
+const anthropicContent = (content: ModelMessage["content"]): string | AnthropicContentBlock[] => {
   if (!Array.isArray(content)) return content ?? "";
-  const blocks: WireBlock[] = [];
+  const blocks: AnthropicContentBlock[] = [];
   for (const part of content) {
     if (part.type === "text") blocks.push({ type: "text", text: part.content });
     else if (part.type === "image")
@@ -185,15 +186,32 @@ const openAiInput = (messages: ReadonlyArray<ModelMessage>) => {
   return input;
 };
 
+type AnthropicContentBlock = Extract<WireBlock, { readonly type: "text" | "image" }>;
+type AnthropicBlock =
+  | AnthropicContentBlock
+  | {
+      readonly type: "tool_result";
+      readonly tool_use_id: string | undefined;
+      readonly content: string;
+      readonly is_error: boolean;
+    }
+  | { readonly type: "thinking"; readonly thinking: string; readonly signature: string }
+  | {
+      readonly type: "tool_use";
+      readonly id: string;
+      readonly name: string;
+      readonly input: ToolArguments;
+    };
+
 interface AnthropicMessage {
   readonly role: "user" | "assistant";
-  readonly content: unknown[];
+  readonly content: ReadonlyArray<AnthropicBlock>;
 }
 
 const appendAnthropicMessage = (
   output: AnthropicMessage[],
   role: AnthropicMessage["role"],
-  blocks: unknown[],
+  blocks: ReadonlyArray<AnthropicBlock>,
 ) => {
   if (blocks.length === 0) return;
   const previous = output.at(-1);
@@ -221,7 +239,7 @@ const anthropicMessages = (messages: ReadonlyArray<ModelMessage>) => {
       case "user":
       case "assistant": {
         const converted = anthropicContent(message.content);
-        const blocks: unknown[] = [];
+        const blocks: AnthropicBlock[] = [];
         for (const thinking of message.thinking ?? []) {
           if (
             thinking.signature === undefined ||
@@ -287,44 +305,77 @@ export function requestFingerprints(
 const anthropicThinkingAlwaysOn = (model: string) =>
   /^claude-(?:opus-5-5|fable-5-1)(?:-\d{8})?(?:\[1m\])?$/.test(model);
 
+/** The Anthropic marker for each `chat()` prompt cache retention, as TanStack's `anthropicText` sends it. */
+const anthropicCacheControl = {
+  short: { type: "ephemeral" },
+  long: { type: "ephemeral", ttl: "1h" },
+} as const;
+type AnthropicCacheControl = (typeof anthropicCacheControl)[keyof typeof anthropicCacheControl];
+const anthropicCacheControlFor = (retention: PromptCacheRetention = "none") =>
+  retention === "none" ? undefined : anthropicCacheControl[retention];
+
+/** Block types that can carry the marker as the last block of the last user message. */
+const isAnthropicCacheableBlock = Schema.is(Schema.Literals(["text", "image", "tool_result"]));
+
+/** Marks the last user block, so the next request reads the whole conversation from the cache. */
+const markLastUserBlock = (
+  messages: ReadonlyArray<AnthropicMessage>,
+  cacheControl: AnthropicCacheControl,
+) => {
+  const last = messages.at(-1);
+  const block = last?.content.at(-1);
+  if (last?.role !== "user" || block === undefined || !isAnthropicCacheableBlock(block.type))
+    return messages;
+  return [
+    ...messages.slice(0, -1),
+    {
+      role: last.role,
+      content: [...last.content.slice(0, -1), { ...block, cache_control: cacheControl }],
+    },
+  ];
+};
+
+/** The Responses cache key, cut to its 64-character limit; none when caching is off. */
+const openAiPromptCacheKey = (promptCache: ResolvedPromptCache | undefined) =>
+  promptCache === undefined || promptCache.retention === "none" || promptCache.key === undefined
+    ? undefined
+    : Array.from(promptCache.key).slice(0, 64).join("");
+
 export function subscriptionRequest(options: {
   readonly provider: OAuthProvider;
   readonly selection: ModelSelection;
   readonly options: Pick<
     TextOptions<Record<string, never>>,
-    "messages" | "systemPrompts" | "tools"
+    "messages" | "systemPrompts" | "tools" | "promptCache"
   >;
-  readonly requestOptions?: { readonly promptCache?: "provider-default" | "disabled" } | undefined;
 }) {
-  return subscriptionRequestBody(
-    options.provider,
-    options.selection,
-    options.options,
-    options.requestOptions,
-  );
+  return subscriptionRequestBody(options.provider, options.selection, options.options);
 }
 function subscriptionRequestBody(
   provider: OAuthProvider,
   selection: ModelSelection,
-  options: Pick<TextOptions<Record<string, never>>, "messages" | "systemPrompts" | "tools">,
-  requestOptions: { readonly promptCache?: "provider-default" | "disabled" } = {},
+  options: Pick<
+    TextOptions<Record<string, never>>,
+    "messages" | "systemPrompts" | "tools" | "promptCache"
+  >,
 ) {
   const system = systemText(options);
   const tools = canonicalTools(options);
   if (provider === "anthropic") {
-    const promptCache = requestOptions.promptCache !== "disabled";
+    const cacheControl = anthropicCacheControlFor(options.promptCache?.retention);
+    const messages = anthropicMessages(options.messages);
     return JSON.stringify({
       model: selection.model,
       max_tokens: 32_000,
       stream: true,
       system:
-        promptCache && system.length > 0
-          ? [{ type: "text", text: system, cache_control: { type: "ephemeral", ttl: "1h" } }]
+        cacheControl !== undefined && system.length > 0
+          ? [{ type: "text", text: system, cache_control: cacheControl }]
           : system,
-      messages: anthropicMessages(options.messages),
+      messages: cacheControl === undefined ? messages : markLastUserBlock(messages, cacheControl),
       tools: tools.map((tool, index) =>
-        promptCache && index === tools.length - 1
-          ? { ...tool, cache_control: { type: "ephemeral", ttl: "1h" } }
+        cacheControl !== undefined && index === tools.length - 1
+          ? { ...tool, cache_control: cacheControl }
           : tool,
       ),
       tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
@@ -342,8 +393,9 @@ function subscriptionRequestBody(
         selection.reasoningEffort === "none" ? undefined : { effort: selection.reasoningEffort },
     });
   }
-  // The ChatGPT Responses subscription endpoint has no confirmed explicit cache-hint contract.
-  // Keep its stable prefix and rely on the provider's automatic cache instead of sending API-only fields.
+  // The ChatGPT Responses subscription endpoint takes `prompt_cache_key` for cache routing (jcode
+  // sends its session id there). It has no confirmed contract for the retention fields, so a
+  // `'long'` retention still sends only the key and relies on the provider's automatic cache.
   return JSON.stringify({
     model: selection.model,
     instructions: system,
@@ -358,6 +410,7 @@ function subscriptionRequestBody(
     parallel_tool_calls: true,
     reasoning: { effort: selection.reasoningEffort, summary: "auto" },
     include: ["reasoning.encrypted_content"],
+    prompt_cache_key: openAiPromptCacheKey(options.promptCache),
     stream: true,
     store: false,
   });
@@ -514,6 +567,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         let promptTokens: number | undefined;
         let completionTokens: number | undefined;
         let cachedPromptTokens: number | undefined;
+        let cacheWriteTokens: number | undefined;
         const streamingCalls = MutableHashMap.empty<
           number,
           { readonly id: string; readonly name: string }
@@ -536,6 +590,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             promptTokens = event.promptTokens ?? promptTokens;
             completionTokens = event.completionTokens ?? completionTokens;
             cachedPromptTokens = event.cachedPromptTokens ?? cachedPromptTokens;
+            cacheWriteTokens = event.cacheWriteTokens ?? cacheWriteTokens;
             return;
           }
           if (NormalizedStreamEvent.$is("error")(event))
@@ -828,10 +883,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           const baselineBody = subscriptionRequest({
             provider: this.name,
             selection: this.#selection,
-            options: options,
-            requestOptions: {
-              promptCache: "disabled",
-            },
+            options: { ...options, promptCache: { retention: "none" } },
           });
           const fingerprints = requestFingerprints(options);
           options.logger.request("subscription model request", {
@@ -915,8 +967,11 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
                   completionTokens: completionTokens ?? 0,
                   totalTokens: (promptTokens ?? 0) + (completionTokens ?? 0),
                 };
-                if (cachedPromptTokens !== undefined)
-                  usage.promptTokensDetails = { cachedTokens: cachedPromptTokens };
+                if (cachedPromptTokens !== undefined || cacheWriteTokens !== undefined)
+                  usage.promptTokensDetails = {
+                    ...optionalProperty("cachedTokens", cachedPromptTokens),
+                    ...optionalProperty("cacheWriteTokens", cacheWriteTokens),
+                  };
                 finished.usage = usage;
               }
               yield finished;
