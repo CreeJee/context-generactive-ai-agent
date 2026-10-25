@@ -432,6 +432,30 @@ describe("OpenAI compatible settings", () => {
         expect(paths).toEqual(["/v1/models"]);
       }),
   );
+  effectTest.effect("offers the levels Strata's own source accepts when /models names it", () =>
+    Effect.gen(function* () {
+      const f = fixture(
+        nativeFetch(() =>
+          Effect.sync(() =>
+            Response.json({
+              data: [
+                { id: configuration.model, owned_by: "strata", meta: { label: "Qwen", gpus: [] } },
+              ],
+            }),
+          ),
+        ),
+      );
+      yield* f.api.update(configuration);
+      expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
+        "default",
+        "none",
+        "low",
+        "medium",
+        "high",
+      ]);
+      yield* f.api.services.models.select(configuration.model, "none");
+    }),
+  );
   effectTest.effect("keeps model listing usable when extension fields are unsupported", () =>
     Effect.gen(function* () {
       const f = fixture(

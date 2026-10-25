@@ -369,6 +369,13 @@
 - 추론 출력과 추론 강도 제어는 별개다. 공개된 강도 목록이 없으면 `reasoning_effort`를 보내지 않고 강도 선택기를 숨긴다. 서버의 추론 스트림은 강도 정보 없이도 표시·저장·복원한다. 지원 파라미터 이름만으로 레벨을 생성하지 않는다.
 - 이전 `lm-studio` 출처 캐시는 설정 파일을 읽을 수 있도록 schema에서 허용하지만 런타임의 지원 강도·지원 여부에는 반영하지 않는다. 다음 모델 목록 조회 성공 시 현재 공개 정보로 교체하거나 제거한다. endpoint 설정이나 사용자 채팅 데이터의 별도 마이그레이션은 하지 않는다.
 
+### 식별된 호환 서버의 공식 강도표 (2026-10-25)
+
+- 2026-10-04 서버 분기 금지를 한 가지 경우에만 완화한다. 이미 읽는 `/models` 응답만으로 서버를 식별할 수 있고(추가 요청·URL·이름 추측 없이), 그 서버의 공식 소스가 실행하는 모든 모델에 대해 받는 강도를 고정할 때 그 표를 쓴다. 모델 목록이 `capabilities.reasoning`을 공개하면 공개 정보가 우선한다.
+- Strata(Niko1221/Strata)는 `owned_by: "strata"`로 식별한다. `serve/frontend.py`의 `EFFORT`가 모든 모델 계열에서 `none`·`low`·`medium`·`high`를 받으므로 이 넷을 제공한다(`high`는 템플릿 기본값 `xhigh`). DeepSeek 계열만 받는 `max`·숫자 강도는 `/models`로 계열을 구분할 수 없어 제공하지 않는다.
+- `default`는 계속 `reasoning_effort`를 보내지 않는다. Strata에서는 웹 앱 공유 Chat 설정, 그다음 `strata-<model>.json`의 `reasoning_effort`, 없으면 모델 기본값이 적용된다.
+- vLLM은 `owned_by: "vllm"`으로 식별되지만 강도는 모델 chat template이 정하므로 표를 두지 않는다. 실제 GLM-5.3 템플릿은 `reasoning_effort`를 프롬프트에 반영하지 않았다.
+
 ### 채팅 실행의 공급자별 모델 선택 정규화 (2026-10-04)
 
 - `ActiveProvider.selected`는 글로벌 설정의 provider만 읽고 해당 공급자의 `models.selected`를 사용한다. UI 모델 목록과 실제 채팅이 같은 정규화된 모델·강도 선택을 사용하며, 다른 provider로 우회하지 않는다.

@@ -55,7 +55,7 @@ export const CompatibleModel = Schema.Struct({
   contextWindow: OpenAICompatibleContextWindow,
   outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
-  /** Reasoning efforts the endpoint's model list published for this model, when it did. */
+  /** Reasoning efforts the endpoint's model list published, or its known server accepts, for this model. */
   reasoning: Schema.optional(CompatibleReasoning),
 });
 export type CompatibleModel = typeof CompatibleModel.Type;
