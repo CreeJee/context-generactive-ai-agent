@@ -3,7 +3,7 @@ import { HashSet, MutableHashMap, Option, Predicate, Schema } from "effect";
 import { ToolFailed, toolResultKey } from "./failure.ts";
 
 /** Tools that wait on work in progress: the same answer again is what waiting looks like. */
-const waitingToolNames = HashSet.fromIterable(["get_background_result", "wait_subagents"]);
+const waitingToolNames = HashSet.fromIterable(["get_background_result"]);
 
 /** How many times in a row one call may return the same result before it is refused. */
 const sameResultLimit = 3;

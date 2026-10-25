@@ -40,8 +40,6 @@ export const builtinToolEffects = {
   read_subagent_tool_result: "read",
   // Report caches are run-local; durable review/adoption is a separate middleware RPC.
   get_subagent_reports: "read",
-  // Reads status/cursor and registers a cancellable waiter; never consumes notifications.
-  wait_subagents: "read",
   adopt_subagent_reports: "effectful",
   // Report-session evidence tools only perform scoped SELECTs and redaction.
   list_report_evidence: "read",
@@ -65,6 +63,8 @@ const retiredToolEffects = {
   get_subagent_report: "read",
   // Replaced by save_code_skill, which also saves ts skills.
   save_shell_skill: "effectful",
+  // Replaced by completion notifications and their follow-up; it only read status.
+  wait_subagents: "read",
 } as const satisfies Record<string, "read" | "effectful">;
 
 export const readOnlyToolNames = HashSet.fromIterable(

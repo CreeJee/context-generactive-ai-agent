@@ -140,57 +140,33 @@ export const defaultTestResponder = (
       : { text: `- 사용자 턴 ${users.length}개 (node ${users[0]})` };
   }
 
+  // A child's completion notification reaches the parent before its next model step, or in an
+  // idle follow-up once the parent's turn ended; the parent retrieves the reports it names.
+  const followUp = instructions.includes("This is an automatic task completion follow-up");
+  const reports = tools.find((message) => message.toolCallId === "call-reports");
+  if (isTruthy(reports)) {
+    const parsed = JSON.parse(toolText(reports));
+    // One part per report, as when each was retrieved on its own.
+    const parts = Array.isArray(parsed.reports)
+      ? parsed.reports.map((report: Json) => JSON.stringify(report)).join(" | ")
+      : toolText(reports);
+    return { text: followUp ? `Background work completed. ${parts}` : parts };
+  }
+  // In a run: "Notification <id>; task <task>; completed: …". In a follow-up: "Notification <id>;
+  // Task <task> (completed): …".
+  const notified = [
+    ...instructions.matchAll(
+      /Notification \S+; [Tt]ask ([^\s;]+)(?:; \w+:| \(\w+\):) Subagent (?:completed|failed); (\{.*\})$/gmu,
+    ),
+  ].map(([, taskId, payload]) => ({ taskId, attemptId: JSON.parse(payload!).attemptId }));
+  if (notified.length > 0)
+    return call("call-reports", "get_subagent_reports", { attempts: notified });
+  if (followUp) return { text: "Background work completed." };
+
   if (tools.length > 0) {
     const byId = MutableHashMap.fromIterable(
       tools.map((message) => [message.toolCallId, toolText(message)]),
     );
-    // Exercise the asynchronous contract explicitly: dispatch -> wait -> retrieve. The test
-    // model waits by choice; production dispatch tools no longer block their parent turn.
-    if (!instructions.includes("You are a subagent") && !user.includes("dispatch only")) {
-      const receipts = tools.flatMap((message) => {
-        try {
-          const value = JSON.parse(toolText(message));
-          return value.status === "running" && isTruthy(value.taskId) && isTruthy(value.attemptId)
-            ? [{ taskId: String(value.taskId), attemptId: String(value.attemptId) }]
-            : [];
-        } catch {
-          return [];
-        }
-      });
-      if (receipts.length > 0)
-        return call("call-wait-children", "wait_subagents", {
-          attempts: receipts,
-          timeoutMs: 30_000,
-        });
-      if (MutableHashMap.has(byId, "call-wait-children")) {
-        return Effect.runPromise(
-          Effect.gen(function* () {
-            const result = yield* Schema.decodeEffect(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  attempts: Schema.Array(
-                    Schema.Struct({ taskId: Schema.String, attemptId: Schema.String }),
-                  ),
-                }),
-              ),
-            )(Option.getOrUndefined(MutableHashMap.get(byId, "call-wait-children"))!);
-            return call("call-reports", "get_subagent_reports", {
-              attempts: result.attempts.map(({ taskId, attemptId }) => ({ taskId, attemptId })),
-            });
-          }).pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
-        );
-      }
-      // One part per report, as when each was retrieved on its own.
-      const reports = Option.getOrUndefined(MutableHashMap.get(byId, "call-reports"));
-      if (isTruthy(reports)) {
-        const parsed = JSON.parse(reports);
-        return {
-          text: Array.isArray(parsed.reports)
-            ? parsed.reports.map((report: Json) => JSON.stringify(report)).join(" | ")
-            : reports,
-        };
-      }
-    }
     if (MutableHashMap.has(byId, "call-memory")) {
       const found = JSON.parse(Option.getOrUndefined(MutableHashMap.get(byId, "call-memory"))!);
       return { text: `Found: ${found.matches?.[0]?.snippet ?? "nothing"}` };
@@ -225,8 +201,6 @@ export const defaultTestResponder = (
     if (isTruthy(generic)) return { text: `${generic[0].slice(5)} said ${generic[1]}` };
   }
 
-  if (instructions.includes("This is an automatic task completion follow-up"))
-    return { text: "Background work completed." };
   if (user === "dispatch only")
     return call("call-background", "run_subagent", { task: "nap background" });
   const generic = user.match(/^call (\S+) (\{.*\})$/s);

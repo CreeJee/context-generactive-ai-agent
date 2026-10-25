@@ -2683,3 +2683,11 @@
   - 대화가 캐시되면 Anthropic의 `input_tokens`가 거의 0이 된다. 그래서 context 사용량과 compact 판단은 전체 입력을 봐야 한다.
   - API usage 장부의 Anthropic 행은 계속 캐시 밖 입력만 저장한다(`cache_mode = 'separate'`). 기존 행과 뜻이 같다.
 - OpenAI 호환 provider는 그대로 둔다. TanStack 호환 어댑터도 캐시 필드를 보내지 않는다.
+
+## `wait_subagents`를 없애고 자식이 끝난 것은 완료 알림으로 받는다 (2026-10-25)
+
+- 사용자 결정: `wait_subagents`는 없앤다. 자식이 끝났다는 것은 완료 알림이 부모에게 알린다. 부모 run이 진행 중이면 다음 모델 호출 전에, 쉬고 있으면 자동 후속 턴으로 알린다. 보고서는 지금처럼 `get_subagent_reports`로 따로 읽는다. 상태 확인은 `get_subagent_reports`의 `running`과 겹쳤고, 이 도구에만 있던 기능은 run 안에서 최대 2분 기다리는 것뿐이었다. 앱 DB 기록으로 10-11 이후 호출은 1번이었다.
+- run 안에서 기다리는 방법은 두지 않는다. 자식 보고서만 남았으면 부모는 답을 끝내고, 완료 알림이 연 후속 턴에서 이어 간다. 위임 안내(`subagentInstructions`)에 그렇게 적는다.
+- `get_subagent_reports`가 끝나지 않은 attempt를 돌려줄 때는 `nextAction`을 붙인다. 내용은 "완료 알림으로 보고된다, 다시 물어도 기다리지 않는다"이다. 같은 `running`을 계속 묻는 호출은 반복 감지(2026-10-24)에 그대로 걸린다. 반복 감지에서 대기 도구로 빼는 것은 `get_background_result` 하나만 남는다.
+- 옛 이름은 기록된 호출을 판정하는 자리에만 남는다(`effects.ts`의 `retiredToolEffects`, 읽기 도구).
+- "서브에이전트 실행 중 메인 작업 지속 (2026-10-04)"의 `wait_subagents` 기본 `timeoutMs` 결정은 이것으로 대체한다.

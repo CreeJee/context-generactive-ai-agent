@@ -10,11 +10,13 @@ import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { DateTime, Clock, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Effect, Layer, Schedule, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
+import { messageText } from "../src/messages/text.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { defaultStorageRoot } from "../src/config/storage-root.ts";
 import { optionalProperty } from "../src/optional-property.ts";
@@ -71,7 +73,28 @@ const client = createSubscriptionOAuthClient({
     isTruthy(selectedProfile) ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
   ),
 });
-const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Use wait_subagents when needed and retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
+const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
+const Busy = Schema.Struct({ busy: Schema.Finite });
+/**
+ * Until the session's children and the follow-ups they started are over: a child's report can
+ * reach the parent only in its completion follow-up, after the first run ended. A follow-up takes
+ * its notifications before its run is recorded, so each must have reached a run that ended.
+ */
+const settled = (sessionId: string) =>
+  Effect.flatMap(SqlClient.SqlClient, (sql) =>
+    sql`SELECT
+        (SELECT count(*) FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+         WHERE t.origin_session_id = ${sessionId}
+           AND a.status IN ('queued', 'running', 'waiting', 'blocked'))
+        + (SELECT count(*) FROM chat_runs WHERE thread_id = ${sessionId} AND status = 'running')
+        + (SELECT count(*) FROM parent_notifications n
+           WHERE n.origin_session_id = ${sessionId} AND NOT EXISTS (
+             SELECT 1 FROM chat_runs r
+             WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running')) AS busy`.pipe(
+      Effect.flatMap((rows) => Schema.decodeUnknownEffect(Busy)(rows[0])),
+      Effect.repeat({ schedule: Schedule.spaced("1 second"), while: ({ busy }) => busy > 0 }),
+    ),
+  );
 const frames = Schema.fromJsonString(
   Schema.Struct({
     type: Schema.String,
@@ -247,21 +270,12 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
   );
   const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
   if (errors.length > 0) throw new Error(`pilot_run_failed: ${stringifyJson(errors)}`);
-  const answer = sse
-    .split("\n")
-    .flatMap((line) =>
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      line.startsWith("data: ")
-        ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
-        : [],
-    )
-    .flatMap((chunk) =>
-      chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
-    )
-    .join("");
+  yield* Effect.provideContext(settled(services.session.id), servicesContext);
   const messages: ModelMessage[] = yield* nativePromise(() =>
     services.state.persistence.stores.messages.loadThread(services.session.id),
   );
+  const last = messages.findLast((message) => message.role === "assistant");
+  const answer = last === undefined ? "" : messageText(last);
   const calls = messages.flatMap((message) =>
     message.role === "assistant" ? (message.toolCalls ?? []) : [],
   );
@@ -279,10 +293,6 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     selection,
     durationMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
     independentWorkBeforeChildCompletion: independent,
-    pollingCalls: calls.filter((call) => call.function.name === "wait_subagents").length,
-    waitArguments: calls
-      .filter((call) => call.function.name === "wait_subagents")
-      .map((call) => call.function.arguments),
     reportCalls: calls.filter((call) => call.function.name === "get_subagent_reports").length,
     toolCalls: calls.map((call) => call.function.name),
     correctTotals: answer.includes("10") && answer.includes("18"),

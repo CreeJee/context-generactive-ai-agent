@@ -317,7 +317,6 @@ const decodeRunIds = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run_id: Schema.String })),
 );
 const decodePendingLifecycleRows = Schema.decodeUnknownEffect(Schema.Array(PendingLifecycleRow));
-const decodeAttemptStatus = Schema.decodeUnknownEffect(Schema.Struct({ status: AttemptStatus }));
 const decodeOriginSessions = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ origin_session_id: Schema.String })),
 );
@@ -2307,17 +2306,6 @@ const make = Effect.gen(function* () {
     taskTree,
     projectTaskTree,
     taskDetail,
-    /** A small session-authorized projection for event-driven waits, not a report retrieval. */
-    subagentAttemptStatus: (sessionId: string, taskId: string, attemptId: string) =>
-      Effect.gen(function* () {
-        const row = yield* first(sql`SELECT a.status FROM agent_run_attempts a
-          JOIN work_tasks t ON t.id = a.task_id
-          WHERE a.id = ${attemptId} AND a.task_id = ${taskId} AND t.origin_session_id = ${sessionId}
-            AND t.agent_id IS NOT NULL AND t.deleted_at IS NULL AND t.delete_requested_at IS NULL`);
-        if (!isTruthy(row))
-          return yield* rejected("attempt_not_found", "Subagent attempt not found in this session");
-        return (yield* decodeAttemptStatus(row)).status;
-      }),
     projectTaskDetail,
     claimResume,
     requestResume,

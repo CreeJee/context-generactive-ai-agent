@@ -11,12 +11,14 @@ import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
   current,
+  delegate,
   encodeJson,
   freshProject,
   heldDefaultTurn,
   heldTurns,
   sdk,
   send,
+  settled,
   until,
 } from "./agent-env.ts";
 import { sqlAll, sqlGet, sqlRun, sqlTransaction } from "../support/sql.ts";
@@ -73,7 +75,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           (yield* Path.Path).join(project.root, "AGENTS.md"),
           "ROOT INSTRUCTIONS FOR EVERY AGENT",
         );
-        const answer = yield* send(sessionId, 'call run_subagent {"task":"list what matters"}');
+        const answer = yield* delegate(sessionId, 'call run_subagent {"task":"list what matters"}');
         expect(answer).toContain("child done: list what matters (earlier user messages: 0)");
         expect(answer).toContain('"status":"completed"');
         const [child] = yield* subagents.list(sessionId);
@@ -223,20 +225,21 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       yield* turns.waitFor("nap B");
       yield* turns.release("nap", 2);
       const answer = yield* Fiber.join(pending);
-      expect(answer.indexOf("napped: nap A")).toBeGreaterThan(-1);
-      expect(answer.indexOf("napped: nap A")).toBeLessThan(answer.indexOf("napped: nap B"));
-      expect((yield* (yield* Subagents).list(sessionId)).map((child) => child.status)).toEqual([
-        "completed",
-        "completed",
-      ]);
+      yield* settled(sessionId);
+      const children = yield* (yield* Subagents).list(sessionId);
+      expect(children.map((child) => child.status)).toEqual(["completed", "completed"]);
+      const receiptOf = (task: string) =>
+        answer.indexOf(children.find((child) => child.lastTask === task)!.id);
+      expect(receiptOf("nap A")).toBeGreaterThan(-1);
+      expect(receiptOf("nap A")).toBeLessThan(receiptOf("nap B"));
     }),
   );
 
   it.effect("a named child keeps its own conversation across the session's runs", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession();
-      yield* send(sessionId, 'call run_subagent {"agent":"helper","task":"first task"}');
-      const second = yield* send(
+      yield* delegate(sessionId, 'call run_subagent {"agent":"helper","task":"first task"}');
+      const second = yield* delegate(
         sessionId,
         'call run_subagent {"agent":"helper","task":"second task"}',
       );
@@ -253,7 +256,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const subagents = yield* Subagents;
       const relayed = yield* RelayedApprovals;
       const approved = yield* Effect.forkChild(
-        send(sessionId, 'call run_subagent {"task":"shell: printf child-approved"}'),
+        delegate(sessionId, 'call run_subagent {"task":"shell: printf child-approved"}'),
       );
       yield* until(
         Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
@@ -268,7 +271,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       const approvedAnswer = yield* Fiber.join(approved);
       expect(approvedAnswer).toContain("scriptSha256");
       const denied = yield* Effect.forkChild(
-        send(sessionId, 'call run_subagent {"task":"shell: printf child-denied"}'),
+        delegate(sessionId, 'call run_subagent {"task":"shell: printf child-denied"}'),
       );
       yield* until(
         Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
@@ -301,7 +304,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
   it.effect("a child file write records the actual artifact without copying its contents", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession("full");
-      const answer = yield* send(
+      const answer = yield* delegate(
         sessionId,
         'call run_subagent {"task":"call write_file {\\"path\\":\\"wt-artifact.txt\\",\\"content\\":\\"artifact sentinel body\\"}"}',
       );
@@ -325,7 +328,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
   it.effect("resume_subagent retries the task as a new child attempt", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession();
-      yield* send(sessionId, 'call run_subagent {"task":"collect facts"}');
+      yield* delegate(sessionId, 'call run_subagent {"task":"collect facts"}');
       const ids = yield* latestAttempt(sessionId);
       yield* sqlTransaction(
         Effect.gen(function* () {
@@ -339,7 +342,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           );
         }),
       );
-      const resumed = yield* send(
+      const resumed = yield* delegate(
         sessionId,
         `call resume_subagent ${yield* encodeJson({ taskId: ids.task_id, expectedAttemptId: ids.attempt_id })}`,
       );
@@ -367,7 +370,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagent blocked re
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { sessionId } = yield* parentSession();
-      yield* send(sessionId, 'call run_subagent {"task":"write externally"}');
+      yield* delegate(sessionId, 'call run_subagent {"task":"write externally"}');
       const ids = yield* latestAttempt(sessionId);
       yield* sqlTransaction(
         Effect.gen(function* () {
@@ -428,7 +431,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
           expect(yield* relayed.pending(sessionId)).toEqual([]);
           // Finish a child with no unfinished tool call, then simulate a crash while that newest
           // child attempt is still running.
-          yield* send(sessionId, 'call run_subagent {"task":"recover facts"}');
+          yield* delegate(sessionId, 'call run_subagent {"task":"recover facts"}');
           const ids = yield* latestAttempt(sessionId);
           yield* sqlTransaction(
             Effect.gen(function* () {

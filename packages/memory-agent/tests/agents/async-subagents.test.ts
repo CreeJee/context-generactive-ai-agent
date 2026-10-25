@@ -17,6 +17,7 @@ import {
   heldTurns,
   sdk,
   send,
+  settled,
   until,
 } from "./agent-env.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
@@ -95,11 +96,7 @@ const asyncTurn = Effect.fnUntraced(
     if (!internal && user === "delegate and keep working") {
       switch (lastTool) {
         case "call-background":
-          return yield* toolCall("call-check-children", "wait_subagents", {
-            attempts: [idsOf(yield* receiptFrom(messageText(last!)))],
-          });
-        case "call-check-children":
-          expect(messageText(last!)).toContain('"status":"pending"');
+          yield* receiptFrom(messageText(last!));
           return yield* toolCall("call-independent-work", "find_memory", { query: "SQLite 결정" });
         case "call-independent-work":
           return { text: "Independent parent work finished." };
@@ -197,7 +194,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       yield* turns.release("nap", 2);
       const attempts = [idsOf(first), idsOf(second)];
-      yield* callTool(sessionId, "wait_subagents", { attempts, timeoutMs: 5000 });
+      yield* settled(sessionId);
       expect(yield* send(sessionId, `review-batch ${yield* encodeJson(attempts)}`)).toBe(
         "Used both reviewed reports.",
       );
@@ -211,7 +208,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
   );
 
   it.effect(
-    "default wait lets the parent execute independent tools in the same turn before the child finishes",
+    "the parent executes independent tools in the same turn before the child finishes",
     () =>
       Effect.gen(function* () {
         const { provider } = yield* TestEnv;
@@ -326,22 +323,17 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     }),
   );
 
-  it.effect("bounded wait is not review; adoption requires retrieval in the same run", () =>
+  it.effect("adoption requires retrieval in the same run", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
       const trace = yield* WorkTraceStore;
       const ids = idsOf(yield* receiptFrom(yield* send(sessionId, "dispatch only")));
-      const wait = (options: { readonly timeoutMs?: number }) =>
-        callTool(sessionId, "wait_subagents", { attempts: [ids], ...options });
       expect(yield* callTool(sessionId, "get_subagent_reports", oneAttempt(ids))).toContain(
         '"status":"running"',
       );
-      expect(yield* wait({ timeoutMs: 0 })).toContain('"status":"pending"');
-      expect(yield* wait({ timeoutMs: 1 })).toContain('"status":"timed_out"');
-      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toEqual([]);
       yield* turns.release("nap");
-      expect(yield* wait({ timeoutMs: 5000 })).toContain('"status":"completed"');
-      expect(yield* wait({})).toContain('"status":"completed"');
+      // The completion follow-up retrieves the report in a run of its own.
+      yield* settled(sessionId);
       expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toEqual([]);
       const adopt = callTool(sessionId, "adopt_subagent_reports", {
         reports: [ids],
@@ -352,35 +344,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toHaveLength(1);
       expect(yield* adopt).toContain("Only reports reviewed in this run");
-    }),
-  );
-
-  it.effect("any wait returns a terminal child without cancelling its peer", () =>
-    Effect.gen(function* () {
-      const { sessionId, turns } = yield* parentSession;
-      const children = yield* Subagents;
-      const first = yield* receiptFrom(
-        yield* send(sessionId, 'call run_subagent {"task":"nap first dispatch only"}'),
-      );
-      const second = yield* receiptFrom(
-        yield* send(sessionId, 'call run_subagent {"task":"slow second dispatch only"}'),
-      );
-      yield* turns.release("nap first");
-      expect(
-        yield* callTool(sessionId, "wait_subagents", {
-          attempts: [idsOf(first), idsOf(second)],
-          mode: "any",
-          timeoutMs: 5000,
-        }),
-      ).toContain('"status":"completed"');
-      const statusOf = (subagentId: string) =>
-        Effect.map(
-          children.list(sessionId),
-          (listed) => listed.find((child) => child.id === subagentId)?.status,
-        );
-      expect(yield* statusOf(second.subagentId)).toBe("running");
-      yield* sdk(() => children.stopTask(second.taskId));
-      expect(yield* statusOf(second.subagentId)).toBe("cancelled");
     }),
   );
 
@@ -443,7 +406,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         "running",
       );
       yield* turns.release("nap first");
-      yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(first)], timeoutMs: 5000 });
+      yield* settled(sessionId);
       const firstReport = yield* reportFrom(
         yield* callTool(sessionId, "get_subagent_reports", oneAttempt(first)),
       );
@@ -462,7 +425,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const children = yield* Subagents;
       const first = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* turns.release("nap");
-      yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(first)], timeoutMs: 5000 });
+      yield* settled(sessionId);
       yield* sqlRun(
         "UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?",
         first.attemptId,
@@ -481,7 +444,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       expect(resumed.attemptId).not.toBe(first.attemptId);
       expect((yield* children.list(sessionId))[0]?.status).toBe("running");
       yield* turns.release("nap");
-      yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(resumed)], timeoutMs: 5000 });
+      yield* settled(sessionId);
     }),
   );
 });
@@ -496,7 +459,7 @@ testAgent({ testProvider })("subagent reports across restart", (it) => {
       const trace = yield* WorkTraceStore;
       const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* turns.release("nap");
-      yield* callTool(sessionId, "wait_subagents", { attempts: [idsOf(receipt)], timeoutMs: 5000 });
+      yield* settled(sessionId);
       const before = yield* reportFrom(
         yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt)),
       );

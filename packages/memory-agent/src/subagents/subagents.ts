@@ -63,12 +63,11 @@ export const subagentToolNames = [
   "run_subagent",
   "resume_subagent",
   "get_subagent_reports",
-  "wait_subagents",
 ] as const;
 
 export class SubagentOperationFailed extends Schema.TaggedError<SubagentOperationFailed>()(
   "SubagentOperationFailed",
-  { operation: Schema.Literals(["run", "wait", "recover", "store"]), cause: Schema.Defect() },
+  { operation: Schema.Literals(["run", "recover", "store"]), cause: Schema.Defect() },
 ) {}
 
 const adoptionMessages = {
@@ -92,8 +91,8 @@ export const subagentInstructions = `You can delegate with run_subagent (a one-o
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
 - Before delegating, reserve a concrete independent task for yourself and assign separate ownership to each child. After dispatch, immediately do your own task while children run; delegation is not a reason to stop working.
-- Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Completion notifications arrive before your next model step, or trigger a follow-up when you are idle. Do not repeatedly poll for progress.
-- When a completion notification already identifies the attempt, retrieve its report without checking status first.
+- Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Completion notifications arrive before your next model step, or trigger a follow-up when you are idle. Do not poll for progress: when only a child's report is left, end your answer and continue in that follow-up.
+- Retrieve a report once a completion notification identifies its attempt.
 - A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.`;
 
 /** What the child is told about itself. Its task comes from the parent agent, not the user. */
@@ -153,23 +152,6 @@ const AttemptsInput = Schema.Struct({
     Schema.check(Schema.isMaxLength(100)),
   ),
 });
-const WaitSubagentsInput = Schema.Struct({
-  attempts: Schema.Array(AttemptInput).pipe(
-    Schema.check(Schema.isMinLength(1)),
-    Schema.check(Schema.isMaxLength(100)),
-  ),
-  mode: Schema.Literals(["any", "all"]).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed("all" as const)),
-  ),
-  timeoutMs: Schema.Finite.pipe(
-    Schema.check(Schema.isInt()),
-    Schema.check(Schema.isBetween({ minimum: 0, maximum: 120_000 })),
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(0)),
-  ).annotate({
-    description: "Milliseconds to wait; 0 (the default) only checks.",
-  }),
-});
-
 const ChildResultInput = Schema.Struct({
   toolCallId: Schema.NonEmptyString,
   offset: Schema.Finite.pipe(
@@ -1335,7 +1317,7 @@ const make = Effect.gen(function* () {
       const reportsTool = toolDefinition({
         name: "get_subagent_reports",
         description:
-          "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running. Only completed reports retrieved here can be adopted; notifications and wait results do not count as review, and retrieval does not adopt them.",
+          "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running. Only completed reports retrieved here can be adopted; notifications do not count as review, and retrieval does not adopt them.",
         inputSchema: toToolSchema(AttemptsInput),
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       }).server((raw, context) =>
@@ -1354,59 +1336,16 @@ const make = Effect.gen(function* () {
               ),
             );
             MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports);
-            return { reports };
+            return reports.some((report) => report.status === "running")
+              ? {
+                  reports,
+                  nextAction:
+                    "A running attempt reports through its completion notification. Continue independent work, or end your answer when none is left; asking again does not wait.",
+                }
+              : { reports };
           }),
         ),
       );
-      const waitTool = toolDefinition({
-        name: "wait_subagents",
-        description:
-          "Check any or all listed task/attempt ids without blocking by default (timeoutMs 0). Pending means continue independent work; completion notifications arrive automatically. A positive timeoutMs (up to 120000) pauses your turn: use only after independent work is exhausted and a child result is required. Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
-        inputSchema: toToolSchema(WaitSubagentsInput),
-      }).server((raw) =>
-        runEffect(
-          Effect.gen(function* () {
-            const input = yield* Schema.decodeEffect(WaitSubagentsInput)(raw);
-            const snapshot = Effect.forEach(input.attempts, ({ taskId, attemptId }) =>
-              Effect.map(
-                trace.subagentAttemptStatus(binding.sessionId, taskId, attemptId),
-                (status) => ({ taskId, attemptId, status }),
-              ),
-            );
-            const ready = (states: Effect.Success<typeof snapshot>) =>
-              input.mode === "all"
-                ? states.every((entry) => terminal(entry.status))
-                : states.some((entry) => terminal(entry.status));
-            if (input.timeoutMs === 0) {
-              const states = yield* snapshot;
-              if (ready(states)) return { status: "completed" as const, attempts: states };
-              return {
-                status: "pending" as const,
-                attempts: states,
-                nextAction:
-                  "Continue independent work. Completion notifications arrive automatically; do not repeatedly poll. Wait with a positive timeout only when no independent work remains.",
-              };
-            }
-            const waiting = Effect.gen(function* () {
-              while (true) {
-                // Read the cursor before status; waitForChange rechecks after registration.
-                const cursor = yield* trace.latestCursor(binding.sessionId);
-                const states = yield* snapshot;
-                if (ready(states)) return { status: "completed" as const, attempts: states };
-                yield* Effect.tryPromise({
-                  try: (signal) => trace.waitForChange(binding.sessionId, cursor, signal),
-                  catch: (cause) => SubagentOperationFailed.make({ operation: "wait", cause }),
-                });
-              }
-            });
-            const result = yield* Effect.timeoutOption(waiting, input.timeoutMs);
-            if (Option.isSome(result)) return result.value;
-            return { status: "timed_out" as const, attempts: yield* snapshot };
-          }),
-          { signal: binding.abortSignal },
-        ),
-      );
-
       const adoptTool = toolDefinition({
         name: "adopt_subagent_reports",
         description:
@@ -1524,7 +1463,7 @@ const make = Effect.gen(function* () {
       };
 
       return {
-        tools: [runTool, lazily(resumeTool), reportsTool, waitTool, adoptTool],
+        tools: [runTool, lazily(resumeTool), reportsTool, adoptTool],
         middleware,
       };
     },

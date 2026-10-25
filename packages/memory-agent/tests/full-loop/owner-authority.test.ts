@@ -983,10 +983,11 @@ testAgent()("full-loop owner tool read/write semantics", (it) => {
     20000,
   );
 
-  it.effect.each(["get_subagent_reports", "wait_subagents"] as const)(
-    "missing subagent reports through the real worker return a settled read failure (%s)",
-    (name) =>
+  it.effect(
+    "missing subagent reports through the real worker return a settled read failure",
+    () =>
       Effect.gen(function* () {
+        const name = "get_subagent_reports";
         const { project } = yield* TestEnv;
         const session = yield* freshSession;
         const controller = callerController();
@@ -1016,23 +1017,12 @@ testAgent()("full-loop owner tool read/write semantics", (it) => {
             attemptId: "61f3d383-537b-4d5e-ab11-82fb7a468282",
           },
         ];
-        let input: Schema.Json;
-        let failingModule: string;
-        switch (name) {
-          case "get_subagent_reports":
-            input = { attempts };
-            failingModule = "subagents.ts";
-            break;
-          case "wait_subagents":
-            input = { attempts, mode: "all", timeoutMs: 0 };
-            failingModule = "store.ts";
-            break;
-        }
+        const input = { attempts };
         const rejection = yield* Effect.flip(Effect.asVoid(sdkCall(() => tool.execute!(input))));
         expect(rejection.cause).toBeInstanceOf(Error);
         if (rejection.cause instanceof Error) {
           expect(rejection.cause.message).toBe("Subagent attempt not found in this session");
-          expect(rejection.cause.stack).toContain(failingModule);
+          expect(rejection.cause.stack).toContain("subagents.ts");
         }
         const observed: boolean[] = [];
         const { result, toolStatuses, followUp } = yield* callOnce(

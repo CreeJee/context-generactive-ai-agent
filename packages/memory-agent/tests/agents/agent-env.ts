@@ -8,12 +8,14 @@ import {
   Schema,
 } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
+import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { messageText } from "../../src/messages/text.ts";
 import { type PermissionMode, Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { AdapterInvocation } from "../../src/testing/scripted-adapter.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { defaultTestResponder } from "../support/provider.ts";
+import { sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
 import { type WaitCondition, waitUntil } from "../support/wait-until.ts";
 
@@ -109,6 +111,57 @@ export const post = Effect.fnUntraced(function* (sessionId: string, text: string
 /** Post one user message and read the answer once the run ends. */
 export const send = Effect.fnUntraced(function* (sessionId: string, text: string) {
   return yield* answerOf(yield* post(sessionId, text));
+});
+
+const Busy = Schema.Struct({ busy: Schema.Finite });
+const RunState = Schema.fromJsonString(Schema.Struct({ running: Schema.NullOr(Schema.Unknown) }));
+
+/**
+ * Waits until the session's delegated work and the follow-ups it started are over: no attempt or
+ * run is going and every notification reached a run that ended. A follow-up takes its
+ * notifications before it counts as live, and a run ends after its record says so, so both the
+ * record and the agent's own view of the live run decide when the next message can be sent.
+ */
+export const settled = (sessionId: string) =>
+  until(
+    Effect.zipWith(
+      Effect.flatMap(
+        sqlGet(
+          `SELECT
+             (SELECT count(*) FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+              WHERE t.origin_session_id = ?
+                AND a.status IN ('queued', 'running', 'waiting', 'blocked'))
+             + (SELECT count(*) FROM parent_notifications n
+                WHERE n.origin_session_id = ? AND NOT EXISTS (
+                  SELECT 1 FROM chat_runs r
+                  WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running')) AS busy`,
+          sessionId,
+          sessionId,
+        ),
+        Schema.decodeUnknownEffect(Busy),
+      ),
+      current(
+        Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)).pipe(
+          Effect.flatMap((response) => sdk(() => response.text())),
+          Effect.flatMap(Schema.decodeEffect(RunState)),
+        ),
+      ),
+      ({ busy }, { running }) => busy === 0 && running === null,
+    ),
+    "delegated work to settle",
+  );
+
+/** Post a message that delegates work, then read the answer of the follow-up that ended it. */
+export const delegate = Effect.fnUntraced(function* (sessionId: string, text: string) {
+  yield* send(sessionId, text);
+  yield* settled(sessionId);
+  const messages = yield* current(
+    Effect.flatMap(ChatState, ({ persistence }) =>
+      sdk(() => persistence.stores.messages.loadThread(sessionId)),
+    ),
+  );
+  const last = messages.findLast((message) => message.role === "assistant");
+  return last === undefined ? "" : messageText(last);
 });
 
 interface Delayed {
