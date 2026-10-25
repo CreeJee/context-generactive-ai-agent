@@ -376,6 +376,11 @@
 - `default`는 계속 `reasoning_effort`를 보내지 않는다. Strata에서는 웹 앱 공유 Chat 설정, 그다음 `strata-<model>.json`의 `reasoning_effort`, 없으면 모델 기본값이 적용된다.
 - vLLM은 `owned_by: "vllm"`으로 식별되지만 강도는 모델 chat template이 정하므로 표를 두지 않는다. 실제 GLM-5.3 템플릿은 `reasoning_effort`를 프롬프트에 반영하지 않았다.
 
+### 도구 JSON Schema와 호환 서버의 non-strict 도구 (2026-10-25)
+
+- `toToolSchema`는 Effect 스키마를 `onExcessProperty: "error"`로 변환해 닫힌 object를 내보낸다. 도구 인자 decode는 그대로 정의되지 않은 키를 버린다. Effect가 `Schema.Int`의 안전 정수 범위 위에 더한 범위·설명을 `allOf`로 내보내면, 같은 값을 통과시키는 더 좁은 범위와 멤버의 설명으로 부모에 접는다. 실제로 자유 형식인 객체(`run_skill`·`save_code_skill`의 `input`)와 외부 MCP 스키마는 그대로 둔다.
+- 호환 서버에는 도구를 strict로 보내지 않는다. strict는 선택 필드를 required + nullable로 바꾸는데, vLLM GLM-5.3과 strata Qwen3.8-Flash-Next 실측에서 모델이 null 대신 추측값을 채웠다(`glob: "*"`로 하위 폴더 제외). SDK가 strict로 바꾼 도구만 SDK가 받은 원래 스키마와 `strict: false`로 되돌리고, SDK가 이미 non-strict로 보낸 도구는 그대로 둔다.
+
 ### 채팅 실행의 공급자별 모델 선택 정규화 (2026-10-04)
 
 - `ActiveProvider.selected`는 글로벌 설정의 provider만 읽고 해당 공급자의 `models.selected`를 사용한다. UI 모델 목록과 실제 채팅이 같은 정규화된 모델·강도 선택을 사용하며, 다른 provider로 우회하지 않는다.

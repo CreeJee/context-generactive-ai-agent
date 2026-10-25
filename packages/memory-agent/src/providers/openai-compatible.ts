@@ -3,6 +3,7 @@ import { nativeStream } from "../runtime/native-stream.ts";
 import { ProviderOperationFailed } from "./contracts.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { JsonValue } from "../json.ts";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import {
@@ -158,6 +159,36 @@ const provider = "openai-compatible" as const;
 const requestRoles = Schema.decodeUnknownOption(
   Schema.Array(Schema.Struct({ role: Schema.String, content: Schema.optional(Schema.Unknown) })),
 );
+/** A Chat Completions function tool as the SDK writes it into the request body. */
+const decodeFunctionTool = Schema.decodeUnknownOption(
+  Schema.Struct({
+    type: Schema.Literal("function"),
+    function: Schema.StructWithRest(
+      Schema.Struct({ name: Schema.String, strict: Schema.optionalKey(Schema.Boolean) }),
+      [Schema.Record(Schema.String, JsonValue)],
+    ),
+  }),
+);
+const decodeJsonValue = Schema.decodeUnknownOption(JsonValue);
+const decodeTools = Schema.decodeUnknownOption(Schema.Array(JsonValue));
+/** Each tool's JSON Schema as the SDK received it, by tool name. */
+type WrittenToolSchemas = { readonly [name: string]: JsonValue };
+/**
+ * A tool the SDK made strict, sent non-strict with its schema as written. Strict mode turns
+ * optional fields into required nullable ones, and local models fill those with guesses (a `glob`
+ * that drops subfolders) instead of null (decisions.md 2026-10-25).
+ */
+const nonStrictTool = (tool: JsonValue, written: WrittenToolSchemas): JsonValue =>
+  decodeFunctionTool(tool).pipe(
+    Option.filter((decoded) => decoded.function.strict === true),
+    Option.flatMap((decoded) =>
+      Option.map(Option.fromNullishOr(written[decoded.function.name]), (parameters) => ({
+        ...decoded,
+        function: { ...decoded.function, parameters, strict: false },
+      })),
+    ),
+    Option.getOrElse(() => tool),
+  );
 const credentialPrefix = "context-generactive-agent/openai-compatible/v1:";
 const decodeStoredCredential = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ baseUrl: Schema.String, key: Schema.String })),
@@ -715,6 +746,7 @@ function makeOpenAICompatibleSettingsBody(
         () => ({ value: null, failed: true }),
       );
       let promptDiagnostic = "Compatible request message roles unavailable";
+      let writtenToolSchemas: WrittenToolSchemas = {};
       const adapter = openaiCompatibleText(selection.model, {
         baseURL: settings.baseUrl,
         apiKey: "unused",
@@ -759,6 +791,9 @@ function makeOpenAICompatibleSettingsBody(
                 delete payload.tools;
                 delete payload.tool_choice;
               }
+              const tools = decodeTools(payload.tools);
+              if (Option.isSome(tools))
+                payload.tools = tools.value.map((tool) => nonStrictTool(tool, writtenToolSchemas));
               const body = stringifyJson(payload);
               const messages = Option.getOrElse(requestRoles(payload.messages), () => []);
               const userContent = messages
@@ -845,6 +880,14 @@ function makeOpenAICompatibleSettingsBody(
                 modelOptions: { ...options.modelOptions, ...maxTokensOf(settings.outputBudget) },
               };
               if (!settings.toolCalling) request.tools = [];
+              writtenToolSchemas = Object.fromEntries(
+                (request.tools ?? []).flatMap((tool) =>
+                  Option.match(decodeJsonValue(tool.inputSchema), {
+                    onNone: () => [],
+                    onSome: (schema) => [[tool.name, schema] as const],
+                  }),
+                ),
+              );
               const toolDefinitions = request.tools?.length ?? 0;
               const toolCalls = yield* Ref.make(0);
               // One provider turn's outcome as counts only: no prompt, reply, model, endpoint or key.

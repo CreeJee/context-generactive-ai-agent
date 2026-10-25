@@ -1248,7 +1248,11 @@ describe("OpenAI compatible settings", () => {
             const tool = {
               name: "lookup",
               description: "Lookup",
-              inputSchema: { type: "object", properties: {} },
+              inputSchema: {
+                type: "object",
+                properties: { glob: { type: "string" } },
+                additionalProperties: false,
+              },
             };
             const consume = () =>
               Effect.gen(function* () {
@@ -1282,7 +1286,20 @@ describe("OpenAI compatible settings", () => {
             );
             expect(requests.at(-1)?.path).toBe("/v1/chat/completions");
             expect(requests.at(-1)?.body.max_tokens).toBe(512);
-            expect(requests.at(-1)?.body.tools).toBeDefined();
+            // A strict-capable schema still goes as written: strict would make `glob` required.
+            expect(requests.at(-1)?.body.tools).toEqual([
+              {
+                type: "function",
+                function: expect.objectContaining({
+                  name: "lookup",
+                  strict: false,
+                  parameters: expect.objectContaining({
+                    properties: { glob: { type: "string" } },
+                    additionalProperties: false,
+                  }),
+                }),
+              },
+            ]);
             expect(requests.at(-1)?.authorization).toBeUndefined();
             yield* f.api.update({ ...settings, toolCalling: false });
             yield* consume();
