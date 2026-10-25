@@ -4,7 +4,7 @@
 
 ## 목표
 
-TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채팅 전송은 Effect AI(`effect/ai`)와 직접 만든 코드로 옮긴다. DB에 저장된 데이터는 그대로 읽고, 같은 모양으로 계속 쓴다.
+TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채팅 전송은 Effect AI(`effect/ai`)와 직접 만든 코드로 옮긴다. 기존 채팅은 지금처럼 열리고 이어서 대화할 수 있어야 한다.
 
 ## 정한 방향 (2026-10-25)
 
@@ -17,8 +17,10 @@ TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채�
 - 옛 Goal의 worker·native artifact 호환은 하지 않는다.
   - 업그레이드는 바이너리 재시작이다. 재시작하면 실행 중이거나 승인을 기다리던 run은 이미 실패로 끝난다(`packages/memory-agent/src/chat-state/chat-state.ts`의 재시작 처리).
   - Goal 사용량도 많지 않다.
-- DB에 저장된 스키마는 바꾸지 않는다. 테이블·열뿐 아니라 JSON 열 안의 모양까지 같게 쓴다. 새 migration은 넣지 않는다.
-- client는 `useChat` 대신 AG-UI 이벤트를 읽는 자체 hook을 `@effect/atom-react`로 만든다. wire는 지금 저장된 AG-UI chunk 모양 그대로다.
+- DB의 테이블·열은 바꾸지 않는다. JSON 열 안의 TanStack 메타데이터는 migration 하나로 지우고, 쓰는 값만 우리 필드로 옮긴다("DB 저장 형식과 migration" 참고).
+  - 조건: 기존 채팅이 지금처럼 열리고, 이어서 대화할 수 있어야 한다.
+- API payload는 새 client에 맞춰 바꿔도 된다. chunk는 AG-UI 1.0 표준 모양으로만 쓰고, TanStack 확장 필드는 넣지 않는다.
+- client는 `useChat` 대신 AG-UI 이벤트를 읽는 자체 hook을 `@effect/atom-react`로 만든다.
 - Effect의 AG-UI 지원(#9842, #9852, #9853)은 merge 전이라 기대지 않는다. merge되면 다시 본다("Effect의 AG-UI 지원" 참고).
 
 ## 설치된 패키지로 본 가능성
@@ -53,11 +55,10 @@ merge된 Effect AI에는 AG-UI 지원이 아직 없다. 기능 요청 [#6341](ht
 쓸 수 있는 것:
 
 - 저장된 승인 대기 기록은 이미 AG-UI 1.0 모양이다. `chat_interrupts.payload`의 키(`id`, `message`, `metadata`, `reason`, `responseSchema`, `toolCallId`)가 모두 AG-UI 1.0 `Interrupt`의 필드다.
-- merge되면 `AgUiSchema`를 저장 codec과 client decoder의 바탕으로 쓸 수 있다. `fromStreamParts`는 loop의 이벤트 변환에 쓸 수 있다.
+- 새 chunk는 AG-UI 1.0 표준 모양만 쓰므로, merge되면 `AgUiSchema`를 chunk Schema로 그대로 쓸 수 있다. `fromStreamParts`는 loop의 이벤트 변환에 쓸 수 있다.
 
 그대로는 쓸 수 없는 것:
 
-- 저장된 chunk는 AG-UI 1.0에 TanStack 필드를 더한 모양이다("DB 저장 형식 고정 범위"의 `workflow_run_events`). `AgUiSchema`로 decode하면 `RUN_FINISHED`의 `usage` 객체에서 실패하고, `toolName`·`input`·`error` 같은 추가 필드는 빠진다.
 - `AgUiServer.agent`는 승인을 interrupt로 바꾸지 않는다.
 - `AgUi.toPrompt`는 client가 보낸 대화로 prompt를 만든다. 우리는 DB 기록이 기준이고, client는 새 메시지만 보낸다.
 - Effect 쪽에는 server만 있다. client는 직접 만든다.
@@ -107,8 +108,9 @@ src에서 많이 쓰는 것:
   - `Prompt`에서는 system prompt가 history 안의 메시지다.
   - tool-result에 `name`이 필수다.
   - 메시지에 `id`·`createdAt`이 없다.
-  - 그래서 저장은 `ModelMessage` 그대로 두고, model을 부르기 직전에만 `Prompt`로 바꾼다.
-- **usage 이름.** `TokenUsage`는 promptTokens 계열이고 Effect `Usage`는 inputTokens 계열이다.
+  - 그래서 저장은 지금 메시지 구조를 우리 Schema로 두고, model을 부르기 직전에만 `Prompt`로 바꾼다.
+  - 저장된 tool 메시지에는 `name`이 없다. 같은 `toolCallId`의 assistant tool call에서 찾는다.
+- **usage 이름.** `TokenUsage`는 promptTokens 계열이고 Effect `Usage`는 inputTokens 계열이다. 저장된 `chat_runs.usage`는 migration에서 새 이름으로 바꾼다.
 
 ### 직접 만들 것
 
@@ -129,23 +131,36 @@ src에서 많이 쓰는 것:
   - provider tool factory 18개(OpenAI 11, Anthropic 7): `packages/memory-agent/src/providers/tool-capabilities.ts`. provider tool은 `Tool.providerDefined`로 만든다.
 - **compaction.** `evictOldest`를 직접 만든다.
 
-## DB 저장 형식 고정 범위
+## DB 저장 형식과 migration
 
-새 runtime은 아래 데이터를 지금과 같은 JSON으로 쓴다. 같은 메시지에서는 키 순서까지 같은 텍스트가 나와야 한다. 두 곳이 텍스트에 의존하기 때문이다.
+테이블과 열은 그대로 둔다. JSON 안의 TanStack 메타데이터는 migration 하나로 지운다. 로컬 DB에 있는 TanStack 메타데이터(2026-10-25 확인):
 
-- `chat_history_projection`의 준비 표시는 저장된 `messages` 텍스트와 비교한다(`packages/memory-agent/src/chat-state/history-projection-sql.ts`).
-- model handoff는 메시지에서 fingerprint를 계산한다(`packages/memory-agent/src/agent/model-handoff.ts`).
+- 메시지의 `metadata.tanstack`(9,589개): `createdAt`, `model`, `toolCallMetadata`, 드물게 `source`·`finishReason`·`run`
+- tool call의 `metadata.tanstack`(3,099개): `model`·`index`, 또는 `source`
+
+migration이 하는 일:
+
+- `metadata.tanstack.createdAt`은 메시지에 `createdAt`이 없을 때 그 자리로 옮긴다.
+- `metadata.tanstack.model`은 우리 `model` 필드로 옮긴다. model handoff가 이전 model을 찾을 때 이 값을 읽는다(`packages/memory-agent/src/agent/model-handoff.ts`의 `StoredModel`).
+- 나머지 TanStack 메타데이터를 지우고, 비게 된 `metadata`도 지운다.
+- `chat_runs.usage`를 새 usage 이름으로 바꾼다.
+- `memory-agent/model-handoff` 상태의 `anchor`를 다시 계산한다.
+  - fingerprint는 메시지 전체의 해시라, 메타데이터를 지우면 값이 바뀐다.
+  - 다시 계산하지 않으면 그 세션의 handoff가 `HistoryChanged`로 실패한다.
+- `chat_threads.messages`를 바꾸면 trigger가 history projection을 stale로 만든다. `chat_history_groups`도 같은 규칙으로 고쳐 ready로 되돌릴지, 다시 만들게 둘지 1단계에서 정한다.
+
+migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadata.tanstack.model`을 읽으므로, 그 전에 돌리면 안 된다.
 
 테이블별 모양:
 
 - `chat_threads.messages`
-  - TanStack `ModelMessage[]`다. subagent thread(`subagent-<id>`)도 같다.
+  - 지금은 TanStack `ModelMessage[]`다. migration 뒤에는 같은 구조(`role`, `content`, `toolCalls`, `toolCallId`, `thinking`, `id`, `createdAt`, `error`)를 우리 Schema로 쓴다. subagent thread(`subagent-<id>`)도 같다.
   - 읽는 곳: history projection의 검증(role, id), migration의 `json_each`, model handoff, compaction
 - `chat_history_projection`: 화면 메시지 id별 `ModelMessage` 묶음이다. `format_version`은 1이다.
 - `chat_runs`
   - status 5종: `running`, `interrupted`, `completed`, `failed`, `aborted`
   - `error`, `error_code`
-  - `usage`: TanStack `TokenUsage`. chunk마다 누적한다.
+  - `usage`: 지금은 TanStack `TokenUsage`다. migration에서 새 usage 이름으로 바꾼다. chunk마다 누적한다.
 - `chat_interrupts`
   - `payload`: `RUN_FINISHED` chunk의 `outcome.interrupts` 항목을 얕게 복사한 객체다(`@tanstack/ai-persistence`의 `interruptPayload`). 키는 모두 AG-UI 1.0 `Interrupt`의 필드다.
   - `response`: 응답 JSON이다. 응답이 없으면 NULL이다.
@@ -154,11 +169,11 @@ src에서 많이 쓰는 것:
   - 메시지에서 계산하는 값만 같은 계산을 유지하면 된다.
 - `workflow_run_events.payload_json`
   - AG-UI chunk다. event key는 `sdk-stream:v1:` namespace다(`packages/memory-agent/src/workflow/durable-stream.ts`).
-  - 저장 chunk가 같으므로 SSE 형식도 AG-UI로 남는다.
-  - AG-UI 1.0 밖의 TanStack 필드가 있다(로컬 DB에서 확인):
-    - `RUN_FINISHED.usage`는 객체다. AG-UI 1.0은 `TokenUsage` 배열이다.
-    - `TOOL_CALL_START.toolName`(`toolCallName`과 별도), `TOOL_CALL_END.input`
-    - `RUN_ERROR`는 두 모양이다: `code`·`message`·`runId`·`threadId`, 또는 `error`·`message`. `runId`·`threadId`·`error`가 AG-UI 1.0 밖이다.
+  - 새 행은 AG-UI 1.0 표준 모양으로만 쓴다.
+  - 옛 행에는 AG-UI 1.0 밖의 TanStack 필드가 있다: `RUN_FINISHED.usage` 객체(AG-UI 1.0은 배열), `TOOL_CALL_START.toolName`, `TOOL_CALL_END.input`, `RUN_ERROR`의 `runId`·`threadId`·`error`.
+  - 옛 행은 그대로 둔다.
+    - 읽는 곳은 진행 중 run에 다시 붙을 때의 replay뿐이고, 내용을 해석하지 않는다.
+    - 재시작하면 진행 중 run은 실패로 끝나므로, 옛 행이 다시 읽힐 일이 없다.
 - `owner_rpc_operations`
   - TanStack 소유는 아니지만, worker RPC 규칙이 SQL에 들어 있다.
   - 쓰기 tool의 권한 확인은 `operation_id - 1`, 실행은 `operation_id` 번호에 기록된다.
@@ -201,19 +216,20 @@ src에서 많이 쓰는 것:
   - named subagent, compaction, model handoff
   - Goal worker run(tool과 승인)
   - queue와 steer
-- 비교 대상은 "DB 저장 형식 고정 범위"의 테이블 전부다.
+- 비교 대상은 "DB 저장 형식과 migration"의 테이블 전부다. 비교할 때 TanStack 메타데이터는 뺀다.
 - 완료 기준: 지금 코드에서 통과한다. 타입으로 확인할 수 없는 경계라 테스트로 둔다.
 
-### 1. 저장 codec
+### 1. 저장 Schema와 migration
 
-- Effect Schema로 정의할 것: `ModelMessage`, `TokenUsage`, interrupt payload, 저장되는 AG-UI chunk, history group
-  - AG-UI chunk Schema에는 위의 TanStack 필드를 넣는다. `AgUiSchema`가 merge되면 그것을 바탕으로 확장한다.
-- `tools/`에 로컬 DB 사본을 전수 검사하는 도구를 둔다.
-  - `~/.context-generactive-agent/agent.db`를 복사한다.
-  - 모든 행을 decode한 뒤 다시 encode한다.
-  - 원래 텍스트와 다른 행을 보고한다.
+- Effect Schema로 정의할 것: 메시지(TanStack 메타데이터 없음, `model` 필드 추가), usage, interrupt payload, AG-UI 1.0 chunk, history group
+  - `AgUiSchema`가 merge되면 chunk Schema는 그것으로 바꾼다.
+- "DB 저장 형식과 migration"의 migration을 만든다. 7단계 전까지 앱의 migration 목록에는 넣지 않는다.
+- `tools/`에 로컬 DB 사본을 검사하는 도구를 둔다.
+  - `~/.context-generactive-agent/agent.db`를 복사하고 migration을 돌린다.
+  - 모든 행이 새 Schema로 decode되는지 본다.
+  - 메시지마다 내용(text, tool call, tool result, thinking과 서명, 이미지)과 `createdAt`, `model`이 원본과 같은지 비교한다.
   - 개인 데이터를 쓰므로 테스트로 커밋하지 않는다.
-- 완료 기준: golden 행과 로컬 DB 사본의 모든 행이 같은 텍스트로 돌아온다.
+- 완료 기준: golden과 로컬 DB 사본에서 차이가 없다.
 
 ### 2. provider
 
@@ -225,10 +241,11 @@ src에서 많이 쓰는 것:
   - `SubscriptionStreamFailed` 단계 분류
 - external ACP와 scripted `LanguageModel`을 만든다.
 - 모델 표, capability 타입, provider tool 18개를 직접 만든다.
-- `ModelMessage`와 `Prompt`를 양방향으로 바꾸는 변환을 만든다. reasoning 서명과 encrypted reasoning이 손실 없이 왕복해야 한다.
+- 저장 메시지와 `Prompt`를 양방향으로 바꾸는 변환을 만든다. reasoning 서명과 encrypted reasoning이 손실 없이 왕복해야 한다.
 - 완료 기준:
   - 기존 provider 계약 테스트를 새 provider로 옮겨서 통과한다: subscription-stream-contract, subscription-reasoning-restoration, subscription-sqlite-reasoning, openai-compatible.
   - 변환이 golden과 로컬 DB 사본에서 왕복한다.
+  - migration한 로컬 DB 사본의 세션마다, 이어서 대화할 때 provider에 보내는 요청이 지금 코드가 원본에서 만드는 요청과 같다. reasoning 서명도 포함한다.
 
 ### 3. tool
 
@@ -255,7 +272,9 @@ src에서 많이 쓰는 것:
   - 끊긴 답 보존
 - durable stream은 지금과 같은 AG-UI chunk와 event key를 쓴다.
 - 서브에이전트, compaction, model handoff를 새 loop로 옮긴다.
-- 완료 기준: 0단계 golden과 같은 행이 나온다.
+- 완료 기준:
+  - 0단계 golden과 같은 행이 나온다.
+  - migration한 로컬 DB 사본의 모든 세션에서, history page의 화면 메시지가 지금 코드가 원본에서 만드는 것과 같다.
 
 ### 5. worker와 Goal
 
@@ -291,22 +310,24 @@ src에서 많이 쓰는 것:
 ### 7. 전환과 삭제
 
 - 커밋 순서:
-  1. backend의 모든 진입점을 새 runtime으로 바꾼다. 진입점: 본 채팅, BTW, 서브에이전트, Goal worker, ACP, MCP, 단발 호출. client는 기존 `useChat`을 그대로 둔다. 이 상태로 browser test를 돌려 wire가 바뀌지 않았는지 확인한다.
-  2. client를 6단계 hook으로 바꾼다.
-  3. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목.
-- 검사: golden, 로컬 DB 왕복 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
+  1. 모든 진입점을 새 runtime으로 바꾸고, client를 6단계 hook으로 바꾸고, migration을 등록한다.
+     - 진입점: 본 채팅, BTW, 서브에이전트, Goal worker, ACP, MCP, 단발 호출
+     - API payload가 바뀌어 기존 `useChat`으로는 확인할 수 없으므로, backend와 client를 함께 바꾼다.
+  2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목.
+- 검사: golden, 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 
 ## 이번에 하지 않는 것
 
 - TanStack과 Effect 사이의 bridge adapter, 임시 `toTanStackTool`
 - 옛 Goal용 v1 host, 옛 TanStack 코드를 고정한 package, 릴리즈 artifact 계약 테스트
-- `ModelMessage`를 `Prompt`로 바꾸는 데이터 변환, 새 migration
+- 저장 메시지 구조를 `Prompt`로 바꾸는 데이터 변환. migration은 TanStack 메타데이터만 지운다.
 - BTW 선행 시험
 
 ## 위험
 
-- 7단계 backend 전환 커밋이 크다. 안전망은 golden DB, 로컬 DB 왕복 도구, 기존 `useChat`으로 돌리는 browser test다.
+- 7단계 전환 커밋이 크다. backend, client, migration이 한 커밋에 들어간다. 안전망은 golden DB, 로컬 DB 검사 도구, browser test다.
+- migration은 되돌릴 수 없다. 1단계 검사 도구로 로컬 DB 사본에서 먼저 확인한다.
 - Effect AI는 unstable이다. effect와 provider 패키지를 같은 커밋에 묶는다. effect를 올릴 때는 provider 계약 테스트를 함께 확인한다.
 - 승인 묶음과 interrupt 의미를 앱이 직접 지켜야 한다.
 - 옛 Goal 세션은 읽기 전용이 된다.
@@ -347,11 +368,10 @@ TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체
 ## 확인하지 않은 것
 
 - provider 패키지는 받아서 소스만 읽었다. 설치, 타입 검사, 실행은 하지 않았다.
-- Effect Schema encode로 TanStack과 키 순서까지 같은 JSON을 만들 수 있는지. 1단계에서 확인한다.
 - `TokenUsage`의 모든 필드를 Effect `Usage`에서 채울 수 있는지.
 - `@effect/atom-react`는 받아서 export만 봤다. 설치와 실행은 하지 않았다.
 - 공식 `@ag-ui/client`. 설치되어 있지 않고(`@ag-ui/core` 1.0.0만 간접 의존성으로 있다), 소스도 보지 않았다.
-- `AgUiSchema`의 `Metadata`가 저장된 `metadata`를 그대로 담는지.
+- `toolCallMetadata`와 tool call `metadata`(`model`, `index`)를 지워도 provider 요청이 같은지. 2단계 완료 기준으로 확인한다.
 
 ## 열린 항목
 
