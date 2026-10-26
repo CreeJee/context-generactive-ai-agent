@@ -10,9 +10,13 @@ import {
   HashSet,
   MutableHashMap,
   MutableHashSet,
+  MutableRef,
   DateTime,
+  Predicate,
   SchemaTransformation,
 } from "effect";
+import type { RunHook } from "../loop/run.ts";
+import { RunEnd } from "../loop/store.ts";
 import { projectInstructions } from "./project-instructions.ts";
 import { workflowActions } from "../workflow/actions.ts";
 import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
@@ -1150,61 +1154,87 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     runId: string,
     goalExecution: () => GoalExecutionPayload | null,
   ) => {
+    // The progress the run's tools made, each once in the order made, and how the run ended.
+    const progress = MutableRef.make<ReadonlyArray<string>>([]);
+    const terminalOutcome = MutableRef.make<"pending" | "completed" | "failed">("pending");
+    const settled = MutableRef.make(false);
+    const madeProgress = (made: ReadonlyArray<string | null>) =>
+      MutableRef.update(progress, (all) =>
+        EffectArray.dedupe([...all, ...EffectArray.filter(made, Predicate.isNotNull)]),
+      );
+    const endedAs = (outcome: "completed" | "failed") => () => {
+      MutableRef.set(terminalOutcome, outcome);
+    };
     const successfulCalls = MutableHashSet.empty<string>();
-    const toolResults: string[] = [];
-    let terminalOutcome: "pending" | "completed" | "failed" = "pending";
-    let settled = false;
     const middleware: ChatMiddleware = {
       name: "memory-agent/workflow-lifecycle",
       onAfterToolCall(_ctx, info) {
         if (info.ok) MutableHashSet.add(successfulCalls, info.toolCallId);
       },
       onToolPhaseComplete(_ctx, info) {
-        for (const call of info.toolCalls) {
-          // Declined approvals have no after-call hook; skipped/error results never count.
-          if (!MutableHashSet.has(successfulCalls, call.id)) continue;
-          const result = info.results.find((entry) => entry.toolCallId === call.id);
-          const fingerprint = toolProgressFingerprint(
-            call.function.name,
-            call.function.arguments,
-            result?.result,
-          );
-          if (isTruthy(fingerprint) && !toolResults.includes(fingerprint))
-            toolResults.push(fingerprint);
-        }
+        // Declined approvals have no after-call hook; skipped/error results never count.
+        madeProgress(
+          info.toolCalls
+            .filter((call) => MutableHashSet.has(successfulCalls, call.id))
+            .map((call) =>
+              toolProgressFingerprint(
+                call.function.name,
+                call.function.arguments,
+                info.results.find((entry) => entry.toolCallId === call.id)?.result,
+              ),
+            ),
+        );
         MutableHashSet.clear(successfulCalls);
       },
-      onFinish() {
-        terminalOutcome = "completed";
-      },
-      onAbort() {
-        terminalOutcome = "failed";
-      },
-      onError() {
-        terminalOutcome = "failed";
-      },
+      onFinish: endedAs("completed"),
+      onAbort: endedAs("failed"),
+      onError: endedAs("failed"),
+    };
+    const hook: RunHook = {
+      // Only a call whose tool ran and returned counts; what a gate answers always carries an
+      // error, which never counts either.
+      stepEnded: (_scope, { answered }) =>
+        Effect.sync(() =>
+          madeProgress(
+            answered.map(({ call, answer }) =>
+              answer._tag === "Returned"
+                ? toolProgressFingerprint(call.name, JSON.stringify(call.params), answer.result)
+                : null,
+            ),
+          ),
+        ),
+      // Waiting for the user is a finish, as it was for the middleware; settlement leaves it.
+      ended: (_scope, end) =>
+        Effect.sync(
+          endedAs(
+            RunEnd.$match(end, {
+              Completed: () => "completed" as const,
+              Interrupted: () => "completed" as const,
+              Failed: () => "failed" as const,
+              Aborted: () => "failed" as const,
+            }),
+          ),
+        ),
     };
     // Hooks only capture the candidate terminal outcome. Settlement runs after the complete SDK
     // stream and every middleware finalizer has stopped, so a later audited finalizer can still
     // downgrade an earlier onFinish to failure before the durable decision is published.
     const settle = Effect.suspend(() => {
-      if (settled) return Effect.void;
-      settled = true;
+      if (MutableRef.getAndSet(settled, true)) return Effect.void;
       return Effect.gen(function* () {
+        const outcome = MutableRef.get(terminalOutcome);
         const persistedStatus = Option.getOrUndefined(
           yield* persistedRunStatus({ runId, sessionId }),
         )?.status;
         if (
           persistedStatus === "interrupted" ||
-          (terminalOutcome === "pending" &&
+          (outcome === "pending" &&
             (persistedStatus === undefined || persistedStatus === "running"))
         )
           return;
         const unresolved = Option.getOrUndefined(yield* unresolvedOperation(runId));
         const completed =
-          terminalOutcome === "completed" &&
-          persistedStatus !== "failed" &&
-          persistedStatus !== "aborted";
+          outcome === "completed" && persistedStatus !== "failed" && persistedStatus !== "aborted";
         const durable = goalExecution();
         if (durable !== null) {
           if (unresolved !== undefined)
@@ -1230,12 +1260,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? yield* workflows.finishRun(sessionId, phase)
             : yield* workflows.get(sessionId);
         if (completed && unresolved === undefined)
-          yield* execution.finish(sessionId, runId, state, [...toolResults]);
+          yield* execution.finish(sessionId, runId, state, [...MutableRef.get(progress)]);
         else yield* execution.stop(sessionId, "run_failed", runId);
         yield* events.publishSession(sessionId, "run-state");
       });
     });
-    return { middleware, settle };
+    return { middleware, hook, settle };
   };
 
   const indexInBackground = (): ChatMiddleware => {
