@@ -89,6 +89,8 @@ export const isInjectedText: {
 function isInjectedTextBody(text: string, injected: InjectedText): boolean {
   const start = text.trimStart();
   const opening = /^<([a-z_-]+)[\s>/]/u.exec(start);
-  if (opening !== null && HashSet.has(injected.tags, opening[1] ?? "")) return true;
-  return injected.prefixes.some((prefix) => start.startsWith(prefix));
+  return (
+    (opening !== null && HashSet.has(injected.tags, opening[1] ?? "")) ||
+    injected.prefixes.some((prefix) => start.startsWith(prefix))
+  );
 }

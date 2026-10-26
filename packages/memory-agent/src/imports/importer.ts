@@ -332,64 +332,69 @@ const make = (watching: boolean, home: string) =>
       );
 
     /** The running pass, or a new one. Two passes would import a line twice before either marks it. */
-    const begin = Effect.suspend(() => {
-      if (running !== null) return Effect.succeed(running);
-      return Effect.gen(function* () {
-        const effectClock = yield* Clock.Clock;
+    const begin = Effect.suspend(() =>
+      Option.match(Option.fromNullishOr(running), {
+        onSome: Effect.succeed,
+        onNone: () =>
+          Effect.gen(function* () {
+            const effectClock = yield* Clock.Clock;
 
-        const done = yield* Deferred.make<number, ImportWorkerFailed>();
-        running = done;
-        const startedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-        activity = ImportActivity.running({
-          startedAt,
-          checked: 0,
-          total: 0,
-          written: 0,
-          failed: 0,
-        });
-        events.publishGlobal("imports");
-        yield* pass(startedAt).pipe(
-          Effect.tap((progress) =>
-            Effect.sync(() => {
-              activity = ImportActivity.finished({
-                startedAt,
-                finishedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                ),
-                ...progress,
-              });
-              events.publishGlobal("imports");
-            }),
-          ),
-          Effect.tap(() =>
-            Effect.tap(projects.listAll, (list) =>
-              Effect.sync(() => {
-                for (const project of list) events.publishProject(project.id, "sessions");
-              }),
-            ).pipe(
-              // The pass is done either way; pages only miss the hint to reload their lists.
-              Effect.catch((error) =>
-                Effect.logWarning("Imported sessions were not announced", error),
+            const done = yield* Deferred.make<number, ImportWorkerFailed>();
+            running = done;
+            const startedAt = DateTime.formatIso(
+              DateTime.makeUnsafe(yield* Clock.currentTimeMillis),
+            );
+            activity = ImportActivity.running({
+              startedAt,
+              checked: 0,
+              total: 0,
+              written: 0,
+              failed: 0,
+            });
+            events.publishGlobal("imports");
+            yield* pass(startedAt).pipe(
+              Effect.tap((progress) =>
+                Effect.sync(() => {
+                  activity = ImportActivity.finished({
+                    startedAt,
+                    finishedAt: DateTime.formatIso(
+                      DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                    ),
+                    ...progress,
+                  });
+                  events.publishGlobal("imports");
+                }),
               ),
-            ),
-          ),
-          Effect.tapError((failure) => crashed(startedAt, failure.reason)),
-          // A defect in the worker's pass stops it; the watcher reports it.
-          Effect.tapDefect(() => crashed(startedAt, "pass")),
-          Effect.map((progress) => progress.written),
-          Effect.onExit((exit) =>
-            Effect.andThen(
-              Effect.sync(() => {
-                running = null;
-              }),
-              Deferred.done(done, exit),
-            ),
-          ),
-          Effect.forkIn(layerScope),
-        );
-        return done;
-      });
-    });
+              Effect.tap(() =>
+                Effect.tap(projects.listAll, (list) =>
+                  Effect.sync(() =>
+                    list.forEach((project) => events.publishProject(project.id, "sessions")),
+                  ),
+                ).pipe(
+                  // The pass is done either way; pages only miss the hint to reload their lists.
+                  Effect.catch((error) =>
+                    Effect.logWarning("Imported sessions were not announced", error),
+                  ),
+                ),
+              ),
+              Effect.tapError((failure) => crashed(startedAt, failure.reason)),
+              // A defect in the worker's pass stops it; the watcher reports it.
+              Effect.tapDefect(() => crashed(startedAt, "pass")),
+              Effect.map((progress) => progress.written),
+              Effect.onExit((exit) =>
+                Effect.andThen(
+                  Effect.sync(() => {
+                    running = null;
+                  }),
+                  Deferred.done(done, exit),
+                ),
+              ),
+              Effect.forkIn(layerScope),
+            );
+            return done;
+          }),
+      }),
+    );
 
     /** One pass, waited for. Returns how many nodes it wrote; embedding them is left to the caller. */
     const runOnce = Effect.flatMap(begin, Deferred.await);
@@ -419,11 +424,15 @@ const make = (watching: boolean, home: string) =>
 
     let watchHealth: LoopHealth = healthyLoop;
     const setWatchHealth = (next: LoopHealth) =>
-      Effect.sync(() => {
-        if (sameLoopHealth(watchHealth, next)) return;
-        watchHealth = next;
-        events.publishGlobal("imports");
-      });
+      Effect.asVoid(
+        Effect.when(
+          Effect.sync(() => {
+            watchHealth = next;
+            events.publishGlobal("imports");
+          }),
+          Effect.sync(() => !sameLoopHealth(watchHealth, next)),
+        ),
+      );
     /**
      * Runs a pass every few minutes while migration is on. A failed round is retried with backoff;
      * when the retries run out, or a defect happens, the watcher stops and settings shows why
@@ -431,8 +440,10 @@ const make = (watching: boolean, home: string) =>
      */
     const watchLoop = Effect.gen(function* () {
       const settings = yield* config.read;
-      if (settings.importsEnabled !== true) return;
-      if ((yield* runOnce) > 0) yield* backfill;
+      const pass = Effect.flatMap(runOnce, (written) =>
+        Effect.when(backfill, Effect.succeed(written > 0)),
+      );
+      yield* Effect.when(pass, Effect.succeed(settings.importsEnabled === true));
     }).pipe(
       superviseLoopStep({ message: "import_watch_failed", setHealth: setWatchHealth }),
       Effect.repeat({
@@ -442,7 +453,7 @@ const make = (watching: boolean, home: string) =>
     );
     const watcher = yield* FiberHandle.make();
     const startWatch = FiberHandle.run(watcher, watchLoop, { onlyIfMissing: true });
-    if (watching) yield* startWatch;
+    yield* Effect.when(startWatch, Effect.succeed(watching));
 
     const overview = Effect.gen(function* () {
       // As it was when asked; counting below may take long enough for a short pass to end.

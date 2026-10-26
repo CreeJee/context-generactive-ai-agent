@@ -1,6 +1,6 @@
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Option, Schema } from "effect";
+import { Match, Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
 import { branchOf, isInjectedText, TranscriptItem, type InjectedText } from "./items.ts";
 
@@ -67,10 +67,12 @@ const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Line));
 
 const isText = Schema.is(Schema.String);
 
-const bodyText = (body: ResultBody | undefined): string => {
-  if (body === undefined) return "";
-  return isText(body) ? body : body.map((part) => part.text ?? "").join("");
-};
+const bodyText = (body: ResultBody | undefined): string =>
+  Option.match(Option.fromUndefinedOr(body), {
+    onNone: () => "",
+    onSome: (present) =>
+      isText(present) ? present : present.map((part) => part.text ?? "").join(""),
+  });
 
 /** System reminders are instructions the harness adds around the message, not part of it. */
 const stripReminders = (text: string) =>
@@ -81,67 +83,70 @@ export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
   const decoded = Option.getOrUndefined(decodeLine(line));
   if (!isTruthy(decoded) || decoded.isSidechain === true || decoded.isMeta === true) return [];
 
-  const items: TranscriptItem[] = [];
-  if (decoded.cwd !== undefined && decoded.sessionId !== undefined)
-    items.push(
-      TranscriptItem.session({
-        externalId: decoded.sessionId,
-        cwd: decoded.cwd,
-        startedAt: decoded.timestamp,
-        // Claude Code records the branch only, and a merged worktree's branch is usually deleted.
-        repository: null,
-        branch: branchOf(decoded.gitBranch),
-      }),
-    );
+  const session: readonly TranscriptItem[] =
+    decoded.cwd !== undefined && decoded.sessionId !== undefined
+      ? [
+          TranscriptItem.session({
+            externalId: decoded.sessionId,
+            cwd: decoded.cwd,
+            startedAt: decoded.timestamp,
+            // Claude Code records the branch only, and a merged worktree's branch is usually deleted.
+            repository: null,
+            branch: branchOf(decoded.gitBranch),
+          }),
+        ]
+      : [];
 
   const content = decoded.message.content;
-  const parts = isText(content) ? [{ type: "text", text: content }] : content;
+  const parts: readonly unknown[] = isText(content) ? [{ type: "text", text: content }] : content;
   const at = decoded.timestamp;
   // A line holds several parts, so each one needs its own id within the line.
   const idOf = (index: number) => (parts.length > 1 ? `${decoded.uuid}#${index}` : decoded.uuid);
 
-  parts.forEach((part, index) => {
-    const decodedPart = Option.getOrUndefined(decodePart(part));
-    if (!isTruthy(decodedPart)) return;
-    switch (decodedPart.type) {
-      case "text": {
-        const text = stripReminders(decodedPart.text);
-        if (text.length === 0 || isInjectedText(text, injected)) return;
-        items.push(
-          TranscriptItem.message({
-            role: decoded.message.role,
-            externalId: idOf(index),
-            at,
-            text,
+  return [
+    ...session,
+    ...parts.flatMap((part, index) =>
+      Option.toArray(decodePart(part)).flatMap((decodedPart): readonly TranscriptItem[] =>
+        Match.value(decodedPart).pipe(
+          Match.withReturnType<readonly TranscriptItem[]>(),
+          Match.discriminatorsExhaustive("type")({
+            text: (textPart) => {
+              const text = stripReminders(textPart.text);
+              if (text.length === 0 || isInjectedText(text, injected)) return [];
+              return [
+                TranscriptItem.message({
+                  role: decoded.message.role,
+                  externalId: idOf(index),
+                  at,
+                  text,
+                }),
+              ];
+            },
+            tool_use: (toolUse) => {
+              const args = JSON.stringify(toolUse.input ?? {});
+              return [
+                TranscriptItem.tool_call({
+                  externalId: idOf(index),
+                  at,
+                  toolName: toolUse.name,
+                  toolCallId: toolUse.id,
+                  text: `${toolUse.name} ${args}`,
+                  refs: refsInArguments(args),
+                }),
+              ];
+            },
+            tool_result: (toolResult) => [
+              TranscriptItem.tool_result({
+                externalId: idOf(index),
+                at,
+                toolCallId: toolResult.tool_use_id,
+                ok: toolResult.is_error !== true,
+                text: bodyText(toolResult.content),
+              }),
+            ],
           }),
-        );
-        return;
-      }
-      case "tool_use": {
-        const args = JSON.stringify(decodedPart.input ?? {});
-        items.push(
-          TranscriptItem.tool_call({
-            externalId: idOf(index),
-            at,
-            toolName: decodedPart.name,
-            toolCallId: decodedPart.id,
-            text: `${decodedPart.name} ${args}`,
-            refs: refsInArguments(args),
-          }),
-        );
-        return;
-      }
-      case "tool_result":
-        items.push(
-          TranscriptItem.tool_result({
-            externalId: idOf(index),
-            at,
-            toolCallId: decodedPart.tool_use_id,
-            ok: decodedPart.is_error !== true,
-            text: bodyText(decodedPart.content),
-          }),
-        );
-    }
-  });
-  return items;
+        ),
+      ),
+    ),
+  ];
 }
