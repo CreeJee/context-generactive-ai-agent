@@ -1,9 +1,10 @@
 import {
+  Array as Arr,
   Data,
   Effect,
+  HashMap,
   type JsonSchema,
   Match,
-  MutableHashMap,
   Option,
   Predicate,
   Schema,
@@ -79,15 +80,15 @@ const OpenAiReasoning = Schema.Struct({
   encryptedContent: Schema.String,
 });
 const decodeOpenAiReasoningJson = Schema.decodeOption(Schema.fromJsonString(OpenAiReasoning));
-/** The reasoning item packed in a thinking signature; null for any other signature. */
+/** The reasoning item packed in a thinking signature; none for any other signature. */
 const decodeOpenAiReasoning = (signature: string) =>
-  signature.startsWith(openAiReasoningPrefix)
-    ? Option.getOrNull(
-        decodeOpenAiReasoningJson(
-          Buffer.from(signature.slice(openAiReasoningPrefix.length), "base64url").toString("utf8"),
-        ),
-      )
-    : null;
+  Option.liftPredicate(signature, (packed) => packed.startsWith(openAiReasoningPrefix)).pipe(
+    Option.flatMap((packed) =>
+      decodeOpenAiReasoningJson(
+        Buffer.from(packed.slice(openAiReasoningPrefix.length), "base64url").toString("utf8"),
+      ),
+    ),
+  );
 const encodeOpenAiReasoning = (id: string, encryptedContent: string) =>
   `${openAiReasoningPrefix}${Buffer.from(JSON.stringify({ id, encryptedContent }), "utf8").toString(
     "base64url",
@@ -148,18 +149,22 @@ interface AnthropicMessage {
 
 /** Appends blocks to the last message when it has the same role, as Anthropic needs turns to alternate. */
 const appendAnthropicMessage = (
-  output: AnthropicMessage[],
+  output: ReadonlyArray<AnthropicMessage>,
   role: AnthropicMessage["role"],
   blocks: ReadonlyArray<AnthropicBlock>,
-) => {
-  if (blocks.length === 0) return;
-  const previous = output.at(-1);
-  if (previous?.role === role) {
-    output[output.length - 1] = { role, content: [...previous.content, ...blocks] };
-    return;
-  }
-  output.push({ role, content: blocks });
-};
+): ReadonlyArray<AnthropicMessage> =>
+  blocks.length === 0
+    ? output
+    : Option.match(
+        Option.filter(Arr.last(output), (previous) => previous.role === role),
+        {
+          onNone: () => [...output, { role, content: blocks }],
+          onSome: (previous) => [
+            ...output.slice(0, -1),
+            { role, content: [...previous.content, ...blocks] },
+          ],
+        },
+      );
 
 /** Block types that can carry the marker as the last block of the last user message. */
 const isAnthropicCacheableBlock = Schema.is(Schema.Literals(["text", "image", "tool_result"]));
@@ -168,19 +173,21 @@ const isAnthropicCacheableBlock = Schema.is(Schema.Literals(["text", "image", "t
 const markLastUserBlock = (
   messages: ReadonlyArray<AnthropicMessage>,
   cacheControl: AnthropicCacheControl,
-) => {
-  const last = messages.at(-1);
-  const block = last?.content.at(-1);
-  if (last?.role !== "user" || block === undefined || !isAnthropicCacheableBlock(block.type))
-    return messages;
-  return [
-    ...messages.slice(0, -1),
-    {
-      role: last.role,
-      content: [...last.content.slice(0, -1), { ...block, cache_control: cacheControl }],
-    },
-  ];
-};
+) =>
+  Option.filter(Arr.last(messages), (last) => last.role === "user").pipe(
+    Option.flatMap((last) =>
+      Option.filter(Arr.last(last.content), (block) => isAnthropicCacheableBlock(block.type)).pipe(
+        Option.map((block) => [
+          ...messages.slice(0, -1),
+          {
+            role: last.role,
+            content: [...last.content.slice(0, -1), { ...block, cache_control: cacheControl }],
+          },
+        ]),
+      ),
+    ),
+    Option.getOrElse(() => messages),
+  );
 
 /** The Responses cache key, cut to its 64-character limit; none when caching is off. */
 const openAiPromptCacheKey = (promptCache: PromptCache | undefined) =>
@@ -230,25 +237,29 @@ const streamFailure = (
   provider: OAuthProvider,
   cause: unknown,
   received: boolean,
-): SubscriptionFailure => {
-  if (
-    Schema.is(ProviderFeatureRejectedError)(cause) ||
-    Schema.is(SubscriptionStreamFailed)(cause) ||
-    Schema.is(ReasoningSummaryProtocolFailed)(cause)
-  )
-    return cause;
-  if (received)
-    return SubscriptionStreamFailed.make({
-      provider,
-      reason: SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}),
-    });
-  return SubscriptionStreamFailed.make({
-    provider,
-    reason: Schema.is(ProviderStreamFailed)(cause)
-      ? cause.reason
-      : SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({}),
-  });
-};
+): SubscriptionFailure =>
+  Match.value(cause).pipe(
+    Match.when(Schema.is(ProviderFeatureRejectedError), (failure): SubscriptionFailure => failure),
+    Match.when(Schema.is(SubscriptionStreamFailed), (failure) => failure),
+    Match.when(Schema.is(ReasoningSummaryProtocolFailed), (failure) => failure),
+    Match.when(
+      () => received,
+      () =>
+        SubscriptionStreamFailed.make({
+          provider,
+          reason: SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}),
+        }),
+    ),
+    Match.when(Schema.is(ProviderStreamFailed), (failure) =>
+      SubscriptionStreamFailed.make({ provider, reason: failure.reason }),
+    ),
+    Match.orElse(() =>
+      SubscriptionStreamFailed.make({
+        provider,
+        reason: SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({}),
+      }),
+    ),
+  );
 
 /** The failure's tag, which is all the error log says about it. */
 const streamFailureCode = Match.typeTags<SubscriptionFailure, string>()({
@@ -288,22 +299,28 @@ function providerEventsWithPromptCacheFallback(options: {
       });
     return source(options.body).pipe(
       Stream.mapEffect((event) =>
-        Effect.gen(function* () {
-          if (provider === "anthropic" && isPromptCacheRejection(event))
-            return yield* ProviderFeatureRejectedError.make({
-              provider: "anthropic",
-              feature: "prompt-cache",
-              status: null,
-            });
-          emitted = true;
-          return event;
-        }),
+        Effect.succeed(event).pipe(
+          Effect.filterOrFail(
+            () => provider !== "anthropic" || !isPromptCacheRejection(event),
+            () =>
+              ProviderFeatureRejectedError.make({
+                provider: "anthropic",
+                feature: "prompt-cache",
+                status: null,
+              }),
+          ),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              emitted = true;
+            }),
+          ),
+        ),
       ),
-      Stream.catchTag("ProviderFeatureRejectedError", (failure) => {
-        if (provider !== "anthropic" || emitted || failure.feature !== "prompt-cache")
-          return Stream.fail(failure);
-        return Stream.unwrap(Effect.as(options.onFallback, source(options.baselineBody)));
-      }),
+      Stream.catchTag("ProviderFeatureRejectedError", (failure) =>
+        provider === "anthropic" && !emitted && failure.feature === "prompt-cache"
+          ? Stream.unwrap(Effect.as(options.onFallback, source(options.baselineBody)))
+          : Stream.fail(failure),
+      ),
     );
   });
 }
@@ -344,14 +361,19 @@ const textOf = (content: StoredContent) =>
     : content.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("");
 
 /** File data as `toPrompt` keeps it: base64 or, with the `url` option, a URL. */
-const imageSource = (part: Prompt.FilePart) => {
-  if (part.data instanceof URL) return { type: "url", url: part.data.toString() } as const;
-  if (part.data instanceof Uint8Array)
-    return { type: "base64", base64: Buffer.from(part.data).toString("base64") } as const;
-  return partOptions(part).url === true
-    ? ({ type: "url", url: part.data } as const)
-    : ({ type: "base64", base64: part.data } as const);
-};
+const imageSource = (part: Prompt.FilePart) =>
+  Match.value(part.data).pipe(
+    Match.when(Predicate.isString, (data) =>
+      partOptions(part).url === true
+        ? ({ type: "url", url: data } as const)
+        : ({ type: "base64", base64: data } as const),
+    ),
+    Match.when(
+      Predicate.isUint8Array,
+      (bytes) => ({ type: "base64", base64: Buffer.from(bytes).toString("base64") }) as const,
+    ),
+    Match.orElse((url) => ({ type: "url", url: url.toString() }) as const),
+  );
 
 const anthropicImage = (part: Prompt.FilePart): ImageBlock => {
   const source = imageSource(part);
@@ -377,125 +399,146 @@ const openAiImage = (part: Prompt.FilePart): OpenAiBlock => {
 const callArguments = (part: Prompt.ToolCallPart) =>
   partOptions(part).arguments ?? JSON.stringify(part.params);
 
-const anthropicMessages = (prompt: Prompt.Prompt) => {
-  const output: AnthropicMessage[] = [];
-  for (const message of prompt.content)
-    switch (message.role) {
-      case "system":
-        break;
-      case "tool":
-        appendAnthropicMessage(
-          output,
-          "user",
-          message.content.flatMap((part) =>
-            part.type === "tool-result"
-              ? [
-                  {
-                    type: "tool_result" as const,
-                    tool_use_id: part.id,
-                    content: textOf(toolResultContent(part)),
-                    is_error: part.isFailure,
-                  },
-                ]
-              : [],
-          ),
-        );
-        break;
-      case "user":
-        appendAnthropicMessage(
-          output,
-          "user",
-          message.content.map((part) =>
-            part.type === "text"
-              ? { type: "text" as const, text: part.text }
-              : anthropicImage(part),
-          ),
-        );
-        break;
-      case "assistant": {
-        const thinking: AnthropicBlock[] = [];
-        const content: AnthropicBlock[] = [];
-        const calls: AnthropicBlock[] = [];
-        for (const part of message.content)
-          switch (part.type) {
-            case "reasoning": {
-              const { signature } = partOptions(part);
-              if (signature !== undefined && decodeOpenAiReasoning(signature) === null)
-                thinking.push({ type: "thinking", thinking: part.text, signature });
-              break;
-            }
-            case "text":
-              content.push({ type: "text", text: part.text });
-              break;
-            case "tool-call":
-              if (!part.providerExecuted)
-                calls.push({
-                  type: "tool_use",
-                  id: part.id,
-                  name: part.name,
-                  input: toolInput(callArguments(part)),
-                });
-              break;
-          }
-        appendAnthropicMessage(output, "assistant", [...thinking, ...content, ...calls]);
-        break;
-      }
-    }
-  return output;
-};
+/** An assistant turn's blocks: Anthropic thinking first, then the text, then the calls. */
+const anthropicAssistant = (message: Prompt.AssistantMessage): ReadonlyArray<AnthropicBlock> => [
+  ...message.content.flatMap((part) =>
+    part.type === "reasoning"
+      ? Option.fromUndefinedOr(partOptions(part).signature).pipe(
+          Option.filter((signature) => Option.isNone(decodeOpenAiReasoning(signature))),
+          Option.map((signature): AnthropicBlock => ({
+            type: "thinking",
+            thinking: part.text,
+            signature,
+          })),
+          Option.toArray,
+        )
+      : [],
+  ),
+  ...message.content.flatMap((part): ReadonlyArray<AnthropicBlock> =>
+    part.type === "text" ? [{ type: "text", text: part.text }] : [],
+  ),
+  ...message.content.flatMap((part): ReadonlyArray<AnthropicBlock> =>
+    part.type === "tool-call" && !part.providerExecuted
+      ? [{ type: "tool_use", id: part.id, name: part.name, input: toolInput(callArguments(part)) }]
+      : [],
+  ),
+];
 
-const openAiInput = (prompt: Prompt.Prompt) => {
-  const input: OpenAiItem[] = [];
-  for (const message of prompt.content) {
-    if (message.role === "system") continue;
-    if (message.role === "tool") {
-      for (const part of message.content)
-        if (part.type === "tool-result")
-          input.push({
-            type: "function_call_output",
-            call_id: part.id,
-            output: textOf(toolResultContent(part)),
-          });
-      continue;
-    }
-    const textType = message.role === "assistant" ? "output_text" : "input_text";
-    const content: OpenAiBlock[] = [];
-    const calls: OpenAiItem[] = [];
-    for (const part of message.content)
-      switch (part.type) {
-        case "reasoning": {
-          const { signature } = partOptions(part);
-          const reasoning = signature === undefined ? null : decodeOpenAiReasoning(signature);
-          if (reasoning !== null)
-            input.push({
+const anthropicMessages = (prompt: Prompt.Prompt) =>
+  Arr.reduce(
+    prompt.content,
+    Arr.empty<AnthropicMessage>(),
+    (output: ReadonlyArray<AnthropicMessage>, message) =>
+      Match.value(message).pipe(
+        Match.discriminatorsExhaustive("role")({
+          system: () => output,
+          tool: (tool) =>
+            appendAnthropicMessage(
+              output,
+              "user",
+              tool.content.flatMap((part): ReadonlyArray<AnthropicBlock> =>
+                part.type === "tool-result"
+                  ? [
+                      {
+                        type: "tool_result",
+                        tool_use_id: part.id,
+                        content: textOf(toolResultContent(part)),
+                        is_error: part.isFailure,
+                      },
+                    ]
+                  : [],
+              ),
+            ),
+          user: (user) =>
+            appendAnthropicMessage(
+              output,
+              "user",
+              user.content.map((part) =>
+                Match.value(part).pipe(
+                  Match.discriminatorsExhaustive("type")({
+                    text: (text): AnthropicBlock => ({ type: "text", text: text.text }),
+                    file: anthropicImage,
+                  }),
+                ),
+              ),
+            ),
+          assistant: (assistant) =>
+            appendAnthropicMessage(output, "assistant", anthropicAssistant(assistant)),
+        }),
+      ),
+  );
+
+/**
+ * A user or assistant turn as Responses items: the encrypted reasoning it carries, a message of
+ * its text and images, then its calls.
+ */
+const openAiTurn = (
+  role: "user" | "assistant",
+  parts: ReadonlyArray<Prompt.UserMessagePart | Prompt.AssistantMessagePart>,
+): ReadonlyArray<OpenAiItem> => {
+  const textType = role === "assistant" ? "output_text" : "input_text";
+  const content = parts.flatMap((part): ReadonlyArray<OpenAiBlock> =>
+    Match.value(part).pipe(
+      Match.when({ type: "text" }, (text): ReadonlyArray<OpenAiBlock> => [
+        { type: textType, text: text.text },
+      ]),
+      Match.when({ type: "file" }, (file) => [openAiImage(file)]),
+      Match.orElse(() => []),
+    ),
+  );
+  return [
+    ...parts.flatMap((part) =>
+      part.type === "reasoning"
+        ? Option.fromUndefinedOr(partOptions(part).signature).pipe(
+            Option.flatMap(decodeOpenAiReasoning),
+            Option.map((reasoning): OpenAiItem => ({
               type: "reasoning",
               id: reasoning.id,
               summary: [],
               encrypted_content: reasoning.encryptedContent,
-            });
-          break;
-        }
-        case "text":
-          content.push({ type: textType, text: part.text });
-          break;
-        case "file":
-          content.push(openAiImage(part));
-          break;
-        case "tool-call":
-          if (!part.providerExecuted)
-            calls.push({
+            })),
+            Option.toArray,
+          )
+        : [],
+    ),
+    ...(content.length > 0 ? [{ type: "message", role, content } as const] : []),
+    ...parts.flatMap((part): ReadonlyArray<OpenAiItem> =>
+      part.type === "tool-call" && !part.providerExecuted
+        ? [
+            {
               type: "function_call",
               call_id: part.id,
               name: part.name,
               arguments: callArguments(part),
-            });
-          break;
-      }
-    if (content.length > 0) input.push({ type: "message", role: message.role, content });
-    input.push(...calls);
-  }
-  return input;
+            },
+          ]
+        : [],
+    ),
+  ];
 };
+
+const openAiInput = (prompt: Prompt.Prompt) =>
+  prompt.content.flatMap((message) =>
+    Match.value(message).pipe(
+      Match.discriminatorsExhaustive("role")({
+        system: (): ReadonlyArray<OpenAiItem> => [],
+        tool: (tool) =>
+          tool.content.flatMap((part): ReadonlyArray<OpenAiItem> =>
+            part.type === "tool-result"
+              ? [
+                  {
+                    type: "function_call_output",
+                    call_id: part.id,
+                    output: textOf(toolResultContent(part)),
+                  },
+                ]
+              : [],
+          ),
+        user: (user) => openAiTurn("user", user.content),
+        assistant: (assistant) => openAiTurn("assistant", assistant.content),
+      }),
+    ),
+  );
 
 const systemText = (prompt: Prompt.Prompt) =>
   prompt.content
@@ -522,49 +565,51 @@ export interface SubscriptionRequest {
   readonly promptCache: PromptCache | undefined;
 }
 
-/** The request body, which the client sends as it is. */
-export const subscriptionBody = (request: SubscriptionRequest) => {
-  const { provider, selection, prompt } = request;
+const anthropicBody = (request: SubscriptionRequest) => {
+  const { selection, prompt } = request;
   const system = systemText(prompt);
   const tools = canonicalTools(request.tools);
-  if (provider === "anthropic") {
-    const cacheControl = anthropicCacheControlFor(request.promptCache?.retention);
-    const messages = anthropicMessages(prompt);
-    return JSON.stringify({
-      model: selection.model,
-      max_tokens: 32_000,
-      stream: true,
-      system:
-        cacheControl !== undefined && system.length > 0
-          ? [{ type: "text", text: system, cache_control: cacheControl }]
-          : system,
-      messages: cacheControl === undefined ? messages : markLastUserBlock(messages, cacheControl),
-      tools: tools.map((tool, index) =>
-        cacheControl !== undefined && index === tools.length - 1
-          ? { ...tool, cache_control: cacheControl }
-          : tool,
-      ),
-      tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
-      thinking: anthropicThinkingAlwaysOn(selection.model)
-        ? {
-            type: "adaptive",
-            // Without an explicit display these models return empty thinking blocks.
-            display: "summarized",
-            // Drop signed thinking whose prefix changed (compaction, model switch,
-            // system or tool changes) instead of rejecting the whole request.
-            block_binding: { prefix_mismatch_behavior: "drop_block" },
-          }
-        : undefined,
-      output_config:
-        selection.reasoningEffort === "none" ? undefined : { effort: selection.reasoningEffort },
-    });
-  }
-  // The ChatGPT Responses subscription endpoint takes `prompt_cache_key` for cache routing (jcode
-  // sends its session id there). It has no confirmed contract for the retention fields, so a
-  // `'long'` retention still sends only the key and relies on the provider's automatic cache.
+  const cacheControl = anthropicCacheControlFor(request.promptCache?.retention);
+  const messages = anthropicMessages(prompt);
   return JSON.stringify({
     model: selection.model,
-    instructions: system,
+    max_tokens: 32_000,
+    stream: true,
+    system:
+      cacheControl !== undefined && system.length > 0
+        ? [{ type: "text", text: system, cache_control: cacheControl }]
+        : system,
+    messages: cacheControl === undefined ? messages : markLastUserBlock(messages, cacheControl),
+    tools: tools.map((tool, index) =>
+      cacheControl !== undefined && index === tools.length - 1
+        ? { ...tool, cache_control: cacheControl }
+        : tool,
+    ),
+    tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
+    thinking: anthropicThinkingAlwaysOn(selection.model)
+      ? {
+          type: "adaptive",
+          // Without an explicit display these models return empty thinking blocks.
+          display: "summarized",
+          // Drop signed thinking whose prefix changed (compaction, model switch,
+          // system or tool changes) instead of rejecting the whole request.
+          block_binding: { prefix_mismatch_behavior: "drop_block" },
+        }
+      : undefined,
+    output_config:
+      selection.reasoningEffort === "none" ? undefined : { effort: selection.reasoningEffort },
+  });
+};
+
+// The ChatGPT Responses subscription endpoint takes `prompt_cache_key` for cache routing (jcode
+// sends its session id there). It has no confirmed contract for the retention fields, so a
+// `'long'` retention still sends only the key and relies on the provider's automatic cache.
+const openAiBody = (request: SubscriptionRequest) => {
+  const { selection, prompt } = request;
+  const tools = canonicalTools(request.tools);
+  return JSON.stringify({
+    model: selection.model,
+    instructions: systemText(prompt),
     input: openAiInput(prompt),
     tools: tools.map((tool) => ({
       type: "function",
@@ -581,6 +626,14 @@ export const subscriptionBody = (request: SubscriptionRequest) => {
     store: false,
   });
 };
+
+/** The request body, which the client sends as it is. */
+export const subscriptionBody = (request: SubscriptionRequest) =>
+  Match.value(request.provider).pipe(
+    Match.when("anthropic", () => anthropicBody(request)),
+    Match.when("openai", () => openAiBody(request)),
+    Match.exhaustive,
+  );
 
 // A digest of bytes in memory cannot fail; a failure is a defect of the runtime.
 const sha256 = (serialized: string) =>
@@ -623,289 +676,445 @@ const metadata = (value: { readonly signature?: string; readonly arguments?: str
   metadata: { [optionsKey]: value },
 });
 
+/** The token counts the stream reported; a later report replaces each count it carries. */
+interface Tokens {
+  readonly promptTokens: number | undefined;
+  readonly completionTokens: number | undefined;
+  readonly cachedPromptTokens: number | undefined;
+  readonly cacheWriteTokens: number | undefined;
+}
+
+interface StreamingCall {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+}
+
+interface StreamingReasoning {
+  readonly id: string;
+  readonly signature: Option.Option<string>;
+}
+
 /**
- * Turns provider events into response parts, one event at a time, and checks the block protocol.
- * OpenAI sends its encrypted reasoning right after the summary it belongs to, so a summary's end
- * waits for the next event: encrypted reasoning puts its signature on that end, as TanStack put it
- * on the current thinking step. Encrypted reasoning after anything else is a block without text.
+ * What the stream has sent so far. OpenAI sends its encrypted reasoning right after the summary it
+ * belongs to, so a summary's end waits for the next event: encrypted reasoning puts its signature
+ * on that end, as TanStack put it on the current thinking step. Encrypted reasoning after anything
+ * else is a block without text.
  */
+interface Translation {
+  readonly textId: Option.Option<string>;
+  readonly texts: number;
+  readonly toolCalls: number;
+  readonly tokens: Tokens;
+  /** The calls and reasoning blocks still streaming, by their block index. */
+  readonly streamingCalls: HashMap.HashMap<number, StreamingCall>;
+  readonly streamingReasoning: HashMap.HashMap<number, StreamingReasoning>;
+  readonly summaryCharacters: number;
+  readonly summaryCount: number;
+  readonly openSummaries: number;
+  readonly summaries: HashMap.HashMap<string, SummaryState>;
+  /** The summary whose end waits for its encrypted reasoning. */
+  readonly endingSummary: Option.Option<string>;
+}
+
+const initialTranslation: Translation = {
+  textId: Option.none(),
+  texts: 0,
+  toolCalls: 0,
+  tokens: {
+    promptTokens: undefined,
+    completionTokens: undefined,
+    cachedPromptTokens: undefined,
+    cacheWriteTokens: undefined,
+  },
+  streamingCalls: HashMap.empty(),
+  streamingReasoning: HashMap.empty(),
+  summaryCharacters: 0,
+  summaryCount: 0,
+  openSummaries: 0,
+  summaries: HashMap.empty(),
+  endingSummary: Option.none(),
+};
+
+/** The state after a step, and the parts it sends. */
+type Translated = readonly [Translation, ReadonlyArray<Part>];
+type Translating = Effect.Effect<Translated, SubscriptionFailure>;
+
+const emit = (state: Translation, parts: ReadonlyArray<Part> = []): Translating =>
+  Effect.succeed<Translated>([state, parts]);
+
+/** Runs `next` on the state `done` left; its parts go out after `done`'s. */
+const andThen = ([state, parts]: Translated, next: (state: Translation) => Translating) =>
+  Effect.map(next(state), ([after, added]): Translated => [after, [...parts, ...added]]);
+
+const closeText = (state: Translation): Translated =>
+  Option.match(state.textId, {
+    onNone: () => [state, []],
+    onSome: (id) => [{ ...state, textId: Option.none() }, [{ type: "text-end", id }]],
+  });
+
+const endSummary = (state: Translation, signature: Option.Option<string>): Translated =>
+  Option.match(state.endingSummary, {
+    onNone: () => [state, []],
+    onSome: (id) => [
+      { ...state, endingSummary: Option.none() },
+      [
+        {
+          type: "reasoning-end",
+          id,
+          ...metadata(optionalProperty("signature", Option.getOrUndefined(signature))),
+        },
+      ],
+    ],
+  });
+
+const summaryIdOf = (event: { readonly id: string; readonly summaryIndex: number }) =>
+  `reasoning-summary-${event.id}-${event.summaryIndex}`;
+
+const summaryFailed = (reason: ReasoningSummaryProtocolFailed["reason"]) =>
+  ReasoningSummaryProtocolFailed.make({ reason });
+
+/** The summary `summaryId` names, which must still be receiving text. */
+const openSummary = (state: Translation, summaryId: string) =>
+  Effect.fromOption(HashMap.get(state.summaries, summaryId), () =>
+    summaryFailed(ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({})),
+  ).pipe(
+    Effect.filterOrFail(SummaryState.$is("open"), () =>
+      summaryFailed(ReasoningSummaryProtocolFailedReason.cases.AlreadyEnded.make({})),
+    ),
+  );
+
+/** Turns provider events into response parts, one event at a time, and checks the block protocol. */
 const makeTranslator = (provider: OAuthProvider) => {
   const failed = (reason: SubscriptionStreamFailed["reason"]) =>
     SubscriptionStreamFailed.make({ provider, reason });
-  const summaryFailed = (reason: ReasoningSummaryProtocolFailed["reason"]) =>
-    ReasoningSummaryProtocolFailed.make({ reason });
-  let textId: string | undefined;
-  let texts = 0;
-  let toolCalls = 0;
-  let promptTokens: number | undefined;
-  let completionTokens: number | undefined;
-  let cachedPromptTokens: number | undefined;
-  let cacheWriteTokens: number | undefined;
-  const streamingCalls = MutableHashMap.empty<
-    number,
-    { readonly id: string; readonly name: string; arguments: string }
-  >();
-  const streamingReasoning = MutableHashMap.empty<
-    number,
-    { readonly id: string; signature: string | undefined }
-  >();
-  let summaryCharacters = 0;
-  let summaryCount = 0;
-  let openSummaries = 0;
-  const summaries = MutableHashMap.empty<string, SummaryState>();
-  /** The summary whose end waits for its encrypted reasoning. */
-  let endingSummary: string | undefined;
+  const withinSummaryLimit = (state: Translation, added: number) =>
+    state.summaryCharacters + added <= publicReasoningLimits.characters;
+  const summaryLimit = () =>
+    summaryFailed(ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}));
+  const isFree = (state: Translation, index: number) =>
+    !HashMap.has(state.streamingCalls, index) && !HashMap.has(state.streamingReasoning, index);
 
-  const closeText = (): Array<Part> => {
-    if (textId === undefined) return [];
-    const id = textId;
-    textId = undefined;
-    return [{ type: "text-end", id }];
-  };
-
-  const endSummary = (signature?: string): Array<Part> => {
-    if (endingSummary === undefined) return [];
-    const id = endingSummary;
-    endingSummary = undefined;
-    return [{ type: "reasoning-end", id, ...metadata(optionalProperty("signature", signature)) }];
-  };
-
-  const step = (event: NormalizedStreamEvent): Effect.Effect<Array<Part>, SubscriptionFailure> => {
-    const ended =
-      NormalizedStreamEvent.$is("usage")(event) || NormalizedStreamEvent.$is("reasoning")(event)
-        ? []
-        : endSummary();
-    return Effect.map(translate(event), (parts) => [...ended, ...parts]);
-  };
-
-  const translate = (
-    event: NormalizedStreamEvent,
-  ): Effect.Effect<Array<Part>, SubscriptionFailure> =>
-    Effect.gen(function* () {
-      if (NormalizedStreamEvent.$is("usage")(event)) {
-        promptTokens = event.promptTokens ?? promptTokens;
-        completionTokens = event.completionTokens ?? completionTokens;
-        cachedPromptTokens = event.cachedPromptTokens ?? cachedPromptTokens;
-        cacheWriteTokens = event.cacheWriteTokens ?? cacheWriteTokens;
-        return [];
-      }
-      if (NormalizedStreamEvent.$is("error")(event))
-        return yield* failed(SubscriptionStreamFailedReason.cases.ProviderRejected.make({}));
-      // Public OpenAI summary parts are reasoning blocks of their own, not Anthropic block ends.
-      if (NormalizedStreamEvent.$is("reasoning-summary-start")(event)) {
-        const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
-        if (MutableHashMap.has(summaries, summaryId))
-          return yield* summaryFailed(
-            ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
-          );
-        if (
-          summaryCount >= publicReasoningLimits.parts ||
-          event.id.length > publicReasoningLimits.idCharacters ||
-          summaryCharacters + event.text.length > publicReasoningLimits.characters
-        )
-          return yield* summaryFailed(
-            ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
-          );
-        summaryCount++;
-        openSummaries++;
-        summaryCharacters += event.text.length;
-        MutableHashMap.set(summaries, summaryId, SummaryState.open({ text: event.text }));
-        return [
-          { type: "reasoning-start", id: summaryId },
-          ...(event.text.length > 0
-            ? [{ type: "reasoning-delta" as const, id: summaryId, delta: event.text }]
-            : []),
-        ];
-      }
-      if (
-        NormalizedStreamEvent.$is("reasoning-summary-delta")(event) ||
-        NormalizedStreamEvent.$is("reasoning-summary-end")(event)
-      ) {
-        const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
-        const summary = Option.getOrUndefined(MutableHashMap.get(summaries, summaryId));
-        if (summary === undefined)
-          return yield* summaryFailed(
-            ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
-          );
-        if (SummaryState.$is("closed")(summary))
-          return yield* summaryFailed(
-            ReasoningSummaryProtocolFailedReason.cases.AlreadyEnded.make({}),
-          );
-        if (NormalizedStreamEvent.$is("reasoning-summary-delta")(event)) {
-          if (summaryCharacters + event.delta.length > publicReasoningLimits.characters)
-            return yield* summaryFailed(
-              ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
-            );
-          summaryCharacters += event.delta.length;
-          MutableHashMap.set(
-            summaries,
-            summaryId,
-            SummaryState.open({ text: summary.text + event.delta }),
-          );
-          return [{ type: "reasoning-delta", id: summaryId, delta: event.delta }];
-        }
-        if (!event.text.startsWith(summary.text))
-          return yield* summaryFailed(
-            ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({}),
-          );
-        const remaining = event.text.slice(summary.text.length);
-        if (summaryCharacters + remaining.length > publicReasoningLimits.characters)
-          return yield* summaryFailed(
-            ReasoningSummaryProtocolFailedReason.cases.ResourceLimit.make({}),
-          );
-        summaryCharacters += remaining.length;
-        openSummaries--;
-        MutableHashMap.set(summaries, summaryId, SummaryState.closed());
-        endingSummary = summaryId;
-        return remaining.length > 0
-          ? [{ type: "reasoning-delta", id: summaryId, delta: remaining }]
-          : [];
-      }
-      if (NormalizedStreamEvent.$is("reasoning")(event)) {
-        if (event.encryptedContent.length > maxEncryptedReasoningCharacters)
-          return yield* failed(
-            SubscriptionStreamFailedReason.cases.EncryptedReasoningLimit.make({}),
-          );
-        const signature = encodeOpenAiReasoning(event.id, event.encryptedContent);
-        if (endingSummary !== undefined) return endSummary(signature);
-        const id = `reasoning-encrypted-${event.id}`;
-        return [
-          { type: "reasoning-start", id },
-          { type: "reasoning-end", id, ...metadata({ signature }) },
-        ];
-      }
-      if (NormalizedStreamEvent.$is("text")(event)) {
-        const opened: Array<Part> = [];
-        if (textId === undefined) {
-          textId = `text-${texts++}`;
-          opened.push({ type: "text-start", id: textId });
-        }
-        return [...opened, { type: "text-delta", id: textId, delta: event.text }];
-      }
-      if (NormalizedStreamEvent.$is("content-block-end")(event) && textId !== undefined)
-        return closeText();
-      const closed = closeText();
-      if (NormalizedStreamEvent.$is("tool-call")(event)) {
-        toolCalls++;
-        const serialized = yield* encodeToolArguments(event.arguments);
-        return [
-          ...closed,
-          { type: "tool-params-start", id: event.id, name: event.name },
-          { type: "tool-params-delta", id: event.id, delta: serialized },
-          { type: "tool-params-end", id: event.id },
-          {
-            type: "tool-call",
-            id: event.id,
-            name: event.name,
-            params: event.arguments,
-            ...metadata({ arguments: serialized }),
-          },
-        ];
-      }
-      if (NormalizedStreamEvent.$is("tool-call-start")(event)) {
-        if (
-          MutableHashMap.has(streamingCalls, event.index) ||
-          MutableHashMap.has(streamingReasoning, event.index)
-        )
-          return yield* failed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({}));
-        MutableHashMap.set(streamingCalls, event.index, {
-          id: event.id,
-          name: event.name,
-          arguments: "",
-        });
-        toolCalls++;
-        return [...closed, { type: "tool-params-start", id: event.id, name: event.name }];
-      }
-      if (NormalizedStreamEvent.$is("reasoning-start")(event)) {
-        if (
-          MutableHashMap.has(streamingReasoning, event.index) ||
-          MutableHashMap.has(streamingCalls, event.index)
-        )
-          return yield* failed(SubscriptionStreamFailedReason.cases.InvalidReasoning.make({}));
-        const id = `reasoning-${event.index}`;
-        MutableHashMap.set(streamingReasoning, event.index, { id, signature: undefined });
-        return [...closed, { type: "reasoning-start", id }];
-      }
-      if (
-        NormalizedStreamEvent.$is("reasoning-delta")(event) ||
-        NormalizedStreamEvent.$is("reasoning-signature")(event)
-      ) {
-        const reasoning = Option.getOrUndefined(
-          MutableHashMap.get(streamingReasoning, event.index),
-        );
-        if (reasoning === undefined)
-          return yield* failed(SubscriptionStreamFailedReason.cases.InvalidReasoning.make({}));
-        if (NormalizedStreamEvent.$is("reasoning-signature")(event)) {
-          reasoning.signature = event.signature;
-          return closed;
-        }
-        return [...closed, { type: "reasoning-delta", id: reasoning.id, delta: event.delta }];
-      }
-      if (NormalizedStreamEvent.$is("tool-call-arguments")(event)) {
-        const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
-        if (call === undefined)
-          return yield* failed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({}));
-        call.arguments += event.delta;
-        return [...closed, { type: "tool-params-delta", id: call.id, delta: event.delta }];
-      }
-      const reasoning = Option.getOrUndefined(MutableHashMap.get(streamingReasoning, event.index));
-      if (reasoning !== undefined) {
-        MutableHashMap.remove(streamingReasoning, event.index);
-        return [
-          ...closed,
+  /** A block end while no text is open: it ends the reasoning or the call at its index. */
+  const blockEnd = (state: Translation, index: number): Translating =>
+    Option.match(HashMap.get(state.streamingReasoning, index), {
+      onSome: (reasoning) =>
+        emit({ ...state, streamingReasoning: HashMap.remove(state.streamingReasoning, index) }, [
           {
             type: "reasoning-end",
             id: reasoning.id,
-            ...metadata(optionalProperty("signature", reasoning.signature)),
+            ...metadata(optionalProperty("signature", Option.getOrUndefined(reasoning.signature))),
           },
-        ];
-      }
-      const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
-      if (call === undefined)
-        return yield* failed(SubscriptionStreamFailedReason.cases.InvalidBlockEnd.make({}));
-      MutableHashMap.remove(streamingCalls, event.index);
-      return [
-        ...closed,
-        { type: "tool-params-end", id: call.id },
-        {
-          type: "tool-call",
-          id: call.id,
-          name: call.name,
-          params: paramsOf(call.arguments),
-          ...metadata({ arguments: call.arguments }),
-        },
-      ];
+        ]),
+      onNone: () =>
+        Effect.fromOption(HashMap.get(state.streamingCalls, index), () =>
+          failed(SubscriptionStreamFailedReason.cases.InvalidBlockEnd.make({})),
+        ).pipe(
+          Effect.map((call): Translated => [
+            { ...state, streamingCalls: HashMap.remove(state.streamingCalls, index) },
+            [
+              { type: "tool-params-end", id: call.id },
+              {
+                type: "tool-call",
+                id: call.id,
+                name: call.name,
+                params: paramsOf(call.arguments),
+                ...metadata({ arguments: call.arguments }),
+              },
+            ],
+          ]),
+        ),
     });
 
-  const finish = Effect.suspend((): Effect.Effect<Array<Part>, SubscriptionFailure> => {
-    if (openSummaries > 0)
-      return Effect.fail(
-        summaryFailed(ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({})),
-      );
-    if (MutableHashMap.size(streamingCalls) > 0 || MutableHashMap.size(streamingReasoning) > 0)
-      return Effect.fail(failed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})));
-    const uncached =
-      promptTokens === undefined
-        ? undefined
-        : promptTokens - (cachedPromptTokens ?? 0) - (cacheWriteTokens ?? 0);
-    return Effect.succeed([
-      ...endSummary(),
-      ...closeText(),
-      {
-        type: "finish",
-        reason: toolCalls > 0 ? "tool-calls" : "stop",
-        usage: {
-          inputTokens: {
-            ...optionalProperty("total", promptTokens),
-            ...optionalProperty("uncached", uncached),
-            ...optionalProperty("cacheRead", cachedPromptTokens),
-            ...optionalProperty("cacheWrite", cacheWriteTokens),
+  /** The reasoning block at `index`, which must have started. */
+  const streamingReasoningAt = (state: Translation, index: number) =>
+    Effect.fromOption(HashMap.get(state.streamingReasoning, index), () =>
+      failed(SubscriptionStreamFailedReason.cases.InvalidReasoning.make({})),
+    );
+
+  const translate = (state: Translation, event: NormalizedStreamEvent): Translating =>
+    NormalizedStreamEvent.$match(event, {
+      usage: (usage) =>
+        emit({
+          ...state,
+          tokens: {
+            promptTokens: usage.promptTokens ?? state.tokens.promptTokens,
+            completionTokens: usage.completionTokens ?? state.tokens.completionTokens,
+            cachedPromptTokens: usage.cachedPromptTokens ?? state.tokens.cachedPromptTokens,
+            cacheWriteTokens: usage.cacheWriteTokens ?? state.tokens.cacheWriteTokens,
           },
-          outputTokens: optionalProperty("total", completionTokens),
-        },
+        }),
+      error: () =>
+        Effect.fail(failed(SubscriptionStreamFailedReason.cases.ProviderRejected.make({}))),
+      // Public OpenAI summary parts are reasoning blocks of their own, not Anthropic block ends.
+      "reasoning-summary-start": (start) => {
+        const summaryId = summaryIdOf(start);
+        return Effect.succeed(state).pipe(
+          Effect.filterOrFail(
+            () => !HashMap.has(state.summaries, summaryId),
+            () =>
+              summaryFailed(ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({})),
+          ),
+          Effect.filterOrFail(
+            () =>
+              state.summaryCount < publicReasoningLimits.parts &&
+              start.id.length <= publicReasoningLimits.idCharacters &&
+              withinSummaryLimit(state, start.text.length),
+            summaryLimit,
+          ),
+          Effect.map((): Translated => [
+            {
+              ...state,
+              summaryCount: state.summaryCount + 1,
+              openSummaries: state.openSummaries + 1,
+              summaryCharacters: state.summaryCharacters + start.text.length,
+              summaries: HashMap.set(
+                state.summaries,
+                summaryId,
+                SummaryState.open({ text: start.text }),
+              ),
+            },
+            [
+              { type: "reasoning-start", id: summaryId },
+              ...(start.text.length > 0
+                ? [{ type: "reasoning-delta" as const, id: summaryId, delta: start.text }]
+                : []),
+            ],
+          ]),
+        );
       },
-    ]);
-  });
+      "reasoning-summary-delta": (delta) => {
+        const summaryId = summaryIdOf(delta);
+        return openSummary(state, summaryId).pipe(
+          Effect.filterOrFail(() => withinSummaryLimit(state, delta.delta.length), summaryLimit),
+          Effect.map((summary): Translated => [
+            {
+              ...state,
+              summaryCharacters: state.summaryCharacters + delta.delta.length,
+              summaries: HashMap.set(
+                state.summaries,
+                summaryId,
+                SummaryState.open({ text: summary.text + delta.delta }),
+              ),
+            },
+            [{ type: "reasoning-delta", id: summaryId, delta: delta.delta }],
+          ]),
+        );
+      },
+      "reasoning-summary-end": (end) => {
+        const summaryId = summaryIdOf(end);
+        return openSummary(state, summaryId).pipe(
+          Effect.filterOrFail(
+            (summary) => end.text.startsWith(summary.text),
+            () =>
+              summaryFailed(ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({})),
+          ),
+          Effect.map((summary) => end.text.slice(summary.text.length)),
+          Effect.filterOrFail(
+            (remaining) => withinSummaryLimit(state, remaining.length),
+            summaryLimit,
+          ),
+          Effect.map((remaining): Translated => [
+            {
+              ...state,
+              summaryCharacters: state.summaryCharacters + remaining.length,
+              openSummaries: state.openSummaries - 1,
+              summaries: HashMap.set(state.summaries, summaryId, SummaryState.closed()),
+              endingSummary: Option.some(summaryId),
+            },
+            remaining.length > 0
+              ? [{ type: "reasoning-delta", id: summaryId, delta: remaining }]
+              : [],
+          ]),
+        );
+      },
+      reasoning: (reasoning) =>
+        Effect.succeed(reasoning).pipe(
+          Effect.filterOrFail(
+            () => reasoning.encryptedContent.length <= maxEncryptedReasoningCharacters,
+            () => failed(SubscriptionStreamFailedReason.cases.EncryptedReasoningLimit.make({})),
+          ),
+          Effect.map(() => {
+            const signature = encodeOpenAiReasoning(reasoning.id, reasoning.encryptedContent);
+            const id = `reasoning-encrypted-${reasoning.id}`;
+            return Option.match(state.endingSummary, {
+              onSome: () => endSummary(state, Option.some(signature)),
+              onNone: (): Translated => [
+                state,
+                [
+                  { type: "reasoning-start", id },
+                  { type: "reasoning-end", id, ...metadata({ signature }) },
+                ],
+              ],
+            });
+          }),
+        ),
+      text: (text) =>
+        Option.match(state.textId, {
+          onSome: (id) => emit(state, [{ type: "text-delta", id, delta: text.text }]),
+          onNone: () => {
+            const id = `text-${state.texts}`;
+            return emit({ ...state, textId: Option.some(id), texts: state.texts + 1 }, [
+              { type: "text-start", id },
+              { type: "text-delta", id, delta: text.text },
+            ]);
+          },
+        }),
+      // A block end closes the open text; with none open it ends the block at its index.
+      "content-block-end": (end) =>
+        Option.match(state.textId, {
+          onSome: () => emit(...closeText(state)),
+          onNone: () => blockEnd(state, end.index),
+        }),
+      "tool-call": (call) =>
+        andThen(closeText(state), (closed) =>
+          Effect.map(encodeToolArguments(call.arguments), (serialized): Translated => [
+            { ...closed, toolCalls: closed.toolCalls + 1 },
+            [
+              { type: "tool-params-start", id: call.id, name: call.name },
+              { type: "tool-params-delta", id: call.id, delta: serialized },
+              { type: "tool-params-end", id: call.id },
+              {
+                type: "tool-call",
+                id: call.id,
+                name: call.name,
+                params: call.arguments,
+                ...metadata({ arguments: serialized }),
+              },
+            ],
+          ]),
+        ),
+      "tool-call-start": (start) =>
+        andThen(closeText(state), (closed) =>
+          Effect.succeed(closed).pipe(
+            Effect.filterOrFail(
+              () => isFree(closed, start.index),
+              () => failed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({})),
+            ),
+            Effect.map((): Translated => [
+              {
+                ...closed,
+                streamingCalls: HashMap.set(closed.streamingCalls, start.index, {
+                  id: start.id,
+                  name: start.name,
+                  arguments: "",
+                }),
+                toolCalls: closed.toolCalls + 1,
+              },
+              [{ type: "tool-params-start", id: start.id, name: start.name }],
+            ]),
+          ),
+        ),
+      "reasoning-start": (start) =>
+        andThen(closeText(state), (closed) =>
+          Effect.succeed(closed).pipe(
+            Effect.filterOrFail(
+              () => isFree(closed, start.index),
+              () => failed(SubscriptionStreamFailedReason.cases.InvalidReasoning.make({})),
+            ),
+            Effect.map((): Translated => {
+              const id = `reasoning-${start.index}`;
+              return [
+                {
+                  ...closed,
+                  streamingReasoning: HashMap.set(closed.streamingReasoning, start.index, {
+                    id,
+                    signature: Option.none(),
+                  }),
+                },
+                [{ type: "reasoning-start", id }],
+              ];
+            }),
+          ),
+        ),
+      "reasoning-delta": (delta) =>
+        andThen(closeText(state), (closed) =>
+          Effect.map(streamingReasoningAt(closed, delta.index), (reasoning): Translated => [
+            closed,
+            [{ type: "reasoning-delta", id: reasoning.id, delta: delta.delta }],
+          ]),
+        ),
+      "reasoning-signature": (signed) =>
+        andThen(closeText(state), (closed) =>
+          Effect.map(streamingReasoningAt(closed, signed.index), (reasoning): Translated => [
+            {
+              ...closed,
+              streamingReasoning: HashMap.set(closed.streamingReasoning, signed.index, {
+                ...reasoning,
+                signature: Option.some(signed.signature),
+              }),
+            },
+            [],
+          ]),
+        ),
+      "tool-call-arguments": (delta) =>
+        andThen(closeText(state), (closed) =>
+          Effect.fromOption(HashMap.get(closed.streamingCalls, delta.index), () =>
+            failed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({})),
+          ).pipe(
+            Effect.map((call): Translated => [
+              {
+                ...closed,
+                streamingCalls: HashMap.set(closed.streamingCalls, delta.index, {
+                  ...call,
+                  arguments: call.arguments + delta.delta,
+                }),
+              },
+              [{ type: "tool-params-delta", id: call.id, delta: delta.delta }],
+            ]),
+          ),
+        ),
+    });
+
+  /** One event's parts; a summary waiting for its encrypted reasoning ends first otherwise. */
+  const step = (state: Translation, event: NormalizedStreamEvent): Translating =>
+    andThen(
+      NormalizedStreamEvent.$is("usage")(event) || NormalizedStreamEvent.$is("reasoning")(event)
+        ? [state, []]
+        : endSummary(state, Option.none()),
+      (ready) => translate(ready, event),
+    );
+
+  /** The end of the stream: every block must have ended, and the turn finishes. */
+  const finish = (state: Translation): Translating =>
+    Effect.succeed(state).pipe(
+      Effect.filterOrFail(
+        () => state.openSummaries === 0,
+        () => summaryFailed(ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({})),
+      ),
+      Effect.filterOrFail(
+        () => HashMap.isEmpty(state.streamingCalls) && HashMap.isEmpty(state.streamingReasoning),
+        () => failed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})),
+      ),
+      Effect.flatMap(() =>
+        andThen(endSummary(state, Option.none()), (summaryEnded) => {
+          const [done, textEnded] = closeText(summaryEnded);
+          const { tokens } = done;
+          const uncached = Option.getOrUndefined(
+            Option.map(
+              Option.fromUndefinedOr(tokens.promptTokens),
+              (total) => total - (tokens.cachedPromptTokens ?? 0) - (tokens.cacheWriteTokens ?? 0),
+            ),
+          );
+          return emit(done, [
+            ...textEnded,
+            {
+              type: "finish",
+              reason: done.toolCalls > 0 ? "tool-calls" : "stop",
+              usage: {
+                inputTokens: {
+                  ...optionalProperty("total", tokens.promptTokens),
+                  ...optionalProperty("uncached", uncached),
+                  ...optionalProperty("cacheRead", tokens.cachedPromptTokens),
+                  ...optionalProperty("cacheWrite", tokens.cacheWriteTokens),
+                },
+                outputTokens: optionalProperty("total", tokens.completionTokens),
+              },
+            },
+          ]);
+        }),
+      ),
+    );
 
   return { step, finish };
 };
@@ -965,8 +1174,12 @@ export const makeSubscriptionModel = Effect.fnUntraced(function* (
   const streamText = (request: LanguageModel.ProviderOptions) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        if (request.responseFormat.type === "json")
-          return yield* unsupported("Subscription models do not support structured output.");
+        yield* Effect.void.pipe(
+          Effect.filterOrFail(
+            () => request.responseFormat.type !== "json",
+            () => unsupported("Subscription models do not support structured output."),
+          ),
+        );
         const controller = yield* Effect.acquireRelease(
           Effect.sync(() => new AbortController()),
           (aborted) => Effect.sync(() => aborted.abort()),
@@ -1006,9 +1219,17 @@ export const makeSubscriptionModel = Effect.fnUntraced(function* (
               Effect.annotateLogs({ provider, eventType: streamEventType(event) }),
             ),
           ),
-          Stream.mapEffect(translator.step),
-          Stream.concat(Stream.fromEffect(translator.finish)),
-          Stream.flatMap(Stream.fromIterable),
+          // None marks the end of the stream, where the turn finishes.
+          Stream.map(Option.some),
+          Stream.concat(Stream.succeed(Option.none<NormalizedStreamEvent>())),
+          Stream.mapAccumEffect(
+            () => initialTranslation,
+            (state, event): Translating =>
+              Option.match(event, {
+                onSome: (received) => translator.step(state, received),
+                onNone: () => translator.finish(state),
+              }),
+          ),
           Stream.catch((failure: SubscriptionFailure) =>
             Stream.fromEffect(
               Effect.logError("subscription model request failed").pipe(
