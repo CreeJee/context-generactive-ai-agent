@@ -158,46 +158,55 @@ const make = Effect.gen(function* () {
           run.projectId,
           run.worktree,
         );
-        if (Option.isNone(selection)) return failed("model_selection_required");
-        const message = [
-          ...(run.continuation
-            ? [
-                "You worked on this card before and were cut off. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
-              ]
-            : []),
-          ...listed("The orchestrator changed the card since your last run", run.notes),
-          cardText(run.card),
-        ].join("\n\n");
-        const outcome = yield* subagents.runAttempt(
-          {
-            project,
-            sessionId: run.sessionId,
-            runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
-            selection: selection.value,
-            tools: [
-              ...(yield* fileTools.forProject(project)),
-              ...(yield* outsideTools.forProject(project)),
-              ...(yield* approvedTools.forProject(project, "gate")),
-            ],
-            systemPrompts: [],
-            gated: gatedToolNames,
-          },
-          {
-            agent: `card-${run.card.id}-g${run.generation}`,
-            message,
-            instructions: cardInstructions,
-          },
-          (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
-        );
-        if (outcome === null) return failed("not_started");
-        return Match.value(outcome).pipe(
-          Match.discriminatorsExhaustive("status")({
-            completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
-            failed: () => failed("failed"),
-            cancelled: () => failed("cancelled"),
-            interrupted: () => failed("cancelled"),
-          }),
-        );
+        const attempt = (chosen: Option.Option.Value<typeof selection>) =>
+          Effect.gen(function* () {
+            const message = [
+              ...(run.continuation
+                ? [
+                    "You worked on this card before and were cut off. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
+                  ]
+                : []),
+              ...listed("The orchestrator changed the card since your last run", run.notes),
+              cardText(run.card),
+            ].join("\n\n");
+            const outcome = yield* subagents.runAttempt(
+              {
+                project,
+                sessionId: run.sessionId,
+                runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
+                selection: chosen,
+                tools: [
+                  ...(yield* fileTools.forProject(project)),
+                  ...(yield* outsideTools.forProject(project)),
+                  ...(yield* approvedTools.forProject(project, "gate")),
+                ],
+                systemPrompts: [],
+                gated: gatedToolNames,
+              },
+              {
+                agent: `card-${run.card.id}-g${run.generation}`,
+                message,
+                instructions: cardInstructions,
+              },
+              (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
+            );
+            return Option.match(Option.fromNullishOr(outcome), {
+              onNone: () => failed("not_started"),
+              onSome: (ended) =>
+                Match.value(ended).pipe(
+                  Match.discriminatorsExhaustive("status")({
+                    completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
+                    failed: () => failed("failed"),
+                    cancelled: () => failed("cancelled"),
+                    interrupted: () => failed("cancelled"),
+                  }),
+                ),
+            });
+          });
+        return yield* Option.match(selection, {
+          onNone: () => Effect.succeed(failed("model_selection_required")),
+          onSome: attempt,
+        });
         // Its session, project or run records failed; the error stays in the logs only.
       },
       // A database failure also names its kind (lock, constraint, ...), never its statement.
@@ -226,38 +235,44 @@ const make = Effect.gen(function* () {
         input.projectId,
         input.worktree,
       );
-      if (Option.isNone(selection))
-        return rejected(VerdictFailure.cases.ModelSelectionRequired.make({}));
-      const recorder = yield* verdictRecorder;
-      const tools: AnyServerTool[] = [
-        ...(yield* fileTools.forProject(project)).filter((tool) =>
-          HashSet.has(readToolNames, tool.name),
-        ),
-        ...(yield* approvedTools.forProject(project, "gate")).filter((tool) =>
-          HashSet.has(checkToolNames, tool.name),
-        ),
-        recorder.tool,
-      ];
-      const outcome = yield* subagents.runAttempt(
-        {
-          project,
-          sessionId: input.sessionId,
-          runId,
-          selection: selection.value,
-          tools,
-          systemPrompts: [],
-          gated: gatedToolNames,
-        },
-        { agent: input.agent, message: input.message, instructions: input.instructions },
-        () => Effect.void,
-      );
-      return Option.getOrElse(yield* recorder.verdict, () =>
-        rejected(
-          outcome?.status === "completed"
-            ? VerdictFailure.cases.NoVerdict.make({})
-            : VerdictFailure.cases.NotFinished.make({}),
-        ),
-      );
+      const verified = (chosen: Option.Option.Value<typeof selection>) =>
+        Effect.gen(function* () {
+          const recorder = yield* verdictRecorder;
+          const tools: AnyServerTool[] = [
+            ...(yield* fileTools.forProject(project)).filter((tool) =>
+              HashSet.has(readToolNames, tool.name),
+            ),
+            ...(yield* approvedTools.forProject(project, "gate")).filter((tool) =>
+              HashSet.has(checkToolNames, tool.name),
+            ),
+            recorder.tool,
+          ];
+          const outcome = yield* subagents.runAttempt(
+            {
+              project,
+              sessionId: input.sessionId,
+              runId,
+              selection: chosen,
+              tools,
+              systemPrompts: [],
+              gated: gatedToolNames,
+            },
+            { agent: input.agent, message: input.message, instructions: input.instructions },
+            () => Effect.void,
+          );
+          return Option.getOrElse(yield* recorder.verdict, () =>
+            rejected(
+              outcome?.status === "completed"
+                ? VerdictFailure.cases.NoVerdict.make({})
+                : VerdictFailure.cases.NotFinished.make({}),
+            ),
+          );
+        });
+      return yield* Option.match(selection, {
+        onNone: () =>
+          Effect.succeed(rejected(VerdictFailure.cases.ModelSelectionRequired.make({}))),
+        onSome: verified,
+      });
     },
     Effect.catch((error) =>
       Effect.as(

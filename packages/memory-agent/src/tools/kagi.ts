@@ -5,7 +5,7 @@ import { onRun, runTrace } from "../runtime/run-trace.ts";
 
 type NativeRunner = ReturnType<typeof runNativeEffectWith<never>>;
 import { toolDefinition, type AnyServerTool, type ToolExecutionContext } from "@tanstack/ai";
-import { HashSet, Context, Effect, Layer, Schema } from "effect";
+import { HashSet, Context, Effect, Layer, Option, Schema } from "effect";
 import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 import { definitionOf } from "./schema.ts";
@@ -76,51 +76,57 @@ const make = Effect.gen(function* () {
     });
 
   const extract = ({ urls }: typeof KagiExtractInput.Type, signal: AbortSignal | undefined) =>
-    Effect.gen(function* () {
-      if (urls.length === 0 || urls.length > maxExtractUrls)
-        return yield* new Cause.UnknownError(
-          new Error(`invalid_urls: pass 1 to ${maxExtractUrls} URLs.`),
+    Effect.succeed(urls).pipe(
+      Effect.filterOrFail(
+        (given) => given.length > 0 && given.length <= maxExtractUrls,
+        () => new Cause.UnknownError(new Error(`invalid_urls: pass 1 to ${maxExtractUrls} URLs.`)),
+      ),
+      Effect.filterOrFail(
+        (given) => given.every(isWebUrl),
+        (given) =>
+          new Cause.UnknownError(
+            new Error(
+              `invalid_urls: not http(s): ${given.filter((url) => !isWebUrl(url)).join(", ")}`,
+            ),
+          ),
+      ),
+      Effect.flatMap((given) => kagi.extract(given, signal)),
+      Effect.map((response) => {
+        const pages = response.data.map((page) =>
+          Option.match(Option.fromNullishOr(page.markdown), {
+            onNone: () => ({
+              url: page.url,
+              status: "failed" as const,
+              error: page.error ?? "no content",
+            }),
+            onSome: (markdown) => ({
+              url: page.url,
+              status: "ok" as const,
+              markdown: markdown.slice(0, maxPageCharacters),
+              truncated: markdown.length > maxPageCharacters,
+            }),
+          }),
         );
-      const rejected = urls.filter((url) => !isWebUrl(url));
-      if (rejected.length > 0)
-        return yield* new Cause.UnknownError(
-          new Error(`invalid_urls: not http(s): ${rejected.join(", ")}`),
-        );
-      const response = yield* kagi.extract(urls, signal);
-      const pages = response.data.map((page) => {
-        if (page.markdown === undefined || page.markdown === null)
-          return {
-            url: page.url,
-            status: "failed" as const,
-            error: page.error ?? "no content",
-          };
-        const truncated = page.markdown.length > maxPageCharacters;
+        const answered = HashSet.fromIterable(pages.map((page) => page.url));
         return {
-          url: page.url,
-          status: "ok" as const,
-          markdown: truncated ? page.markdown.slice(0, maxPageCharacters) : page.markdown,
-          truncated,
+          pages,
+          // URLs Kagi reported an error for, or left out of the answer entirely.
+          errors: [
+            ...(response.errors ?? []).map((error) => ({
+              url: error.url,
+              code: error.code,
+              message: error.message ?? null,
+            })),
+            ...urls
+              .filter((url) => !HashSet.has(answered, url))
+              .map((url) => ({ url, code: "missing", message: null })),
+          ],
+          requested: urls.length,
+          succeeded: pages.filter((page) => page.status === "ok").length,
+          note: "Markdown is Kagi's conversion of each page, not the original HTML.",
         };
-      });
-      const answered = HashSet.fromIterable(pages.map((page) => page.url));
-      return {
-        pages,
-        // URLs Kagi reported an error for, or left out of the answer entirely.
-        errors: [
-          ...(response.errors ?? []).map((error) => ({
-            url: error.url,
-            code: error.code,
-            message: error.message ?? null,
-          })),
-          ...urls
-            .filter((url) => !HashSet.has(answered, url))
-            .map((url) => ({ url, code: "missing", message: null })),
-        ],
-        requested: urls.length,
-        succeeded: pages.filter((page) => page.status === "ok").length,
-        note: "Markdown is Kagi's conversion of each page, not the original HTML.",
-      };
-    });
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const serverTools = (run: NativeRunner): AnyServerTool[] => [

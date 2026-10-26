@@ -114,19 +114,23 @@ const make = Effect.gen(function* () {
     return {
       readBoard: () =>
         Effect.gen(function* () {
-          const view = yield* (yield* KanbanBoardActions).view(sessionId);
-          if (Option.isNone(view)) return { error: "not_kanban" as const };
-          const board = yield* (yield* Boards).view(sessionId);
-          const titles = new Map(board.cards.map(({ card }) => [card.id, card]));
-          return {
-            ...view.value,
-            cards: view.value.cards.map((card) => ({
-              ...card,
-              title: titles.get(card.cardId)?.title ?? "",
-              dependsOn: titles.get(card.cardId)?.dependsOn ?? [],
-            })),
-            pendingChanges: board.pendingChanges,
-          };
+          const boards = yield* Boards;
+          return yield* Option.match(yield* (yield* KanbanBoardActions).view(sessionId), {
+            onNone: () => Effect.succeed({ error: "not_kanban" as const }),
+            onSome: (view) =>
+              Effect.map(boards.view(sessionId), (board) => {
+                const titles = new Map(board.cards.map(({ card }) => [card.id, card]));
+                return {
+                  ...view,
+                  cards: view.cards.map((card) => ({
+                    ...card,
+                    title: titles.get(card.cardId)?.title ?? "",
+                    dependsOn: titles.get(card.cardId)?.dependsOn ?? [],
+                  })),
+                  pendingChanges: board.pendingChanges,
+                };
+              }),
+          });
         }).pipe(Effect.provideContext(runtime)),
 
       editBoard: ({ edit }: typeof EditBoardInput.Type) =>

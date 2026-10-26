@@ -1,7 +1,6 @@
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { HashSet } from "effect";
-import { isTruthy } from "../truthy.ts";
 import { errorTag } from "../tools/failure.ts";
 import type { AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
@@ -69,27 +68,39 @@ const make = Effect.gen(function* () {
     withPreviews: (project: Project, tools: readonly AnyServerTool[]) =>
       Effect.map(runTrace, (caller): AnyServerTool[] => {
         const run = runNativeEffectWith(onRun(services, caller));
-        return tools.map((tool): AnyServerTool => {
-          const execute = tool.execute;
-          if (!isTruthy(execute) || !HashSet.has(writingToolNames, tool.name)) return tool;
-          return {
-            ...tool,
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            execute: (...call: Parameters<typeof execute>) =>
-              run(
-                Effect.gen(function* () {
-                  const result = yield* nativePromise(() => Promise.resolve(execute(...call)));
-                  const written = Option.getOrUndefined(decodeWritten(result));
-                  if (!(written !== undefined) || !isDrawing(written.path)) return result;
-                  const preview = yield* previewOf(project, written.path);
-                  return Option.match(preview, {
-                    onNone: () => result,
-                    onSome: (picture) => ({ ...result, preview: picture }),
-                  });
-                }),
-              ),
-          };
-        });
+        return tools.map((tool): AnyServerTool =>
+          Option.fromNullishOr(tool.execute).pipe(
+            Option.filter(() => HashSet.has(writingToolNames, tool.name)),
+            Option.match({
+              onNone: () => tool,
+              onSome: (execute) => ({
+                ...tool,
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                execute: (...call: Parameters<typeof execute>) =>
+                  run(
+                    Effect.flatMap(
+                      nativePromise(() => Promise.resolve(execute(...call))),
+                      (result) =>
+                        decodeWritten(result).pipe(
+                          Option.filter((written) => isDrawing(written.path)),
+                          Option.match({
+                            onNone: () => Effect.succeed(result),
+                            onSome: (written) =>
+                              Effect.map(
+                                previewOf(project, written.path),
+                                Option.match({
+                                  onNone: () => result,
+                                  onSome: (picture) => ({ ...result, preview: picture }),
+                                }),
+                              ),
+                          }),
+                        ),
+                    ),
+                  ),
+              }),
+            }),
+          ),
+        );
       }),
 
     /** {@link withPreviews} for the Effect AI loop (docs/effect-ai-migration.md step 3). */

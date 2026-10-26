@@ -338,35 +338,44 @@ const make = Effect.gen(function* () {
            * `runSkill` that also runs `project`'s ts skills, as programs over these tools, and its
            * sh skills as before. Any other tool comes back as it is.
            */
-          codeSkills: (project: Project, runSkill: AnyServerTool): AnyServerTool => {
-            const execute = runSkill.execute;
-            if (runSkill.name !== "run_skill" || !isTruthy(execute)) return runSkill;
-            return {
-              ...runSkill,
-              execute: (args, context?: ToolExecutionContext) =>
-                Option.match(decodeRunSkill(args), {
-                  // The engine checked the arguments; what it let through, the tool reports.
-                  onNone: () => Promise.resolve(execute(args, context)),
-                  onSome: ({ name, input = {}, timeoutSeconds }) =>
-                    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                    runNativeEffectWith(caller)(
-                      guardedEffect(
-                        name,
-                        Effect.flatMap(codeSkills.runnable(project, name), (saved) =>
-                          SavedProgram.$match(saved, {
-                            sh: () => nativePromise(() => Promise.resolve(execute(args, context))),
-                            ts: ({ code, input: schema }) =>
-                              Effect.flatMap(skillInput(schema, input), (value) =>
-                                run(code, value, secondsOf(timeoutSeconds, skillSeconds), context),
-                              ),
-                          }),
+          codeSkills: (project: Project, runSkill: AnyServerTool): AnyServerTool =>
+            Option.fromNullishOr(runSkill.execute).pipe(
+              Option.filter(() => runSkill.name === "run_skill"),
+              Option.match({
+                onNone: () => runSkill,
+                onSome: (execute) => ({
+                  ...runSkill,
+                  execute: (args, context?: ToolExecutionContext) =>
+                    Option.match(decodeRunSkill(args), {
+                      // The engine checked the arguments; what it let through, the tool reports.
+                      onNone: () => Promise.resolve(execute(args, context)),
+                      onSome: ({ name, input = {}, timeoutSeconds }) =>
+                        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                        runNativeEffectWith(caller)(
+                          guardedEffect(
+                            name,
+                            Effect.flatMap(codeSkills.runnable(project, name), (saved) =>
+                              SavedProgram.$match(saved, {
+                                sh: () =>
+                                  nativePromise(() => Promise.resolve(execute(args, context))),
+                                ts: ({ code, input: schema }) =>
+                                  Effect.flatMap(skillInput(schema, input), (value) =>
+                                    run(
+                                      code,
+                                      value,
+                                      secondsOf(timeoutSeconds, skillSeconds),
+                                      context,
+                                    ),
+                                  ),
+                              }),
+                            ),
+                          ),
+                          { signal: context?.abortSignal },
                         ),
-                      ),
-                      { signal: context?.abortSignal },
-                    ),
+                    }),
                 }),
-            };
-          },
+              }),
+            ),
         };
       }),
 

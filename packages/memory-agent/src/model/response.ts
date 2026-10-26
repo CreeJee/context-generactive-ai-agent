@@ -1,7 +1,89 @@
-import { Effect, Stream } from "effect";
+import { Array as EffectArray, Effect, HashMap, Match, Option, Stream } from "effect";
 import type { AiError, Response } from "effect/ai";
 
 type Metadata = NonNullable<Response.StreamPartEncoded["metadata"]>;
+
+interface Block {
+  readonly text: string;
+  readonly metadata: Metadata;
+}
+
+/** The parts finished so far, and the text and reasoning blocks still open (`text:<id>`). */
+interface Collected {
+  readonly output: Array<Response.PartEncoded>;
+  readonly open: HashMap.HashMap<string, Block>;
+}
+
+const started = (
+  state: Collected,
+  { key, metadata }: { key: string; metadata: Metadata | undefined },
+): Collected => ({
+  ...state,
+  open: HashMap.set(state.open, key, { text: "", metadata: metadata ?? {} }),
+});
+
+const appended = (state: Collected, { key, delta }: { key: string; delta: string }): Collected => ({
+  ...state,
+  open: HashMap.modify(state.open, key, (block) => ({ ...block, text: block.text + delta })),
+});
+
+/** A block's text, with its start and end metadata merged. */
+const merged = (block: Block, metadata: Metadata | undefined) => ({
+  text: block.text,
+  metadata: { ...block.metadata, ...metadata },
+});
+
+/** Closes a block as the part `finished` makes of it. */
+const ended = (
+  state: Collected,
+  {
+    key,
+    metadata,
+    finished,
+  }: {
+    key: string;
+    metadata: Metadata | undefined;
+    finished: (block: ReturnType<typeof merged>) => Response.PartEncoded;
+  },
+): Collected => ({
+  open: HashMap.remove(state.open, key),
+  output: [
+    ...state.output,
+    finished(
+      merged(
+        Option.getOrElse(HashMap.get(state.open, key), () => ({ text: "", metadata: {} })),
+        metadata,
+      ),
+    ),
+  ],
+});
+
+const collected = (state: Collected, part: Response.StreamPartEncoded): Collected =>
+  Match.value(part).pipe(
+    Match.discriminators("type")({
+      "text-start": ({ id, metadata }) => started(state, { key: `text:${id}`, metadata }),
+      "reasoning-start": ({ id, metadata }) => started(state, { key: `reasoning:${id}`, metadata }),
+      "text-delta": ({ id, delta }) => appended(state, { key: `text:${id}`, delta }),
+      "reasoning-delta": ({ id, delta }) => appended(state, { key: `reasoning:${id}`, delta }),
+      "text-end": ({ id, metadata }) =>
+        ended(state, {
+          key: `text:${id}`,
+          metadata,
+          finished: (block) => ({ type: "text", ...block }),
+        }),
+      "reasoning-end": ({ id, metadata }) =>
+        ended(state, {
+          key: `reasoning:${id}`,
+          metadata,
+          finished: (block) => ({ type: "reasoning", ...block }),
+        }),
+      "tool-params-start": () => state,
+      "tool-params-delta": () => state,
+      "tool-params-end": () => state,
+      error: () => state,
+    }),
+    Match.orElse((whole) => ({ ...state, output: [...state.output, whole] })),
+  );
 
 /**
  * The whole response a part stream describes, for `generateText` of a model that only streams:
@@ -10,45 +92,7 @@ type Metadata = NonNullable<Response.StreamPartEncoded["metadata"]>;
 export const collectResponse = <R>(
   stream: Stream.Stream<Response.StreamPartEncoded, AiError.AiError, R>,
 ): Effect.Effect<Array<Response.PartEncoded>, AiError.AiError, R> =>
-  Effect.map(Stream.runCollect(stream), (parts) => {
-    const output: Array<Response.PartEncoded> = [];
-    const open = new Map<string, { text: string; metadata: Metadata }>();
-    const start = (id: string, metadata: Metadata | undefined) =>
-      open.set(id, { text: "", metadata: metadata ?? {} });
-    const append = (id: string, delta: string) => {
-      const block = open.get(id);
-      if (block !== undefined) block.text += delta;
-    };
-    const end = (id: string, metadata: Metadata | undefined) => {
-      const block = open.get(id) ?? { text: "", metadata: {} };
-      open.delete(id);
-      return { text: block.text, metadata: { ...block.metadata, ...metadata } };
-    };
-    for (const part of parts)
-      switch (part.type) {
-        case "text-start":
-        case "reasoning-start":
-          start(`${part.type}:${part.id}`, part.metadata);
-          break;
-        case "text-delta":
-          append(`text-start:${part.id}`, part.delta);
-          break;
-        case "reasoning-delta":
-          append(`reasoning-start:${part.id}`, part.delta);
-          break;
-        case "text-end":
-          output.push({ type: "text", ...end(`text-start:${part.id}`, part.metadata) });
-          break;
-        case "reasoning-end":
-          output.push({ type: "reasoning", ...end(`reasoning-start:${part.id}`, part.metadata) });
-          break;
-        case "tool-params-start":
-        case "tool-params-delta":
-        case "tool-params-end":
-        case "error":
-          break;
-        default:
-          output.push(part);
-      }
-    return output;
-  });
+  Effect.map(
+    Stream.runCollect(stream),
+    (parts) => EffectArray.reduce(parts, { output: [], open: HashMap.empty() }, collected).output,
+  );

@@ -40,7 +40,8 @@ export const btwToolGuard: ChatMiddleware = {
     return tools.length === config.tools.length ? undefined : { tools };
   },
   onBeforeToolCall(_ctx, call) {
-    if (allowed(call.toolName)) return undefined;
-    return { type: "skip", result: { error: "btw_tool_not_allowed", tool: call.toolName } };
+    return allowed(call.toolName)
+      ? undefined
+      : { type: "skip", result: { error: "btw_tool_not_allowed", tool: call.toolName } };
   },
 };

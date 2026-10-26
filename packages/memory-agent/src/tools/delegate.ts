@@ -1,7 +1,6 @@
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
@@ -156,10 +155,16 @@ const make = Effect.gen(function* () {
           ),
         );
         const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
-        if (saved?.status === "completed")
-          return yield* Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(saved.result);
-        if (isTruthy(saved)) return { taskId: receipt.taskId, ...saved };
-        return receipt;
+        return yield* Option.match(Option.fromNullishOr(saved), {
+          onNone: () => Effect.succeed(receipt),
+          onSome: (result) =>
+            Match.value(result).pipe(
+              Match.when({ status: "completed" }, ({ result: text }) =>
+                Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(text),
+              ),
+              Match.orElse((running) => Effect.succeed({ taskId: receipt.taskId, ...running })),
+            ),
+        });
       });
 
   /** The run's toolset when an external agent is trusted in the project, with `tool` making it. */

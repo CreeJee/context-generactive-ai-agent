@@ -83,19 +83,21 @@ const turnStream = (turn: ScriptedTurn): Stream.Stream<Part, AiError.AiError> =>
           { type: "text-end", id: textId } as const,
         ]),
   ]);
-  if (turn.failAfterText !== undefined)
-    return Stream.concat(opened, Stream.fail(failed(turn.failAfterText)));
   const calls = turn.toolCalls ?? [];
   return Stream.concat(
     opened,
-    Stream.fromIterable<Part>([
-      ...calls.flatMap(callParts),
-      {
-        type: "finish",
-        reason: calls.length > 0 ? "tool-calls" : "stop",
-        usage: turn.usage ?? { inputTokens: {}, outputTokens: {} },
-      },
-    ]),
+    Option.match(Option.fromNullishOr(turn.failAfterText), {
+      onNone: () =>
+        Stream.fromIterable<Part>([
+          ...calls.flatMap(callParts),
+          {
+            type: "finish",
+            reason: calls.length > 0 ? "tool-calls" : "stop",
+            usage: turn.usage ?? { inputTokens: {}, outputTokens: {} },
+          },
+        ]),
+      onSome: (failure) => Stream.fail(failed(failure)),
+    }),
   );
 };
 

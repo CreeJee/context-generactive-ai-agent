@@ -1,4 +1,4 @@
-import type { JsonSchema } from "effect";
+import { type JsonSchema, Option } from "effect";
 import { Tool } from "effect/ai";
 import { optionalProperty } from "../optional-property.ts";
 import { toolParametersJsonSchema } from "../tools/schema.ts";
@@ -9,8 +9,13 @@ import { toolParametersJsonSchema } from "../tools/schema.ts";
  * schema always with `properties` and `required`. A tool written in JSON Schema (MCP) goes as
  * written.
  */
-export const toolParameters = (tool: Tool.Any): JsonSchema.JsonSchema => {
-  if (Tool.isDynamic(tool) && tool.jsonSchema !== undefined) return tool.jsonSchema;
+export const toolParameters = (tool: Tool.Any): JsonSchema.JsonSchema =>
+  Option.liftPredicate(tool, Tool.isDynamic).pipe(
+    Option.flatMapNullishOr((dynamic) => dynamic.jsonSchema),
+    Option.getOrElse(() => fromSchema(tool)),
+  );
+
+const fromSchema = (tool: Tool.Any): JsonSchema.JsonSchema => {
   const { $schema: _, ...written } = toolParametersJsonSchema(tool.parametersSchema);
   const typed =
     "properties" in written && written["type"] === undefined
