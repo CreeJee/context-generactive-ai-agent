@@ -138,6 +138,10 @@ const toolJsonSchema = (
   throw new Error(`Unsupported target: ${target}`);
 };
 
+/** A tool's parameters in the draft-07 form TanStack sends providers. */
+export const toolParametersJsonSchema = (schema: Schema.Constraint) =>
+  toolJsonSchema(schema, "draft-07");
+
 export const toToolSchema = <S extends Schema.ConstraintDecoder<unknown, never>>(
   schema: S,
 ): ToolSchema<S["Type"], S["Encoded"]> => ({

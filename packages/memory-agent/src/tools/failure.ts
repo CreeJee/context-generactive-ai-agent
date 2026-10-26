@@ -40,11 +40,12 @@ export const toolResultKey = Symbol.for("tanstack-ai.toolResult");
  * What the model reads for a failed tool call: a code, the failure's own tag, and the tool's
  * text, redacted, so the model can correct a path or an argument and try again.
  */
-export interface ToolFailureResult {
-  readonly error: string;
-  readonly cause: string;
-  readonly detail: string;
-}
+export const ToolFailureResult = Schema.Struct({
+  error: Schema.String,
+  cause: Schema.String,
+  detail: Schema.String,
+});
+export type ToolFailureResult = typeof ToolFailureResult.Type;
 
 /**
  * A tool call failed. `code` is the reason (`not_found`, `io_error`, …), `tag` the failure's tag;

@@ -28,6 +28,7 @@ import { providerToolFunction } from "../providers/provider-tools.ts";
 import { providerPrompt } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
+import { toolParameters } from "./tool-schema.ts";
 
 /**
  * The ChatGPT and Claude subscription models as an Effect `LanguageModel`. The request body is the
@@ -507,7 +508,7 @@ const canonicalTools = (tools: ReadonlyArray<Tool.Any>) =>
       Option.getOrElse(providerToolFunction(tool), () => ({
         name: tool.name,
         ...optionalProperty("description", Tool.getDescription(tool)),
-        input_schema: Tool.getJsonSchema(tool),
+        input_schema: toolParameters(tool),
       })),
     )
     .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));

@@ -22,6 +22,7 @@ import { isTruthy } from "../truthy.ts";
 import { providerPrompt, type ReplayTarget } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
+import { toolParameters } from "./tool-schema.ts";
 
 /**
  * An OpenAI-compatible Chat Completions endpoint as an Effect `LanguageModel`. The request body is
@@ -281,7 +282,7 @@ const chatTools = (tools: ReadonlyArray<Tool.Any>): Array<ChatTool> =>
     function: {
       name: tool.name,
       description: Tool.getDescription(tool),
-      parameters: Tool.getJsonSchema(tool),
+      parameters: toolParameters(tool),
       strict: false,
     },
   }));

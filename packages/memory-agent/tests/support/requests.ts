@@ -149,6 +149,7 @@ const completion =
 const tanstackCompatibleBody = Effect.fnUntraced(function* (
   threadId: string,
   history: ReadonlyArray<ModelMessage>,
+  chatTools: ReadonlyArray<AnyTool> = tanstackTools(),
 ) {
   let settings: Settings = {};
   const bodies: string[] = [];
@@ -183,7 +184,7 @@ const tanstackCompatibleBody = Effect.fnUntraced(function* (
         adapter,
         messages: [...history],
         systemPrompts: [system],
-        tools: tanstackTools(),
+        tools: [...chatTools],
         threadId,
       }),
       (cause) => new Cause.UnknownError(cause),
@@ -197,12 +198,15 @@ const wireBody = (payload: CompatiblePayload) =>
   JSON.stringify({ ...payload, stream: true, stream_options: { include_usage: true } });
 
 /** The body the Effect AI compatible model sends for the migrated `history`; none when refused. */
-const effectCompatibleBody = (history: ReadonlyArray<StoredMessage>) =>
+const effectCompatibleBody = (
+  history: ReadonlyArray<StoredMessage>,
+  modelTools: ReadonlyArray<Tool.Any> = effectTools,
+) =>
   compatibleRequest({
     endpoint,
     reasoningEffort: "default",
     prompt: providerPrompt(toPrompt(history, [system]), compatibleTarget(endpoint.model)),
-    tools: effectTools,
+    tools: modelTools,
   }).pipe(
     Effect.map(wireBody),
     Effect.orElseSucceed(() => undefined),
@@ -334,4 +338,20 @@ export const toolRequestDifferences = ({
       provider: selection.provider,
       difference: firstDifference(expected, effectBody(selection, "thread-1", [next], modelTools)),
     })),
+  );
+
+/** The same for the compatible endpoint, whose tools are compared without key order. */
+export const compatibleToolRequestDifference = ({
+  chatTools,
+  modelTools,
+}: {
+  readonly chatTools: ReadonlyArray<AnyTool>;
+  readonly modelTools: ReadonlyArray<Tool.Any>;
+}) =>
+  Effect.map(
+    Effect.all([
+      tanstackCompatibleBody("thread-1", [asTanStack(next)], chatTools),
+      effectCompatibleBody([next], modelTools),
+    ]),
+    ([expected, actual]) => firstDifference(expected, actual, compatibleUnordered),
   );
