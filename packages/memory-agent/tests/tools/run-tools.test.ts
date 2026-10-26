@@ -2,9 +2,11 @@ import { it } from "@effect/vitest";
 import type { AnyTool } from "@tanstack/ai";
 import { Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
+import { StorageRoot } from "../../src/config/storage-root.ts";
 import type { Project } from "../../src/projects/projects.ts";
 import { makeLazyTools } from "../../src/tools/discovery.ts";
 import { FileTools } from "../../src/tools/files.ts";
+import { OutsideTools } from "../../src/tools/outside.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
 import { withTestPlatform } from "../support/platform.ts";
 import { compatibleToolRequestDifference, toolRequestDifferences } from "../support/requests.ts";
@@ -48,6 +50,25 @@ describe("Effect AI tools", () => {
           yield* requestDifferences(
             yield* inRun(files.forProject(project)),
             files.runToolsFor(project),
+          ),
+        ).toEqual(same);
+      }),
+    ),
+  );
+
+  it.live("outside tools", () =>
+    withTestPlatform(
+      Effect.gen(function* () {
+        const outside = yield* Effect.provideContext(
+          OutsideTools,
+          yield* Layer.build(
+            OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer("/tmp/storage"))),
+          ),
+        );
+        expect(
+          yield* requestDifferences(
+            yield* inRun(outside.forProject(project)),
+            outside.runToolsFor(project),
           ),
         ).toEqual(same);
       }),
