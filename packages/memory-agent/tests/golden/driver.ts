@@ -58,7 +58,8 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   );
   /**
    * No run of the conversation or of its subagents is going, no child attempt is going, every
-   * child's notification reached a run that ended, and the agent agrees.
+   * child's notification reached a run that ended, no steered message waits for the server to send
+   * it, and the agent agrees.
    */
   const settled = waitUntil(
     Effect.zipWith(
@@ -71,7 +72,10 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
            + (SELECT count(*) FROM parent_notifications n
               WHERE n.origin_session_id = ? AND NOT EXISTS (
                 SELECT 1 FROM chat_runs r
-                WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running')) AS busy`,
+                WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running'))
+           + (SELECT count(*) FROM queued_messages
+              WHERE session_id = ? AND state = 'waiting' AND steered = 1) AS busy`,
+        sessionId,
         sessionId,
         sessionId,
         sessionId,
@@ -83,6 +87,31 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     "the conversation to settle",
     6_000,
   );
+  /** Send a user message, run `meanwhile` once the model is answering it, then wait to settle. */
+  const sendAnd = <E, R>(text: string, meanwhile: Effect.Effect<void, E, R>) =>
+    Effect.gen(function* () {
+      const sending = yield* Effect.forkChild(deliver(text));
+      yield* waitUntil(
+        Effect.sync(
+          () => provider?.adapter.invocations.some((call) => call.threadId === sessionId) ?? false,
+        ),
+        "the model to be asked",
+        6_000,
+      );
+      yield* meanwhile;
+      yield* Fiber.join(sending).pipe(Effect.ignore);
+      yield* settled;
+    });
+  /** Queue or steer a message as the page's composer does while a run is going. */
+  const enqueue = (text: string, mode: "queue" | "steer") =>
+    Effect.gen(function* () {
+      const response = yield* (yield* AgentChat).enqueue(sessionId, null, {
+        text,
+        attachmentIds: [],
+        mode,
+      });
+      yield* Effect.sync(() => expect(response.status).toBe(201));
+    });
   return {
     sessionId,
     settled,
@@ -126,19 +155,27 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       yield* Effect.sync(() => expect(response.status).toBe(200));
     }),
     /** Send a user message, then cancel the run once the model is answering it. */
-    sendAndCancel: Effect.fnUntraced(function* (text: string) {
-      const sending = yield* Effect.forkChild(deliver(text));
-      yield* waitUntil(
-        Effect.sync(
-          () => provider?.adapter.invocations.some((call) => call.threadId === sessionId) ?? false,
+    sendAndCancel: (text: string) =>
+      sendAnd(
+        text,
+        Effect.asVoid(Effect.flatMap(AgentChat, (chat) => chat.cancel(sessionId, null))),
+      ),
+    /**
+     * Send a user message and, once the model is answering it, queue `messages` behind it in order.
+     * `answer` then lets the model go on.
+     */
+    sendAndQueue: (
+      text: string,
+      messages: ReadonlyArray<readonly [text: string, mode: "queue" | "steer"]>,
+      answer: () => void,
+    ) =>
+      sendAnd(
+        text,
+        Effect.andThen(
+          Effect.forEach(messages, ([queued, mode]) => enqueue(queued, mode), { discard: true }),
+          Effect.sync(answer),
         ),
-        "the model to be asked",
-        6_000,
-      );
-      yield* (yield* AgentChat).cancel(sessionId, null);
-      yield* Fiber.join(sending).pipe(Effect.ignore);
-      yield* settled;
-    }),
+      ),
     /**
      * Send a user message and restart the agent once `running` holds. The page then reconnects to
      * the new agent.

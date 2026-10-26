@@ -1,0 +1,219 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:steer",
+          "createdAt": "<time>"
+        },
+        {
+          "id": "<id-2>",
+          "role": "user",
+          "content": "and the notes"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-3>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-4>",
+          "role": "user",
+          "content": "shorter please"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-5>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:steer",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 1,
+      "ui_id": "<id-2>",
+      "messages": [
+        {
+          "id": "<id-2>",
+          "role": "user",
+          "content": "and the notes"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 2,
+      "ui_id": "<id-3>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-3>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 3,
+      "ui_id": "<id-4>",
+      "messages": [
+        {
+          "id": "<id-4>",
+          "role": "user",
+          "content": "shorter please"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 4,
+      "ui_id": "<id-5>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-5>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-6>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-7>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-8>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:steer",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "and the notes",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-7>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "shorter please",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-8>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "artifacts": [],
+  "notifications": [],
+  "queue": [
+    {
+      "text": "and the notes",
+      "state": "delivered",
+      "delivered_via": "next_turn",
+      "run_id": "<id-7>",
+      "in_transcript": 0,
+      "steered": 1,
+      "failure": null
+    },
+    {
+      "text": "shorter please",
+      "state": "delivered",
+      "delivered_via": "next_turn",
+      "run_id": "<id-8>",
+      "in_transcript": 0,
+      "steered": 1,
+      "failure": null
+    }
+  ],
+  "workflow": [],
+  "bindings": [],
+  "acknowledgements": [],
+  "events": [],
+  "ledger": [],
+  "usage": []
+}

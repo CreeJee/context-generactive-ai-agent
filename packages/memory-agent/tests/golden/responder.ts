@@ -15,6 +15,35 @@ import { defaultTestResponder } from "../support/provider.ts";
  * unique across the database. Anything else (reviews, subagents) gets the shared test model.
  */
 
+/** Model turns that wait until the test opens the gate, counting how many wait. */
+const gate = () => {
+  const state = { opened: Deferred.makeUnsafe<void>(), held: 0 };
+  return {
+    held: () => state.held,
+    open: () => {
+      Deferred.doneUnsafe(state.opened, Effect.void);
+      state.opened = Deferred.makeUnsafe<void>();
+      state.held = 0;
+    },
+    waits: Effect.suspend(() => {
+      state.held += 1;
+      return Deferred.await(state.opened);
+    }),
+  };
+};
+
+/**
+ * Subagents answer once the test lets them, so a child ends after its parent's run and its report
+ * arrives in a follow-up run, not in whichever parent step happens to come first.
+ */
+const children = gate();
+export const childrenHeld = children.held;
+export const releaseChildren = children.open;
+
+/** A scripted turn that waits, so the test can act while the run is going. */
+const turns = gate();
+export const releaseTurns = turns.open;
+
 const call = (id: string, name: string, args: JsonValue): ScriptedToolCall => ({
   id,
   name,
@@ -82,6 +111,13 @@ const scripts = {
     { toolCalls: [saveSkill("goal-approval", "printf goal-approved")] },
     { text: "goal approval done" },
   ],
+  // The read waits, so a message queued meanwhile goes out when it returns. The queued message is
+  // then the last user message, and the shared model answers it.
+  queue: [
+    { toolCalls: [call("queue-read", "read_file", { path: "notes.txt" })], waitFor: turns.waits },
+  ],
+  // Steering cuts this answer; the queued messages are the next turns.
+  steer: [{ text: "never shown", waitFor: Effect.never }],
   // The skill still runs when the agent restarts, so its outcome is unknown.
   "goal-restart": [
     { toolCalls: [saveSkill("goal-sleeper", "sleep 3; printf slept")] },
@@ -104,6 +140,8 @@ const Scenario = Schema.Literals([
   "goal-tools",
   "goal-approval",
   "goal-restart",
+  "queue",
+  "steer",
 ]);
 export type Scenario = typeof Scenario.Type;
 const decodeScenario = Schema.decodeUnknownOption(Scenario);
@@ -118,22 +156,6 @@ const userText = (message: ModelMessage | undefined) =>
       : (message.content ?? [])
           .flatMap((part) => (part.type === "text" ? [part.content] : []))
           .join("");
-
-/**
- * Subagents answer once the test lets them, so a child ends after its parent's run and its report
- * arrives in a follow-up run, not in whichever parent step happens to come first.
- */
-const children = { gate: Deferred.makeUnsafe<void>(), held: 0 };
-export const childrenHeld = () => children.held;
-export const releaseChildren = () => {
-  Deferred.doneUnsafe(children.gate, Effect.void);
-  children.gate = Deferred.makeUnsafe<void>();
-  children.held = 0;
-};
-const childWaits = Effect.suspend(() => {
-  children.held += 1;
-  return Deferred.await(children.gate);
-});
 
 /**
  * The shared test model. Its call ids are fixed names (`call-reports`) that one conversation can
@@ -155,7 +177,7 @@ const sharedModel: ScriptedResponder = (invocation) => {
             ...turn,
             toolCalls: turn.toolCalls.map((tool) => ({ ...tool, id: `${tool.id}@${scope}` })),
           };
-    return child ? { ...scoped, waitFor: childWaits } : scoped;
+    return child ? { ...scoped, waitFor: children.waits } : scoped;
   });
 };
 

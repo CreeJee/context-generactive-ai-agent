@@ -5,11 +5,13 @@ import { sqlGet } from "../support/sql.ts";
 import { testAgent } from "../support/test-env.ts";
 import { conversation, expectGolden } from "./driver.ts";
 import { waitUntil } from "../support/wait-until.ts";
-import { childrenHeld, goldenResponder, releaseChildren } from "./responder.ts";
+import { childrenHeld, goldenResponder, releaseChildren, releaseTurns } from "./responder.ts";
 
 type Chat = Effect.Success<ReturnType<typeof conversation>>;
 type Step =
-  | ReturnType<Chat["send" | "sendAndCancel" | "approve" | "post" | "restartDuring"]>
+  | ReturnType<
+      Chat["send" | "sendAndCancel" | "sendAndQueue" | "approve" | "post" | "restartDuring"]
+    >
   | Chat["settled" | "compact" | "goal" | "continuePastUncertain"]
   | ReturnType<typeof selectTestModel>;
 
@@ -102,6 +104,19 @@ goldenAgent("golden chat rows", (it) => {
       yield* chat.send("golden:goal-approval");
       yield* chat.approve(true);
     }),
+  );
+  scenario("a queued message reaches the model when a tool call returns", "queue", "ask", (chat) =>
+    chat.sendAndQueue("golden:queue", [["and the second line", "queue"]], releaseTurns),
+  );
+  scenario("steering cuts the answer and sends the queued messages next", "steer", "ask", (chat) =>
+    chat.sendAndQueue(
+      "golden:steer",
+      [
+        ["and the notes", "queue"],
+        ["shorter please", "steer"],
+      ],
+      () => {},
+    ),
   );
   scenario("/compact summarizes earlier turns for the next one", "compaction", "ask", (chat) =>
     Effect.gen(function* () {
