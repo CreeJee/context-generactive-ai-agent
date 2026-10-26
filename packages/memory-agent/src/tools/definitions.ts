@@ -7,7 +7,7 @@
  */
 import { defineInterrupt, toolDefinition } from "@tanstack/ai";
 import { HashSet, Schema } from "effect";
-import { toToolSchema } from "./schema.ts";
+import { definitionOf, toToolSchema } from "./schema.ts";
 
 export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
 export {
@@ -192,26 +192,31 @@ export const DeleteOutsideFileInput = Schema.Struct({
   ),
 });
 
-const saveCodeSkill = {
+/** The gated tools' names, descriptions and parameters, which their Effect AI tools share. */
+export const saveCodeSkillSpec = {
   name: "save_code_skill",
   description:
     "Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.",
-  inputSchema: toToolSchema(SaveCodeSkillInput),
+  parameters: SaveCodeSkillInput,
 } as const;
 
-const writeOutsideFile = {
+export const writeOutsideFileSpec = {
   name: "write_outside_file",
   description:
     "Create a text file outside the project, or replace one when expectedSha256 is given. Each write is approved first. Credential files are refused even with approval.",
-  inputSchema: toToolSchema(WriteOutsideFileInput),
+  parameters: WriteOutsideFileInput,
 } as const;
 
-const deleteOutsideFile = {
+export const deleteOutsideFileSpec = {
   name: "delete_outside_file",
   description:
     "Delete one text file outside the project whose content still matches expectedSha256. Each deletion is approved first.",
-  inputSchema: toToolSchema(DeleteOutsideFileInput),
+  parameters: DeleteOutsideFileInput,
 } as const;
+
+const saveCodeSkill = definitionOf(saveCodeSkillSpec);
+const writeOutsideFile = definitionOf(writeOutsideFileSpec);
+const deleteOutsideFile = definitionOf(deleteOutsideFileSpec);
 
 /** Names of the tools that never run without an approval, in either permission mode. */
 export const gatedToolNames = HashSet.fromIterable([

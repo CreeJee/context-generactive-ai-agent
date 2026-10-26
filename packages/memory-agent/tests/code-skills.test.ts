@@ -9,7 +9,10 @@ import { builtinOverlap } from "../src/skills/code-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { CodeTools } from "../src/tools/code.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
+import type { JsonValue } from "../src/json.ts";
+import type { RunTool } from "../src/tools/run-tool.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
+import { runToolRequestDifferences } from "./support/requests.ts";
 import { inRun } from "./support/run-span.ts";
 import { sdk } from "./agents/agent-env.ts";
 
@@ -35,7 +38,50 @@ test("a script that only wraps built-in tools is refused, a filter after a build
   expect(Option.isNone(builtinOverlap("git log --oneline -20"))).toBe(true);
 });
 
+const callOf = (tool: RunTool | undefined, params: JsonValue) =>
+  Effect.fromNullishOr(tool).pipe(
+    Effect.flatMap((found) => found.prepare(params)),
+    Effect.flatMap((run) => run({ toolCallId: "call-1" })),
+  );
+
 testAgent()("code skills", (it) => {
+  it.effect("the Effect AI tools ask as the TanStack ones and need approval as they did", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const approved = yield* ApprovedTools;
+      yield* Effect.forEach(["static", "gate"] as const, (approval) =>
+        Effect.gen(function* () {
+          const chatTools = yield* inRun(approved.forProject(project, approval));
+          const runTools = approved.runToolsFor(project, approval);
+          expect(yield* runToolRequestDifferences({ chatTools, runTools })).toEqual([
+            undefined,
+            undefined,
+            undefined,
+          ]);
+          expect(runTools.map((tool) => tool.tool.needsApproval ?? false)).toEqual(
+            chatTools.map((tool) => tool.needsApproval ?? false),
+          );
+        }),
+      );
+    }),
+  );
+
+  it.effect("an approved script runs with its arguments through its Effect AI tool", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const [save, run] = (yield* ApprovedTools).runToolsFor(project, "gate");
+      yield* callOf(save, {
+        name: "echo-run",
+        description: "Print the arguments",
+        program: { runtime: "sh", script: 'printf "%s|" "$@"' },
+      });
+      expect(yield* callOf(run, { name: "echo-run", args: ["a b", "it's"] })).toMatchObject({
+        status: "succeeded",
+        stdout: "a b|it's|",
+      });
+    }),
+  );
+
   it.effect("an approved script runs with its arguments; an edited one is refused", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
