@@ -283,13 +283,13 @@ const make = Effect.fnUntraced(function* (options?: {
           const claimed = yield* takeOne(options);
           if (Option.isSome(claimed)) {
             const row = claimed.value;
-            const element = yield* Schema.decodeEffect(JsonElement)(row.element_json).pipe(
+            return yield* Schema.decodeEffect(JsonElement)(row.element_json).pipe(
+              Effect.map((element) => ({ id: row.id, attempts: row.attempts, element })),
               // A payload that is not JSON can never succeed: dead-letter it and take the next one.
               Effect.catchTag("SchemaError", (cause) =>
                 markFailed(row.sequence, Cause.fail(cause)).pipe(Effect.andThen(loop)),
               ),
             );
-            return { id: row.id, attempts: row.attempts, element };
           }
           const next = yield* nextVisible(options.name, options.maxAttempts);
           const wait = next === null ? pollMillis : Math.min(pollMillis, Math.max(0, next - now()));
