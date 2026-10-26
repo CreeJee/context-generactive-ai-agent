@@ -55,6 +55,10 @@ import {
 } from "./openai-compatible-config.ts";
 import { subscriptionAgentLoop } from "./subscription-runtime.ts";
 import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model-discovery.ts";
+import {
+  CompatibleRunRequestFailed,
+  CompatibleRunRequestFailedReason,
+} from "../model/compatible.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const stringifyJson = EffectFunction.flow(
@@ -77,39 +81,8 @@ export class OpenAICompatibleFailed extends Schema.TaggedError<OpenAICompatibleF
     ]),
   },
 ) {}
-/**
- * Why this app refused or failed a request the compatible SDK sent through its fetch or stream.
- * It is thrown back to the SDK, so its message is fixed text without URLs, headers or payloads.
- */
-export const CompatibleRunRequestFailedReason = Schema.TaggedUnion({
-  /** The run was released before the request went out. */
-  Cancelled: {},
-  KeychainUnavailable: {},
-  ContextLimitExceeded: {},
-  ToolCallingDisabled: {},
-  /** fetch failed; `codes` are the Node/undici transport codes along its cause chain. */
-  Transport: { codes: Schema.Array(Schema.String) },
-});
-export class CompatibleRunRequestFailed extends Schema.TaggedError<CompatibleRunRequestFailed>()(
-  "CompatibleRunRequestFailed",
-  {
-    reason: CompatibleRunRequestFailedReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message() {
-    return CompatibleRunRequestFailedReason.match(this.reason, {
-      Cancelled: () => "Compatible run cancelled",
-      KeychainUnavailable: () => "Compatible keychain unavailable",
-      ContextLimitExceeded: () => "Compatible context limit exceeded",
-      ToolCallingDisabled: () => "Compatible tool calling is disabled",
-      Transport: (reason) =>
-        `Compatible API request failed: ${
-          reason.codes.length > 0 ? reason.codes.join(" <- ") : "transport failure"
-        }`,
-    });
-  }
-}
+// The SDK adapter throws these back to the SDK, so their message is fixed text.
+export { CompatibleRunRequestFailed, CompatibleRunRequestFailedReason };
 export interface CompatibleKeyStore {
   get(): Promise<string | null>;
   set(value: string | null): Promise<void>;

@@ -157,6 +157,32 @@ const cases: ReadonlyArray<{ readonly name: string; readonly history: Array<Stor
     ],
   },
   {
+    // The compatible request renames another model's ids; its own id takes the first new name.
+    name: "calls from another model",
+    history: [
+      { role: "user", content: "go" },
+      {
+        role: "assistant",
+        source: { provider: "openai", api: "responses", model: "gpt-5.5" },
+        thinking: [{ content: "plan", signature: "signed" }],
+        toolCalls: [
+          call("call_1|fc_1", "list_files", "{}"),
+          call(`call_2|${"f".repeat(40)}`, "read_file", '{"path":"a"}'),
+        ],
+      },
+      { role: "tool", toolCallId: "call_1|fc_1", content: "[]" },
+      { role: "tool", toolCallId: `call_2|${"f".repeat(40)}`, content: "a" },
+      {
+        role: "assistant",
+        source: { provider: "openai-compatible", api: "openai-completions", model: "local-model" },
+        thinking: [{ content: "own thought" }],
+        content: "own answer",
+        toolCalls: [call("call_1_fc_1", "list_files", "{}")],
+      },
+      { role: "tool", toolCallId: "call_1_fc_1", content: "[]" },
+    ],
+  },
+  {
     name: "content, thinking and results as stored",
     history: [
       { role: "user", id: "u-1", createdAt: "2026-10-26T00:00:00.000Z", content: "" },
@@ -197,7 +223,7 @@ const cases: ReadonlyArray<{ readonly name: string; readonly history: Array<Stor
 
 const allHistories = Effect.map(goldenHistories, (golden) => [...golden, ...cases]);
 
-describe("Effect AI subscription model", () => {
+describe("Effect AI subscription and compatible models", () => {
   it.effect("keeps every stored message through the prompt", () =>
     Effect.gen(function* () {
       for (const { name, history } of yield* allHistories)
@@ -220,6 +246,7 @@ describe("Effect AI subscription model", () => {
         expect(differences, name).toStrictEqual([
           { provider: "anthropic", difference: undefined },
           { provider: "openai", difference: undefined },
+          { provider: "openai-compatible", difference: undefined },
         ]);
       }
     }),
