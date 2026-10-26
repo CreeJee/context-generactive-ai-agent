@@ -23,14 +23,12 @@ export class HistoryPageUnavailable extends Schema.TaggedError<HistoryPageUnavai
 ) {}
 const unavailable = (reason: HistoryPageUnavailable["reason"]) =>
   Effect.fail(HistoryPageUnavailable.make({ reason }));
+/** The roles a history page shows; any other makes the transcript invalid for it. */
+const HistoryRole = Schema.Literals(["user", "assistant", "tool"]);
+const isHistoryRole = Schema.is(HistoryRole);
 const validateStored = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
-    Schema.Array(
-      Schema.Struct({
-        role: Schema.Literals(["user", "assistant", "tool"]),
-        id: Schema.optional(Schema.String),
-      }),
-    ),
+    Schema.Array(Schema.Struct({ role: HistoryRole, id: Schema.optional(Schema.String) })),
   ),
 );
 const encodeGroup = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -105,10 +103,12 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
   const prepared = Effect.fnUntraced(function* (snapshot: HistorySnapshot) {
     // Startup/import still validates and decodes stored JSON. Avoid reparsing the writer's
     // freshly serialized snapshot.
-    if (snapshot.models === undefined)
-      yield* validateStored(snapshot.sourceJSON).pipe(
+    yield* Effect.when(
+      validateStored(snapshot.sourceJSON).pipe(
         Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
-      );
+      ),
+      Effect.succeed(snapshot.models === undefined),
+    );
     const retained = yield* retainedIds(snapshot.threadId);
     const normalized = historyProjectionMessages(
       snapshot.threadId,
@@ -119,16 +119,10 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
       "id-collision": () => unavailable("id-collision"),
       ready: ({ messages }) => Effect.succeed(messages),
     });
-    for (const message of models) {
-      switch (message.role) {
-        case "user":
-        case "assistant":
-        case "tool":
-          break;
-        default:
-          return yield* unavailable("invalid-transcript");
-      }
-    }
+    yield* Effect.when(
+      unavailable("invalid-transcript"),
+      Effect.succeed(!models.every((message) => isHistoryRole(message.role))),
+    );
     return yield* HistoryGroupingResult.$match(groupHistoryMessages(snapshot.threadId, models), {
       "id-collision": () => unavailable("id-collision"),
       ready: ({ groups }) => Effect.succeed(groups),
@@ -149,21 +143,26 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         const existing = yield* identities(threadId);
         // Delete only changed identities before upserting, so moved/swapped IDs
         // cannot collide with the unique cursor index. Unchanged JSON is not rewritten.
-        for (const row of existing)
-          if (row.ordinal < groups.length && groups[row.ordinal]?.id !== row.ui_id)
-            yield* client.unsafe(sql.removeOrdinal, [threadId, row.ordinal]);
-        for (const [ordinal, group] of groups.entries())
-          yield* client.unsafe(sql.updateGroup, [
-            threadId,
-            ordinal,
-            group.id,
-            yield* encodeGroup(group.messages),
-          ]);
+        yield* Effect.forEach(
+          existing.filter(
+            (row) => row.ordinal < groups.length && groups[row.ordinal]?.id !== row.ui_id,
+          ),
+          (row) => client.unsafe(sql.removeOrdinal, [threadId, row.ordinal]),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          groups,
+          (group, ordinal) =>
+            Effect.flatMap(encodeGroup(group.messages), (encoded) =>
+              client.unsafe(sql.updateGroup, [threadId, ordinal, group.id, encoded]),
+            ),
+          { discard: true },
+        );
         const published = yield* client.unsafe(`${sql.publishIfCurrent} RETURNING thread_id`, [
           threadId,
           snapshot.sourceJSON,
         ]);
-        if (published.length === 0) return yield* unavailable("not-ready");
+        yield* Effect.when(unavailable("not-ready"), Effect.succeed(published.length === 0));
       }),
     );
 

@@ -32,10 +32,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const session = yield* nodes.session(threadId);
       // Read the images first: the transcript is built in one synchronous pass.
-      const images = MutableHashMap.empty<string, readonly Attachment[]>();
-      for (const node of session)
-        if (node.kind === "user")
-          MutableHashMap.set(images, node.id, yield* attachments.forNode(node.id));
+      const images = MutableHashMap.fromIterable(
+        yield* Effect.forEach(
+          session.filter((node) => node.kind === "user"),
+          (node) =>
+            Effect.map(
+              attachments.forNode(node.id),
+              (found): readonly [string, readonly Attachment[]] => [node.id, found],
+            ),
+        ),
+      );
       return convertMessagesToModelMessages(
         sessionMessages(session, (nodeId) =>
           Option.getOrElse(MutableHashMap.get(images, nodeId), () => []),
