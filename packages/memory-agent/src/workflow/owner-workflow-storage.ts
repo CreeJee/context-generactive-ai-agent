@@ -270,10 +270,9 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
         (execution_id, workflow_name, payload_json, parent_execution_id, status, result_json)
       VALUES (${request.executionId}, ${request.workflowName}, ${payloadJson},
         ${request.parentExecutionId ?? null}, 'running', NULL)`);
-    const admitted = yield* readExecution(request.executionId);
-    if (Option.isNone(admitted))
-      return yield* failure("execution.admit", "invalid_state", request.executionId);
-    return admitted.value;
+    return yield* Effect.fromOption(yield* readExecution(request.executionId), () =>
+      failure("execution.admit", "invalid_state", request.executionId),
+    );
   });
 
   const setDeferredRaw = Effect.fnUntraced(function* (
@@ -348,14 +347,20 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
       const changed = yield* step("execution.result")(sql`
         UPDATE owner_workflow_executions SET status = ${status}, result_json = ${json}
         WHERE execution_id = ${executionId} RETURNING execution_id`);
-      if (changed.length !== 1)
-        return yield* failure("execution.result", "invalid_state", executionId);
+      yield* Effect.when(
+        Effect.fail(failure("execution.result", "invalid_state", executionId)),
+        Effect.succeed(changed.length !== 1),
+      );
     }),
-    activityResult: Effect.fnUntraced(function* (executionId, activityName, attempt) {
-      const row = yield* step("activity.read")(activityRow({ executionId, activityName, attempt }));
-      if (Option.isNone(row)) return Option.none();
-      return Option.fromNullishOr(yield* storedResult("activity.result", row.value.result_json));
-    }),
+    activityResult: (executionId, activityName, attempt) =>
+      step("activity.read")(activityRow({ executionId, activityName, attempt })).pipe(
+        Effect.flatMap((row) =>
+          Effect.transposeOption(
+            Option.map(row, (value) => storedResult("activity.result", value.result_json)),
+          ),
+        ),
+        Effect.map(Option.flatMap(Option.fromNullishOr)),
+      ),
     setActivityResult: Effect.fnUntraced(function* (executionId, activityName, attempt, result) {
       const json = yield* encodeJson("activity.result", result);
       const inserted = yield* step("activity.result")(sql`
@@ -369,11 +374,12 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
       if (Option.getOrUndefined(row)?.result_json !== json)
         return yield* failure("activity.result", "execution_conflict", activityName);
     }),
-    deferredResult: Effect.fnUntraced(function* (executionId, deferredName) {
-      const row = yield* step("deferred.read")(deferredRow({ executionId, deferredName }));
-      if (Option.isNone(row)) return Option.none();
-      return Option.some(yield* decodeUnknown("deferred.exit", row.value.exit_json));
-    }),
+    deferredResult: (executionId, deferredName) =>
+      Effect.flatMap(step("deferred.read")(deferredRow({ executionId, deferredName })), (row) =>
+        Effect.transposeOption(
+          Option.map(row, (value) => decodeUnknown("deferred.exit", value.exit_json)),
+        ),
+      ),
     setDeferredResult: (workflowName, executionId, deferredName, exit) =>
       transaction("deferred.complete")(
         setDeferredRaw(workflowName, executionId, deferredName, exit),

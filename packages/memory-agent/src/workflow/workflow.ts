@@ -15,6 +15,7 @@ import {
 } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
+import { optionalProperty } from "../optional-property.ts";
 import { evaluateWorkflowAction, WorkflowActionReason, WorkflowActionRequest } from "./actions.ts";
 import {
   completionEvidence,
@@ -162,22 +163,15 @@ const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
       .map((step) => step.id),
   );
   const notStarted = notStartedStatus(steps, (id) => done.has(id));
-  return steps.map((step) => {
-    switch (step.status) {
-      case "pending":
-        return { ...step, status: notStarted(step) };
-      case "completed":
-        return { ...step, status: "done" as const };
-      case "backlog":
-      case "ready":
-      case "in_progress":
-      case "verify":
-      case "human_decision":
-      case "done":
-      case "blocked":
-        return { ...step, status: step.status };
-    }
-  });
+  return steps.map((step) => ({
+    ...step,
+    status: Match.value(step.status).pipe(
+      Match.withReturnType<CardStatus>(),
+      Match.when("pending", () => notStarted(step)),
+      Match.when("completed", () => "done"),
+      Match.orElse((status) => status),
+    ),
+  }));
 };
 
 const planFields = {
@@ -465,19 +459,14 @@ export function reconciledWorkflowPhase(state: WorkflowState): WorkflowPhase {
 
   const verification = state.plan.verification;
   if (verification.evidence.length === 0) return "verify";
-  switch (verification.status) {
-    case "failed":
-      return "execute";
-    case "invalid_hypothesis":
-      return verification.recoveryPhase ?? "plan";
-    case "invalid_criterion":
-    case "inconclusive":
-      return "plan";
-    case "not_run":
-    case "passed":
-    case "blocked":
-      return "verify";
-  }
+  return Match.value(verification.status).pipe(
+    Match.withReturnType<WorkflowPhase>(),
+    Match.when("failed", () => "execute"),
+    Match.when("invalid_hypothesis", () => verification.recoveryPhase ?? "plan"),
+    Match.whenOr("invalid_criterion", "inconclusive", () => "plan"),
+    Match.whenOr("not_run", "passed", "blocked", () => "verify"),
+    Match.exhaustive,
+  );
 }
 
 const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
@@ -684,14 +673,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       const { current, identity, closedVerification } = yield* checkNewGoal(sessionId, input);
       const now = nowIso();
       const newId = yield* crypto.randomUUIDv4();
-      if (Option.isSome(identity)) {
-        yield* sql`INSERT INTO workflow_goal_instances VALUES (${newId}, ${sessionId}, ${now})`;
-        yield* sql`UPDATE workflow_goal_identities SET goal_instance_id = ${newId}, created_at = ${now}
-          WHERE session_id = ${sessionId}`;
-      } else {
-        // An unbound legacy Goal never receives a fabricated historical identity.
-        yield* insertGoalIdentity(sessionId, newId, now);
-      }
+      // An unbound legacy Goal never receives a fabricated historical identity.
+      yield* Option.isSome(identity)
+        ? Effect.andThen(
+            sql`INSERT INTO workflow_goal_instances VALUES (${newId}, ${sessionId}, ${now})`,
+            sql`UPDATE workflow_goal_identities SET goal_instance_id = ${newId}, created_at = ${now}
+              WHERE session_id = ${sessionId}`,
+          )
+        : insertGoalIdentity(sessionId, newId, now);
       const state = yield* save(sessionId, {
         phase: closedVerification ? "goal" : current.phase,
         goal: {
@@ -889,21 +878,22 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const verified = current.plan.steps.every((step) => step.status === "done");
             if (!verified) return current;
             const request = current.goal?.completionRequest;
-            let snapshot = current.goal?.completion;
-            if (
+            const derived =
               request !== undefined &&
               current.goal !== null &&
               request.goalVersion === current.goal.version &&
               request.planVersion === current.plan.version
-            ) {
-              const derived = yield* completion.derive(
-                sessionId,
-                current,
-                request.mappings,
-                request.recorderRunId,
-              );
-              if (Derived.$is("accepted")(derived)) snapshot = derived.snapshot;
-            }
+                ? yield* completion.derive(
+                    sessionId,
+                    current,
+                    request.mappings,
+                    request.recorderRunId,
+                  )
+                : undefined;
+            const snapshot =
+              derived !== undefined && Derived.$is("accepted")(derived)
+                ? derived.snapshot
+                : current.goal?.completion;
             // Native registration authorizes execution, not successful criterion coverage.
             // Legacy/unprovenanced Goals retain the release-compatible automatic completion.
             if (
@@ -919,9 +909,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   status: "completed" as const,
                   verification: current.plan.verification,
                   updatedAt: now,
+                  ...optionalProperty("completion", snapshot),
                 }
               : null;
-            if (goal !== null && snapshot !== undefined) goal.completion = snapshot;
             const plan = { ...current.plan, status: "completed" as const, updatedAt: now };
             return {
               ...current,
@@ -1034,8 +1024,12 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.gen(function* () {
             // Only the first Goal in a new session is unambiguously new. A legacy Goal
             // without a recorded identity stays unbound; guessing it from text is unsafe.
-            if (current.goal === null)
-              yield* insertGoalIdentity(sessionId, yield* crypto.randomUUIDv4(), nowIso());
+            yield* Effect.when(
+              Effect.flatMap(crypto.randomUUIDv4(), (goalInstanceId) =>
+                insertGoalIdentity(sessionId, goalInstanceId, nowIso()),
+              ),
+              Effect.succeed(current.goal === null),
+            );
             const goal: GoalArtifact = {
               ...input,
               evidence: [],
@@ -1089,9 +1083,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                       input.steps.map((step) => {
                         const replanned = { ...step, status: "pending" as const, evidence: [] };
                         const prior = previous.get(step.id);
-                        if (prior === undefined) return replanned;
-                        const held = prior.hold === undefined ? {} : { hold: prior.hold };
-                        return { ...cardContract(prior), ...held, ...replanned };
+                        return prior === undefined
+                          ? replanned
+                          : {
+                              ...cardContract(prior),
+                              ...optionalProperty("hold", prior.hold),
+                              ...replanned,
+                            };
                       }),
                     ),
                     evidence: [],
@@ -1166,12 +1164,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const steps = cardStatuses(
               current.plan?.steps.map((step) => {
                 const update = input.steps.find((candidate) => candidate.id === step.id);
-                if (!isTruthy(update)) return step;
-                return {
-                  ...step,
-                  status: update.status,
-                  evidence: [...step.evidence, ...update.evidence],
-                };
+                return isTruthy(update)
+                  ? {
+                      ...step,
+                      status: update.status,
+                      evidence: [...step.evidence, ...update.evidence],
+                    }
+                  : step;
               }) ?? [],
             );
             if (steps.some((step) => step.status === "done" && step.evidence.length === 0))
@@ -1199,40 +1198,52 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             if (input.planStatus === "completed" && steps.some((step) => step.status !== "done"))
               return yield* WorkflowProgressRefused.make({ reason: "steps_incomplete" });
 
-            let snapshot = current.goal?.completion;
-            let completionRequest = current.goal?.completionRequest;
             const stageCompletion =
               (yield* completion.required(sessionId)) && (yield* completion.running(recorderRunId));
-            if (input.criterionMappings !== undefined) {
-              const derived = yield* completion.derive(
-                sessionId,
-                {
-                  ...current,
-                  plan: isTruthy(current.plan) ? { ...current.plan, steps } : null,
-                },
-                input.criterionMappings,
-                recorderRunId,
-                stageCompletion,
-              );
-              if (Derived.$is("refused")(derived))
-                return yield* WorkflowProgressRefused.make({
-                  reason: "completion_evidence_invalid",
-                });
-              if (isTruthy(snapshot) && !sameSnapshot(snapshot, derived.snapshot))
-                return yield* WorkflowProgressRefused.make({
-                  reason: "completion_snapshot_conflict",
-                });
-              if (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
-                return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
-              if (stageCompletion) {
-                completionRequest = {
-                  recorderRunId,
-                  goalVersion: derived.snapshot.goalVersion,
-                  planVersion: derived.snapshot.planVersion,
-                  mappings: input.criterionMappings,
-                };
-              } else snapshot = derived.snapshot;
-            }
+            const mappings = input.criterionMappings;
+            const derived =
+              mappings === undefined
+                ? undefined
+                : yield* completion.derive(
+                    sessionId,
+                    {
+                      ...current,
+                      plan: isTruthy(current.plan) ? { ...current.plan, steps } : null,
+                    },
+                    mappings,
+                    recorderRunId,
+                    stageCompletion,
+                  );
+            if (derived !== undefined && Derived.$is("refused")(derived))
+              return yield* WorkflowProgressRefused.make({
+                reason: "completion_evidence_invalid",
+              });
+            const recorded = current.goal?.completion;
+            if (
+              derived !== undefined &&
+              isTruthy(recorded) &&
+              !sameSnapshot(recorded, derived.snapshot)
+            )
+              return yield* WorkflowProgressRefused.make({
+                reason: "completion_snapshot_conflict",
+              });
+            if (
+              derived !== undefined &&
+              (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
+            )
+              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
+            // A run still recording completion stages its mappings; otherwise they settle now.
+            const completionRequest =
+              derived !== undefined && mappings !== undefined && stageCompletion
+                ? {
+                    recorderRunId,
+                    goalVersion: derived.snapshot.goalVersion,
+                    planVersion: derived.snapshot.planVersion,
+                    mappings,
+                  }
+                : current.goal?.completionRequest;
+            const snapshot =
+              derived !== undefined && !stageCompletion ? derived.snapshot : recorded;
             if (
               input.goalStatus === "completed" &&
               (yield* completion.required(sessionId)) &&
@@ -1278,11 +1289,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   evidence: [...current.goal.evidence, ...input.goalEvidence],
                   verification: recordGoalVerification ? verification : current.goal.verification,
                   updatedAt: now,
+                  ...optionalProperty("completion", snapshot),
+                  ...optionalProperty("completionRequest", completionRequest),
                 }
               : null;
-            if (isTruthy(goal) && isTruthy(snapshot)) goal.completion = snapshot;
-            if (isTruthy(goal) && completionRequest !== undefined)
-              goal.completionRequest = completionRequest;
             const plan = isTruthy(current.plan)
               ? {
                   ...current.plan,

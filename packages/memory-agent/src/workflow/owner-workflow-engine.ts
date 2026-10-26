@@ -83,35 +83,29 @@ const engineFailure = (
   cause: unknown,
 ) => OwnerWorkflowEngineError.make({ operation, reason, cause });
 
-const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): unknown => {
-  const result = Schema.encodeUnknownResult(jsonExit(owner))(exit);
-  if (Result.isFailure(result)) throw engineFailure("exit.encode", "codec", result.failure);
-  return result.success;
-};
+const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): unknown =>
+  Result.getOrThrowWith(Schema.encodeUnknownResult(jsonExit(owner))(exit), (failure) =>
+    engineFailure("exit.encode", "codec", failure),
+  );
 
-const decodeExit = (owner: ExitSchemaOwner, encoded: unknown): Exit.Exit<unknown, unknown> => {
-  const result = Schema.decodeUnknownResult(jsonExit(owner))(encoded);
-  if (Result.isFailure(result)) throw engineFailure("exit.decode", "codec", result.failure);
-  return result.success as Exit.Exit<unknown, unknown>;
-};
+const decodeExit = (owner: ExitSchemaOwner, encoded: unknown): Exit.Exit<unknown, unknown> =>
+  Result.getOrThrowWith(Schema.decodeUnknownResult(jsonExit(owner))(encoded), (failure) =>
+    engineFailure("exit.decode", "codec", failure),
+  ) as Exit.Exit<unknown, unknown>;
 
 // `makeUnsafe` owns the typed deferred codecs. The low-level engine only reconstructs the Exit/Cause
 // shape after JSON persistence and must leave success/error payloads encoded for that outer codec.
 const encodedExit = Schema.toCodecJson(
   Schema.Exit(Schema.Unknown, Schema.Unknown, Schema.Defect()),
 );
-const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): unknown => {
-  const result = Schema.encodeUnknownResult(encodedExit)(exit);
-  if (Result.isFailure(result))
-    throw engineFailure("deferred.exit.encode", "codec", result.failure);
-  return result.success;
-};
-const decodeEncodedExit = (encoded: unknown): Exit.Exit<unknown, unknown> => {
-  const result = Schema.decodeUnknownResult(encodedExit)(encoded);
-  if (Result.isFailure(result))
-    throw engineFailure("deferred.exit.decode", "codec", result.failure);
-  return result.success;
-};
+const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): unknown =>
+  Result.getOrThrowWith(Schema.encodeUnknownResult(encodedExit)(exit), (failure) =>
+    engineFailure("deferred.exit.encode", "codec", failure),
+  );
+const decodeEncodedExit = (encoded: unknown): Exit.Exit<unknown, unknown> =>
+  Result.getOrThrowWith(Schema.decodeUnknownResult(encodedExit)(encoded), (failure) =>
+    engineFailure("deferred.exit.decode", "codec", failure),
+  );
 
 const encodeResult = (
   owner: ExitSchemaOwner,
@@ -161,6 +155,15 @@ const makeEngine = Effect.gen(function* () {
         : Effect.succeed(entry);
     });
 
+  const cancelClocks = Effect.fnUntraced(function* (executionId: string) {
+    const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
+    yield* Effect.forEach(
+      cancelled,
+      (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
+      { discard: true },
+    );
+  });
+
   const liveExecution = Effect.fnUntraced(function* (
     workflow: Workflow.Any,
     executionId: string,
@@ -174,11 +177,7 @@ const makeEngine = Effect.gen(function* () {
       return current;
     }
     const stored = yield* defect("execution.read", () => storage.execution(executionId));
-    if (Option.isNone(stored))
-      return yield* Effect.die(
-        engineFailure("execution.lookup", "execution_conflict", executionId),
-      );
-    if (stored.value.workflowName !== workflowName(workflow))
+    if (Option.isNone(stored) || stored.value.workflowName !== workflowName(workflow))
       return yield* Effect.die(
         engineFailure("execution.lookup", "execution_conflict", executionId),
       );
@@ -213,7 +212,8 @@ const makeEngine = Effect.gen(function* () {
       yield* Fiber.await(running);
       return yield* resumeExecution(workflow, executionId);
     }
-    if (existing !== undefined && running !== undefined) yield* FiberMap.remove(runs, executionId);
+    // A fiber still remembered here has already finished; drop it before the replay.
+    yield* Effect.when(FiberMap.remove(runs, executionId), Effect.succeed(running !== undefined));
 
     const scope = yield* Scope.fork(ownerScope);
     const instance = WorkflowEngine.WorkflowInstance.initial(workflow, executionId, scope);
@@ -226,18 +226,15 @@ const makeEngine = Effect.gen(function* () {
       Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
       (effect) => deferredState.trackRun(instance, effect),
       Effect.tap((result) =>
-        Effect.gen(function* () {
-          yield* defect("execution.result", () =>
+        Effect.andThen(
+          defect("execution.result", () =>
             storage.setResult(executionId, encodeResult(workflow, result)),
-          );
-          if (!Predicate.isTagged(result, "Complete")) return;
-          const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
-          yield* Effect.forEach(
-            cancelled,
-            (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
-            { discard: true },
-          );
-        }),
+          ),
+          Effect.when(
+            cancelClocks(executionId),
+            Effect.succeed(Predicate.isTagged(result, "Complete")),
+          ),
+        ),
       ),
       Effect.tap((result) => {
         if (state.parentExecutionId === undefined || !Predicate.isTagged(result, "Complete"))
@@ -264,6 +261,17 @@ const makeEngine = Effect.gen(function* () {
     if (entry !== undefined) yield* resumeExecution(entry.workflow, executionId);
   });
 
+  const interruptExecution = Effect.fnUntraced(function* (operation: string, executionId: string) {
+    const state = executions.get(executionId);
+    if (state !== undefined) {
+      state.interrupted = true;
+      state.instance.interrupted = true;
+    }
+    yield* FiberMap.remove(runs, executionId);
+    yield* defect(operation, () => storage.setInterrupted(executionId));
+    yield* cancelClocks(executionId);
+  });
+
   const armClock = (clock: {
     readonly workflowName: string;
     readonly executionId: string;
@@ -273,11 +281,14 @@ const makeEngine = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      if (clock.dueAt > now) yield* Effect.sleep(Duration.millis(clock.dueAt - now));
-      const fired = yield* defect("clock.fire", () =>
-        storage.fireClock(clock.executionId, clock.clockName),
+      yield* Effect.when(
+        Effect.sleep(Duration.millis(clock.dueAt - now)),
+        Effect.succeed(clock.dueAt > now),
       );
-      if (fired) yield* wakeExecution(clock.workflowName, clock.executionId, clock.deferredName);
+      yield* Effect.when(
+        wakeExecution(clock.workflowName, clock.executionId, clock.deferredName),
+        defect("clock.fire", () => storage.fireClock(clock.executionId, clock.clockName)),
+      );
     }).pipe(
       FiberMap.run(clocks, `${clock.executionId}/${clock.clockName}`, {
         onlyIfMissing: true,
@@ -361,36 +372,9 @@ const makeEngine = Effect.gen(function* () {
           ),
         ),
       ),
-    interrupt: Effect.fnUntraced(function* (_workflow, executionId) {
-      const state = executions.get(executionId);
-      if (state !== undefined) {
-        state.interrupted = true;
-        state.instance.interrupted = true;
-      }
-      yield* FiberMap.remove(runs, executionId);
-      yield* defect("execution.interrupt", () => storage.setInterrupted(executionId));
-      const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
-      yield* Effect.forEach(
-        cancelled,
-        (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
-        { discard: true },
-      );
-    }),
-    interruptUnsafe: Effect.fnUntraced(function* (_workflow, executionId) {
-      const state = executions.get(executionId);
-      if (state !== undefined) {
-        state.interrupted = true;
-        state.instance.interrupted = true;
-      }
-      yield* FiberMap.remove(runs, executionId);
-      yield* defect("execution.interruptUnsafe", () => storage.setInterrupted(executionId));
-      const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
-      yield* Effect.forEach(
-        cancelled,
-        (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
-        { discard: true },
-      );
-    }),
+    interrupt: (_workflow, executionId) => interruptExecution("execution.interrupt", executionId),
+    interruptUnsafe: (_workflow, executionId) =>
+      interruptExecution("execution.interruptUnsafe", executionId),
     resume: (workflow, executionId) => resumeExecution(workflow, executionId),
     activityExecute: Effect.fnUntraced(function* <A, E, R>(
       activity: Pick<Activity.Any, "name"> & { readonly executeEncoded: Effect.Effect<A, E, R> },
@@ -439,22 +423,21 @@ const makeEngine = Effect.gen(function* () {
     // before the public engine reapplies the deferred's typed schema.
     deferredDone: (options) =>
       Effect.gen(function* () {
-        const inserted = yield* defect("deferred.complete", () =>
-          storage.setDeferredResult(
-            options.workflowName,
-            options.executionId,
-            options.deferredName,
-            encodeEncodedExit(options.exit),
-          ),
-        );
-        if (!inserted) return;
         const wake = wakeExecution(options.workflowName, options.executionId, options.deferredName);
         const current = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
-        if (Option.isSome(current) && current.value.executionId === options.executionId) {
-          yield* wake.pipe(Effect.forkIn(ownerScope));
-        } else {
-          yield* wake;
-        }
+        // The execution completing its own deferred cannot wait for its own replay.
+        const inside = Option.isSome(current) && current.value.executionId === options.executionId;
+        yield* Effect.when(
+          inside ? Effect.asVoid(Effect.forkIn(wake, ownerScope)) : wake,
+          defect("deferred.complete", () =>
+            storage.setDeferredResult(
+              options.workflowName,
+              options.executionId,
+              options.deferredName,
+              encodeEncodedExit(options.exit),
+            ),
+          ),
+        );
       }),
     scheduleClock: (workflow, options) =>
       Effect.gen(function* () {
