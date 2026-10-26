@@ -1,5 +1,5 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Cause, Effect, Function, Layer, Result, Schema, Scope, Stream } from "effect";
+import { Cause, Effect, Function, Layer, Result, Schema, Scope, Semaphore, Stream } from "effect";
 import { RpcClient, RpcServer } from "effect/rpc";
 import { workerData } from "node:worker_threads";
 import {
@@ -110,6 +110,10 @@ function runFullLoop(
       );
       const controller = sdkAbortController();
       yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort("worker interrupted")));
+      // The owner ledger admits a run's operation IDs only in increasing order, but the owner port
+      // does not send waiting calls in the order they took IDs. Parallel tool calls and their hooks
+      // therefore take an ID and finish the call under one permit.
+      const ownerOrder = yield* Semaphore.make(1);
       let operationId = lastOperationId;
       const rpcEffect = Effect.fn("FullLoopWorker.rpc")(function* (operation: string, input: any) {
         const reply = yield* owner.OwnerCall({
@@ -128,7 +132,7 @@ function runFullLoop(
           uncertain: () => Effect.fail(refused("uncertain")),
           rejected: ({ reason }) => Effect.fail(refused(reason)),
         });
-      });
+      }, ownerOrder.withPermits(1));
       const rpc = (operation: string, input: any): Promise<any> =>
         runNativeEffect(rpcEffect(operation, input));
       const parseArguments = Function.flow(

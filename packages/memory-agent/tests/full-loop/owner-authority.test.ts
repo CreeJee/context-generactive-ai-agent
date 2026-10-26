@@ -201,6 +201,48 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
   );
 
   it.effect(
+    "parallel tool calls of one model turn settle while a finished call's hook reaches the owner first",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* ownerFixture();
+        const adapter = new ScriptedTextAdapter([
+          {
+            toolCalls: ["c1", "c2", "c3"].map((id) => ({
+              id,
+              name: "owner_tool",
+              arguments: "{}",
+            })),
+          },
+          { text: "finished" },
+        ]);
+        const tool = toolDefinition({ name: "owner_tool", description: "owner" }).server(
+          () => "result",
+        );
+        const settled: string[] = [];
+        yield* collect(
+          f.owner,
+          capabilities(
+            { adapter, agentLoopStrategy: maxIterations(3) },
+            {
+              tools: [tool],
+              middleware: [
+                {
+                  name: "record",
+                  onAfterToolCall: (_ctx, info) => {
+                    settled.push(info.toolCallId);
+                  },
+                },
+              ],
+            },
+          ),
+        );
+        expect(settled.toSorted()).toEqual(["c1", "c2", "c3"]);
+        expect(f.toolStatuses()).toEqual(Array(3).fill({ status: "succeeded" }));
+      }),
+    20000,
+  );
+
+  it.effect(
     "arguments the stream cut off or the schema refuses go back to the model, not end the run",
     () =>
       Effect.gen(function* () {

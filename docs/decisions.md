@@ -2696,3 +2696,28 @@
 - `get_subagent_reports`가 끝나지 않은 attempt를 돌려줄 때는 `nextAction`을 붙인다. 내용은 "완료 알림으로 보고된다, 다시 물어도 기다리지 않는다"이다. 같은 `running`을 계속 묻는 호출은 반복 감지(2026-10-24)에 그대로 걸린다. 반복 감지에서 대기 도구로 빼는 것은 `get_background_result` 하나만 남는다.
 - 옛 이름은 기록된 호출을 판정하는 자리에만 남는다(`effects.ts`의 `retiredToolEffects`, 읽기 도구).
 - "서브에이전트 실행 중 메인 작업 지속 (2026-10-04)"의 `wait_subagents` 기본 `timeoutMs` 결정은 이것으로 대체한다.
+
+## Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)
+
+- 사용자 결정: 한 모델 턴의 도구 호출은 사용성을 기준으로 병렬로 실행한다. Goal 실행도 일반 채팅과 같다. 읽기는 서로 기다리지 않는다. 쓰기 중 일부만 성공해도 각 결과를 그대로 기록한다.
+- 사용자 결정: 복구 단위는 도구 하나가 아니라 Goal의 작업 단위(bound run)다. 도구마다 복구하는 정밀도는 포기한다.
+- 계기: TanStack 1.0(2026-10-24)은 도구를 기본으로 병렬 실행한다(`toolExecution: 'parallel'`). Goal worker는 owner 호출마다 순번(`operationId`)을 매기고, owner 장부는 한 run 안에서 순번이 커지는 순서로만 받는다. 먼저 끝난 도구의 hook이 큰 순번으로 먼저 도착하면 형제 도구의 작은 순번이 `non_monotonic`으로 거절되고 run이 실패했다(2026-10-26, run `run-1792992578848-w328qq`). 당장은 worker가 owner 호출을 한 번에 하나씩 보내게 했다. 도구는 병렬로 돌지만 owner 호출은 줄을 선다.
+- 순번의 목적은 중복 실행 방지였다([dev-goal-owner-execution-contract.md](dev-goal-owner-execution-contract.md), "Owner RPC fingerprint의 bounded evidence와 해시 비교 (2026-10-11)"). 다시 보낸 호출에는 저장된 결과로 답하고, 끊긴 run의 부작용이 모르게 반복되지 않게 한다. 이 목적에 run 전체의 순서는 필요 없다. 도구 호출마다의 기록과 run 단위 확인으로 충분하다.
+- Goal worker와 owner RPC를 없앤다. Goal loop는 일반 채팅처럼 owner 프로세스에서 돈다.
+  - worker가 지키던 것은 Goal별 코드 고정(worker 세대, native artifact), DB를 만지지 않는 loop, 모든 모델 chunk·hook·도구의 장부 기록이다.
+  - 코드 고정은 Effect AI 전환 계획에서 이미 버렸다. 업그레이드는 재시작이고, 재시작하면 진행 중 run은 실패로 끝나므로 고정할 실행이 남지 않는다.
+  - 모델 chunk와 middleware는 부작용이 아니다. 로컬 DB 장부 3,558행 중 middleware가 1,841행, modelNext가 1,703행이었고, 도구 관련 행(toolAuthorize·tool)은 8행이었다.
+  - loop의 프로세스 격리도 잃는다. 격리가 필요한 것은 코드·셸 실행 같은 도구이고, 이들은 이미 따로 돈다(`code/sandbox.ts`, 셸 스킬).
+- 도구 장부만 남긴다. owner가 도구 호출마다 실행 전에 예약하고, 끝나면 결과를 적는다.
+  - 테이블은 `owner_rpc_operations`를 그대로 쓴다. 번호는 owner가 run 안에서 매기고, 순서 검사에는 쓰지 않는다. 그래서 `uncertainRuns`, 입장 검사(`run-bindings.ts`), 완료 근거(`completion-evidence.ts`)의 SQL이 새 행에서도 같은 뜻으로 돈다.
+  - 장부는 Goal bound run에만 둔다. 지금과 같은 범위다.
+  - run 안에서는 결과를 모르는 쓰기가 다른 쓰기를 막지 않는다. 모델은 실패 결과를 보고 판단한다. run이 끝났을 때 결과를 모르는 쓰기가 남아 있으면, 지금처럼 다음 run 입장에서 사용자 확인을 받는다("승인된 Plan의 서버 자동 진행 (2026-10-02)"의 2026-10-14 수정).
+  - 끊긴 run은 지금처럼 재생하지 않는다. 자동 이어가기 조건(`endedWithKnownEffectsSql`, 2026-10-13)도 그대로다.
+- 동시 실행
+  - 읽기 도구끼리는 admission의 tool gate 말고는 서로 기다리지 않는다.
+  - 쓰기 호출과 앞뒤 호출의 순서는 Goal과 일반 채팅이 같은 규칙을 쓴다. 규칙은 아직 정하지 않았다([effect-ai-migration.md](effect-ai-migration.md) "열린 항목").
+  - 지금 상태: TanStack 1.0으로 올린 뒤(2026-10-24) 한 step의 호출은 순서 없이 동시에 돈다. `chat()`에 `toolExecution`을 넘기지 않아 기본값 `'parallel'`이다. 그래서 "도구 성능 (2026-09-15)"의 "쓰기 뒤의 읽기는 그 쓰기가 끝난 뒤에" 규칙은 지켜지지 않는다.
+  - owner가 읽기를 미리 실행하던 `parallelReads`는 지운다. TanStack이 도구를 순서대로 실행하던 때의 우회다. 순서 규칙은 loop의 도구 실행이 맡는다.
+- read recovery(2026-10-11)의 새 receipt는 만들지 않는다. 로컬 DB에서 쓰인 적이 없다. 0.0.17 릴리즈에 들어 있으므로 이미 있는 receipt는 계속 인정한다.
+- 옛 Goal 세션도 새 코드에서 이어서 run을 시작한다. worker 세대·native artifact·dispatch와 옛 장부 행은 지우지 않고 읽기만 한다. 완료 근거는 worker 세대가 있는 Goal의 새 run도 받는다. 지금은 dispatch 세대가 없는 run을 거절한다.
+- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 구현 시점은 정하지 않았다. 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다.
