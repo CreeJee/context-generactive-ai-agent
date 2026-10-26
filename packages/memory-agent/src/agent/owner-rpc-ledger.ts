@@ -63,12 +63,16 @@ export const makeSqliteOwnerRpcLedger = Effect.gen(function* () {
   });
   const identify = Effect.fnUntraced(function* (runKey: string) {
     const b = yield* Schema.decodeEffect(BindingJson)(runKey);
-    const bound = yield* sql`
+    yield* sql`
       SELECT run_id FROM workflow_run_bindings
       WHERE run_id = ${b.runId} AND session_id = ${b.sessionId}
         AND goal_instance_id = ${b.goalInstanceId} AND goal_version = ${b.goalVersion}
-        AND plan_version IS ${b.planVersion} AND workflow_revision_id = ${b.workflowRevisionId}`;
-    if (bound.length === 0) return yield* OwnerRpcLedgerError.make({ reason: "unbound_run" });
+        AND plan_version IS ${b.planVersion} AND workflow_revision_id = ${b.workflowRevisionId}`.pipe(
+      Effect.filterOrFail(
+        (bound) => bound.length > 0,
+        () => OwnerRpcLedgerError.make({ reason: "unbound_run" }),
+      ),
+    );
     return b;
   });
   // A savepoint is not a durable reservation: an outer rollback could erase it
@@ -151,19 +155,25 @@ export const makeSqliteOwnerRpcLedger = Effect.gen(function* () {
     settle: (runKey, operationId, reply) =>
       stored(
         Effect.gen(function* () {
-          const validated = yield* Schema.decodeEffect(Reply)(reply);
-          if (validated.operationId !== operationId)
-            return yield* OwnerRpcLedgerError.make({ reason: "reply_mismatch" });
+          const validated = yield* Schema.decodeEffect(Reply)(reply).pipe(
+            Effect.filterOrFail(
+              (decoded) => decoded.operationId === operationId,
+              () => OwnerRpcLedgerError.make({ reason: "reply_mismatch" }),
+            ),
+          );
           const json = yield* Schema.encodeEffect(ReplyJson)(validated);
           yield* standalone(
             Effect.gen(function* () {
               const { runId } = yield* identify(runKey);
-              const settled = yield* sql`
+              yield* sql`
                 UPDATE owner_rpc_operations SET reply_json = ${json}, status = ${replyStatus(validated)}
                 WHERE run_id = ${runId} AND operation_id = ${operationId} AND run_key = ${runKey}
-                  AND status = 'pending' RETURNING operation_id`;
-              if (settled.length !== 1)
-                return yield* OwnerRpcLedgerError.make({ reason: "unreserved" });
+                  AND status = 'pending' RETURNING operation_id`.pipe(
+                Effect.filterOrFail(
+                  (settled) => settled.length === 1,
+                  () => OwnerRpcLedgerError.make({ reason: "unreserved" }),
+                ),
+              );
             }),
           );
         }),

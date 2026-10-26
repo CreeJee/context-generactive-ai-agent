@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import { Clock, Context, Crypto, Data, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Context, Crypto, Data, Effect, Layer, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { decodeFullLoopValue } from "./full-loop-codec.ts";
 import { GoalExecutionPayload } from "../workflow/goal-execution-contracts.ts";
@@ -112,16 +112,15 @@ const Call = Schema.Union([
     }),
   }),
 ]);
-const readArgsKey = (call: typeof Call.Type) => {
-  switch (call.name) {
-    case "get_background_result":
-      return JSON.stringify({ taskId: call.args.taskId, offset: call.args.offset ?? 0 });
-    case "get_subagent_report":
-      return JSON.stringify(call.args);
-    case "get_subagent_reports":
-      return JSON.stringify(call.args.attempts);
-  }
-};
+const readArgsKey = (call: typeof Call.Type) =>
+  Match.value(call).pipe(
+    Match.discriminatorsExhaustive("name")({
+      get_background_result: ({ args }) =>
+        JSON.stringify({ taskId: args.taskId, offset: args.offset ?? 0 }),
+      get_subagent_report: ({ args }) => JSON.stringify(args),
+      get_subagent_reports: ({ args }) => JSON.stringify(args.attempts),
+    }),
+  );
 const Key = Schema.Struct({
   runId: Schema.String,
   sessionId: Schema.String,
@@ -390,14 +389,17 @@ export const makeOwnerReadRecovery = Effect.gen(function* () {
         disposition: "new_run_only_no_replay",
         originalExceptionAvailable: false,
       });
-      switch (result.call.name) {
-        case "get_background_result":
-          return { ...base, tool: result.call.name, taskId: result.call.args.taskId };
-        case "get_subagent_report":
-          return { ...base, tool: result.call.name, ...result.call.args };
-        case "get_subagent_reports":
-          return { ...base, tool: result.call.name, attempts: result.call.args.attempts };
-      }
+      return Match.value(result.call).pipe(
+        Match.discriminatorsExhaustive("name")({
+          get_background_result: ({ name, args }) => ({ ...base, tool: name, taskId: args.taskId }),
+          get_subagent_report: ({ name, args }) => ({ ...base, tool: name, ...args }),
+          get_subagent_reports: ({ name, args }) => ({
+            ...base,
+            tool: name,
+            attempts: args.attempts,
+          }),
+        }),
+      );
     },
   });
   const persisted = Effect.fnUntraced(function* (sessionId: string, runId: string) {

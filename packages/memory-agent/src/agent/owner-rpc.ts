@@ -52,7 +52,7 @@ export type OwnerRpcPermits = (
 /** Freeze a detached JSON tree; never freeze caller-owned values. */
 function freezeJson<T>(value: T): T {
   if (Predicate.isObject(value)) {
-    for (const entry of Object.values(value)) freezeJson(entry);
+    Object.values(value).forEach(freezeJson);
     Object.freeze(value);
   }
   return value;

@@ -345,8 +345,10 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
         );
         disposed = true;
         MutableHashMap.clear(goals);
-        if (options.remove === true)
-          yield* fs.remove(root, { recursive: true, force: true }).pipe(Effect.mapError(failure));
+        yield* Effect.when(
+          fs.remove(root, { recursive: true, force: true }).pipe(Effect.mapError(failure)),
+          Effect.succeed(options.remove === true),
+        );
       },
       (effect, _options?: { readonly remove?: boolean }) => mutex.withPermit(effect),
     ),

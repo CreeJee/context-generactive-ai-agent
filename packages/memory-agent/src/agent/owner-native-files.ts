@@ -19,12 +19,21 @@ const filesystem = {
     expectedPath: string,
     sha256: string,
   ) {
-    if ((yield* fs.realPath(path).pipe(Effect.mapError(registrationError))) !== expectedPath)
-      return yield* NativeRegistrationError.make({ cause: "Unknown native artifact origin" });
-    if (hashSha256(yield* fs.readFile(path).pipe(Effect.mapError(registrationError))) !== sha256)
-      return yield* NativeRegistrationError.make({
-        cause: "Native artifact changed before registration",
-      });
+    yield* fs.realPath(path).pipe(
+      Effect.mapError(registrationError),
+      Effect.filterOrFail(
+        (real) => real === expectedPath,
+        () => NativeRegistrationError.make({ cause: "Unknown native artifact origin" }),
+      ),
+    );
+    yield* fs.readFile(path).pipe(
+      Effect.mapError(registrationError),
+      Effect.filterOrFail(
+        (bytes) => hashSha256(bytes) === sha256,
+        () =>
+          NativeRegistrationError.make({ cause: "Native artifact changed before registration" }),
+      ),
+    );
   }),
   exists: (path: string) => fs.exists(path).pipe(Effect.mapError(registrationError)),
   publish: Effect.fn("OwnerNativeFiles.publish")(function* (source: string, destination: string) {
@@ -33,11 +42,15 @@ const filesystem = {
     yield* fs.makeDirectory(dirname(destination), { recursive: true, mode: 0o700 });
     yield* fs.copyFile(source, temporary);
     yield* fs.rename(temporary, destination).pipe(
+      // Another publisher may have renamed first; only a missing destination is a failure.
       Effect.catch((cause) =>
-        Effect.gen(function* () {
-          yield* fs.remove(temporary, { force: true });
-          if (!(yield* fs.exists(destination))) return yield* cause;
-        }),
+        Effect.andThen(
+          fs.remove(temporary, { force: true }),
+          Effect.when(
+            Effect.fail(cause),
+            Effect.map(fs.exists(destination), (published) => !published),
+          ),
+        ),
       ),
     );
     return yield* fs.realPath(destination);
