@@ -1,0 +1,246 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "read the notes",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "toolCalls": [
+            {
+              "id": "golden-reasoning-read",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"notes.txt\"}"
+              }
+            }
+          ],
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "thinking": [
+            {
+              "content": "I should read the notes.",
+              "signature": "signed-read"
+            }
+          ],
+          "model": "fast-1"
+        },
+        {
+          "role": "tool",
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "toolCallId": "golden-reasoning-read"
+        },
+        {
+          "role": "assistant",
+          "content": "The notes have two lines.",
+          "id": "<id-3>",
+          "createdAt": "<time>",
+          "thinking": [
+            {
+              "content": "The notes have two lines.",
+              "signature": "signed-answer"
+            }
+          ],
+          "model": "fast-1"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "read the notes",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 1,
+      "ui_id": "<id-2>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": null,
+          "toolCalls": [
+            {
+              "id": "golden-reasoning-read",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"notes.txt\"}"
+              }
+            }
+          ],
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "thinking": [
+            {
+              "content": "I should read the notes.",
+              "signature": "signed-read"
+            }
+          ],
+          "model": "fast-1"
+        },
+        {
+          "role": "tool",
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "toolCallId": "golden-reasoning-read",
+          "id": "stored:<session>:2"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 2,
+      "ui_id": "<id-3>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "The notes have two lines.",
+          "id": "<id-3>",
+          "createdAt": "<time>",
+          "thinking": [
+            {
+              "content": "The notes have two lines.",
+              "signature": "signed-answer"
+            }
+          ],
+          "model": "fast-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-4>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": {
+        "promptTokens": 2400,
+        "completionTokens": 60,
+        "totalTokens": 2460,
+        "promptTokensDetails": {
+          "cachedTokens": 2000
+        }
+      },
+      "cancel_requested": null
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/context-usage",
+      "key": "<session>",
+      "value": {
+        "inputTokens": 1200,
+        "cachedTokens": 1000,
+        "observationId": "<id-5>",
+        "compactionStage": "none"
+      }
+    },
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "read the notes",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-4>",
+      "text": "",
+      "detail": {}
+    },
+    {
+      "kind": "tool_call",
+      "run_id": "<id-4>",
+      "text": "read_file {\"path\":\"notes.txt\"}",
+      "detail": {
+        "toolName": "read_file",
+        "toolCallId": "golden-reasoning-read"
+      }
+    },
+    {
+      "kind": "tool_result",
+      "run_id": "<id-4>",
+      "text": {
+        "path": "notes.txt",
+        "sha256": "c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f",
+        "content": "first line\nsecond line\n",
+        "startLine": 1,
+        "endLine": 2,
+        "totalLines": 2,
+        "nextStartLine": null,
+        "lineTruncated": false
+      },
+      "detail": {
+        "toolName": "read_file",
+        "toolCallId": "golden-reasoning-read",
+        "ok": true
+      }
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-4>",
+      "text": "The notes have two lines.",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "artifacts": [],
+  "notifications": [],
+  "queue": [],
+  "workflow": [],
+  "bindings": [],
+  "events": [],
+  "ledger": [],
+  "usage": [
+    {
+      "run_id": "<id-4>",
+      "thread_id": "<session>",
+      "purpose": "main",
+      "provider": "openai",
+      "model": "fast-1"
+    },
+    {
+      "run_id": "<id-4>",
+      "thread_id": "<session>",
+      "purpose": "main",
+      "provider": "openai",
+      "model": "fast-1"
+    }
+  ]
+}

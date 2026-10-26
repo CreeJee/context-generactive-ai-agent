@@ -42,9 +42,10 @@ export const sessionScopedResponder: ScriptedResponder = (invocation) => {
 
 /**
  * How the page talks to the agent: `send` is a fresh tab posting a message, `restore` is a
- * reloaded tab that hydrates the session from the server before answering it.
+ * reloaded tab that hydrates the session from the server before answering it. `page` is the
+ * page's own client: it hydrates too, and a turn sends only the messages the server has not stored.
  */
-export type Connection = "send" | "restore";
+export type Connection = "send" | "restore" | "page";
 
 /** A real TanStack chat client talking to the open agent in-process, like the browser UI does. */
 export const chatClient = Effect.fnUntraced(function* (sessionId: string, connection: Connection) {
@@ -52,6 +53,13 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
   const runPromise = Effect.runPromiseWith(yield* Effect.context<AgentServices>());
   const tools = approvalToolDefinitions;
   const interrupts = [permissionReviewInterrupt];
+  const sessionConnection = () =>
+    fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
+      fetchClient: (input, init) => {
+        const request = new Request(input, init);
+        return runPromise(chatRoute(agent, request, sessionId));
+      },
+    });
   const make = () => {
     switch (connection) {
       case "send":
@@ -70,19 +78,24 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
           persistence: true,
           tools,
           interrupts,
-          connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
-            fetchClient: (input, init) => {
-              const request = new Request(input, init);
-              return runPromise(chatRoute(agent, request, sessionId));
-            },
-          }),
+          connection: sessionConnection(),
+        });
+      case "page":
+        return new ChatClient({
+          threadId: sessionId,
+          persistence: true,
+          // As in the page's chat panel.
+          history: { pageSize: 20 },
+          tools,
+          interrupts,
+          connection: sessionConnection(),
         });
     }
   };
   const client = yield* Effect.acquireRelease(Effect.sync(make), (client) =>
     Effect.sync(() => client.dispose()),
   );
-  if (connection === "restore") client.attach();
+  if (connection !== "send") client.attach();
   const text = () =>
     client
       .getMessages()

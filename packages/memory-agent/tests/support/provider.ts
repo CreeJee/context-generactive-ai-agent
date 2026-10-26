@@ -1,4 +1,8 @@
-import { AuthConnectionState, ProviderOperationFailed } from "../../src/providers/contracts.ts";
+import {
+  AuthConnectionState,
+  ProviderOperationFailed,
+  type RunTextAdapter,
+} from "../../src/providers/contracts.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
 import { Cause, Deferred, Function, MutableHashMap, Option, Effect, Layer, Schema } from "effect";
@@ -257,6 +261,8 @@ export interface TestProviderOptions {
   readonly responder?: ScriptedResponder;
   /** Replace scripted delays with a test-controlled gate. */
   readonly delayedTurnGate?: ScriptedTurn["waitFor"];
+  /** Run chats on this adapter instead of the scripted one, such as a provider's own adapter. */
+  readonly adapter?: (selection: ModelSelection) => RunTextAdapter;
 }
 
 export function turnGate() {
@@ -387,7 +393,7 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
         runtime: () =>
           Effect.succeed({
             provider: "openai" as const,
-            adapter: () => adapter,
+            adapter: options.adapter ?? (() => adapter),
             contextWindow: () => 200_000,
             agentLoop: subscriptionAgentLoop,
             runMiddleware: () => ({ name: "memory-agent/test-provider" }),

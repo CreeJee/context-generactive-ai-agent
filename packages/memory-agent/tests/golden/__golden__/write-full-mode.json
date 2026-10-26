@@ -175,6 +175,8 @@
   "subagents": [],
   "tasks": [],
   "attempts": [],
+  "artifacts": [],
+  "notifications": [],
   "queue": [],
   "workflow": [],
   "bindings": [],

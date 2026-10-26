@@ -25,19 +25,31 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   yield* (yield* Projects).setPermissionMode(project.id, mode);
   yield* selectTestModel();
   const sessionId = (yield* (yield* Sessions).create(project.id)).id;
-  const tab = yield* chatClient(sessionId, "send");
-  const runs = (status: string) =>
+  // Like the page: the server owns the transcript and a turn sends only what it has not stored.
+  const tab = yield* chatClient(sessionId, "page");
+  /**
+   * No run of the conversation or of its subagents is going, no child attempt is going, and every
+   * child's notification reached a run that ended.
+   */
+  const settled = waitUntil(
     Effect.map(
       sqlGet(
-        "SELECT count(*) AS runs FROM chat_runs WHERE thread_id = ? AND status = ?",
+        `SELECT
+           (SELECT count(*) FROM chat_runs WHERE status = 'running' AND (thread_id = ?
+              OR thread_id IN (SELECT 'subagent-' || id FROM subagents WHERE session_id = ?)))
+           + (SELECT count(*) FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+              WHERE t.origin_session_id = ? AND a.status IN ('queued', 'running', 'waiting', 'blocked'))
+           + (SELECT count(*) FROM parent_notifications n
+              WHERE n.origin_session_id = ? AND NOT EXISTS (
+                SELECT 1 FROM chat_runs r
+                WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running')) AS busy`,
         sessionId,
-        status,
+        sessionId,
+        sessionId,
+        sessionId,
       ),
-      (row) => Number(row?.["runs"] ?? 0),
-    );
-  /** No run of the conversation is still going. */
-  const settled = waitUntil(
-    Effect.map(runs("running"), (running) => running === 0),
+      (row) => Number(row?.["busy"] ?? 0) === 0,
+    ),
     "the conversation to settle",
     6_000,
   );
@@ -45,10 +57,30 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     sessionId,
     tab,
     settled,
+    /** Send a user message and wait for its run alone, leaving the children it started going. */
+    post: Effect.fnUntraced(function* (text: string) {
+      yield* tab.send(text);
+      yield* waitUntil(
+        Effect.map(
+          sqlGet(
+            "SELECT count(*) AS runs FROM chat_runs WHERE thread_id = ? AND status = 'running'",
+            sessionId,
+          ),
+          (row) => Number(row?.["runs"] ?? 0) === 0,
+        ),
+        "the run to end",
+        6_000,
+      );
+    }),
     /** Send a user message and wait until the run it starts has ended or asks for approval. */
     send: Effect.fnUntraced(function* (text: string) {
       yield* tab.send(text);
       yield* settled;
+    }),
+    /** Compact the conversation as the page's `/compact` does. */
+    compact: Effect.gen(function* () {
+      const response = yield* (yield* AgentChat).compact(sessionId, null);
+      yield* Effect.sync(() => expect(response.status).toBe(200));
     }),
     /** Send a user message, then cancel the run once the model is answering it. */
     sendAndCancel: Effect.fnUntraced(function* (text: string) {

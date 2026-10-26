@@ -1,11 +1,29 @@
 import { Effect } from "effect";
 import type { PermissionMode } from "../../src/projects/projects.ts";
+import { selectTestModel } from "../support/provider.ts";
 import { testAgent } from "../support/test-env.ts";
 import { conversation, expectGolden } from "./driver.ts";
-import { goldenResponder } from "./responder.ts";
+import { waitUntil } from "../support/wait-until.ts";
+import { childrenHeld, goldenResponder, releaseChildren } from "./responder.ts";
 
 type Chat = Effect.Success<ReturnType<typeof conversation>>;
-type Step = ReturnType<Chat["send" | "sendAndCancel" | "approve"]>;
+type Step =
+  | ReturnType<Chat["send" | "sendAndCancel" | "approve" | "post"]>
+  | Chat["settled" | "compact"]
+  | ReturnType<typeof selectTestModel>;
+
+/** Send a message that starts children, let them answer after its run, and wait for the reports. */
+const delegate = (chat: Chat, text: string) =>
+  Effect.gen(function* () {
+    yield* chat.post(text);
+    yield* waitUntil(
+      Effect.sync(() => childrenHeld() > 0),
+      "a child to ask the model",
+      6_000,
+    );
+    releaseChildren();
+    yield* chat.settled;
+  });
 
 testAgent({ testProvider: { responder: goldenResponder } })("golden chat rows", (it) => {
   /** A scenario in its own conversation, compared with the golden file of the same name. */
@@ -52,5 +70,27 @@ testAgent({ testProvider: { responder: goldenResponder } })("golden chat rows", 
   );
   scenario("user cancels a running answer", "cancelled", "ask", (chat) =>
     chat.sendAndCancel("golden:cancel"),
+  );
+  scenario("a named subagent keeps its conversation across runs", "named-subagent", "ask", (chat) =>
+    Effect.andThen(
+      delegate(chat, "golden:subagent-first"),
+      delegate(chat, "golden:subagent-second"),
+    ),
+  );
+  scenario("the next turn after a model change", "model-handoff", "ask", (chat) =>
+    Effect.gen(function* () {
+      yield* chat.send("before the switch");
+      yield* selectTestModel("deep-1", "medium");
+      yield* chat.send("after the switch");
+      yield* chat.send("still the new model");
+    }),
+  );
+  scenario("/compact summarizes earlier turns for the next one", "compaction", "ask", (chat) =>
+    Effect.gen(function* () {
+      for (const turn of ["turn one", "turn two", "turn three", "turn four"])
+        yield* chat.send(turn);
+      yield* chat.compact;
+      yield* chat.send("turn five");
+    }),
   );
 });

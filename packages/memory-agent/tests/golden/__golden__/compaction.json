@@ -1,0 +1,383 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "turn one",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-3>",
+          "role": "user",
+          "content": "turn two",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-4>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-5>",
+          "role": "user",
+          "content": "turn three",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-6>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-7>",
+          "role": "user",
+          "content": "turn four",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-8>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-9>",
+          "role": "user",
+          "content": "turn five",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-10>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "turn one",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 1,
+      "ui_id": "<id-2>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 2,
+      "ui_id": "<id-3>",
+      "messages": [
+        {
+          "id": "<id-3>",
+          "role": "user",
+          "content": "turn two",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 3,
+      "ui_id": "<id-4>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-4>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 4,
+      "ui_id": "<id-5>",
+      "messages": [
+        {
+          "id": "<id-5>",
+          "role": "user",
+          "content": "turn three",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 5,
+      "ui_id": "<id-6>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-6>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 6,
+      "ui_id": "<id-7>",
+      "messages": [
+        {
+          "id": "<id-7>",
+          "role": "user",
+          "content": "turn four",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 7,
+      "ui_id": "<id-8>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-8>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 8,
+      "ui_id": "<id-9>",
+      "messages": [
+        {
+          "id": "<id-9>",
+          "role": "user",
+          "content": "turn five",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 9,
+      "ui_id": "<id-10>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-10>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-11>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-12>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-13>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-14>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-15>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/manual-compaction",
+      "key": "<session>",
+      "value": {
+        "clearedThrough": 8,
+        "summarizedTurns": 2
+      }
+    },
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    },
+    {
+      "namespace": "memory-agent/turn-summaries",
+      "key": "<session>",
+      "value": {
+        "blocks": [
+          {
+            "end": 2,
+            "nextTurnNodeId": "<id-16>",
+            "text": "- 사용자 턴 2개 (node <id-17>)"
+          }
+        ]
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "turn one",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-11>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "turn two",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-12>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "turn three",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-13>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "turn four",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-14>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "turn five",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-15>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "artifacts": [],
+  "notifications": [],
+  "queue": [],
+  "workflow": [],
+  "bindings": [],
+  "events": [],
+  "ledger": [],
+  "usage": []
+}

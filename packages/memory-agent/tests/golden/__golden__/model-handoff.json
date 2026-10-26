@@ -1,0 +1,235 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "before the switch",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-3>",
+          "role": "user",
+          "content": "after the switch",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-4>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "id": "<id-5>",
+          "role": "user",
+          "content": "still the new model",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-6>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "before the switch",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 1,
+      "ui_id": "<id-2>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 2,
+      "ui_id": "<id-3>",
+      "messages": [
+        {
+          "id": "<id-3>",
+          "role": "user",
+          "content": "after the switch",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 3,
+      "ui_id": "<id-4>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-4>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 4,
+      "ui_id": "<id-5>",
+      "messages": [
+        {
+          "id": "<id-5>",
+          "role": "user",
+          "content": "still the new model",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 5,
+      "ui_id": "<id-6>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hello from fast-1",
+          "id": "<id-6>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-7>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-8>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    },
+    {
+      "run_id": "<id-9>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "handoff",
+        "target": "[\"openai\",\"deep-1\",null]",
+        "through": 2,
+        "anchor": "<fingerprint>",
+        "anchorId": "<id-2>"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "before the switch",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-7>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "after the switch",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-8>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    },
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "still the new model",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-9>",
+      "text": "Hello from fast-1",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "artifacts": [],
+  "notifications": [],
+  "queue": [],
+  "workflow": [],
+  "bindings": [],
+  "events": [],
+  "ledger": [],
+  "usage": []
+}

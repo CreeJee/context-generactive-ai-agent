@@ -27,8 +27,10 @@ const isObject = (value: JsonValue): value is JsonObject =>
  * is shared by every test in the file.
  */
 const volatileId =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]+-\d{13}-[a-z0-9]{4,}(?:-message)?(?:-\d+)?(?![a-z0-9])/g;
+  /(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]+-\d{13}-[a-z0-9]{4,})(?:-message)?(?:-\d+)?(?![a-z0-9])/g;
 const isoTime = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+/** Model handoff's hash of a stored message, which holds ids and times. */
+const messageFingerprint = /^v2:[0-9a-f]{64}$/;
 const timeKey = /(?:_at|At|^timestamp|_since)$/;
 
 /**
@@ -81,7 +83,12 @@ const withoutTanStackMetadata = (value: JsonObject) => {
  */
 const normalizeWith = (rename: (text: string) => string) => {
   const walk = (value: JsonValue, key: string | undefined): JsonValue => {
-    if (isString(value)) return isoTime.test(value) ? "<time>" : rename(value);
+    if (isString(value))
+      return isoTime.test(value)
+        ? "<time>"
+        : messageFingerprint.test(value)
+          ? "<fingerprint>"
+          : rename(value);
     if (isNumber(value)) return key !== undefined && timeKey.test(key) ? "<time>" : value;
     if (!isObject(value)) {
       if (Array.isArray(value)) return value.map((item) => walk(item, undefined));
@@ -174,23 +181,35 @@ export const goldenRows = Effect.fnUntraced(function* (
     ),
     subagents: yield* rows(
       `SELECT id, name, instructions, status, parent_run_id, last_task, last_answer, error
-       FROM subagents WHERE session_id = ? ORDER BY created_at, id`,
+       FROM subagents WHERE session_id = ? ORDER BY rowid`,
       sessionId,
     ),
     tasks: yield* rows(
       `SELECT id, parent_task_id, parent_run_id, parent_tool_call_id, agent_id, agent_name, status,
-         title, request FROM work_tasks WHERE origin_session_id = ? ORDER BY created_at, id`,
+         title, request FROM work_tasks WHERE origin_session_id = ? ORDER BY rowid`,
       sessionId,
     ),
     attempts: yield* rows(
       `SELECT a.task_id, a.attempt_number, a.chat_run_id, a.thread_id, a.status, a.resume_reason,
          a.resumability, a.pending_tool_call_ids, a.failure
        FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
-       WHERE t.origin_session_id = ? ORDER BY a.created_at, a.id`,
+       WHERE t.origin_session_id = ? ORDER BY a.rowid`,
       sessionId,
     ),
+    artifacts: yield* rows(
+      `SELECT w.task_id, w.kind, w.locator, w.media_type, w.verification
+       FROM work_artifacts w JOIN work_tasks t ON t.id = w.task_id
+       WHERE t.origin_session_id = ? ORDER BY w.rowid`,
+      sessionId,
+    ),
+    notifications: yield* rows(
+      `SELECT task_id, parent_run_id, kind, summary, payload, delivered_to_run_id
+       FROM parent_notifications WHERE origin_session_id = ? ORDER BY seq`,
+      sessionId,
+    ),
+    // `seq` counts across conversations, so only its order is compared.
     queue: yield* rows(
-      `SELECT seq, text, state, delivered_via, run_id, in_transcript, steered, failure
+      `SELECT text, state, delivered_via, run_id, in_transcript, steered, failure
        FROM queued_messages WHERE session_id = ? ORDER BY seq`,
       sessionId,
     ),
