@@ -1,5 +1,7 @@
 import type { AnyServerTool, ChatMiddleware } from "@tanstack/ai";
-import { Function as EffectFunction, Schema } from "effect";
+import { Effect, Function as EffectFunction, Option, Schema } from "effect";
+import type { RunHook } from "../loop/run.ts";
+import { CallOutcome } from "../loop/scheduler.ts";
 import {
   createMemoryTools,
   memoryReadRunTools,
@@ -44,4 +46,19 @@ export const btwToolGuard: ChatMiddleware = {
       ? undefined
       : { type: "skip", result: { error: "btw_tool_not_allowed", tool: call.toolName } };
   },
+};
+
+/**
+ * The same allowlist for the Effect AI loop, whose run lists only {@link btwEvidenceRunTools}: a
+ * call to any other tool is refused without running it.
+ */
+export const btwToolGuardHook: RunHook = {
+  admit: (_scope, call) =>
+    Effect.succeed(
+      allowed(call.name)
+        ? Option.none()
+        : Option.some(
+            CallOutcome.Returned({ result: { error: "btw_tool_not_allowed", tool: call.name } }),
+          ),
+    ),
 };
