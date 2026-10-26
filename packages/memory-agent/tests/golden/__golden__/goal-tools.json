@@ -1,0 +1,1817 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:goal-tools",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "toolCalls": [
+            {
+              "id": "goal-read@<session>",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"notes.txt\"}"
+              }
+            },
+            {
+              "id": "goal-list@<session>",
+              "type": "function",
+              "function": {
+                "name": "list_files",
+                "arguments": "{}"
+              }
+            },
+            {
+              "id": "goal-write@<session>",
+              "type": "function",
+              "function": {
+                "name": "write_file",
+                "arguments": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "toolCallId": "goal-read@<session>",
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}"
+        },
+        {
+          "role": "tool",
+          "toolCallId": "goal-list@<session>",
+          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}"
+        },
+        {
+          "role": "tool",
+          "toolCallId": "goal-write@<session>",
+          "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}"
+        },
+        {
+          "role": "assistant",
+          "content": "goal tools done"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:goal-tools",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 1,
+      "ui_id": "stored:<session>:1",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "",
+          "toolCalls": [
+            {
+              "id": "goal-read@<session>",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"notes.txt\"}"
+              }
+            },
+            {
+              "id": "goal-list@<session>",
+              "type": "function",
+              "function": {
+                "name": "list_files",
+                "arguments": "{}"
+              }
+            },
+            {
+              "id": "goal-write@<session>",
+              "type": "function",
+              "function": {
+                "name": "write_file",
+                "arguments": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}"
+              }
+            }
+          ],
+          "id": "stored:<session>:1"
+        },
+        {
+          "role": "tool",
+          "toolCallId": "goal-read@<session>",
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "id": "stored:<session>:2"
+        },
+        {
+          "role": "tool",
+          "toolCallId": "goal-list@<session>",
+          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+          "id": "stored:<session>:3"
+        },
+        {
+          "role": "tool",
+          "toolCallId": "goal-write@<session>",
+          "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+          "id": "stored:<session>:4"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 2,
+      "ui_id": "stored:<session>:5",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "goal tools done",
+          "id": "stored:<session>:5"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-3>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:goal-tools",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-3>",
+      "text": "",
+      "detail": {}
+    },
+    {
+      "kind": "tool_call",
+      "run_id": "<id-3>",
+      "text": "read_file {\"path\":\"notes.txt\"}",
+      "detail": {
+        "toolName": "read_file",
+        "toolCallId": "goal-read@<session>"
+      }
+    },
+    {
+      "kind": "tool_result",
+      "run_id": "<id-3>",
+      "text": {
+        "path": "notes.txt",
+        "sha256": "c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f",
+        "content": "first line\nsecond line\n",
+        "startLine": 1,
+        "endLine": 2,
+        "totalLines": 2,
+        "nextStartLine": null,
+        "lineTruncated": false
+      },
+      "detail": {
+        "toolName": "read_file",
+        "toolCallId": "goal-read@<session>",
+        "ok": true
+      }
+    },
+    {
+      "kind": "tool_call",
+      "run_id": "<id-3>",
+      "text": "list_files {}",
+      "detail": {
+        "toolName": "list_files",
+        "toolCallId": "goal-list@<session>"
+      }
+    },
+    {
+      "kind": "tool_result",
+      "run_id": "<id-3>",
+      "text": {
+        "snapshot": "<id-2>",
+        "directory": ".",
+        "glob": null,
+        "source": "walk",
+        "total": 8,
+        "excludedCredentialFiles": 0,
+        "truncated": false,
+        "paths": [
+          ".agents/skills/approval/SKILL.md",
+          ".agents/skills/approval/scripts/run.sh",
+          ".agents/skills/mixed-skill/SKILL.md",
+          ".agents/skills/mixed-skill/scripts/run.sh",
+          ".agents/skills/review/SKILL.md",
+          ".agents/skills/review/scripts/run.sh",
+          "notes.txt",
+          "out.txt"
+        ],
+        "nextOffset": null
+      },
+      "detail": {
+        "toolName": "list_files",
+        "toolCallId": "goal-list@<session>",
+        "ok": true
+      }
+    },
+    {
+      "kind": "tool_call",
+      "run_id": "<id-3>",
+      "text": "write_file {\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+      "detail": {
+        "toolName": "write_file",
+        "toolCallId": "goal-write@<session>"
+      }
+    },
+    {
+      "kind": "tool_result",
+      "run_id": "<id-3>",
+      "text": {
+        "path": "goal.txt",
+        "created": true,
+        "sha256": "d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7",
+        "bytes": 12
+      },
+      "detail": {
+        "toolName": "write_file",
+        "toolCallId": "goal-write@<session>",
+        "ok": true
+      }
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-3>",
+      "text": "goal tools done",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "artifacts": [],
+  "notifications": [],
+  "queue": [],
+  "workflow": [
+    {
+      "state_json": {
+        "phase": "chat",
+        "goal": {
+          "version": 1,
+          "statement": "Keep the golden notes",
+          "outcomes": [
+            "The notes are read and written"
+          ],
+          "constraints": [],
+          "nonGoals": [],
+          "assumptions": [],
+          "openQuestions": [],
+          "evidence": [],
+          "verification": {
+            "status": "not_run",
+            "summary": "",
+            "evidence": [],
+            "recoveryPhase": null,
+            "updatedAt": null
+          },
+          "updatedAt": "<time>",
+          "status": "active"
+        },
+        "plan": null,
+        "ledger": [
+          {
+            "sequence": 1,
+            "at": "<time>",
+            "kind": "goal_updated",
+            "detail": "goal v1 (active)"
+          }
+        ]
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "run_id": "<id-3>",
+      "goal_version": 1,
+      "plan_version": null
+    }
+  ],
+  "acknowledgements": [],
+  "events": [
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "CUSTOM",
+        "name": "run.accepted",
+        "value": {},
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "RUN_STARTED",
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "RUN_STARTED",
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_START",
+        "toolCallId": "goal-read@<session>",
+        "toolCallName": "read_file",
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_START",
+        "toolCallId": "goal-read@<session>",
+        "toolCallName": "read_file",
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_ARGS",
+        "toolCallId": "goal-read@<session>",
+        "delta": "{\"path\":\"notes.txt\"}",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_ARGS",
+        "toolCallId": "goal-read@<session>",
+        "delta": "{\"path\":\"notes.txt\"}",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_END",
+        "toolCallId": "goal-read@<session>",
+        "timestamp": "<time>",
+        "input": {
+          "path": "notes.txt"
+        }
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_END",
+        "toolCallId": "goal-read@<session>",
+        "timestamp": "<time>",
+        "input": {
+          "path": "notes.txt"
+        }
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_START",
+        "toolCallId": "goal-list@<session>",
+        "toolCallName": "list_files",
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_START",
+        "toolCallId": "goal-list@<session>",
+        "toolCallName": "list_files",
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_ARGS",
+        "toolCallId": "goal-list@<session>",
+        "delta": "{}",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:13",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_ARGS",
+        "toolCallId": "goal-list@<session>",
+        "delta": "{}",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:6",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_END",
+        "toolCallId": "goal-list@<session>",
+        "timestamp": "<time>",
+        "input": {}
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:15",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_END",
+        "toolCallId": "goal-list@<session>",
+        "timestamp": "<time>",
+        "input": {}
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_START",
+        "toolCallId": "goal-write@<session>",
+        "toolCallName": "write_file",
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:17",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_START",
+        "toolCallId": "goal-write@<session>",
+        "toolCallName": "write_file",
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:8",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_ARGS",
+        "toolCallId": "goal-write@<session>",
+        "delta": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:19",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_ARGS",
+        "toolCallId": "goal-write@<session>",
+        "delta": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_END",
+        "toolCallId": "goal-write@<session>",
+        "timestamp": "<time>",
+        "input": {
+          "path": "goal.txt",
+          "content": "goal output\n"
+        }
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:21",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_END",
+        "toolCallId": "goal-write@<session>",
+        "timestamp": "<time>",
+        "input": {
+          "path": "goal.txt",
+          "content": "goal output\n"
+        }
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:10",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "RUN_FINISHED",
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:23",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "RUN_FINISHED",
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_RESULT",
+        "timestamp": "<time>",
+        "messageId": "<id-4>",
+        "toolCallId": "goal-read@<session>",
+        "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+        "role": "tool"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:25",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_RESULT",
+        "timestamp": "<time>",
+        "messageId": "<id-4>",
+        "toolCallId": "goal-read@<session>",
+        "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+        "role": "tool"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:12",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_RESULT",
+        "timestamp": "<time>",
+        "messageId": "<id-4>",
+        "toolCallId": "goal-list@<session>",
+        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+        "role": "tool"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:27",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_RESULT",
+        "timestamp": "<time>",
+        "messageId": "<id-4>",
+        "toolCallId": "goal-list@<session>",
+        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+        "role": "tool"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:13",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_RESULT",
+        "timestamp": "<time>",
+        "messageId": "<id-4>",
+        "toolCallId": "goal-write@<session>",
+        "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+        "role": "tool"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:29",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TOOL_CALL_RESULT",
+        "timestamp": "<time>",
+        "messageId": "<id-4>",
+        "toolCallId": "goal-write@<session>",
+        "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+        "role": "tool"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:14",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TEXT_MESSAGE_START",
+        "messageId": "<id-5>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "model": "scripted-1"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:31",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TEXT_MESSAGE_START",
+        "messageId": "<id-5>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "model": "scripted-1"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:15",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TEXT_MESSAGE_CONTENT",
+        "messageId": "<id-5>",
+        "delta": "goal tools done",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:33",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TEXT_MESSAGE_CONTENT",
+        "messageId": "<id-5>",
+        "delta": "goal tools done",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:16",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TEXT_MESSAGE_END",
+        "messageId": "<id-5>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:35",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "TEXT_MESSAGE_END",
+        "messageId": "<id-5>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "chunk:17",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "RUN_FINISHED",
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:chunk:37",
+      "kind": "chunk",
+      "payload_json": {
+        "type": "RUN_FINISHED",
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>"
+      }
+    },
+    {
+      "run_id": "<id-3>",
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      }
+    }
+  ],
+  "ledger": [
+    {
+      "run_id": "<id-3>",
+      "operation_id": 1,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 2,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 3,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 4,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 5,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 6,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 7,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 8,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 9,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 10,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 11,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 12,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 13,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 14,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 15,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 16,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 17,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelOpen",
+      "input_kind": "omitted",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 18,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 19,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 20,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 21,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 22,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 23,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 24,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 25,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 26,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 27,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 28,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 29,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 30,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 31,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 32,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 33,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 34,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 35,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 36,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 37,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 38,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 39,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 40,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 41,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "toolAuthorize",
+      "input_kind": "complete",
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "read_file"
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-read@<session>"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "notes.txt"
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 42,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "toolAuthorize",
+      "input_kind": "complete",
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "list_files"
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-list@<session>"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              []
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 43,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "toolAuthorize",
+      "input_kind": "complete",
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "write_file"
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-write@<session>"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "goal.txt"
+                  ]
+                ],
+                [
+                  "content",
+                  [
+                    "string",
+                    "goal output\n"
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 44,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "tool",
+      "input_kind": "complete",
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "read_file"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "notes.txt"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-read@<session>"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 45,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 46,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 47,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 48,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 49,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "tool",
+      "input_kind": "complete",
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "list_files"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              []
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-list@<session>"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 50,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 51,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 52,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 53,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 54,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "tool",
+      "input_kind": "complete",
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "write_file"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "goal.txt"
+                  ]
+                ],
+                [
+                  "content",
+                  [
+                    "string",
+                    "goal output\n"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-write@<session>"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 55,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 56,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 57,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 58,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 59,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 60,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 61,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 62,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 63,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 64,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 65,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "strategy",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 66,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 67,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 68,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 69,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 70,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 71,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 72,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "middleware-hook",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 73,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelOpen",
+      "input_kind": "omitted",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 74,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 75,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 76,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 77,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 78,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 79,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 80,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 81,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 82,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 83,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 84,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "modelNext",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 85,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 86,
+      "side_effect": 0,
+      "status": "succeeded",
+      "operation": "strategy",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 87,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 88,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 89,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 90,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 91,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 92,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    },
+    {
+      "run_id": "<id-3>",
+      "operation_id": 93,
+      "side_effect": 1,
+      "status": "succeeded",
+      "operation": "middleware",
+      "input_kind": "complete",
+      "input": null
+    }
+  ],
+  "usage": []
+}

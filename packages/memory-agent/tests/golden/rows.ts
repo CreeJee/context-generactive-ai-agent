@@ -132,6 +132,10 @@ const threadsOf = (sessionId: string) =>
     (found) => found.map((row) => String(row["thread_id"])),
   );
 
+/** Rows of `alias` in the order their runs started; run ids are random. */
+const runOrder = (alias: string) =>
+  `(SELECT r.rowid FROM chat_runs r WHERE r.run_id = ${alias}.run_id)`;
+
 const inList = (count: number) =>
   `(${Array.from({ length: Math.max(count, 1) }, () => "?").join(", ")})`;
 
@@ -145,7 +149,7 @@ export const goldenRows = Effect.fnUntraced(function* (
   const project = yield* sqlAll("SELECT project_id FROM sessions WHERE id = ?", sessionId);
   const runs = yield* rows(
     `SELECT run_id, thread_id, status, error, error_code, usage, cancel_requested
-     FROM chat_runs WHERE thread_id IN ${inList(ids.length)} ORDER BY started_at, run_id`,
+     FROM chat_runs WHERE thread_id IN ${inList(ids.length)} ORDER BY rowid`,
     ...ids,
   );
   const runIds = runs.flatMap((run) => (isString(run["run_id"]) ? [run["run_id"]] : []));
@@ -218,8 +222,13 @@ export const goldenRows = Effect.fnUntraced(function* (
       sessionId,
     ),
     bindings: yield* rows(
-      `SELECT run_id, goal_version, plan_version FROM workflow_run_bindings
-       WHERE session_id = ? ORDER BY run_id`,
+      `SELECT b.run_id, b.goal_version, b.plan_version FROM workflow_run_bindings b
+       WHERE b.session_id = ? ORDER BY ${runOrder("b")}`,
+      sessionId,
+    ),
+    acknowledgements: yield* rows(
+      `SELECT a.run_id FROM workflow_uncertain_acknowledgements a
+       WHERE a.session_id = ? ORDER BY ${runOrder("a")}`,
       sessionId,
     ),
     events: yield* rows(
@@ -227,9 +236,16 @@ export const goldenRows = Effect.fnUntraced(function* (
        WHERE run_id IN ${inList(runList.length)} ORDER BY cursor`,
       ...runList,
     ),
+    // The fingerprint's digest and the inputs of model, middleware and strategy calls hash and
+    // carry whole requests; the migration keeps only tool rows, so only their input is compared.
     ledger: yield* rows(
-      `SELECT run_id, operation_id, side_effect, status, fingerprint FROM owner_rpc_operations
-       WHERE run_id IN ${inList(runList.length)} ORDER BY run_id, operation_id`,
+      `SELECT o.run_id, o.operation_id, o.side_effect, o.status,
+         json_extract(o.fingerprint, '$.operation') AS operation,
+         json_extract(o.fingerprint, '$.inputKind') AS input_kind,
+         CASE WHEN json_extract(o.fingerprint, '$.operation') IN ('tool', 'toolAuthorize')
+           THEN json_extract(o.fingerprint, '$.input') END AS input
+       FROM owner_rpc_operations o
+       WHERE o.run_id IN ${inList(runList.length)} ORDER BY ${runOrder("o")}, o.operation_id`,
       ...runList,
     ),
     usage: yield* rows(

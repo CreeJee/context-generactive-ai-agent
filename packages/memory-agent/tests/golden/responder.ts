@@ -68,6 +68,26 @@ const scripts = {
     { toolCalls: [call("second", "run_subagent", { agent: "helper", task: "second task" })] },
     { text: "second started" },
   ],
+  "goal-tools": [
+    {
+      toolCalls: [
+        call("goal-read", "read_file", { path: "notes.txt" }),
+        call("goal-list", "list_files", {}),
+        call("goal-write", "write_file", { path: "goal.txt", content: "goal output\n" }),
+      ],
+    },
+    { text: "goal tools done" },
+  ],
+  "goal-approval": [
+    { toolCalls: [saveSkill("goal-approval", "printf goal-approved")] },
+    { text: "goal approval done" },
+  ],
+  // The skill still runs when the agent restarts, so its outcome is unknown.
+  "goal-restart": [
+    { toolCalls: [saveSkill("goal-sleeper", "sleep 3; printf slept")] },
+    { toolCalls: [call("goal-run", "run_skill", { name: "goal-sleeper" })] },
+    { text: "never reached" },
+  ],
 } satisfies { readonly [scenario: string]: ReadonlyArray<ScriptedTurn> };
 
 const Scenario = Schema.Literals([
@@ -81,6 +101,9 @@ const Scenario = Schema.Literals([
   "cancel",
   "subagent-first",
   "subagent-second",
+  "goal-tools",
+  "goal-approval",
+  "goal-restart",
 ]);
 export type Scenario = typeof Scenario.Type;
 const decodeScenario = Schema.decodeUnknownOption(Scenario);

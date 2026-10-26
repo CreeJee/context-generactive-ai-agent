@@ -184,6 +184,7 @@
   "queue": [],
   "workflow": [],
   "bindings": [],
+  "acknowledgements": [],
   "events": [],
   "ledger": [],
   "usage": []
