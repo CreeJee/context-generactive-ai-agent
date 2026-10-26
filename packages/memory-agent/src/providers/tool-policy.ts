@@ -410,9 +410,6 @@ const executionOptionKeys = HashSet.fromIterable([
   "maxProcesses",
 ]);
 const pathRequestKeys = HashSet.fromIterable(["path", "access", "target"]);
-/** Fails with `failure` when `refused`. */
-const refuseWhen = <E>(refused: boolean, failure: () => E) =>
-  refused ? Effect.fail(failure()) : Effect.void;
 function validateSandbox(
   tool: AnyProviderToolDescriptor,
   options: ProviderToolExecutionOptions,
@@ -436,17 +433,21 @@ function validateSandbox(
     Effect.gen(function* () {
       const pathViolation = (reason: ProviderToolPathViolation["reason"]) =>
         ProviderToolPathViolation.make({ toolId: tool.id, path: request.path, reason });
-      yield* refuseWhen(
-        Object.keys(request).some((key) => !HashSet.has(pathRequestKeys, key)),
-        () => optionsViolation("path_request_invalid"),
+      yield* Effect.when(
+        Effect.fail(optionsViolation("path_request_invalid")),
+        Effect.succeed(Object.keys(request).some((key) => !HashSet.has(pathRequestKeys, key))),
       );
       const trustedRoot = yield* Effect.fromOption(root, () =>
         sandboxViolation("trusted_profile_required"),
       );
-      yield* refuseWhen(oauthProtocolPath.isAbsolute(request.path), () =>
-        pathViolation("absolute_path"),
+      yield* Effect.when(
+        Effect.fail(pathViolation("absolute_path")),
+        Effect.succeed(oauthProtocolPath.isAbsolute(request.path)),
       );
-      yield* refuseWhen(isCredentialPath(request.path), () => pathViolation("credential_path"));
+      yield* Effect.when(
+        Effect.fail(pathViolation("credential_path")),
+        Effect.succeed(isCredentialPath(request.path)),
+      );
       yield* resolveProjectPath(trustedRoot, request.path, request.target).pipe(
         Effect.catchTags({
           PathRejected: (rejection) => Effect.fail(pathViolation(rejection.reason)),
@@ -463,12 +464,13 @@ function validateSandbox(
       );
     });
   return Effect.gen(function* () {
-    yield* refuseWhen(
-      Object.keys(options).some((key) => !HashSet.has(executionOptionKeys, key)),
-      () => optionsViolation("unknown_policy_option"),
+    yield* Effect.when(
+      Effect.fail(optionsViolation("unknown_policy_option")),
+      Effect.succeed(Object.keys(options).some((key) => !HashSet.has(executionOptionKeys, key))),
     );
-    yield* refuseWhen(appManaged && sandbox === undefined, () =>
-      sandboxViolation("trusted_profile_required"),
+    yield* Effect.when(
+      Effect.fail(sandboxViolation("trusted_profile_required")),
+      Effect.succeed(appManaged && sandbox === undefined),
     );
     const root = yield* Option.match(Option.fromNullishOr(sandbox), {
       onNone: () => Effect.succeedNone,
@@ -484,41 +486,50 @@ function validateSandbox(
           Effect.asSome,
         ),
     });
-    yield* refuseWhen(
-      tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true,
-      () => sandboxViolation("isolated_compute_required"),
+    yield* Effect.when(
+      Effect.fail(sandboxViolation("isolated_compute_required")),
+      Effect.succeed(
+        tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true,
+      ),
     );
-    yield* refuseWhen(
-      tool.sandbox.includes("isolated_desktop_required") && sandbox?.isolatedDesktop !== true,
-      () => sandboxViolation("isolated_desktop_required"),
+    yield* Effect.when(
+      Effect.fail(sandboxViolation("isolated_desktop_required")),
+      Effect.succeed(
+        tool.sandbox.includes("isolated_desktop_required") && sandbox?.isolatedDesktop !== true,
+      ),
     );
-    yield* refuseWhen(
+    if (
       options.networkRequested === true &&
-        tool.sandbox.includes("provider_hosted") === false &&
-        sandbox?.network !== "restricted",
-      () => sandboxViolation("network_denied"),
-    );
-    yield* refuseWhen(
+      tool.sandbox.includes("provider_hosted") === false &&
+      sandbox?.network !== "restricted"
+    ) {
+      return yield* sandboxViolation("network_denied");
+    }
+    if (
       environment.length > 0 &&
-        (sandbox?.environment !== "allowlisted_names" ||
-          environment.some((name) => !sandbox.allowedEnvironmentNames.includes(name))),
-      () => sandboxViolation("environment_denied"),
-    );
+      (sandbox?.environment !== "allowlisted_names" ||
+        environment.some((name) => !sandbox.allowedEnvironmentNames.includes(name)))
+    ) {
+      return yield* sandboxViolation("environment_denied");
+    }
     yield* Effect.forEach(
       requests,
       ([name, value, maximum]) =>
-        refuseWhen(
-          value !== undefined &&
-            (!Number.isSafeInteger(value) ||
-              value <= 0 ||
-              maximum === undefined ||
-              value > maximum),
-          () => optionsViolation(`${name}_limit_invalid`),
+        Effect.when(
+          Effect.fail(optionsViolation(`${name}_limit_invalid`)),
+          Effect.succeed(
+            value !== undefined &&
+              (!Number.isSafeInteger(value) ||
+                value <= 0 ||
+                maximum === undefined ||
+                value > maximum),
+          ),
         ),
       { discard: true },
     );
-    yield* refuseWhen((options.paths?.length ?? 0) > 0 && !appManaged, () =>
-      sandboxViolation("local_access_not_applicable"),
+    yield* Effect.when(
+      Effect.fail(sandboxViolation("local_access_not_applicable")),
+      Effect.succeed((options.paths?.length ?? 0) > 0 && !appManaged),
     );
     yield* Effect.forEach(options.paths ?? [], (request) => checkedPath(request, root), {
       discard: true,
@@ -686,7 +697,7 @@ function makeProviderToolPolicyBody(
           onSome: Effect.fail,
         });
         const exposed = publicDescriptor(tool);
-        yield* exposed.requiresApproval ? approvalOutcome(input) : Effect.void;
+        yield* Effect.when(approvalOutcome(input), Effect.succeed(exposed.requiresApproval));
         const workspaceRoot = yield* validateSandbox(tool, input.options, sandbox);
         return Object.freeze({ tool: exposed, workspaceRoot });
       }),

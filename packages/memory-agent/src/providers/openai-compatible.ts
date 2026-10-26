@@ -396,12 +396,9 @@ function makeOpenAICompatibleSettingsBody(
         const existing = yield* storedKey(account);
         const moved = account.baseUrl !== baseUrl;
         // Never carry an old endpoint's credential to a different server implicitly.
-        yield* Effect.void.pipe(
-          Effect.filterOrFail(
-            () => !moved || apiKey !== undefined || existing === null,
-            () => OpenAICompatibleFailed.make({ operation: "validation" }),
-          ),
-        );
+        if (moved && apiKey === undefined && existing !== null) {
+          return yield* OpenAICompatibleFailed.make({ operation: "validation" });
+        }
         yield* writeBoth(
           apiKey === undefined || (apiKey === null && existing === null)
             ? null
@@ -555,11 +552,10 @@ function makeOpenAICompatibleSettingsBody(
               {
                 onNone: () => Effect.void,
                 onSome: (account) =>
-                  Effect.void.pipe(
-                    Effect.filterOrFail(
-                      () => account.baseUrl === requested,
-                      () => OpenAICompatibleFailed.make({ operation: "models" }),
-                    ),
+                  Effect.when(
+                    Effect.fail(OpenAICompatibleFailed.make({ operation: "models" })),
+                    Effect.succeed(account.baseUrl !== requested),
+                  ).pipe(
                     Effect.andThen(() => {
                       const models = account.models.map(({ reasoning: _previous, ...model }) =>
                         Option.match(

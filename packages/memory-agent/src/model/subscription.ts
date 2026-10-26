@@ -298,24 +298,21 @@ function providerEventsWithPromptCacheFallback(options: {
         );
       });
     return source(options.body).pipe(
-      Stream.mapEffect((event) =>
-        Effect.succeed(event).pipe(
-          Effect.filterOrFail(
-            () => provider !== "anthropic" || !isPromptCacheRejection(event),
-            () =>
-              ProviderFeatureRejectedError.make({
-                provider: "anthropic",
-                feature: "prompt-cache",
-                status: null,
-              }),
-          ),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              emitted = true;
+      Stream.mapEffect((event) => {
+        if (provider === "anthropic" && isPromptCacheRejection(event)) {
+          return Effect.fail(
+            ProviderFeatureRejectedError.make({
+              provider: "anthropic",
+              feature: "prompt-cache",
+              status: null,
             }),
-          ),
-        ),
-      ),
+          );
+        }
+        return Effect.sync(() => {
+          emitted = true;
+          return event;
+        });
+      }),
       Stream.catchTag("ProviderFeatureRejectedError", (failure) =>
         provider === "anthropic" && !emitted && failure.feature === "prompt-cache"
           ? Stream.unwrap(Effect.as(options.onFallback, source(options.baselineBody)))
@@ -849,38 +846,36 @@ const makeTranslator = (provider: OAuthProvider) => {
       // Public OpenAI summary parts are reasoning blocks of their own, not Anthropic block ends.
       "reasoning-summary-start": (start) => {
         const summaryId = summaryIdOf(start);
-        return Effect.succeed(state).pipe(
-          Effect.filterOrFail(
-            () => !HashMap.has(state.summaries, summaryId),
-            () =>
-              summaryFailed(ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({})),
-          ),
-          Effect.filterOrFail(
-            () =>
-              state.summaryCount < publicReasoningLimits.parts &&
-              start.id.length <= publicReasoningLimits.idCharacters &&
-              withinSummaryLimit(state, start.text.length),
-            summaryLimit,
-          ),
-          Effect.map((): Translated => [
-            {
-              ...state,
-              summaryCount: state.summaryCount + 1,
-              openSummaries: state.openSummaries + 1,
-              summaryCharacters: state.summaryCharacters + start.text.length,
-              summaries: HashMap.set(
-                state.summaries,
-                summaryId,
-                SummaryState.open({ text: start.text }),
-              ),
-            },
-            [
-              { type: "reasoning-start", id: summaryId },
-              ...(start.text.length > 0
-                ? [{ type: "reasoning-delta" as const, id: summaryId, delta: start.text }]
-                : []),
-            ],
-          ]),
+        if (HashMap.has(state.summaries, summaryId)) {
+          return Effect.fail(
+            summaryFailed(ReasoningSummaryProtocolFailedReason.cases.ConflictingSummary.make({})),
+          );
+        }
+        if (
+          state.summaryCount >= publicReasoningLimits.parts ||
+          start.id.length > publicReasoningLimits.idCharacters ||
+          !withinSummaryLimit(state, start.text.length)
+        ) {
+          return Effect.fail(summaryLimit());
+        }
+        return emit(
+          {
+            ...state,
+            summaryCount: state.summaryCount + 1,
+            openSummaries: state.openSummaries + 1,
+            summaryCharacters: state.summaryCharacters + start.text.length,
+            summaries: HashMap.set(
+              state.summaries,
+              summaryId,
+              SummaryState.open({ text: start.text }),
+            ),
+          },
+          [
+            { type: "reasoning-start", id: summaryId },
+            ...(start.text.length > 0
+              ? [{ type: "reasoning-delta" as const, id: summaryId, delta: start.text }]
+              : []),
+          ],
         );
       },
       "reasoning-summary-delta": (delta) => {
@@ -928,27 +923,27 @@ const makeTranslator = (provider: OAuthProvider) => {
           ]),
         );
       },
-      reasoning: (reasoning) =>
-        Effect.succeed(reasoning).pipe(
-          Effect.filterOrFail(
-            () => reasoning.encryptedContent.length <= maxEncryptedReasoningCharacters,
-            () => failed(SubscriptionStreamFailedReason.cases.EncryptedReasoningLimit.make({})),
-          ),
-          Effect.map(() => {
-            const signature = encodeOpenAiReasoning(reasoning.id, reasoning.encryptedContent);
-            const id = `reasoning-encrypted-${reasoning.id}`;
-            return Option.match(state.endingSummary, {
-              onSome: () => endSummary(state, Option.some(signature)),
-              onNone: (): Translated => [
-                state,
-                [
-                  { type: "reasoning-start", id },
-                  { type: "reasoning-end", id, ...metadata({ signature }) },
-                ],
+      reasoning: (reasoning) => {
+        if (reasoning.encryptedContent.length > maxEncryptedReasoningCharacters) {
+          return Effect.fail(
+            failed(SubscriptionStreamFailedReason.cases.EncryptedReasoningLimit.make({})),
+          );
+        }
+        const signature = encodeOpenAiReasoning(reasoning.id, reasoning.encryptedContent);
+        const id = `reasoning-encrypted-${reasoning.id}`;
+        return Effect.succeed(
+          Option.match(state.endingSummary, {
+            onSome: () => endSummary(state, Option.some(signature)),
+            onNone: (): Translated => [
+              state,
+              [
+                { type: "reasoning-start", id },
+                { type: "reasoning-end", id, ...metadata({ signature }) },
               ],
-            });
+            ],
           }),
-        ),
+        );
+      },
       text: (text) =>
         Option.match(state.textId, {
           onSome: (id) => emit(state, [{ type: "text-delta", id, delta: text.text }]),
@@ -985,48 +980,44 @@ const makeTranslator = (provider: OAuthProvider) => {
           ]),
         ),
       "tool-call-start": (start) =>
-        andThen(closeText(state), (closed) =>
-          Effect.succeed(closed).pipe(
-            Effect.filterOrFail(
-              () => isFree(closed, start.index),
-              () => failed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({})),
-            ),
-            Effect.map((): Translated => [
-              {
-                ...closed,
-                streamingCalls: HashMap.set(closed.streamingCalls, start.index, {
-                  id: start.id,
-                  name: start.name,
-                  arguments: "",
-                }),
-                toolCalls: closed.toolCalls + 1,
-              },
-              [{ type: "tool-params-start", id: start.id, name: start.name }],
-            ]),
-          ),
-        ),
+        andThen(closeText(state), (closed) => {
+          if (!isFree(closed, start.index)) {
+            return Effect.fail(
+              failed(SubscriptionStreamFailedReason.cases.InvalidToolCall.make({})),
+            );
+          }
+          return emit(
+            {
+              ...closed,
+              streamingCalls: HashMap.set(closed.streamingCalls, start.index, {
+                id: start.id,
+                name: start.name,
+                arguments: "",
+              }),
+              toolCalls: closed.toolCalls + 1,
+            },
+            [{ type: "tool-params-start", id: start.id, name: start.name }],
+          );
+        }),
       "reasoning-start": (start) =>
-        andThen(closeText(state), (closed) =>
-          Effect.succeed(closed).pipe(
-            Effect.filterOrFail(
-              () => isFree(closed, start.index),
-              () => failed(SubscriptionStreamFailedReason.cases.InvalidReasoning.make({})),
-            ),
-            Effect.map((): Translated => {
-              const id = `reasoning-${start.index}`;
-              return [
-                {
-                  ...closed,
-                  streamingReasoning: HashMap.set(closed.streamingReasoning, start.index, {
-                    id,
-                    signature: Option.none(),
-                  }),
-                },
-                [{ type: "reasoning-start", id }],
-              ];
-            }),
-          ),
-        ),
+        andThen(closeText(state), (closed) => {
+          if (!isFree(closed, start.index)) {
+            return Effect.fail(
+              failed(SubscriptionStreamFailedReason.cases.InvalidReasoning.make({})),
+            );
+          }
+          const id = `reasoning-${start.index}`;
+          return emit(
+            {
+              ...closed,
+              streamingReasoning: HashMap.set(closed.streamingReasoning, start.index, {
+                id,
+                signature: Option.none(),
+              }),
+            },
+            [{ type: "reasoning-start", id }],
+          );
+        }),
       "reasoning-delta": (delta) =>
         andThen(closeText(state), (closed) =>
           Effect.map(streamingReasoningAt(closed, delta.index), (reasoning): Translated => [
@@ -1076,45 +1067,42 @@ const makeTranslator = (provider: OAuthProvider) => {
     );
 
   /** The end of the stream: every block must have ended, and the turn finishes. */
-  const finish = (state: Translation): Translating =>
-    Effect.succeed(state).pipe(
-      Effect.filterOrFail(
-        () => state.openSummaries === 0,
-        () => summaryFailed(ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({})),
-      ),
-      Effect.filterOrFail(
-        () => HashMap.isEmpty(state.streamingCalls) && HashMap.isEmpty(state.streamingReasoning),
-        () => failed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})),
-      ),
-      Effect.flatMap(() =>
-        andThen(endSummary(state, Option.none()), (summaryEnded) => {
-          const [done, textEnded] = closeText(summaryEnded);
-          const { tokens } = done;
-          const uncached = Option.getOrUndefined(
-            Option.map(
-              Option.fromUndefinedOr(tokens.promptTokens),
-              (total) => total - (tokens.cachedPromptTokens ?? 0) - (tokens.cacheWriteTokens ?? 0),
-            ),
-          );
-          return emit(done, [
-            ...textEnded,
-            {
-              type: "finish",
-              reason: done.toolCalls > 0 ? "tool-calls" : "stop",
-              usage: {
-                inputTokens: {
-                  ...optionalProperty("total", tokens.promptTokens),
-                  ...optionalProperty("uncached", uncached),
-                  ...optionalProperty("cacheRead", tokens.cachedPromptTokens),
-                  ...optionalProperty("cacheWrite", tokens.cacheWriteTokens),
-                },
-                outputTokens: optionalProperty("total", tokens.completionTokens),
-              },
+  const finish = (state: Translation): Translating => {
+    if (state.openSummaries !== 0) {
+      return Effect.fail(
+        summaryFailed(ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({})),
+      );
+    }
+    if (!HashMap.isEmpty(state.streamingCalls) || !HashMap.isEmpty(state.streamingReasoning)) {
+      return Effect.fail(failed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})));
+    }
+    return andThen(endSummary(state, Option.none()), (summaryEnded) => {
+      const [done, textEnded] = closeText(summaryEnded);
+      const { tokens } = done;
+      const uncached = Option.getOrUndefined(
+        Option.map(
+          Option.fromUndefinedOr(tokens.promptTokens),
+          (total) => total - (tokens.cachedPromptTokens ?? 0) - (tokens.cacheWriteTokens ?? 0),
+        ),
+      );
+      return emit(done, [
+        ...textEnded,
+        {
+          type: "finish",
+          reason: done.toolCalls > 0 ? "tool-calls" : "stop",
+          usage: {
+            inputTokens: {
+              ...optionalProperty("total", tokens.promptTokens),
+              ...optionalProperty("uncached", uncached),
+              ...optionalProperty("cacheRead", tokens.cachedPromptTokens),
+              ...optionalProperty("cacheWrite", tokens.cacheWriteTokens),
             },
-          ]);
-        }),
-      ),
-    );
+            outputTokens: optionalProperty("total", tokens.completionTokens),
+          },
+        },
+      ]);
+    });
+  };
 
   return { step, finish };
 };
@@ -1174,11 +1162,9 @@ export const makeSubscriptionModel = Effect.fnUntraced(function* (
   const streamText = (request: LanguageModel.ProviderOptions) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        yield* Effect.void.pipe(
-          Effect.filterOrFail(
-            () => request.responseFormat.type !== "json",
-            () => unsupported("Subscription models do not support structured output."),
-          ),
+        yield* Effect.when(
+          Effect.fail(unsupported("Subscription models do not support structured output.")),
+          Effect.succeed(request.responseFormat.type === "json"),
         );
         const controller = yield* Effect.acquireRelease(
           Effect.sync(() => new AbortController()),

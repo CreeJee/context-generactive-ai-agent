@@ -1035,11 +1035,9 @@ export const makeCompatibleModel = Effect.fnUntraced(function* (options: Compati
   const streamText = (request: LanguageModel.ProviderOptions) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        yield* Effect.void.pipe(
-          Effect.filterOrFail(
-            () => request.responseFormat.type !== "json",
-            () => invalidRequest("Compatible models do not support structured output."),
-          ),
+        yield* Effect.when(
+          Effect.fail(invalidRequest("Compatible models do not support structured output.")),
+          Effect.succeed(request.responseFormat.type === "json"),
         );
         const payload = yield* compatibleRequest({
           endpoint,

@@ -1643,11 +1643,7 @@ const make = Effect.gen(function* () {
         });
         // A launched child always settles, also after its signal is aborted.
         return yield* Effect.scoped(run).pipe(
-          Effect.onInterrupt(() =>
-            Effect.flatMap(Ref.get(launched), (started) =>
-              started ? Effect.asVoid(Deferred.await(settled)) : Effect.void,
-            ),
-          ),
+          Effect.onInterrupt(() => Effect.when(Deferred.await(settled), Ref.get(launched))),
         );
       }),
 

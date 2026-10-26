@@ -128,6 +128,22 @@ function handoffHistoryBody(
   const past = messages.slice(0, through);
   const tail = messages.slice(through);
   const asked = (message: ModelMessage) => message.role === "user" && messageText(message).trim();
+  if (through === 0 || actual !== state.anchor) {
+    return Effect.fail(
+      ModelHandoffFailed.make({
+        reason: ModelHandoffReason.cases.HistoryChanged.make({}),
+        message: "Model handoff history changed; the saved boundary cannot be replayed",
+      }),
+    );
+  }
+  if (!past.some(asked) && !tail.some(asked)) {
+    return Effect.fail(
+      ModelHandoffFailed.make({
+        reason: ModelHandoffReason.cases.UserQuestionMissing.make({}),
+        message: "Model handoff requires an actual user question",
+      }),
+    );
+  }
   // Approved calls may complete before the first new-model request. Pair those results without
   // replaying the rest of the old protocol or changing the SDK's canonical execution state.
   const pairedIds = HashSet.fromIterable(
@@ -167,26 +183,8 @@ function handoffHistoryBody(
       Match.exhaustive,
     ),
   );
-  return Effect.void.pipe(
-    Effect.filterOrFail(
-      () => through !== 0 && actual === state.anchor,
-      () =>
-        ModelHandoffFailed.make({
-          reason: ModelHandoffReason.cases.HistoryChanged.make({}),
-          message: "Model handoff history changed; the saved boundary cannot be replayed",
-        }),
-    ),
-    Effect.filterOrFail(
-      () => past.some(asked) || tail.some(asked),
-      () =>
-        ModelHandoffFailed.make({
-          reason: ModelHandoffReason.cases.UserQuestionMissing.make({}),
-          message: "Model handoff requires an actual user question",
-        }),
-    ),
-    Effect.map(() =>
-      replayableToolHistory([{ role: "assistant", content: handoffNotice }, ...text, ...tail]),
-    ),
+  return Effect.succeed(
+    replayableToolHistory([{ role: "assistant", content: handoffNotice }, ...text, ...tail]),
   );
 }
 
