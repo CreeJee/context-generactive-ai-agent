@@ -7,6 +7,7 @@ import { Effect, HashSet, Option, Predicate, Schema } from "effect";
 import { answeredToolCalls, messageText, replayableToolHistory } from "./compaction.ts";
 import type { ProviderId } from "../providers/contracts.ts";
 import type { NodeStoreFailed } from "../memory/nodes.ts";
+import type { JsonValue } from "../json.ts";
 
 export const ModelHandoffReason = Schema.TaggedUnion({
   HistoryChanged: {},
@@ -60,7 +61,7 @@ const callPointer = (name: string, resultNodeId: string | null | undefined) => {
 };
 
 export const modelHandoffNamespace = "memory-agent/model-handoff";
-const HandoffState = Schema.TaggedUnion({
+export const HandoffState = Schema.TaggedUnion({
   baseline: { target: Schema.String },
   handoff: {
     target: Schema.String,
@@ -72,16 +73,16 @@ const HandoffState = Schema.TaggedUnion({
   },
 });
 type HandoffState = typeof HandoffState.Type;
-type SavedHandoff = typeof HandoffState.cases.handoff.Type;
+export type SavedHandoff = typeof HandoffState.cases.handoff.Type;
 const decodeState = Schema.decodeUnknownOption(HandoffState);
 const StoredModel = Schema.Struct({ tanstack: Schema.Struct({ model: Schema.String }) });
 const decodeModel = Schema.decodeUnknownOption(StoredModel);
-const legacyFingerprint = (message: ModelMessage | undefined) =>
+export const legacyFingerprint = (message: ModelMessage | JsonValue | undefined) =>
   sha256(JSON.stringify(message) ?? "missing");
 
 // UI hydration can reorder object fields and fan out tool messages. Hash JSON values
 // canonically and locate identified boundaries independently of their array position.
-const fingerprint = (message: ModelMessage | undefined) =>
+export const fingerprint = (message: ModelMessage | JsonValue | undefined) =>
   "v2:" +
   sha256(
     JSON.stringify(message, (_key, value) =>

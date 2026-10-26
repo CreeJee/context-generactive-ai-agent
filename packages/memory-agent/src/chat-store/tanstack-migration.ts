@@ -1,0 +1,326 @@
+import { Effect, Function as EffectFunction, Option, Predicate, Schema } from "effect";
+import { SqlClient, SqlSchema } from "effect/sql";
+import {
+  fingerprint,
+  HandoffState,
+  legacyFingerprint,
+  modelHandoffNamespace,
+  type SavedHandoff,
+} from "../agent/model-handoff.ts";
+import { historyProjectionSchema } from "../chat-state/history-projection-sql.ts";
+import type { JsonValue } from "../json.ts";
+import { optionalProperty } from "../optional-property.ts";
+
+/**
+ * The one migration of the Effect AI switch: the chat rows TanStack wrote move to the shapes of
+ * `schema.ts` (step 1 of docs/effect-ai-migration.md). Each transform is idempotent, so a row
+ * already migrated passes through unchanged.
+ */
+
+type JsonObject = { readonly [key: string]: JsonValue };
+type Entries = ReadonlyArray<readonly [string, JsonValue]>;
+const isJsonObject = (value: JsonValue | undefined): value is JsonObject =>
+  Predicate.isObject(value) && !Array.isArray(value);
+const isJsonArray = (value: JsonValue): value is readonly JsonValue[] => Array.isArray(value);
+const count = (value: JsonValue | undefined) => (Predicate.isNumber(value) ? value : undefined);
+
+/** `object` with each entry replaced, in place, by the entries `entry` returns for it. */
+const replaceEntries = (
+  object: JsonObject,
+  entry: (key: string, value: JsonValue) => Entries,
+): JsonObject =>
+  Object.fromEntries(Object.entries(object).flatMap(([key, value]) => entry(key, value)));
+
+/** TanStack's keys in a `metadata` object: `tanstack`, and `tanstack:` ones on interrupts. */
+const isTanStackKey = (key: string) => key === "tanstack" || key.startsWith("tanstack:");
+
+/** A `metadata` entry without TanStack's keys, gone when nothing else was in it. */
+const metadataEntry = (metadata: JsonValue): Entries => {
+  if (!isJsonObject(metadata)) return [["metadata", metadata]];
+  const kept = replaceEntries(metadata, (key, value) => (isTanStackKey(key) ? [] : [[key, value]]));
+  return Object.keys(kept).length === 0 ? [] : [["metadata", kept]];
+};
+
+/**
+ * The fields of a message's `metadata.tanstack` the app keeps. Replay reads `source`,
+ * `finishReason` and `stopReason`; model handoff reads `model`. `createdAt` repeats the
+ * message's own.
+ */
+const keptFields = ["createdAt", "model", "source", "finishReason", "stopReason"] as const;
+
+/** A tool call without the metadata TanStack gave it, which nothing reads. */
+const migrateToolCall = (call: JsonValue): JsonValue =>
+  isJsonObject(call)
+    ? replaceEntries(call, (key, value) =>
+        key === "metadata" ? metadataEntry(value) : [[key, value]],
+      )
+    : call;
+
+/** A message with its kept TanStack fields lifted to the top level, where its metadata was. */
+export const migrateMessage = (message: JsonValue): JsonValue => {
+  if (!isJsonObject(message)) return message;
+  const tanstack = isJsonObject(message.metadata) ? message.metadata.tanstack : undefined;
+  const lifted: Entries = isJsonObject(tanstack)
+    ? keptFields
+        .filter((field) => Object.hasOwn(tanstack, field) && !Object.hasOwn(message, field))
+        .map((field) => [field, tanstack[field]])
+    : [];
+  return replaceEntries(message, (key, value) => {
+    switch (key) {
+      case "metadata":
+        return [...lifted, ...metadataEntry(value)];
+      case "toolCalls":
+        return [[key, isJsonArray(value) ? value.map(migrateToolCall) : value]];
+      default:
+        return [[key, value]];
+    }
+  });
+};
+
+/**
+ * A TanStack `TokenUsage` as AG-UI 1.0's. `inputExcludesCache`: the Anthropic adapter before
+ * 456191fe reported only the uncached input, so the cache reads and writes are added back and the
+ * total follows.
+ */
+export const migrateUsage: {
+  (inputExcludesCache: boolean): (usage: JsonValue) => JsonValue;
+} & typeof migrateUsageBody = EffectFunction.dual(2, migrateUsageBody);
+function migrateUsageBody(usage: JsonValue, inputExcludesCache: boolean): JsonValue {
+  if (!isJsonObject(usage) || !Predicate.isNumber(usage.promptTokens)) return usage;
+  const prompt = isJsonObject(usage.promptTokensDetails) ? usage.promptTokensDetails : {};
+  const completion = isJsonObject(usage.completionTokensDetails)
+    ? usage.completionTokensDetails
+    : {};
+  const cached = count(prompt.cachedTokens);
+  const written = count(prompt.cacheWriteTokens);
+  const output = count(usage.completionTokens);
+  const input = inputExcludesCache
+    ? usage.promptTokens + (cached ?? 0) + (written ?? 0)
+    : usage.promptTokens;
+  return {
+    inputTokens: input,
+    ...optionalProperty("outputTokens", output),
+    ...optionalProperty(
+      "totalTokens",
+      inputExcludesCache ? input + (output ?? 0) : count(usage.totalTokens),
+    ),
+    ...optionalProperty("reasoningTokens", count(completion.reasoningTokens)),
+    ...optionalProperty("cachedInputTokens", cached),
+    ...optionalProperty("cacheWriteInputTokens", written),
+  };
+}
+
+/**
+ * An interrupt without TanStack's binding. The permission review's request, which TanStack kept
+ * as `tanstack:interruptPayload`, becomes `metadata.payload`.
+ */
+export const migrateInterruptPayload = (payload: JsonValue): JsonValue =>
+  isJsonObject(payload) && isJsonObject(payload.metadata)
+    ? {
+        ...payload,
+        metadata: replaceEntries(payload.metadata, (key, value) => {
+          switch (key) {
+            case "tanstack:interruptPayload":
+              return [["payload", value]];
+            case "tanstack:interruptBinding":
+              return [];
+            default:
+              return [[key, value]];
+          }
+        }),
+      }
+    : payload;
+
+/** Where the handoff's boundary was in the messages before the migration, or -1 if it is gone. */
+const boundaryIndex = (saved: SavedHandoff, before: readonly JsonValue[]) => {
+  if (!saved.anchor.startsWith("v2:"))
+    return before.findIndex((message) => legacyFingerprint(message) === saved.anchor);
+  const through =
+    saved.anchorId === undefined
+      ? saved.through
+      : before.findIndex((message) => isJsonObject(message) && message.id === saved.anchorId) + 1;
+  return through > 0 && fingerprint(before[through - 1]) === saved.anchor ? through - 1 : -1;
+};
+
+/**
+ * The handoff anchored on the migrated messages: the anchor fingerprints its boundary message,
+ * which the migration changes. A legacy anchor moves to v2 as `modelHandoffHistoryEffect` does.
+ * A boundary that no longer matched stays as it was; replay refuses it either way.
+ */
+const migrateHandoff = (
+  saved: SavedHandoff,
+  before: readonly JsonValue[],
+  after: readonly JsonValue[],
+): Option.Option<SavedHandoff> => {
+  const index = boundaryIndex(saved, before);
+  const boundary = after[index];
+  if (index < 0 || boundary === undefined) return Option.none();
+  const anchor = fingerprint(boundary);
+  return saved.anchor.startsWith("v2:")
+    ? Option.some({ ...saved, anchor }).pipe(Option.filter(() => anchor !== saved.anchor))
+    : Option.some({
+        ...saved,
+        through: index + 1,
+        anchor,
+        anchorId:
+          isJsonObject(boundary) && Predicate.isString(boundary.id) ? boundary.id : undefined,
+      });
+};
+
+// The stores wrote these texts from JSON values, so parsing restores them.
+const parseJson = (text: string): JsonValue => JSON.parse(text);
+const parseMessages = (text: string): readonly JsonValue[] => JSON.parse(text);
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeHandoff = Schema.decodeEffect(Schema.fromJsonString(HandoffState));
+const encodeHandoff = Schema.encodeEffect(Schema.fromJsonString(HandoffState));
+
+const ThreadId = Schema.Struct({ thread_id: Schema.String });
+const ThreadRow = Schema.Struct({
+  messages: Schema.String,
+  ready: Schema.NullOr(Schema.Literals([0, 1])),
+});
+const GroupRow = Schema.Struct({ ordinal: Schema.Int, messages: Schema.String });
+const ValueRow = Schema.Struct({ value: Schema.String });
+const InterruptRow = Schema.Struct({ seq: Schema.Int, payload: Schema.String });
+const UsageRow = Schema.Struct({
+  run_id: Schema.String,
+  usage: Schema.String,
+  input_excludes_cache: Schema.Literals([0, 1]),
+});
+
+/** Migrates every chat row TanStack wrote: threads, history groups, handoffs, interrupts, usage. */
+export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const threadIds = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ThreadId,
+    execute: () => sql`SELECT thread_id FROM chat_threads ORDER BY thread_id`,
+  });
+  const thread = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: ThreadRow,
+    execute: (id) => sql`
+      SELECT chat_threads.messages, chat_history_projection.ready FROM chat_threads
+      LEFT JOIN chat_history_projection USING (thread_id)
+      WHERE chat_threads.thread_id = ${id}`,
+  });
+  const groups = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: GroupRow,
+    execute: (id) => sql`SELECT ordinal, messages FROM chat_history_groups WHERE thread_id = ${id}`,
+  });
+  const handoff = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: ValueRow,
+    execute: (id) => sql`
+      SELECT value FROM chat_metadata WHERE namespace = ${modelHandoffNamespace} AND key = ${id}`,
+  });
+  const interrupts = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: InterruptRow,
+    execute: () => sql`SELECT seq, payload FROM chat_interrupts`,
+  });
+  // The Anthropic adapter fills `cacheWriteTokens` since 456191fe and never did before it.
+  const usages = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: UsageRow,
+    execute: () => sql`
+      SELECT run_id, usage,
+        run_id IN (SELECT run_id FROM api_usage_responses WHERE provider = 'anthropic')
+          AND json_type(usage, '$.promptTokensDetails.cacheWriteTokens') IS NULL
+          AS input_excludes_cache
+      FROM chat_runs WHERE usage IS NOT NULL`,
+  });
+  /** Writes `next` through `write` when it differs from the stored `text`. */
+  const rewrite = <A, E, R>(
+    text: string,
+    next: JsonValue,
+    write: (text: string) => Effect.Effect<A, E, R>,
+  ) =>
+    encodeJson(next).pipe(
+      Effect.flatMap((encoded) =>
+        write(encoded).pipe(Effect.when(Effect.succeed(encoded !== text))),
+      ),
+    );
+
+  const migrateThread = Effect.fnUntraced(function* (id: string) {
+    const row = yield* thread(id);
+    const before = parseMessages(row.messages);
+    const after = before.map(migrateMessage);
+    yield* rewrite(
+      row.messages,
+      after,
+      (text) => sql`UPDATE chat_threads SET messages = ${text} WHERE thread_id = ${id}`,
+    );
+    yield* Effect.forEach(
+      yield* groups(id),
+      (group) =>
+        rewrite(
+          group.messages,
+          parseMessages(group.messages).map(migrateMessage),
+          (text) => sql`
+            UPDATE chat_history_groups SET messages = ${text}
+            WHERE thread_id = ${id} AND ordinal = ${group.ordinal}`,
+        ),
+      { discard: true },
+    );
+    // The thread's update marked its groups stale; they moved with it, so they are as ready as
+    // they were. A thread with no projection row has nothing to restore.
+    yield* sql`UPDATE chat_history_projection SET ready = ${row.ready} WHERE thread_id = ${id}`;
+    const saved = yield* handoff(id).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeedNone,
+          onSome: (stored) => Effect.option(decodeHandoff(stored.value)),
+        }),
+      ),
+    );
+    yield* Option.match(
+      saved.pipe(
+        Option.filter(HandoffState.guards.handoff),
+        Option.flatMap((state) => migrateHandoff(state, before, after)),
+      ),
+      {
+        onNone: () => Effect.void,
+        onSome: (state) =>
+          encodeHandoff(state).pipe(
+            Effect.flatMap(
+              (value) => sql`
+                UPDATE chat_metadata SET value = ${value}
+                WHERE namespace = ${modelHandoffNamespace} AND key = ${id}`,
+            ),
+          ),
+      },
+    );
+  });
+
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      // The projection's tables, created as the projection creates them, so every thread joins.
+      yield* sql.unsafe(historyProjectionSchema).unprepared;
+      yield* Effect.forEach(yield* threadIds(), ({ thread_id }) => migrateThread(thread_id), {
+        discard: true,
+      });
+      yield* Effect.forEach(
+        yield* interrupts(),
+        ({ seq, payload }) =>
+          rewrite(
+            payload,
+            migrateInterruptPayload(parseJson(payload)),
+            (text) => sql`UPDATE chat_interrupts SET payload = ${text} WHERE seq = ${seq}`,
+          ),
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        yield* usages(),
+        (run) =>
+          rewrite(
+            run.usage,
+            migrateUsage(parseJson(run.usage), run.input_excludes_cache === 1),
+            (text) => sql`UPDATE chat_runs SET usage = ${text} WHERE run_id = ${run.run_id}`,
+          ),
+        { discard: true },
+      );
+    }),
+  );
+});
