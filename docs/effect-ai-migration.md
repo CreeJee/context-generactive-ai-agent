@@ -98,7 +98,7 @@ src에서 많이 쓰는 것:
 - 한 step의 도구를 동시에 실행할 수 있다.
   - Effect의 `concurrency`(기본값 `"unbounded"`)는 자동 도구 해석과 승인된 호출의 사전 실행에만 쓰인다. 이 계획은 `disableToolCallResolution: true`로 해석을 앱이 가져가므로, 동시 실행은 앱 scheduler가 정한다("도구 실행 방식").
   - 그렇게 만들면 서브에이전트를 첫 호출 직전에 모두 시작하던 우회를 지울 수 있다(decisions.md "서브에이전트 (2026-09-15)").
-  - parallel-reads 우회도 지울 수 있다. 지금은 step의 첫 쓰기 앞에 있는 읽기만 미리 시작하지만, scheduler는 쓰기 사이에 있는 읽기끼리도 동시에 돌린다.
+  - parallel-reads 우회도 지울 수 있다. 지금은 step의 첫 쓰기 앞에 있는 읽기만 미리 시작하지만, scheduler는 한 step의 호출을 순서 없이 모두 동시에 돌린다.
   - 직접 만드는 provider에서는 모델이 아직 생성하는 동안 읽기를 먼저 시작한다.
 - 도구 진행 결과를 `HandlerContext.preliminary`로 보낼 수 있다.
 - span, GenAI telemetry, 타입이 있는 `AiError` reason을 얻는다.
@@ -107,7 +107,7 @@ src에서 많이 쓰는 것:
 ### 의미가 달라 따로 맞출 것
 
 - **승인 묶음.**
-  - 지금 규칙은 "한 번에 여러 호출 중 하나라도 `ask`면 묶음 전체를 한 번에 묻는다"이다(decisions.md "권한 모드 (2026-09-14)"). 근거가 "TanStack 재개 단위"라 전환하면서 바꾼다. 승인 요청은 지금처럼 한 묶음으로 묻고, 승인 대기 호출과 순서가 걸리지 않는 호출은 기다리지 않는다("도구 실행 방식").
+  - 지금 규칙은 "한 번에 여러 호출 중 하나라도 `ask`면 묶음 전체를 한 번에 묻는다"이다(decisions.md "권한 모드 (2026-09-14)"). 근거가 "TanStack 재개 단위"라 전환하면서 바꾼다. 승인 요청은 지금처럼 한 묶음으로 묻고, 승인이 필요 없는 호출은 기다리지 않는다("도구 실행 방식").
   - Effect는 자동 도구 해석에서 같은 step의 승인 불필요 도구를 순서 없이 바로 실행한다.
   - 그래서 `disableToolCallResolution: true`로 자동 해석을 끄고, 앱이 `toolkit.handle`을 직접 부른다.
   - 이 모드에서는 Effect가 `needsApproval`을 평가하지 않는다. 판정 함수(`isApprovalNeeded`)는 export되지 않으므로 앱이 `tool.needsApproval`을 직접 평가한다.
@@ -162,7 +162,7 @@ Effect의 자동 도구 해석을 쓰지 않고, 앱이 stream을 읽으며 도�
 
 - 등록되지 않은 이름이 하나라도 오면 호출 전체가 실패한다. `"deferred"`는 자동 해석에서 효과가 없어 lazy discovery를 만들 수 없다.
 - 승인 판정이 boolean뿐이라 permission-review의 reason, `responseSchema`, `askedBy`를 담을 수 없다. 판정 함수가 실패하면 승인 없이 실행한다.
-- 동시 실행을 `concurrency` 숫자로만 정한다. "쓰기 뒤의 읽기는 쓰기가 끝난 뒤에"(decisions.md "도구 성능 (2026-09-15)"의 `parallelReads`) 같은 순서를 표현할 수 없다.
+- 동시 실행을 `concurrency` 숫자로만 정한다. 읽기는 받는 즉시, 쓰기는 완전한 finish 뒤에 시작하는 구분을 표현할 수 없다. (호출 사이의 순서는 2026-10-27에 두지 않기로 했다.)
 - 응답이 끊기면 실행 중인 핸들러를 interrupt한다. 쓰기 도구는 부작용이 반만 남는다.
 
 호출 하나는 이 순서로 처리한다:
@@ -173,22 +173,23 @@ Effect의 자동 도구 해석을 쓰지 않고, 앱이 stream을 읽으며 도�
 
 scheduler 규칙:
 
-호출 사이의 순서는 열린 항목이다. 아래 규칙은 다른 대화(2026-10-26)에서 정한 장벽 안이다. 같은 날 이 계획의 Goal 결정을 정한 대화에서 사용자는 순서를 두지 않는 안을 검토 중이라고 했다. TanStack 1.0은 지금 순서 없이 돌린다("열린 항목"). 4단계 scheduler를 만들기 전에 정한다. 순서와 무관한 규칙(쓰기는 완전한 finish 뒤, 결과는 호출 순서로, 실행 중 호출은 끊지 않음)은 어느 안이든 지킨다.
+호출 사이에는 순서를 두지 않는다(decisions.md "도구 호출 사이에 순서를 두지 않는다 (2026-10-27)"). 한 step의 호출은 서로 독립이고, 순서가 필요하면 모델이 다음 턴으로 나눈다.
 
 - 읽기 호출은 `readOnlyToolNames`(`packages/memory-agent/src/tools/effects.ts`)에 있는 도구의 호출이다. 나머지(쓰기, 셸, MCP, delegation, 서브에이전트)는 쓰기 호출로 본다. MCP의 `readOnlyHint`는 쓰지 않는다(decisions.md "MCP 서버 (2026-09-15)").
-- 읽기끼리는 동시에 돈다. 두 호출 중 하나라도 쓰기면, 뒤 호출은 앞 호출이 끝난 뒤에 시작한다.
-- 앞에 끝나지 않은 쓰기 호출이 없으면, 읽기 호출은 받는 즉시 시작한다.
-- 쓰기 호출은 그 step의 응답이 완전한 finish(`stop`, `tool-calls`, `pause`)로 끝난 뒤에 시작한다.
+- 읽기 호출은 받는 즉시 시작한다.
+- 쓰기 호출은 그 step의 응답이 완전한 finish(`stop`, `tool-calls`, `pause`)로 끝난 뒤에 모두 함께 시작한다. 다른 호출을 기다리지 않는다.
   - 응답이 끊기거나 provider가 실패하면 쓰기 호출을 시작하지 않는다. 끊긴 경우에는 "응답이 끊겨 실행하지 않음" 결과를 만든다.
   - 이유: finish 전에 시작하면 run이 provider 실패로 끝나도 부작용이 남는다. 실패한 턴은 다음 요청의 history에서 빠지므로(`transformMessagesForReplay`의 `stopReason` 규칙), 모델은 그 쓰기를 모른다.
   - 실행 중인 호출은 응답 사정으로 끊지 않는다. 사용자 취소는 지금 취소 동작을 따른다.
 - 모델에 돌려주는 tool 결과는 끝난 순서가 아니라 호출 순서로 놓는다(지금 `parallelReads`와 같다).
 - 서브에이전트를 첫 호출 직전에 모두 시작하는 우회와 `parallelReads`는 이 scheduler로 대신한다.
+- 모델에는 한 턴의 호출이 동시에 돈다고 시스템 프롬프트에서 한 번 알린다.
+- 같은 파일을 한 턴에 두 번 쓰면 쓰기 도구의 기대 sha256 검사가 하나를 실패시킨다(decisions.md "잘못된 성공 거르기 (2026-10-14)"). 셸·코드 실행·MCP에는 이런 검사가 없다.
 
 승인 대기:
 
 - 승인이 필요한 호출은 승인 뒤에 시작한다. 한 step의 승인 요청은 지금처럼 한 interrupt 묶음으로 묻는다.
-- 승인을 기다리는 동안에도, 승인 대기 호출과 순서가 걸리지 않는 호출은 먼저 실행하고 결과를 기록한다. 순서는 scheduler 규칙과 같다. 승인 대기 호출이 쓰기면 그 뒤의 모든 호출이, 읽기면 그 뒤 첫 쓰기 호출부터의 모든 호출이 재개 run으로 넘어간다.
+- 승인을 기다리는 동안에도 다른 호출은 먼저 실행하고 결과를 기록한다. 재개 run으로 넘어가는 것은 승인 대기 호출뿐이다.
 - interrupt로 run을 끝내는 때는 실행할 수 있는 호출이 모두 끝난 뒤다. 그래서 오래 걸리는 호출이 승인 표시를 늦출 수 있다.
 - 재개 run은 결과가 없는 호출만 실행한다. 이미 결과가 기록된 호출을 다시 실행하면 쓰기가 두 번 일어난다.
 - decisions.md "권한 모드 (2026-09-14)"의 "묶음 전체를 한 번에 묻는다(TanStack 재개 단위)"를 이 규칙으로 대체한다.
@@ -452,7 +453,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 완료 기준:
   - 0단계 golden과 같은 행이 나온다. 예외는 한 step에 승인 호출과 다른 호출이 섞인 시나리오다. 승인 규칙이 바뀌어 앞 호출이 interrupt 전에 실행되므로, 그 차이만 있는지 확인하고 golden을 새 규칙으로 고친다.
   - migration한 로컬 DB 사본의 모든 세션에서, history page의 화면 메시지가 지금 코드가 원본에서 만드는 것과 같다.
-  - scheduler 규칙을 테스트로 둔다: 읽기끼리 동시 실행, 쓰기 전후 순서, 쓰기는 완전한 finish 뒤에 시작, 승인 대기 중 앞 호출 실행, 재개 run은 결과 없는 호출만 실행. 타입으로 확인할 수 없는 순서다.
+  - scheduler 규칙을 테스트로 둔다: 읽기는 받는 즉시 시작, 쓰기는 완전한 finish 뒤에 다른 호출을 기다리지 않고 시작, 끊긴 응답의 쓰기는 실행하지 않음, 결과는 호출 순서, 승인 대기 중 다른 호출 실행, 재개 run은 결과 없는 호출만 실행. 타입으로 확인할 수 없는 순서다.
 
 ### 5. Goal 실행
 
@@ -530,7 +531,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - migration은 되돌릴 수 없다. 1단계 검사 도구로 로컬 DB 사본에서 먼저 확인한다.
 - Effect AI는 unstable이다. effect와 provider 패키지를 같은 커밋에 묶는다. effect를 올릴 때는 provider 계약 테스트를 함께 확인한다.
 - 승인 묶음과 interrupt 의미를 앱이 직접 지켜야 한다. 필요한 검증은 아래의 "보안 체크리스트" 절이다.
-- 도구 실행 순서를 앱 scheduler가 정한다. 규칙이 틀리면 같은 파일을 동시에 바꾸거나, 쓰기 뒤의 읽기가 쓰기 전 상태를 읽는다. 규칙은 "도구 실행 방식"에 있고, 4단계 테스트로 고정한다.
+- 한 턴의 호출은 순서 없이 동시에 돈다. 모델이 앞 호출에 기대는 호출을 한 턴에 내면, 읽기가 쓰기 전 상태를 읽거나 셸·MCP 쓰기가 겹친다. 시스템 프롬프트로 알리고, 파일 쓰기는 sha256 검사가 막는다. 쓰기를 finish 뒤에 시작하는 규칙이 틀리면 실패한 턴의 부작용이 남는다. 규칙은 "도구 실행 방식"에 있고, 4단계 테스트로 고정한다.
 - Goal의 코드 고정과 loop의 프로세스 격리를 잃는다. 업그레이드한 코드가 옛 Goal의 다음 run을 돈다.
 - 겹치는 도구 뒤 hook이 run 상태를 같이 바꾸면 기록이 어긋난다. 4단계에서 21개 middleware를 본다.
 
@@ -549,7 +550,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - Effect approval part 금지. `disableToolCallResolution: true`여도 prompt에 승인된 `tool-approval-request`·`tool-approval-response` 쌍이 있고 결과가 없으면, Effect가 모델 호출 전에 `toolkit.handle`로 그 도구를 실행한다(`effect/ai/LanguageModel.ts`의 `collectToolApprovals`, `executeApprovedToolCalls`). 이 실행은 게이트, repeatGuard, 승인 묶음 규칙을 거치지 않는다. 저장 메시지를 `Prompt`로 바꿀 때 approval part를 만들지 않는다.
 - `ask` 모드 내장 도구 승인. 지금은 TanStack 자체 승인에 맡기고, 게이트는 MCP·delegation 호출만 묻는다(`agent/chat.ts`의 `askEveryCall` 앞 주석). 새 loop가 `tool.needsApproval`을 직접 평가한다. 평가가 실패하면 승인을 요구한다. Effect 내부 판정(`isApprovalNeeded`)은 실패하면 승인 불필요로 처리하므로 따라 하지 않는다.
 - needsApproval 차단. 지금 Goal worker에서는 owner가 승인 없는 실행을 거절한다(`agent/full-loop-execution.ts`의 `toolAuthorize`와 `resumedApproval`, `agent/full-loop-worker.ts`의 owner-tool-grant). worker를 없애도 같은 검사를 새 loop의 실행 직전에 둔다. 승인이 필요한 호출은 이 run이나 parent run의 승인 응답이 있어야 시작한다.
-- 승인 대기 중 실행 순서. 지금의 interrupt는 step 전체를 멈추고, 묶음에 ask가 하나라도 있으면 묶음 전체를 한 번에 묻는다(decisions.md "권한 모드 (2026-09-14)", 근거는 TanStack 재개 단위). 새 loop는 승인 요청을 한 묶음으로 묻되, 승인 대기 호출과 순서가 걸리지 않는 호출은 먼저 실행한다("도구 실행 방식"). 승인을 기다리는 호출과 그 뒤에 순서가 걸리는 호출은 승인 전에 실행하지 않는다. 재개 run은 결과가 기록되지 않은 호출만 실행한다. 이미 실행한 호출을 다시 실행하면 쓰기가 두 번 일어난다.
+- 승인 대기 중 실행 순서. 지금의 interrupt는 step 전체를 멈추고, 묶음에 ask가 하나라도 있으면 묶음 전체를 한 번에 묻는다(decisions.md "권한 모드 (2026-09-14)", 근거는 TanStack 재개 단위). 새 loop는 승인 요청을 한 묶음으로 묻되, 승인이 필요 없는 호출은 먼저 실행한다("도구 실행 방식"). 승인을 기다리는 호출은 승인 전에 실행하지 않는다. 재개 run은 결과가 기록되지 않은 호출만 실행한다. 이미 실행한 호출을 다시 실행하면 쓰기가 두 번 일어난다.
 - 쓰기 호출은 완전한 finish 뒤에만 시작한다. finish 전에 시작하면 provider 실패로 run이 실패해도 부작용이 남고, 실패한 턴은 history에서 빠져 모델이 그 쓰기를 모른다.
 - 게이트 순서. 지금 순서는 chatState → delivery → projectInstructions → repeatGuard → 게이트다(`agent/chat.ts`의 middleware 조립). repeatGuard가 게이트 앞이라 거절된 반복은 검토·사용자 질의가 없고, 게이트가 도구 실행 전이라 거절 호출은 실행되지 않는다. middleware를 typed hook으로 바꿀 때 이 순서를 명세로 남긴다.
 - permission-review payload의 `askedBy`("review"/"every_call")를 앱 쪽 interrupt에 유지한다. 빠지면 MCP `ask` 모드의 "호출마다 묻는" 구분이 감사 기록에서 사라진다.
@@ -675,10 +676,10 @@ Goal worker를 전제로 쓴 항목들이다. 5단계를 구현할 때 "Goal도 
 
 ## 열린 항목
 
-- 호출 사이의 순서. 4단계 scheduler 전에 정한다.
+- (닫힘, 2026-10-27) 호출 사이의 순서. 순서를 두지 않는다(decisions.md "도구 호출 사이에 순서를 두지 않는다 (2026-10-27)"). 검토한 안은 아래 셋이었다.
   - 쓰기를 앞뒤 호출 모두와 순서를 지키는 장벽으로 둔다. "도구 실행 방식"의 지금 규칙이고, decisions.md "도구 성능 (2026-09-15)"과 같다.
   - 쓰기를 도구가 정한 자원 키로 같은 자원끼리만 줄 세운다(`packages/memory-agent/src/concurrency/keyed-limit.ts`의 `keyedSerialLimit`). 키가 없는 쓰기는 장벽으로 둔다. 쓰기 뒤의 읽기가 같은 자원을 읽으면 쓰기를 기다려야 하므로, 읽기 도구에도 키가 필요하다.
-  - 순서를 두지 않는다. 한 턴의 호출은 서로 독립이라고 보고 모두 동시에 돌린다. 순서가 필요하면 모델이 다음 턴으로 나눈다. 지금 TanStack 1.0의 동작이고, 사용자가 검토 중인 안이다(2026-10-26).
+  - 순서를 두지 않는다. 한 턴의 호출은 서로 독립이라고 보고 모두 동시에 돌린다. 순서가 필요하면 모델이 다음 턴으로 나눈다. 지금 TanStack 1.0의 동작이다. 사용자가 이 안으로 정했다(2026-10-27).
     - 같은 파일 쓰기의 충돌은 쓰기 도구의 기대 sha256 검사가 하나를 실패시킨다(decisions.md "잘못된 성공 거르기 (2026-10-14)"). 셸·코드 실행·MCP는 이런 검사가 없다.
     - 모델이 순서를 기대하지 않도록 도구 설명이나 시스템 프롬프트에 한 턴의 호출은 동시에 돈다고 알린다.
 - (닫힘, 2026-10-26) 5단계를 전환 전에 TanStack 위에서 먼저 할지. 사용자가 전환을 바로 시작하기로 했다. Goal은 5단계에서 옮긴다.
