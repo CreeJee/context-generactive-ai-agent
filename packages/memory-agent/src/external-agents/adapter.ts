@@ -1,16 +1,6 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
-import {
-  MutableHashMap,
-  Option,
-  Cause,
-  Data,
-  Effect,
-  Stream,
-  Queue,
-  DateTime,
-  Schema,
-} from "effect";
+import { MutableHashMap, Option, Cause, Data, Effect, Stream, Queue, DateTime } from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   EventType,
@@ -25,8 +15,8 @@ import {
 } from "@tanstack/ai/adapters";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { messageText } from "../messages/text.ts";
-import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
-import { ExternalPromptOutcome } from "./agents.ts";
+import { turnFailure } from "../model/external.ts";
+import type { ExternalPromptOutcome } from "./agents.ts";
 
 /** Sends one user turn to the external agent; updates arrive through `onUpdate`. */
 export type ExternalTurn = (
@@ -41,29 +31,6 @@ type Item = Data.TaggedEnum<{
   error: { readonly error: Error };
 }>;
 const Item = Data.taggedEnum<Item>();
-
-/**
- * A turn that ended without an answer. The SDK sends `code` and `message` as the run's
- * `RUN_ERROR`: the page words the code and shows the message, the agent's own text with secrets
- * already hidden, only under its details.
- */
-export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTurnFailed>()(
-  "ExternalAgentTurnFailed",
-  { code: ExternalAgentFailureCode, detail: Schema.NullOr(Schema.String) },
-) {
-  override get message() {
-    return this.detail ?? this.code;
-  }
-}
-
-/** Why a turn did not produce an answer, or null when it did. */
-const failureOf = ExternalPromptOutcome.$match({
-  completed: (): ExternalAgentTurnFailed | null => null,
-  cancelled: () => null,
-  unavailable: ({ failure }) => ExternalAgentTurnFailed.make(failure),
-  failed: ({ failure }) => ExternalAgentTurnFailed.make(failure),
-  disconnected: () => ExternalAgentTurnFailed.make({ code: "disconnected", detail: null }),
-});
 
 /**
  * TanStack text adapter for a conversation held directly with an external ACP agent. The agent
@@ -198,9 +165,10 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
         };
         const doneChunks = function* (outcome: ExternalPromptOutcome): Chunks {
           if (signal?.aborted === true) return;
-          const failure = failureOf(outcome);
-          // Synchronous SDK iterator: a failed turn is thrown as its typed error.
-          if (failure !== null) throw failure;
+          // Synchronous SDK iterator: a failed turn is thrown as its typed error. The SDK sends its
+          // `code` and `message` as the run's `RUN_ERROR`.
+          const failure = turnFailure(outcome);
+          if (Option.isSome(failure)) throw failure.value;
           if (MutableHashMap.size(toolTitles) > 0) {
             const list = [...MutableHashMap.values(toolTitles)]
               .map((call) => `- ${call.title} (${call.status})`)
