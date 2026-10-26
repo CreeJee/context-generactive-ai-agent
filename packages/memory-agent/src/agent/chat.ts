@@ -249,6 +249,10 @@ export const memoryInstructions = `You are a local assistant that remembers conv
 - Retrieval is not use. Before relying on a promoted project-memory node in the answer, call use_promoted_memory with only nodes retrieved in this run.
 - Cite where a remembered fact came from (project and time) when it matters.`;
 
+/** How the calls of one response run (decisions.md "도구 호출 사이에 순서를 두지 않는다"). */
+export const concurrentCallsInstructions =
+  "Tool calls you make in one response run at the same time and may finish in any order. When a call depends on another call's result or effect, make it in a later response.";
+
 /** The memoryInstructions line that applies only to a run with that promotion tool. */
 const promotionRules = {
   promote_memory_candidate: "- Promote an adopted Work Trace result",
@@ -2115,6 +2119,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
             : []),
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
+          concurrentCallsInstructions,
         ];
         const standingPrompts = standingPromptsFor(sharedTools);
         const localRules = yield* localWorkflowRules(project, skills.skills).pipe(
