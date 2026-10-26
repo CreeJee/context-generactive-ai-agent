@@ -130,10 +130,13 @@ export interface RunHook<R = never> {
     call: StepCall,
     answer: CallAnswer,
   ) => Effect.Effect<void, RunFailed, R>;
-  /** What a model call used, as the provider reported it. */
+  /**
+   * What a model call used, as the provider reported it: a count it did not report is absent, not
+   * zero.
+   */
   readonly usage?: (
     scope: RunScope,
-    usage: StoredUsage,
+    usage: Response.Usage,
     source: Source,
   ) => Effect.Effect<void, RunFailed, R>;
   /** A model step ended and its calls that do not wait for the user got their answers. */
@@ -820,18 +823,18 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       yield* Ref.set(partial, Option.none());
 
       yield* Effect.transposeOption(
-        Option.map(
-          Option.flatMap(finish, (part) => usageOf(part.usage)),
-          (used) =>
+        Option.flatMap(finish, (part) =>
+          Option.map(usageOf(part.usage), (used) =>
             Ref.update(usage, (total) => Option.some(addUsage(total, used))).pipe(
               Effect.andThen(
                 Effect.forEach(
                   hooks.flatMap((hook) => hook.usage ?? []),
-                  (hook) => hook(scope, used, spec.source),
+                  (hook) => hook(scope, part.usage, spec.source),
                   { discard: true },
                 ),
               ),
             ),
+          ),
         ),
       );
       yield* Effect.transposeOption(

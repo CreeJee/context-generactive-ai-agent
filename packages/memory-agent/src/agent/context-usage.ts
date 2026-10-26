@@ -1,7 +1,9 @@
-import { Function as EffectFunction } from "effect";
+import { Crypto, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
+import { asRunFailed, type RunHook } from "../loop/run.ts";
+import { RunStore } from "../loop/store.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { Option, Schema } from "effect";
 import { budgetFor } from "./compaction.ts";
@@ -220,3 +222,38 @@ export function recordContextUsage({
       ),
   };
 }
+
+/** The same record for the Effect AI loop, kept in the run store's chat metadata. */
+export const contextUsageHook = (options: {
+  readonly windowTokens: Effect.Effect<number>;
+  readonly compactionStage: Effect.Effect<CompactionStage>;
+  readonly windowKnown: Effect.Effect<boolean>;
+}): RunHook<RunStore | Crypto.Crypto> => ({
+  usage: ({ threadId, emit }, { inputTokens }) =>
+    Effect.transposeOption(
+      Option.map(Option.fromNullishOr(inputTokens.total), (usedTokens) =>
+        Effect.gen(function* () {
+          const store = yield* RunStore;
+          const crypto = yield* Crypto.Crypto;
+          const stored: StoredContextUsage = {
+            inputTokens: usedTokens,
+            cachedTokens: inputTokens.cacheRead ?? null,
+            observationId: yield* crypto.randomUUIDv4(),
+            compactionStage: yield* options.compactionStage,
+          };
+          yield* store.metadata.set(contextUsageNamespace, threadId, stored);
+          yield* emit({
+            type: "CUSTOM",
+            name: contextUsageEvent,
+            value: contextView({
+              usedTokens,
+              windowTokens: yield* options.windowTokens,
+              cachedTokens: stored.cachedTokens,
+              compactionStage: stored.compactionStage,
+              windowKnown: yield* options.windowKnown,
+            }),
+          });
+        }),
+      ),
+    ).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
+});

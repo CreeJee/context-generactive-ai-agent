@@ -62,7 +62,7 @@ export interface CompactResult {
  */
 export type CompactionStage = "none" | "clear-answered" | "summarize" | "leave-out";
 
-export interface ContextView {
+export type ContextView = {
   /**
    * Tokens the model read in its latest request in this conversation: instructions, tools and
    * the conversation. Null before the first.
@@ -80,6 +80,6 @@ export interface ContextView {
   readonly windowKnown: boolean;
   /** Estimated conversation size past which earlier parts are compacted. */
   readonly compactAtTokens: number;
-}
+};
 
 export const contextUsageEvent = "memory-agent.context";
