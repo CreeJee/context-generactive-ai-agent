@@ -59,8 +59,20 @@ const saveSkill = (id: string, script: string) =>
     reason: "golden scenario",
   });
 
+/** Provider usage with every detail, so the run's stored usage shows each of them. */
+const usage = (input: number) => ({
+  promptTokens: input,
+  completionTokens: 12,
+  totalTokens: input + 12,
+  promptTokensDetails: { cachedTokens: 60, cacheWriteTokens: 20 },
+  completionTokensDetails: { reasoningTokens: 4 },
+});
+
 const scripts = {
-  read: [{ toolCalls: [call("read", "read_file", { path: "notes.txt" })] }, { text: "read done" }],
+  read: [
+    { toolCalls: [call("read", "read_file", { path: "notes.txt" })], usage: usage(100) },
+    { text: "read done", usage: usage(140) },
+  ],
   "parallel-reads": [
     {
       toolCalls: [

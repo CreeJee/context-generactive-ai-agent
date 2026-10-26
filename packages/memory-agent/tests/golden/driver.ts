@@ -14,7 +14,7 @@ import { JsonValue } from "../../src/json.ts";
 import { convertSchemaToJsonSchema, uiMessagesToWire } from "@tanstack/ai";
 import { approvalToolDefinitions } from "../../src/tools/definitions.ts";
 import { chatRoute } from "../support/chat-route.ts";
-import { conversationRows, normalized } from "./rows.ts";
+import { migratedRows, normalized, withoutChunkMetadata } from "./rows.ts";
 
 /**
  * How golden scenarios talk to the agent. Only this file knows the client; the migration replaces
@@ -61,7 +61,11 @@ const answerOf = Effect.fnUntraced(function* (response: Response) {
   const parsed = (body: string): JsonValue => Option.getOrElse(decodeJsonText(body), () => body);
   const stream = response.headers.get("content-type")?.startsWith("text/event-stream") ?? false;
   const body = stream
-    ? text.split("\n").flatMap((line) => (line.startsWith("data: ") ? [parsed(line.slice(6))] : []))
+    ? text
+        .split("\n")
+        .flatMap((line) =>
+          line.startsWith("data: ") ? [withoutChunkMetadata(parsed(line.slice(6)))] : [],
+        )
     : parsed(text);
   return { status: response.status, body };
 });
@@ -323,7 +327,7 @@ export const matchGolden = Effect.fnUntraced(function* (
   );
 });
 
-/** Compare the conversation's rows with the stored golden file `name`. */
+/** Compare the conversation's rows, once migrated, with the stored golden file `name`. */
 export const expectGolden = Effect.fnUntraced(function* (sessionId: string, name: string) {
-  yield* matchGolden(name, yield* conversationRows(sessionId), [[sessionId, "<session>"]]);
+  yield* matchGolden(name, yield* migratedRows(sessionId), [[sessionId, "<session>"]]);
 });

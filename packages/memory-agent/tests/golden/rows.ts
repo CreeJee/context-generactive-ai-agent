@@ -1,10 +1,23 @@
-import { Effect, MutableHashMap, Option, Schema } from "effect";
+import type { ModelMessage } from "@tanstack/ai";
+import { Effect, Function as EffectFunction, MutableHashMap, Option, Schema } from "effect";
+import { expect } from "vite-plus/test";
+import {
+  HandoffState,
+  handoffHistory,
+  modelHandoffNamespace,
+} from "../../src/agent/model-handoff.ts";
+import {
+  migrateInterruptPayload,
+  migrateMessage,
+  migrateTanStackRows,
+  migrateUsage,
+} from "../../src/chat-store/tanstack-migration.ts";
 import { JsonValue } from "../../src/json.ts";
-import { sqlAll } from "../support/sql.ts";
+import { sqlAll, withOpenSql } from "../support/sql.ts";
 
 /**
- * The rows one conversation leaves in the database, in a form that does not depend on ids, clocks
- * or TanStack's own metadata. The Effect AI migration must leave the same rows behind.
+ * The rows one conversation leaves in the database, in a form that does not depend on ids or
+ * clocks. The Effect AI migration must leave the same rows behind.
  */
 
 const isString = Schema.is(Schema.String);
@@ -52,34 +65,10 @@ const placeholders = (fixed: ReadonlyArray<readonly [string, string]>) => {
   };
 };
 
-/** TanStack's own keys: `metadata.tanstack` and keys such as `tanstack:interruptBinding`. */
-const isTanStackKey = (key: string) => key === "tanstack" || key.startsWith("tanstack:");
-
-/**
- * Drops TanStack metadata. A message keeps the `createdAt` and `model` TanStack held for it, as the
- * migration moves them to the message itself.
- */
-const withoutTanStackMetadata = (value: JsonObject) => {
-  const ownKeys = (object: JsonObject) =>
-    Object.fromEntries(Object.entries(object).filter(([key]) => !isTanStackKey(key)));
-  const { metadata, ...rest } = ownKeys(value);
-  if (metadata === undefined || !isObject(metadata)) return ownKeys(value);
-  const tanstack = rest["role"] === undefined ? undefined : metadata["tanstack"];
-  const lifted =
-    tanstack === undefined || !isObject(tanstack)
-      ? []
-      : (["createdAt", "model"] as const).flatMap((field) => {
-          const held = tanstack[field];
-          return rest[field] === undefined && held !== undefined ? [[field, held] as const] : [];
-        });
-  const ours = ownKeys(metadata);
-  const message = { ...rest, ...Object.fromEntries(lifted) };
-  return Object.keys(ours).length === 0 ? message : { ...message, metadata: ours };
-};
-
 /**
  * A JSON column is compared as JSON; a string inside it stays a string, so a value that changes
- * from encoded JSON to an object (tool call arguments, tool results) shows in the diff.
+ * from encoded JSON to an object (tool call arguments, tool results) shows in the diff. Keys are
+ * sorted, as the order a writer puts them in means nothing.
  */
 const normalizeWith = (rename: (text: string) => string) => {
   const walk = (value: JsonValue, key: string | undefined): JsonValue => {
@@ -94,11 +83,11 @@ const normalizeWith = (rename: (text: string) => string) => {
       if (Array.isArray(value)) return value.map((item) => walk(item, undefined));
       return value;
     }
+    // Renamed in their stored order first, so placeholders keep that order's numbers.
     return Object.fromEntries(
-      Object.entries(withoutTanStackMetadata(value)).map(([name, item]) => [
-        rename(name),
-        walk(item, name),
-      ]),
+      Object.entries(value)
+        .map(([name, item]) => [rename(name), walk(item, name)] as const)
+        .sort(([left], [right]) => left.localeCompare(right)),
     );
   };
   return walk;
@@ -139,8 +128,8 @@ const runOrder = (alias: string) =>
 const inList = (count: number) =>
   `(${Array.from({ length: Math.max(count, 1) }, () => "?").join(", ")})`;
 
-/** The conversation's rows as stored; `normalized` makes them comparable. */
-export const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
+/** The conversation's rows as stored. */
+const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
   const threads = yield* threadsOf(sessionId);
   const ids = threads.length === 0 ? [sessionId] : threads;
   const runs = yield* rows(
@@ -253,8 +242,84 @@ export const conversationRows = Effect.fnUntraced(function* (sessionId: string) 
 });
 
 /**
- * `value` without ids, clocks or TanStack metadata. `names` are values that differ per test run,
- * such as the storage folder or a session id, and the names they get.
+ * `value` without ids or clocks. `names` are values that differ per test run, such as the storage
+ * folder or a session id, and the names they get.
  */
-export const normalized = (value: JsonValue, names: ReadonlyArray<readonly [string, string]>) =>
-  normalizeWith(placeholders(names))(value, undefined);
+export const normalized: {
+  (names: ReadonlyArray<readonly [string, string]>): (value: JsonValue) => JsonValue;
+} & typeof normalizedBody = EffectFunction.dual(2, normalizedBody);
+function normalizedBody(value: JsonValue, names: ReadonlyArray<readonly [string, string]>) {
+  return normalizeWith(placeholders(names))(value, undefined);
+}
+
+type Rows = ReadonlyArray<JsonObject>;
+const migrateColumn = (rows: Rows, column: string, migrate: (value: JsonValue) => JsonValue) =>
+  rows.map((row) => ({ ...row, [column]: migrate(row[column] ?? null) }));
+const migrateMessages = (messages: JsonValue) =>
+  Array.isArray(messages) ? messages.map(migrateMessage) : messages;
+const migrateInterrupts = (interrupts: JsonValue) =>
+  Array.isArray(interrupts) ? interrupts.map(migrateInterruptPayload) : interrupts;
+
+/**
+ * A stream chunk without what TanStack adds to it: its metadata, and that of the messages of a
+ * snapshot and the interrupts of an outcome. Chunks become plain AG-UI 1.0 with the switch
+ * (docs/effect-ai-migration.md), so only the rest of a chunk is compared.
+ */
+export const withoutChunkMetadata = (chunk: JsonValue): JsonValue => {
+  if (!isObject(chunk)) return chunk;
+  const entry = (key: string, value: JsonValue): ReadonlyArray<readonly [string, JsonValue]> => {
+    if (key === "messages") return [[key, migrateMessages(value)]];
+    if (key === "outcome" && isObject(value) && Object.hasOwn(value, "interrupts"))
+      return [[key, { ...value, interrupts: migrateInterrupts(value["interrupts"]!) }]];
+    if (key !== "metadata" || !isObject(value)) return [[key, value]];
+    const kept = Object.entries(value).filter(([field]) => field !== "tanstack");
+    return kept.length === 0 ? [] : [[key, Object.fromEntries(kept)]];
+  };
+  return Object.fromEntries(Object.entries(chunk).flatMap(([key, value]) => entry(key, value)));
+};
+
+const HandoffRow = Schema.Struct({
+  messages: Schema.String,
+  value: Schema.fromJsonString(HandoffState),
+});
+const decodeHandoffRow = Schema.decodeUnknownEffect(HandoffRow);
+// The thread's text is what the message store wrote, so parsing restores its messages.
+const parseMessages = (text: string): readonly ModelMessage[] => JSON.parse(text);
+
+/**
+ * The conversation's rows after the TanStack migration (src/chat-store/tanstack-migration.ts). Its
+ * transforms give the rows they should become; the migration then runs on the database and must
+ * leave those rows, with a saved model handoff that still finds its boundary.
+ */
+export const migratedRows = Effect.fnUntraced(function* (sessionId: string) {
+  const stored = yield* conversationRows(sessionId);
+  const expected = {
+    ...stored,
+    threads: migrateColumn(stored.threads, "messages", migrateMessages),
+    history: migrateColumn(stored.history, "messages", migrateMessages),
+    runs: migrateColumn(stored.runs, "usage", migrateUsage(false)),
+    interrupts: migrateColumn(stored.interrupts, "payload", migrateInterruptPayload),
+  };
+  yield* withOpenSql(migrateTanStackRows());
+  const migrated = yield* conversationRows(sessionId);
+  // Handoff anchors are fingerprints, which normalizing hides; the replay below checks them.
+  expect(normalized(migrated, [])).toEqual(normalized(expected, []));
+  const handoffs = yield* sqlAll(
+    `SELECT t.messages, m.value FROM chat_threads t
+     JOIN chat_metadata m ON m.namespace = ? AND m.key = t.thread_id WHERE t.thread_id = ?`,
+    modelHandoffNamespace,
+    sessionId,
+  );
+  yield* Effect.forEach(handoffs, (row) =>
+    Effect.map(decodeHandoffRow(row), ({ messages, value }) =>
+      HandoffState.match(value, {
+        baseline: () => [],
+        handoff: (saved) => handoffHistory(parseMessages(messages), saved, () => null),
+      }),
+    ),
+  );
+  return {
+    ...migrated,
+    events: migrateColumn(migrated.events, "payload_json", withoutChunkMetadata),
+  };
+});

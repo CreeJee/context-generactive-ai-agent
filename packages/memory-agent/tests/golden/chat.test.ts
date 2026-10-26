@@ -5,7 +5,7 @@ import { sqlGet } from "../support/sql.ts";
 import { testAgent } from "../support/test-env.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { conversation, expectGolden, matchGolden } from "./driver.ts";
-import { conversationRows } from "./rows.ts";
+import { migratedRows } from "./rows.ts";
 import { waitUntil } from "../support/wait-until.ts";
 import { childrenHeld, goldenResponder, releaseChildren, releaseTurns } from "./responder.ts";
 
@@ -170,8 +170,8 @@ goldenAgent("golden chat rows", (it) => {
           "rejections",
           {
             answers,
-            conversation: yield* conversationRows(chat.sessionId),
-            other: yield* conversationRows(other.sessionId),
+            conversation: yield* migratedRows(chat.sessionId),
+            other: yield* migratedRows(other.sessionId),
           },
           [
             [chat.sessionId, "<session>"],

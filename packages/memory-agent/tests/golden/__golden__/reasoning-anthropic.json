@@ -1,168 +1,114 @@
 {
-  "threads": [
-    {
-      "thread_id": "<session>",
-      "messages": [
-        {
-          "id": "<id-1>",
-          "role": "user",
-          "content": "read the notes",
-          "createdAt": "<time>"
-        },
-        {
-          "role": "assistant",
-          "content": null,
-          "toolCalls": [
-            {
-              "id": "golden-reasoning-read",
-              "type": "function",
-              "function": {
-                "name": "read_file",
-                "arguments": "{\"path\":\"notes.txt\"}"
-              }
-            }
-          ],
-          "id": "<id-2>",
-          "createdAt": "<time>",
-          "thinking": [
-            {
-              "content": "I should read the notes.",
-              "signature": "signed-read"
-            }
-          ],
-          "model": "fast-1"
-        },
-        {
-          "role": "tool",
-          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
-          "toolCallId": "golden-reasoning-read"
-        },
-        {
-          "role": "assistant",
-          "content": "The notes have two lines.",
-          "id": "<id-3>",
-          "createdAt": "<time>",
-          "thinking": [
-            {
-              "content": "The notes have two lines.",
-              "signature": "signed-answer"
-            }
-          ],
-          "model": "fast-1"
-        }
-      ]
-    }
-  ],
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [],
+  "events": [],
   "history": [
     {
-      "thread_id": "<session>",
-      "ordinal": 0,
-      "ui_id": "<id-1>",
+      "format_version": 1,
       "messages": [
         {
-          "id": "<id-1>",
-          "role": "user",
           "content": "read the notes",
-          "createdAt": "<time>"
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
         }
       ],
-      "format_version": 1,
-      "ready": 1
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
     },
     {
-      "thread_id": "<session>",
-      "ordinal": 1,
-      "ui_id": "<id-2>",
+      "format_version": 1,
       "messages": [
         {
-          "role": "assistant",
           "content": null,
-          "toolCalls": [
-            {
-              "id": "golden-reasoning-read",
-              "type": "function",
-              "function": {
-                "name": "read_file",
-                "arguments": "{\"path\":\"notes.txt\"}"
-              }
-            }
-          ],
-          "id": "<id-2>",
           "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "fast-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "fast-1",
+            "provider": "anthropic"
+          },
           "thinking": [
             {
               "content": "I should read the notes.",
               "signature": "signed-read"
             }
           ],
-          "model": "fast-1"
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "read_file"
+              },
+              "id": "golden-reasoning-read",
+              "type": "function"
+            }
+          ]
         },
         {
-          "role": "tool",
           "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
-          "toolCallId": "golden-reasoning-read",
-          "id": "stored:<session>:2"
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "golden-reasoning-read"
         }
       ],
-      "format_version": 1,
-      "ready": 1
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
     },
     {
-      "thread_id": "<session>",
-      "ordinal": 2,
-      "ui_id": "<id-3>",
+      "format_version": 1,
       "messages": [
         {
-          "role": "assistant",
           "content": "The notes have two lines.",
-          "id": "<id-3>",
           "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-3>",
+          "model": "fast-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "fast-1",
+            "provider": "anthropic"
+          },
           "thinking": [
             {
               "content": "The notes have two lines.",
               "signature": "signed-answer"
             }
-          ],
-          "model": "fast-1"
+          ]
         }
       ],
-      "format_version": 1,
-      "ready": 1
-    }
-  ],
-  "runs": [
-    {
-      "run_id": "<id-4>",
+      "ordinal": 2,
+      "ready": 1,
       "thread_id": "<session>",
-      "status": "completed",
-      "error": null,
-      "error_code": null,
-      "usage": {
-        "promptTokens": 2400,
-        "completionTokens": 60,
-        "totalTokens": 2460,
-        "promptTokensDetails": {
-          "cachedTokens": 2000
-        }
-      },
-      "cancel_requested": null
+      "ui_id": "<id-3>"
     }
   ],
   "interrupts": [],
+  "ledger": [],
   "metadata": [
     {
-      "namespace": "memory-agent/context-usage",
       "key": "<session>",
+      "namespace": "memory-agent/context-usage",
       "value": {
-        "inputTokens": 1200,
         "cachedTokens": 1000,
-        "observationId": "<id-5>",
-        "compactionStage": "none"
+        "compactionStage": "none",
+        "inputTokens": 1200,
+        "observationId": "<id-5>"
       }
     },
     {
-      "namespace": "memory-agent/model-handoff",
       "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
       "value": {
         "_tag": "baseline",
         "target": "[\"openai\",\"fast-1\",null]"
@@ -171,77 +117,153 @@
   ],
   "nodes": [
     {
+      "detail": {},
       "kind": "user",
       "run_id": null,
-      "text": "read the notes",
-      "detail": {}
+      "text": "read the notes"
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-4>",
-      "text": "",
-      "detail": {}
+      "text": ""
     },
     {
+      "detail": {
+        "toolCallId": "golden-reasoning-read",
+        "toolName": "read_file"
+      },
       "kind": "tool_call",
       "run_id": "<id-4>",
-      "text": "read_file {\"path\":\"notes.txt\"}",
-      "detail": {
-        "toolName": "read_file",
-        "toolCallId": "golden-reasoning-read"
-      }
+      "text": "read_file {\"path\":\"notes.txt\"}"
     },
     {
+      "detail": {
+        "ok": true,
+        "toolCallId": "golden-reasoning-read",
+        "toolName": "read_file"
+      },
       "kind": "tool_result",
       "run_id": "<id-4>",
       "text": {
+        "content": "first line\nsecond line\n",
+        "endLine": 2,
+        "lineTruncated": false,
+        "nextStartLine": null,
         "path": "notes.txt",
         "sha256": "c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f",
-        "content": "first line\nsecond line\n",
         "startLine": 1,
-        "endLine": 2,
-        "totalLines": 2,
-        "nextStartLine": null,
-        "lineTruncated": false
-      },
-      "detail": {
-        "toolName": "read_file",
-        "toolCallId": "golden-reasoning-read",
-        "ok": true
+        "totalLines": 2
       }
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-4>",
-      "text": "The notes have two lines.",
-      "detail": {}
+      "text": "The notes have two lines."
+    }
+  ],
+  "notifications": [],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-4>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": {
+        "cachedInputTokens": 2000,
+        "inputTokens": 2400,
+        "outputTokens": 60,
+        "totalTokens": 2460
+      }
     }
   ],
   "subagents": [],
   "tasks": [],
-  "attempts": [],
-  "artifacts": [],
-  "notifications": [],
-  "queue": [],
-  "workflow": [],
-  "bindings": [],
-  "acknowledgements": [],
-  "events": [],
-  "ledger": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "read the notes",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "fast-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "fast-1",
+            "provider": "anthropic"
+          },
+          "thinking": [
+            {
+              "content": "I should read the notes.",
+              "signature": "signed-read"
+            }
+          ],
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "read_file"
+              },
+              "id": "golden-reasoning-read",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "role": "tool",
+          "toolCallId": "golden-reasoning-read"
+        },
+        {
+          "content": "The notes have two lines.",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-3>",
+          "model": "fast-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "fast-1",
+            "provider": "anthropic"
+          },
+          "thinking": [
+            {
+              "content": "The notes have two lines.",
+              "signature": "signed-answer"
+            }
+          ]
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
   "usage": [
     {
-      "run_id": "<id-4>",
-      "thread_id": "<session>",
-      "purpose": "main",
+      "model": "fast-1",
       "provider": "openai",
-      "model": "fast-1"
+      "purpose": "main",
+      "run_id": "<id-4>",
+      "thread_id": "<session>"
     },
     {
-      "run_id": "<id-4>",
-      "thread_id": "<session>",
-      "purpose": "main",
+      "model": "fast-1",
       "provider": "openai",
-      "model": "fast-1"
+      "purpose": "main",
+      "run_id": "<id-4>",
+      "thread_id": "<session>"
     }
-  ]
+  ],
+  "workflow": []
 }

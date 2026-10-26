@@ -44,3 +44,7 @@ export const sqlExec = (script: string) =>
 /** Runs `effect` in one transaction on the open agent's `SqlClient`. */
 export const sqlTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flatMap(client, (sql) => sql.withTransaction(effect));
+
+/** Runs an app Effect that needs a `SqlClient` on the open agent's. */
+export const withOpenSql = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(client, (sql) => Effect.provideService(effect, SqlClient.SqlClient, sql));

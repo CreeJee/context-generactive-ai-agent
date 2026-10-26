@@ -1,129 +1,93 @@
 {
-  "threads": [
-    {
-      "thread_id": "<session>",
-      "messages": [
-        {
-          "id": "<id-1>",
-          "role": "user",
-          "content": "golden:unknown-tool",
-          "createdAt": "<time>"
-        },
-        {
-          "role": "assistant",
-          "content": null,
-          "toolCalls": [
-            {
-              "id": "unknown@<session>",
-              "type": "function",
-              "function": {
-                "name": "no_such_tool",
-                "arguments": "{\"path\":\"notes.txt\"}"
-              }
-            }
-          ],
-          "id": "<id-2>",
-          "createdAt": "<time>",
-          "model": "scripted-1"
-        },
-        {
-          "role": "tool",
-          "content": "{\"error\":\"Unknown tool: no_such_tool\"}",
-          "toolCallId": "unknown@<session>",
-          "error": "Unknown tool: no_such_tool"
-        },
-        {
-          "role": "assistant",
-          "content": "unknown tool done",
-          "id": "<id-3>",
-          "createdAt": "<time>",
-          "model": "scripted-1"
-        }
-      ]
-    }
-  ],
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [],
+  "events": [],
   "history": [
     {
-      "thread_id": "<session>",
-      "ordinal": 0,
-      "ui_id": "<id-1>",
+      "format_version": 1,
       "messages": [
         {
-          "id": "<id-1>",
-          "role": "user",
           "content": "golden:unknown-tool",
-          "createdAt": "<time>"
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
         }
       ],
-      "format_version": 1,
-      "ready": 1
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
     },
     {
-      "thread_id": "<session>",
-      "ordinal": 1,
-      "ui_id": "<id-2>",
+      "format_version": 1,
       "messages": [
         {
-          "role": "assistant",
           "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
           "toolCalls": [
             {
-              "id": "unknown@<session>",
-              "type": "function",
               "function": {
-                "name": "no_such_tool",
-                "arguments": "{\"path\":\"notes.txt\"}"
-              }
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "no_such_tool"
+              },
+              "id": "unknown@<session>",
+              "type": "function"
             }
-          ],
-          "id": "<id-2>",
-          "createdAt": "<time>",
-          "model": "scripted-1"
+          ]
         },
         {
-          "role": "tool",
           "content": "{\"error\":\"Unknown tool: no_such_tool\"}",
-          "toolCallId": "unknown@<session>",
           "error": "Unknown tool: no_such_tool",
-          "id": "stored:<session>:2"
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "unknown@<session>"
         }
       ],
-      "format_version": 1,
-      "ready": 1
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
     },
     {
-      "thread_id": "<session>",
-      "ordinal": 2,
-      "ui_id": "<id-3>",
+      "format_version": 1,
       "messages": [
         {
-          "role": "assistant",
           "content": "unknown tool done",
-          "id": "<id-3>",
           "createdAt": "<time>",
-          "model": "scripted-1"
+          "finishReason": "stop",
+          "id": "<id-3>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
         }
       ],
-      "format_version": 1,
-      "ready": 1
-    }
-  ],
-  "runs": [
-    {
-      "run_id": "<id-4>",
+      "ordinal": 2,
+      "ready": 1,
       "thread_id": "<session>",
-      "status": "completed",
-      "error": null,
-      "error_code": null,
-      "usage": null,
-      "cancel_requested": null
+      "ui_id": "<id-3>"
     }
   ],
   "interrupts": [],
+  "ledger": [],
   "metadata": [
     {
-      "namespace": "memory-agent/model-handoff",
       "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
       "value": {
         "_tag": "baseline",
         "target": "[\"openai\",\"fast-1\",null]"
@@ -132,55 +96,115 @@
   ],
   "nodes": [
     {
+      "detail": {},
       "kind": "user",
       "run_id": null,
-      "text": "golden:unknown-tool",
-      "detail": {}
+      "text": "golden:unknown-tool"
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-4>",
-      "text": "",
-      "detail": {}
+      "text": ""
     },
     {
+      "detail": {
+        "toolCallId": "unknown@<session>",
+        "toolName": "no_such_tool"
+      },
       "kind": "tool_call",
       "run_id": "<id-4>",
-      "text": "no_such_tool {\"path\":\"notes.txt\"}",
-      "detail": {
-        "toolName": "no_such_tool",
-        "toolCallId": "unknown@<session>"
-      }
+      "text": "no_such_tool {\"path\":\"notes.txt\"}"
     },
     {
+      "detail": {
+        "ok": false,
+        "toolCallId": "unknown@<session>",
+        "toolName": "no_such_tool"
+      },
       "kind": "tool_result",
       "run_id": "<id-4>",
       "text": {
         "error": "Unknown tool: no_such_tool"
-      },
-      "detail": {
-        "toolName": "no_such_tool",
-        "toolCallId": "unknown@<session>",
-        "ok": false
       }
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-4>",
-      "text": "unknown tool done",
-      "detail": {}
+      "text": "unknown tool done"
+    }
+  ],
+  "notifications": [],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-4>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
     }
   ],
   "subagents": [],
   "tasks": [],
-  "attempts": [],
-  "artifacts": [],
-  "notifications": [],
-  "queue": [],
-  "workflow": [],
-  "bindings": [],
-  "acknowledgements": [],
-  "events": [],
-  "ledger": [],
-  "usage": []
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:unknown-tool",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "no_such_tool"
+              },
+              "id": "unknown@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"error\":\"Unknown tool: no_such_tool\"}",
+          "error": "Unknown tool: no_such_tool",
+          "role": "tool",
+          "toolCallId": "unknown@<session>"
+        },
+        {
+          "content": "unknown tool done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-3>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
+  "workflow": []
 }

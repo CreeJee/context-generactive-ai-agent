@@ -1,50 +1,1047 @@
 {
-  "threads": [
+  "acknowledgements": [
     {
-      "thread_id": "<session>",
-      "messages": [
-        {
-          "id": "<id-1>",
-          "role": "user",
-          "content": "golden:goal-restart",
-          "createdAt": "<time>"
-        }
-      ]
+      "run_id": "<id-2>"
+    }
+  ],
+  "artifacts": [],
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "chat_run_id": "<id-4>",
+      "failure": null,
+      "pending_tool_call_ids": [],
+      "resumability": {
+        "state": "not_needed"
+      },
+      "resume_reason": null,
+      "status": "cancelled",
+      "task_id": "<id-3>",
+      "thread_id": "background-<id-5>"
+    }
+  ],
+  "bindings": [
+    {
+      "goal_version": 1,
+      "plan_version": null,
+      "run_id": "<id-2>"
+    }
+  ],
+  "events": [
+    {
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "name": "run.accepted",
+        "timestamp": "<time>",
+        "type": "CUSTOM",
+        "value": {}
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-2>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-2>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-7>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "toolCallName": "save_code_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-7>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "toolCallName": "save_code_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "input": {
+          "description": "Print a line",
+          "name": "goal-sleeper",
+          "program": {
+            "runtime": "sh",
+            "script": "sleep 3; printf slept"
+          },
+          "reason": "golden scenario"
+        },
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "input": {
+          "description": "Print a line",
+          "name": "goal-sleeper",
+          "program": {
+            "runtime": "sh",
+            "script": "sleep 3; printf slept"
+          },
+          "reason": "golden scenario"
+        },
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-2>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-2>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+        "messageId": "<id-7>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:13",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+        "messageId": "<id-7>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:6",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-8>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "toolCallName": "run_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:15",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-8>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "toolCallName": "run_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:17",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "chunk:8",
+      "kind": "chunk",
+      "payload_json": {
+        "input": {
+          "name": "goal-sleeper"
+        },
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:19",
+      "kind": "chunk",
+      "payload_json": {
+        "input": {
+          "name": "goal-sleeper"
+        },
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-2>"
+    },
+    {
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      },
+      "run_id": "<id-2>"
     }
   ],
   "history": [
     {
-      "thread_id": "<session>",
-      "ordinal": 0,
-      "ui_id": "<id-1>",
+      "format_version": 1,
       "messages": [
         {
-          "id": "<id-1>",
-          "role": "user",
           "content": "golden:goal-restart",
-          "createdAt": "<time>"
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
         }
       ],
-      "format_version": 1,
-      "ready": 1
-    }
-  ],
-  "runs": [
-    {
-      "run_id": "<id-2>",
+      "ordinal": 0,
+      "ready": 1,
       "thread_id": "<session>",
-      "status": "failed",
-      "error": "The server stopped before this answer finished.",
-      "error_code": "server_restarted",
-      "usage": null,
-      "cancel_requested": null
+      "ui_id": "<id-1>"
     }
   ],
   "interrupts": [],
+  "ledger": [
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 1,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 2,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 3,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 4,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 5,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 6,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 7,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 8,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 9,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 10,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 11,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 12,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 13,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 14,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 15,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 16,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "omitted",
+      "operation": "modelOpen",
+      "operation_id": 17,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 18,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 19,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 20,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 21,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 22,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 23,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 24,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 25,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 26,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 27,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 28,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "save_code_skill"
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-sleeper@<session>"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-sleeper"
+                  ]
+                ],
+                [
+                  "description",
+                  [
+                    "string",
+                    "Print a line"
+                  ]
+                ],
+                [
+                  "program",
+                  [
+                    "object",
+                    [
+                      [
+                        "runtime",
+                        [
+                          "string",
+                          "sh"
+                        ]
+                      ],
+                      [
+                        "script",
+                        [
+                          "string",
+                          "sleep 3; printf slept"
+                        ]
+                      ]
+                    ]
+                  ]
+                ],
+                [
+                  "reason",
+                  [
+                    "string",
+                    "golden scenario"
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "toolAuthorize",
+      "operation_id": 29,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "save_code_skill"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-sleeper"
+                  ]
+                ],
+                [
+                  "description",
+                  [
+                    "string",
+                    "Print a line"
+                  ]
+                ],
+                [
+                  "program",
+                  [
+                    "object",
+                    [
+                      [
+                        "runtime",
+                        [
+                          "string",
+                          "sh"
+                        ]
+                      ],
+                      [
+                        "script",
+                        [
+                          "string",
+                          "sleep 3; printf slept"
+                        ]
+                      ]
+                    ]
+                  ]
+                ],
+                [
+                  "reason",
+                  [
+                    "string",
+                    "golden scenario"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-sleeper@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 30,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 31,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 32,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 33,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 34,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 35,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 36,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 37,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 38,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "strategy",
+      "operation_id": 39,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 40,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 41,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 42,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 43,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 44,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 45,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 46,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "omitted",
+      "operation": "modelOpen",
+      "operation_id": 47,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 48,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 49,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 50,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 51,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 52,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 53,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 54,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 55,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 56,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 57,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 58,
+      "run_id": "<id-2>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "run_skill"
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-run@<session>"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-sleeper"
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "toolAuthorize",
+      "operation_id": 59,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "run_skill"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-sleeper"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-run@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 60,
+      "run_id": "<id-2>",
+      "side_effect": 1,
+      "status": "pending"
+    }
+  ],
   "metadata": [
     {
-      "namespace": "memory-agent/model-handoff",
       "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
       "value": {
         "_tag": "baseline",
         "target": "[\"openai\",\"fast-1\",null]"
@@ -53,1128 +1050,131 @@
   ],
   "nodes": [
     {
+      "detail": {},
       "kind": "user",
       "run_id": null,
-      "text": "golden:goal-restart",
-      "detail": {}
+      "text": "golden:goal-restart"
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-2>",
-      "text": "",
-      "detail": {}
+      "text": ""
     },
     {
+      "detail": {
+        "toolCallId": "goal-sleeper@<session>",
+        "toolName": "save_code_skill"
+      },
       "kind": "tool_call",
       "run_id": "<id-2>",
-      "text": "save_code_skill {\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
-      "detail": {
-        "toolName": "save_code_skill",
-        "toolCallId": "goal-sleeper@<session>"
-      }
+      "text": "save_code_skill {\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}"
     },
     {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-sleeper@<session>",
+        "toolName": "save_code_skill"
+      },
       "kind": "tool_result",
       "run_id": "<id-2>",
       "text": {
-        "name": "goal-sleeper",
         "directory": ".agents/skills/goal-sleeper",
-        "scriptSha256": "9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1",
+        "name": "goal-sleeper",
+        "network": [],
         "replaced": false,
         "runtime": "sh",
-        "network": []
-      },
-      "detail": {
-        "toolName": "save_code_skill",
-        "toolCallId": "goal-sleeper@<session>",
-        "ok": true
+        "scriptSha256": "9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1"
       }
+    }
+  ],
+  "notifications": [
+    {
+      "delivered_to_run_id": null,
+      "kind": "stopped",
+      "parent_run_id": "<id-2>",
+      "payload": {
+        "attemptId": "<id-6>"
+      },
+      "summary": "Background shell cancelled; retrieve with get_background_result taskId <id-3>",
+      "task_id": "<id-3>"
+    }
+  ],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": "The server stopped before this answer finished.",
+      "error_code": "server_restarted",
+      "run_id": "<id-2>",
+      "status": "failed",
+      "thread_id": "<session>",
+      "usage": null
     }
   ],
   "subagents": [],
   "tasks": [
     {
-      "id": "<id-3>",
-      "parent_task_id": null,
-      "parent_run_id": "<id-2>",
-      "parent_tool_call_id": "goal-run@<session>",
       "agent_id": null,
       "agent_name": "background_shell",
-      "status": "cancelled",
-      "title": "goal-sleeper",
-      "request": "goal-sleeper"
-    }
-  ],
-  "attempts": [
-    {
-      "task_id": "<id-3>",
-      "attempt_number": 1,
-      "chat_run_id": "<id-4>",
-      "thread_id": "background-<id-5>",
-      "status": "cancelled",
-      "resume_reason": null,
-      "resumability": {
-        "state": "not_needed"
-      },
-      "pending_tool_call_ids": [],
-      "failure": null
-    }
-  ],
-  "artifacts": [],
-  "notifications": [
-    {
-      "task_id": "<id-3>",
+      "id": "<id-3>",
       "parent_run_id": "<id-2>",
-      "kind": "stopped",
-      "summary": "Background shell cancelled; retrieve with get_background_result taskId <id-3>",
-      "payload": {
-        "attemptId": "<id-6>"
-      },
-      "delivered_to_run_id": null
+      "parent_task_id": null,
+      "parent_tool_call_id": "goal-run@<session>",
+      "request": "goal-sleeper",
+      "status": "cancelled",
+      "title": "goal-sleeper"
     }
   ],
-  "queue": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:goal-restart",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
   "workflow": [
     {
       "state_json": {
-        "phase": "chat",
         "goal": {
-          "version": 1,
-          "statement": "Keep the golden notes",
+          "assumptions": [],
+          "constraints": [],
+          "evidence": [],
+          "nonGoals": [],
+          "openQuestions": [],
           "outcomes": [
             "The notes are read and written"
           ],
-          "constraints": [],
-          "nonGoals": [],
-          "assumptions": [],
-          "openQuestions": [],
-          "evidence": [],
+          "statement": "Keep the golden notes",
+          "status": "active",
+          "updatedAt": "<time>",
           "verification": {
-            "status": "not_run",
-            "summary": "",
             "evidence": [],
             "recoveryPhase": null,
+            "status": "not_run",
+            "summary": "",
             "updatedAt": null
           },
-          "updatedAt": "<time>",
-          "status": "active"
+          "version": 1
         },
-        "plan": null,
         "ledger": [
           {
-            "sequence": 1,
             "at": "<time>",
+            "detail": "goal v1 (active)",
             "kind": "goal_updated",
-            "detail": "goal v1 (active)"
+            "sequence": 1
           }
-        ]
+        ],
+        "phase": "chat",
+        "plan": null
       }
     }
-  ],
-  "bindings": [
-    {
-      "run_id": "<id-2>",
-      "goal_version": 1,
-      "plan_version": null
-    }
-  ],
-  "acknowledgements": [
-    {
-      "run_id": "<id-2>"
-    }
-  ],
-  "events": [
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:1",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "CUSTOM",
-        "name": "run.accepted",
-        "value": {},
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:0",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_STARTED",
-        "runId": "<id-2>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:3",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_STARTED",
-        "runId": "<id-2>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:1",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_START",
-        "toolCallId": "goal-sleeper@<session>",
-        "toolCallName": "save_code_skill",
-        "parentMessageId": "<id-7>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:5",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_START",
-        "toolCallId": "goal-sleeper@<session>",
-        "toolCallName": "save_code_skill",
-        "parentMessageId": "<id-7>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:2",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_ARGS",
-        "toolCallId": "goal-sleeper@<session>",
-        "delta": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:7",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_ARGS",
-        "toolCallId": "goal-sleeper@<session>",
-        "delta": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:3",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_END",
-        "toolCallId": "goal-sleeper@<session>",
-        "timestamp": "<time>",
-        "input": {
-          "name": "goal-sleeper",
-          "description": "Print a line",
-          "program": {
-            "runtime": "sh",
-            "script": "sleep 3; printf slept"
-          },
-          "reason": "golden scenario"
-        }
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:9",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_END",
-        "toolCallId": "goal-sleeper@<session>",
-        "timestamp": "<time>",
-        "input": {
-          "name": "goal-sleeper",
-          "description": "Print a line",
-          "program": {
-            "runtime": "sh",
-            "script": "sleep 3; printf slept"
-          },
-          "reason": "golden scenario"
-        }
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:4",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_FINISHED",
-        "runId": "<id-2>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:11",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_FINISHED",
-        "runId": "<id-2>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:5",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_RESULT",
-        "timestamp": "<time>",
-        "messageId": "<id-7>",
-        "toolCallId": "goal-sleeper@<session>",
-        "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
-        "role": "tool"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:13",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_RESULT",
-        "timestamp": "<time>",
-        "messageId": "<id-7>",
-        "toolCallId": "goal-sleeper@<session>",
-        "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
-        "role": "tool"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:6",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_START",
-        "toolCallId": "goal-run@<session>",
-        "toolCallName": "run_skill",
-        "parentMessageId": "<id-8>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:15",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_START",
-        "toolCallId": "goal-run@<session>",
-        "toolCallName": "run_skill",
-        "parentMessageId": "<id-8>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:7",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_ARGS",
-        "toolCallId": "goal-run@<session>",
-        "delta": "{\"name\":\"goal-sleeper\"}",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:17",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_ARGS",
-        "toolCallId": "goal-run@<session>",
-        "delta": "{\"name\":\"goal-sleeper\"}",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "chunk:8",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_END",
-        "toolCallId": "goal-run@<session>",
-        "timestamp": "<time>",
-        "input": {
-          "name": "goal-sleeper"
-        }
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:chunk:19",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_END",
-        "toolCallId": "goal-run@<session>",
-        "timestamp": "<time>",
-        "input": {
-          "name": "goal-sleeper"
-        }
-      }
-    },
-    {
-      "run_id": "<id-2>",
-      "event_key": "sdk-stream:v1:closed",
-      "kind": "run_completed",
-      "payload_json": {
-        "deliveryClosed": true
-      }
-    }
-  ],
-  "ledger": [
-    {
-      "run_id": "<id-2>",
-      "operation_id": 1,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 2,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 3,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 4,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 5,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 6,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 7,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 8,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 9,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 10,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 11,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 12,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 13,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 14,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 15,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 16,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 17,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelOpen",
-      "input_kind": "omitted",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 18,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 19,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 20,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 21,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 22,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 23,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 24,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 25,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 26,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 27,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 28,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 29,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "toolAuthorize",
-      "input_kind": "complete",
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "save_code_skill"
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-sleeper@<session>"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-sleeper"
-                  ]
-                ],
-                [
-                  "description",
-                  [
-                    "string",
-                    "Print a line"
-                  ]
-                ],
-                [
-                  "program",
-                  [
-                    "object",
-                    [
-                      [
-                        "runtime",
-                        [
-                          "string",
-                          "sh"
-                        ]
-                      ],
-                      [
-                        "script",
-                        [
-                          "string",
-                          "sleep 3; printf slept"
-                        ]
-                      ]
-                    ]
-                  ]
-                ],
-                [
-                  "reason",
-                  [
-                    "string",
-                    "golden scenario"
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      ]
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 30,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "tool",
-      "input_kind": "complete",
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "save_code_skill"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-sleeper"
-                  ]
-                ],
-                [
-                  "description",
-                  [
-                    "string",
-                    "Print a line"
-                  ]
-                ],
-                [
-                  "program",
-                  [
-                    "object",
-                    [
-                      [
-                        "runtime",
-                        [
-                          "string",
-                          "sh"
-                        ]
-                      ],
-                      [
-                        "script",
-                        [
-                          "string",
-                          "sleep 3; printf slept"
-                        ]
-                      ]
-                    ]
-                  ]
-                ],
-                [
-                  "reason",
-                  [
-                    "string",
-                    "golden scenario"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-sleeper@<session>"
-            ]
-          ]
-        ]
-      ]
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 31,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 32,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 33,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 34,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 35,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 36,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 37,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 38,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 39,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "strategy",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 40,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 41,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 42,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 43,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 44,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 45,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 46,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 47,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelOpen",
-      "input_kind": "omitted",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 48,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 49,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 50,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 51,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 52,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 53,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 54,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 55,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 56,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 57,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 58,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 59,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "toolAuthorize",
-      "input_kind": "complete",
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "run_skill"
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-run@<session>"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-sleeper"
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      ]
-    },
-    {
-      "run_id": "<id-2>",
-      "operation_id": 60,
-      "side_effect": 1,
-      "status": "pending",
-      "operation": "tool",
-      "input_kind": "complete",
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "run_skill"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-sleeper"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-run@<session>"
-            ]
-          ]
-        ]
-      ]
-    }
-  ],
-  "usage": []
+  ]
 }

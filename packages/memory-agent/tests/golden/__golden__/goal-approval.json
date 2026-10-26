@@ -1,232 +1,857 @@
 {
-  "threads": [
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [
     {
-      "thread_id": "<session>",
-      "messages": [
-        {
-          "id": "<id-1>",
-          "role": "user",
-          "content": "golden:goal-approval"
+      "goal_version": 1,
+      "plan_version": null,
+      "run_id": "<id-3>"
+    },
+    {
+      "goal_version": 1,
+      "plan_version": null,
+      "run_id": "<id-4>"
+    }
+  ],
+  "events": [
+    {
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "name": "run.accepted",
+        "timestamp": "<time>",
+        "type": "CUSTOM",
+        "value": {}
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:41",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "toolCallName": "save_code_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:43",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "toolCallName": "save_code_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:45",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "input": {
+          "description": "Print a line",
+          "name": "goal-approval",
+          "program": {
+            "runtime": "sh",
+            "script": "printf goal-approved"
+          },
+          "reason": "golden scenario"
         },
-        {
-          "id": "<id-2>",
-          "role": "assistant",
-          "toolCalls": [
-            {
-              "id": "goal-approval@<session>",
-              "type": "function",
-              "function": {
-                "name": "save_code_skill",
-                "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}"
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:47",
+      "kind": "chunk",
+      "payload_json": {
+        "input": {
+          "description": "Print a line",
+          "name": "goal-approval",
+          "program": {
+            "runtime": "sh",
+            "script": "printf goal-approved"
+          },
+          "reason": "golden scenario"
+        },
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "messages": [
+          {
+            "content": "golden:goal-approval",
+            "id": "<id-1>",
+            "role": "user"
+          },
+          {
+            "createdAt": "<time>",
+            "finishReason": "tool_calls",
+            "id": "<id-2>",
+            "model": "scripted-1",
+            "role": "assistant",
+            "source": {
+              "model": "scripted-1",
+              "provider": "scripted"
+            },
+            "toolCalls": [
+              {
+                "function": {
+                  "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
+                  "name": "save_code_skill"
+                },
+                "id": "goal-approval@<session>",
+                "type": "function"
               }
+            ]
+          }
+        ],
+        "timestamp": "<time>",
+        "type": "MESSAGES_SNAPSHOT"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:49",
+      "kind": "chunk",
+      "payload_json": {
+        "messages": [
+          {
+            "content": "golden:goal-approval",
+            "id": "<id-1>",
+            "role": "user"
+          },
+          {
+            "createdAt": "<time>",
+            "finishReason": "tool_calls",
+            "id": "<id-2>",
+            "model": "scripted-1",
+            "role": "assistant",
+            "source": {
+              "model": "scripted-1",
+              "provider": "scripted"
+            },
+            "toolCalls": [
+              {
+                "function": {
+                  "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
+                  "name": "save_code_skill"
+                },
+                "id": "goal-approval@<session>",
+                "type": "function"
+              }
+            ]
+          }
+        ],
+        "timestamp": "<time>",
+        "type": "MESSAGES_SNAPSHOT"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "outcome": {
+          "interrupts": [
+            {
+              "id": "approval_goal-approval@<session>",
+              "message": "Approval required to run save_code_skill",
+              "metadata": {
+                "input": {
+                  "description": "Print a line",
+                  "name": "goal-approval",
+                  "program": {
+                    "runtime": "sh",
+                    "script": "printf goal-approved"
+                  },
+                  "reason": "golden scenario"
+                },
+                "kind": "approval",
+                "toolName": "save_code_skill"
+              },
+              "reason": "tool_call",
+              "responseSchema": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "approved": {
+                        "const": true
+                      },
+                      "editedArgs": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "description": "One line on what the skill does and when to use it; it is listed so later runs can find it.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).",
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          "program": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.",
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "input": {
+                                    "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input.",
+                                    "type": "object"
+                                  },
+                                  "runtime": {
+                                    "enum": [
+                                      "ts"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "runtime",
+                                  "code"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "network": {
+                                    "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
+                                    "items": {
+                                      "maxLength": 253,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 32,
+                                    "type": "array"
+                                  },
+                                  "runtime": {
+                                    "enum": [
+                                      "sh"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "script": {
+                                    "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "runtime",
+                                  "script"
+                                ],
+                                "type": "object"
+                              }
+                            ],
+                            "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
+                          },
+                          "reason": {
+                            "description": "One sentence on why, shown to the user when asking.",
+                            "type": "string"
+                          },
+                          "usage": {
+                            "description": "What the input or arguments mean and what the result shows.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "program"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "approved"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "approved": {
+                        "const": false
+                      }
+                    },
+                    "required": [
+                      "approved"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "toolCallId": "goal-approval@<session>"
             }
           ],
-          "createdAt": "<time>",
-          "model": "scripted-1"
+          "type": "interrupt"
         },
-        {
-          "role": "tool",
-          "toolCallId": "goal-approval@<session>",
-          "content": "{\"approved\":true,\"pendingExecution\":true,\"message\":\"User approved this action\"}"
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:51",
+      "kind": "chunk",
+      "payload_json": {
+        "outcome": {
+          "interrupts": [
+            {
+              "id": "approval_goal-approval@<session>",
+              "message": "Approval required to run save_code_skill",
+              "metadata": {
+                "input": {
+                  "description": "Print a line",
+                  "name": "goal-approval",
+                  "program": {
+                    "runtime": "sh",
+                    "script": "printf goal-approved"
+                  },
+                  "reason": "golden scenario"
+                },
+                "kind": "approval",
+                "toolName": "save_code_skill"
+              },
+              "reason": "tool_call",
+              "responseSchema": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "approved": {
+                        "const": true
+                      },
+                      "editedArgs": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "description": "One line on what the skill does and when to use it; it is listed so later runs can find it.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).",
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          "program": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.",
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "input": {
+                                    "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input.",
+                                    "type": "object"
+                                  },
+                                  "runtime": {
+                                    "enum": [
+                                      "ts"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "runtime",
+                                  "code"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "network": {
+                                    "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
+                                    "items": {
+                                      "maxLength": 253,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 32,
+                                    "type": "array"
+                                  },
+                                  "runtime": {
+                                    "enum": [
+                                      "sh"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "script": {
+                                    "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "runtime",
+                                  "script"
+                                ],
+                                "type": "object"
+                              }
+                            ],
+                            "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
+                          },
+                          "reason": {
+                            "description": "One sentence on why, shown to the user when asking.",
+                            "type": "string"
+                          },
+                          "usage": {
+                            "description": "What the input or arguments mean and what the result shows.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "program"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "approved"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "approved": {
+                        "const": false
+                      }
+                    },
+                    "required": [
+                      "approved"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "toolCallId": "goal-approval@<session>"
+            }
+          ],
+          "type": "interrupt"
         },
-        {
-          "role": "tool",
-          "toolCallId": "goal-approval@<session>",
-          "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}"
-        },
-        {
-          "role": "assistant",
-          "content": "goal approval done"
-        }
-      ]
+        "runId": "<id-3>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      },
+      "run_id": "<id-3>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "name": "run.accepted",
+        "timestamp": "<time>",
+        "type": "CUSTOM",
+        "value": {}
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+        "messageId": "<id-2>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:55",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+        "messageId": "<id-2>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-approval@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-4>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:57",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-4>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-5>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_START"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:59",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-5>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_START"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "goal approval done",
+        "messageId": "<id-5>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_CONTENT"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:61",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "goal approval done",
+        "messageId": "<id-5>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_CONTENT"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-5>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_END"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:63",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-5>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_END"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-4>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:65",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-4>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-4>"
+    },
+    {
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      },
+      "run_id": "<id-4>"
     }
   ],
   "history": [
     {
-      "thread_id": "<session>",
-      "ordinal": 0,
-      "ui_id": "<id-1>",
+      "format_version": 1,
       "messages": [
         {
+          "content": "golden:goal-approval",
           "id": "<id-1>",
-          "role": "user",
-          "content": "golden:goal-approval"
+          "role": "user"
         }
       ],
-      "format_version": 1,
-      "ready": 1
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
     },
     {
-      "thread_id": "<session>",
-      "ordinal": 1,
-      "ui_id": "<id-2>",
+      "format_version": 1,
       "messages": [
         {
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
           "id": "<id-2>",
+          "model": "scripted-1",
           "role": "assistant",
+          "source": {
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
           "toolCalls": [
             {
-              "id": "goal-approval@<session>",
-              "type": "function",
               "function": {
-                "name": "save_code_skill",
-                "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}"
-              }
+                "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
+                "name": "save_code_skill"
+              },
+              "id": "goal-approval@<session>",
+              "type": "function"
             }
-          ],
-          "createdAt": "<time>",
-          "model": "scripted-1"
+          ]
         },
         {
-          "role": "tool",
-          "toolCallId": "goal-approval@<session>",
           "content": "{\"approved\":true,\"pendingExecution\":true,\"message\":\"User approved this action\"}",
-          "id": "stored:<session>:2"
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "goal-approval@<session>"
         },
         {
-          "role": "tool",
-          "toolCallId": "goal-approval@<session>",
           "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
-          "id": "stored:<session>:3"
+          "id": "stored:<session>:3",
+          "role": "tool",
+          "toolCallId": "goal-approval@<session>"
         }
       ],
-      "format_version": 1,
-      "ready": 1
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
     },
     {
-      "thread_id": "<session>",
-      "ordinal": 2,
-      "ui_id": "stored:<session>:4",
+      "format_version": 1,
       "messages": [
         {
-          "role": "assistant",
           "content": "goal approval done",
-          "id": "stored:<session>:4"
+          "id": "stored:<session>:4",
+          "role": "assistant"
         }
       ],
-      "format_version": 1,
-      "ready": 1
-    }
-  ],
-  "runs": [
-    {
-      "run_id": "<id-3>",
+      "ordinal": 2,
+      "ready": 1,
       "thread_id": "<session>",
-      "status": "interrupted",
-      "error": null,
-      "error_code": null,
-      "usage": null,
-      "cancel_requested": null
-    },
-    {
-      "run_id": "<id-4>",
-      "thread_id": "<session>",
-      "status": "completed",
-      "error": null,
-      "error_code": null,
-      "usage": null,
-      "cancel_requested": null
+      "ui_id": "stored:<session>:4"
     }
   ],
   "interrupts": [
     {
       "interrupt_id": "approval_goal-approval@<session>",
-      "run_id": "<id-3>",
-      "thread_id": "<session>",
-      "status": "resolved",
       "payload": {
         "id": "approval_goal-approval@<session>",
-        "reason": "tool_call",
         "message": "Approval required to run save_code_skill",
-        "toolCallId": "goal-approval@<session>",
+        "metadata": {
+          "input": {
+            "description": "Print a line",
+            "name": "goal-approval",
+            "program": {
+              "runtime": "sh",
+              "script": "printf goal-approved"
+            },
+            "reason": "golden scenario"
+          },
+          "kind": "approval",
+          "toolName": "save_code_skill"
+        },
+        "reason": "tool_call",
         "responseSchema": {
           "oneOf": [
             {
-              "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "approved": {
                   "const": true
                 },
                 "editedArgs": {
-                  "type": "object",
+                  "additionalProperties": false,
                   "properties": {
-                    "name": {
-                      "type": "string",
-                      "maxLength": 64,
-                      "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
-                    },
                     "description": {
-                      "type": "string",
+                      "description": "One line on what the skill does and when to use it; it is listed so later runs can find it.",
                       "minLength": 1,
-                      "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).",
+                      "maxLength": 64,
+                      "type": "string"
                     },
                     "program": {
                       "anyOf": [
                         {
-                          "type": "object",
+                          "additionalProperties": false,
                           "properties": {
-                            "runtime": {
-                              "type": "string",
-                              "enum": [
-                                "ts"
-                              ]
-                            },
                             "code": {
-                              "type": "string",
+                              "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.",
                               "minLength": 1,
-                              "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
+                              "type": "string"
                             },
                             "input": {
-                              "type": "object",
-                              "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
+                              "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input.",
+                              "type": "object"
+                            },
+                            "runtime": {
+                              "enum": [
+                                "ts"
+                              ],
+                              "type": "string"
                             }
                           },
                           "required": [
                             "runtime",
                             "code"
                           ],
-                          "additionalProperties": false
+                          "type": "object"
                         },
                         {
-                          "type": "object",
+                          "additionalProperties": false,
                           "properties": {
-                            "runtime": {
-                              "type": "string",
-                              "enum": [
-                                "sh"
-                              ]
-                            },
-                            "script": {
-                              "type": "string",
-                              "minLength": 1,
-                              "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
-                            },
                             "network": {
-                              "type": "array",
-                              "maxItems": 32,
                               "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
                               "items": {
-                                "type": "string",
-                                "maxLength": 253
-                              }
+                                "maxLength": 253,
+                                "type": "string"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
+                            },
+                            "runtime": {
+                              "enum": [
+                                "sh"
+                              ],
+                              "type": "string"
+                            },
+                            "script": {
+                              "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+                              "minLength": 1,
+                              "type": "string"
                             }
                           },
                           "required": [
                             "runtime",
                             "script"
                           ],
-                          "additionalProperties": false
+                          "type": "object"
                         }
                       ],
                       "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
                     },
-                    "usage": {
-                      "type": "string",
-                      "description": "What the input or arguments mean and what the result shows."
-                    },
                     "reason": {
-                      "type": "string",
-                      "description": "One sentence on why, shown to the user when asking."
+                      "description": "One sentence on why, shown to the user when asking.",
+                      "type": "string"
+                    },
+                    "usage": {
+                      "description": "What the input or arguments mean and what the result shows.",
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -234,16 +859,16 @@
                     "description",
                     "program"
                   ],
-                  "additionalProperties": false
+                  "type": "object"
                 }
               },
               "required": [
                 "approved"
               ],
-              "additionalProperties": false
+              "type": "object"
             },
             {
-              "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "approved": {
                   "const": false
@@ -252,33 +877,965 @@
               "required": [
                 "approved"
               ],
-              "additionalProperties": false
+              "type": "object"
             }
           ]
         },
-        "metadata": {
-          "kind": "approval",
-          "toolName": "save_code_skill",
-          "input": {
-            "name": "goal-approval",
-            "description": "Print a line",
-            "program": {
-              "runtime": "sh",
-              "script": "printf goal-approved"
-            },
-            "reason": "golden scenario"
-          }
-        }
+        "toolCallId": "goal-approval@<session>"
       },
       "response": {
         "approved": true
-      }
+      },
+      "run_id": "<id-3>",
+      "status": "resolved",
+      "thread_id": "<session>"
+    }
+  ],
+  "ledger": [
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 1,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 2,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 3,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 4,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 5,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 6,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 7,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 8,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 9,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 10,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 11,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 12,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 13,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 14,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 15,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 16,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "omitted",
+      "operation": "modelOpen",
+      "operation_id": 17,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 18,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 19,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 20,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 21,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 22,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 23,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 24,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 25,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 26,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 27,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 28,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 29,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 30,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 31,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 32,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 33,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "strategy",
+      "operation_id": 34,
+      "run_id": "<id-3>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 35,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 36,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 37,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 38,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 39,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 40,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 41,
+      "run_id": "<id-3>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 1,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 2,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 3,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 4,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 5,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 6,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 7,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 8,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 9,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "save_code_skill"
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-approval@<session>"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-approval"
+                  ]
+                ],
+                [
+                  "description",
+                  [
+                    "string",
+                    "Print a line"
+                  ]
+                ],
+                [
+                  "program",
+                  [
+                    "object",
+                    [
+                      [
+                        "runtime",
+                        [
+                          "string",
+                          "sh"
+                        ]
+                      ],
+                      [
+                        "script",
+                        [
+                          "string",
+                          "printf goal-approved"
+                        ]
+                      ]
+                    ]
+                  ]
+                ],
+                [
+                  "reason",
+                  [
+                    "string",
+                    "golden scenario"
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "toolAuthorize",
+      "operation_id": 10,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "save_code_skill"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-approval"
+                  ]
+                ],
+                [
+                  "description",
+                  [
+                    "string",
+                    "Print a line"
+                  ]
+                ],
+                [
+                  "program",
+                  [
+                    "object",
+                    [
+                      [
+                        "runtime",
+                        [
+                          "string",
+                          "sh"
+                        ]
+                      ],
+                      [
+                        "script",
+                        [
+                          "string",
+                          "printf goal-approved"
+                        ]
+                      ]
+                    ]
+                  ]
+                ],
+                [
+                  "reason",
+                  [
+                    "string",
+                    "golden scenario"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-approval@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 11,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 12,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 13,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 14,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 15,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 16,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 17,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 18,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 19,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "strategy",
+      "operation_id": 20,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 21,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 22,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 23,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 24,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 25,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 26,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "middleware-hook",
+      "operation": "middleware",
+      "operation_id": 27,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "omitted",
+      "operation": "modelOpen",
+      "operation_id": 28,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 29,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 30,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 31,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 32,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 33,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 34,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 35,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 36,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 37,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 38,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "modelNext",
+      "operation_id": 39,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 40,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "strategy",
+      "operation_id": 41,
+      "run_id": "<id-4>",
+      "side_effect": 0,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 42,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 43,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 44,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 45,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 46,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 47,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": null,
+      "input_kind": "complete",
+      "operation": "middleware",
+      "operation_id": 48,
+      "run_id": "<id-4>",
+      "side_effect": 1,
+      "status": "succeeded"
     }
   ],
   "metadata": [
     {
-      "namespace": "memory-agent/model-handoff",
       "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
       "value": {
         "_tag": "baseline",
         "target": "[\"openai\",\"fast-1\",null]"
@@ -287,1696 +1844,157 @@
   ],
   "nodes": [
     {
+      "detail": {},
       "kind": "user",
       "run_id": null,
-      "text": "golden:goal-approval",
-      "detail": {}
+      "text": "golden:goal-approval"
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-3>",
-      "text": "",
-      "detail": {}
+      "text": ""
     },
     {
+      "detail": {
+        "toolCallId": "goal-approval@<session>",
+        "toolName": "save_code_skill"
+      },
       "kind": "tool_call",
       "run_id": "<id-3>",
-      "text": "save_code_skill {\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
-      "detail": {
-        "toolName": "save_code_skill",
-        "toolCallId": "goal-approval@<session>"
-      }
+      "text": "save_code_skill {\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}"
     },
     {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-approval@<session>",
+        "toolName": "save_code_skill"
+      },
       "kind": "tool_result",
       "run_id": "<id-3>",
       "text": {
-        "name": "goal-approval",
         "directory": ".agents/skills/goal-approval",
-        "scriptSha256": "3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb",
+        "name": "goal-approval",
+        "network": [],
         "replaced": false,
         "runtime": "sh",
-        "network": []
-      },
-      "detail": {
-        "toolName": "save_code_skill",
-        "toolCallId": "goal-approval@<session>",
-        "ok": true
+        "scriptSha256": "3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb"
       }
     },
     {
+      "detail": {},
       "kind": "assistant",
       "run_id": "<id-4>",
-      "text": "goal approval done",
-      "detail": {}
+      "text": "goal approval done"
+    }
+  ],
+  "notifications": [],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-3>",
+      "status": "interrupted",
+      "thread_id": "<session>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-4>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
     }
   ],
   "subagents": [],
   "tasks": [],
-  "attempts": [],
-  "artifacts": [],
-  "notifications": [],
-  "queue": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:goal-approval",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
+                "name": "save_code_skill"
+              },
+              "id": "goal-approval@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"approved\":true,\"pendingExecution\":true,\"message\":\"User approved this action\"}",
+          "role": "tool",
+          "toolCallId": "goal-approval@<session>"
+        },
+        {
+          "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+          "role": "tool",
+          "toolCallId": "goal-approval@<session>"
+        },
+        {
+          "content": "goal approval done",
+          "role": "assistant"
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
   "workflow": [
     {
       "state_json": {
-        "phase": "chat",
         "goal": {
-          "version": 1,
-          "statement": "Keep the golden notes",
+          "assumptions": [],
+          "constraints": [],
+          "evidence": [],
+          "nonGoals": [],
+          "openQuestions": [],
           "outcomes": [
             "The notes are read and written"
           ],
-          "constraints": [],
-          "nonGoals": [],
-          "assumptions": [],
-          "openQuestions": [],
-          "evidence": [],
+          "statement": "Keep the golden notes",
+          "status": "active",
+          "updatedAt": "<time>",
           "verification": {
-            "status": "not_run",
-            "summary": "",
             "evidence": [],
             "recoveryPhase": null,
+            "status": "not_run",
+            "summary": "",
             "updatedAt": null
           },
-          "updatedAt": "<time>",
-          "status": "active"
+          "version": 1
         },
-        "plan": null,
         "ledger": [
           {
-            "sequence": 1,
             "at": "<time>",
+            "detail": "goal v1 (active)",
             "kind": "goal_updated",
-            "detail": "goal v1 (active)"
+            "sequence": 1
           }
-        ]
+        ],
+        "phase": "chat",
+        "plan": null
       }
     }
-  ],
-  "bindings": [
-    {
-      "run_id": "<id-3>",
-      "goal_version": 1,
-      "plan_version": null
-    },
-    {
-      "run_id": "<id-4>",
-      "goal_version": 1,
-      "plan_version": null
-    }
-  ],
-  "acknowledgements": [],
-  "events": [
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:1",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "CUSTOM",
-        "name": "run.accepted",
-        "value": {},
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "chunk:0",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_STARTED",
-        "runId": "<id-3>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:41",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_STARTED",
-        "runId": "<id-3>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "chunk:1",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_START",
-        "toolCallId": "goal-approval@<session>",
-        "toolCallName": "save_code_skill",
-        "parentMessageId": "<id-2>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:43",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_START",
-        "toolCallId": "goal-approval@<session>",
-        "toolCallName": "save_code_skill",
-        "parentMessageId": "<id-2>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "chunk:2",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_ARGS",
-        "toolCallId": "goal-approval@<session>",
-        "delta": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:45",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_ARGS",
-        "toolCallId": "goal-approval@<session>",
-        "delta": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "chunk:3",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_END",
-        "toolCallId": "goal-approval@<session>",
-        "timestamp": "<time>",
-        "input": {
-          "name": "goal-approval",
-          "description": "Print a line",
-          "program": {
-            "runtime": "sh",
-            "script": "printf goal-approved"
-          },
-          "reason": "golden scenario"
-        }
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:47",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_END",
-        "toolCallId": "goal-approval@<session>",
-        "timestamp": "<time>",
-        "input": {
-          "name": "goal-approval",
-          "description": "Print a line",
-          "program": {
-            "runtime": "sh",
-            "script": "printf goal-approved"
-          },
-          "reason": "golden scenario"
-        }
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "chunk:4",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "MESSAGES_SNAPSHOT",
-        "timestamp": "<time>",
-        "messages": [
-          {
-            "id": "<id-1>",
-            "role": "user",
-            "content": "golden:goal-approval"
-          },
-          {
-            "id": "<id-2>",
-            "role": "assistant",
-            "toolCalls": [
-              {
-                "id": "goal-approval@<session>",
-                "type": "function",
-                "function": {
-                  "name": "save_code_skill",
-                  "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}"
-                }
-              }
-            ],
-            "createdAt": "<time>",
-            "model": "scripted-1"
-          }
-        ]
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:49",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "MESSAGES_SNAPSHOT",
-        "timestamp": "<time>",
-        "messages": [
-          {
-            "id": "<id-1>",
-            "role": "user",
-            "content": "golden:goal-approval"
-          },
-          {
-            "id": "<id-2>",
-            "role": "assistant",
-            "toolCalls": [
-              {
-                "id": "goal-approval@<session>",
-                "type": "function",
-                "function": {
-                  "name": "save_code_skill",
-                  "arguments": "{\"name\":\"goal-approval\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf goal-approved\"},\"reason\":\"golden scenario\"}"
-                }
-              }
-            ],
-            "createdAt": "<time>",
-            "model": "scripted-1"
-          }
-        ]
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "chunk:5",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_FINISHED",
-        "runId": "<id-3>",
-        "threadId": "<session>",
-        "timestamp": "<time>",
-        "outcome": {
-          "type": "interrupt",
-          "interrupts": [
-            {
-              "id": "approval_goal-approval@<session>",
-              "reason": "tool_call",
-              "message": "Approval required to run save_code_skill",
-              "toolCallId": "goal-approval@<session>",
-              "responseSchema": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "approved": {
-                        "const": true
-                      },
-                      "editedArgs": {
-                        "type": "object",
-                        "properties": {
-                          "name": {
-                            "type": "string",
-                            "maxLength": 64,
-                            "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
-                          },
-                          "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
-                          },
-                          "program": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "runtime": {
-                                    "type": "string",
-                                    "enum": [
-                                      "ts"
-                                    ]
-                                  },
-                                  "code": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
-                                  },
-                                  "input": {
-                                    "type": "object",
-                                    "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
-                                  }
-                                },
-                                "required": [
-                                  "runtime",
-                                  "code"
-                                ],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "runtime": {
-                                    "type": "string",
-                                    "enum": [
-                                      "sh"
-                                    ]
-                                  },
-                                  "script": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
-                                  },
-                                  "network": {
-                                    "type": "array",
-                                    "maxItems": 32,
-                                    "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
-                                    "items": {
-                                      "type": "string",
-                                      "maxLength": 253
-                                    }
-                                  }
-                                },
-                                "required": [
-                                  "runtime",
-                                  "script"
-                                ],
-                                "additionalProperties": false
-                              }
-                            ],
-                            "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
-                          },
-                          "usage": {
-                            "type": "string",
-                            "description": "What the input or arguments mean and what the result shows."
-                          },
-                          "reason": {
-                            "type": "string",
-                            "description": "One sentence on why, shown to the user when asking."
-                          }
-                        },
-                        "required": [
-                          "name",
-                          "description",
-                          "program"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "required": [
-                      "approved"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "approved": {
-                        "const": false
-                      }
-                    },
-                    "required": [
-                      "approved"
-                    ],
-                    "additionalProperties": false
-                  }
-                ]
-              },
-              "metadata": {
-                "kind": "approval",
-                "toolName": "save_code_skill",
-                "input": {
-                  "name": "goal-approval",
-                  "description": "Print a line",
-                  "program": {
-                    "runtime": "sh",
-                    "script": "printf goal-approved"
-                  },
-                  "reason": "golden scenario"
-                }
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:chunk:51",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_FINISHED",
-        "runId": "<id-3>",
-        "threadId": "<session>",
-        "timestamp": "<time>",
-        "outcome": {
-          "type": "interrupt",
-          "interrupts": [
-            {
-              "id": "approval_goal-approval@<session>",
-              "reason": "tool_call",
-              "message": "Approval required to run save_code_skill",
-              "toolCallId": "goal-approval@<session>",
-              "responseSchema": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "approved": {
-                        "const": true
-                      },
-                      "editedArgs": {
-                        "type": "object",
-                        "properties": {
-                          "name": {
-                            "type": "string",
-                            "maxLength": 64,
-                            "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
-                          },
-                          "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
-                          },
-                          "program": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "runtime": {
-                                    "type": "string",
-                                    "enum": [
-                                      "ts"
-                                    ]
-                                  },
-                                  "code": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
-                                  },
-                                  "input": {
-                                    "type": "object",
-                                    "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
-                                  }
-                                },
-                                "required": [
-                                  "runtime",
-                                  "code"
-                                ],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "runtime": {
-                                    "type": "string",
-                                    "enum": [
-                                      "sh"
-                                    ]
-                                  },
-                                  "script": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
-                                  },
-                                  "network": {
-                                    "type": "array",
-                                    "maxItems": 32,
-                                    "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
-                                    "items": {
-                                      "type": "string",
-                                      "maxLength": 253
-                                    }
-                                  }
-                                },
-                                "required": [
-                                  "runtime",
-                                  "script"
-                                ],
-                                "additionalProperties": false
-                              }
-                            ],
-                            "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
-                          },
-                          "usage": {
-                            "type": "string",
-                            "description": "What the input or arguments mean and what the result shows."
-                          },
-                          "reason": {
-                            "type": "string",
-                            "description": "One sentence on why, shown to the user when asking."
-                          }
-                        },
-                        "required": [
-                          "name",
-                          "description",
-                          "program"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "required": [
-                      "approved"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "approved": {
-                        "const": false
-                      }
-                    },
-                    "required": [
-                      "approved"
-                    ],
-                    "additionalProperties": false
-                  }
-                ]
-              },
-              "metadata": {
-                "kind": "approval",
-                "toolName": "save_code_skill",
-                "input": {
-                  "name": "goal-approval",
-                  "description": "Print a line",
-                  "program": {
-                    "runtime": "sh",
-                    "script": "printf goal-approved"
-                  },
-                  "reason": "golden scenario"
-                }
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
-      "run_id": "<id-3>",
-      "event_key": "sdk-stream:v1:closed",
-      "kind": "run_completed",
-      "payload_json": {
-        "deliveryClosed": true
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:1",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "CUSTOM",
-        "name": "run.accepted",
-        "value": {},
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "chunk:0",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_RESULT",
-        "timestamp": "<time>",
-        "messageId": "<id-2>",
-        "toolCallId": "goal-approval@<session>",
-        "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
-        "role": "tool"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:55",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TOOL_CALL_RESULT",
-        "timestamp": "<time>",
-        "messageId": "<id-2>",
-        "toolCallId": "goal-approval@<session>",
-        "content": "{\"name\":\"goal-approval\",\"directory\":\".agents/skills/goal-approval\",\"scriptSha256\":\"3ebc9bbed0749f11025c009baa5f7577695dd02fa375b0738f241a16e14ff7cb\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
-        "role": "tool"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "chunk:1",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_STARTED",
-        "runId": "<id-4>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:57",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_STARTED",
-        "runId": "<id-4>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "chunk:2",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TEXT_MESSAGE_START",
-        "messageId": "<id-5>",
-        "role": "assistant",
-        "timestamp": "<time>",
-        "model": "scripted-1"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:59",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TEXT_MESSAGE_START",
-        "messageId": "<id-5>",
-        "role": "assistant",
-        "timestamp": "<time>",
-        "model": "scripted-1"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "chunk:3",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TEXT_MESSAGE_CONTENT",
-        "messageId": "<id-5>",
-        "delta": "goal approval done",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:61",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TEXT_MESSAGE_CONTENT",
-        "messageId": "<id-5>",
-        "delta": "goal approval done",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "chunk:4",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TEXT_MESSAGE_END",
-        "messageId": "<id-5>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:63",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "TEXT_MESSAGE_END",
-        "messageId": "<id-5>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "chunk:5",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_FINISHED",
-        "runId": "<id-4>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:chunk:65",
-      "kind": "chunk",
-      "payload_json": {
-        "type": "RUN_FINISHED",
-        "runId": "<id-4>",
-        "threadId": "<session>",
-        "timestamp": "<time>"
-      }
-    },
-    {
-      "run_id": "<id-4>",
-      "event_key": "sdk-stream:v1:closed",
-      "kind": "run_completed",
-      "payload_json": {
-        "deliveryClosed": true
-      }
-    }
-  ],
-  "ledger": [
-    {
-      "run_id": "<id-3>",
-      "operation_id": 1,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 2,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 3,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 4,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 5,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 6,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 7,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 8,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 9,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 10,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 11,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 12,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 13,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 14,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 15,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 16,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 17,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelOpen",
-      "input_kind": "omitted",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 18,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 19,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 20,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 21,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 22,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 23,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 24,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 25,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 26,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 27,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 28,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 29,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 30,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 31,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 32,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 33,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 34,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "strategy",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 35,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 36,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 37,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 38,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 39,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 40,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-3>",
-      "operation_id": 41,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 1,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 2,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 3,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 4,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 5,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 6,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 7,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 8,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 9,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 10,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "toolAuthorize",
-      "input_kind": "complete",
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "save_code_skill"
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-approval@<session>"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-approval"
-                  ]
-                ],
-                [
-                  "description",
-                  [
-                    "string",
-                    "Print a line"
-                  ]
-                ],
-                [
-                  "program",
-                  [
-                    "object",
-                    [
-                      [
-                        "runtime",
-                        [
-                          "string",
-                          "sh"
-                        ]
-                      ],
-                      [
-                        "script",
-                        [
-                          "string",
-                          "printf goal-approved"
-                        ]
-                      ]
-                    ]
-                  ]
-                ],
-                [
-                  "reason",
-                  [
-                    "string",
-                    "golden scenario"
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      ]
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 11,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "tool",
-      "input_kind": "complete",
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "save_code_skill"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-approval"
-                  ]
-                ],
-                [
-                  "description",
-                  [
-                    "string",
-                    "Print a line"
-                  ]
-                ],
-                [
-                  "program",
-                  [
-                    "object",
-                    [
-                      [
-                        "runtime",
-                        [
-                          "string",
-                          "sh"
-                        ]
-                      ],
-                      [
-                        "script",
-                        [
-                          "string",
-                          "printf goal-approved"
-                        ]
-                      ]
-                    ]
-                  ]
-                ],
-                [
-                  "reason",
-                  [
-                    "string",
-                    "golden scenario"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-approval@<session>"
-            ]
-          ]
-        ]
-      ]
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 12,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 13,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 14,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 15,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 16,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 17,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 18,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 19,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 20,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "strategy",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 21,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 22,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 23,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 24,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 25,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 26,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 27,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "middleware-hook",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 28,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelOpen",
-      "input_kind": "omitted",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 29,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 30,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 31,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 32,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 33,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 34,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 35,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 36,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 37,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 38,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 39,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "modelNext",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 40,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 41,
-      "side_effect": 0,
-      "status": "succeeded",
-      "operation": "strategy",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 42,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 43,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 44,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 45,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 46,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 47,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    },
-    {
-      "run_id": "<id-4>",
-      "operation_id": 48,
-      "side_effect": 1,
-      "status": "succeeded",
-      "operation": "middleware",
-      "input_kind": "complete",
-      "input": null
-    }
-  ],
-  "usage": []
+  ]
 }
