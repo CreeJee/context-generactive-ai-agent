@@ -6,6 +6,7 @@ import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { chatClient, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -109,8 +110,7 @@ testAgent()("MCP servers of a project", (it) => {
           mcpServers: { fake: fake.entry({ FAKE_MCP_LIST_LOG: listLog }) },
         });
         yield* servers.setTrusted(project, "project", "fake", true);
-        // Trusting lists the tools once. A listing of a server on the 2025 protocol is two
-        // tools/list requests: the SDK lists again to fill its own cache.
+        // Trusting lists the tools once.
         const listing = (yield* lines(listLog)).length;
         const [left, right] = yield* Effect.all(
           [inRun(servers.tools(project)), inRun(servers.tools(project))],
@@ -168,6 +168,57 @@ testAgent()("MCP servers of a project", (it) => {
             ),
           )(String(result)),
         ).toEqual({ cwd: project.root, token: "expanded-token", inheritedSecret: null });
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
+    "the Effect AI tools ask as the TanStack ones and answer the same",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const chat = yield* inRun(servers.tools(project));
+        const run = yield* servers.runTools(project);
+        expect(
+          yield* runToolRequestDifferences({ chatTools: chat.tools, runTools: run.tools }),
+        ).toEqual([undefined, undefined, undefined]);
+        expect(run.guides).toEqual(chat.guides);
+        const name = mcpToolName("fake", "echo");
+        const echo = chat.tools.find((tool) => tool.name === name);
+        const runEcho = Effect.fromNullishOr(run.tools.find((tool) => tool.tool.name === name));
+        const sent = yield* sdk(() => Promise.resolve(echo?.execute?.({ text: "same" })));
+        const ran = yield* runEcho.pipe(
+          Effect.flatMap((tool) => tool.prepare({ text: "same" })),
+          Effect.flatMap((call) => call({ toolCallId: "call-echo" })),
+        );
+        expect(ran).toEqual(sent);
+        // The arguments are checked against the server's schema, as TanStack checked them.
+        const rejected = yield* Effect.flip(
+          Effect.flatMap(runEcho, (tool) => tool.prepare({ count: 1 })),
+        );
+        expect(rejected.message).toContain('required property "text"');
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
+    "a tool that must run as a task answers once its task ends",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, {
+          mcpServers: { fake: fake.entry({ FAKE_MCP_TASKS: "true" }) },
+        });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const later = (yield* servers.runTools(project)).tools.find(
+          (tool) => tool.tool.name === mcpToolName("fake", "later"),
+        );
+        const call = yield* Effect.flatMap(Effect.fromNullishOr(later), (tool) => tool.prepare({}));
+        expect(yield* call({ toolCallId: "call-later" })).toBe("later: done");
       }),
     serverStartTimeout,
   );

@@ -254,9 +254,6 @@ catalogs:
     '@tanstack/ai-compaction':
       specifier: ^1.0.0
       version: 1.0.0
-    '@tanstack/ai-mcp':
-      specifier: 1.0.0
-      version: 1.0.0
     '@tanstack/ai-openai':
       specifier: ^1.0.0
       version: 1.0.0
@@ -661,9 +658,6 @@ importers:
       '@tanstack/ai-compaction':
         specifier: 'catalog:'
         version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))
-      '@tanstack/ai-mcp':
-        specifier: 'catalog:'
-        version: 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
         version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
@@ -2474,15 +2468,6 @@ packages:
 
   '@tanstack/ai-event-client@1.0.0':
     resolution: {integrity: sha512-RXlk6XkIYU4n25QYoCmETKiFjPnEpwvQv5Ve62pdtHaEVP//VZUdwGSRGCf/PATgwYdib8FT49tPmqnKtXPDhw==}
-
-  '@tanstack/ai-mcp@1.0.0':
-    resolution: {integrity: sha512-HPjtpK1nb7WKaAr5cE1/DlcDR/BJyLYeYoMcuS64V7ZefCJvF/6Dj0yb+Elt9B4dZpJ85SWRBzNyf7qGjJI1hQ==}
-    hasBin: true
-    peerDependencies:
-      '@tanstack/ai-harness': ^0.1.0
-    peerDependenciesMeta:
-      '@tanstack/ai-harness':
-        optional: true
 
   '@tanstack/ai-openai@1.0.0':
     resolution: {integrity: sha512-p0blsUs98FSnIXgYk8KMAbyBTWCHdZj4PyvhrUuO3vU4aNAnjlwunDyrqVhmP8gXA3k0oSUru4UAmXXKnN5j4g==}
@@ -7078,16 +7063,6 @@ snapshots:
   '@tanstack/ai-event-client@1.0.0':
     dependencies:
       '@tanstack/devtools-event-client': 0.4.4
-
-  '@tanstack/ai-mcp@1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)':
-    dependencies:
-      '@modelcontextprotocol/client': 2.3.1
-      '@modelcontextprotocol/server': 2.3.1
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      jose: 6.2.12
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - zod
 
   '@tanstack/ai-openai@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)':
     dependencies:

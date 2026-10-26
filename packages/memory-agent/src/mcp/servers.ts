@@ -1,13 +1,16 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { runTrace } from "../runtime/run-trace.ts";
-import { Cause, Function as EffectFunction } from "effect";
+import { runTrace, type RunTrace } from "../runtime/run-trace.ts";
+import { Cause, Function as EffectFunction, type JsonSchema, Predicate } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import {
+  StreamableHTTPClientTransport,
+  type Client,
+  type Tool as McpTool,
+} from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { AnyServerTool } from "@tanstack/ai";
-import { createMCPClient, type MCPClient } from "@tanstack/ai-mcp";
 import {
   HashSet,
   MutableHashMap,
@@ -22,6 +25,18 @@ import {
   Match,
   Schema,
 } from "effect";
+import { JsonValue } from "../json.ts";
+import { optionalProperty } from "../optional-property.ts";
+import { jsonSchemaIssues } from "../tools/input-repair.ts";
+import { runTool, type RunTool } from "../tools/run-tool.ts";
+import {
+  callTool,
+  connectClient,
+  inputSchemaOf,
+  listTools,
+  type JsonObject,
+  type McpToolFailed,
+} from "./client.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -122,8 +137,8 @@ export interface McpServerGuide {
 }
 
 /** The tools of a run's servers, with the guide of each server that offers any. */
-export interface McpRunTools {
-  readonly tools: AnyServerTool[];
+export interface McpRunTools<Tool = AnyServerTool> {
+  readonly tools: Tool[];
   readonly guides: readonly McpServerGuide[];
 }
 
@@ -168,9 +183,20 @@ const TrustRow = Schema.Struct({
   fingerprint: Schema.String,
 });
 
-/** One server's tools as agent tools, and its guide (`null` when it sent none). */
+/** One tool of a server as the model is told about it, and its call on the live connection. */
+interface ServerTool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonSchema.JsonSchema;
+  readonly outputSchema: McpTool["outputSchema"];
+  readonly call: (
+    args: JsonObject,
+  ) => Effect.Effect<unknown, McpToolFailed | Schema.SchemaError | Cause.UnknownError>;
+}
+
+/** One server's tools, and its guide (`null` when it sent none). */
 interface Discovered {
-  readonly tools: AnyServerTool[];
+  readonly tools: ServerTool[];
   readonly guide: string | null;
 }
 
@@ -178,7 +204,7 @@ const nothingDiscovered: Discovered = { tools: [], guide: null };
 
 interface Connection {
   readonly fingerprint: string;
-  readonly client: Promise<MCPClient>;
+  readonly client: Promise<Client>;
   state: McpServerState;
   discovering: Promise<Discovered> | null;
 }
@@ -191,15 +217,17 @@ const describeFailure = (error: Error) => {
 
 const isMissingVariable = Schema.is(MissingVariable);
 
-const withTimeout = <A>(promise: Promise<A>, ms: number, step: McpStepTimedOut["step"]) =>
-  nativePromise(() => promise).pipe(
+const withTimeout = <A, E>(
+  effect: Effect.Effect<A, E>,
+  ms: number,
+  step: McpStepTimedOut["step"],
+) =>
+  effect.pipe(
     Effect.timeoutOrElse({
       duration: ms,
       orElse: () => Effect.fail(McpStepTimedOut.make({ step })),
     }),
   );
-
-const isText = Schema.is(Schema.String);
 
 /** The server state settings show for a step that did not finish in time. */
 const stepTimedOutCode = {
@@ -234,6 +262,58 @@ const truncated = (text: string) =>
   text.length <= maxMcpResultCharacters
     ? null
     : `${text.slice(0, maxMcpResultCharacters)}\n… [cut: ${text.length - maxMcpResultCharacters} more characters]`;
+
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+/** A long result cut: its text, or its JSON when it is not text. */
+const limited = <A>(result: A) =>
+  Effect.succeed<unknown>(result).pipe(
+    Effect.filterOrElse(Predicate.isString, encodeJson),
+    Effect.map((text) => truncated(text) ?? result),
+  );
+
+const decodeArguments = Schema.decodeUnknownOption(Schema.Record(Schema.String, JsonValue));
+
+/** MCP arguments are an object; TanStack sent `{}` for anything else. */
+const argumentsOf = <A>(args: A): JsonObject => Option.getOrElse(decodeArguments(args), () => ({}));
+
+/** The tool for TanStack's loop, whose calls are spans in the run's trace. */
+const chatToolOf =
+  (caller: RunTrace) =>
+  (tool: ServerTool): AnyServerTool => ({
+    __toolSide: "server",
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    ...optionalProperty("outputSchema", tool.outputSchema),
+    needsApproval: false,
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    execute: (args, context) =>
+      runNativeEffect(
+        tool
+          .call(argumentsOf(args))
+          .pipe(Effect.withSpan("McpServers.call"), Effect.provideContext(caller)),
+        { signal: context?.abortSignal },
+      ),
+  });
+
+/**
+ * The tool for the Effect AI loop. The SDK does not check arguments against a JSON Schema, so its
+ * parameters check them as TanStack did (`jsonSchemaIssues`).
+ */
+const runToolOf = (tool: ServerTool): RunTool =>
+  runTool({
+    name: tool.name,
+    description: tool.description,
+    parameters: Schema.Record(Schema.String, JsonValue).check(
+      Schema.makeFilter((value) =>
+        Option.getOrUndefined(jsonSchemaIssues({ schema: tool.inputSchema, value })),
+      ),
+    ),
+    jsonSchema: tool.inputSchema,
+    needsApproval: false,
+    handler: (args) => tool.call(args).pipe(Effect.withSpan("McpServers.call")),
+  });
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -363,16 +443,11 @@ const make = Effect.gen(function* () {
     // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     const client = runNativeEffect(
-      nativePromise(() =>
-        createMCPClient({
-          // SAFETY: The SDK's concrete HTTP transport declares sessionId as string | undefined while
-          // TanStack's TransportInput expects an exact optional string. Runtime contracts agree.
-          transport: transportFor(project, server.config) as Parameters<
-            typeof createMCPClient
-          >[0]["transport"],
-          name: "context-generactive-agent",
-        }),
-      ),
+      Effect.try({
+        // A missing `${VAR}` throws here, and settings show which one.
+        try: () => transportFor(project, server.config),
+        catch: (error) => new Cause.UnknownError(error),
+      }).pipe(Effect.flatMap(connectClient)),
     );
     client.catch(() => undefined);
     const connection: Connection = {
@@ -396,41 +471,24 @@ const make = Effect.gen(function* () {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     const pending = runNativeEffect(
       Effect.gen(function* () {
-        const client = yield* withTimeout(connection.client, connectTimeoutMs, "connect");
-        const tools = yield* withTimeout(client.tools(), connectTimeoutMs, "tools/list");
+        const client = yield* withTimeout(
+          nativePromise(() => connection.client),
+          connectTimeoutMs,
+          "connect",
+        );
+        const tools = yield* withTimeout(listTools(client), connectTimeoutMs, "tools/list");
         if (Option.getOrUndefined(MutableHashMap.get(connections, key)) !== connection)
           return nothingDiscovered;
         connection.state = McpServerState.connected({ tools: tools.map((tool) => tool.name) });
-        const guide = client.instructions?.trim() ?? "";
-        const agentTools = tools.flatMap((tool): AnyServerTool[] => {
-          const execute = tool.execute;
-          if (!isTruthy(execute)) return [];
-          return [
-            {
-              ...tool,
-              name: mcpToolName(server.name, tool.name),
-              description: `[MCP ${server.name}] ${tool.description}`.trim(),
-              needsApproval: false,
-              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              execute: (args, context) =>
-                runNativeEffect(
-                  nativePromise(() => Promise.resolve(execute(args, context))).pipe(
-                    Effect.flatMap((result) =>
-                      Effect.gen(function* () {
-                        const text = isText(result)
-                          ? result
-                          : yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-                              result,
-                            );
-                        return truncated(text) ?? result;
-                      }),
-                    ),
-                  ),
-                ),
-            },
-          ];
-        });
-        return { tools: agentTools, guide: guide === "" ? null : guide } satisfies Discovered;
+        const guide = client.getInstructions()?.trim() ?? "";
+        const serverTools = tools.map((tool): ServerTool => ({
+          name: mcpToolName(server.name, tool.name),
+          description: `[MCP ${server.name}] ${tool.description ?? ""}`.trim(),
+          inputSchema: inputSchemaOf(tool),
+          outputSchema: tool.outputSchema,
+          call: (args) => callTool({ client, tool, args }).pipe(Effect.flatMap(limited)),
+        }));
+        return { tools: serverTools, guide: guide === "" ? null : guide } satisfies Discovered;
       }).pipe(
         // A server that fails to start or list is remembered as failed and offers no tools.
         Effect.catch((failure) => {
@@ -486,6 +544,23 @@ const make = Effect.gen(function* () {
     });
     return { files, servers: views } satisfies McpOverview;
   });
+
+  /** What every trusted, unchanged server of the project offers. */
+  const discoveredFor = (project: Project) =>
+    Effect.gen(function* () {
+      const usable = (yield* configured(project)).servers.filter(
+        (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
+      );
+      return yield* Effect.forEach(
+        usable,
+        (entry) =>
+          Effect.tryPromise({
+            try: () => discover(project, entry.server),
+            catch: (cause) => McpOperationFailed.make({ operation: "tools", cause }),
+          }).pipe(Effect.map((discovered) => ({ server: entry.server.name, ...discovered }))),
+        { concurrency: "unbounded" },
+      );
+    });
 
   yield* Effect.addFinalizer(() =>
     Effect.forEach(
@@ -545,42 +620,25 @@ const make = Effect.gen(function* () {
     tools: (project: Project) =>
       Effect.gen(function* () {
         const caller = yield* runTrace;
-        const usable = (yield* configured(project)).servers.filter(
-          (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
-        );
-        const found = yield* Effect.forEach(
-          usable,
-          (entry) =>
-            Effect.tryPromise({
-              try: () => discover(project, entry.server),
-              catch: (cause) => McpOperationFailed.make({ operation: "tools", cause }),
-            }).pipe(Effect.map((discovered) => ({ server: entry.server.name, ...discovered }))),
-          { concurrency: "unbounded" },
-        );
         // Discovered tools are shared by concurrent runs, so each run wraps its own calls.
-        const tools = found
-          .flatMap((server) => server.tools)
-          .map((tool): AnyServerTool => {
-            const execute = tool.execute;
-            if (!isTruthy(execute)) return tool;
-            return {
-              ...tool,
-              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              execute: (...call: Parameters<typeof execute>) =>
-                runNativeEffect(
-                  nativePromise(() => Promise.resolve(execute(...call))).pipe(
-                    Effect.withSpan("McpServers.call"),
-                    Effect.provideContext(caller),
-                  ),
-                ),
-            };
-          });
-        const guides = found.flatMap(({ server, tools: offered, guide }): McpServerGuide[] =>
-          guide === null || offered.length === 0 ? [] : [{ server, text: guide }],
-        );
-        return { tools, guides } satisfies McpRunTools;
+        return runToolsOf(yield* discoveredFor(project), chatToolOf(caller));
       }),
+
+    /** {@link tools} for the Effect AI loop, whose calls are spans where the loop runs them. */
+    runTools: (project: Project) =>
+      Effect.map(discoveredFor(project), (found) => runToolsOf(found, runToolOf)),
   };
+});
+
+/** A run's tools from what its servers offer, with the guide of each server that offers any. */
+const runToolsOf = <Tool>(
+  found: ReadonlyArray<Discovered & { readonly server: string }>,
+  toolOf: (tool: ServerTool) => Tool,
+): McpRunTools<Tool> => ({
+  tools: found.flatMap((server) => server.tools).map(toolOf),
+  guides: found.flatMap(({ server, tools: offered, guide }): McpServerGuide[] =>
+    guide === null || offered.length === 0 ? [] : [{ server, text: guide }],
+  ),
 });
 
 /** MCP servers from `<storage>/mcp.json` and `<project>/.mcp.json` (R18). */

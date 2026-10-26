@@ -41,7 +41,6 @@ catalog:
   "@modelcontextprotocol/client": ^2.3.1
   "@modelcontextprotocol/server": ^2.3.1
   "@napi-rs/keyring": 2.1.1
-  "@tanstack/ai-mcp": 1.0.0
   cmdk: ^1.1.1
   kiwi-nlp: 0.24.0
   cross-spawn: 7.0.6

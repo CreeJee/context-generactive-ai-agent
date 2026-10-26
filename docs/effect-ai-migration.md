@@ -394,7 +394,11 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 결과(2026-10-26, 진행 중): 모두 `packages/memory-agent/src` 아래다.
   - 도구 단위는 `tools/run-tool.ts`의 `RunTool`이다. 모델에 알리는 Effect AI `Tool`, lazy 여부, 인자를 decode해 실행할 호출을 만드는 `prepare`를 담는다. `runTool`이 이름·설명·parameters와 handler로 만든다.
   - `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode를 먼저 하고 게이트를 거친 뒤 실행하므로 둘을 나눠야 한다. handler마다 다른 타입은 closure로 감춘다.
-  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`), `run_code`와 ts skill(`tools/code.ts`의 `forRunTools`), `read_skill`(`tools/skills.ts`), Kagi(`tools/kagi.ts`), background 결과·취소(`tools/background.ts`), `delegate_to_agent`(`tools/delegate.ts`), kanban 보드 도구(`kanban/tools.ts`), verifier의 `record_card_verdict`(`kanban/subagent-card-agent.ts`의 `verdictRecorder`), workflow 도구(`workflow/tools.ts`, phase별 목록은 `phaseTools` 표), 부모의 subagent 도구 4개(`subagents/subagents.ts`의 `runToolsFor`).
+  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`), `run_code`와 ts skill(`tools/code.ts`의 `forRunTools`), `read_skill`(`tools/skills.ts`), Kagi(`tools/kagi.ts`), background 결과·취소(`tools/background.ts`), `delegate_to_agent`(`tools/delegate.ts`), kanban 보드 도구(`kanban/tools.ts`), verifier의 `record_card_verdict`(`kanban/subagent-card-agent.ts`의 `verdictRecorder`), workflow 도구(`workflow/tools.ts`, phase별 목록은 `phaseTools` 표), 부모의 subagent 도구 4개(`subagents/subagents.ts`의 `runToolsFor`), MCP 도구(`mcp/servers.ts`의 `runTools`).
+  - MCP: `@tanstack/ai-mcp` 대신 SDK `Client`로 연결하고 도구를 나열·호출한다(`mcp/client.ts`). TanStack 도구와 Effect AI 도구가 같은 연결과 같은 호출을 쓰고, `@tanstack/ai-mcp` 의존성은 지웠다.
+    - TanStack client에서 옮긴 것: 프로토콜 협상 `auto`, task가 필요한 도구는 서버가 task를 지원할 때만 제공, 2025 프로토콜 task의 polling(`tasks/get`·`tasks/result`, 멈춘 호출은 `tasks/cancel`), 2026 프로토콜의 `Mcp-Param-*` 헤더용 `toolDefinition`, 결과 변환(text 하나는 문자열, 나머지는 part, `ui://` resource 생략, output schema가 있으면 `structuredContent`), 서버 오류 문구 `MCP tool "<name>" returned an error: ...`.
+    - 인자는 서버가 보낸 JSON Schema로 `jsonSchemaIssues`가 검사한다. TanStack도 같은 검사기로 검사했다. `Tool.dynamic`은 인자를 검사하지 않는다.
+    - 호출 span(`McpServers.call`)은 TanStack 도구에서는 run trace 아래, Effect AI 도구에서는 loop가 호출을 실행하는 곳 아래에 생긴다.
   - subagent 도구: 한 부모 run의 상태(검토한 보고서, 전달된 알림, adoption draft)를 `parentRun`이 갖고, TanStack middleware와 Effect AI 도구가 같은 규칙을 쓴다. `runToolsFor`는 middleware 대신 `hooks`(`retry`, `deliver`, `recordAdoption`, `release`)를 내보내고, 4단계 loop가 middleware 자리에서 부른다. 검토 표시는 `onAfterToolCall` 대신 get_subagent_reports의 handler가 성공한 결과로 한다.
   - 승인 도구: `ask` 모드(`static`)의 save_code_skill·write_outside_file·delete_outside_file은 `needsApproval: true`를 단다. 다른 모드(`gate`)는 loop의 review가 호출마다 정한다. 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 두고, `effect/ai`는 서버의 `tools/approved.ts`만 import한다.
   - `tests/tool-effects.test.ts`의 등록 검사는 `toolDefinition({ name })`과 함께 `{ name, description, parameters }` spec도 도구 등록으로 읽는다. 설명이 `${...}`를 쓰는 template literal이어도 읽는다.
@@ -409,6 +413,11 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - 비밀 가리기가 실패하면 결과 대신 `redaction_failed` 도구 실패를 돌려준다. TanStack 경로는 `{error: message}`를 돌려줬다.
     - JSON이 아닌 결과(undefined 필드가 있는 객체 등)도 JSON으로 바꾼 뒤 가린다. 옛 `redactResult`는 이런 결과를 가리지 않고 넘겼다.
     - 프로그램 안 호출의 `invalid_input:` 뒤 문구는 Effect Schema의 decode 오류다. TanStack은 Standard Schema의 문구였다. 접두사는 같다.
+    - MCP client는 elicitation·sampling capability를 알리지 않는다. 서버가 그래도 입력을 요청하면 도구 실패(`The MCP server asked for input, which this app does not answer.`)다. TanStack은 두 capability를 알리고 입력 요청을 `mcp_input` interrupt로 바꿨지만, 앱은 그 interrupt를 다루지 않았다.
+    - 2025 프로토콜 서버의 도구 목록은 `tools/list` 한 번이다. SDK `listTools`가 페이지를 모으고 출력 검사용 캐시도 채운다. TanStack은 캐시를 채우려고 한 번 더 보냈다. 페이지 상한은 SDK 기본값 64다(TanStack 100).
+    - 서버가 오류로 답한 호출의 실패 tag는 `McpToolFailed`다. TanStack 경로는 `Error`였다. 문구는 같다.
+    - TanStack 도구에 MCP Apps용 `metadata.mcp`(title, annotations, `uiResourceUri`)가 없다. 앱은 읽지 않았다.
+    - 2026 프로토콜의 `tools/list_changed` 구독을 열지 않는다. run마다 목록을 다시 읽는다.
   - 다음 단계로 넘기는 것:
     - 4단계: 인자 decode 실패를 모델에 돌려주는 문구. TanStack은 `Input validation failed for tool <name>: ...`였다.
     - 자식 run의 `read_subagent_tool_result`: spec과 호출(`childResult`)은 나눴고, RunTool은 자식 run을 새 loop로 옮길 때 만든다. 자식 도구 목록(code 도구, 병렬 읽기, 게이트)과 함께 바뀌기 때문이다.
