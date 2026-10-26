@@ -214,24 +214,28 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
           FiberMap.remove(runs.running, `${payload.goalInstanceId}:${payload.cardId}`),
         ),
       );
-      // The orchestrator stopping the agent interrupts it; anything else that ends it is a failure.
-      if (Exit.isFailure(exit))
-        return Cause.hasInterruptsOnly(exit.cause)
-          ? CardAttemptOutcome.cases.Stopped.make({ cardStatus: "in_progress" })
-          : failedWith(CardFailure.cases.Defect.make({}));
-      return yield* Match.valueTags(exit.value, {
-        Failed: ({ failure }) => Effect.succeed(failedWith(failure)),
-        // The card's agent cannot write the repository's git metadata from its sandbox; the owner
-        // commits its work to the card branch.
-        Finished: ({ report }) =>
-          Effect.map(
-            workspace.commitWork(cardRef, `${card.title}\n\nattempt ${payload.attemptNo}`),
-            (commit) =>
-              CardAttemptOutcome.cases.Completed.make({
-                report,
-                commit: Option.getOrNull(commit),
-              }),
+      return yield* Exit.match(exit, {
+        // The orchestrator stopping the agent interrupts it; anything else that ends it is a failure.
+        onFailure: (cause) =>
+          Effect.succeed(
+            Cause.hasInterruptsOnly(cause)
+              ? CardAttemptOutcome.cases.Stopped.make({ cardStatus: "in_progress" })
+              : failedWith(CardFailure.cases.Defect.make({})),
           ),
+        onSuccess: Match.valueTags({
+          Failed: ({ failure }) => Effect.succeed(failedWith(failure)),
+          // The card's agent cannot write the repository's git metadata from its sandbox; the owner
+          // commits its work to the card branch.
+          Finished: ({ report }) =>
+            Effect.map(
+              workspace.commitWork(cardRef, `${card.title}\n\nattempt ${payload.attemptNo}`),
+              (commit) =>
+                CardAttemptOutcome.cases.Completed.make({
+                  report,
+                  commit: Option.getOrNull(commit),
+                }),
+            ),
+        }),
       });
     }),
   ).pipe(
@@ -248,20 +252,25 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
 export const handleCardRun = Effect.fn("CardQueue.handle")(function* (payload: CardRunPayload) {
   const attempts = yield* CardAttempts;
   const recorded = yield* attempts.attempt(payload);
-  if (Option.isSome(recorded) && recorded.value.outcome !== null) return recorded.value.outcome;
-  const outcome = yield* deliver(payload).pipe(
-    Effect.catchTag("WorkflowStorageError", (cause) =>
-      Effect.fail(
-        KanbanStorageFailed.make({
-          operation: "card",
-          reason: KanbanStorageReason.cases.Storage.make({}),
-          cause,
-        }),
-      ),
-    ),
+  return yield* Option.match(
+    Option.flatMapNullishOr(recorded, (attempt) => attempt.outcome),
+    {
+      onSome: Effect.succeed,
+      onNone: () =>
+        deliver(payload).pipe(
+          Effect.catchTag("WorkflowStorageError", (cause) =>
+            Effect.fail(
+              KanbanStorageFailed.make({
+                operation: "card",
+                reason: KanbanStorageReason.cases.Storage.make({}),
+                cause,
+              }),
+            ),
+          ),
+          Effect.tap((outcome) => attempts.recordOutcome(payload, outcome)),
+        ),
+    },
   );
-  yield* attempts.recordOutcome(payload, outcome);
-  return outcome;
 });
 
 /**

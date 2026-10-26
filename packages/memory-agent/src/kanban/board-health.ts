@@ -20,7 +20,9 @@ const make = Effect.gen(function* () {
   const health = yield* Ref.make<Readonly<Record<string, LoopHealth>>>({});
 
   const changed = (board: BoardRef, isChanged: boolean) =>
-    isChanged ? Effect.asVoid(events.publishSession(board.sessionId, "run-state")) : Effect.void;
+    Effect.asVoid(
+      Effect.when(events.publishSession(board.sessionId, "run-state"), Effect.succeed(isChanged)),
+    );
 
   const get = (goalInstanceId: string) =>
     Effect.map(Ref.get(health), (all) => all[goalInstanceId] ?? healthyLoop);
@@ -32,8 +34,9 @@ const make = Effect.gen(function* () {
   const set = (board: BoardRef, next: LoopHealth) =>
     Ref.modify(health, (all): [boolean, Readonly<Record<string, LoopHealth>>] => {
       const current = all[board.goalInstanceId] ?? healthyLoop;
-      if (loopStopped(current) || sameLoopHealth(current, next)) return [false, all];
-      return [true, { ...all, [board.goalInstanceId]: next }];
+      return loopStopped(current) || sameLoopHealth(current, next)
+        ? [false, all]
+        : [true, { ...all, [board.goalInstanceId]: next }];
     }).pipe(Effect.flatMap((isChanged) => changed(board, isChanged)));
 
   return {

@@ -326,13 +326,22 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           // Subscribe before looking, so a record made between the look and the wait is seen.
           const wakeups = yield* PubSub.subscribe(recorded);
-          while (true) {
-            const current = yield* attempt(key);
-            if (Option.isSome(current) && current.value.outcome !== null)
-              return current.value.outcome;
-            let woke = "";
-            while (woke !== key.goalInstanceId) woke = yield* PubSub.take(wakeups);
-          }
+          // The next outcome this process records for the Goal instance, of any of its cards.
+          const nextRecord = PubSub.take(wakeups).pipe(
+            Effect.repeat({ until: (woke) => woke === key.goalInstanceId }),
+          );
+          const outcome: Effect.Effect<CardAttemptOutcome, KanbanStorageFailed> = Effect.flatMap(
+            attempt(key),
+            (current) =>
+              Option.match(
+                Option.flatMapNullishOr(current, (found) => found.outcome),
+                {
+                  onSome: Effect.succeed,
+                  onNone: () => Effect.andThen(nextRecord, outcome),
+                },
+              ),
+          );
+          return yield* outcome;
         }),
       ),
 

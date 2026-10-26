@@ -72,17 +72,17 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     );
     const dependsOn = new Map(steps.map((step) => [step.id, step.dependsOn]));
     // A replaced card another replaced card depends on is cancelled after it.
-    const order: string[] = [];
-    let remaining = [...replaced];
-    while (remaining.length > 0) {
+    const cancelOrder = (remaining: readonly string[]): readonly string[] => {
       const leaf = remaining.find(
         (id) => !remaining.some((other) => other !== id && dependsOn.get(other)?.includes(id)),
       );
       // A cycle among them cannot be cancelled in any order; the refusal names it.
       const next = leaf === undefined ? remaining : [leaf];
-      order.push(...next);
-      remaining = remaining.filter((id) => !next.includes(id));
-    }
+      return remaining.length === 0
+        ? []
+        : [...next, ...cancelOrder(remaining.filter((id) => !next.includes(id)))];
+    };
+    const order = cancelOrder(replaced);
     yield* Effect.forEach(
       dependents,
       (step) =>

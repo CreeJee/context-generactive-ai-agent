@@ -214,38 +214,43 @@ const make = Effect.fnUntraced(function* (options?: {
           RETURNING sequence, id, element_json, attempts`.pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ClaimedRow))),
       );
-      const row = rows[0];
-      if (row === undefined) return Option.none();
-      yield* Effect.addFinalizer((exit) =>
-        Match.valueTags(settlementOf(exit, row.attempts, options.maxAttempts), {
-          Complete: () =>
-            settle(
-              row.sequence,
-              sql`UPDATE persisted_queue_items
+      return yield* Effect.transposeOption(
+        Option.map(Option.fromUndefinedOr(rows[0]), (row) =>
+          // The claimed row settles by how its delivery ended, once the delivery's scope closes.
+          Effect.as(
+            Effect.addFinalizer((exit) =>
+              Match.valueTags(settlementOf(exit, row.attempts, options.maxAttempts), {
+                Complete: () =>
+                  settle(
+                    row.sequence,
+                    sql`UPDATE persisted_queue_items
                   SET state = 'completed', acquired_by = NULL, updated_at = ${now()}
                   WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
-            ),
-          Release: () =>
-            settle(
-              row.sequence,
-              sql`UPDATE persisted_queue_items
+                  ),
+                Release: () =>
+                  settle(
+                    row.sequence,
+                    sql`UPDATE persisted_queue_items
                   SET acquired_by = NULL, attempts = attempts - 1, updated_at = ${now()}
                   WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
-            ),
-          DeadLetter: ({ cause }) => markFailed(row.sequence, cause),
-          Retry: ({ cause }) =>
-            Effect.flatMap(options.retryDelay(row.attempts), (delay) =>
-              settle(
-                row.sequence,
-                sql`UPDATE persisted_queue_items
+                  ),
+                DeadLetter: ({ cause }) => markFailed(row.sequence, cause),
+                Retry: ({ cause }) =>
+                  Effect.flatMap(options.retryDelay(row.attempts), (delay) =>
+                    settle(
+                      row.sequence,
+                      sql`UPDATE persisted_queue_items
                     SET acquired_by = NULL, visible_at = ${now() + Duration.toMillis(delay)},
                         last_failure = ${failureSummary(cause)}, updated_at = ${now()}
                     WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
-              ),
+                    ),
+                  ),
+              }),
             ),
-        }),
+            row,
+          ),
+        ),
       );
-      return Option.some(row);
     });
 
   const nextVisible = (name: string, maxAttempts: number) =>
@@ -281,20 +286,34 @@ const make = Effect.fnUntraced(function* (options?: {
           // Close before looking, so an offer after the look reopens it.
           latch.closeUnsafe();
           const claimed = yield* takeOne(options);
-          if (Option.isSome(claimed)) {
-            const row = claimed.value;
-            return yield* Schema.decodeEffect(JsonElement)(row.element_json).pipe(
-              Effect.map((element) => ({ id: row.id, attempts: row.attempts, element })),
-              // A payload that is not JSON can never succeed: dead-letter it and take the next one.
-              Effect.catchTag("SchemaError", (cause) =>
-                markFailed(row.sequence, Cause.fail(cause)).pipe(Effect.andThen(loop)),
+          return yield* Option.match(claimed, {
+            onSome: (row) =>
+              Schema.decodeEffect(JsonElement)(row.element_json).pipe(
+                Effect.map((element) => ({ id: row.id, attempts: row.attempts, element })),
+                // A payload that is not JSON can never succeed: dead-letter it and take the next one.
+                Effect.catchTag("SchemaError", (cause) =>
+                  markFailed(row.sequence, Cause.fail(cause)).pipe(Effect.andThen(loop)),
+                ),
               ),
-            );
-          }
-          const next = yield* nextVisible(options.name, options.maxAttempts);
-          const wait = next === null ? pollMillis : Math.min(pollMillis, Math.max(0, next - now()));
-          yield* restore(Effect.race(latch.await, Effect.sleep(Duration.millis(wait))));
-          return yield* loop;
+            onNone: () =>
+              nextVisible(options.name, options.maxAttempts).pipe(
+                Effect.flatMap((next) =>
+                  restore(
+                    Effect.race(
+                      latch.await,
+                      Effect.sleep(
+                        Duration.millis(
+                          next === null
+                            ? pollMillis
+                            : Math.min(pollMillis, Math.max(0, next - now())),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Effect.andThen(loop),
+              ),
+          });
         });
         return loop;
       }).pipe(
@@ -308,9 +327,13 @@ const make = Effect.fnUntraced(function* (options?: {
         const at = now();
         yield* sql`DELETE FROM persisted_queue_items
             WHERE state = 'completed' AND updated_at <= ${at - Duration.toMillis(timeToLive)}`;
-        if (failedTimeToLive !== undefined)
-          yield* sql`DELETE FROM persisted_queue_items
-              WHERE state = 'failed' AND updated_at <= ${at - Duration.toMillis(failedTimeToLive)}`;
+        yield* Effect.transposeOption(
+          Option.map(
+            Option.fromUndefinedOr(failedTimeToLive),
+            (ttl) => sql`DELETE FROM persisted_queue_items
+              WHERE state = 'failed' AND updated_at <= ${at - Duration.toMillis(ttl)}`,
+          ),
+        );
       }).pipe(Effect.mapError(queueError("Failed to clean up persisted queue"))),
   });
 
@@ -373,24 +396,25 @@ const make = Effect.fnUntraced(function* (options?: {
       );
       const refuse = (reason: PersistedQueueItemsFailed["reason"]) =>
         PersistedQueueItemsFailed.make({ operation: "requeue", reason });
-      if (Option.isNone(current))
-        return yield* refuse(PersistedQueueItemsReason.cases.NotFound.make({}));
-      const state = current.value.state;
-      switch (state) {
-        case "pending":
-        case "completed":
-          return yield* refuse(PersistedQueueItemsReason.cases.NotDeadLettered.make({ state }));
-        case "failed": {
+      const found = yield* Effect.fromOption(current, () =>
+        refuse(PersistedQueueItemsReason.cases.NotFound.make({})),
+      );
+      return yield* Match.value(found.state).pipe(
+        Match.when("failed", () => {
           // Status and update run back to back on the single owner connection.
           const at = now();
-          yield* sql`UPDATE persisted_queue_items
+          return sql`UPDATE persisted_queue_items
               SET state = 'pending', attempts = 0, visible_at = ${at}, last_failure = NULL, updated_at = ${at}
               WHERE queue_name = ${name} AND id = ${id} AND state = 'failed'`.pipe(
             Effect.mapError(itemsError("requeue")),
+            Effect.andThen(nudge(name)),
           );
-          return yield* nudge(name);
-        }
-      }
+        }),
+        Match.whenOr("pending", "completed", (state) =>
+          Effect.fail(refuse(PersistedQueueItemsReason.cases.NotDeadLettered.make({ state }))),
+        ),
+        Match.exhaustive,
+      );
     }),
   };
 

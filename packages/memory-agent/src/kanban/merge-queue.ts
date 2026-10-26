@@ -164,35 +164,38 @@ const make = Effect.gen(function* () {
     target: string,
   ) {
     const request = yield* decisions.get(requestId);
-    if (Option.isNone(request)) return yield* Effect.as(setMerge(goal, null), true);
-    return yield* Match.valueTags(request.value.state, {
-      Pending: () => Effect.succeed(false),
-      Closed: () =>
-        Effect.as(setMerge(goal, merge.Stopped.make({ reason: "goal_replaced" })), false),
-      Answered: ({ answer }) =>
-        DecisionAnswer.matchOrElse(
-          answer,
-          {
-            MergeConflict: ({ choice }) =>
-              choice === "resolved"
-                ? Effect.as(setMerge(goal, null), true)
-                : Effect.as(
-                    setMerge(goal, merge.Stopped.make({ reason: "conflict_stopped" })),
-                    false,
-                  ),
-            ProtectedBranchMerge: ({ choice }) =>
-              choice === "manual_merge"
-                ? Effect.as(
-                    Effect.andThen(
-                      setMerge(goal, merge.ManualMerge.make({})),
-                      scheduler.pokeProject(goal.projectId),
-                    ),
-                    false,
-                  )
-                : Effect.as(createPullRequest(goal, target), false),
-          },
-          () => Effect.succeed(false),
-        ),
+    return yield* Option.match(request, {
+      onNone: () => Effect.as(setMerge(goal, null), true),
+      onSome: ({ state }) =>
+        Match.valueTags(state, {
+          Pending: () => Effect.succeed(false),
+          Closed: () =>
+            Effect.as(setMerge(goal, merge.Stopped.make({ reason: "goal_replaced" })), false),
+          Answered: ({ answer }) =>
+            DecisionAnswer.matchOrElse(
+              answer,
+              {
+                MergeConflict: ({ choice }) =>
+                  choice === "resolved"
+                    ? Effect.as(setMerge(goal, null), true)
+                    : Effect.as(
+                        setMerge(goal, merge.Stopped.make({ reason: "conflict_stopped" })),
+                        false,
+                      ),
+                ProtectedBranchMerge: ({ choice }) =>
+                  choice === "manual_merge"
+                    ? Effect.as(
+                        Effect.andThen(
+                          setMerge(goal, merge.ManualMerge.make({})),
+                          scheduler.pokeProject(goal.projectId),
+                        ),
+                        false,
+                      )
+                    : Effect.as(createPullRequest(goal, target), false),
+              },
+              () => Effect.succeed(false),
+            ),
+        }),
     });
   });
 
@@ -206,16 +209,14 @@ const make = Effect.gen(function* () {
     );
     yield* Effect.forEach(
       others,
-      Effect.fnUntraced(function* (other) {
-        const schedule = yield* schedules.get(other.goalInstanceId);
-        if (
-          Option.exists(
-            schedule,
-            (found) => found.targetBranch === target && !mergeSettled(found.merge),
-          )
-        )
-          yield* schedules.setUpstreamPending(other.goalInstanceId, true);
-      }),
+      (other) =>
+        Effect.when(
+          schedules.setUpstreamPending(other.goalInstanceId, true),
+          Effect.map(
+            schedules.get(other.goalInstanceId),
+            Option.exists((found) => found.targetBranch === target && !mergeSettled(found.merge)),
+          ),
+        ),
       { discard: true },
     );
     yield* scheduler.pokeProject(goal.projectId);
@@ -355,8 +356,8 @@ const make = Effect.gen(function* () {
           ((step.boundaries ?? []).length === 0 ||
             overlappingBoundaries(step, { boundaries: files }).length > 0),
       );
-      if (steps.length > 0)
-        yield* Effect.scoped(
+      yield* Effect.when(
+        Effect.scoped(
           Effect.gen(function* () {
             const checkout = yield* worktrees.goalCheckout(ref, head);
             yield* Effect.forEach(
@@ -385,7 +386,9 @@ const make = Effect.gen(function* () {
               { discard: true },
             );
           }),
-        );
+        ),
+        Effect.succeed(steps.length > 0),
+      );
     }
     yield* schedules.setUpstreamPending(goal.goalInstanceId, false);
     yield* events.publishSession(goal.sessionId, "run-state");
@@ -417,9 +420,10 @@ const make = Effect.gen(function* () {
   yield* Effect.forEach(
     yield* schedules.all,
     (schedule) =>
-      Predicate.isTagged(schedule.merge, "PullRequestPending")
-        ? schedules.setMerge(schedule.goalInstanceId, merge.PullRequestUncertain.make({}))
-        : Effect.void,
+      Effect.when(
+        schedules.setMerge(schedule.goalInstanceId, merge.PullRequestUncertain.make({})),
+        Effect.succeed(Predicate.isTagged(schedule.merge, "PullRequestPending")),
+      ),
     { discard: true },
   );
 
@@ -427,15 +431,23 @@ const make = Effect.gen(function* () {
     /** Starts or continues the merge of a Goal whose cards are all done. */
     offer: Effect.fn("GoalMerges.offer")(function* (goal: KanbanGoal) {
       const schedule = yield* schedules.get(goal.goalInstanceId);
-      if (Option.isNone(schedule) || mergeSettled(schedule.value.merge)) return;
-      yield* runFor(goal, "merge", mergeGoal(goal), schedule.value.targetBranch);
+      yield* Effect.transposeOption(
+        Option.map(
+          Option.filter(schedule, (found) => !mergeSettled(found.merge)),
+          (found) => runFor(goal, "merge", mergeGoal(goal), found.targetBranch),
+        ),
+      );
     }),
 
     /** Takes in a target another Goal merged into, when the Goal was told about one. */
     takeUpstream: Effect.fn("GoalMerges.takeUpstream")(function* (goal: KanbanGoal) {
       const schedule = yield* schedules.get(goal.goalInstanceId);
-      if (Option.isNone(schedule) || !schedule.value.upstreamPending) return;
-      yield* runFor(goal, "upstream", takeUpstream(goal), schedule.value.targetBranch);
+      yield* Effect.transposeOption(
+        Option.map(
+          Option.filter(schedule, (found) => found.upstreamPending),
+          (found) => runFor(goal, "upstream", takeUpstream(goal), found.targetBranch),
+        ),
+      );
     }),
   };
 });
