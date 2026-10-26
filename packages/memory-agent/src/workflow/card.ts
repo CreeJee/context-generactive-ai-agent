@@ -21,21 +21,19 @@ export const StepProgressStatus = Schema.Literals([
 ]);
 export type StepProgressStatus = typeof StepProgressStatus.Type;
 
+const progressOfCard = {
+  backlog: "pending",
+  ready: "pending",
+  in_progress: "in_progress",
+  verify: "in_progress",
+  human_decision: "blocked",
+  blocked: "blocked",
+  done: "completed",
+} as const satisfies Record<CardStatus, StepProgressStatus>;
+
 /** How a card reads in the model-facing progress vocabulary, which Goal execution keeps. */
 export function stepProgressStatus(status: CardStatus): StepProgressStatus {
-  switch (status) {
-    case "backlog":
-    case "ready":
-      return "pending";
-    case "in_progress":
-    case "verify":
-      return "in_progress";
-    case "human_decision":
-    case "blocked":
-      return "blocked";
-    case "done":
-      return "completed";
-  }
+  return progressOfCard[status];
 }
 
 export const CardRisk = Schema.Literals(["low", "medium", "high"]);

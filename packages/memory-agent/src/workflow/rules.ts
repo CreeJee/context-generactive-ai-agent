@@ -1,6 +1,7 @@
-import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
+  Array as EffectArray,
+  HashSet,
   MutableHashMap,
   Option,
   Cache,
@@ -176,18 +177,16 @@ const normalizedTerms = (text: string) =>
       .filter(Boolean),
   );
 
-const lexicalScore = (query: HashSet.HashSet<string>, rule: WorkflowRule) => {
-  const searchable = normalizedTerms(`${rule.title} ${rule.terms.join(" ")} ${rule.instruction}`);
-  let overlap = 0;
-  for (const term of query) if (HashSet.has(searchable, term)) overlap += 1;
-  return overlap;
-};
+const lexicalScore = (query: HashSet.HashSet<string>, rule: WorkflowRule) =>
+  HashSet.size(
+    HashSet.intersection(
+      query,
+      normalizedTerms(`${rule.title} ${rule.terms.join(" ")} ${rule.instruction}`),
+    ),
+  );
 
-const cosine = (left: Float32Array, right: Float32Array) => {
-  let score = 0;
-  for (let index = 0; index < left.length; index++) score += left[index]! * right[index]!;
-  return score;
-};
+const cosine = (left: Float32Array, right: Float32Array) =>
+  left.reduce((score, value, index) => score + value * right[index]!, 0);
 
 const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
@@ -219,14 +218,11 @@ const make = Effect.gen(function* () {
 
   return {
     resolve: ({ phase, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
-      const byId = MutableHashMap.fromIterable(
-        builtInWorkflowRules.map((rule) => [rule.id, rule] as const),
-      );
-      for (const rule of rules)
-        if (!MutableHashMap.has(byId, rule.id)) MutableHashMap.set(byId, rule.id, rule);
-      const candidates = [...MutableHashMap.values(byId)].filter((rule) =>
-        rule.phases.includes(phase),
-      );
+      // A built-in rule keeps its id; a supplied rule with the same id is ignored.
+      const candidates = EffectArray.dedupeWith(
+        [...builtInWorkflowRules, ...rules],
+        (left, right) => left.id === right.id,
+      ).filter((rule) => rule.phases.includes(phase));
       const required = candidates.filter((rule) => rule.priority === "required");
       const optional = candidates.filter((rule) => rule.priority === "recommended");
       if (optional.length === 0) return Effect.succeed({ rules: required, degraded: [] as const });

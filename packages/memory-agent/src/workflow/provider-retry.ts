@@ -7,6 +7,7 @@ import {
   Effect,
   Function as EffectFunction,
   Layer,
+  Option,
   Predicate,
   Random,
   Result,
@@ -234,14 +235,19 @@ const make = Effect.gen(function* () {
      * pending, and reports cancellation when the owner interrupts it meanwhile.
      */
     awaitRun: (runId: string) =>
-      Effect.gen(function* () {
-        const pending = (yield* stored(true)).filter((entry) => entry.runId === runId);
-        for (const payload of pending) {
-          const outcome = yield* join(payload);
-          if (Predicate.isTagged(outcome, "Cancelled")) return outcome;
-        }
-        return ProviderRetryOutcome.Retry();
-      }),
+      stored(true).pipe(
+        Effect.flatMap((waits) =>
+          Effect.findFirst(
+            waits.filter((entry) => entry.runId === runId),
+            (payload) => Effect.map(join(payload), Predicate.isTagged("Cancelled")),
+          ),
+        ),
+        Effect.map((cancelled) =>
+          Option.isSome(cancelled)
+            ? ProviderRetryOutcome.Cancelled()
+            : ProviderRetryOutcome.Retry(),
+        ),
+      ),
 
     /** Owner cancellation of every pending wait in the session; never a durable failure. */
     cancelSession: (sessionId: string) =>

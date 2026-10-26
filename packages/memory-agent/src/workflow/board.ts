@@ -204,31 +204,41 @@ export class Boards extends Context.Service<
             const full = window.length > revisionWindow;
             const baseline = full ? window[0] : undefined;
             const changes = full ? window.slice(1) : window;
-            let previous =
+            const before =
               baseline === undefined
                 ? new Map<string, string>()
                 : yield* cardsOf(yield* decodeWorkflowState(baseline.state_json));
-            const lastChange = new Map<string, BoardCard["lastChange"]>();
-            const history: BoardRevision[] = [];
-            for (const revision of changes) {
-              const state = yield* decodeWorkflowState(revision.state_json);
-              const next = yield* cardsOf(state);
-              const cardIds = [
-                ...[...next].filter(([id, json]) => previous.get(id) !== json).map(([id]) => id),
-                ...[...previous.keys()].filter((id) => !next.has(id)),
-              ];
-              previous = next;
-              if (cardIds.length === 0) continue;
-              for (const id of cardIds)
-                lastChange.set(id, { author: revision.author_json, at: revision.created_at });
-              history.push({
-                revisionId: revision.id,
-                at: revision.created_at,
-                author: revision.author_json,
-                detail: state.ledger.at(-1)?.detail ?? "",
-                cardIds,
-              });
-            }
+            const decoded = yield* Effect.forEach(changes, (revision) =>
+              Effect.gen(function* () {
+                const state = yield* decodeWorkflowState(revision.state_json);
+                return { revision, state, cards: yield* cardsOf(state) };
+              }),
+            );
+            const history = decoded.flatMap(
+              ({ revision, state, cards }, index): BoardRevision[] => {
+                const previous = decoded[index - 1]?.cards ?? before;
+                const cardIds = [
+                  ...[...cards].filter(([id, json]) => previous.get(id) !== json).map(([id]) => id),
+                  ...[...previous.keys()].filter((id) => !cards.has(id)),
+                ];
+                return cardIds.length === 0
+                  ? []
+                  : [
+                      {
+                        revisionId: revision.id,
+                        at: revision.created_at,
+                        author: revision.author_json,
+                        detail: state.ledger.at(-1)?.detail ?? "",
+                        cardIds,
+                      },
+                    ];
+              },
+            );
+            const lastChange = new Map(
+              history.flatMap(({ author, at, cardIds }) =>
+                cardIds.map((id): [string, BoardCard["lastChange"]] => [id, { author, at }]),
+              ),
+            );
             const view: BoardView = {
               plan:
                 plan === null

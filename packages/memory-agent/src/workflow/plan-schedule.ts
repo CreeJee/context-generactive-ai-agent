@@ -1,5 +1,5 @@
 import { Array as EffectArray, Data, Effect, Function as EffectFunction, Schema } from "effect";
-import { stepProgressStatus, type StepProgressStatus } from "./card.ts";
+import { stepProgressStatus, type CardStatus, type StepProgressStatus } from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
 /** A dependency defect the model can fix by revising the Plan's step ids or dependsOn. */
@@ -28,26 +28,27 @@ const knownDependencies = (steps: readonly DependencyStep[]) => {
 export function planDependencyIssues(
   steps: readonly DependencyStep[],
 ): ReadonlyArray<PlanDependencyIssue> {
-  const issues: PlanDependencyIssue[] = [];
-  const seen = new Set<string>();
-  for (const step of steps) {
-    if (seen.has(step.id))
-      issues.push(PlanDependencyIssue.cases.DuplicateStepId.make({ stepId: step.id }));
-    seen.add(step.id);
-  }
-  for (const step of steps)
-    for (const dependsOn of EffectArray.dedupe(step.dependsOn)) {
-      if (dependsOn === step.id)
-        issues.push(PlanDependencyIssue.cases.SelfDependency.make({ stepId: step.id }));
-      else if (!seen.has(dependsOn))
-        issues.push(
-          PlanDependencyIssue.cases.UnknownDependency.make({ stepId: step.id, dependsOn }),
-        );
-    }
+  const ids = new Set(steps.map((step) => step.id));
+  // Every repeat of an id after its first step is one duplicate.
+  const duplicates = steps.flatMap((step, index): PlanDependencyIssue[] =>
+    steps.findIndex((other) => other.id === step.id) < index
+      ? [PlanDependencyIssue.cases.DuplicateStepId.make({ stepId: step.id })]
+      : [],
+  );
+  const references = steps.flatMap((step) =>
+    EffectArray.dedupe(step.dependsOn).flatMap((dependsOn): PlanDependencyIssue[] =>
+      dependsOn === step.id
+        ? [PlanDependencyIssue.cases.SelfDependency.make({ stepId: step.id })]
+        : ids.has(dependsOn)
+          ? []
+          : [PlanDependencyIssue.cases.UnknownDependency.make({ stepId: step.id, dependsOn })],
+    ),
+  );
 
   const edges = knownDependencies(steps);
   const dependencies = new Map(steps.map((step) => [step.id, edges(step)]));
   // Depth-first search; every back edge closes one reported cycle.
+  const cycles: PlanDependencyIssue[] = [];
   const finished = new Set<string>();
   const path: string[] = [];
   const visit = (id: string) => {
@@ -55,7 +56,7 @@ export function planDependencyIssues(
     for (const next of dependencies.get(id) ?? []) {
       const index = path.indexOf(next);
       if (index >= 0)
-        issues.push(
+        cycles.push(
           PlanDependencyIssue.cases.DependencyCycle.make({ cycle: [...path.slice(index), next] }),
         );
       else if (!finished.has(next)) visit(next);
@@ -64,7 +65,7 @@ export function planDependencyIssues(
     finished.add(id);
   };
   for (const id of dependencies.keys()) if (!finished.has(id)) visit(id);
-  return issues;
+  return [...duplicates, ...references, ...cycles];
 }
 
 /** Plan saves reject dependency defects; persisted Plans are only read through planSchedule. */
@@ -101,6 +102,17 @@ export interface WaitingStep {
   readonly unmet: EffectArray.NonEmptyReadonlyArray<UnmetDependency>;
 }
 
+/** Where a card sits in Goal execution's schedule. */
+const scheduleStage = {
+  done: "done",
+  in_progress: "inProgress",
+  verify: "inProgress",
+  blocked: "blocked",
+  human_decision: "blocked",
+  backlog: "notStarted",
+  ready: "notStarted",
+} as const satisfies Record<CardStatus, string>;
+
 export type PlanSchedule = Data.TaggedEnum<{
   finished: {};
   runnable: {
@@ -124,37 +136,26 @@ export const PlanSchedule = Data.taggedEnum<PlanSchedule>();
 export function planSchedule(steps: readonly PlanStep[]): PlanSchedule {
   const status = new Map(steps.map((step) => [step.id, step.status]));
   const edges = knownDependencies(steps);
-  const ready: string[] = [];
-  const inProgress: string[] = [];
-  const blocked: string[] = [];
-  const waiting: WaitingStep[] = [];
-  for (const step of steps)
-    switch (step.status) {
-      case "done":
-        break;
-      case "in_progress":
-      case "verify":
-        inProgress.push(step.id);
-        break;
-      case "blocked":
-      case "human_decision":
-        blocked.push(step.id);
-        break;
-      case "backlog":
-      case "ready": {
-        const unmet = edges(step).flatMap((id): UnmetDependency[] => {
-          const dependency = status.get(id) ?? "done";
-          return dependency === "done" ? [] : [{ id, status: stepProgressStatus(dependency) }];
-        });
-        if (EffectArray.isReadonlyArrayNonEmpty(unmet)) waiting.push({ stepId: step.id, unmet });
-        else ready.push(step.id);
-      }
-    }
-  if (ready.length > 0 || inProgress.length > 0)
-    return PlanSchedule.runnable({ ready, inProgress, waiting });
-  return blocked.length === 0 && waiting.length === 0
-    ? PlanSchedule.finished()
-    : PlanSchedule.stalled({ blocked, waiting });
+  const inStage = (stage: (typeof scheduleStage)[CardStatus]) =>
+    steps.filter((step) => scheduleStage[step.status] === stage);
+  const inProgress = inStage("inProgress").map((step) => step.id);
+  const blocked = inStage("blocked").map((step) => step.id);
+  const notStarted = inStage("notStarted").map((step) => ({
+    stepId: step.id,
+    unmet: edges(step).flatMap((id): UnmetDependency[] => {
+      const dependency = status.get(id) ?? "done";
+      return dependency === "done" ? [] : [{ id, status: stepProgressStatus(dependency) }];
+    }),
+  }));
+  const ready = notStarted.filter(({ unmet }) => unmet.length === 0).map(({ stepId }) => stepId);
+  const waiting = notStarted.flatMap(({ stepId, unmet }): WaitingStep[] =>
+    EffectArray.isReadonlyArrayNonEmpty(unmet) ? [{ stepId, unmet }] : [],
+  );
+  return ready.length > 0 || inProgress.length > 0
+    ? PlanSchedule.runnable({ ready, inProgress, waiting })
+    : blocked.length === 0 && waiting.length === 0
+      ? PlanSchedule.finished()
+      : PlanSchedule.stalled({ blocked, waiting });
 }
 
 export const unmetDependencyText = (step: WaitingStep) =>

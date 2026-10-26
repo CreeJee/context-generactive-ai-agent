@@ -75,8 +75,10 @@ export const workflowRunEvents = Effect.gen(function* () {
         const json = yield* Schema.encodeUnknownEffect(PayloadText)(payload);
         return yield* sql.withTransaction(
           Effect.gen(function* () {
-            if (!(yield* permitted(sessionId, runId)))
-              return yield* RunEventRejected.make({ reason: "unbound" });
+            yield* Effect.when(
+              Effect.fail(RunEventRejected.make({ reason: "unbound" })),
+              Effect.map(permitted(sessionId, runId), (bound) => !bound),
+            );
             yield* sql`
               INSERT INTO workflow_run_events (run_id, event_key, kind, payload_json, created_at)
               VALUES (${runId}, ${eventKey}, ${kind}, ${json}, ${DateTime.formatIso(yield* DateTime.now)})
