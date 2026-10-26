@@ -178,11 +178,10 @@ const make = Effect.gen(function* () {
   });
 
   const send = (item: Outgoing) =>
-    Effect.gen(function* () {
-      const settings = yield* config.read;
-      if (settings.defectReports === false) return;
-      yield* delivery.sendNotice(yield* messageOf(item));
-    }).pipe(
+    Effect.when(
+      Effect.flatMap(messageOf(item), delivery.sendNotice),
+      Effect.map(config.read, (settings) => settings.defectReports !== false),
+    ).pipe(
       // The defect itself is already in the log; a report that cannot go out is only noted.
       Effect.catch(logFailure("defect_report_failed")),
     );

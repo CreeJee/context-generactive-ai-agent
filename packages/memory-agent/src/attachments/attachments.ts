@@ -223,15 +223,14 @@ const make = Effect.gen(function* () {
           try: () => requireRuntime("sharp"),
           catch: (cause) => AttachmentStorageFailed.make({ operation: "convert", cause }),
         });
-        const attempts = [
+        const [first, ...smaller] = [
           { edge: modelImageEdge, quality: 86 },
           { edge: 1600, quality: 78 },
           { edge: 1280, quality: 70 },
           { edge: 1024, quality: 64 },
         ] as const;
-        let candidate: Uint8Array = new Uint8Array();
-        for (const attempt of attempts) {
-          candidate = yield* io("convert", () =>
+        const convert = (attempt: { readonly edge: number; readonly quality: number }) =>
+          io("convert", () =>
             sharp(upload.path)
               .rotate()
               .resize({
@@ -243,9 +242,14 @@ const make = Effect.gen(function* () {
               .webp({ quality: attempt.quality, smartSubsample: true })
               .toBuffer(),
           );
-          if (candidate.length <= maxModelImageBytes) break;
-        }
-        return candidate;
+        // A smaller attempt runs only while the previous one is still too large.
+        const initial = yield* convert(first);
+        return yield* Effect.reduce(
+          smaller,
+          () => initial,
+          (candidate, attempt) =>
+            candidate.length <= maxModelImageBytes ? Effect.succeed(candidate) : convert(attempt),
+        );
       }).pipe(conversionPermits.withPermits(1));
       if (encoded.length >= attachment.bytes) {
         yield* fileIo("convert", fs.writeFileString(noCopy, "", { mode: 0o600 }));
