@@ -401,7 +401,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - 인자는 서버가 보낸 JSON Schema로 `jsonSchemaIssues`가 검사한다. TanStack도 같은 검사기로 검사했다. `Tool.dynamic`은 인자를 검사하지 않는다.
     - 호출 span(`McpServers.call`)은 TanStack 도구에서는 run trace 아래, Effect AI 도구에서는 loop가 호출을 실행하는 곳 아래에 생긴다.
   - provider tool: 요청은 TanStack factory 인자 배열 대신 `{ id, config }`(`ProviderToolRequest`)다. 설정 검사는 `providers/provider-tools.ts`의 표(`acceptsConfig`)가 한다. `ProviderToolRuntime.compose`가 같은 요청으로 TanStack 도구(`tool`)와 Effect AI 도구(`modelTool`)를 만든다. TanStack 쪽(`factoryArguments`, descriptor의 `extension.factory`)은 7단계에 지운다.
-  - subagent 도구: 한 부모 run의 상태(검토한 보고서, 전달된 알림, adoption draft)를 `parentRun`이 갖고, TanStack middleware와 Effect AI 도구가 같은 규칙을 쓴다. `runToolsFor`는 middleware 대신 `hooks`(`retry`, `deliver`, `recordAdoption`, `release`)를 내보내고, 4단계 loop가 middleware 자리에서 부른다. 검토 표시는 `onAfterToolCall` 대신 get_subagent_reports의 handler가 성공한 결과로 한다.
+  - subagent 도구: 한 부모 run의 상태(검토한 보고서, 전달된 알림, adoption draft)를 `parentRun`이 갖고, TanStack middleware와 Effect AI 도구가 같은 규칙을 쓴다. `runToolsFor`는 middleware 대신 run hook(`hook`)을 내보낸다(4단계에서 `hooks` 묶음을 hook으로 바꿨다). 검토 표시는 `onAfterToolCall` 대신 get_subagent_reports의 handler가 성공한 결과로 한다.
   - 승인 도구: `ask` 모드(`static`)의 save_code_skill·write_outside_file·delete_outside_file은 `needsApproval: true`를 단다. 다른 모드(`gate`)는 loop의 review가 호출마다 정한다. 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 두고, `effect/ai`는 서버의 `tools/approved.ts`만 import한다.
   - `tests/tool-effects.test.ts`의 등록 검사는 `toolDefinition({ name })`과 함께 `{ name, description, parameters }` spec도 도구 등록으로 읽는다. 설명이 `${...}`를 쓰는 template literal이어도 읽는다.
   - provider 요청은 TanStack과 같다(`tests/tools/run-tools.test.ts`, `tests/model/tool-schema.test.ts`). parameters는 TanStack처럼 draft-07에서 `$schema`를 빼고, object에 `type`·`properties`·`required`를 채운다(`model/tool-schema.ts`).
@@ -410,7 +410,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 인자 보정: TanStack은 인자가 schema에 맞지 않으면 모델에 보낸 JSON Schema 쪽으로 고쳐 다시 검사했다(`"5"` → 5, `"true"` → true, optional 필드의 `null` 제거). `tools/input-repair.ts`가 같은 검사기(`@cfworker/json-schema` 4.1.1)로 같은 규칙을 옮겼다. loop는 `prepareRepaired`로 호출을 준비한다.
   - ts skill 입력 검사: TanStack `validateJsonSchema`가 하던 JSON Schema 검사를 `jsonSchemaIssues`(`tools/input-repair.ts`)가 같은 검사기와 같은 문구로 한다.
   - 프로그램 안의 도구 호출은 `prepare`로 decode한다. 보정은 하지 않는다. TanStack도 프로그램의 호출은 Standard Schema로만 검사했다.
-  - 기억 도구의 사용 기록은 middleware `onFinish` 대신 `recordUse(parentMessageId)`로 내보낸다. 4단계 loop가 답을 마친 뒤 부른다.
+  - 기억 도구의 사용 기록은 middleware `onFinish` 대신 run hook으로 내보낸다(4단계). 마지막 model step의 메시지 id로, run이 끝나거나 승인을 기다릴 때 남긴다.
   - TanStack과 달라진 것:
     - 비밀 가리기가 실패하면 결과 대신 `redaction_failed` 도구 실패를 돌려준다. TanStack 경로는 `{error: message}`를 돌려줬다.
     - JSON이 아닌 결과(undefined 필드가 있는 객체 등)도 JSON으로 바꾼 뒤 가린다. 옛 `redactResult`는 이런 결과를 가리지 않고 넘겼다.
@@ -454,6 +454,16 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 0단계 golden과 같은 행이 나온다. 예외는 한 step에 승인 호출과 다른 호출이 섞인 시나리오다. 승인 규칙이 바뀌어 앞 호출이 interrupt 전에 실행되므로, 그 차이만 있는지 확인하고 golden을 새 규칙으로 고친다.
   - migration한 로컬 DB 사본의 모든 세션에서, history page의 화면 메시지가 지금 코드가 원본에서 만드는 것과 같다.
   - scheduler 규칙을 테스트로 둔다: 읽기는 받는 즉시 시작, 쓰기는 완전한 finish 뒤에 다른 호출을 기다리지 않고 시작, 끊긴 응답의 쓰기는 실행하지 않음, 결과는 호출 순서, 승인 대기 중 다른 호출 실행, 재개 run은 결과 없는 호출만 실행. 타입으로 확인할 수 없는 순서다.
+- 진행(2026-10-27): 모두 `packages/memory-agent/src` 아래다.
+  - loop는 `loop/run.ts`의 `runChat`이다. scheduler는 `loop/scheduler.ts`, 행은 `loop/store.ts`의 `RunStore`, 재개 검사는 `loop/resume.ts`, chunk는 `loop/chunks.ts`다.
+  - hook으로 옮긴 middleware: queue 전달(`queue/delivery.ts`), project instructions, 반복 호출 막기, 권한 게이트(`makePermissionGateHook`), 기억 노드 기록(`memory/record.ts`), 승격 기억 사용 기록(`tools/memory.ts`), workflow 진행과 종료(`agent/chat.ts`의 `workflowAfterRun`), run 뒤 색인(`indexInBackground`), 턴 요약(`turn-summaries.ts`의 `hookForRun`), 첨부 이미지(`modelImagesHook`), context usage(`contextUsageHook`), API usage, compaction(`compactionHook`), 부모 run의 subagent 일(`subagents.ts`의 `runToolsFor`).
+  - 옮기지 않는 middleware: `parallelReads`(scheduler가 한 step의 호출을 모두 동시에 돌린다), provider의 `runMiddleware()`(이름뿐이다).
+  - compaction과 model handoff는 메시지 타입과 무관하다(`ConversationMessage`). `chat_metadata`는 `ChatMetadata`(`chat-store/metadata.ts`)로 읽고 쓴다. 새 loop는 `RunStore.chatMetadata`를 쓴다. `@tanstack/ai-compaction`의 `evictOldest`는 `compaction.ts`로 옮겨 7단계에 의존성을 지울 수 있다.
+  - model handoff의 이전 model은 저장 메시지의 `model` 필드에서 찾는다. TanStack 메시지는 `metadata.tanstack.model`이다. handoff 기준 대화는 run이 저장하기 전의 thread여야 한다(TanStack은 `onStart` 저장 전에 읽었다). 새 loop는 run 시작에 thread를 저장하므로, 조립하는 쪽이 저장 전 thread를 `loadHistory`로 넘긴다.
+  - 사용자 취소 없이 interrupt된 run은 서버가 멈춘 것으로 보고 `failed`, `server_restarted`로 남긴다. TanStack의 `service_shutdown` 처리와 같다.
+  - RUN_ERROR 문구는 `shownRunErrors`(`agent/run-errors.ts`)가 가린다.
+  - 한 응답의 호출이 동시에 돈다는 안내는 standing prompt(`concurrentCallsInstructions`)에 있다. TanStack 1.0도 동시에 돌리므로 지금 경로에도 넣었다.
+  - 남은 것: 자식 run을 새 loop로 옮기기(`relayDecision`을 쓰는 gate hook, trace hook, 자식 기록 줄이기), AgentChat이 새 loop로 run을 돌리는 조립과 테스트 provider, golden과 history page 비교.
 
 ### 5. Goal 실행
 
