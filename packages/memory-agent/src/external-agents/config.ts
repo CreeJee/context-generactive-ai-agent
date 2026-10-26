@@ -59,47 +59,51 @@ export const agentFingerprint = (command: AgentCommand) =>
 const readAgentsFileBody = Effect.fn("agents.readConfig")(function* (
   path: string,
   scope: AgentScope,
-) {
+): Effect.fn.Return<AgentsFileRead, never, FileSystem.FileSystem> {
   const fs = yield* FileSystem.FileSystem;
-  // A file whose presence cannot be checked is treated as absent, like a missing one.
-  if (!(yield* fs.exists(path).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(false)))))
-    return { path, agents: [], error: null } satisfies AgentsFileRead;
-  const text = yield* fs.readFileString(path).pipe(Effect.result);
-  if (Result.isFailure(text))
-    return {
+  const read = fs.readFileString(path).pipe(
+    Effect.map((text) =>
+      Result.match(decodeAgentsFile(text), {
+        onFailure: (error): AgentsFileRead => ({
+          path,
+          agents: [],
+          error: {
+            code: "invalid_config",
+            detail: String(error).split("\n").slice(0, 4).join("\n"),
+          },
+        }),
+        onSuccess: (file): AgentsFileRead => {
+          const entries = Object.entries(file.agents);
+          const invalid = entries.filter(([name]) => !isAgentName(name)).map(([name]) => name);
+          return {
+            path,
+            error:
+              invalid.length > 0 ? { code: "invalid_names", detail: invalid.join(", ") } : null,
+            agents: entries
+              .filter(([name]) => isAgentName(name))
+              .map(([name, command]) => ({
+                scope,
+                name,
+                command,
+                fingerprint: agentFingerprint(command),
+              })),
+          };
+        },
+      }),
+    ),
+    Effect.orElseSucceed((): AgentsFileRead => ({
       path,
       agents: [],
       error: { code: "unreadable", detail: null },
-    } satisfies AgentsFileRead;
-  return Result.match(decodeAgentsFile(text.success), {
-    onFailure: (error) => ({
-      path,
-      agents: [],
-      error: {
-        code: "invalid_config" as const,
-        detail: String(error).split("\n").slice(0, 4).join("\n"),
-      },
-    }),
-    onSuccess: (file) => {
-      const entries = Object.entries(file.agents);
-      const invalid = entries.filter(([name]) => !isAgentName(name)).map(([name]) => name);
-      return {
-        path,
-        error:
-          invalid.length > 0
-            ? { code: "invalid_names" as const, detail: invalid.join(", ") }
-            : null,
-        agents: entries
-          .filter(([name]) => isAgentName(name))
-          .map(([name, command]) => ({
-            scope,
-            name,
-            command,
-            fingerprint: agentFingerprint(command),
-          })),
-      };
-    },
-  });
+    })),
+  );
+  // A file whose presence cannot be checked is treated as absent, like a missing one.
+  return yield* fs.exists(path).pipe(
+    Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+    Effect.flatMap((exists) =>
+      exists ? read : Effect.succeed<AgentsFileRead>({ path, agents: [], error: null }),
+    ),
+  );
 });
 
 export const readAgentsFile: {

@@ -12,8 +12,11 @@ import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SdkStreams } from "../acp/web-streams.ts";
 import {
+  Array as EffectArray,
   Cause,
+  Function as EffectFunction,
   HashSet,
+  Match,
   MutableHashMap,
   DateTime,
   Clock,
@@ -207,16 +210,18 @@ const isInitializeTimedOut = Schema.is(ExternalAgentInitializeTimedOut);
  * Why a connection attempt failed, from what it rejected with. `detail` is not redacted yet: the
  * owner hides secrets before anyone sees it.
  */
-const connectFailure = (error: Error): ShownFailure<ExternalAgentFailureCode> =>
-  isMissingVariable(error)
-    ? { code: "missing_env", detail: error.variable }
-    : isInitializeTimedOut(error)
-      ? { code: "initialize_timed_out", detail: null }
-      : isPlatformError(error)
-        ? { code: "spawn_failed", detail: error.message }
-        : error instanceof acp.RequestError
-          ? { code: "agent_error", detail: failureText(error) }
-          : { code: "connection_failed", detail: rejectionText(error) };
+const connectFailure = (error: Error) =>
+  Match.value(error).pipe(
+    Match.withReturnType<ShownFailure<ExternalAgentFailureCode>>(),
+    Match.when(isMissingVariable, (missing) => ({ code: "missing_env", detail: missing.variable })),
+    Match.when(isInitializeTimedOut, () => ({ code: "initialize_timed_out", detail: null })),
+    Match.when(isPlatformError, (platform) => ({ code: "spawn_failed", detail: platform.message })),
+    Match.when(Match.instanceOf(acp.RequestError), (request) => ({
+      code: "agent_error",
+      detail: failureText(request),
+    })),
+    Match.orElse((other) => ({ code: "connection_failed", detail: rejectionText(other) })),
+  );
 
 /** The option that allows exactly this once, or rejects; a standing "always" is never chosen. */
 function permissionAnswer(
@@ -224,11 +229,33 @@ function permissionAnswer(
   approved: boolean,
 ): RequestPermissionResponse {
   const wanted = approved ? "allow_once" : "reject_once";
-  const option = request.options.find((candidate) => candidate.kind === wanted);
-  return isTruthy(option)
-    ? { outcome: { outcome: "selected", optionId: option.optionId } }
-    : { outcome: { outcome: "cancelled" } };
+  return Option.match(
+    EffectArray.findFirst(request.options, (candidate) => candidate.kind === wanted),
+    {
+      onNone: () => ({ outcome: { outcome: "cancelled" } }),
+      onSome: (option) => ({ outcome: { outcome: "selected", optionId: option.optionId } }),
+    },
+  );
 }
+
+/** A launcher Windows runs without cmd. */
+const nativeLauncher = /\.(com|exe)$/i;
+
+/** The interpreter and flags a `#!` line names, looking past `env` and its `-S`. */
+const shebangOf = (firstLine: string) =>
+  Option.flatMap(
+    Option.liftPredicate(firstLine, (line) => line.startsWith("#!")),
+    (line) => {
+      const [interpreterPath = "", ...flags] = line.slice(2).trim().split(/\s+/);
+      const named = interpreterPath.split("/").at(-1) ?? "";
+      const [interpreter = "", ...rest] =
+        named === "env" ? flags.slice(flags[0] === "-S" ? 1 : 0) : [named, ...flags];
+      return Option.liftPredicate(
+        { interpreter, flags: rest },
+        (found) => found.interpreter.length > 0,
+      );
+    },
+  );
 
 /** Resolve Windows launchers using the same cmd metacharacter and npm shim escaping contract as cross-spawn. */
 export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation")(
@@ -239,70 +266,69 @@ export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation
     readonly env: NodeJS.ProcessEnv;
     readonly platform?: NodeJS.Platform;
   }) {
-    let command = options.command;
-    let args = [...options.args];
-    let shell: string | undefined;
-    if ((options.platform ?? process.platform) !== "win32") return { command, args, shell };
+    if ((options.platform ?? process.platform) !== "win32")
+      return { command: options.command, args: [...options.args], shell: undefined };
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const { cwd, env } = options;
-    const resolve = Effect.fnUntraced(function* (name: string) {
-      const extensions = ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")];
-      const directories = /[\\/]/.test(name)
-        ? [cwd]
-        : [cwd, ...(env.Path ?? env.PATH ?? "").split(";")];
-      for (const directory of directories) {
-        for (const extension of extensions) {
-          const candidate = path.resolve(cwd, directory, `${name}${extension}`);
-          // A candidate that cannot be inspected is not a launcher.
-          const isFile = yield* fs.stat(candidate).pipe(
+    const extensions = ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")];
+    const resolve = (name: string) =>
+      Effect.findFirst(
+        (/[\\/]/.test(name) ? [cwd] : [cwd, ...(env.Path ?? env.PATH ?? "").split(";")]).flatMap(
+          (directory) =>
+            extensions.map((extension) => path.resolve(cwd, directory, `${name}${extension}`)),
+        ),
+        // A candidate that cannot be inspected is not a launcher.
+        (candidate) =>
+          fs.stat(candidate).pipe(
             Effect.map((info) => info.type === "File"),
             Effect.catchTag("PlatformError", () => Effect.succeed(false)),
-          );
-          if (isFile) return candidate;
-        }
-      }
-      return undefined;
-    });
-    let executable = yield* resolve(command);
-    if (executable !== undefined && !/\.(com|exe)$/i.test(executable)) {
-      const firstLine = yield* fs.readFileString(executable).pipe(
-        Effect.map((text) => text.split(/\r?\n/, 1)[0] ?? ""),
+          ),
+      );
+    const found = yield* resolve(options.command);
+    const direct = { command: options.command, args: options.args, executable: found };
+    /** The script run by the interpreter its `#!` line names, or by itself without one. */
+    const throughShebang = (script: string) =>
+      fs.readFileString(script).pipe(
         // An unreadable launcher has no shebang to follow.
         Effect.catchTag("PlatformError", () => Effect.succeed("")),
+        Effect.map((text) => shebangOf(text.split(/\r?\n/, 1)[0] ?? "")),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(direct),
+            onSome: ({ interpreter, flags }) =>
+              Effect.map(resolve(interpreter), (executable) => ({
+                command: interpreter,
+                args: [...flags, script, ...options.args],
+                executable,
+              })),
+          }),
+        ),
       );
-      if (firstLine.startsWith("#!")) {
-        const [interpreterPath, ...flags] = firstLine.slice(2).trim().split(/\s+/);
-        let interpreter = interpreterPath?.split("/").at(-1);
-        if (interpreter === "env") {
-          if (flags[0] === "-S") flags.shift();
-          interpreter = flags.shift();
-        }
-        if (interpreter !== undefined && interpreter.length > 0) {
-          command = interpreter;
-          args = [...flags, executable, ...args];
-          executable = yield* resolve(command);
-        }
-      }
-    }
-    if (executable === undefined || !/\.(com|exe)$/i.test(executable)) {
-      const meta = /([()\][%!^"`<>&|;, *?])/g;
-      const doubleEscape =
-        executable !== undefined && /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(executable);
-      const quote = (arg: string) => {
-        let value =
-          `"${arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1")}"`.replace(
-            meta,
-            "^$1",
-          );
-        if (doubleEscape) value = value.replace(meta, "^$1");
-        return value;
-      };
-      command = [path.normalize(command).replace(meta, "^$1"), ...args.map(quote)].join(" ");
-      args = [];
-      shell = env.ComSpec ?? env.COMSPEC ?? "cmd.exe";
-    }
-    return { command, args, shell };
+    const { command, args, executable } = yield* Option.match(
+      Option.filter(found, (file) => !nativeLauncher.test(file)),
+      { onNone: () => Effect.succeed(direct), onSome: throughShebang },
+    );
+    if (Option.exists(executable, (file) => nativeLauncher.test(file)))
+      return { command, args: [...args], shell: undefined };
+    // Anything else runs through cmd, which reads its metacharacters; an npm shim reads them twice.
+    const meta = /([()\][%!^"`<>&|;, *?])/g;
+    const doubleEscape = Option.exists(executable, (file) =>
+      /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(file),
+    );
+    const quote = (arg: string) => {
+      const escaped =
+        `"${arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1")}"`.replace(
+          meta,
+          "^$1",
+        );
+      return doubleEscape ? escaped.replace(meta, "^$1") : escaped;
+    };
+    return {
+      command: [path.normalize(command).replace(meta, "^$1"), ...args.map(quote)].join(" "),
+      args: [],
+      shell: env.ComSpec ?? env.COMSPEC ?? "cmd.exe",
+    };
   },
 );
 
@@ -352,13 +378,11 @@ const make = Effect.gen(function* () {
         .filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
         .map((entry) => [linkKey(project, entry.agent), entry.agent.fingerprint]),
     );
-    for (const [key, link] of links) {
-      if (!key.startsWith(`${project.id}/`)) continue;
-      if (Option.getOrUndefined(MutableHashMap.get(usableFingerprints, key)) === link.fingerprint)
-        continue;
-      retire(link);
-      MutableHashMap.remove(links, key);
-    }
+    retireLinks(
+      (key, link) =>
+        key.startsWith(`${project.id}/`) &&
+        !Option.contains(MutableHashMap.get(usableFingerprints, key), link.fingerprint),
+    );
     const files = yield* Effect.forEach([global, local], (file, index) =>
       // A decode error can quote the file, environment values included.
       Effect.map(
@@ -373,18 +397,30 @@ const make = Effect.gen(function* () {
     return { files, agents };
   });
 
+  const close = (live: Live) => {
+    live.connection.close();
+    live.dispose();
+  };
+
   const shutdown = (link: Link) => {
     const live = link.live;
     link.live = null;
-    if (!(live !== null)) return;
-    live.connection.close();
-    live.dispose();
+    Option.match(Option.fromNullishOr(live), { onNone: EffectFunction.constVoid, onSome: close });
   };
 
   const retire = (link: Link) => {
     link.retired = true;
     shutdown(link);
   };
+
+  /** Stops and forgets the links `stale` picks. */
+  const retireLinks = (stale: (key: string, link: Link) => boolean) =>
+    Array.from(links)
+      .filter(([key, link]) => stale(key, link))
+      .forEach(([key, link]) => {
+        retire(link);
+        MutableHashMap.remove(links, key);
+      });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const startProcess = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> =>
@@ -449,14 +485,12 @@ const make = Effect.gen(function* () {
             );
           })
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
-            const handler = Option.getOrUndefined(
-              MutableHashMap.get(handlers, ctx.params.sessionId),
-            );
-            return isTruthy(handler)
-              ? handler.askPermission(ctx.params)
-              : Promise.resolve({ outcome: { outcome: "cancelled" } as const });
-          })
+          .onRequest(acp.methods.client.session.requestPermission, (ctx) =>
+            Option.match(MutableHashMap.get(handlers, ctx.params.sessionId), {
+              onNone: () => Promise.resolve({ outcome: { outcome: "cancelled" } as const }),
+              onSome: (handler) => handler.askPermission(ctx.params),
+            }),
+          )
           .connect(acp.ndJsonStream(streams.writable, streams.readable));
 
         return yield* Effect.gen(function* () {
@@ -510,8 +544,7 @@ const make = Effect.gen(function* () {
       (live) => {
         link.attempt = null;
         if (link.retired) {
-          live.connection.close();
-          live.dispose();
+          close(live);
           return live;
         }
         link.live = live;
@@ -553,32 +586,46 @@ const make = Effect.gen(function* () {
     if (link.retired || link.live !== live) return;
     link.live = null;
     live.dispose();
-    const retry = Effect.gen(function* () {
-      while (!link.retired && link.live === null && link.failures < maxConsecutiveFailures) {
-        yield* Effect.sleep(retryDelayMs);
-        if (link.retired || link.live !== null || link.failures >= maxConsecutiveFailures) return;
-        const outcome = yield* Effect.result(nativePromise(() => attempt(project, agent, link)));
-        if (Result.isSuccess(outcome)) return;
-      }
-    });
-    runCallback(FiberMap.run(retries, linkKey(project, agent), retry, { onlyIfMissing: true }));
+    const wanted = () =>
+      !link.retired && link.live === null && link.failures < maxConsecutiveFailures;
+    // Each failed attempt counts, so `wanted` ends the retries; the link state reports the last one.
+    const retry = Effect.sleep(retryDelayMs).pipe(
+      Effect.andThen(
+        Effect.when(
+          nativePromise(() => attempt(project, agent, link)),
+          Effect.sync(wanted),
+        ),
+      ),
+      Effect.retry({ while: wanted }),
+      Effect.ignore,
+    );
+    runCallback(
+      FiberMap.run(retries, linkKey(project, agent), Effect.when(retry, Effect.sync(wanted)), {
+        onlyIfMissing: true,
+      }),
+    );
   };
 
   const linkFor = (project: Project, agent: ConfiguredAgent) => {
     const key = linkKey(project, agent);
-    const existing = Option.getOrUndefined(MutableHashMap.get(links, key));
-    if (existing?.fingerprint === agent.fingerprint) return existing;
-    if (isTruthy(existing)) retire(existing);
-    const link: Link = {
-      fingerprint: agent.fingerprint,
-      retired: false,
-      state: AgentLinkState.idle(),
-      live: null,
-      attempt: null,
-      failures: 0,
-    };
-    MutableHashMap.set(links, key, link);
-    return link;
+    const existing = MutableHashMap.get(links, key);
+    return Option.getOrElse(
+      Option.filter(existing, (link) => link.fingerprint === agent.fingerprint),
+      () => {
+        // A changed configuration replaces the link the old one used.
+        Option.match(existing, { onNone: EffectFunction.constVoid, onSome: retire });
+        const link: Link = {
+          fingerprint: agent.fingerprint,
+          retired: false,
+          state: AgentLinkState.idle(),
+          live: null,
+          attempt: null,
+          failures: 0,
+        };
+        MutableHashMap.set(links, key, link);
+        return link;
+      },
+    );
   };
 
   /** The trusted, unchanged configuration of a named agent usable in this project. */
@@ -605,17 +652,21 @@ const make = Effect.gen(function* () {
           target,
           envNames: Object.keys(entry.agent.command.env),
           shadowed: entry.shadowed,
-          state:
-            entry.trusted === null
-              ? AgentTrustState.untrusted()
-              : entry.trusted !== entry.agent.fingerprint
-                ? AgentTrustState.changed()
-                : AgentTrustState.trusted({
-                    link:
-                      Option.getOrUndefined(
-                        MutableHashMap.get(links, linkKey(project, entry.agent)),
-                      )?.state ?? AgentLinkState.idle(),
+          state: Match.value(entry.trusted).pipe(
+            Match.withReturnType<AgentTrustState>(),
+            Match.when(Match.null, () => AgentTrustState.untrusted()),
+            Match.when(
+              (fingerprint) => fingerprint === entry.agent.fingerprint,
+              () =>
+                AgentTrustState.trusted({
+                  link: Option.match(MutableHashMap.get(links, linkKey(project, entry.agent)), {
+                    onNone: () => AgentLinkState.idle(),
+                    onSome: (link) => link.state,
                   }),
+                }),
+            ),
+            Match.orElse(() => AgentTrustState.changed()),
+          ),
         }),
       ),
     );
@@ -623,9 +674,7 @@ const make = Effect.gen(function* () {
   });
 
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      for (const link of MutableHashMap.values(links)) retire(link);
-    }),
+    Effect.sync(() => Array.from(MutableHashMap.values(links)).forEach(retire)),
   );
 
   return {
@@ -643,44 +692,56 @@ const make = Effect.gen(function* () {
     setTrusted: (project: Project, scope: AgentScope, name: string, trusted: boolean) =>
       Effect.gen(function* () {
         const projectId = scope === "global" ? "" : project.id;
-        const entry = (yield* configured(project)).agents.find(
+        const entry = EffectArray.findFirst(
+          (yield* configured(project)).agents,
           (candidate) => candidate.agent.scope === scope && candidate.agent.name === name,
         );
-        if (trusted && isTruthy(entry)) {
-          const trustedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-          yield* sql`
-            INSERT INTO agent_trust (scope, project_id, name, fingerprint, trusted_at)
-            VALUES (${scope}, ${projectId}, ${name}, ${entry.agent.fingerprint}, ${trustedAt})
-            ON CONFLICT (scope, project_id, name) DO UPDATE
-            SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`;
-        }
-        if (!trusted) {
-          yield* sql`
-            DELETE FROM agent_trust
-            WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`;
-          for (const [key, link] of links)
-            if (key.endsWith(`/${scope}/${name}`)) {
-              retire(link);
-              MutableHashMap.remove(links, key);
-            }
-        }
+        const record = (agent: ConfiguredAgent) =>
+          Effect.flatMap(Clock.currentTimeMillis, (now) => {
+            const trustedAt = DateTime.formatIso(DateTime.makeUnsafe(now));
+            return sql`
+              INSERT INTO agent_trust (scope, project_id, name, fingerprint, trusted_at)
+              VALUES (${scope}, ${projectId}, ${name}, ${agent.fingerprint}, ${trustedAt})
+              ON CONFLICT (scope, project_id, name) DO UPDATE
+              SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`;
+          });
+        const forget = sql`
+          DELETE FROM agent_trust
+          WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`.pipe(
+          Effect.andThen(
+            Effect.sync(() => retireLinks((key) => key.endsWith(`/${scope}/${name}`))),
+          ),
+        );
+        yield* trusted
+          ? Option.match(entry, {
+              onNone: () => Effect.void,
+              onSome: (found) => record(found.agent),
+            })
+          : forget;
         return yield* overview(project);
       }),
 
     /** Manual reconnect: clears the failure count and tries once more. */
     reconnect: (project: Project, name: string) =>
-      Effect.gen(function* () {
-        const agent = yield* usable(project, name);
-        if (!isTruthy(agent)) return yield* overview(project);
-        const link = linkFor(project, agent);
-        shutdown(link);
-        link.failures = 0;
-        yield* Effect.tryPromise({
-          try: () => attempt(project, agent, link),
-          catch: (cause) => ExternalAgentOperationFailed.make({ operation: "reconnect", cause }),
-        }).pipe(Effect.catchTag("ExternalAgentOperationFailed", () => Effect.void));
-        return yield* overview(project);
-      }),
+      usable(project, name).pipe(
+        Effect.flatMap((agent) =>
+          Option.match(Option.fromNullishOr(agent), {
+            onNone: () => Effect.void,
+            onSome: (found) =>
+              Effect.suspend(() => {
+                const link = linkFor(project, found);
+                shutdown(link);
+                link.failures = 0;
+                return Effect.tryPromise({
+                  try: () => attempt(project, found, link),
+                  catch: (cause) =>
+                    ExternalAgentOperationFailed.make({ operation: "reconnect", cause }),
+                }).pipe(Effect.catchTag("ExternalAgentOperationFailed", () => Effect.void));
+              }),
+          }),
+        ),
+        Effect.andThen(overview(project)),
+      ),
 
     /**
      * Sends one prompt to the agent in the conversation `sessionKey` (a new agent session the first
@@ -752,31 +813,30 @@ const make = Effect.gen(function* () {
           const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
           MutableHashMap.set(live.handlers, sessionId, {
             onUpdate: (update) => {
-              switch (update.sessionUpdate) {
-                case "agent_message_chunk":
-                  if (update.content.type === "text") answer += update.content.text;
-                  break;
-                case "tool_call":
-                  MutableHashMap.set(toolCalls, update.toolCallId, {
-                    title: update.title,
-                    kind: update.kind ?? null,
-                    status: update.status ?? null,
-                  });
-                  break;
-                case "tool_call_update": {
-                  const known = Option.getOrUndefined(
-                    MutableHashMap.get(toolCalls, update.toolCallId),
-                  );
-                  MutableHashMap.set(toolCalls, update.toolCallId, {
-                    title: update.title ?? known?.title ?? "",
-                    kind: update.kind ?? known?.kind ?? null,
-                    status: update.status ?? known?.status ?? null,
-                  });
-                  break;
-                }
-                default:
-                  break;
-              }
+              Match.value(update).pipe(
+                Match.discriminators("sessionUpdate")({
+                  agent_message_chunk: (chunk) => {
+                    answer += chunk.content.type === "text" ? chunk.content.text : "";
+                  },
+                  tool_call: (call) =>
+                    MutableHashMap.set(toolCalls, call.toolCallId, {
+                      title: call.title,
+                      kind: call.kind ?? null,
+                      status: call.status ?? null,
+                    }),
+                  tool_call_update: (call) => {
+                    const known = Option.getOrUndefined(
+                      MutableHashMap.get(toolCalls, call.toolCallId),
+                    );
+                    MutableHashMap.set(toolCalls, call.toolCallId, {
+                      title: call.title ?? known?.title ?? "",
+                      kind: call.kind ?? known?.kind ?? null,
+                      status: call.status ?? known?.status ?? null,
+                    });
+                  },
+                }),
+                Match.orElse(EffectFunction.constVoid),
+              );
               hooks.onUpdate?.(update);
             },
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -793,40 +853,46 @@ const make = Effect.gen(function* () {
               .notify(acp.methods.agent.session.cancel, { sessionId: agentSession })
               .catch(() => undefined);
           hooks.signal.addEventListener("abort", cancel, { once: true });
-          return yield* Effect.gen(function* () {
-            const outcome = yield* Effect.result(
-              nativePromise(() =>
-                live.connection.agent.request(acp.methods.agent.session.prompt, {
-                  sessionId: agentSession,
-                  prompt: [{ type: "text", text }],
-                }),
-              ),
-            );
-            if (Result.isSuccess(outcome)) {
-              const answered = {
-                stopReason: outcome.success.stopReason,
-                answer,
-                toolCalls: [...MutableHashMap.values(toolCalls)],
-              };
-              return outcome.success.stopReason === "cancelled"
-                ? ExternalPromptOutcome.cancelled(answered)
-                : ExternalPromptOutcome.completed(answered);
-            }
-            if (live.connection.signal.aborted || link.live !== live)
-              return ExternalPromptOutcome.disconnected({
-                answer,
-                toolCalls: [...MutableHashMap.values(toolCalls)],
-              });
-            const error = rejectionError(outcome.failure);
-            return ExternalPromptOutcome.failed({
-              failure: yield* redactor.hideDetail({
-                code: "agent_error" as const,
-                detail: rejectionText(error),
-              }),
-              answer,
-              toolCalls: [...MutableHashMap.values(toolCalls)],
-            });
-          }).pipe(
+          return yield* nativePromise(() =>
+            live.connection.agent.request(acp.methods.agent.session.prompt, {
+              sessionId: agentSession,
+              prompt: [{ type: "text", text }],
+            }),
+          ).pipe(
+            Effect.matchEffect({
+              onSuccess: ({ stopReason }): Effect.Effect<ExternalPromptOutcome> => {
+                const answered = {
+                  stopReason,
+                  answer,
+                  toolCalls: [...MutableHashMap.values(toolCalls)],
+                };
+                return Effect.succeed(
+                  stopReason === "cancelled"
+                    ? ExternalPromptOutcome.cancelled(answered)
+                    : ExternalPromptOutcome.completed(answered),
+                );
+              },
+              onFailure: (failure): Effect.Effect<ExternalPromptOutcome> =>
+                live.connection.signal.aborted || link.live !== live
+                  ? Effect.succeed(
+                      ExternalPromptOutcome.disconnected({
+                        answer,
+                        toolCalls: [...MutableHashMap.values(toolCalls)],
+                      }),
+                    )
+                  : Effect.map(
+                      redactor.hideDetail({
+                        code: "agent_error" as const,
+                        detail: failure.pipe(rejectionError, rejectionText),
+                      }),
+                      (shown) =>
+                        ExternalPromptOutcome.failed({
+                          failure: shown,
+                          answer,
+                          toolCalls: [...MutableHashMap.values(toolCalls)],
+                        }),
+                    ),
+            }),
             Effect.ensuring(
               Effect.sync(() => {
                 hooks.signal.removeEventListener("abort", cancel);
