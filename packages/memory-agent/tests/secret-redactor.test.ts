@@ -1,8 +1,10 @@
-import { Layer } from "effect";
+import { Layer, Schema } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { SecretRedactor, mergeFindings } from "../src/secrets/redactor.ts";
+import { ToolFailed } from "../src/tools/failure.ts";
+import { runTool } from "../src/tools/run-tool.ts";
 
 /**
  * Keys are assembled at run time so this file holds nothing shaped like a real key; repository
@@ -129,6 +131,43 @@ describe("SecretRedactor", () => {
           signal: null,
         });
       }),
+  );
+
+  effectTest.effect("hides secrets in a run tool's result and in its failure's text", () =>
+    Effect.gen(function* () {
+      const redactor = yield* SecretRedactor;
+      const [shell] = redactor.withHiddenRunResults([
+        runTool({
+          name: "run_skill",
+          description: "Run a skill.",
+          parameters: Schema.Struct({ fail: Schema.Boolean }),
+          handler: ({ fail }) =>
+            fail
+              ? Effect.fail(
+                  ToolFailed.make({
+                    code: "tool_failed",
+                    tag: "SkillFailed",
+                    detail: `GITHUB_TOKEN=${fake.github}`,
+                  }),
+                )
+              : Effect.succeed({ stdout: `GITHUB_TOKEN=${fake.github}` }),
+        }),
+      ]);
+      const call = (fail: boolean) =>
+        Effect.flatMap(shell!.prepare({ fail }), (run) => run({ toolCallId: "call-1" }));
+      expect(yield* call(false)).toEqual({ stdout: "GITHUB_TOKEN=[redacted:github]" });
+      expect(yield* Effect.flip(call(true))).toMatchObject({
+        code: "tool_failed",
+        tag: "SkillFailed",
+        detail: "GITHUB_TOKEN=[redacted:github]",
+      });
+    }).pipe(
+      // Test entry point owns this Layer and its resource scope.
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(SecretRedactor.layer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
   );
 
   effectTest.live("large output stays fast", () =>

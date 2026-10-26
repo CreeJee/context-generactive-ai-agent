@@ -9,6 +9,7 @@ import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import type { ShownFailure } from "../runtime/shown-failure.ts";
 import { ToolFailed, toolFailedOf } from "../tools/failure.ts";
+import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
 /**
@@ -160,6 +161,13 @@ function replaceFindings(text: string, findings: readonly Finding[]): RedactedVi
   return { text: out + text.slice(at), hidden };
 }
 
+/** What the model reads for a call whose result or failure could not have its secrets hidden. */
+const withheld = ToolFailed.make({
+  code: "redaction_failed",
+  tag: "SecretRedactionFailed",
+  detail: "Hiding secrets in what the tool gave failed, so it is not shown.",
+});
+
 /** Longest failure detail shown; an agent's or provider's error can carry a whole response. */
 const maxShownDetail = 1_000;
 
@@ -225,6 +233,27 @@ const make = Effect.sync(() => {
       fallbackLogged("Failure detail withheld", () => null),
     );
 
+  /**
+   * The call with secrets hidden in its result and in its failure's text. When hiding fails,
+   * neither is shown.
+   */
+  const hiddenCall =
+    (run: PreparedCall): PreparedCall =>
+    (call) =>
+      run(call).pipe(
+        Effect.flatMap(redactJson),
+        Effect.catchTag("ToolFailed", (failed) =>
+          Effect.flatMap(redactText(failed.detail), ({ text }) =>
+            Effect.fail(
+              text === failed.detail
+                ? failed
+                : ToolFailed.make({ code: failed.code, tag: failed.tag, detail: text }),
+            ),
+          ),
+        ),
+        Effect.catchTag("SecretRedactionFailed", () => Effect.fail(withheld)),
+      );
+
   /** The failure with its detail as {@link shownDetail} shows it. */
   const hideDetail = <Code extends string>(
     failure: ShownFailure<Code>,
@@ -279,6 +308,13 @@ const make = Effect.sync(() => {
         };
       });
     },
+
+    /** {@link withHiddenResults} for the Effect AI loop's tools (docs/effect-ai-migration.md). */
+    withHiddenRunResults: (tools: ReadonlyArray<RunTool>): Array<RunTool> =>
+      tools.map((tool) => ({
+        ...tool,
+        prepare: (params) => Effect.map(tool.prepare(params), hiddenCall),
+      })),
   };
 });
 
