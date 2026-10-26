@@ -1,5 +1,6 @@
 import { EventType, type StreamChunk } from "@tanstack/ai";
 import { Cause, Clock, Effect, Function as EffectFunction, Schema, Stream } from "effect";
+import type { AgUiEvent } from "../loop/chunks.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import type { SecretRedactor } from "../secrets/redactor.ts";
 import { RepeatedToolCall } from "../tools/repeat-guard.ts";
@@ -50,3 +51,28 @@ function withShownRunErrorsBody(
     ),
   );
 }
+
+/**
+ * {@link withShownRunErrors} for the events of the Effect AI loop. A run the repeat guard stopped
+ * already ends with its own code there.
+ */
+export const shownRunErrors: {
+  (
+    redactor: SecretRedactor["Service"],
+  ): <E, R>(events: Stream.Stream<AgUiEvent, E, R>) => Stream.Stream<AgUiEvent, E, R>;
+  <E, R>(
+    events: Stream.Stream<AgUiEvent, E, R>,
+    redactor: SecretRedactor["Service"],
+  ): Stream.Stream<AgUiEvent, E, R>;
+} = EffectFunction.dual(
+  2,
+  <E, R>(events: Stream.Stream<AgUiEvent, E, R>, redactor: SecretRedactor["Service"]) =>
+    Stream.mapEffect(events, (event) =>
+      event.type === "RUN_ERROR"
+        ? Effect.map(redactor.shownDetail(event.message), (message): AgUiEvent => ({
+            ...event,
+            message: message ?? "detail withheld",
+          }))
+        : Effect.succeed(event),
+    ),
+);
