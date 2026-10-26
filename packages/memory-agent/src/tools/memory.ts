@@ -7,6 +7,7 @@ import {
   Effect,
   Function as EffectFunction,
   Layer,
+  Option,
   Schema,
 } from "effect";
 import { Graph } from "../memory/graph.ts";
@@ -177,23 +178,29 @@ const memoryCalls = (projectId: string, scope?: MemoryToolScope) => {
 
   const reads = (binding?: MemoryToolRunBinding) => ({
     findMemory: ({ query }: typeof findMemoryInput.Type) =>
-      Effect.gen(function* () {
-        const result = yield* Effect.flatMap(MemorySearch, (search) =>
-          search.find({ query, projectId, crossProject }),
-        );
-        if (binding !== undefined) {
-          const ids = yield* Effect.flatMap(KnowledgePromotions, (knowledge) =>
-            knowledge.recordRetrieval({
-              projectId,
-              sessionId: binding.sessionId,
-              runId: binding.runId,
-              memoryNodeIds: result.matches.map((match) => match.id),
-            }),
-          );
-          for (const id of ids) MutableHashSet.add(retrieved, id);
-        }
-        return result;
-      }),
+      Effect.flatMap(MemorySearch, (search) =>
+        search.find({ query, projectId, crossProject }),
+      ).pipe(
+        // A run remembers what it found, which is all `use_promoted_memory` accepts.
+        Effect.tap((result) =>
+          Option.match(Option.fromNullishOr(binding), {
+            onNone: () => Effect.void,
+            onSome: (bound) =>
+              Effect.flatMap(KnowledgePromotions, (knowledge) =>
+                knowledge.recordRetrieval({
+                  projectId,
+                  sessionId: bound.sessionId,
+                  runId: bound.runId,
+                  memoryNodeIds: result.matches.map((match) => match.id),
+                }),
+              ).pipe(
+                Effect.tap((ids) =>
+                  Effect.sync(() => ids.forEach((id) => MutableHashSet.add(retrieved, id))),
+                ),
+              ),
+          }),
+        ),
+      ),
     readEvidence: ({ id, offset }: typeof readEvidenceInput.Type) =>
       Effect.map(
         readStructuredEvidence(id, offset ?? 0, projectId, crossProject),
@@ -221,15 +228,20 @@ const memoryCalls = (projectId: string, scope?: MemoryToolScope) => {
         }),
       ),
     useMemory: ({ memoryNodeIds: ids }: typeof UsePromotedMemoryInput.Type) =>
-      Effect.gen(function* () {
-        if (ids.some((id) => !MutableHashSet.has(retrieved, id)))
-          return yield* PromotedMemoryUseRejected.make({
-            reason: NotRetrieved.make({}),
-            message: "Only promoted memories retrieved in this run can be used",
-          });
-        usedDraft = EffectArray.dedupe(ids);
-        return { status: "recorded" as const, usedMemoryCount: usedDraft.length };
-      }),
+      Effect.succeed(ids).pipe(
+        Effect.filterOrFail(
+          (given) => given.every((id) => MutableHashSet.has(retrieved, id)),
+          () =>
+            PromotedMemoryUseRejected.make({
+              reason: NotRetrieved.make({}),
+              message: "Only promoted memories retrieved in this run can be used",
+            }),
+        ),
+        Effect.map((given) => {
+          usedDraft = EffectArray.dedupe(given);
+          return { status: "recorded" as const, usedMemoryCount: usedDraft.length };
+        }),
+      ),
     /** Records the memories the answer declared it used, under the answer's message. */
     recordUse: (parentMessageId: string) =>
       Effect.flatMap(KnowledgePromotions, (knowledge) =>
@@ -280,31 +292,37 @@ function createMemoryToolsBody(
       run(calls.traceEvidence(input), { signal: context?.abortSignal }),
     ),
   ] as const;
-  if (!(binding !== undefined)) return { tools: base, middleware: null };
-  const bound = runCalls(binding);
-
-  const middleware: ChatMiddleware = {
-    name: "memory-agent/promoted-memory-use",
-    onFinish(ctx) {
-      if (!isTruthy(ctx.currentMessageId)) return;
-      return run(bound.recordUse(ctx.currentMessageId));
+  return Option.match(Option.fromNullishOr(binding), {
+    onNone: () => ({ tools: base, middleware: null }),
+    onSome: (runBinding) => {
+      const bound = runCalls(runBinding);
+      const middleware: ChatMiddleware = {
+        name: "memory-agent/promoted-memory-use",
+        onFinish: (ctx) =>
+          Option.match(Option.liftPredicate(ctx.currentMessageId, isTruthy), {
+            onNone: () => undefined,
+            onSome: (messageId) => run(bound.recordUse(messageId)),
+          }),
+      };
+      return {
+        tools: [
+          ...base,
+          toolDefinition(definitionOf(readToolResult)).server(({ id, offset }, context) =>
+            run(bound.readToolResult({ id, offset: offset ?? 0 }), {
+              signal: context?.abortSignal,
+            }),
+          ),
+          toolDefinition(definitionOf(promoteMemoryCandidate)).server((input) =>
+            run(bound.promote(input)),
+          ),
+          toolDefinition(definitionOf(usePromotedMemory)).server((input) =>
+            Effect.runSync(bound.useMemory(input)),
+          ),
+        ] as const,
+        middleware,
+      };
     },
-  };
-  return {
-    tools: [
-      ...base,
-      toolDefinition(definitionOf(readToolResult)).server(({ id, offset }, context) =>
-        run(bound.readToolResult({ id, offset: offset ?? 0 }), { signal: context?.abortSignal }),
-      ),
-      toolDefinition(definitionOf(promoteMemoryCandidate)).server((input) =>
-        run(bound.promote(input)),
-      ),
-      toolDefinition(definitionOf(usePromotedMemory)).server((input) =>
-        Effect.runSync(bound.useMemory(input)),
-      ),
-    ] as const,
-    middleware,
-  };
+  });
 }
 
 /** Runs a call of {@link memoryCalls} on these services, keeping the caller's fiber and span. */

@@ -1,4 +1,12 @@
-import { Effect, Function as EffectFunction, Option, Predicate, Schema } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  Function as EffectFunction,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import {
   fingerprint,
@@ -35,11 +43,16 @@ const replaceEntries = (
 const isTanStackKey = (key: string) => key === "tanstack" || key.startsWith("tanstack:");
 
 /** A `metadata` entry without TanStack's keys, gone when nothing else was in it. */
-const metadataEntry = (metadata: JsonValue): Entries => {
-  if (!isJsonObject(metadata)) return [["metadata", metadata]];
-  const kept = replaceEntries(metadata, (key, value) => (isTanStackKey(key) ? [] : [[key, value]]));
-  return Object.keys(kept).length === 0 ? [] : [["metadata", kept]];
-};
+const metadataEntry = (metadata: JsonValue): Entries =>
+  Option.match(Option.liftPredicate(metadata, isJsonObject), {
+    onNone: () => [["metadata", metadata]],
+    onSome: (object) => {
+      const kept = replaceEntries(object, (key, value) =>
+        isTanStackKey(key) ? [] : [[key, value]],
+      );
+      return Object.keys(kept).length === 0 ? [] : [["metadata", kept]];
+    },
+  });
 
 /**
  * The fields of a message's `metadata.tanstack` the app keeps. Replay reads `source`,
@@ -57,24 +70,28 @@ const migrateToolCall = (call: JsonValue): JsonValue =>
     : call;
 
 /** A message with its kept TanStack fields lifted to the top level, where its metadata was. */
-export const migrateMessage = (message: JsonValue): JsonValue => {
-  if (!isJsonObject(message)) return message;
+export const migrateMessage = (message: JsonValue): JsonValue =>
+  Option.liftPredicate(message, isJsonObject).pipe(
+    Option.map(migrateMessageObject),
+    Option.getOrElse(() => message),
+  );
+
+const migrateMessageObject = (message: JsonObject): JsonObject => {
   const tanstack = isJsonObject(message.metadata) ? message.metadata.tanstack : undefined;
   const lifted: Entries = isJsonObject(tanstack)
     ? keptFields
         .filter((field) => Object.hasOwn(tanstack, field) && !Object.hasOwn(message, field))
         .map((field) => [field, tanstack[field]])
     : [];
-  return replaceEntries(message, (key, value) => {
-    switch (key) {
-      case "metadata":
-        return [...lifted, ...metadataEntry(value)];
-      case "toolCalls":
-        return [[key, isJsonArray(value) ? value.map(migrateToolCall) : value]];
-      default:
-        return [[key, value]];
-    }
-  });
+  return replaceEntries(message, (key, value) =>
+    Match.value(key).pipe(
+      Match.when("metadata", (): Entries => [...lifted, ...metadataEntry(value)]),
+      Match.when("toolCalls", (): Entries => [
+        [key, isJsonArray(value) ? value.map(migrateToolCall) : value],
+      ]),
+      Match.orElse((): Entries => [[key, value]]),
+    ),
+  );
 };
 
 /**
@@ -86,7 +103,26 @@ export const migrateUsage: {
   (inputExcludesCache: boolean): (usage: JsonValue) => JsonValue;
 } & typeof migrateUsageBody = EffectFunction.dual(2, migrateUsageBody);
 function migrateUsageBody(usage: JsonValue, inputExcludesCache: boolean): JsonValue {
-  if (!isJsonObject(usage) || !Predicate.isNumber(usage.promptTokens)) return usage;
+  return Option.liftPredicate(usage, isJsonObject).pipe(
+    Option.flatMap((object) =>
+      Option.map(Option.liftPredicate(object.promptTokens, Predicate.isNumber), (promptTokens) =>
+        agUiUsage({ usage: object, promptTokens, inputExcludesCache }),
+      ),
+    ),
+    Option.getOrElse(() => usage),
+  );
+}
+
+/** A TanStack usage that reported its input tokens. */
+function agUiUsage({
+  usage,
+  promptTokens,
+  inputExcludesCache,
+}: {
+  readonly usage: JsonObject;
+  readonly promptTokens: number;
+  readonly inputExcludesCache: boolean;
+}) {
   const prompt = isJsonObject(usage.promptTokensDetails) ? usage.promptTokensDetails : {};
   const completion = isJsonObject(usage.completionTokensDetails)
     ? usage.completionTokensDetails
@@ -94,9 +130,7 @@ function migrateUsageBody(usage: JsonValue, inputExcludesCache: boolean): JsonVa
   const cached = count(prompt.cachedTokens);
   const written = count(prompt.cacheWriteTokens);
   const output = count(usage.completionTokens);
-  const input = inputExcludesCache
-    ? usage.promptTokens + (cached ?? 0) + (written ?? 0)
-    : usage.promptTokens;
+  const input = inputExcludesCache ? promptTokens + (cached ?? 0) + (written ?? 0) : promptTokens;
   return {
     inputTokens: input,
     ...optionalProperty("outputTokens", output),
@@ -118,23 +152,23 @@ export const migrateInterruptPayload = (payload: JsonValue): JsonValue =>
   isJsonObject(payload) && isJsonObject(payload.metadata)
     ? {
         ...payload,
-        metadata: replaceEntries(payload.metadata, (key, value) => {
-          switch (key) {
-            case "tanstack:interruptPayload":
-              return [["payload", value]];
-            case "tanstack:interruptBinding":
-              return [];
-            default:
-              return [[key, value]];
-          }
-        }),
+        metadata: replaceEntries(payload.metadata, (key, value) =>
+          Match.value(key).pipe(
+            Match.when("tanstack:interruptPayload", (): Entries => [["payload", value]]),
+            Match.when("tanstack:interruptBinding", (): Entries => []),
+            Match.orElse((): Entries => [[key, value]]),
+          ),
+        ),
       }
     : payload;
 
 /** Where the handoff's boundary was in the messages before the migration, or -1 if it is gone. */
-const boundaryIndex = (saved: SavedHandoff, before: readonly JsonValue[]) => {
-  if (!saved.anchor.startsWith("v2:"))
-    return before.findIndex((message) => legacyFingerprint(message) === saved.anchor);
+const boundaryIndex = (saved: SavedHandoff, before: readonly JsonValue[]) =>
+  saved.anchor.startsWith("v2:")
+    ? v2BoundaryIndex(saved, before)
+    : before.findIndex((message) => legacyFingerprint(message) === saved.anchor);
+
+const v2BoundaryIndex = (saved: SavedHandoff, before: readonly JsonValue[]) => {
   const through =
     saved.anchorId === undefined
       ? saved.through
@@ -153,18 +187,18 @@ const migrateHandoff = (
   after: readonly JsonValue[],
 ): Option.Option<SavedHandoff> => {
   const index = boundaryIndex(saved, before);
-  const boundary = after[index];
-  if (index < 0 || boundary === undefined) return Option.none();
-  const anchor = fingerprint(boundary);
-  return saved.anchor.startsWith("v2:")
-    ? Option.some({ ...saved, anchor }).pipe(Option.filter(() => anchor !== saved.anchor))
-    : Option.some({
-        ...saved,
-        through: index + 1,
-        anchor,
-        anchorId:
-          isJsonObject(boundary) && Predicate.isString(boundary.id) ? boundary.id : undefined,
-      });
+  return Option.flatMap(Arr.get(after, index), (boundary) => {
+    const anchor = fingerprint(boundary);
+    return saved.anchor.startsWith("v2:")
+      ? Option.some({ ...saved, anchor }).pipe(Option.filter(() => anchor !== saved.anchor))
+      : Option.some({
+          ...saved,
+          through: index + 1,
+          anchor,
+          anchorId:
+            isJsonObject(boundary) && Predicate.isString(boundary.id) ? boundary.id : undefined,
+        });
+  });
 };
 
 // The stores wrote these texts from JSON values, so parsing restores them.

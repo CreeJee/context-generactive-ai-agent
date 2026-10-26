@@ -3,6 +3,7 @@ import {
   Array as EffectArray,
   Function as EffectFunction,
   JsonSchema,
+  Match,
   Option,
   Predicate,
   Record as EffectRecord,
@@ -63,19 +64,28 @@ type Fold = (node: JsonObject) => JsonObject;
  * How one keyword of an `allOf` member folds into its node: a bound intersects the node's, and the
  * member's annotation, the more specific one, replaces the node's. Other keywords do not fold.
  */
-const keywordFold = (key: string, value: JsonValue): Option.Option<Fold> => {
-  if (isBoundKeyword(key) && Predicate.isNumber(value))
-    return Option.some((node) => {
-      const current = node[key];
-      return {
-        ...node,
-        [key]: Predicate.isNumber(current) ? boundIntersection[key](current, value) : value,
-      };
-    });
-  if (isAnnotationKeyword(key) && Predicate.isString(value))
-    return Option.some((node) => ({ ...node, [key]: value }));
-  return Option.none();
-};
+const keywordFold = (key: string, value: JsonValue): Option.Option<Fold> =>
+  Option.zipWith(
+    Option.liftPredicate(key, isBoundKeyword),
+    Option.liftPredicate(value, Predicate.isNumber),
+    (bound, limit): Fold =>
+      (node) => {
+        const current = node[bound];
+        return {
+          ...node,
+          [bound]: Predicate.isNumber(current) ? boundIntersection[bound](current, limit) : limit,
+        };
+      },
+  ).pipe(
+    Option.orElse(() =>
+      Option.zipWith(
+        Option.liftPredicate(key, isAnnotationKeyword),
+        Option.liftPredicate(value, Predicate.isString),
+        (annotation, text): Fold =>
+          (node) => ({ ...node, [annotation]: text }),
+      ),
+    ),
+  );
 /** How an `allOf` member folds into its node, when every keyword it has folds. */
 const memberFold = (member: JsonValue): Option.Option<Fold> =>
   Option.liftPredicate(isJsonObject)(member).pipe(
@@ -96,15 +106,22 @@ const foldNode = (node: JsonObject): JsonObject => {
   const { allOf, ...rest } = EffectRecord.map(node, (child, key) =>
     isDataKeyword(key) ? child : foldValue(child),
   );
-  if (allOf === undefined || !isJsonArray(allOf)) return rest;
-  const [folds, kept] = EffectArray.partition(allOf, (member) =>
-    Option.match(memberFold(member), {
-      onNone: () => Result.fail(member),
-      onSome: Result.succeed,
+  return Option.fromNullishOr(allOf).pipe(
+    Option.filter(isJsonArray),
+    Option.match({
+      onNone: () => rest,
+      onSome: (members) => {
+        const [folds, kept] = EffectArray.partition(members, (member) =>
+          Option.match(memberFold(member), {
+            onNone: () => Result.fail(member),
+            onSome: Result.succeed,
+          }),
+        );
+        const folded = folds.reduce((out, fold) => fold(out), rest);
+        return kept.length === 0 ? folded : { ...folded, allOf: kept };
+      },
     }),
   );
-  const folded = folds.reduce((out, fold) => fold(out), rest);
-  return kept.length === 0 ? folded : { ...folded, allOf: kept };
 };
 
 /**
@@ -118,24 +135,29 @@ const toolJsonSchema = (
   const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" });
   const shared = (definitions: JsonSchema.Definitions) =>
     Object.keys(definitions).length > 0 ? definitions : undefined;
-  if (target === "draft-2020-12")
-    return foldNode(
-      toJsonObject({
-        ...document.schema,
-        ...optionalProperty("$defs", shared(document.definitions)),
-      }),
-    );
-  if (target === "draft-07") {
-    const draft07 = JsonSchema.toDocumentDraft07(document);
-    return foldNode(
-      toJsonObject({
-        ...draft07.schema,
-        ...optionalProperty("definitions", shared(draft07.definitions)),
-      }),
-    );
-  }
-  // The Standard Schema caller reads JSON Schema synchronously; this is its thrown error.
-  throw new Error(`Unsupported target: ${target}`);
+  return Match.value(target).pipe(
+    Match.when("draft-2020-12", () =>
+      foldNode(
+        toJsonObject({
+          ...document.schema,
+          ...optionalProperty("$defs", shared(document.definitions)),
+        }),
+      ),
+    ),
+    Match.when("draft-07", () => {
+      const draft07 = JsonSchema.toDocumentDraft07(document);
+      return foldNode(
+        toJsonObject({
+          ...draft07.schema,
+          ...optionalProperty("definitions", shared(draft07.definitions)),
+        }),
+      );
+    }),
+    Match.orElse(() => {
+      // The Standard Schema caller reads JSON Schema synchronously; this is its thrown error.
+      throw new Error(`Unsupported target: ${target}`);
+    }),
+  );
 };
 
 /**

@@ -1,10 +1,9 @@
 import { Function as EffectFunction } from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { isTruthy } from "../truthy.ts";
 import { toolDefinition } from "@tanstack/ai";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Cause, Context, Effect, FileSystem, Layer, Match, Schema } from "effect";
+import { Cause, Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -109,10 +108,15 @@ function resolveShellWorkingDirectoryBody(
   storageRoot: string,
   workdir: string,
 ) {
-  if (!isAbsolute(workdir)) return resolveProjectPath(projectRoot, workdir, "directory");
-  const resolved = resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
+  return isAbsolute(workdir)
+    ? outsideWorkingDirectory(projectRoot, storageRoot, workdir)
+    : resolveProjectPath(projectRoot, workdir, "directory");
+}
+
+/** An absolute working directory, which must be under a temporary directory. */
+function outsideWorkingDirectory(projectRoot: string, storageRoot: string, workdir: string) {
   return Effect.gen(function* () {
-    const directory = yield* resolved;
+    const directory = yield* resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
     const tempRoots = yield* Effect.all(
       [canonicalPathEffect("/tmp"), Effect.flatMap(temporaryDirectory, canonicalPathEffect)],
       { concurrency: 2 },
@@ -209,35 +213,50 @@ const make = Effect.gen(function* () {
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
               ),
             );
-          if (binding !== undefined) {
-            const receipt = yield* background.start(
-              binding,
-              toolCallId ?? randomUUID(),
-              "shell",
-              label,
-              backgroundOperation(execute).pipe(
-                Effect.map((result) => ({
-                  report: JSON.stringify({
-                    workdir: directory.relative,
-                    ...result,
-                    command: label,
-                  }),
-                  failure: commandFailure(result),
-                })),
-              ),
-            );
-            const result = yield* background.waitResult(
-              binding.sessionId,
-              receipt.taskId,
-              yieldMs ?? 1000,
-            );
-            if (result?.status === "completed")
-              return yield* Schema.decodeEffect(Schema.fromJsonString(ShellResult))(result.result);
-            if (isTruthy(result)) return { taskId: receipt.taskId, ...result };
-            return receipt;
-          }
-          const result = yield* Effect.tryPromise((interrupted) => execute(signal ?? interrupted));
-          return { workdir: directory.relative, ...result, command: label };
+          const inBackground = (bound: BackgroundBinding) =>
+            Effect.gen(function* () {
+              const receipt = yield* background.start(
+                bound,
+                toolCallId ?? randomUUID(),
+                "shell",
+                label,
+                backgroundOperation(execute).pipe(
+                  Effect.map((result) => ({
+                    report: JSON.stringify({
+                      workdir: directory.relative,
+                      ...result,
+                      command: label,
+                    }),
+                    failure: commandFailure(result),
+                  })),
+                ),
+              );
+              const saved = yield* background.waitResult(
+                bound.sessionId,
+                receipt.taskId,
+                yieldMs ?? 1000,
+              );
+              return yield* Option.match(Option.fromNullishOr(saved), {
+                onNone: () => Effect.succeed(receipt),
+                onSome: (result) =>
+                  Match.value(result).pipe(
+                    Match.when({ status: "completed" }, ({ result: text }) =>
+                      Schema.decodeEffect(Schema.fromJsonString(ShellResult))(text),
+                    ),
+                    Match.orElse((running) =>
+                      Effect.succeed({ taskId: receipt.taskId, ...running }),
+                    ),
+                  ),
+              });
+            });
+          const inline = Effect.map(
+            Effect.tryPromise((interrupted) => execute(signal ?? interrupted)),
+            (result) => ({ workdir: directory.relative, ...result, command: label }),
+          );
+          return yield* Option.match(Option.fromNullishOr(binding), {
+            onNone: () => inline,
+            onSome: inBackground,
+          });
         }),
       ),
 
@@ -252,23 +271,30 @@ const make = Effect.gen(function* () {
             path,
             "new-or-file",
           );
-          if (expectedSha256 === undefined) {
-            const created = yield* createTextFileEffect({
-              absolute: target.absolute,
-              path,
-              text: content,
-            });
-            return { path: target.absolute, created: true, ...created };
-          }
-          if (!(target.stats !== undefined))
-            return yield* PathRejected.make({ path, reason: "not_found" });
-          const replaced = yield* replaceTextFileEffect({
-            absolute: target.absolute,
-            path,
-            expectedSha256,
-            text: content,
+          // Without a hash the file must be new; with one it replaces the file it names.
+          return yield* Option.match(Option.fromNullishOr(expectedSha256), {
+            onNone: () =>
+              Effect.map(
+                createTextFileEffect({ absolute: target.absolute, path, text: content }),
+                (created) => ({ path: target.absolute, created: true, ...created }),
+              ),
+            onSome: (expected) =>
+              Effect.succeed(target).pipe(
+                Effect.filterOrFail(
+                  (existing) => existing.stats !== undefined,
+                  () => PathRejected.make({ path, reason: "not_found" }),
+                ),
+                Effect.andThen(
+                  replaceTextFileEffect({
+                    absolute: target.absolute,
+                    path,
+                    expectedSha256: expected,
+                    text: content,
+                  }),
+                ),
+                Effect.map((replaced) => ({ path: target.absolute, created: false, ...replaced })),
+              ),
           });
-          return { path: target.absolute, created: false, ...replaced };
         }),
       ),
 
@@ -319,16 +345,8 @@ const make = Effect.gen(function* () {
         const deleteOutsideFile = (input: typeof DeleteOutsideFileInput.Type) =>
           run(calls.deleteOutsideFile(input));
 
-        if (approval === "gate") {
-          const [save, write, remove] = reviewedToolDefinitions;
-          return [
-            lazily(save.server(saveCodeSkill)),
-            runSkill,
-            lazily(write.server(writeOutsideFile)),
-            lazily(remove.server(deleteOutsideFile)),
-          ] as const;
-        }
-        const [save, write, remove] = approvalToolDefinitions;
+        const [save, write, remove] =
+          approval === "gate" ? reviewedToolDefinitions : approvalToolDefinitions;
         return [
           lazily(save.server(saveCodeSkill)),
           runSkill,

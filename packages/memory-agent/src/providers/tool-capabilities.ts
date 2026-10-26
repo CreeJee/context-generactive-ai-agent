@@ -3,7 +3,7 @@ import * as OpenAITools from "@tanstack/ai-openai/tools";
 import {
   Array as EffectArray,
   Function as EffectFunction,
-  MutableHashMap,
+  HashMap,
   HashSet,
   Option,
   Context,
@@ -474,61 +474,70 @@ function makeProviderToolCapabilityRegistryBody(
   descriptors: readonly AnyProviderToolDescriptor[] = providerToolDescriptors,
   models: readonly ProviderToolModelMetadata[] = installedModelMetadata(),
 ): Effect.Effect<ProviderToolCapabilityRegistryApi, ProviderToolMetadataFailure> {
+  const metadataFailure = (reason: typeof ProviderToolMetadataFailureReason.Type) =>
+    ProviderToolMetadataFailure.make({ reason });
   return Effect.gen(function* () {
-    const byId = MutableHashMap.empty<string, AnyProviderToolDescriptor>();
-    for (const entry of descriptors) {
-      if (entry.id !== `${entry.provider}:${entry.kind}`)
-        return yield* ProviderToolMetadataFailure.make({
-          reason: ProviderToolMetadataFailureReason.cases.InvalidId.make({ id: entry.id }),
-        });
-      if (MutableHashMap.has(byId, entry.id))
-        return yield* ProviderToolMetadataFailure.make({
-          reason: ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id: entry.id }),
-        });
-      MutableHashMap.set(byId, entry.id, entry);
-    }
-    const byModel = MutableHashMap.empty<string, HashSet.HashSet<string>>();
-    for (const model of models) {
-      const key = `${model.provider}:${model.model}`;
-      if (MutableHashMap.has(byModel, key))
-        return yield* ProviderToolMetadataFailure.make({
-          reason: ProviderToolMetadataFailureReason.cases.DuplicateModel.make({
-            provider: model.provider,
-            model: model.model,
-          }),
-        });
-      MutableHashMap.set(byModel, key, HashSet.fromIterable(model.tools));
-    }
+    const byId = yield* Effect.reduce(
+      descriptors,
+      () => HashMap.empty<string, AnyProviderToolDescriptor>(),
+      (known, entry) =>
+        Effect.succeed(entry).pipe(
+          Effect.filterOrFail(
+            ({ id, provider, kind }) => id === `${provider}:${kind}`,
+            ({ id }) =>
+              metadataFailure(ProviderToolMetadataFailureReason.cases.InvalidId.make({ id })),
+          ),
+          Effect.filterOrFail(
+            ({ id }) => !HashMap.has(known, id),
+            ({ id }) =>
+              metadataFailure(ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id })),
+          ),
+          Effect.map((valid) => HashMap.set(known, valid.id, valid)),
+        ),
+    );
+    const byModel = yield* Effect.reduce(
+      models,
+      () => HashMap.empty<string, HashSet.HashSet<string>>(),
+      (known, model) =>
+        Effect.succeed(`${model.provider}:${model.model}`).pipe(
+          Effect.filterOrFail(
+            (key) => !HashMap.has(known, key),
+            () =>
+              metadataFailure(
+                ProviderToolMetadataFailureReason.cases.DuplicateModel.make({
+                  provider: model.provider,
+                  model: model.model,
+                }),
+              ),
+          ),
+          Effect.map((key) => HashMap.set(known, key, HashSet.fromIterable(model.tools))),
+        ),
+    );
     const stableDescriptors = Object.freeze([...descriptors].toSorted(compareDescriptor));
     return {
       descriptors: stableDescriptors,
-      get: (id) => {
-        const found = Option.getOrUndefined(MutableHashMap.get(byId, id));
-        return found === undefined
-          ? Effect.fail(UnknownProviderTool.make({ id }))
-          : Effect.succeed(found);
-      },
+      get: (id) => Effect.fromOption(HashMap.get(byId, id), () => UnknownProviderTool.make({ id })),
       filter: (query) => filterProviderTools(stableDescriptors, query),
-      resolve: (query) => {
-        const supported = Option.getOrUndefined(
-          MutableHashMap.get(byModel, `${query.provider}:${query.model}`),
-        );
-        if (supported === undefined)
-          return Effect.fail(
+      resolve: (query) =>
+        Effect.map(
+          Effect.fromOption(HashMap.get(byModel, `${query.provider}:${query.model}`), () =>
             UnknownProviderToolModel.make({ provider: query.provider, model: query.model }),
-          );
-        const account =
-          query.accountToolKinds === undefined
-            ? null
-            : HashSet.fromIterable(query.accountToolKinds);
-        return Effect.succeed(
-          filterProviderTools(stableDescriptors, query).filter(
-            (entry) =>
-              HashSet.has(supported, entry.kind) &&
-              (account === null || HashSet.has(account, entry.kind)),
           ),
-        );
-      },
+          (supported) => {
+            const account = Option.map(
+              Option.fromNullishOr(query.accountToolKinds),
+              HashSet.fromIterable,
+            );
+            return filterProviderTools(stableDescriptors, query).filter(
+              (entry) =>
+                HashSet.has(supported, entry.kind) &&
+                Option.match(account, {
+                  onNone: () => true,
+                  onSome: (kinds) => HashSet.has(kinds, entry.kind),
+                }),
+            );
+          },
+        ),
     };
   });
 }

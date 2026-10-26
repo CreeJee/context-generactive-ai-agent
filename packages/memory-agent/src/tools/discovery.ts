@@ -85,6 +85,17 @@ export type ToolLookup = Data.TaggedEnum<{
 }>;
 export const ToolLookup = Data.taggedEnum<ToolLookup>();
 
+/** One discovery call so far: the names discovered, what it found, and the names it did not. */
+interface Discovering {
+  readonly names: Array<string>;
+  readonly found: ReadonlyArray<{
+    readonly name: string;
+    readonly description: string;
+    readonly inputSchema: JsonSchema.JsonSchema;
+  }>;
+  readonly errors: ReadonlyArray<string>;
+}
+
 /** The run's tools with TanStack's lazy discovery, seeded with what `history` discovered. */
 export const lazyToolsFor = Effect.fnUntraced(function* (
   tools: ReadonlyArray<RunTool>,
@@ -104,28 +115,30 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
     jsonSchema: discoveryParameters,
     handler: ({ toolNames }) =>
       Ref.modify(discovered, (before) => {
-        let names = before;
-        const found: Array<{
-          readonly name: string;
-          readonly description: string;
-          readonly inputSchema: JsonSchema.JsonSchema;
-        }> = [];
-        const errors: Array<string> = [];
-        for (const name of toolNames) {
-          const tool = lazyByName.get(name);
-          if (tool === undefined) {
-            errors.push(
-              `Unknown tool: '${name}'. Available tools: [${undiscovered(names).join(", ")}]`,
-            );
-            continue;
-          }
-          names = names.includes(name) ? names : [...names, name];
-          found.push({
-            name,
-            description: tool.tool.description ?? "",
-            inputSchema: toolParameters(tool.tool),
-          });
-        }
+        const start: Discovering = { names: before, found: [], errors: [] };
+        const { names, found, errors } = Arr.reduce(toolNames, start, (state, name): Discovering =>
+          Option.match(Option.fromNullishOr(lazyByName.get(name)), {
+            onNone: () => ({
+              ...state,
+              errors: [
+                ...state.errors,
+                `Unknown tool: '${name}'. Available tools: [${undiscovered(state.names).join(", ")}]`,
+              ],
+            }),
+            onSome: (tool) => ({
+              names: state.names.includes(name) ? state.names : [...state.names, name],
+              found: [
+                ...state.found,
+                {
+                  name,
+                  description: tool.tool.description ?? "",
+                  inputSchema: toolParameters(tool.tool),
+                },
+              ],
+              errors: state.errors,
+            }),
+          }),
+        );
         const answer = {
           tools: found,
           ...optionalProperty("errors", errors.length > 0 ? errors : undefined),
@@ -144,20 +157,26 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
 
     /** The tool a call by `name` runs. Discovery stays callable after everything is found. */
     find: (name: string) =>
-      Effect.map(Ref.get(discovered), (names): ToolLookup => {
-        const tool = eager.find((candidate) => candidate.tool.name === name);
-        if (tool !== undefined) return ToolLookup.Found({ tool });
-        if (name === discoveryToolName && lazy.length > 0)
-          return ToolLookup.Found({ tool: discovery });
-        const lazyTool = lazyByName.get(name);
-        if (lazyTool === undefined) return ToolLookup.Unknown();
-        return names.includes(name)
-          ? ToolLookup.Found({ tool: lazyTool })
-          : ToolLookup.Undiscovered({
-              answer: {
-                error: `Error: Tool '${name}' must be discovered first. Call ${discoveryToolName} with toolNames: ['${name}'] to discover it.`,
-              },
-            });
-      }),
+      Effect.map(Ref.get(discovered), (names): ToolLookup =>
+        Arr.findFirst(eager, (candidate) => candidate.tool.name === name).pipe(
+          Option.orElse(() =>
+            Option.liftPredicate(discovery, () => name === discoveryToolName && lazy.length > 0),
+          ),
+          Option.map((tool) => ToolLookup.Found({ tool })),
+          Option.getOrElse(() =>
+            Option.match(Option.fromNullishOr(lazyByName.get(name)), {
+              onNone: () => ToolLookup.Unknown(),
+              onSome: (lazyTool) =>
+                names.includes(name)
+                  ? ToolLookup.Found({ tool: lazyTool })
+                  : ToolLookup.Undiscovered({
+                      answer: {
+                        error: `Error: Tool '${name}' must be discovered first. Call ${discoveryToolName} with toolNames: ['${name}'] to discover it.`,
+                      },
+                    }),
+            }),
+          ),
+        ),
+      ),
   };
 });

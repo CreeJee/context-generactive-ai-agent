@@ -69,20 +69,23 @@ export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
 export const errorTag = (error: Error) => Option.getOrElse(tagOfUnknown(error), () => error.name);
 
 const toolAuthored = /^([a-z_]+): ([\s\S]*)$/;
+const isToolFailed = Schema.is(ToolFailed);
 
 /**
  * Any tool error as a {@link ToolFailed}. Tool-authored messages already follow the
  * `code: detail` form; anything else is `tool_failed` with its message as the detail.
  */
-export const toolFailedOf = (error: Error) => {
-  if (Schema.is(ToolFailed)(error)) return error;
-  const authored = toolAuthored.exec(error.message);
-  return ToolFailed.make({
-    code: authored?.[1] ?? "tool_failed",
-    tag: errorTag(error),
-    detail: authored?.[2] ?? error.message,
-  });
-};
+export const toolFailedOf = (error: Error): ToolFailed =>
+  Option.liftPredicate(error, isToolFailed).pipe(
+    Option.getOrElse(() => {
+      const authored = toolAuthored.exec(error.message);
+      return ToolFailed.make({
+        code: authored?.[1] ?? "tool_failed",
+        tag: errorTag(error),
+        detail: authored?.[2] ?? error.message,
+      });
+    }),
+  );
 
 /** A Node.js system error (`ENOENT`, `EACCES`, …). Only its code is kept for the model. */
 export const SystemError = Schema.Struct({ code: Schema.String });
@@ -96,28 +99,40 @@ export const toolFailure: {
   (path: string): (error: Error) => ReturnType<typeof toolFailureBody>;
 } & typeof toolFailureBody = EffectFunction.dual(2, toolFailureBody);
 function toolFailureBody(error: Error, path: string): ToolFailed {
-  // Already what the model reads. Its `code` field would otherwise pass for a system error's.
-  if (Schema.is(ToolFailed)(error)) return error;
   const tag = errorTag(error);
   const reason = Schema.is(PathRejected)(error)
     ? error.reason
     : Schema.is(TextFileRejected)(error)
       ? textFileRejectedReasonName(error.reason)
       : null;
-  if (reason !== null)
-    return ToolFailed.make({
-      code: reason,
-      tag,
-      detail: `${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, reason)) ?? ""}`.trim(),
-    });
-  if (Schema.is(TextFileIoFailed)(error))
-    return ToolFailed.make({ code: "io_error", tag, detail: `${path} (${error.reason.code})` });
-  const systemError = Option.getOrUndefined(decodeSystemError(error));
-  if (systemError !== undefined)
-    return ToolFailed.make({ code: "io_error", tag, detail: `${path} (${systemError.code})` });
-  // Tool-authored messages already follow the `reason: detail` form.
-  if (toolAuthored.test(error.message)) return toolFailedOf(error);
-  return ToolFailed.make({ code: "io_error", tag, detail: `${path} (unknown)` });
+  const ioError = (code: string) =>
+    ToolFailed.make({ code: "io_error", tag, detail: `${path} (${code})` });
+  // Already what the model reads. Its `code` field would otherwise pass for a system error's.
+  return Option.liftPredicate(error, isToolFailed).pipe(
+    Option.orElse(() =>
+      Option.map(Option.fromNullishOr(reason), (code) =>
+        ToolFailed.make({
+          code,
+          tag,
+          detail: `${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, code)) ?? ""}`.trim(),
+        }),
+      ),
+    ),
+    Option.orElse(() =>
+      Option.map(Option.liftPredicate(error, Schema.is(TextFileIoFailed)), (failed) =>
+        ioError(failed.reason.code),
+      ),
+    ),
+    Option.orElse(() => Option.map(decodeSystemError(error), (system) => ioError(system.code))),
+    // Tool-authored messages already follow the `reason: detail` form.
+    Option.orElse(() =>
+      Option.map(
+        Option.liftPredicate(error, (candidate) => toolAuthored.test(candidate.message)),
+        toolFailedOf,
+      ),
+    ),
+    Option.getOrElse(() => ioError("unknown")),
+  );
 }
 
 /** Runs one tool operation, rethrowing any failure as a model-facing message. */
@@ -176,15 +191,16 @@ export const guardedEffect: {
 function guardedEffectBody<A, E, R>(path: string, program: Effect.Effect<A, E, R>) {
   return program.pipe(
     Effect.catchCause((cause): Effect.Effect<never, E | Cause.UnknownError> => {
-      if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
       const failure = Cause.squash(cause);
       const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
-      return Effect.fail(
-        new Cause.UnknownError(
-          // A thrown non-Error carries nothing the model may see.
-          toolFailure(Predicate.isError(error) ? error : new Error("unknown"), path),
-        ),
-      );
+      return Cause.hasInterrupts(cause)
+        ? Effect.failCause(cause)
+        : Effect.fail(
+            new Cause.UnknownError(
+              // A thrown non-Error carries nothing the model may see.
+              toolFailure(Predicate.isError(error) ? error : new Error("unknown"), path),
+            ),
+          );
     }),
   );
 }
