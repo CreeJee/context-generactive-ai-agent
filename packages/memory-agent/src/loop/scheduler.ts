@@ -15,7 +15,8 @@ import { ToolFailed, toolResultKey } from "../tools/failure.ts";
 export interface StepCall {
   readonly id: string;
   readonly name: string;
-  readonly params: unknown;
+  /** The arguments the call runs with: as the model sent them, or as the user edited them. */
+  readonly params: JsonValue;
 }
 
 /** What a call answers the model with, or the user's decision it waits for. */
@@ -54,8 +55,14 @@ const failedWith = (failure: ToolFailed): CallAnswer =>
   CallOutcome.Failed({ result: failure[toolResultKey], message: failure.message });
 
 export interface StepScheduler<Request, E, R> {
-  /** Takes a call as the model makes it; its gates and run go on beside the response. */
-  readonly offer: (call: StepCall) => Effect.Effect<void, never, R>;
+  /**
+   * Takes a call as the model makes it, with what the gates decide for it; the decision and the
+   * run go on beside the response.
+   */
+  readonly offer: (
+    call: StepCall,
+    admission: Effect.Effect<Admission<Request>, E, R>,
+  ) => Effect.Effect<void, never, R>;
   /**
    * The response ended, `complete` with a finish of `stop`, `tool-calls` or `pause`. Writes start,
    * or are answered as not run when it was not complete. Waits for every call and gives their
@@ -66,8 +73,6 @@ export interface StepScheduler<Request, E, R> {
 
 /** A scheduler for one step; its calls run in the scope, so closing it interrupts them. */
 export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options: {
-  /** The gates, in their order: whether the call runs and what it answers if not. */
-  readonly admit: (call: StepCall) => Effect.Effect<Admission<Request>, E, R>;
   /** What follows an answered call, as soon as it has its answer. */
   readonly answered: (call: StepCall, answer: CallAnswer) => Effect.Effect<void, E, R>;
 }): Effect.fn.Return<StepScheduler<Request, E, R>, never, Scope.Scope> {
@@ -99,8 +104,8 @@ export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options
       Waiting: Effect.succeed,
     });
 
-  const offer = (call: StepCall) =>
-    options.admit(call).pipe(
+  const offer = (call: StepCall, admission: Effect.Effect<Admission<Request>, E, R>) =>
+    admission.pipe(
       Effect.flatMap(outcomeOf(call)),
       Effect.forkIn(scope),
       Effect.flatMap((fiber) => Ref.update(calls, (all) => [...all, fiber])),

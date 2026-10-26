@@ -61,9 +61,7 @@ describe("lazy tools", () => {
       const lazyTools = yield* lazyToolsFor(tools, []);
       expect(yield* lazyTools.find("delete_file")).toEqual(
         ToolLookup.Undiscovered({
-          answer: {
-            error: `Error: Tool 'delete_file' must be discovered first. Call ${discoveryToolName} with toolNames: ['delete_file'] to discover it.`,
-          },
+          message: `Error: Tool 'delete_file' must be discovered first. Call ${discoveryToolName} with toolNames: ['delete_file'] to discover it.`,
         }),
       );
       expect(yield* discover(lazyTools, ["delete_file", "nope"])).toEqual({

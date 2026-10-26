@@ -9,7 +9,6 @@ import {
   Schema,
 } from "effect";
 import type { StoredMessage } from "../chat-store/schema.ts";
-import type { JsonValue } from "../json.ts";
 import { toolParameters } from "../model/tool-schema.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
@@ -77,10 +76,10 @@ const discoveredIn = (history: ReadonlyArray<StoredMessage>, lazy: ReadonlySet<s
   );
 };
 
-/** What a call by name runs: a tool, an answer that the lazy tool is not discovered yet, or none. */
+/** What a call by name runs: a tool, the failure that the lazy tool is not discovered yet, or none. */
 export type ToolLookup = Data.TaggedEnum<{
   Found: { readonly tool: RunTool };
-  Undiscovered: { readonly answer: JsonValue };
+  Undiscovered: { readonly message: string };
   Unknown: {};
 }>;
 export const ToolLookup = Data.taggedEnum<ToolLookup>();
@@ -170,9 +169,7 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
                 names.includes(name)
                   ? ToolLookup.Found({ tool: lazyTool })
                   : ToolLookup.Undiscovered({
-                      answer: {
-                        error: `Error: Tool '${name}' must be discovered first. Call ${discoveryToolName} with toolNames: ['${name}'] to discover it.`,
-                      },
+                      message: `Error: Tool '${name}' must be discovered first. Call ${discoveryToolName} with toolNames: ['${name}'] to discover it.`,
                     }),
             }),
           ),

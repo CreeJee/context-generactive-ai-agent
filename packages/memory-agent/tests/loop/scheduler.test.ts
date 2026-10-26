@@ -34,31 +34,36 @@ const harness = Effect.fnUntraced(function* (ids: ReadonlyArray<string>) {
         ),
       ),
     );
-  const scheduler = yield* stepScheduler({ admit, answered: () => Effect.void });
-  return { scheduler, started: Ref.get(started), release };
+  const scheduler = yield* stepScheduler<string, never, never>({ answered: () => Effect.void });
+  return {
+    offer: (call: StepCall) => scheduler.offer(call, admit(call)),
+    settle: scheduler.settle,
+    started: Ref.get(started),
+    release,
+  };
 });
 
 describe("step scheduler", () => {
   it.effect("starts a read when it is admitted, before the response finishes", () =>
     Effect.gen(function* () {
-      const { scheduler, started, release } = yield* harness(["r1", "w1"]);
-      yield* scheduler.offer(read("r1"));
-      yield* scheduler.offer(write("w1"));
+      const { offer, settle, started, release } = yield* harness(["r1", "w1"]);
+      yield* offer(read("r1"));
+      yield* offer(write("w1"));
       yield* Effect.yieldNow;
       expect(yield* started).toEqual(["r1"]);
       yield* release("r1");
       yield* release("w1");
-      yield* Effect.forkChild(scheduler.settle(true));
+      yield* Effect.forkChild(settle(true));
     }).pipe(Effect.scoped),
   );
 
   it.effect("starts every write after a complete finish without waiting for other calls", () =>
     Effect.gen(function* () {
-      const { scheduler, started, release } = yield* harness(["r1", "w1", "w2"]);
-      yield* scheduler.offer(read("r1"));
-      yield* scheduler.offer(write("w1"));
-      yield* scheduler.offer(write("w2"));
-      const settled = yield* Effect.forkChild(scheduler.settle(true));
+      const { offer, settle, started, release } = yield* harness(["r1", "w1", "w2"]);
+      yield* offer(read("r1"));
+      yield* offer(write("w1"));
+      yield* offer(write("w2"));
+      const settled = yield* Effect.forkChild(settle(true));
       yield* Effect.yieldNow;
       // r1 is still running and neither write waits for it or for the other.
       expect(yield* started).toEqual(["r1", "w1", "w2"]);
@@ -75,10 +80,10 @@ describe("step scheduler", () => {
 
   it.effect("answers the writes of an incomplete response without running them", () =>
     Effect.gen(function* () {
-      const { scheduler, started, release } = yield* harness(["r1", "w1"]);
-      yield* scheduler.offer(read("r1"));
-      yield* scheduler.offer(write("w1"));
-      const settled = yield* Effect.forkChild(scheduler.settle(false));
+      const { offer, settle, started, release } = yield* harness(["r1", "w1"]);
+      yield* offer(read("r1"));
+      yield* offer(write("w1"));
+      const settled = yield* Effect.forkChild(settle(false));
       yield* Effect.yieldNow;
       // The running read is not cut; it still gives its result.
       yield* release("r1");
@@ -96,22 +101,20 @@ describe("step scheduler", () => {
     Effect.gen(function* () {
       const ran = yield* Ref.make(0);
       const scheduler = yield* stepScheduler<string, never, never>({
-        admit: (call) =>
-          Effect.succeed(
-            call.id === "ask"
-              ? CallOutcome.Waiting({ request: "approve?" })
-              : Run(
-                  Effect.as(
-                    Ref.update(ran, (count) => count + 1),
-                    "done",
-                  ),
-                ),
-          ),
         answered: () => Effect.void,
       });
-      yield* scheduler.offer(write("ask"));
-      yield* scheduler.offer(write("w1"));
-      yield* scheduler.offer(read("r1"));
+      const run = Run(
+        Effect.as(
+          Ref.update(ran, (count) => count + 1),
+          "done",
+        ),
+      );
+      yield* scheduler.offer(
+        write("ask"),
+        Effect.succeed(CallOutcome.Waiting({ request: "approve?" })),
+      );
+      yield* scheduler.offer(write("w1"), Effect.succeed(run));
+      yield* scheduler.offer(read("r1"), Effect.succeed(run));
       expect(yield* scheduler.settle(true)).toEqual([
         CallOutcome.Waiting({ request: "approve?" }),
         CallOutcome.Returned({ result: "done" }),
