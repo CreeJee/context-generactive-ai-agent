@@ -10,7 +10,8 @@ import { gatedToolNames } from "../tools/definitions.ts";
 import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
-import { toToolSchema } from "../tools/schema.ts";
+import { runTool } from "../tools/run-tool.ts";
+import { definitionOf } from "../tools/schema.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import {
   CardAgent,
@@ -75,6 +76,45 @@ const CardVerdictInput = Schema.Struct({
   ),
 });
 
+const recordCardVerdict = {
+  name: "record_card_verdict",
+  description: "Record whether the card meets its acceptance criteria and required evidence.",
+  parameters: CardVerdictInput,
+} as const;
+
+const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
+
+/**
+ * record_card_verdict for one verifier run, and the verdict it recorded. The TanStack tool and the
+ * Effect AI tool (docs/effect-ai-migration.md step 3) record into the same verdict.
+ */
+export const verdictRecorder = Effect.gen(function* () {
+  const verdict = yield* Ref.make(Option.none<CardVerdict>());
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  const record = (input: typeof CardVerdictInput.Type) =>
+    Effect.as(
+      Ref.set(
+        verdict,
+        Option.some<CardVerdict>(
+          input.passed
+            ? CardVerdict.Passed({ evidence: input.evidence })
+            : rejected(
+                VerdictFailure.cases.Rejected.make({
+                  note: input.reason ?? input.evidence.join("; "),
+                }),
+              ),
+        ),
+      ),
+      { recorded: true },
+    );
+  return {
+    verdict: Ref.get(verdict),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    tool: toolDefinition(definitionOf(recordCardVerdict)).server((input) => runSync(record(input))),
+    runTool: runTool({ ...recordCardVerdict, handler: record }),
+  };
+});
+
 const readToolNames = HashSet.fromIterable(["list_files", "search_files", "read_file"]);
 const checkToolNames = HashSet.fromIterable(["run_skill"]);
 
@@ -110,8 +150,6 @@ const make = Effect.gen(function* () {
       Effect.logWarning("Kanban card agent unavailable", { error, reason }),
       failed("unavailable"),
     );
-  const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
-
   const agent = CardAgent.of({
     run: Effect.fnUntraced(
       function* (run: CardAgentRun) {
@@ -190,32 +228,7 @@ const make = Effect.gen(function* () {
       );
       if (Option.isNone(selection))
         return rejected(VerdictFailure.cases.ModelSelectionRequired.make({}));
-      const verdict = yield* Ref.make(Option.none<CardVerdict>());
-      const runSync = Effect.runSyncWith(yield* Effect.context<never>());
-      const record = toolDefinition({
-        name: "record_card_verdict",
-        description: "Record whether the card meets its acceptance criteria and required evidence.",
-        inputSchema: toToolSchema(CardVerdictInput),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server((input) =>
-        runSync(
-          Effect.as(
-            Ref.set(
-              verdict,
-              Option.some<CardVerdict>(
-                input.passed
-                  ? CardVerdict.Passed({ evidence: input.evidence })
-                  : rejected(
-                      VerdictFailure.cases.Rejected.make({
-                        note: input.reason ?? input.evidence.join("; "),
-                      }),
-                    ),
-              ),
-            ),
-            { recorded: true },
-          ),
-        ),
-      );
+      const recorder = yield* verdictRecorder;
       const tools: AnyServerTool[] = [
         ...(yield* fileTools.forProject(project)).filter((tool) =>
           HashSet.has(readToolNames, tool.name),
@@ -223,7 +236,7 @@ const make = Effect.gen(function* () {
         ...(yield* approvedTools.forProject(project, "gate")).filter((tool) =>
           HashSet.has(checkToolNames, tool.name),
         ),
-        record,
+        recorder.tool,
       ];
       const outcome = yield* subagents.runAttempt(
         {
@@ -238,7 +251,7 @@ const make = Effect.gen(function* () {
         { agent: input.agent, message: input.message, instructions: input.instructions },
         () => Effect.void,
       );
-      return Option.getOrElse(yield* Ref.get(verdict), () =>
+      return Option.getOrElse(yield* recorder.verdict, () =>
         rejected(
           outcome?.status === "completed"
             ? VerdictFailure.cases.NoVerdict.make({})
