@@ -7,6 +7,7 @@ import { JsonValue } from "../json.ts";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import {
+  Array as Arr,
   Cause,
   Config,
   Context,
@@ -166,18 +167,29 @@ const credentialPrefix = "context-generactive-agent/openai-compatible/v1:";
 const decodeStoredCredential = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ baseUrl: Schema.String, key: Schema.String })),
 );
-const credentialFor = (stored: string | null, baseUrl: string): string | null => {
-  if (!isTruthy(stored)) return null;
-  // Legacy credentials predate endpoint binding. An endpoint change without an explicit
-  // replacement or clear is rejected below; newly written credentials are always bound.
-  if (!stored.startsWith(credentialPrefix)) return stored;
-  // An unreadable bound credential counts as no credential for any endpoint.
-  return Option.match(decodeStoredCredential(stored.slice(credentialPrefix.length)), {
-    onNone: () => null,
-    onSome: (value) => (value.baseUrl === baseUrl ? value.key : null),
-  });
-};
+const credentialFor = (stored: string | null, baseUrl: string): string | null =>
+  Option.liftPredicate(stored, isTruthy).pipe(
+    Option.flatMap((credential) =>
+      // Legacy credentials predate endpoint binding. An endpoint change without an explicit
+      // replacement or clear is rejected below; newly written credentials are always bound.
+      credential.startsWith(credentialPrefix)
+        ? // An unreadable bound credential counts as no credential for any endpoint.
+          decodeStoredCredential(credential.slice(credentialPrefix.length)).pipe(
+            Option.filter((value) => value.baseUrl === baseUrl),
+            Option.map((value) => value.key),
+          )
+        : Option.some(credential),
+    ),
+    Option.getOrNull,
+  );
 const invalidSettings = () => OpenAICompatibleFailed.make({ operation: "validation" });
+/** An http(s) URL without credentials, query or fragment. */
+const isEndpointUrl = (url: URL) =>
+  ["http:", "https:"].includes(url.protocol) &&
+  url.username.length === 0 &&
+  url.password.length === 0 &&
+  url.search.length === 0 &&
+  url.hash.length === 0;
 export const validateCompatibleConnection = Effect.fnUntraced(function* (
   input: CompatibleConnectionInput,
 ): Effect.fn.Return<CompatibleConnectionInput, OpenAICompatibleFailed> {
@@ -187,40 +199,31 @@ export const validateCompatibleConnection = Effect.fnUntraced(function* (
   const url = yield* Effect.try({
     try: () => new URL(value.baseUrl.trim()),
     catch: invalidSettings,
-  });
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    url.username.length > 0 ||
-    url.password.length > 0 ||
-    url.search.length > 0 ||
-    url.hash.length > 0
-  )
-    return yield* invalidSettings();
+  }).pipe(Effect.filterOrFail(isEndpointUrl, invalidSettings));
   return { ...value, baseUrl: url.href.replace(/\/+$/, "") };
 });
+/** A model whose window or output budget is out of range, or that has no id. */
+const isUnusableModel = (value: CompatibleModelInput) =>
+  value.contextWindow < 1024 ||
+  value.contextWindow > 10_000_000 ||
+  (value.outputBudget !== null &&
+    (value.outputBudget < 1 || value.outputBudget >= value.contextWindow)) ||
+  !isTruthy(value.id.trim());
 export const validateCompatibleModel = Effect.fnUntraced(function* (
   input: CompatibleModelInput,
 ): Effect.fn.Return<CompatibleModelInput, OpenAICompatibleFailed> {
   const value = yield* Schema.decodeEffect(CompatibleModelInput)(input).pipe(
     Effect.mapError(invalidSettings),
+    Effect.filterOrFail((decoded) => !isUnusableModel(decoded), invalidSettings),
   );
-  if (
-    value.contextWindow < 1024 ||
-    value.contextWindow > 10_000_000 ||
-    (value.outputBudget !== null &&
-      (value.outputBudget < 1 || value.outputBudget >= value.contextWindow)) ||
-    !isTruthy(value.id.trim())
-  )
-    return yield* invalidSettings();
   return { ...value, id: value.id.trim() };
 });
-export const validateCompatibleLabel = Effect.fnUntraced(function* (
+export const validateCompatibleLabel = (
   label: string,
-): Effect.fn.Return<string, OpenAICompatibleFailed> {
-  const value = label.trim();
-  if (value === "" || value.length > 80) return yield* invalidSettings();
-  return value;
-});
+): Effect.Effect<string, OpenAICompatibleFailed> =>
+  Effect.sync(() => label.trim()).pipe(
+    Effect.filterOrFail((value) => value !== "" && value.length <= 80, invalidSettings),
+  );
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function makeOpenAICompatibleSettings(options: {
   readonly config: GlobalConfigApi;
@@ -271,7 +274,7 @@ function makeOpenAICompatibleSettingsBody(
   ) =>
     Effect.uninterruptible(
       Effect.gen(function* () {
-        if (keyWrite !== null) yield* keyWrite;
+        yield* keyWrite ?? Effect.void;
         yield* configWrite.pipe(
           Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "partial" })),
         );
@@ -287,12 +290,20 @@ function makeOpenAICompatibleSettingsBody(
    * The model choice that goes with a newly selected endpoint: the same model when that endpoint
    * registered it too, else its first model. Only an active compatible choice moves.
    */
-  const followSelection = (prior: Settings, account: CompatibleAccount | undefined) => {
-    if (prior.provider !== provider || !isTruthy(prior.model) || account === undefined) return {};
-    if (account.models.some((model) => model.id === prior.model)) return {};
-    const first = account.models[0];
-    return first === undefined ? {} : { model: first.id, reasoningEffort: "default" };
-  };
+  const followSelection = (prior: Settings, account: CompatibleAccount | undefined) =>
+    Option.fromUndefinedOr(account).pipe(
+      Option.filter(
+        (next) =>
+          prior.provider === provider &&
+          isTruthy(prior.model) &&
+          !next.models.some((model) => model.id === prior.model),
+      ),
+      Option.flatMap((next) => Arr.head(next.models)),
+      Option.match({
+        onNone: () => ({}),
+        onSome: (first) => ({ model: first.id, reasoningEffort: "default" }),
+      }),
+    );
   // Read settings and key under the same permit as updates. Never pair a key written
   // during an update with the previous endpoint, including in test and model discovery.
   const accountSnapshot = (id: string) =>
@@ -385,8 +396,12 @@ function makeOpenAICompatibleSettingsBody(
         const existing = yield* storedKey(account);
         const moved = account.baseUrl !== baseUrl;
         // Never carry an old endpoint's credential to a different server implicitly.
-        if (moved && apiKey === undefined && existing !== null)
-          return yield* OpenAICompatibleFailed.make({ operation: "validation" });
+        yield* Effect.void.pipe(
+          Effect.filterOrFail(
+            () => !moved || apiKey !== undefined || existing === null,
+            () => OpenAICompatibleFailed.make({ operation: "validation" }),
+          ),
+        );
         yield* writeBoth(
           apiKey === undefined || (apiKey === null && existing === null)
             ? null
@@ -466,11 +481,14 @@ function makeOpenAICompatibleSettingsBody(
         : Effect.asVoid(writeAccounts({ ...all, selected: id }, followSelection(prior, account))),
     );
 
-  const authorized = (key: string | null) => {
-    const headers = new Headers({ "Content-Type": "application/json" });
-    if (isTruthy(key)) headers.set("Authorization", `Bearer ${key}`);
-    return headers;
-  };
+  const authorized = (key: string | null) =>
+    new Headers({
+      "Content-Type": "application/json",
+      ...Option.match(Option.liftPredicate(key, isTruthy), {
+        onNone: () => ({}),
+        onSome: (value) => ({ Authorization: `Bearer ${value}` }),
+      }),
+    });
   const request = <A>(
     operation: "test" | "models",
     id: string,
@@ -498,15 +516,18 @@ function makeOpenAICompatibleSettingsBody(
     url: string,
     init: RequestInit,
   ) =>
-    Effect.gen(function* () {
-      const response = yield* attempt(operation, () =>
-        fetcher(url, { ...init, redirect: "error" }),
-      );
-      if (!response.ok) return yield* OpenAICompatibleFailed.make({ operation });
-      return yield* Schema.decodeUnknownEffect(schema)(
-        yield* attempt(operation, () => response.json()),
-      ).pipe(Effect.mapError(() => OpenAICompatibleFailed.make({ operation })));
-    });
+    attempt(operation, () => fetcher(url, { ...init, redirect: "error" })).pipe(
+      Effect.filterOrFail(
+        (response) => response.ok,
+        () => OpenAICompatibleFailed.make({ operation }),
+      ),
+      Effect.flatMap((response) => attempt(operation, () => response.json())),
+      Effect.flatMap((body) =>
+        Schema.decodeUnknownEffect(schema)(body).pipe(
+          Effect.mapError(() => OpenAICompatibleFailed.make({ operation })),
+        ),
+      ),
+    );
   /**
    * The endpoint's model list, for suggestions when registering a model. Reasoning efforts it
    * publishes for registered models are saved with them.
@@ -529,59 +550,82 @@ function makeOpenAICompatibleSettingsBody(
             const ids = page.data.map((entry) => entry.id);
             const stored = yield* config.read;
             const all = compatibleAccountsOf(stored);
-            const account = all.accounts.find((item) => item.id === id);
-            if (account === undefined) return ids;
-            if (account.baseUrl !== requested)
-              return yield* OpenAICompatibleFailed.make({ operation: "models" });
-            const models = account.models.map(({ reasoning: _previous, ...model }) => {
-              const reasoning = readCompatibleReasoning(model.id, page);
-              return reasoning === undefined ? model : { ...model, reasoning };
-            });
-            if (!Equal.equals(models, account.models)) {
-              // Before capability discovery, none meant to omit the wire parameter.
-              const legacyDefault =
-                all.selected === id &&
-                stored.provider === provider &&
-                stored.reasoningEffort === "none" &&
-                account.models.find((model) => model.id === stored.model)?.reasoning === undefined;
-              yield* writeAccounts(
-                replaceAccount(all, { ...account, models }),
-                legacyDefault ? { reasoningEffort: "default" } : {},
-              );
-            }
+            yield* Option.match(
+              Arr.findFirst(all.accounts, (item) => item.id === id),
+              {
+                onNone: () => Effect.void,
+                onSome: (account) =>
+                  Effect.void.pipe(
+                    Effect.filterOrFail(
+                      () => account.baseUrl === requested,
+                      () => OpenAICompatibleFailed.make({ operation: "models" }),
+                    ),
+                    Effect.andThen(() => {
+                      const models = account.models.map(({ reasoning: _previous, ...model }) =>
+                        Option.match(
+                          Option.fromUndefinedOr(readCompatibleReasoning(model.id, page)),
+                          {
+                            onNone: () => model,
+                            onSome: (reasoning) => ({ ...model, reasoning }),
+                          },
+                        ),
+                      );
+                      // Before capability discovery, none meant to omit the wire parameter.
+                      const legacyDefault =
+                        all.selected === id &&
+                        stored.provider === provider &&
+                        stored.reasoningEffort === "none" &&
+                        account.models.find((model) => model.id === stored.model)?.reasoning ===
+                          undefined;
+                      return Effect.when(
+                        writeAccounts(
+                          replaceAccount(all, { ...account, models }),
+                          legacyDefault ? { reasoningEffort: "default" } : {},
+                        ),
+                        Effect.succeed(!Equal.equals(models, account.models)),
+                      );
+                    }),
+                  ),
+              },
+            );
             return ids;
           }),
         ),
     );
   const test = (id: string, modelId: string) =>
     request("test", id, ({ account, headers, signal }) =>
-      Effect.gen(function* () {
-        const settings = compatibleEndpointModel(account, modelId);
-        if (settings === null) return yield* OpenAICompatibleFailed.make({ operation: "missing" });
-        const completion = yield* fetchJson(
-          "test",
-          Schema.Struct({
-            choices: Schema.Array(
-              Schema.Struct({ message: Schema.Struct({ content: Schema.NullOr(Schema.String) }) }),
-            ),
-          }),
-          `${account.baseUrl}/chat/completions`,
-          {
-            method: "POST",
-            headers,
-            signal,
-            body: stringifyJson({
-              model: settings.model,
-              messages: [{ role: "user", content: "Reply OK" }],
-              max_tokens: Math.min(16, settings.outputBudget ?? 16),
-              stream: false,
+      Effect.fromNullishOr(compatibleEndpointModel(account, modelId)).pipe(
+        Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "missing" })),
+        Effect.flatMap((settings) =>
+          fetchJson(
+            "test",
+            Schema.Struct({
+              choices: Schema.Array(
+                Schema.Struct({
+                  message: Schema.Struct({ content: Schema.NullOr(Schema.String) }),
+                }),
+              ),
             }),
-          },
-        );
-        if (completion.choices.length === 0)
-          return yield* OpenAICompatibleFailed.make({ operation: "test" });
-        return { ok: true as const };
-      }),
+            `${account.baseUrl}/chat/completions`,
+            {
+              method: "POST",
+              headers,
+              signal,
+              body: stringifyJson({
+                model: settings.model,
+                messages: [{ role: "user", content: "Reply OK" }],
+                max_tokens: Math.min(16, settings.outputBudget ?? 16),
+                stream: false,
+              }),
+            },
+          ),
+        ),
+        Effect.filterOrFail(
+          (completion) => completion.choices.length > 0,
+          () => OpenAICompatibleFailed.make({ operation: "test" }),
+        ),
+        Effect.as({ ok: true as const }),
+      ),
     );
   const model = (settings: OpenAICompatibleConfiguration, isDefault: boolean): ProviderModel => ({
     provider,
@@ -597,20 +641,21 @@ function makeOpenAICompatibleSettingsBody(
       reasoning: publishedReasoning(settings) !== null,
     },
   });
-  /** The selected endpoint joined with the model a compatible choice names, or its first model. */
-  const selectedEndpoint = (settings: Settings) => {
-    const account = selectedCompatibleAccount(compatibleAccountsOf(settings));
-    if (account === null) return null;
-    const chosen =
-      settings.provider === provider && isTruthy(settings.model)
-        ? compatibleEndpointModel(account, settings.model)
-        : null;
-    const first = account.models[0];
-    return {
-      account,
-      endpoint: chosen ?? (first === undefined ? null : compatibleEndpointModel(account, first.id)),
-    };
-  };
+  /** The selected endpoint with the model a compatible choice names, or with its first model. */
+  const selectedEndpoint = (settings: Settings) =>
+    Option.fromNullishOr(selectedCompatibleAccount(compatibleAccountsOf(settings))).pipe(
+      Option.flatMap((account) =>
+        Option.liftPredicate(settings.model, isTruthy).pipe(
+          Option.filter(() => settings.provider === provider),
+          Option.flatMapNullishOr((chosen) => compatibleEndpointModel(account, chosen)),
+          Option.orElse(() =>
+            Option.flatMapNullishOr(Arr.head(account.models), (first) =>
+              compatibleEndpointModel(account, first.id),
+            ),
+          ),
+        ),
+      ),
+    );
   const services: ProviderConfiguration = {
     provider,
     auth: {
@@ -629,35 +674,49 @@ function makeOpenAICompatibleSettingsBody(
       list: Effect.gen(function* () {
         const selected = yield* read;
         // Discovery only refreshes published reasoning; the registered models list without it.
-        if (isTruthy(selected))
-          yield* discover(selected.id).pipe(
-            Effect.catchTag(["OpenAICompatibleFailed", "GlobalConfigFailed"], () => Effect.void),
-          );
+        yield* Option.match(Option.liftPredicate(selected, isTruthy), {
+          onNone: () => Effect.void,
+          onSome: (account) =>
+            discover(account.id).pipe(
+              Effect.catchTag(["OpenAICompatibleFailed", "GlobalConfigFailed"], () => Effect.void),
+            ),
+        });
         const account = yield* read;
-        if (!isTruthy(account)) return [];
-        return account.models.flatMap((entry, index) => {
-          const settings = compatibleEndpointModel(account, entry.id);
-          return settings === null ? [] : [model(settings, index === 0)];
+        return Option.match(Option.liftPredicate(account, isTruthy), {
+          onNone: () => [],
+          onSome: (refreshed) =>
+            refreshed.models.flatMap((entry, index) =>
+              Option.toArray(
+                Option.map(
+                  Option.fromNullishOr(compatibleEndpointModel(refreshed, entry.id)),
+                  (settings) => model(settings, index === 0),
+                ),
+              ),
+            ),
         });
       }).pipe(
         Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "catalog" })),
       ),
-      selected: Effect.map(config.read, (settings) => {
-        const endpoint = selectedEndpoint(settings)?.endpoint ?? null;
-        if (settings.provider !== provider || !isTruthy(settings.model)) return null;
-        return {
-          provider,
-          model: settings.model,
-          reasoningEffort:
-            isTruthy(endpoint) &&
-            endpoint.model === settings.model &&
-            model(endpoint, false).supportedReasoningEfforts.includes(
-              settings.reasoningEffort ?? "default",
+      selected: Effect.map(config.read, (settings) =>
+        Option.liftPredicate(settings.model, isTruthy).pipe(
+          Option.filter(() => settings.provider === provider),
+          Option.map((chosen) => ({
+            provider,
+            model: chosen,
+            reasoningEffort: Option.exists(
+              selectedEndpoint(settings),
+              (endpoint) =>
+                endpoint.model === chosen &&
+                model(endpoint, false).supportedReasoningEfforts.includes(
+                  settings.reasoningEffort ?? "default",
+                ),
             )
               ? (settings.reasoningEffort ?? "default")
               : "default",
-        };
-      }),
+          })),
+          Option.getOrNull,
+        ),
+      ),
       acceptsImages: () => Effect.succeed(false),
       cheapestEffort: (selection) => Effect.succeed({ ...selection, reasoningEffort: "default" }),
       select: (id: string, effort = "default") =>
@@ -666,13 +725,16 @@ function makeOpenAICompatibleSettingsBody(
             const account = yield* read.pipe(
               Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" })),
             );
-            const settings = isTruthy(account) ? compatibleEndpointModel(account, id) : null;
-            if (
-              !isTruthy(settings) ||
-              !model(settings, false).supportedReasoningEfforts.includes(effort)
-            )
-              return yield* ModelUnavailable.make({ provider, model: id, reasoningEffort: effort });
-            const selection = { provider, model: id, reasoningEffort: effort };
+            const selection = yield* Effect.fromOption(
+              Option.liftPredicate(account, isTruthy).pipe(
+                Option.flatMapNullishOr((found) => compatibleEndpointModel(found, id)),
+                Option.filter((settings) =>
+                  model(settings, false).supportedReasoningEfforts.includes(effort),
+                ),
+                Option.as({ provider, model: id, reasoningEffort: effort }),
+              ),
+              () => ModelUnavailable.make({ provider, model: id, reasoningEffort: effort }),
+            );
             yield* config
               .update(selection)
               .pipe(
