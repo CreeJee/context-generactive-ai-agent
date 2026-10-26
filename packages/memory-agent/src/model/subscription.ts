@@ -14,6 +14,7 @@ import {
 } from "../oauth/protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { ModelSelection, SubscriptionModelSelection } from "../providers/contracts.ts";
+import { providerPrompt } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
 
@@ -955,19 +956,21 @@ export const makeSubscriptionModel = Effect.fnUntraced(function* (
           Effect.sync(() => new AbortController()),
           (aborted) => Effect.sync(() => aborted.abort()),
         );
-        const body = subscriptionBody({ ...options, provider, ...request });
+        // Subscription providers read another model's turns as their own: no replay target.
+        const replayed = { ...request, prompt: providerPrompt(request.prompt, undefined) };
+        const body = subscriptionBody({ ...options, provider, ...replayed });
         const baselineBody = subscriptionBody({
           ...options,
           provider,
-          ...request,
+          ...replayed,
           promptCache: { retention: "none" },
         });
-        const fingerprints = yield* requestFingerprints(request);
+        const fingerprints = yield* requestFingerprints(replayed);
         yield* Effect.logDebug("subscription model request").pipe(
           Effect.annotateLogs({
             provider,
             model: selection.model,
-            messages: request.prompt.content.length,
+            messages: replayed.prompt.content.length,
             tools: request.tools.length,
             ...fingerprints,
           }),

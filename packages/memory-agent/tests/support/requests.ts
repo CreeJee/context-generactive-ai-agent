@@ -5,7 +5,7 @@ import { Cause, Effect, Predicate, Stream } from "effect";
 import { Tool } from "effect/ai";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import type { JsonValue } from "../../src/json.ts";
-import { providerHistory, sanitizeText } from "../../src/model/history.ts";
+import { providerPrompt } from "../../src/model/history.ts";
 import { toPrompt } from "../../src/model/prompt.ts";
 import { subscriptionBody } from "../../src/model/subscription.ts";
 import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
@@ -120,7 +120,7 @@ const effectBody = (
   subscriptionBody({
     provider: selection.provider,
     selection,
-    prompt: toPrompt(providerHistory(history, undefined), [sanitizeText(system)]),
+    prompt: providerPrompt(toPrompt(history, [system]), undefined),
     tools: tools.map((tool) =>
       Tool.dynamic(tool.name, { description: tool.description, parameters: tool.parameters }),
     ),

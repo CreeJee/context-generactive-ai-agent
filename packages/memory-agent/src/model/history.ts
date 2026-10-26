@@ -1,7 +1,9 @@
 import { Function as EffectFunction, Option, Predicate, Schema } from "effect";
+import type { Prompt } from "effect/ai";
 import type { MessageSource, StoredMessage } from "../chat-store/schema.ts";
 import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
+import { fromPrompt, toPrompt } from "./prompt.ts";
 
 /**
  * The history a provider request carries, built from stored messages the way TanStack 1.0 built it
@@ -195,7 +197,7 @@ const sanitizeHistory = (history: ReadonlyArray<StoredMessage>): Array<StoredMes
 
 /**
  * The history a request to `target` carries. The subscription providers pass no target: they
- * read another model's turns as their own.
+ * read another model's turns as their own. `providerPrompt` applies it to a prompt.
  */
 export const providerHistory: {
   (
@@ -207,3 +209,15 @@ export const providerHistory: {
   (history: ReadonlyArray<StoredMessage>, target: ReplayTarget | undefined) =>
     sanitizeHistory(replayHistory(history, target)),
 );
+
+/**
+ * The prompt a request to `target` sends, from the prompt of the stored conversation
+ * (`toPrompt`): its history replayed, and its system prompts without lone surrogates.
+ */
+export const providerPrompt: {
+  (target: ReplayTarget | undefined): (prompt: Prompt.Prompt) => Prompt.Prompt;
+  (prompt: Prompt.Prompt, target: ReplayTarget | undefined): Prompt.Prompt;
+} = EffectFunction.dual(2, (prompt: Prompt.Prompt, target: ReplayTarget | undefined) => {
+  const { system, history } = fromPrompt(prompt);
+  return toPrompt(providerHistory(history, target), system.map(sanitizeText));
+});
