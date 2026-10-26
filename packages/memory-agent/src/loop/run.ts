@@ -468,7 +468,8 @@ const toolkitOf = (tools: ReadonlyArray<RunTool>) =>
 
 const isRunFailed = Schema.is(RunFailed);
 
-const asRunFailed = (error: { readonly message: string }) =>
+/** A failure as the run fails with it: its own message, which the run row keeps. */
+export const asRunFailed = (error: { readonly message: string }) =>
   isRunFailed(error) ? error : RunFailed.make({ message: error.message });
 
 /** The run after its resume was accepted: it starts, goes on until it ends, and keeps its rows. */
