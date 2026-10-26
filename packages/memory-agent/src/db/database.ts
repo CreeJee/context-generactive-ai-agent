@@ -86,7 +86,9 @@ export function migrateDatabase(sqlite: DatabaseSync) {
       "INSERT OR IGNORE INTO effect_sql_migrations (migration_id,name) VALUES (?,?)",
     );
     if (!hasMetadata)
-      for (let version = 1; version <= applied; version++) adopt.run(version, `schema_${version}`);
+      Array.from({ length: applied }, (_, index) => index + 1).forEach((version) =>
+        adopt.run(version, `schema_${version}`),
+      );
     const recorded = sqlite
       .prepare("SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id")
       .all();

@@ -50,7 +50,7 @@ const activeCommands = shellProcessState.activeCommands;
 
 /** Stops every shell command owned by this process, normally during server shutdown. */
 export function stopAllCommands(force = false) {
-  for (const command of activeCommands) (force ? command.force : command.cancel)();
+  Array.from(activeCommands).forEach((command) => (force ? command.force : command.cancel)());
 }
 
 // The app installs graceful signal handlers. Its eventual process.exit reaches this final,
@@ -72,11 +72,12 @@ const secretVariable =
   /(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|COOKIE|SESSION_?KEY|AUTH)/i;
 
 export function commandEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(source))
-    if (value !== undefined && !secretVariable.test(name)) env[name] = value;
   return {
-    ...env,
+    ...Object.fromEntries(
+      Object.entries(source).filter(
+        ([name, value]) => value !== undefined && !secretVariable.test(name),
+      ),
+    ),
     TERM: "dumb",
     NO_COLOR: "1",
     PAGER: "cat",
@@ -114,8 +115,8 @@ const makeCapture = () => {
   };
 
   const result = () => {
-    let tail = Buffer.concat(tailChunks);
-    if (tail.length > tailBytes) tail = tail.subarray(tail.length - tailBytes);
+    const kept = Buffer.concat(tailChunks);
+    const tail = kept.subarray(Math.max(kept.length - tailBytes, 0));
     const omitted = total - head.length - tail.length;
     const text =
       omitted > 0
@@ -258,7 +259,7 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
         () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
       );
       // Close the abort-listener registration race after the child is tracked.
-      if (isAborted(options.signal)) onAbort();
+      yield* Effect.when(Effect.sync(onAbort), Effect.succeed(isAborted(options.signal)));
 
       const drain = (
         output: Stream.Stream<Uint8Array, PlatformError.PlatformError>,

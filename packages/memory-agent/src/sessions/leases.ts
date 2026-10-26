@@ -1,4 +1,3 @@
-import { isTruthy } from "../truthy.ts";
 import {
   Clock,
   DateTime,
@@ -63,13 +62,12 @@ function makeLeasesBody(
 ) {
   const leases = MutableHashMap.empty<string, Lease>();
   const expiredListeners: Array<(sessionId: string) => Effect.Effect<void>> = [];
-  const live = (sessionId: string) => {
-    const lease = Option.getOrUndefined(MutableHashMap.get(leases, sessionId));
-    if (!isTruthy(lease)) return null;
-    if (now() - lease.renewedAt < ttlMs) return lease;
-    MutableHashMap.remove(leases, sessionId);
-    return null;
-  };
+  const live = (sessionId: string): Option.Option<Lease> =>
+    Option.flatMap(MutableHashMap.get(leases, sessionId), (lease) => {
+      if (now() - lease.renewedAt < ttlMs) return Option.some(lease);
+      MutableHashMap.remove(leases, sessionId);
+      return Option.none();
+    });
 
   return {
     /**
@@ -78,10 +76,10 @@ function makeLeasesBody(
      */
     sweepExpired: Effect.suspend(() => {
       const current = now();
-      const expired: string[] = [];
-      for (const [sessionId, lease] of leases)
-        if (current - lease.renewedAt >= ttlMs) expired.push(sessionId);
-      for (const sessionId of expired) MutableHashMap.remove(leases, sessionId);
+      const expired = Array.from(leases)
+        .filter(([, lease]) => current - lease.renewedAt >= ttlMs)
+        .map(([sessionId]) => sessionId);
+      expired.forEach((sessionId) => MutableHashMap.remove(leases, sessionId));
       // Each freed session's listeners run in turn, in the order they registered.
       return Effect.forEach(
         expired,
@@ -97,9 +95,11 @@ function makeLeasesBody(
     },
 
     view(sessionId: string, holder: string | null): LeaseView {
-      const lease = live(sessionId);
-      if (!isTruthy(lease)) return { state: "free" };
-      return lease.holder === holder ? { state: "mine" } : { state: "other", since: lease.since };
+      return Option.match(live(sessionId), {
+        onNone: (): LeaseView => ({ state: "free" }),
+        onSome: (lease): LeaseView =>
+          lease.holder === holder ? { state: "mine" } : { state: "other", since: lease.since },
+      });
     },
 
     /**
@@ -107,16 +107,21 @@ function makeLeasesBody(
      * pages asking at once cannot both win: the loser stays read-only.
      */
     claim(sessionId: string, holder: string): ClaimResult {
-      const lease = live(sessionId);
-      if (isTruthy(lease) && lease.holder !== holder)
-        return { claimed: false, heldSince: lease.since };
-      if (isTruthy(lease)) lease.renewedAt = now();
-      else MutableHashMap.set(leases, sessionId, { holder, since: now(), renewedAt: now() });
-      return { claimed: true };
+      return Option.match(live(sessionId), {
+        onNone: (): ClaimResult => {
+          MutableHashMap.set(leases, sessionId, { holder, since: now(), renewedAt: now() });
+          return { claimed: true };
+        },
+        onSome: (lease): ClaimResult => {
+          if (lease.holder !== holder) return { claimed: false, heldSince: lease.since };
+          lease.renewedAt = now();
+          return { claimed: true };
+        },
+      });
     },
 
     release(sessionId: string, holder: string) {
-      if (Option.getOrUndefined(MutableHashMap.get(leases, sessionId))?.holder === holder)
+      if (Option.exists(MutableHashMap.get(leases, sessionId), (lease) => lease.holder === holder))
         MutableHashMap.remove(leases, sessionId);
     },
 
@@ -125,8 +130,10 @@ function makeLeasesBody(
      * (callers without pages, like tests and scripts, send no holder).
      */
     permits(sessionId: string, holder: string | null) {
-      const lease = live(sessionId);
-      return !isTruthy(lease) || lease.holder === holder;
+      return Option.match(live(sessionId), {
+        onNone: () => true,
+        onSome: (lease) => lease.holder === holder,
+      });
     },
   };
 }
