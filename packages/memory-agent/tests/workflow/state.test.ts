@@ -17,7 +17,9 @@ import {
   Workflows,
   type WorkflowState,
 } from "../../src/workflow/workflow.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
@@ -191,6 +193,45 @@ testAgent()("Workflows", (it) => {
         error: "workflow_progress_refused",
         reason: "phase_not_executable",
       });
+    }),
+  );
+
+  it.effect("the Effect AI tools ask as the TanStack ones in every phase and answer the same", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflowTools = yield* WorkflowTools;
+      for (const phase of ["goal", "plan", "execute", "verify", "completed", "chat"] as const)
+        expect(
+          yield* runToolRequestDifferences({
+            chatTools: yield* inRun(workflowTools.forSession(id, phase)),
+            runTools: workflowTools.runToolsFor(id, phase),
+          }),
+        ).toEqual([undefined, undefined, undefined]);
+
+      // The same calls on two sessions in the same state, one through each tool set.
+      const runCall = Effect.fnUntraced(function* (
+        sessionId: string,
+        name: string,
+        input: JsonValue,
+      ) {
+        const tool = yield* Effect.fromNullishOr(
+          workflowTools.runToolsFor(sessionId, "execute").find(({ tool }) => tool.name === name),
+        );
+        return yield* (yield* tool.prepare(input))({ toolCallId: "call-1" });
+      });
+      const sessions = [yield* freshSession, yield* freshSession];
+      yield* Effect.forEach(sessions, executing);
+      const stale = { planStatus: "completed", detail: "Plan done without its steps" };
+      expect(yield* runCall(sessions[0]!, "update_workflow_progress", stale)).toEqual(
+        yield* (yield* serverTool(sessions[1]!, "execute", "update_workflow_progress"))(stale),
+      );
+      const dependent = {
+        ...plan,
+        steps: plan.steps.map((step) => ({ ...step, dependsOn: ["missing"] })),
+      };
+      expect(yield* runCall(sessions[0]!, "update_plan", dependent)).toEqual(
+        yield* (yield* serverTool(sessions[1]!, "execute", "update_plan"))(dependent),
+      );
     }),
   );
 
