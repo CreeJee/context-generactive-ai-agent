@@ -1,7 +1,7 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { Cause, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
+import { ANTHROPIC_MODELS } from "./model-catalog.ts";
 import {
   Clock,
   Data,

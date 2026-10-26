@@ -1,4 +1,4 @@
-import { OPENAI_IMAGE_MODELS, type OpenAIImageModel } from "@tanstack/ai-openai";
+import { OPENAI_IMAGE_MODELS, type OpenAIImageModel } from "./model-catalog.ts";
 import { Data } from "effect";
 
 export type ImageExecutionMode = "provider_tool" | "direct_adapter";

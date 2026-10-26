@@ -1,17 +1,11 @@
-import type { AnthropicChatModelToolCapabilitiesByName } from "@tanstack/ai-anthropic";
-import type { OpenAIChatModel, OpenAIChatModelToolCapabilitiesByName } from "@tanstack/ai-openai";
+import type { AnthropicChatModel, OpenAIChatModel } from "./model-catalog.ts";
 
-/**
- * The installed OpenAI adapter omits some empty-tool models from its capability map type. Preserve
- * those exact empty tuples while requiring every runtime chat model to be represented.
- */
-type OpenAIExactToolCapabilitiesByName = {
-  readonly [Model in OpenAIChatModel]: Model extends keyof OpenAIChatModelToolCapabilitiesByName
-    ? OpenAIChatModelToolCapabilitiesByName[Model]
-    : readonly [];
+/** The provider tool kinds each model accepts, keyed by every model the catalog lists. */
+type ToolCapabilitiesByName<Model extends string> = {
+  readonly [Name in Model]: ReadonlyArray<string>;
 };
 
-/** Runtime counterpart of @tanstack/ai-openai 1.0.0's type-only model tool metadata. */
+/** @tanstack/ai-openai 1.0.0's type-only model tool metadata, owned here as data. */
 export const openAIModelToolCapabilities = {
   "gpt-5.2": [
     "web_search",
@@ -454,9 +448,9 @@ export const openAIModelToolCapabilities = {
   "gpt-5.6-luna-pro": [],
   "gpt-5.6-sol-pro": [],
   "gpt-5.6-terra-pro": [],
-} as const satisfies OpenAIExactToolCapabilitiesByName;
+} as const satisfies ToolCapabilitiesByName<OpenAIChatModel>;
 
-/** Runtime counterpart of @tanstack/ai-anthropic 1.0.0's type-only model tool metadata. */
+/** @tanstack/ai-anthropic 1.0.0's type-only model tool metadata, owned here as data. */
 export const anthropicModelToolCapabilities = {
   "claude-opus-4-6": [
     "web_search",
@@ -603,4 +597,4 @@ export const anthropicModelToolCapabilities = {
     "text_editor",
     "memory",
   ],
-} as const satisfies AnthropicChatModelToolCapabilitiesByName;
+} as const satisfies ToolCapabilitiesByName<AnthropicChatModel>;

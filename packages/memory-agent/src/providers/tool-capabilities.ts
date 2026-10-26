@@ -1,6 +1,4 @@
-import { ANTHROPIC_MODELS, type AnthropicChatModel } from "@tanstack/ai-anthropic";
 import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
-import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
 import * as OpenAITools from "@tanstack/ai-openai/tools";
 import {
   Array as EffectArray,
@@ -14,6 +12,12 @@ import {
   Schema,
 } from "effect";
 import { ProviderVendor } from "./contracts.ts";
+import {
+  ANTHROPIC_MODELS,
+  OPENAI_CHAT_MODELS,
+  type AnthropicChatModel,
+  type OpenAIChatModel,
+} from "./model-catalog.ts";
 import {
   anthropicModelToolCapabilities,
   openAIModelToolCapabilities,
