@@ -39,6 +39,7 @@ import { migrateTanStackRows } from "../../packages/memory-agent/src/chat-store/
 import { migrationClient } from "../../packages/memory-agent/src/db/migration-client.ts";
 import type { JsonValue } from "../../packages/memory-agent/src/json.ts";
 import { fromPrompt, toPrompt } from "../../packages/memory-agent/src/model/prompt.ts";
+import { historyScreen } from "../../packages/memory-agent/tests/support/history-screen.ts";
 import {
   asTanStack,
   next,
@@ -88,6 +89,46 @@ const said = (message: JsonValue | undefined): JsonValue => {
   });
   return Object.fromEntries([...fields, ...lifted]);
 };
+
+/** The JSON paths where two values differ; never the values, which quote the conversation. */
+const differingPaths = (
+  left: JsonValue | undefined,
+  right: JsonValue | undefined,
+  path: string,
+): ReadonlyArray<string> =>
+  fingerprint(left) === fingerprint(right)
+    ? []
+    : isObject(left) && isObject(right)
+      ? [...new Set([...Object.keys(left), ...Object.keys(right)])].flatMap((key) =>
+          differingPaths(left[key], right[key], `${path}.${key}`),
+        )
+      : Array.isArray(left) && Array.isArray(right)
+        ? Array.from({ length: Math.max(left.length, right.length) }, (_, index) =>
+            differingPaths(left[index], right[index], `${path}.${index}`),
+          ).flat()
+        : [path];
+
+/**
+ * What the page shows of a UI message: everything but the metadata of the message and its parts,
+ * which hold TanStack's metadata and which the page never reads.
+ */
+const shown = (message: JsonValue | undefined): JsonValue | undefined =>
+  isObject(message)
+    ? Object.fromEntries(
+        Object.entries(message).flatMap(([key, value]): Entries => {
+          if (key === "metadata") return [];
+          return [
+            [key, key === "parts" && Array.isArray(value) ? value.map(withoutMetadata) : value],
+          ];
+        }),
+      )
+    : message;
+
+/** Where a migrated screen message differs from the original: its JSON paths, indexes left out. */
+const screenDifference = (before: JsonValue | undefined, after: JsonValue | undefined) =>
+  [...new Set(differingPaths(before, after, "$").map((path) => path.replace(/\.\d+/g, "[]")))]
+    .sort()
+    .join(" ");
 
 /** Whether a saved handoff still finds its boundary in `messages`, as replay looks for it. */
 const anchored = (saved: SavedHandoff, messages: readonly JsonValue[]) => {
@@ -249,6 +290,23 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
               ),
         );
 
+  /** Whether the history page shows the migrated groups as it shows the original ones. */
+  const compareScreen = (
+    where: string,
+    before: ReadonlyArray<JsonValue>,
+    after: ReadonlyArray<JsonValue>,
+  ) =>
+    after.length !== before.length
+      ? report.fail("screen message count", where)
+      : after.forEach((message, index) =>
+          fingerprint(shown(message)) === fingerprint(shown(before[index]))
+            ? report.count("screen message same")
+            : report.fail(
+                `screen message differs at ${screenDifference(shown(before[index]), shown(message))}`,
+                `${where}#${index}`,
+              ),
+        );
+
   /**
    * Whether the prompt keeps the migrated history, and the Effect AI model sends for it the
    * request TanStack sent for the original. A history that does not decode is reported above.
@@ -307,13 +365,19 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
         { discard: true },
       );
       // The screen history, group after group, is the longest history the thread had.
-      if (groups.length > 0 && groups.every((group) => group.before !== null))
+      if (groups.length > 0 && groups.every((group) => group.before !== null)) {
         yield* checkReplay(
           "history",
           id,
           groups.flatMap((group) => parseTanStackMessages(group.before ?? "[]")),
           groups.flatMap((group) => parseArray(group.after)),
         );
+        compareScreen(
+          id,
+          historyScreen(groups.map((group) => group.before ?? "[]")),
+          historyScreen(groups.map((group) => group.after)),
+        );
+      }
     }),
     { discard: true },
   );
