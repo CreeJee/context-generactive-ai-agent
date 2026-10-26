@@ -59,11 +59,9 @@ function createOAuthAccountLoginManagerBody(
   const LoginEntry = Data.taggedEnum<LoginEntry>();
   const entries = MutableHashMap.empty<OAuthProvider, LoginEntry>();
   const activeAttempt = (provider: OAuthProvider) =>
-    Option.getOrUndefined(
-      Option.map(
-        Option.filter(MutableHashMap.get(entries, provider), LoginEntry.$is("running")),
-        (entry) => entry.attempt,
-      ),
+    Option.map(
+      Option.filter(MutableHashMap.get(entries, provider), LoginEntry.$is("running")),
+      (entry) => entry.attempt,
     );
   const recordResult = (provider: OAuthProvider, value: AccountLoginState) =>
     MutableHashMap.set(
@@ -96,8 +94,10 @@ function createOAuthAccountLoginManagerBody(
       Effect.gen(function* () {
         if (label.trim().length === 0 || label.length > 80)
           return yield* OAuthProfileRejected.make({ reason: "invalid_oauth_profile" });
-        if (activeAttempt(provider) !== undefined)
-          return yield* OAuthHarnessError.fromCode("login_in_progress");
+        yield* Effect.when(
+          Effect.fail(OAuthHarnessError.fromCode("login_in_progress")),
+          Effect.succeed(Option.isSome(activeAttempt(provider))),
+        );
         const attempt: Attempt = {
           id: yield* (yield* Crypto.Crypto).randomUUIDv4(),
           label: label.trim(),
@@ -111,48 +111,73 @@ function createOAuthAccountLoginManagerBody(
         return yield* Effect.gen(function* () {
           const login = yield* nativePromise(() => startLogin(provider, attempt.id));
           attempt.login = login;
-          if (attempt.cancelled) login.cancel();
+          yield* Effect.when(
+            Effect.sync(() => login.cancel()),
+            Effect.succeed(attempt.cancelled),
+          );
           // Completion is owned by the login SDK and its explicit cancel callback, across HTTP requests.
           attempt.completed = runOAuthNodeEffect(
             nativePromise(() => login.completed).pipe(
               Effect.flatMap((connection) =>
                 Effect.gen(function* () {
-                  if (!connection.connected || attempt.cancelled)
-                    return yield* OAuthHarnessError.fromCode(
-                      attempt.cancelled ? "cancelled" : "not_connected",
-                    );
+                  yield* Effect.when(
+                    Effect.fail(OAuthHarnessError.fromCode("cancelled")),
+                    Effect.succeed(attempt.cancelled),
+                  );
+                  yield* Effect.when(
+                    Effect.fail(OAuthHarnessError.fromCode("not_connected")),
+                    Effect.succeed(!connection.connected),
+                  );
                   yield* store.publish(provider, attempt.id, attempt.label, accounts);
-                  if (!(yield* store.list(provider)).some((profile) => profile.selected))
-                    yield* store.select(provider, attempt.id, accounts);
+                  yield* Effect.when(
+                    store.select(provider, attempt.id, accounts),
+                    Effect.map(
+                      store.list(provider),
+                      (listed) => !listed.some((profile) => profile.selected),
+                    ),
+                  );
                   recordResult(provider, AccountLoginState.completed());
                 }),
               ),
               // Any failed completion is the attempt's outcome; the page shows it as login_failed.
               Effect.catch(() =>
-                Effect.gen(function* () {
-                  if (!(yield* store.list(provider)).some((profile) => profile.id === attempt.id)) {
-                    // Best-effort removal of the unpublished slot; the login already failed.
-                    yield* nativePromise(() => accounts.remove(provider, attempt.id)).pipe(
-                      Effect.catchTag("UnknownError", () =>
-                        Effect.logWarning("OAuth login slot cleanup failed", {
-                          error: "UnknownError",
-                        }),
+                Effect.flatMap(store.list(provider), (listed) =>
+                  listed.some((profile) => profile.id === attempt.id)
+                    ? Effect.sync(() => recordResult(provider, AccountLoginState.completed()))
+                    : // Best-effort removal of the unpublished slot; the login already failed.
+                      nativePromise(() => accounts.remove(provider, attempt.id)).pipe(
+                        Effect.catchTag("UnknownError", () =>
+                          Effect.logWarning("OAuth login slot cleanup failed", {
+                            error: "UnknownError",
+                          }),
+                        ),
+                        Effect.andThen(
+                          Effect.sync(() =>
+                            recordResult(
+                              provider,
+                              AccountLoginState.error({ error: "login_failed" }),
+                            ),
+                          ),
+                        ),
                       ),
-                    );
-                    recordResult(provider, AccountLoginState.error({ error: "login_failed" }));
-                  } else recordResult(provider, AccountLoginState.completed());
-                }),
+                ),
               ),
+              Effect.asVoid,
+              // Only this attempt's own running entry settles; a newer login keeps its state.
               Effect.ensuring(
-                Effect.sync(() => {
-                  const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
-                  if (LoginEntry.$is("running")(entry) && entry.attempt === attempt)
-                    MutableHashMap.set(
-                      entries,
-                      provider,
-                      LoginEntry.settled({ result: entry.result }),
-                    );
-                }),
+                Effect.sync(() =>
+                  MutableHashMap.get(entries, provider).pipe(
+                    Option.filter(LoginEntry.$is("running")),
+                    Option.filter((entry) => entry.attempt === attempt),
+                    Option.map((entry) =>
+                      MutableHashMap.set(
+                        entries,
+                        provider,
+                        LoginEntry.settled({ result: entry.result }),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           );
@@ -176,20 +201,25 @@ function createOAuthAccountLoginManagerBody(
   const cancel = (provider: OAuthProvider) =>
     runOAuthNodeEffect(
       Effect.gen(function* () {
-        const attempt = activeAttempt(provider);
-        if (attempt !== undefined) {
-          attempt.cancelled = true;
-          attempt.login?.cancel();
-          const completed = attempt.completed;
-          if (completed !== undefined) yield* nativePromise(() => completed);
-        }
+        yield* Option.match(activeAttempt(provider), {
+          onNone: () => Effect.void,
+          onSome: (attempt) => {
+            attempt.cancelled = true;
+            attempt.login?.cancel();
+            // A login still starting has no completion yet; its start sees the flag instead.
+            return nativePromise(() => attempt.completed ?? Promise.resolve());
+          },
+        });
         return yield* profiles(provider);
       }),
     );
   /** Resolves once the provider's running login, if any, has finished either way. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const settled = (provider: OAuthProvider): Promise<void> =>
-    activeAttempt(provider)?.completed ?? Promise.resolve();
+    Option.getOrElse(
+      Option.flatMapNullishOr(activeAttempt(provider), (attempt) => attempt.completed),
+      () => Promise.resolve(),
+    );
   return { profiles, start, cancel, settled };
 }
 

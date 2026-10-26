@@ -1,5 +1,5 @@
 import { nativePromise } from "../runtime/native-effect.ts";
-import { Effect, Stream, Function as EffectFunction, Schema } from "effect";
+import { Cause, Effect, Stream, Function as EffectFunction, Option, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
@@ -82,7 +82,10 @@ const windowsTokenProxyEffect = Effect.fn("OAuth.windowsTokenProxy")(function* (
         Stream.runForEach((chunk) =>
           Effect.gen(function* () {
             size += chunk.byteLength;
-            if (size > 2048) return yield* ProxyOutputTooLarge.make();
+            yield* Effect.when(
+              Effect.fail(ProxyOutputTooLarge.make()),
+              Effect.succeed(size > 2048),
+            );
             output += decoder.decode(chunk, { stream: true });
           }),
         ),
@@ -125,37 +128,42 @@ function fetchOpenAiTokenViaSystemProxyBody(
       const resolution = yield* windowsTokenProxyEffect();
       if (resolution.route !== "proxy") return { route: resolution.route, response: null };
       return yield* Effect.acquireUseRelease(
-        Effect.try(() => new ProxyAgent(resolution.url)).pipe(
-          Effect.catchTag("UnknownError", () => Effect.succeed(null)),
-        ),
-        (dispatcher) =>
-          Effect.gen(function* () {
-            if (dispatcher === null) return { route: "unavailable" as const, response: null };
-            const response = yield* Effect.tryPromise((ownerSignal) =>
-              undiciFetch(url, {
-                method: "POST",
-                headers: { Accept: "application/json", "Content-Type": contentType },
-                body,
-                redirect: "error",
-                signal: AbortSignal.any([ownerSignal, AbortSignal.timeout(30_000)]),
-                dispatcher,
+        // An agent that cannot be built for this URL leaves the request unrouted.
+        Effect.option(Effect.try(() => new ProxyAgent(resolution.url))),
+        // The annotation lets both branches share one result type.
+        (proxy): Effect.Effect<TokenProxyResult, Cause.UnknownError> =>
+          Option.match(proxy, {
+            onNone: () => Effect.succeed({ route: "unavailable" as const, response: null }),
+            onSome: (dispatcher) =>
+              Effect.gen(function* () {
+                const response = yield* Effect.tryPromise((ownerSignal) =>
+                  undiciFetch(url, {
+                    method: "POST",
+                    headers: { Accept: "application/json", "Content-Type": contentType },
+                    body,
+                    redirect: "error",
+                    signal: AbortSignal.any([ownerSignal, AbortSignal.timeout(30_000)]),
+                    dispatcher,
+                  }),
+                );
+                const text = yield* nativePromise(() => response.text());
+                return {
+                  route: "attempted" as const,
+                  response: new Response(text, { status: response.status }),
+                };
               }),
-            );
-            const text = yield* nativePromise(() => response.text());
-            return {
-              route: "attempted" as const,
-              response: new Response(text, { status: response.status }),
-            };
           }),
         // Closing the one-shot agent is best-effort; the token response already stands.
         (dispatcher) =>
-          dispatcher === null
-            ? Effect.void
-            : nativePromise(() => dispatcher.close()).pipe(
+          Effect.transposeOption(
+            Option.map(dispatcher, (agent) =>
+              nativePromise(() => agent.close()).pipe(
                 Effect.catchTag("UnknownError", () =>
                   Effect.logWarning("OAuth proxy agent close failed", { error: "UnknownError" }),
                 ),
               ),
+            ),
+          ),
       );
     }),
   );

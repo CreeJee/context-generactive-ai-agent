@@ -1,6 +1,7 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
-import { Crypto, Effect, Exit, Function as EffectFunction } from "effect";
+import { Cause, Crypto, Effect, Function as EffectFunction, Option } from "effect";
+import type { PlatformError } from "effect/PlatformError";
 
 import { Schema } from "effect";
 
@@ -28,6 +29,13 @@ const digest = Effect.fnUntraced(function* (value: string) {
   );
 });
 
+const fragmentMessages = {
+  invalid_manifest: "Invalid credential manifest.",
+  incomplete_fragments: "Incomplete credential fragments.",
+  changed_while_reading: "Credential changed while reading.",
+  fragment_limit: "Credential exceeds the fragment limit.",
+} as const satisfies Record<CredentialFragmentsFailed["reason"], string>;
+
 /** Why a fragmented credential could not be read or written; the keychain store reports its stage. */
 export class CredentialFragmentsFailed extends Schema.TaggedError<CredentialFragmentsFailed>()(
   "CredentialFragmentsFailed",
@@ -41,26 +49,20 @@ export class CredentialFragmentsFailed extends Schema.TaggedError<CredentialFrag
   },
 ) {
   override get message() {
-    switch (this.reason) {
-      case "invalid_manifest":
-        return "Invalid credential manifest.";
-      case "incomplete_fragments":
-        return "Incomplete credential fragments.";
-      case "changed_while_reading":
-        return "Credential changed while reading.";
-      case "fragment_limit":
-        return "Credential exceeds the fragment limit.";
-    }
+    return fragmentMessages[this.reason];
   }
 }
 
+/** The manifest a fragmented credential leaves in the root entry; none for a password stored whole. */
 const manifest = (
   value: string | null | undefined,
-): Effect.Effect<Manifest | null, CredentialFragmentsFailed> =>
+): Effect.Effect<Option.Option<Manifest>, CredentialFragmentsFailed> =>
   value == null || !value.startsWith(manifestPrefix)
-    ? Effect.succeed(null)
-    : Effect.fromOption(decodeManifest(value.slice(manifestPrefix.length)), () =>
-        CredentialFragmentsFailed.make({ reason: "invalid_manifest" }),
+    ? Effect.succeedNone
+    : Effect.asSome(
+        Effect.fromOption(decodeManifest(value.slice(manifestPrefix.length)), () =>
+          CredentialFragmentsFailed.make({ reason: "invalid_manifest" }),
+        ),
       );
 
 /** Keep every fragment in the OS vault, and publish a new generation only after all writes succeed. */
@@ -83,8 +85,8 @@ function createChunkedPasswordEntryBody(
       (index) => Effect.exit(nativePromise(() => chunk(value, index).deleteCredential())),
       { concurrency: 1 },
     );
-    for (const result of results)
-      if (Exit.isFailure(result)) return yield* Effect.failCause(result.cause);
+    // Every fragment is tried; the first failed delete is the outcome.
+    yield* Effect.all(results, { discard: true });
   });
   /** Cleanup only: the write's own outcome stands, so a failed delete is logged by tag. */
   const removeChunksBestEffort = (value: Manifest) =>
@@ -93,14 +95,21 @@ function createChunkedPasswordEntryBody(
         Effect.logWarning("Credential fragment cleanup failed", { error: "UnknownError" }),
       ),
     );
-  return {
-    getPassword: () =>
-      runOAuthNodeEffect(
-        Effect.gen(function* () {
-          let encoded = (yield* nativePromise(() => root.getPassword())) ?? undefined;
-          for (let attempt = 0; attempt < 2; attempt++) {
-            const current = yield* manifest(encoded);
-            if (current === null) return encoded;
+  /** Reads what `encoded` names; a manifest replaced while its fragments were read is read once more. */
+  const readFrom = (
+    encoded: string | undefined,
+    again: boolean,
+  ): Effect.Effect<
+    string | undefined,
+    CredentialFragmentsFailed | Cause.UnknownError | PlatformError,
+    Crypto.Crypto
+  > =>
+    Effect.flatMap(
+      manifest(encoded),
+      Option.match({
+        onNone: () => Effect.succeed(encoded),
+        onSome: (current) =>
+          Effect.gen(function* () {
             const parts = yield* Effect.forEach(
               Array.from({ length: current.count }, (_, index) => index),
               (index) =>
@@ -116,12 +125,52 @@ function createChunkedPasswordEntryBody(
             )
               return password;
             const latest = (yield* nativePromise(() => root.getPassword())) ?? undefined;
-            if (latest === encoded)
-              return yield* CredentialFragmentsFailed.make({ reason: "incomplete_fragments" });
-            encoded = latest;
-          }
-          return yield* CredentialFragmentsFailed.make({ reason: "changed_while_reading" });
-        }),
+            yield* Effect.when(
+              Effect.fail(CredentialFragmentsFailed.make({ reason: "incomplete_fragments" })),
+              Effect.succeed(latest === encoded),
+            );
+            return yield* again
+              ? readFrom(latest, false)
+              : Effect.fail(CredentialFragmentsFailed.make({ reason: "changed_while_reading" }));
+          }),
+      }),
+    );
+  /** A password too long for one vault entry goes into fragments, published by a manifest last. */
+  const writeFragments = Effect.fn("CredentialFragments.write")(function* (password: string) {
+    const encoded = Buffer.from(password).toString("base64");
+    const next: Manifest = {
+      generation: yield* (yield* Crypto.Crypto).randomUUIDv4(),
+      count: Math.ceil(encoded.length / passwordLimit),
+      digest: yield* digest(password),
+    };
+    yield* Effect.when(
+      Effect.fail(CredentialFragmentsFailed.make({ reason: "fragment_limit" })),
+      Effect.succeed(next.count > 256),
+    );
+    yield* Effect.gen(function* () {
+      yield* Effect.forEach(
+        Array.from({ length: next.count }, (_, index) => index),
+        (index) =>
+          nativePromise(() =>
+            chunk(next, index).setPassword(
+              encoded.slice(index * passwordLimit, (index + 1) * passwordLimit),
+            ),
+          ),
+        { discard: true },
+      );
+      const encodedManifest = yield* Schema.encodeEffect(Schema.fromJsonString(Manifest))(next);
+      yield* nativePromise(() => root.setPassword(manifestPrefix + encodedManifest));
+    }).pipe(
+      // A failed or interrupted write leaves no fragments of the new generation behind.
+      Effect.onError(() => removeChunksBestEffort(next)),
+    );
+  });
+  return {
+    getPassword: () =>
+      runOAuthNodeEffect(
+        nativePromise(() => root.getPassword()).pipe(
+          Effect.flatMap((encoded) => readFrom(encoded ?? undefined, true)),
+        ),
       ),
     setPassword: (password) =>
       runOAuthNodeEffect(
@@ -129,36 +178,10 @@ function createChunkedPasswordEntryBody(
           const previous = yield* nativePromise(() => root.getPassword()).pipe(
             Effect.flatMap(manifest),
           );
-          if (password.length <= passwordLimit)
-            yield* nativePromise(() => root.setPassword(password));
-          else {
-            const encoded = Buffer.from(password).toString("base64");
-            const next: Manifest = {
-              generation: yield* (yield* Crypto.Crypto).randomUUIDv4(),
-              count: Math.ceil(encoded.length / passwordLimit),
-              digest: yield* digest(password),
-            };
-            if (next.count > 256)
-              return yield* CredentialFragmentsFailed.make({ reason: "fragment_limit" });
-            yield* Effect.gen(function* () {
-              for (let index = 0; index < next.count; index++) {
-                const entry = chunk(next, index);
-                yield* nativePromise(() =>
-                  entry.setPassword(
-                    encoded.slice(index * passwordLimit, (index + 1) * passwordLimit),
-                  ),
-                );
-              }
-              const encodedManifest = yield* Schema.encodeEffect(Schema.fromJsonString(Manifest))(
-                next,
-              );
-              yield* nativePromise(() => root.setPassword(manifestPrefix + encodedManifest));
-            }).pipe(
-              // A failed or interrupted write leaves no fragments of the new generation behind.
-              Effect.onError(() => removeChunksBestEffort(next)),
-            );
-          }
-          if (previous !== null) yield* removeChunksBestEffort(previous);
+          yield* password.length <= passwordLimit
+            ? nativePromise(() => root.setPassword(password))
+            : writeFragments(password);
+          yield* Effect.transposeOption(Option.map(previous, removeChunksBestEffort));
         }),
       ),
     deleteCredential: () =>
@@ -168,7 +191,7 @@ function createChunkedPasswordEntryBody(
             Effect.flatMap(manifest),
           );
           const deleted = yield* nativePromise(() => root.deleteCredential());
-          if (previous !== null) yield* removeChunks(previous);
+          yield* Effect.transposeOption(Option.map(previous, removeChunks));
           return deleted;
         }),
       ),

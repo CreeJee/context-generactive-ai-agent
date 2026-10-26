@@ -19,6 +19,7 @@ import {
 } from "./subscription-usage-probe.ts";
 import {
   createKeychainProfileCredentialStore,
+  type CredentialStore,
   type OAuthHarnessError,
 } from "./validation-harness.ts";
 
@@ -80,6 +81,14 @@ export class SubscriptionQuotaError extends Schema.TaggedError<SubscriptionQuota
   { reason: Schema.Literal("profiles_unreadable"), cause: Schema.Defect() },
 ) {}
 
+const subscriptionUsageReaders: Record<
+  SubscriptionAccountProvider,
+  (options: { readonly store: CredentialStore }) => ReturnType<SubscriptionUsage["Service"]["read"]>
+> = {
+  openai: openAiSubscriptionUsage,
+  anthropic: anthropicSubscriptionUsage,
+};
+
 /** Reads the provider-reported windows of one stored account. */
 export class SubscriptionUsage extends Context.Service<
   SubscriptionUsage,
@@ -96,15 +105,10 @@ export class SubscriptionUsage extends Context.Service<
   static readonly layer = Layer.succeed(
     SubscriptionUsage,
     SubscriptionUsage.of({
-      read: (provider, accountId) => {
-        const store = createKeychainProfileCredentialStore(accountId);
-        switch (provider) {
-          case "openai":
-            return openAiSubscriptionUsage({ store });
-          case "anthropic":
-            return anthropicSubscriptionUsage({ store });
-        }
-      },
+      read: (provider, accountId) =>
+        subscriptionUsageReaders[provider]({
+          store: createKeychainProfileCredentialStore(accountId),
+        }),
     }),
   );
 }
@@ -154,22 +158,29 @@ export class SubscriptionQuota extends Context.Service<
           }),
         );
         const at = DateTime.formatIso(yield* DateTime.now);
-        if (Result.isSuccess(windows)) {
-          const observed: ObservedQuota = SubscriptionQuotaStatus.cases.observed.make({
-            windows: windows.success,
-            observedAt: at,
-          });
-          yield* Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed));
-          return observed;
-        }
-        const previous = (yield* Ref.get(lastObserved)).get(accountId);
-        return previous === undefined
-          ? SubscriptionQuotaStatus.cases.unavailable.make({ reason: windows.failure })
-          : SubscriptionQuotaStatus.cases.stale.make({
-              windows: previous.windows,
-              observedAt: previous.observedAt,
-              failedAt: at,
+        return yield* Result.match(windows, {
+          onSuccess: (observedWindows) => {
+            const observed: ObservedQuota = SubscriptionQuotaStatus.cases.observed.make({
+              windows: observedWindows,
+              observedAt: at,
             });
+            return Effect.as(
+              Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed)),
+              observed,
+            );
+          },
+          onFailure: (reason) =>
+            Effect.map(Ref.get(lastObserved), (map) => {
+              const previous = map.get(accountId);
+              return previous === undefined
+                ? SubscriptionQuotaStatus.cases.unavailable.make({ reason })
+                : SubscriptionQuotaStatus.cases.stale.make({
+                    windows: previous.windows,
+                    observedAt: previous.observedAt,
+                    failedAt: at,
+                  });
+            }),
+        });
       });
       // Profile ids are unique across providers, so one cache per provider keys by id alone.
       const providerCache = (provider: SubscriptionAccountProvider) =>

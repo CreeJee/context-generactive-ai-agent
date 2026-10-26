@@ -17,6 +17,7 @@ import {
   MutableHashSet,
   DateTime,
   Option,
+  Predicate,
   Schema,
   Layer,
   Scope,
@@ -118,9 +119,9 @@ export const createKeychainCredentialStore = (
           catch: () => credentialStoreFailure(provider, "read"),
         });
         if (encoded == null) return null;
-        const decoded = decodeStoredCredential(encoded);
-        if (Option.isNone(decoded)) return yield* credentialStoreFailure(provider, "decode");
-        const credential = decoded.value;
+        const credential = yield* Effect.fromOption(decodeStoredCredential(encoded), () =>
+          credentialStoreFailure(provider, "decode"),
+        );
         return {
           accessToken: credential.accessToken,
           refreshToken: credential.refreshToken,
@@ -256,11 +257,14 @@ const safeTransportCodes = HashSet.fromIterable([
 ]);
 const NativeCause = Schema.Struct({ code: Schema.String });
 const decodeNativeCause = Schema.decodeUnknownOption(NativeCause);
-const safeTransportCode = (error: Error): string => {
-  if (error.name === "TimeoutError") return "timeout";
-  const code = Option.getOrUndefined(decodeNativeCause(error.cause))?.code;
-  return code !== undefined && HashSet.has(safeTransportCodes, code) ? code : "other";
-};
+const safeTransportCode = (error: Error): string =>
+  error.name === "TimeoutError"
+    ? "timeout"
+    : decodeNativeCause(error.cause).pipe(
+        Option.map((cause) => cause.code),
+        Option.filter((code) => HashSet.has(safeTransportCodes, code)),
+        Option.getOrElse(() => "other"),
+      );
 
 // Codes raised before any request byte is written: name resolution, TCP connect or TLS handshake.
 // ETIMEDOUT, ECONNRESET and socket/header errors can follow a written request and stay uncertain.
@@ -317,12 +321,14 @@ const TokenErrorBody = Schema.Struct({
   error: Schema.Union([Schema.String, Schema.Struct({ code: Schema.String })]),
 });
 const decodeTokenErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(TokenErrorBody));
-const providerCode = (body: string): string | undefined => {
-  const parsed = Option.getOrUndefined(decodeTokenErrorBody(body));
-  if (!isTruthy(parsed)) return undefined;
-  const code = Schema.is(Schema.String)(parsed.error) ? parsed.error : parsed.error.code;
-  return HashSet.has(safeOAuthCodes, code) ? code : undefined;
-};
+const providerCode = (body: string): string | undefined =>
+  decodeTokenErrorBody(body).pipe(
+    Option.map((parsed) =>
+      Schema.is(Schema.String)(parsed.error) ? parsed.error : parsed.error.code,
+    ),
+    Option.filter((code) => HashSet.has(safeOAuthCodes, code)),
+    Option.getOrUndefined,
+  );
 
 export class OAuthHarnessError extends Schema.TaggedError<OAuthHarnessError>()(
   "OAuthHarnessError",
@@ -401,6 +407,13 @@ export interface SubscriptionOAuthClientOptions {
   readonly now?: () => number;
 }
 
+/** The SDK's own operating system names; other platforms send Node's name. */
+const stainlessOsNames: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: "MacOS",
+  win32: "Windows",
+  linux: "Linux",
+};
+
 const utf8 = new TextEncoder();
 // Equal-length inputs are compared in constant time: every byte is folded in, with no early exit.
 const safeEqual = (left: string, right: string) => {
@@ -431,31 +444,33 @@ const OpenAiIdClaims = Schema.Struct({
 });
 const decodeOpenAiIdClaims = Schema.decodeUnknownOption(Schema.fromJsonString(OpenAiIdClaims));
 
-const openAiAccountId = (idToken: string) => {
-  const payload = idToken.split(".")[1];
-  if (payload === undefined) return undefined;
-  return Option.getOrUndefined(
-    decodeOpenAiIdClaims(Buffer.from(payload, "base64url").toString()),
-  )?.["https://api.openai.com/auth"].chatgpt_account_id;
-};
+const openAiAccountId = (idToken: string) =>
+  Option.fromUndefinedOr(idToken.split(".")[1]).pipe(
+    Option.flatMap((payload) => decodeOpenAiIdClaims(Buffer.from(payload, "base64url").toString())),
+    Option.map((claims) => claims["https://api.openai.com/auth"].chatgpt_account_id),
+    Option.getOrUndefined,
+  );
 
 const parseTokens = (
   token: typeof TokenResponse.Type,
   previous?: StoredCredential,
-): Result.Result<StoredCredential, OAuthHarnessError> => {
-  const refreshToken = token.refresh_token ?? previous?.refreshToken;
-  if (refreshToken === undefined)
-    return Result.fail(OAuthHarnessError.fromCode("invalid_token_response"));
-  const idToken = token.id_token ?? previous?.idToken;
-  const accountId = (idToken && openAiAccountId(idToken)) ?? previous?.accountId;
-  const credential: StoredCredential = {
-    accessToken: token.access_token,
-    refreshToken,
-    expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + token.expires_in * 1_000,
-  };
-  const withIdentity = idToken === undefined ? credential : { ...credential, idToken };
-  return Result.succeed(accountId === undefined ? withIdentity : { ...withIdentity, accountId });
-};
+): Result.Result<StoredCredential, OAuthHarnessError> =>
+  Result.map(
+    Result.fromNullishOr(token.refresh_token ?? previous?.refreshToken, () =>
+      OAuthHarnessError.fromCode("invalid_token_response"),
+    ),
+    (refreshToken) => {
+      const idToken = token.id_token ?? previous?.idToken;
+      const accountId = (idToken && openAiAccountId(idToken)) ?? previous?.accountId;
+      const credential: StoredCredential = {
+        accessToken: token.access_token,
+        refreshToken,
+        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + token.expires_in * 1_000,
+      };
+      const withIdentity = idToken === undefined ? credential : { ...credential, idToken };
+      return accountId === undefined ? withIdentity : { ...withIdentity, accountId };
+    },
+  );
 
 interface AuthorizationCodeGrant {
   readonly grant_type: "authorization_code";
@@ -480,14 +495,13 @@ interface EncodedTokenBody {
   readonly contentType: string;
 }
 
-const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedTokenBody => {
-  if (protocol.tokenEncoding === "form")
-    return {
-      body: new URLSearchParams(Object.entries(values)).toString(),
-      contentType: "application/x-www-form-urlencoded",
-    };
-  return { body: JSON.stringify(values), contentType: "application/json" };
-};
+const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedTokenBody =>
+  protocol.tokenEncoding === "form"
+    ? {
+        body: new URLSearchParams(Object.entries(values)).toString(),
+        contentType: "application/x-www-form-urlencoded",
+      }
+    : { body: JSON.stringify(values), contentType: "application/json" };
 
 /** One SSE frame of a provider stream: a decoded event, or the `[DONE]` marker. */
 type Frame = Data.TaggedEnum<{
@@ -589,7 +603,10 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       readonly signal?: AbortSignal;
     } = {},
   ): Effect.fn.Return<LoginAttempt, OAuthHarnessError> {
-    if (loginActive) return yield* OAuthHarnessError.fromCode("login_in_progress");
+    yield* Effect.when(
+      Effect.fail(OAuthHarnessError.fromCode("login_in_progress")),
+      Effect.succeed(loginActive),
+    );
     loginActive = true;
     const pkce = createPkce();
     let verifier: string | null = pkce.verifier;
@@ -625,7 +642,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     const redirectAuthority = `${protocol.callbackRedirectHost}:${port}`;
     const redirectUri = `http://${redirectAuthority}${protocol.callbackPath}`;
     const authorize = new URL(protocol.authorizeUrl);
-    for (const [key, value] of Object.entries({
+    Object.entries({
       response_type: "code",
       client_id: protocol.clientId,
       redirect_uri: redirectUri,
@@ -634,8 +651,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       code_challenge_method: "S256",
       state,
       ...protocol.authorizeParameters,
-    }))
-      authorize.searchParams.set(key, value);
+    }).forEach(([key, value]) => authorize.searchParams.set(key, value));
 
     // Login completion has its own lifetime and explicit cancellation, independent of the HTTP request.
     const completion = yield* Deferred.make<OAuthConnectionStatus, OAuthHarnessError>();
@@ -715,8 +731,13 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       const codeVerifier = verifier;
       let previous: StoredCredential | null = null;
       let written = false;
+      // A login cancelled or timed out meanwhile stops before its next step.
+      const unlessFinished = Effect.when(
+        Effect.fail(OAuthHarnessError.fromCode("cancelled")),
+        Effect.sync(() => finished),
+      );
       return yield* Effect.gen(function* () {
-        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
+        yield* unlessFinished;
         const commonGrant = {
           grant_type: "authorization_code",
           code,
@@ -727,14 +748,14 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         const grant: AuthorizationCodeGrant =
           protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
         const credential = yield* exchangeEffect(grant);
-        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
+        yield* unlessFinished;
         previous = yield* nativePromise(() => store.read(protocol.provider));
-        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
+        yield* unlessFinished;
         written = true;
         yield* nativePromise(() => store.write(protocol.provider, credential));
-        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
+        yield* unlessFinished;
         const connection = yield* statusEffect();
-        if (finished) return yield* OAuthHarnessError.fromCode("cancelled");
+        yield* unlessFinished;
         yield* settleAfterResponse(Result.succeed(connection));
         return callbackResponse("Connected. You may close this window.", 200);
       }).pipe(
@@ -748,10 +769,10 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
                   provider: protocol.provider,
                   operation: "login_callback",
                 });
-            if (written) {
-              const credential = previous;
-              // Best-effort rollback; the login already failed with `error`.
-              yield* nativePromise(() =>
+            const credential = previous;
+            // Best-effort rollback of a written credential; the login already failed with `error`.
+            yield* Effect.when(
+              nativePromise(() =>
                 credential === null
                   ? store.remove(protocol.provider)
                   : store.write(protocol.provider, credential),
@@ -759,8 +780,9 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
                 Effect.catchTag("UnknownError", () =>
                   Effect.logWarning("OAuth credential rollback failed", { error: "UnknownError" }),
                 ),
-              );
-            }
+              ),
+              Effect.succeed(written),
+            );
             yield* settleAfterResponse(Result.fail(error));
             return callbackResponse(
               error.code === "credential_store_unavailable"
@@ -783,7 +805,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       Effect.forkDetach,
     );
     options.signal?.addEventListener("abort", abort, { once: true });
-    if (options.signal?.aborted === true) abort();
+    yield* Effect.when(Effect.sync(abort), Effect.succeed(options.signal?.aborted === true));
     return {
       provider: protocol.provider,
       authorizationUrl: authorize.toString(),
@@ -882,12 +904,14 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         if (refreshing !== null) return refreshing;
         // The caller's credential may predate a refresh that finished while it waited. Refresh
         // tokens rotate, so spending the old one would be rejected and sign out the new login.
-        const stored = yield* nativePromise(() => store.read(protocol.provider));
-        if (stored === null)
-          return yield* OAuthHarnessError.fromCode("not_connected", null, {
-            provider: protocol.provider,
-            operation: "token_refresh",
-          });
+        const stored = yield* nativePromise(() => store.read(protocol.provider)).pipe(
+          Effect.filterOrFail(Predicate.isNotNull, () =>
+            OAuthHarnessError.fromCode("not_connected", null, {
+              provider: protocol.provider,
+              operation: "token_refresh",
+            }),
+          ),
+        );
         if (stored.refreshToken !== credential.refreshToken)
           return { token: {}, load: Effect.succeed(stored) };
         const token = {};
@@ -931,14 +955,21 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     );
     return yield* entry.load;
   });
+  /** The stored credential, refreshed first when it is about to expire. */
+  const freshCredential = (context: OAuthHarnessErrorContext) =>
+    nativePromise(() => store.read(protocol.provider)).pipe(
+      Effect.filterOrFail(isTruthy, () =>
+        OAuthHarnessError.fromCode("not_connected", null, context),
+      ),
+      Effect.filterOrElse((credential) => credential.expiresAt > now() + 30_000, refreshEffect),
+    );
   function refreshForValidation(): Promise<OAuthConnectionStatus> {
     return runNativeEffect(
-      Effect.gen(function* () {
-        const credential = yield* nativePromise(() => store.read(protocol.provider));
-        if (credential === null) return yield* OAuthHarnessError.fromCode("not_connected");
-        yield* refreshEffect(credential);
-        return yield* statusEffect();
-      }),
+      nativePromise(() => store.read(protocol.provider)).pipe(
+        Effect.filterOrFail(Predicate.isNotNull, () => OAuthHarnessError.fromCode("not_connected")),
+        Effect.flatMap(refreshEffect),
+        Effect.andThen(statusEffect()),
+      ),
     );
   }
 
@@ -981,10 +1012,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       provider: protocol.provider,
       operation: "model_catalog",
     };
-    let credential = yield* nativePromise(() => store.read(protocol.provider));
-    if (!isTruthy(credential))
-      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
-    if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
+    let credential = yield* freshCredential(context);
 
     const pages: unknown[] = [];
     // Native HTTP boundary: keep the existing timeout and the Effect owner's
@@ -1038,10 +1066,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       provider: protocol.provider,
       operation: "model_stream",
     };
-    let credential = yield* nativePromise(() => store.read(protocol.provider));
-    if (!isTruthy(credential))
-      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
-    if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
+    let credential = yield* freshCredential(context);
 
     const prepared =
       protocol.provider === "anthropic"
@@ -1063,16 +1088,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
             [headers.get("anthropic-beta"), ...prepared.betas].filter(isTruthy).join(","),
           );
         headers.set("X-Stainless-Arch", process.arch === "x64" ? "x64" : process.arch);
-        headers.set(
-          "X-Stainless-OS",
-          process.platform === "darwin"
-            ? "MacOS"
-            : process.platform === "win32"
-              ? "Windows"
-              : process.platform === "linux"
-                ? "Linux"
-                : process.platform,
-        );
+        headers.set("X-Stainless-OS", stainlessOsNames[process.platform] ?? process.platform);
       }
       return yield* Effect.tryPromise({
         try: (ownerSignal) =>

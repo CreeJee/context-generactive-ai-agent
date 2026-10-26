@@ -1,7 +1,6 @@
 import { nativePromise } from "../runtime/native-effect.ts";
 import { runOAuthNodeEffect } from "./node-runtime.ts";
 import { Effect, MutableHashMap, Option } from "effect";
-import { isTruthy } from "../truthy.ts";
 import { Crypto } from "effect";
 import {
   createProfileCredentialStore,
@@ -41,10 +40,14 @@ function createAccountBoundSubscriptionClientsBody(
   provider: OAuthProvider,
   createClient: (id: string | null) => SubscriptionOAuthClient = (id) => {
     const protocol = providerProtocols[provider];
-    if (id === null) return createSubscriptionOAuthClient({ protocol });
-    return createSubscriptionOAuthClient({
-      protocol,
-      store: createKeychainProfileCredentialStore(id),
+    // The legacy account keeps the client's own credential entry.
+    return Option.match(Option.fromNullishOr(id), {
+      onNone: () => createSubscriptionOAuthClient({ protocol }),
+      onSome: (profile) =>
+        createSubscriptionOAuthClient({
+          protocol,
+          store: createKeychainProfileCredentialStore(profile),
+        }),
     });
   },
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
@@ -56,21 +59,19 @@ function createAccountBoundSubscriptionClientsBody(
   const clientFor = (id: string | null) => {
     const key = id ?? "__legacy__";
     const configured = profiles.committed(provider).profiles;
-    for (const cachedId of MutableHashMap.keys(cache)) {
-      if (
-        cachedId !== key &&
-        cachedId !== "__legacy__" &&
-        !configured.some((profile) => profile.id === cachedId)
+    // Clients of removed accounts go; the legacy one goes once any account is configured.
+    Array.from(MutableHashMap.keys(cache))
+      .filter((cachedId) =>
+        cachedId === "__legacy__"
+          ? configured.length > 0
+          : cachedId !== key && !configured.some((profile) => profile.id === cachedId),
       )
-        MutableHashMap.remove(cache, cachedId);
-    }
-    if (configured.length > 0) MutableHashMap.remove(cache, "__legacy__");
-    let client = Option.getOrUndefined(MutableHashMap.get(cache, key));
-    if (!isTruthy(client)) {
-      client = createClient(id);
+      .forEach((cachedId) => MutableHashMap.remove(cache, cachedId));
+    return Option.getOrElse(MutableHashMap.get(cache, key), () => {
+      const client = createClient(id);
       MutableHashMap.set(cache, key, client);
-    }
-    return client;
+      return client;
+    });
   };
   const legacyAllowed = () => {
     const committed = profiles.committed(provider);
@@ -117,27 +118,39 @@ function createAccountBoundSubscriptionClientsBody(
               nativePromise(() => attempt.completed).pipe(
                 Effect.flatMap((connection) =>
                   Effect.gen(function* () {
-                    if (cancelled) return yield* OAuthHarnessError.fromCode("cancelled");
-                    if (!connection.connected)
-                      return yield* OAuthHarnessError.fromCode("not_connected");
+                    yield* Effect.when(
+                      Effect.fail(OAuthHarnessError.fromCode("cancelled")),
+                      Effect.sync(() => cancelled),
+                    );
+                    yield* Effect.when(
+                      Effect.fail(OAuthHarnessError.fromCode("not_connected")),
+                      Effect.succeed(!connection.connected),
+                    );
                     yield* profiles.publish(
                       provider,
                       id,
                       provider === "openai" ? "ChatGPT" : "Claude",
                       accounts,
                     );
-                    if (selectedId() === null) yield* profiles.select(provider, id, accounts);
+                    yield* Effect.when(
+                      profiles.select(provider, id, accounts),
+                      Effect.sync(() => selectedId() === null),
+                    );
                     return connection;
                   }),
                 ),
                 Effect.onError(() =>
-                  Effect.gen(function* () {
-                    // A published account survives a selection failure or late cancellation.
-                    if (!(yield* profiles.list(provider)).some((profile) => profile.id === id)) {
-                      yield* nativePromise(() => accounts.remove(provider, id));
-                      MutableHashMap.remove(cache, id);
-                    }
-                  }).pipe(
+                  // A published account survives a selection failure or late cancellation.
+                  Effect.when(
+                    Effect.andThen(
+                      nativePromise(() => accounts.remove(provider, id)),
+                      Effect.sync(() => MutableHashMap.remove(cache, id)),
+                    ),
+                    Effect.map(
+                      profiles.list(provider),
+                      (listed) => !listed.some((profile) => profile.id === id),
+                    ),
+                  ).pipe(
                     // Cleanup only: the login's own failure stands, so this one is logged by tag.
                     Effect.catchTags({
                       OAuthProfileStoreFailed: () => cleanupFailed("OAuthProfileStoreFailed"),
@@ -160,23 +173,29 @@ function createAccountBoundSubscriptionClientsBody(
       disconnect: () =>
         runOAuthNodeEffect(
           Effect.gen(function* () {
-            const id = selectedId();
-            if (id !== null) {
-              yield* profiles.remove(provider, id, accounts, legacy);
-              MutableHashMap.remove(cache, id);
-            } else if (legacyAllowed()) {
-              yield* profiles.whileRemoving(
-                provider,
-                "__legacy__",
-                nativePromise(() => clientFor(null).disconnect()).pipe(
-                  Effect.tap(() => Effect.sync(() => MutableHashMap.remove(cache, "__legacy__"))),
+            yield* Option.match(Option.fromNullishOr(selectedId()), {
+              onSome: (id) =>
+                Effect.andThen(
+                  profiles.remove(provider, id, accounts, legacy),
+                  Effect.sync(() => MutableHashMap.remove(cache, id)),
                 ),
-              );
-            } else return yield* OAuthHarnessError.fromCode("not_connected");
-            const next = selectedId();
-            return next !== null
-              ? yield* nativePromise(() => clientFor(next).status())
-              : { provider, connected: false, expiresAt: null };
+              onNone: () =>
+                legacyAllowed()
+                  ? profiles.whileRemoving(
+                      provider,
+                      "__legacy__",
+                      nativePromise(() => clientFor(null).disconnect()).pipe(
+                        Effect.tap(() =>
+                          Effect.sync(() => MutableHashMap.remove(cache, "__legacy__")),
+                        ),
+                      ),
+                    )
+                  : Effect.fail(OAuthHarnessError.fromCode("not_connected")),
+            });
+            return yield* Option.match(Option.fromNullishOr(selectedId()), {
+              onSome: (next) => nativePromise(() => clientFor(next).status()),
+              onNone: () => Effect.succeed({ provider, connected: false, expiresAt: null }),
+            });
           }),
         ),
     },

@@ -61,24 +61,26 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   const protocol = providerProtocols[provider];
   const now = options.now ?? Date.now;
   const fetcher = options.fetch ?? fetch;
-  let credential = yield* nativePromise(() => options.store.read(provider));
-  if (!isTruthy(credential))
-    return yield* OAuthHarnessError.fromCode("not_connected", null, context);
+  const readCredential = nativePromise(() => options.store.read(provider)).pipe(
+    Effect.filterOrFail(isTruthy, () => OAuthHarnessError.fromCode("not_connected", null, context)),
+  );
+  const stored = yield* readCredential;
   // The app's own expiry margin: the same credential would be refreshed before a model request.
-  const refreshed = credential.expiresAt <= now() + 30_000;
-  if (refreshed) {
-    if (!options.refreshExpired) return yield* SubscriptionUsageCredentialExpired.make({});
-    const client = createSubscriptionOAuthClient({
-      protocol,
-      store: options.store,
-      fetch: fetcher,
-      now,
-    });
-    yield* nativePromise(() => client.refreshForValidation());
-    credential = yield* nativePromise(() => options.store.read(provider));
-    if (!isTruthy(credential))
-      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
-  }
+  const refreshed = stored.expiresAt <= now() + 30_000;
+  yield* Effect.when(
+    Effect.fail(SubscriptionUsageCredentialExpired.make({})),
+    Effect.succeed(refreshed && !options.refreshExpired),
+  );
+  const credential = refreshed
+    ? yield* nativePromise(() =>
+        createSubscriptionOAuthClient({
+          protocol,
+          store: options.store,
+          fetch: fetcher,
+          now,
+        }).refreshForValidation(),
+      ).pipe(Effect.andThen(readCredential))
+    : stored;
   const headers = new Headers(protocol.modelHeaders);
   headers.set("Accept", "application/json");
   headers.delete("Content-Type");
@@ -94,9 +96,12 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
       }),
     catch: () => OAuthHarnessError.fromCode("transport_unavailable", null, context),
-  });
-  if (!response.ok)
-    return yield* OAuthHarnessError.fromCode("provider_rejected", response.status, context);
+  }).pipe(
+    Effect.filterOrFail(
+      (response) => response.ok,
+      (response) => OAuthHarnessError.fromCode("provider_rejected", response.status, context),
+    ),
+  );
   const body = yield* nativePromise(() => response.json()).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(UsageObject)),
     Effect.mapError(() =>
