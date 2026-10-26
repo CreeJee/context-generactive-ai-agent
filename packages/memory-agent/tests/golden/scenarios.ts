@@ -1,0 +1,196 @@
+import { Effect, Function as EffectFunction } from "effect";
+import type { PermissionMode } from "../../src/projects/projects.ts";
+import { selectTestModel } from "../support/provider.ts";
+import { testAgent, type TestEnvOptions } from "../support/test-env.ts";
+import type { JsonValue } from "../../src/json.ts";
+import { conversation, expectGolden, matchGolden } from "./driver.ts";
+import { migratedRows } from "./rows.ts";
+import { waitUntil } from "../support/wait-until.ts";
+import { childrenHeld, goldenResponder, releaseChildren, releaseTurns } from "./responder.ts";
+
+export type Chat = Effect.Success<ReturnType<typeof conversation>>;
+type Step =
+  | ReturnType<
+      Chat["send" | "sendAndCancel" | "sendAndQueue" | "approve" | "post" | "restartDuring"]
+    >
+  | Chat["settled" | "compact" | "goal" | "continuePastUncertain"]
+  | ReturnType<typeof selectTestModel>;
+
+/** Send a message that starts children, let them answer after its run, and wait for the reports. */
+const delegate = (chat: Chat, text: string) =>
+  Effect.gen(function* () {
+    yield* chat.post(text);
+    yield* waitUntil(
+      Effect.sync(() => childrenHeld() > 0),
+      "a child to ask the model",
+      6_000,
+    );
+    releaseChildren();
+    yield* chat.settled;
+  });
+
+/** An agent whose model answers as the golden scenarios script it. */
+export const goldenAgent = (options: TestEnvOptions = {}) =>
+  testAgent({ testProvider: { responder: goldenResponder }, ...options });
+type It = Parameters<Parameters<ReturnType<typeof goldenAgent>>[1]>[0];
+
+/** A directory of `__golden__` with its trailing slash, or `""` for the top. */
+type Goldens = "" | `${string}/`;
+type Scenario = (
+  title: string,
+  golden: string,
+  mode: PermissionMode,
+  body: (chat: Chat) => Effect.Effect<void, Effect.Error<Step>, Effect.Services<Step>>,
+) => void;
+
+/** A scenario in its own conversation, compared with the golden file of the same name in `goldens`. */
+export const scenarioIn: {
+  (goldens: Goldens): (it: It) => Scenario;
+  (it: It, goldens: Goldens): Scenario;
+} = EffectFunction.dual(
+  2,
+  (it: It, goldens: Goldens): Scenario =>
+    (title, golden, mode, body) =>
+      it.effect(
+        title,
+        () =>
+          Effect.gen(function* () {
+            const chat = yield* conversation(mode);
+            yield* body(chat);
+            yield* expectGolden(chat.sessionId, `${goldens}${golden}`);
+          }),
+        20_000,
+      ),
+);
+
+/** The scenarios of a chat run that no Goal starts, compared with the golden files in `goldens`. */
+export const chatScenarios: {
+  (goldens: Goldens): (it: It) => void;
+  (it: It, goldens: Goldens): void;
+} = EffectFunction.dual(2, (it: It, goldens: Goldens) => {
+  const scenario = scenarioIn(it, goldens);
+
+  scenario("plain answer", "plain-answer", "ask", (chat) => chat.send("hello"));
+  scenario("read tool", "read-tool", "ask", (chat) => chat.send("golden:read"));
+  scenario("two reads in one step", "parallel-reads", "ask", (chat) =>
+    chat.send("golden:parallel-reads"),
+  );
+  scenario("write tool without approval in full mode", "write-full-mode", "full", (chat) =>
+    chat.send("golden:write"),
+  );
+  scenario("write tool in ask mode", "write-ask-mode", "ask", (chat) => chat.send("golden:write"));
+  scenario("approved tool in ask mode", "approval-approved", "ask", (chat) =>
+    Effect.andThen(chat.send("golden:approval"), chat.approve(true)),
+  );
+  scenario("declined tool in ask mode", "approval-declined", "ask", (chat) =>
+    Effect.andThen(chat.send("golden:approval"), chat.approve(false)),
+  );
+  scenario("permission review asks, then the user approves", "permission-review", "auto", (chat) =>
+    Effect.andThen(chat.send("golden:review"), chat.approve(true)),
+  );
+  scenario("reads and a write needing approval in one step", "mixed-step", "ask", (chat) =>
+    Effect.andThen(chat.send("golden:mixed"), chat.approve(true)),
+  );
+  scenario("provider failure after some text", "provider-failure", "ask", (chat) =>
+    chat.send("golden:fail"),
+  );
+  scenario("user cancels a running answer", "cancelled", "ask", (chat) =>
+    chat.sendAndCancel("golden:cancel"),
+  );
+  scenario("a named subagent keeps its conversation across runs", "named-subagent", "ask", (chat) =>
+    Effect.andThen(
+      delegate(chat, "golden:subagent-first"),
+      delegate(chat, "golden:subagent-second"),
+    ),
+  );
+  scenario("the next turn after a model change", "model-handoff", "ask", (chat) =>
+    Effect.gen(function* () {
+      yield* chat.send("before the switch");
+      yield* selectTestModel("deep-1", "medium");
+      yield* chat.send("after the switch");
+      yield* chat.send("still the new model");
+    }),
+  );
+  scenario("a queued message reaches the model when a tool call returns", "queue", "ask", (chat) =>
+    chat.sendAndQueue("golden:queue", [["and the second line", "queue"]], releaseTurns),
+  );
+  scenario("steering cuts the answer and sends the queued messages next", "steer", "ask", (chat) =>
+    chat.sendAndQueue(
+      "golden:steer",
+      [
+        ["and the notes", "queue"],
+        ["shorter please", "steer"],
+      ],
+      () => {},
+    ),
+  );
+  // The model gets an error result and the run goes on. Today the tool_result node's text is
+  // `[object Object]`.
+  scenario("a call to a tool the run never offered", "unknown-tool", "ask", (chat) =>
+    chat.send("golden:unknown-tool"),
+  );
+  // Requests a changed page could send. A Goal worker's own requests to the owner are checked in
+  // tests/full-loop/owner-authority.test.ts; step 5 removes the worker.
+  it.effect(
+    "requests the page never sends are refused and leave the approval waiting",
+    () =>
+      Effect.gen(function* () {
+        const chat = yield* conversation("ask");
+        const other = yield* conversation("ask");
+        // The other conversation has a turn, so its requests reach the checks of a resume.
+        yield* other.send("hello");
+        yield* chat.send("golden:hand-written");
+        const pending = yield* chat.pendingInterrupt;
+        const approval = (interruptId: string, payload: JsonValue) => ({
+          parentRunId: pending.run_id,
+          resume: [{ interruptId, status: "resolved", payload }] as const,
+        });
+        const answers = {
+          // A response its schema refuses would otherwise be an approval.
+          tamperedApproval: yield* chat.handWritten(
+            approval(pending.interrupt_id, { approved: "yes" }),
+          ),
+          unknownInterrupt: yield* chat.handWritten(
+            approval("no-such-interrupt", { approved: true }),
+          ),
+          otherSessionResume: yield* other.handWritten(
+            approval(pending.interrupt_id, { approved: true }),
+          ),
+          otherSessionRunId: yield* other.handWritten({
+            runId: pending.run_id,
+            messages: [{ id: "hand-written", role: "user", content: "not my run" }],
+          }),
+          otherSessionReconnect: yield* other.reconnect(`runId=${pending.run_id}&offset=-1`),
+          otherRunIdHeader: yield* chat.reconnect(`runId=${pending.run_id}&offset=-1`, {
+            "X-Run-Id": `${other.sessionId}:run`,
+          }),
+          otherRunLastEventId: yield* chat.reconnect(`runId=${pending.run_id}`, {
+            "Last-Event-ID": `memory:v1:${encodeURIComponent(`${other.sessionId}:run`)}:1`,
+          }),
+        };
+        // The approval still waits and the page can answer it.
+        yield* chat.approve(true);
+        yield* matchGolden(
+          `${goldens}rejections`,
+          {
+            answers,
+            conversation: yield* migratedRows(chat.sessionId),
+            other: yield* migratedRows(other.sessionId),
+          },
+          [
+            [chat.sessionId, "<session>"],
+            [other.sessionId, "<other-session>"],
+          ],
+        );
+      }),
+    20_000,
+  );
+  scenario("/compact summarizes earlier turns for the next one", "compaction", "ask", (chat) =>
+    Effect.gen(function* () {
+      for (const turn of ["turn one", "turn two", "turn three", "turn four"])
+        yield* chat.send(turn);
+      yield* chat.compact;
+      yield* chat.send("turn five");
+    }),
+  );
+});

@@ -309,7 +309,7 @@
       "event_key": "chunk:12",
       "kind": "chunk",
       "payload_json": {
-        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
         "messageId": "<id-4>",
         "role": "tool",
         "timestamp": "<time>",
@@ -322,7 +322,7 @@
       "event_key": "sdk-stream:v1:chunk:27",
       "kind": "chunk",
       "payload_json": {
-        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
         "messageId": "<id-4>",
         "role": "tool",
         "timestamp": "<time>",
@@ -509,7 +509,7 @@
           "toolCallId": "goal-read@<session>"
         },
         {
-          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
           "id": "stored:<session>:3",
           "role": "tool",
           "toolCallId": "goal-list@<session>"
@@ -1653,6 +1653,8 @@
         "paths": [
           ".agents/skills/approval/SKILL.md",
           ".agents/skills/approval/scripts/run.sh",
+          ".agents/skills/hand-written/SKILL.md",
+          ".agents/skills/hand-written/scripts/run.sh",
           ".agents/skills/mixed-skill/SKILL.md",
           ".agents/skills/mixed-skill/scripts/run.sh",
           ".agents/skills/review/SKILL.md",
@@ -1662,7 +1664,7 @@
         ],
         "snapshot": "<id-2>",
         "source": "walk",
-        "total": 8,
+        "total": 10,
         "truncated": false
       }
     },
@@ -1757,7 +1759,7 @@
           "toolCallId": "goal-read@<session>"
         },
         {
-          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":8,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
           "role": "tool",
           "toolCallId": "goal-list@<session>"
         },

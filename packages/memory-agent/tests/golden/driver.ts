@@ -1,12 +1,12 @@
-import { Effect, Fiber, FileSystem, Match, Option, Path, Schema } from "effect";
+import { Crypto, Effect, Fiber, FileSystem, Match, Option, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
+import { AgentChat, ChatLoop } from "../../src/agent/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { chatClient, json, sdk } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { sqlGet } from "../support/sql.ts";
+import { sqlAll, sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
@@ -30,9 +30,9 @@ const decodeRunState = Schema.decodeUnknownEffect(
     uncertainRuns: Schema.Array(Schema.Struct({ runId: Schema.String })),
   }),
 );
-const decodePending = Schema.decodeUnknownEffect(
-  Schema.Struct({ run_id: Schema.String, interrupt_id: Schema.String }),
-);
+const PendingInterrupt = Schema.Struct({ run_id: Schema.String, interrupt_id: Schema.String });
+const decodePending = Schema.decodeUnknownEffect(PendingInterrupt);
+const decodeAllPending = Schema.decodeUnknownEffect(Schema.NonEmptyArray(PendingInterrupt));
 const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(JsonValue));
 const encodeJsonText = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -156,6 +156,68 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       });
       yield* Effect.sync(() => expect(response.status).toBe(201));
     });
+  /** Post a chat request the page never sends; the run id is fresh unless `turn` names one. */
+  const handWritten = Effect.fnUntraced(function* (turn: HandWrittenTurn) {
+    const agent = yield* AgentChat;
+    // As the page's client builds it: the messages it holds and the tools it can approve.
+    const body = yield* encodeJsonText({
+      threadId: sessionId,
+      runId: `${sessionId}:hand-written-${(handWrittenTurns += 1)}`,
+      state: {},
+      messages: uiMessagesToWire(page.tab.client.getMessages()),
+      tools: approvalToolDefinitions.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: convertSchemaToJsonSchema(tool.inputSchema) ?? { type: "object" },
+      })),
+      context: [],
+      forwardedProps: {},
+      ...turn,
+    });
+    const request = new Request(`http://127.0.0.1/api/chat?session=${sessionId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    return yield* answerOf(yield* chatRoute(agent, request, sessionId));
+  });
+  /** The page answers the approvals its client binds to the tools it knows. */
+  const answerOnPage = Effect.fnUntraced(function* (approved: boolean) {
+    yield* page.tab.pendingInterrupt;
+    page.tab.client.resolveInterrupts((item) => {
+      Match.value(item).pipe(
+        Match.discriminatorsExhaustive("kind")({
+          generic: (review) => review.resolveInterrupt({ approved }),
+          "tool-approval": (tool) => tool.resolveInterrupt(approved),
+        }),
+      );
+    });
+    yield* page.tab.until(() => !page.tab.client.getIsLoading(), "the resumed run to end");
+  });
+  /**
+   * The Effect AI loop's interrupts carry no TanStack binding, so the page's client cannot answer
+   * them. Answer them as the client of step 6 does: a new run whose parent is the interrupted one.
+   */
+  const answerByHand = Effect.fnUntraced(function* (approved: boolean) {
+    const pending = yield* Effect.flatMap(
+      sqlAll(
+        "SELECT run_id, interrupt_id FROM chat_interrupts WHERE thread_id = ? AND status = 'pending' ORDER BY seq",
+        sessionId,
+      ),
+      decodeAllPending,
+    );
+    const crypto = yield* Crypto.Crypto;
+    const answer = yield* handWritten({
+      runId: yield* crypto.randomUUIDv4(),
+      parentRunId: pending[0].run_id,
+      resume: pending.map(({ interrupt_id }) => ({
+        interruptId: interrupt_id,
+        status: "resolved" as const,
+        payload: { approved },
+      })),
+    });
+    yield* Effect.sync(() => expect(answer.status).toBe(200));
+  });
   return {
     sessionId,
     settled,
@@ -167,31 +229,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       ),
       decodePending,
     ),
-    /** Post a chat request the page never sends; the run id is fresh unless `turn` names one. */
-    handWritten: Effect.fnUntraced(function* (turn: HandWrittenTurn) {
-      const agent = yield* AgentChat;
-      // As the page's client builds it: the messages it holds and the tools it can approve.
-      const body = yield* encodeJsonText({
-        threadId: sessionId,
-        runId: `${sessionId}:hand-written-${(handWrittenTurns += 1)}`,
-        state: {},
-        messages: uiMessagesToWire(page.tab.client.getMessages()),
-        tools: approvalToolDefinitions.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          parameters: convertSchemaToJsonSchema(tool.inputSchema) ?? { type: "object" },
-        })),
-        context: [],
-        forwardedProps: {},
-        ...turn,
-      });
-      const request = new Request(`http://127.0.0.1/api/chat?session=${sessionId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-      });
-      return yield* answerOf(yield* chatRoute(agent, request, sessionId));
-    }),
+    handWritten,
     /** Reconnect to a run's stream as a reloaded page does, with `query` and `headers`. */
     reconnect: Effect.fnUntraced(function* (
       query: string,
@@ -296,16 +334,8 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     }),
     /** Answer every pending approval and permission review, then wait for the resumed run. */
     approve: Effect.fnUntraced(function* (approved: boolean) {
-      yield* page.tab.pendingInterrupt;
-      page.tab.client.resolveInterrupts((item) => {
-        Match.value(item).pipe(
-          Match.discriminatorsExhaustive("kind")({
-            generic: (review) => review.resolveInterrupt({ approved }),
-            "tool-approval": (tool) => tool.resolveInterrupt(approved),
-          }),
-        );
-      });
-      yield* page.tab.until(() => !page.tab.client.getIsLoading(), "the resumed run to end");
+      const loop = yield* ChatLoop;
+      yield* loop === "effect-ai" ? answerByHand(approved) : answerOnPage(approved);
       yield* settled;
     }),
   };

@@ -4,6 +4,7 @@ import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Function as EffectFunction } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { isTruthy } from "../truthy.ts";
+import { aborted } from "../runtime/aborted.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { projectInstructions, projectInstructionsHook } from "../agent/project-instructions.ts";
 import {
@@ -495,18 +496,6 @@ const childResultIn = (
         };
       },
     },
-  );
-
-/** Completes once `signal` aborts. */
-const abortedBy = (signal: AbortSignal) =>
-  Effect.suspend(() =>
-    signal.aborted
-      ? Effect.void
-      : Effect.callback<void>((resume) => {
-          const abort = () => resume(Effect.void);
-          signal.addEventListener("abort", abort, { once: true });
-          return Effect.sync(() => signal.removeEventListener("abort", abort));
-        }),
   );
 
 /** The terminal event of an attempt that answered carries its last assistant message id. */
@@ -1018,7 +1007,7 @@ const make = Effect.gen(function* () {
           runId: handle.chatRunId,
           conversation: [...(yield* runStore.thread(threadId)), { role: "user", content: task }],
           resume: [],
-          cancel: abortedBy(signal),
+          cancel: aborted(signal),
         },
       ).pipe(
         Stream.runForEach((event) => Ref.update(progress, (run) => childRunStep(run, event))),

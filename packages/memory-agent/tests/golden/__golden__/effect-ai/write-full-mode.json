@@ -1,0 +1,211 @@
+{
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [],
+  "events": [],
+  "history": [
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:write",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"out.txt\",\"content\":\"written\\n\"}",
+                "name": "write_file"
+              },
+              "id": "write@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"out.txt\",\"created\":true,\"sha256\":\"d9ed84a15ec3aa6e344981cb5b92da385361d08a8b6e579c73ce716e55cdecab\",\"bytes\":8}",
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "write@<session>"
+        }
+      ],
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "write done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-3>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 2,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-3>"
+    }
+  ],
+  "interrupts": [],
+  "ledger": [],
+  "metadata": [
+    {
+      "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:write"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-4>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "write@<session>",
+        "toolName": "write_file"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-4>",
+      "text": "write_file {\"path\":\"out.txt\",\"content\":\"written\\n\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "write@<session>",
+        "toolName": "write_file"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-4>",
+      "text": {
+        "bytes": 8,
+        "created": true,
+        "path": "out.txt",
+        "sha256": "d9ed84a15ec3aa6e344981cb5b92da385361d08a8b6e579c73ce716e55cdecab"
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-4>",
+      "text": "write done"
+    }
+  ],
+  "notifications": [],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-4>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:write",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"out.txt\",\"content\":\"written\\n\"}",
+                "name": "write_file"
+              },
+              "id": "write@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"out.txt\",\"created\":true,\"sha256\":\"d9ed84a15ec3aa6e344981cb5b92da385361d08a8b6e579c73ce716e55cdecab\",\"bytes\":8}",
+          "role": "tool",
+          "toolCallId": "write@<session>"
+        },
+        {
+          "content": "write done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-3>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
+  "workflow": []
+}
