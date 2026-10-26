@@ -126,7 +126,7 @@ src에서 많이 쓰는 것:
   - 메시지에 `id`·`createdAt` 필드가 없다. 자유 형식 `options`만 있다.
   - 그래서 저장은 지금 메시지 구조를 우리 Schema로 두고, model을 부르기 직전에만 `Prompt`로 바꾼다.
   - 저장된 tool 메시지에는 `name`이 없다. 같은 `toolCallId`의 assistant tool call에서 찾는다.
-- **usage 모양.** `TokenUsage`는 promptTokens 계열이다. Effect `Usage`는 중첩 구조다: `inputTokens{total, uncached, cacheRead, cacheWrite}`, `outputTokens{total, text, reasoning}`. 저장된 `chat_runs.usage`는 migration에서 새 모양으로 바꾸고, 필드 대응표는 1단계에서 정한다.
+- **usage 모양.** `TokenUsage`는 promptTokens 계열이다. Effect `Usage`는 중첩 구조다: `inputTokens{total, uncached, cacheRead, cacheWrite}`, `outputTokens{total, text, reasoning}`. 저장된 `chat_runs.usage`는 migration에서 새 모양으로 바꾼다. 저장 모양과 대응표는 1단계 "결과"에 있다.
   - 로컬 DB에 실제로 있는 키(2026-10-26): `promptTokens`, `completionTokens`, `totalTokens`, `promptTokensDetails.{cachedTokens, cacheWriteTokens}`, `completionTokensDetails.reasoningTokens`.
   - `totalTokens` 말고는 모두 Effect `Usage`에 자리가 있다. `promptTokens`가 cache를 포함하는지는 provider마다 확인해 `inputTokens.total`·`uncached`에 나눈다.
 - **history를 provider 요청으로 바꾸는 규칙.** TanStack 1.0은 요청마다 `transformMessagesForReplay`(`@tanstack/ai`의 `utilities/replay-messages.js`)로 history를 다듬는다. 새 변환이 같은 일을 해야 이어지는 대화의 요청이 같아진다.
@@ -222,13 +222,13 @@ migration이 하는 일:
 
 - `metadata.tanstack.createdAt`은 메시지에 `createdAt`이 없을 때 그 자리로 옮긴다.
 - `metadata.tanstack.model`은 우리 `model` 필드로 옮긴다. model handoff가 이전 model을 찾을 때 이 값을 읽는다(`packages/memory-agent/src/agent/model-handoff.ts`의 `StoredModel`).
-- `source`·`finishReason`·`stopReason`도 지금 요청을 만들 때 쓰는 값이다("의미가 달라 따로 맞출 것"의 history 변환 규칙). 같은 원칙대로 우리 필드로 옮길지, 변환 규칙을 바꿀지 1단계에서 정한다("열린 항목").
+- `source`·`finishReason`·`stopReason`도 지금 요청을 만들 때 쓰는 값이다("의미가 달라 따로 맞출 것"의 history 변환 규칙). 같은 원칙대로 메시지 필드로 옮기고, 변환 규칙은 그대로 둔다(2026-10-26).
 - 나머지 TanStack 메타데이터를 지우고, 비게 된 `metadata`도 지운다.
 - `chat_runs.usage`를 새 usage 모양으로 바꾼다.
 - `memory-agent/model-handoff` 상태의 `anchor`를 다시 계산한다.
   - fingerprint는 메시지 전체의 해시라, 메타데이터를 지우면 값이 바뀐다.
   - 다시 계산하지 않으면 그 세션의 handoff가 `HistoryChanged`로 실패한다.
-- `chat_threads.messages`를 바꾸면 trigger가 history projection을 stale로 만든다. `chat_history_groups`도 같은 규칙으로 고쳐 ready로 되돌릴지, 다시 만들게 둘지 1단계에서 정한다.
+- `chat_threads.messages`를 바꾸면 trigger가 history projection을 stale로 만든다. `chat_history_groups`도 메시지마다 같은 변환으로 고치고, thread마다 migration 전의 `ready`로 되돌린다(2026-10-26). 다시 만들지 않는다.
 
 migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadata.tanstack.model`을 읽으므로, 그 전에 돌리면 안 된다.
 
@@ -244,7 +244,8 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
   - `usage`: 지금은 TanStack `TokenUsage`다. migration에서 새 usage 모양으로 바꾼다. chunk마다 누적한다.
 - `chat_interrupts`
   - `payload`: `RUN_FINISHED` chunk의 `outcome.interrupts` 항목을 얕게 복사한 객체다(`@tanstack/ai-persistence`의 `interruptPayload`). 키는 모두 AG-UI 1.0 `Interrupt`의 필드다.
-    - `metadata`에는 TanStack의 재개 binding(`tanstack:interruptBinding`)이 있다. 재개할 때 도구 이름과 스키마를 이 값으로 확인하고, 도구가 없으면 `stale`로 거절한다. golden은 이 키를 빼고 비교한다. 새 loop의 재개 검증에 같은 정보가 필요하면 1단계 interrupt payload Schema에 앱 키로 둔다.
+    - `metadata`에는 TanStack의 재개 binding(`tanstack:interruptBinding`)이 있다. 재개할 때 도구 이름과 스키마를 이 값으로 확인하고, 도구가 없으면 `stale`로 거절한다. migration은 이 키를 지운다. 같은 정보(도구 이름, tool call id, 인자)가 payload의 앱 필드에 있다.
+    - permission review의 요청(`toolCallId`, `toolName`, `arguments`, `reason`, `askedBy`)은 `metadata`의 `tanstack:interruptPayload`에 있다. migration이 `metadata.payload`로 옮긴다.
   - `response`: 응답 JSON이다. 응답이 없으면 NULL이다.
 - `chat_metadata`
   - namespace는 모두 우리 것이다: `memory-agent/context-usage`, `memory-agent/consumed-cold-usage`, `memory-agent/turn-summaries`, `memory-agent/manual-compaction`, `memory-agent/model-handoff`, `memory-agent/workflow-execution`, `background-task-result`, history group.
@@ -315,8 +316,8 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 
 ### 1. 저장 Schema와 migration
 
-- Effect Schema로 정의할 것: 메시지(TanStack 메타데이터 없음, `model` 필드 추가), usage, interrupt payload, interrupt 응답, AG-UI 1.0 chunk, history group
-  - `AgUiSchema`가 merge되면 chunk Schema는 그것으로 바꾼다.
+- Effect Schema로 정의할 것: 메시지(TanStack 메타데이터 없음, `model` 필드 추가), usage, interrupt payload, interrupt 응답, history group
+  - AG-UI 1.0 chunk Schema는 chunk를 쓰는 4단계에서 정의한다(2026-10-26). `AgUiSchema`가 merge되면 그것으로 바꾼다.
   - usage는 `TokenUsage` 필드와 Effect `Usage` 필드의 대응표를 함께 정한다.
   - interrupt 응답은 payload의 `responseSchema`와 승인 인자로 검사한다. Effect에는 이 검사에 해당하는 기능이 없다.
 - `publishIfCurrent`의 `messages = ?` 비교가 새 직렬화에서도 성립하는지 확인한다("보안 체크리스트"의 "데이터와 절차").
@@ -327,6 +328,18 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 메시지마다 내용(text, tool call, tool result, thinking과 서명, 이미지)과 `createdAt`, `model`이 원본과 같은지 비교한다.
   - 개인 데이터를 쓰므로 테스트로 커밋하지 않는다.
 - 완료 기준: golden과 로컬 DB 사본에서 차이가 없다.
+- 결과(2026-10-26): Schema는 `packages/memory-agent/src/chat-store/schema.ts`, migration은 같은 폴더의 `tanstack-migration.ts`(`migrateTanStackRows`)다. 결정은 decisions.md "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)".
+  - usage는 AG-UI 1.0 `TokenUsage` 하나로 저장한다. `RUN_FINISHED`가 싣는 모양이다.
+    - `inputTokens` ← `promptTokens`, `outputTokens` ← `completionTokens`, `totalTokens` ← `totalTokens`
+    - `cachedInputTokens` ← `promptTokensDetails.cachedTokens`, `cacheWriteInputTokens` ← `promptTokensDetails.cacheWriteTokens`, `reasoningTokens` ← `completionTokensDetails.reasoningTokens`
+    - 456191fe 전의 Anthropic 구독 run은 `promptTokens`가 캐시 밖 입력뿐이다. 그 커밋부터 `cacheWriteTokens`를 늘 채우므로, 이 키가 없는 Anthropic run에 캐시 읽기·쓰기를 더하고 `totalTokens`를 다시 계산한다. Anthropic run은 `api_usage_responses.provider`로 가린다.
+    - Effect `Usage`(2·4단계)와는 이렇게 잇는다: `inputTokens.total` = `inputTokens`, `cacheRead` = `cachedInputTokens`, `cacheWrite` = `cacheWriteInputTokens`, `uncached`는 남는 값, `outputTokens.total` = `outputTokens`, `reasoning` = `reasoningTokens`.
+  - golden은 migration 뒤의 행으로 비교한다(`tests/golden/rows.ts`의 `migratedRows`). 시나리오마다 변환 함수가 만든 행과 DB에서 migration을 돌린 행이 같은지, 저장된 model handoff가 replay되는지 본다. chunk(Goal의 `workflow_run_events`, 거절 응답)는 TanStack 메타데이터를 빼고 비교한다.
+  - JSON key 순서는 golden에서 정렬한다. 7단계의 writer가 key를 다른 순서로 써도 golden이 흔들리지 않는다.
+  - `publishIfCurrent`의 `messages = ?` 비교는 그대로 성립한다. migration이 thread와 group을 같은 encoder로 쓰고, 이후에는 publisher가 thread에서 읽은 글자를 그대로 비교한다.
+  - 로컬 DB 검사 도구: `node tools/chat-store-check/main.ts --source <agent.db> --work <저장소 밖 폴더>`. 원본을 `VACUUM INTO`로 두 번 복사해 한쪽에만 migration을 돌리고, 두 번째 실행이 바꾸는 행이 없는지, 모든 행이 새 Schema로 decode되는지(정의 밖 key는 실패), 메시지 내용과 handoff anchor가 원본과 같은지 본다. 출력은 개수, id, Schema 경로뿐이다.
+  - 로컬 DB 사본 결과(2026-10-26): thread 751개, 메시지 144,641개, history group 33,046개가 decode되고 내용이 같다. 두 번째 실행은 아무것도 바꾸지 않는다. projection의 ready 751개는 그대로다. usage 1,374개, interrupt payload 140개·응답 138개가 decode된다. Anthropic run 19개 중 456191fe 전 16개는 `cacheWriteTokens`가 없고 13개가 보정되며, 뒤 3개는 있다. handoff anchor 5개는 그대로 맞는다. migration은 27초 걸렸다.
+  - 대화가 지워진 thread의 handoff 상태 7개(legacy 1개 포함)는 `chat_metadata`에 남아 있고 migration 대상이 아니다.
 
 ### 2. provider
 
@@ -419,7 +432,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - run 뒤 다시 읽기: `withReactivity`, `refresh`
   - SSR이 필요하면 `Atom.serializable`과 `HydrationBoundary`
 - 직접 쓰는 채팅 규칙(`chat-panel.tsx`의 `useChat` 호출 기준):
-  - SSE를 읽고 1단계의 AG-UI chunk Schema로 decode한다.
+  - SSE를 읽고 4단계의 AG-UI chunk Schema로 decode한다.
   - AG-UI 이벤트를 화면 메시지 parts로 쌓는 reducer. 지금의 UIMessage parts 모양을 유지한다.
   - 서버에 이미 있는 메시지는 빼고 보내는 전송(`persistence: true`)
   - 이전 기록 paging(`history.pageSize: 20`, `hasOlderMessages`, `loadOlderMessages`)
@@ -528,7 +541,7 @@ worker를 없애면 owner와 worker 사이의 검사(`agent/full-loop-execution.
 ### 데이터와 절차
 
 - golden DB와 `tools/`의 로컬 DB 검사 도구는 개인 데이터를 다룬다. 행 내용을 stdout에 대량 출력하지 않고, 사본 파일은 저장소 밖에 둔다. "테스트로 커밋하지 않는다"를 도구 동작으로도 지킨다.
-- migration이 쓰는 새 저장 Schema가 history projection의 검증(user·assistant·tool 외 role을 `invalid-transcript`로 거절, `chat-state/history-projection-native.ts`의 `prepared`)과 호환해야 세션이 읽힌다. `publishIfCurrent`의 `messages = ?` 동등 비교(오래된 snapshot 부활 방지)가 새 직렬화 기준으로 다시 성립하는지 1단계에서 확인한다.
+- migration이 쓰는 새 저장 Schema가 history projection의 검증(user·assistant·tool 외 role을 `invalid-transcript`로 거절, `chat-state/history-projection-native.ts`의 `prepared`)과 호환해야 세션이 읽힌다. `publishIfCurrent`의 `messages = ?` 동등 비교(오래된 snapshot 부활 방지)가 새 직렬화 기준으로 다시 성립하는지 1단계에서 확인한다. 확인했다(2026-10-26, 1단계 "결과").
 - golden 비교는 정상 경로 동등성이라 보안 회귀를 잡지 못한다. 0단계 시나리오에 부정 케이스를 더한다: 승인 없는 needsApproval 실행 시도, 타 세션 resumeRunId, 미등록 interrupt 응답, deferred로 온 미등록 도구 호출, binding 불일치 재접속. 지금 코드의 거절 응답을 golden으로 고정해 7단계 전환이 이 검증을 회귀 테스트로 상속하게 한다.
 
 ## 대체 결정이 필요한 decisions.md 항목
@@ -608,5 +621,5 @@ Goal worker를 전제로 쓴 항목들이다. 5단계를 구현할 때 "Goal도 
 - (닫힘, 2026-10-26) 5단계를 전환 전에 TanStack 위에서 먼저 할지. 사용자가 전환을 바로 시작하기로 했다. Goal은 5단계에서 옮긴다.
 - (닫힘, 2026-10-26) 옛 Goal 세션을 읽기 전용으로 둘지. Goal worker를 없애므로 옛 Goal 세션도 이어서 진행한다.
 - 결과를 기다리지 않는 도구로 바꿀 대상(셸 등). 전환과 따로 정한다.
-- `source`·`finishReason`·`stopReason`을 우리 필드로 옮길지, 아니면 history 변환 규칙을 바꿀지.
-- `chat_runs.usage`의 새 모양. Effect `Usage`와 AG-UI 1.0 `TokenUsage`(평평한 `inputTokens`, `outputTokens`, `cachedInputTokens`, `cacheWriteInputTokens`, `reasoningTokens`) 중 무엇으로 저장할지. chunk는 AG-UI 모양을 쓴다.
+- (닫힘, 2026-10-26) `source`·`finishReason`·`stopReason`을 우리 필드로 옮길지, 아니면 history 변환 규칙을 바꿀지. 메시지 필드로 옮기고 변환 규칙은 그대로 둔다.
+- (닫힘, 2026-10-26) `chat_runs.usage`의 새 모양. AG-UI 1.0 `TokenUsage` 하나로 저장한다. 1단계 "결과"에 대응표가 있다.

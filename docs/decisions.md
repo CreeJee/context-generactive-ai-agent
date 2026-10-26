@@ -2731,3 +2731,19 @@
 - API payload는 새 client에 맞춰 바꾼다. chunk는 AG-UI 1.0 표준 모양으로만 쓴다. client는 `useChat` 대신 `@effect/atom-react`로 만든 hook을 쓴다.
 - 도구는 Effect의 자동 해석 대신 앱이 stream을 읽으며 실행한다(계획의 "도구 실행 방식"). 자동 해석은 등록되지 않은 이름 하나로 호출 전체가 실패하고, 승인 판정이 boolean뿐이며, 응답이 끊기면 실행 중인 핸들러를 끊는다.
 - TanStack을 전제로 한 결정들은 해당 단계를 구현할 때 대체 표시를 단다. 대상 목록은 계획에 있다.
+
+## 채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 migration이 행을 어떻게 바꾸는지다. 새 모양의 Schema는 `packages/memory-agent/src/chat-store/schema.ts`, migration은 `tanstack-migration.ts`다. migration은 전환 커밋(계획의 7단계)에서 등록한다. 지금 코드는 `metadata.tanstack.model`을 읽기 때문이다.
+- 메시지는 `metadata.tanstack`의 `model`, `source`, `finishReason`, `stopReason`을 메시지 필드로 옮긴다. `createdAt`은 메시지에 없을 때만 옮긴다.
+  - 넷 다 지금 요청을 만들 때 읽는 값이다. handoff는 이전 model을 찾고, replay는 다른 source의 메시지를 text로 보내며 실패·취소된 turn을 뺀다. 변환 규칙은 그대로 둔다. 이어서 대화할 때 provider 요청이 지금과 같아야 하기 때문이다.
+  - 나머지(`responseId`, `run`, `index`, `toolCallMetadata`, `runId`, `threadId`)와 tool call의 metadata는 읽는 곳이 없어서 지운다. 비게 된 `metadata`도 지운다.
+- `chat_runs.usage`는 AG-UI 1.0 `TokenUsage` 하나(평평한 `inputTokens`, `outputTokens`, `totalTokens`, `cachedInputTokens`, `cacheWriteInputTokens`, `reasoningTokens`)로 저장한다. stream의 `RUN_FINISHED`가 싣는 모양이다. 캐시 값과 reasoning은 합계의 일부이고, 더하는 값이 아니다.
+  - 456191fe("구독 어댑터가 `chat()`의 promptCache를 따른다 (2026-10-25)") 전의 Anthropic 구독 run은 입력에 캐시가 빠져 있다. migration이 캐시 읽기·쓰기를 더한다.
+  - 가르는 기준은 시각이 아니라 `promptTokensDetails.cacheWriteTokens` 키다. 그 커밋부터 Anthropic run은 이 키를 늘 채운다. 0.0.17까지의 릴리즈에는 이 커밋이 없으므로, 릴리즈 사용자의 행은 커밋 시각 뒤에도 옛 뜻이다.
+- interrupt payload는 TanStack의 재개 binding(`tanstack:interruptBinding`)을 지운다. 재개 검증에 쓰던 도구 이름, tool call id, 인자는 payload의 앱 필드에 있다.
+  - permission review의 요청은 TanStack이 `tanstack:interruptPayload`에 두고 있었다. `metadata.payload`로 옮긴다. 이 값에는 `askedBy`가 있다. 0단계 golden은 TanStack 키를 통째로 빼고 비교해서 이 값까지 빠지고 있었다.
+- history group은 다시 만들지 않는다. 메시지마다 같은 변환으로 고치고, thread마다 migration 전의 `ready`로 되돌린다. group은 thread의 메시지를 나눠 담은 것이라 둘이 계속 맞는다.
+- model handoff의 anchor는 메시지 전체의 해시라 migration이 바꾼다. migration 전 메시지에서 경계를 찾고, migration 뒤의 같은 메시지로 anchor를 다시 계산한다. legacy anchor는 실행 중 upgrade와 같은 규칙으로 v2가 된다. 이미 맞지 않던 anchor는 그대로 둔다. 다른 `chat_metadata` namespace는 메시지 순번과 글자를 저장하므로 바꾸지 않는다.
+- Goal의 옛 chunk(`workflow_run_events`)는 바꾸지 않는다. 계획의 "DB 저장 형식과 migration"대로다.
+- 확인: golden 시나리오마다 DB에서 migration을 돌린 행이 변환 결과와 같고 handoff가 replay된다. 로컬 DB 사본은 `tools/chat-store-check`로 확인했다. 모든 행이 새 Schema로 decode되고, 정의 밖 key도 없다. 메시지 내용과 anchor도 원본과 같다. 결과는 계획의 1단계 "결과"에 있다.
