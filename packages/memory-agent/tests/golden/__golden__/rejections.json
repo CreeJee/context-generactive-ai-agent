@@ -1,0 +1,586 @@
+{
+  "answers": {
+    "tamperedApproval": {
+      "status": 200,
+      "body": [
+        {
+          "type": "CUSTOM",
+          "name": "run.accepted",
+          "value": {},
+          "timestamp": "<time>"
+        },
+        {
+          "type": "RUN_ERROR",
+          "timestamp": "<time>",
+          "message": "Approval approval_hand-written@<session> must be a boolean or decision envelope. One or more interrupt resolutions are invalid.",
+          "code": "invalid-payload"
+        }
+      ]
+    },
+    "unknownInterrupt": {
+      "status": 200,
+      "body": [
+        {
+          "type": "CUSTOM",
+          "name": "run.accepted",
+          "value": {},
+          "timestamp": "<time>"
+        },
+        {
+          "type": "RUN_ERROR",
+          "timestamp": "<time>",
+          "message": "Missing resume entry for pending interrupt approval_hand-written@<session>. Resume entries must resolve or cancel the complete interrupt batch.",
+          "code": "unknown-interrupt"
+        }
+      ]
+    },
+    "otherSessionResume": {
+      "status": 200,
+      "body": [
+        {
+          "type": "CUSTOM",
+          "name": "run.accepted",
+          "value": {},
+          "timestamp": "<time>"
+        },
+        {
+          "type": "RUN_ERROR",
+          "timestamp": "<time>",
+          "message": "Resume entry references non-pending interrupt approval_hand-written@<session>. Resume entries must resolve or cancel the complete interrupt batch.",
+          "code": "unknown-interrupt"
+        }
+      ]
+    },
+    "otherSessionRunId": {
+      "status": 409,
+      "body": {
+        "error": "run_id_conflict"
+      }
+    },
+    "otherSessionReconnect": {
+      "status": 404,
+      "body": {
+        "error": "run_not_found"
+      }
+    },
+    "otherRunIdHeader": {
+      "status": 400,
+      "body": {
+        "error": "invalid_stream_offset"
+      }
+    },
+    "otherRunLastEventId": {
+      "status": 400,
+      "body": {
+        "error": "invalid_stream_offset"
+      }
+    }
+  },
+  "conversation": {
+    "threads": [
+      {
+        "thread_id": "<session>",
+        "messages": [
+          {
+            "id": "<id-1>",
+            "role": "user",
+            "content": "golden:hand-written",
+            "createdAt": "<time>"
+          },
+          {
+            "id": "<id-2>",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "scripted-discovery-<id-3>",
+                "type": "function",
+                "function": {
+                  "name": "__lazy__tool__discovery__",
+                  "arguments": "{\"toolNames\":[\"save_code_skill\"]}"
+                }
+              }
+            ],
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          },
+          {
+            "role": "tool",
+            "id": "snapshot_<id-4>_2",
+            "toolCallId": "scripted-discovery-<id-3>",
+            "content": "{\"tools\":[{\"name\":\"save_code_skill\",\"description\":\"Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":64,\"description\":\"Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).\"},\"description\":{\"type\":\"string\",\"minLength\":1,\"description\":\"One line on what the skill does and when to use it; it is listed so later runs can find it.\"},\"program\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"ts\"]},\"code\":{\"type\":\"string\",\"minLength\":1,\"description\":\"TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.\"},\"input\":{\"type\":\"object\",\"description\":\"JSON Schema of `input`, of type \\\"object\\\"; every run is checked against it. Omit when the skill takes no input.\"}},\"required\":[\"runtime\",\"code\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"sh\"]},\"script\":{\"type\":\"string\",\"minLength\":1,\"description\":\"POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.\"},\"network\":{\"type\":\"array\",\"maxItems\":32,\"description\":\"The only hosts the script may connect to, exactly as it needs them (e.g. \\\"registry.npmjs.org\\\", \\\"*.github.com\\\", \\\"api.example.com:443\\\"). Omit for no network; localhost only if listed.\",\"items\":{\"type\":\"string\",\"maxLength\":253}}},\"required\":[\"runtime\",\"script\"],\"additionalProperties\":false}],\"description\":\"ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.\"},\"usage\":{\"type\":\"string\",\"description\":\"What the input or arguments mean and what the result shows.\"},\"reason\":{\"type\":\"string\",\"description\":\"One sentence on why, shown to the user when asking.\"}},\"required\":[\"name\",\"description\",\"program\"],\"additionalProperties\":false}}]}"
+          },
+          {
+            "id": "<id-5>",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "hand-written@<session>",
+                "type": "function",
+                "function": {
+                  "name": "save_code_skill",
+                  "arguments": "{\"name\":\"hand-written\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf hand-written\"},\"reason\":\"golden scenario\"}"
+                }
+              }
+            ],
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          },
+          {
+            "role": "tool",
+            "content": "{\"name\":\"hand-written\",\"directory\":\".agents/skills/hand-written\",\"scriptSha256\":\"f754678c7c02a7fba80f79451212627e20e83f14d9bbf94a467526671e43255f\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+            "toolCallId": "hand-written@<session>"
+          },
+          {
+            "role": "assistant",
+            "content": "hand-written done",
+            "id": "<id-6>",
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          }
+        ]
+      }
+    ],
+    "history": [
+      {
+        "thread_id": "<session>",
+        "ordinal": 0,
+        "ui_id": "<id-1>",
+        "messages": [
+          {
+            "id": "<id-1>",
+            "role": "user",
+            "content": "golden:hand-written",
+            "createdAt": "<time>"
+          }
+        ],
+        "format_version": 1,
+        "ready": 1
+      },
+      {
+        "thread_id": "<session>",
+        "ordinal": 1,
+        "ui_id": "<id-2>",
+        "messages": [
+          {
+            "id": "<id-2>",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "scripted-discovery-<id-3>",
+                "type": "function",
+                "function": {
+                  "name": "__lazy__tool__discovery__",
+                  "arguments": "{\"toolNames\":[\"save_code_skill\"]}"
+                }
+              }
+            ],
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          },
+          {
+            "role": "tool",
+            "id": "snapshot_<id-4>_2",
+            "toolCallId": "scripted-discovery-<id-3>",
+            "content": "{\"tools\":[{\"name\":\"save_code_skill\",\"description\":\"Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":64,\"description\":\"Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).\"},\"description\":{\"type\":\"string\",\"minLength\":1,\"description\":\"One line on what the skill does and when to use it; it is listed so later runs can find it.\"},\"program\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"ts\"]},\"code\":{\"type\":\"string\",\"minLength\":1,\"description\":\"TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.\"},\"input\":{\"type\":\"object\",\"description\":\"JSON Schema of `input`, of type \\\"object\\\"; every run is checked against it. Omit when the skill takes no input.\"}},\"required\":[\"runtime\",\"code\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"sh\"]},\"script\":{\"type\":\"string\",\"minLength\":1,\"description\":\"POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.\"},\"network\":{\"type\":\"array\",\"maxItems\":32,\"description\":\"The only hosts the script may connect to, exactly as it needs them (e.g. \\\"registry.npmjs.org\\\", \\\"*.github.com\\\", \\\"api.example.com:443\\\"). Omit for no network; localhost only if listed.\",\"items\":{\"type\":\"string\",\"maxLength\":253}}},\"required\":[\"runtime\",\"script\"],\"additionalProperties\":false}],\"description\":\"ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.\"},\"usage\":{\"type\":\"string\",\"description\":\"What the input or arguments mean and what the result shows.\"},\"reason\":{\"type\":\"string\",\"description\":\"One sentence on why, shown to the user when asking.\"}},\"required\":[\"name\",\"description\",\"program\"],\"additionalProperties\":false}}]}"
+          }
+        ],
+        "format_version": 1,
+        "ready": 1
+      },
+      {
+        "thread_id": "<session>",
+        "ordinal": 2,
+        "ui_id": "<id-5>",
+        "messages": [
+          {
+            "id": "<id-5>",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "hand-written@<session>",
+                "type": "function",
+                "function": {
+                  "name": "save_code_skill",
+                  "arguments": "{\"name\":\"hand-written\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf hand-written\"},\"reason\":\"golden scenario\"}"
+                }
+              }
+            ],
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          },
+          {
+            "role": "tool",
+            "content": "{\"name\":\"hand-written\",\"directory\":\".agents/skills/hand-written\",\"scriptSha256\":\"f754678c7c02a7fba80f79451212627e20e83f14d9bbf94a467526671e43255f\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+            "toolCallId": "hand-written@<session>",
+            "id": "stored:<session>:4"
+          }
+        ],
+        "format_version": 1,
+        "ready": 1
+      },
+      {
+        "thread_id": "<session>",
+        "ordinal": 3,
+        "ui_id": "<id-6>",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "hand-written done",
+            "id": "<id-6>",
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          }
+        ],
+        "format_version": 1,
+        "ready": 1
+      }
+    ],
+    "runs": [
+      {
+        "run_id": "<id-4>",
+        "thread_id": "<session>",
+        "status": "interrupted",
+        "error": null,
+        "error_code": null,
+        "usage": null,
+        "cancel_requested": null
+      },
+      {
+        "run_id": "<session>:hand-written-1",
+        "thread_id": "<session>",
+        "status": "failed",
+        "error": "Approval approval_hand-written@<session> must be a boolean or decision envelope. One or more interrupt resolutions are invalid.",
+        "error_code": null,
+        "usage": null,
+        "cancel_requested": null
+      },
+      {
+        "run_id": "<id-7>",
+        "thread_id": "<session>",
+        "status": "completed",
+        "error": null,
+        "error_code": null,
+        "usage": null,
+        "cancel_requested": null
+      }
+    ],
+    "interrupts": [
+      {
+        "interrupt_id": "approval_hand-written@<session>",
+        "run_id": "<id-4>",
+        "thread_id": "<session>",
+        "status": "resolved",
+        "payload": {
+          "id": "approval_hand-written@<session>",
+          "reason": "tool_call",
+          "message": "Approval required to run save_code_skill",
+          "toolCallId": "hand-written@<session>",
+          "responseSchema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "approved": {
+                    "const": true
+                  },
+                  "editedArgs": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
+                      },
+                      "program": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "runtime": {
+                                "type": "string",
+                                "enum": [
+                                  "ts"
+                                ]
+                              },
+                              "code": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
+                              },
+                              "input": {
+                                "type": "object",
+                                "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
+                              }
+                            },
+                            "required": [
+                              "runtime",
+                              "code"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "runtime": {
+                                "type": "string",
+                                "enum": [
+                                  "sh"
+                                ]
+                              },
+                              "script": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
+                              },
+                              "network": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "maxLength": 253
+                                },
+                                "maxItems": 32,
+                                "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed."
+                              }
+                            },
+                            "required": [
+                              "runtime",
+                              "script"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ],
+                        "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
+                      },
+                      "usage": {
+                        "type": "string",
+                        "description": "What the input or arguments mean and what the result shows."
+                      },
+                      "reason": {
+                        "type": "string",
+                        "description": "One sentence on why, shown to the user when asking."
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "description",
+                      "program"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "approved"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "approved": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "approved"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "metadata": {
+            "kind": "approval",
+            "toolName": "save_code_skill",
+            "input": {
+              "name": "hand-written",
+              "description": "Print a line",
+              "program": {
+                "runtime": "sh",
+                "script": "printf hand-written"
+              },
+              "reason": "golden scenario"
+            }
+          }
+        },
+        "response": {
+          "approved": true
+        }
+      }
+    ],
+    "metadata": [
+      {
+        "namespace": "memory-agent/model-handoff",
+        "key": "<session>",
+        "value": {
+          "_tag": "baseline",
+          "target": "[\"openai\",\"fast-1\",null]"
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "kind": "user",
+        "run_id": null,
+        "text": "golden:hand-written",
+        "detail": {}
+      },
+      {
+        "kind": "assistant",
+        "run_id": "<id-4>",
+        "text": "",
+        "detail": {}
+      },
+      {
+        "kind": "tool_call",
+        "run_id": "<id-4>",
+        "text": "save_code_skill {\"name\":\"hand-written\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"printf hand-written\"},\"reason\":\"golden scenario\"}",
+        "detail": {
+          "toolName": "save_code_skill",
+          "toolCallId": "hand-written@<session>"
+        }
+      },
+      {
+        "kind": "tool_result",
+        "run_id": "<id-4>",
+        "text": {
+          "name": "hand-written",
+          "directory": ".agents/skills/hand-written",
+          "scriptSha256": "f754678c7c02a7fba80f79451212627e20e83f14d9bbf94a467526671e43255f",
+          "replaced": false,
+          "runtime": "sh",
+          "network": []
+        },
+        "detail": {
+          "toolName": "save_code_skill",
+          "toolCallId": "hand-written@<session>",
+          "ok": true
+        }
+      },
+      {
+        "kind": "assistant",
+        "run_id": "<id-7>",
+        "text": "hand-written done",
+        "detail": {}
+      }
+    ],
+    "subagents": [],
+    "tasks": [],
+    "attempts": [],
+    "artifacts": [],
+    "notifications": [],
+    "queue": [],
+    "workflow": [],
+    "bindings": [],
+    "acknowledgements": [],
+    "events": [],
+    "ledger": [],
+    "usage": []
+  },
+  "other": {
+    "threads": [
+      {
+        "thread_id": "<other-session>",
+        "messages": [
+          {
+            "id": "<id-8>",
+            "role": "user",
+            "content": "hello",
+            "createdAt": "<time>"
+          },
+          {
+            "role": "assistant",
+            "content": "Hello from fast-1",
+            "id": "<id-9>",
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          }
+        ]
+      }
+    ],
+    "history": [
+      {
+        "thread_id": "<other-session>",
+        "ordinal": 0,
+        "ui_id": "<id-8>",
+        "messages": [
+          {
+            "id": "<id-8>",
+            "role": "user",
+            "content": "hello",
+            "createdAt": "<time>"
+          }
+        ],
+        "format_version": 1,
+        "ready": 1
+      },
+      {
+        "thread_id": "<other-session>",
+        "ordinal": 1,
+        "ui_id": "<id-9>",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "Hello from fast-1",
+            "id": "<id-9>",
+            "createdAt": "<time>",
+            "model": "scripted-1"
+          }
+        ],
+        "format_version": 1,
+        "ready": 1
+      }
+    ],
+    "runs": [
+      {
+        "run_id": "<id-10>",
+        "thread_id": "<other-session>",
+        "status": "completed",
+        "error": null,
+        "error_code": null,
+        "usage": null,
+        "cancel_requested": null
+      }
+    ],
+    "interrupts": [],
+    "metadata": [
+      {
+        "namespace": "memory-agent/model-handoff",
+        "key": "<other-session>",
+        "value": {
+          "_tag": "baseline",
+          "target": "[\"openai\",\"fast-1\",null]"
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "kind": "user",
+        "run_id": null,
+        "text": "hello",
+        "detail": {}
+      },
+      {
+        "kind": "assistant",
+        "run_id": "<id-10>",
+        "text": "Hello from fast-1",
+        "detail": {}
+      }
+    ],
+    "subagents": [],
+    "tasks": [],
+    "attempts": [],
+    "artifacts": [],
+    "notifications": [],
+    "queue": [],
+    "workflow": [],
+    "bindings": [],
+    "acknowledgements": [],
+    "events": [],
+    "ledger": [],
+    "usage": []
+  }
+}

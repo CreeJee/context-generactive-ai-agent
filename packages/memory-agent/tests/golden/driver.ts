@@ -1,4 +1,4 @@
-import { Effect, Fiber, FileSystem, Match, Path, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Match, Option, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -10,7 +10,11 @@ import { sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
-import { goldenRows } from "./rows.ts";
+import { JsonValue } from "../../src/json.ts";
+import { convertSchemaToJsonSchema, uiMessagesToWire } from "@tanstack/ai";
+import { approvalToolDefinitions } from "../../src/tools/definitions.ts";
+import { chatRoute } from "../support/chat-route.ts";
+import { conversationRows, normalized } from "./rows.ts";
 
 /**
  * How golden scenarios talk to the agent. Only this file knows the client; the migration replaces
@@ -26,6 +30,41 @@ const decodeRunState = Schema.decodeUnknownEffect(
     uncertainRuns: Schema.Array(Schema.Struct({ runId: Schema.String })),
   }),
 );
+const decodePending = Schema.decodeUnknownEffect(
+  Schema.Struct({ run_id: Schema.String, interrupt_id: Schema.String }),
+);
+const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(JsonValue));
+const encodeJsonText = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+/**
+ * A chat request written by hand, for what the page never sends. It is an empty turn of the
+ * conversation with these fields on top.
+ */
+export interface HandWrittenTurn {
+  readonly runId?: string;
+  readonly parentRunId?: string;
+  readonly resume?: ReadonlyArray<{
+    readonly interruptId: string;
+    readonly status: "resolved" | "cancelled";
+    readonly payload?: JsonValue;
+  }>;
+  readonly messages?: ReadonlyArray<{
+    readonly id: string;
+    readonly role: "user";
+    readonly content: string;
+  }>;
+}
+
+/** What the agent answered: its status and body, or the events of an event stream. */
+const answerOf = Effect.fnUntraced(function* (response: Response) {
+  const text = yield* sdk(() => response.text());
+  const parsed = (body: string): JsonValue => Option.getOrElse(decodeJsonText(body), () => body);
+  const stream = response.headers.get("content-type")?.startsWith("text/event-stream") ?? false;
+  const body = stream
+    ? text.split("\n").flatMap((line) => (line.startsWith("data: ") ? [parsed(line.slice(6))] : []))
+    : parsed(text);
+  return { status: response.status, body };
+});
 
 /** A fresh conversation in the shared project, which is set to `mode` first. */
 export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = "ask") {
@@ -39,6 +78,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   // Like the page: the server owns the transcript and a turn sends only what it has not stored.
   // A restart replaces the agent, and the page reconnects with a new client.
   const page = { tab: yield* chatClient(sessionId, "page") };
+  let handWrittenTurns = 0;
   /**
    * Send once the page has finished its last answer. A page that is still busy queues the message
    * instead of sending it, and the user would see it waiting.
@@ -115,6 +155,50 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   return {
     sessionId,
     settled,
+    /** The run and id of the conversation's one pending interrupt. */
+    pendingInterrupt: Effect.flatMap(
+      sqlGet(
+        "SELECT run_id, interrupt_id FROM chat_interrupts WHERE thread_id = ? AND status = 'pending'",
+        sessionId,
+      ),
+      decodePending,
+    ),
+    /** Post a chat request the page never sends; the run id is fresh unless `turn` names one. */
+    handWritten: Effect.fnUntraced(function* (turn: HandWrittenTurn) {
+      const agent = yield* AgentChat;
+      // As the page's client builds it: the messages it holds and the tools it can approve.
+      const body = yield* encodeJsonText({
+        threadId: sessionId,
+        runId: `${sessionId}:hand-written-${(handWrittenTurns += 1)}`,
+        state: {},
+        messages: uiMessagesToWire(page.tab.client.getMessages()),
+        tools: approvalToolDefinitions.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: convertSchemaToJsonSchema(tool.inputSchema) ?? { type: "object" },
+        })),
+        context: [],
+        forwardedProps: {},
+        ...turn,
+      });
+      const request = new Request(`http://127.0.0.1/api/chat?session=${sessionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      return yield* answerOf(yield* chatRoute(agent, request, sessionId));
+    }),
+    /** Reconnect to a run's stream as a reloaded page does, with `query` and `headers`. */
+    reconnect: Effect.fnUntraced(function* (
+      query: string,
+      headers: { readonly "X-Run-Id"?: string; readonly "Last-Event-ID"?: string } = {},
+    ) {
+      const agent = yield* AgentChat;
+      const request = new Request(`http://127.0.0.1/api/chat?session=${sessionId}&${query}`, {
+        headers,
+      });
+      return yield* answerOf(yield* chatRoute(agent, request, sessionId));
+    }),
     /** Send a user message and wait for its run alone, leaving the children it started going. */
     post: Effect.fnUntraced(function* (text: string) {
       yield* deliver(text);
@@ -223,11 +307,23 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   };
 });
 
+/**
+ * Compare `value` with the stored golden file `name`. `names` are the run's own values in it, such
+ * as session ids, and the names they get there.
+ */
+export const matchGolden = Effect.fnUntraced(function* (
+  name: string,
+  value: JsonValue,
+  names: ReadonlyArray<readonly [string, string]>,
+) {
+  const { base, project } = yield* TestEnv;
+  const golden = normalized(value, [[base, "<base>"], ...names, [project.id, "<project>"]]);
+  yield* sdk(() =>
+    expect(`${JSON.stringify(golden, null, 2)}\n`).toMatchFileSnapshot(`./__golden__/${name}.json`),
+  );
+});
+
 /** Compare the conversation's rows with the stored golden file `name`. */
 export const expectGolden = Effect.fnUntraced(function* (sessionId: string, name: string) {
-  const { base } = yield* TestEnv;
-  const rows = yield* goldenRows(sessionId, [[base, "<base>"]]);
-  yield* sdk(() =>
-    expect(`${JSON.stringify(rows, null, 2)}\n`).toMatchFileSnapshot(`./__golden__/${name}.json`),
-  );
+  yield* matchGolden(name, yield* conversationRows(sessionId), [[sessionId, "<session>"]]);
 });

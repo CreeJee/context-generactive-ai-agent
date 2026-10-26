@@ -3,7 +3,9 @@ import type { PermissionMode } from "../../src/projects/projects.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { sqlGet } from "../support/sql.ts";
 import { testAgent } from "../support/test-env.ts";
-import { conversation, expectGolden } from "./driver.ts";
+import type { JsonValue } from "../../src/json.ts";
+import { conversation, expectGolden, matchGolden } from "./driver.ts";
+import { conversationRows } from "./rows.ts";
 import { waitUntil } from "../support/wait-until.ts";
 import { childrenHeld, goldenResponder, releaseChildren, releaseTurns } from "./responder.ts";
 
@@ -117,6 +119,67 @@ goldenAgent("golden chat rows", (it) => {
       ],
       () => {},
     ),
+  );
+  // The model gets an error result and the run goes on. Today the tool_result node's text is
+  // `[object Object]`.
+  scenario("a call to a tool the run never offered", "unknown-tool", "ask", (chat) =>
+    chat.send("golden:unknown-tool"),
+  );
+  // Requests a changed page could send. A Goal worker's own requests to the owner are checked in
+  // tests/full-loop/owner-authority.test.ts; step 5 removes the worker.
+  it.effect(
+    "requests the page never sends are refused and leave the approval waiting",
+    () =>
+      Effect.gen(function* () {
+        const chat = yield* conversation("ask");
+        const other = yield* conversation("ask");
+        // The other conversation has a turn, so its requests reach the checks of a resume.
+        yield* other.send("hello");
+        yield* chat.send("golden:hand-written");
+        const pending = yield* chat.pendingInterrupt;
+        const approval = (interruptId: string, payload: JsonValue) => ({
+          parentRunId: pending.run_id,
+          resume: [{ interruptId, status: "resolved", payload }] as const,
+        });
+        const answers = {
+          // A response its schema refuses would otherwise be an approval.
+          tamperedApproval: yield* chat.handWritten(
+            approval(pending.interrupt_id, { approved: "yes" }),
+          ),
+          unknownInterrupt: yield* chat.handWritten(
+            approval("no-such-interrupt", { approved: true }),
+          ),
+          otherSessionResume: yield* other.handWritten(
+            approval(pending.interrupt_id, { approved: true }),
+          ),
+          otherSessionRunId: yield* other.handWritten({
+            runId: pending.run_id,
+            messages: [{ id: "hand-written", role: "user", content: "not my run" }],
+          }),
+          otherSessionReconnect: yield* other.reconnect(`runId=${pending.run_id}&offset=-1`),
+          otherRunIdHeader: yield* chat.reconnect(`runId=${pending.run_id}&offset=-1`, {
+            "X-Run-Id": `${other.sessionId}:run`,
+          }),
+          otherRunLastEventId: yield* chat.reconnect(`runId=${pending.run_id}`, {
+            "Last-Event-ID": `memory:v1:${encodeURIComponent(`${other.sessionId}:run`)}:1`,
+          }),
+        };
+        // The approval still waits and the page can answer it.
+        yield* chat.approve(true);
+        yield* matchGolden(
+          "rejections",
+          {
+            answers,
+            conversation: yield* conversationRows(chat.sessionId),
+            other: yield* conversationRows(other.sessionId),
+          },
+          [
+            [chat.sessionId, "<session>"],
+            [other.sessionId, "<other-session>"],
+          ],
+        );
+      }),
+    20_000,
   );
   scenario("/compact summarizes earlier turns for the next one", "compaction", "ask", (chat) =>
     Effect.gen(function* () {

@@ -139,14 +139,10 @@ const runOrder = (alias: string) =>
 const inList = (count: number) =>
   `(${Array.from({ length: Math.max(count, 1) }, () => "?").join(", ")})`;
 
-export const goldenRows = Effect.fnUntraced(function* (
-  sessionId: string,
-  /** Other values that differ per test run, such as the storage folder, and their names. */
-  fixed: ReadonlyArray<readonly [string, string]>,
-) {
+/** The conversation's rows as stored; `normalized` makes them comparable. */
+export const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
   const threads = yield* threadsOf(sessionId);
   const ids = threads.length === 0 ? [sessionId] : threads;
-  const project = yield* sqlAll("SELECT project_id FROM sessions WHERE id = ?", sessionId);
   const runs = yield* rows(
     `SELECT run_id, thread_id, status, error, error_code, usage, cancel_requested
      FROM chat_runs WHERE thread_id IN ${inList(ids.length)} ORDER BY rowid`,
@@ -154,7 +150,7 @@ export const goldenRows = Effect.fnUntraced(function* (
   );
   const runIds = runs.flatMap((run) => (isString(run["run_id"]) ? [run["run_id"]] : []));
   const runList = runIds.length === 0 ? [""] : runIds;
-  const dump = {
+  return {
     threads: yield* rows(
       `SELECT thread_id, messages FROM chat_threads WHERE thread_id IN ${inList(ids.length)}
        ORDER BY thread_id = ? DESC, thread_id`,
@@ -254,10 +250,11 @@ export const goldenRows = Effect.fnUntraced(function* (
       sessionId,
     ),
   };
-  const rename = placeholders([
-    ...fixed,
-    [sessionId, "<session>"],
-    ...project.map((row) => [String(row["project_id"]), "<project>"] as const),
-  ]);
-  return normalizeWith(rename)(dump, undefined);
 });
+
+/**
+ * `value` without ids, clocks or TanStack metadata. `names` are values that differ per test run,
+ * such as the storage folder or a session id, and the names they get.
+ */
+export const normalized = (value: JsonValue, names: ReadonlyArray<readonly [string, string]>) =>
+  normalizeWith(placeholders(names))(value, undefined);

@@ -116,6 +116,16 @@ const scripts = {
   queue: [
     { toolCalls: [call("queue-read", "read_file", { path: "notes.txt" })], waitFor: turns.waits },
   ],
+  // A skill of its own, as the project already holds the skills of other scenarios.
+  "hand-written": [
+    { toolCalls: [saveSkill("hand-written", "printf hand-written")] },
+    { text: "hand-written done" },
+  ],
+  // The model names a tool the run never offered.
+  "unknown-tool": [
+    { toolCalls: [call("unknown", "no_such_tool", { path: "notes.txt" })] },
+    { text: "unknown tool done" },
+  ],
   // Steering cuts this answer; the queued messages are the next turns.
   steer: [{ text: "never shown", waitFor: Effect.never }],
   // The skill still runs when the agent restarts, so its outcome is unknown.
@@ -142,6 +152,8 @@ const Scenario = Schema.Literals([
   "goal-restart",
   "queue",
   "steer",
+  "unknown-tool",
+  "hand-written",
 ]);
 export type Scenario = typeof Scenario.Type;
 const decodeScenario = Schema.decodeUnknownOption(Scenario);
