@@ -1,0 +1,11 @@
+{
+  "extends": "../../packages/memory-agent/tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "typeRoots": ["../../packages/memory-agent/node_modules/@types"]
+  },
+  "include": ["*.ts"]
+}
