@@ -12,11 +12,13 @@ import {
   Result,
   Schema,
   Stream,
+  String as Str,
 } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
 import { FetchHttpClient, HttpClient, type HttpClientError } from "effect/http";
 import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
+import type { ShownFailure } from "../providers/contracts.ts";
 import {
   reservedOutput,
   type OpenAICompatibleConfiguration,
@@ -25,6 +27,7 @@ import { isTruthy } from "../truthy.ts";
 import { providerPrompt, type ReplayTarget } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
+import { shownReason } from "./shown-failure.ts";
 import { toolParameters } from "./tool-schema.ts";
 
 /**
@@ -971,6 +974,27 @@ const withDiagnostic = (error: AiError.AiError, diagnostic: string): AiError.AiE
         () => error,
       );
 
+/**
+ * A compatible model's failure as the user sees it. A chat template's refusal keeps its text and
+ * the request's role counts after it (decisions.md 2026-10-04); the rest of the provider's
+ * description, with the URL in it, is left out.
+ */
+export const shownCompatibleFailure = (error: AiError.AiError): ShownFailure =>
+  Option.match(compatibleFailure(error), {
+    onSome: (failure) => ({ message: failure.message }),
+    onNone: () =>
+      error.message.includes(templateError)
+        ? { message: `${templateError}\n${Arr.lastNonEmpty(Str.split(error.message, "\n"))}` }
+        : shownReason(error),
+  });
+
+/** A model whose every request fails with `failure`, for a run that cannot reach its endpoint. */
+export const failingCompatibleModel = (failure: CompatibleRunRequestFailed) =>
+  LanguageModel.make({
+    streamText: () => Stream.fromEffect(failWith(failure)),
+    generateText: () => failWith(failure),
+  });
+
 /** What the error log says about a failure: its reason, never provider text. */
 const failureCode = (error: AiError.AiError) =>
   Option.match(compatibleFailure(error), {
@@ -1006,7 +1030,7 @@ export interface CompatibleModelOptions {
   readonly fetcher: typeof globalThis.fetch;
 }
 
-export const makeCompatibleModel = Effect.fnUntraced(function* (options: CompatibleModelOptions) {
+export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleModelOptions) {
   const { endpoint, reasoningEffort, fetcher } = options;
   // The fetch client has no resources; its scope only builds it.
   const http = yield* Effect.scoped(Layer.build(FetchHttpClient.layer)).pipe(

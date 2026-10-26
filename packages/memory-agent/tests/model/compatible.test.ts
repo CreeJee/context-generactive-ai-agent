@@ -9,7 +9,7 @@ import {
   compatibleFailure,
   CompatibleRunRequestFailed,
   CompatibleRunRequestFailedReason,
-  makeCompatibleModel,
+  compatibleModel,
   type CompatibleModelOptions,
 } from "../../src/model/compatible.ts";
 
@@ -89,7 +89,7 @@ const options = (fetcher: typeof fetch): CompatibleModelOptions => ({
 
 /** The parts the model streams, with tool calls left for the caller as the agent loop leaves them. */
 const partsOf = Effect.fnUntraced(function* (modelOptions: CompatibleModelOptions) {
-  const model = yield* makeCompatibleModel(modelOptions);
+  const model = yield* compatibleModel(modelOptions);
   return yield* Stream.runCollect(
     model.streamText({ prompt, disableToolCallResolution: true, toolCallValidation: "deferred" }),
   );
@@ -378,7 +378,7 @@ describe("compatible language model", () => {
   it.effect("aborts the request when the stream is interrupted", () =>
     Effect.gen(function* () {
       let signal: AbortSignal | undefined;
-      const model = yield* makeCompatibleModel(
+      const model = yield* compatibleModel(
         options((_url, init) => {
           signal = init?.signal ?? undefined;
           return Promise.resolve(openStream(chunk({ content: "partial" })));

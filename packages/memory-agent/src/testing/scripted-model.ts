@@ -1,8 +1,25 @@
-import { Array as Arr, Cause, Effect, Option, Predicate, Ref, Schema, Stream } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Effect,
+  HashMap,
+  Match,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+  String as Str,
+  Struct,
+} from "effect";
 import { AiError, LanguageModel, type Response } from "effect/ai";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { fromPrompt, optionsKey } from "../model/prompt.ts";
 import { collectResponse } from "../model/response.ts";
+import { shownReason } from "../model/shown-failure.ts";
+import type { ModelRun, ShownFailure } from "../providers/contracts.ts";
+import { discoveryToolName } from "../tools/discovery.ts";
+import { isTruthy } from "../truthy.ts";
 
 /**
  * Provider-free Effect AI model for tests, as `ScriptedTextAdapter` is for TanStack: the agent
@@ -29,9 +46,13 @@ export interface ScriptedTurn {
   readonly usage?: typeof Response.Usage.Encoded;
 }
 
+/** The run a scripted model answers. */
+export type ScriptedRun = Pick<ModelRun, "threadId" | "runId">;
+
 /** One step the model was asked for, with its prompt as stored messages. */
 export interface ScriptedInvocation {
   readonly index: number;
+  readonly run: ScriptedRun;
   readonly system: ReadonlyArray<string>;
   readonly history: ReadonlyArray<StoredMessage>;
   readonly toolNames: ReadonlyArray<string>;
@@ -46,12 +67,27 @@ type Part = Response.StreamPartEncoded;
 const model = "scripted-1";
 const textId = "text-0";
 
+/** The run a model answers when the test names none. */
+const defaultRun: ScriptedRun = { threadId: "scripted-thread", runId: "scripted-run" };
+
+/** What a scripted model's messages are written as. */
+export const scriptedSource = { provider: "scripted", api: "text", model };
+
+/** Ids of the discovery calls the model makes for a responder. */
+const ownDiscovery = "scripted-discovery-";
+
 const failed = (description: string) =>
   AiError.make({
     module: "ScriptedLanguageModel",
     method: "streamText",
     reason: AiError.UnknownError.make({ description }),
   });
+
+/** A scripted failure as the user sees it: the text the turn was scripted to fail with. */
+export const shownScriptedFailure = (error: AiError.AiError): ShownFailure =>
+  error.reason._tag === "UnknownError" && error.reason.description !== undefined
+    ? { message: error.reason.description }
+    : shownReason(error);
 
 const decodeArguments = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
 /** The parameters of scripted arguments; arguments that do not parse stay text for the caller. */
@@ -101,14 +137,46 @@ const turnStream = (turn: ScriptedTurn): Stream.Stream<Part, AiError.AiError> =>
   );
 };
 
+/** The tools a request lists by name only, in the discovery tool's description. */
+const lazyToolNames = (request: LanguageModel.ProviderOptions): ReadonlyArray<string> =>
+  Arr.findFirst(request.tools, (tool) => tool.name === discoveryToolName).pipe(
+    Option.flatMapNullishOr(
+      (discovery) => /Available tools: \[([^\]]*)\]/.exec(discovery.description ?? "")?.[1],
+    ),
+    Option.filter((listed) => listed !== ""),
+    Option.match({ onNone: () => [], onSome: Str.split(", ") }),
+  );
+
+/** The conversation as the responder wrote it, without the discovery calls made for it. */
+const withoutOwnDiscovery = (history: ReadonlyArray<StoredMessage>) =>
+  history.flatMap(
+    Match.type<StoredMessage>().pipe(
+      Match.discriminatorsExhaustive("role")({
+        user: (user): ReadonlyArray<StoredMessage> => [user],
+        assistant: (assistant) => {
+          const calls = assistant.toolCalls ?? [];
+          const kept = calls.filter((call) => !call.id.startsWith(ownDiscovery));
+          const rest = Struct.omit(assistant, ["toolCalls"]);
+          return Arr.isReadonlyArrayNonEmpty(kept)
+            ? [{ ...rest, toolCalls: kept }]
+            : Arr.filter([rest], () => calls.length === 0 || isTruthy(assistant.content));
+        },
+        tool: (tool) => Arr.filter([tool], () => !tool.toolCallId.startsWith(ownDiscovery)),
+      }),
+    ),
+  );
+
 /**
  * A model that answers each step with the next scripted turn, or with what `turns` responds, and
- * records every step it was asked for in `invocations`.
+ * records every step it was asked for in `invocations`. `forRun` makes the model a run asks; the
+ * runs share the turns, the record and the calls waiting for their discovery.
  */
-export const makeScriptedModel = Effect.fnUntraced(function* (
+export const scriptedModel = Effect.fnUntraced(function* (
   turns: Arr.NonEmptyReadonlyArray<ScriptedTurn> | ScriptedResponder,
 ) {
   const invocations = yield* Ref.make<ReadonlyArray<ScriptedInvocation>>([]);
+  /** Turns that call lazy tools, by the discovery call made for them. */
+  const afterDiscovery = yield* Ref.make(HashMap.empty<string, ScriptedTurn>());
   const respond: ScriptedResponder = Predicate.isFunction(turns)
     ? turns
     : (invocation) =>
@@ -121,34 +189,91 @@ export const makeScriptedModel = Effect.fnUntraced(function* (
               ),
           ),
         );
-  const streamText = (request: LanguageModel.ProviderOptions) =>
+  /**
+   * Like a model, the turn first asks for the lazy tools among its calls, then makes the calls
+   * once their schemas are sent.
+   */
+  const discoveryFor = (
+    turn: ScriptedTurn,
+    request: LanguageModel.ProviderOptions,
+    id: string,
+  ): Effect.Effect<ScriptedTurn> => {
+    const lazy = lazyToolNames(request);
+    const toolNames = (turn.toolCalls ?? [])
+      .map((call) => call.name)
+      .filter((name) => lazy.includes(name) && !request.tools.some((tool) => tool.name === name));
+    return Arr.isReadonlyArrayNonEmpty(toolNames)
+      ? Effect.as(Ref.update(afterDiscovery, HashMap.set(id, turn)), {
+          toolCalls: [{ id, name: discoveryToolName, arguments: JSON.stringify({ toolNames }) }],
+        })
+      : Effect.succeed(turn);
+  };
+  const streamText = (run: ScriptedRun) => (request: LanguageModel.ProviderOptions) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        const invocation = yield* Ref.modify(
-          invocations,
-          (recorded): [ScriptedInvocation, ReadonlyArray<ScriptedInvocation>] => {
-            const made = {
-              index: recorded.length,
-              ...fromPrompt(request.prompt),
-              toolNames: request.tools.map((tool) => tool.name),
-            };
-            return [made, [...recorded, made]];
-          },
+        const prompt = fromPrompt(request.prompt);
+        const answered = Option.flatMap(Arr.last(prompt.history), (message) =>
+          message.role === "tool" ? Option.some(message.toolCallId) : Option.none(),
         );
-        const response = respond(invocation);
-        const turn = yield* Effect.isEffect(response) ? response : Effect.succeed(response);
-        yield* turn.waitFor ?? Effect.void;
-        yield* turn.delayMs === undefined ? Effect.void : Effect.sleep(turn.delayMs);
-        return turnStream(turn);
+        const waiting = yield* Option.match(answered, {
+          onNone: () => Effect.succeedNone,
+          onSome: (id) =>
+            Ref.modify(
+              afterDiscovery,
+              (held): [Option.Option<ScriptedTurn>, HashMap.HashMap<string, ScriptedTurn>] => [
+                HashMap.get(held, id),
+                HashMap.remove(held, id),
+              ],
+            ),
+        });
+        return yield* Option.match(waiting, {
+          // The turn waited once already, when the responder gave it.
+          onSome: (turn) => Effect.succeed(turnStream(turn)),
+          onNone: () =>
+            Effect.gen(function* () {
+              const invocation = yield* Ref.modify(
+                invocations,
+                (recorded): [ScriptedInvocation, ReadonlyArray<ScriptedInvocation>] => {
+                  const made = {
+                    index: recorded.length,
+                    run,
+                    system: prompt.system,
+                    history: withoutOwnDiscovery(prompt.history),
+                    toolNames: request.tools.map((tool) => tool.name),
+                  };
+                  return [made, [...recorded, made]];
+                },
+              );
+              const response = respond(invocation);
+              const scripted = yield* Effect.isEffect(response)
+                ? response
+                : Effect.succeed(response);
+              const turn = yield* discoveryFor(
+                scripted,
+                request,
+                // Unique across runs, as the run's stored conversation keeps it.
+                `${ownDiscovery}${run.runId}-${invocation.index}`,
+              );
+              yield* Effect.when(
+                Effect.andThen(
+                  turn.waitFor ?? Effect.void,
+                  turn.delayMs === undefined ? Effect.void : Effect.sleep(turn.delayMs),
+                ),
+                Effect.succeed(turn === scripted),
+              );
+              return turnStream(turn);
+            }),
+        });
       }).pipe(
         Effect.catchTag("UnknownError", (error) =>
           Effect.fail(failed(Predicate.isError(error.cause) ? error.cause.message : error.message)),
         ),
       ),
     );
-  const languageModel = yield* LanguageModel.make({
-    streamText,
-    generateText: (request) => collectResponse(streamText(request)),
-  });
-  return { model: languageModel, invocations: Ref.get(invocations) };
+  const forRun = (run: ScriptedRun) =>
+    LanguageModel.make({
+      streamText: streamText(run),
+      generateText: (request) => collectResponse(streamText(run)(request)),
+    });
+  return { model: yield* forRun(defaultRun), forRun, invocations: Ref.get(invocations) };
 });

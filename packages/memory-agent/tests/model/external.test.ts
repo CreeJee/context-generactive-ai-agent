@@ -7,7 +7,7 @@ import { ExternalPromptOutcome } from "../../src/external-agents/agents.ts";
 import {
   ExternalAgentTurnFailed,
   externalFailure,
-  makeExternalModel,
+  externalModel,
   type ExternalModelOptions,
 } from "../../src/model/external.ts";
 
@@ -52,7 +52,7 @@ const turnOf =
     });
 
 const partsOf = (options: ExternalModelOptions) =>
-  Effect.flatMap(makeExternalModel(options), (model) =>
+  Effect.flatMap(externalModel(options), (model) =>
     Stream.runCollect(
       model.streamText({ prompt, disableToolCallResolution: true, toolCallValidation: "deferred" }),
     ),

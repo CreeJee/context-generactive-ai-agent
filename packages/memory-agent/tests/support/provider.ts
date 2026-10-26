@@ -1,11 +1,33 @@
 import {
   AuthConnectionState,
   ProviderOperationFailed,
+  type ModelRun,
   type RunTextAdapter,
 } from "../../src/providers/contracts.ts";
 import { isTruthy } from "../../src/truthy.ts";
-import type { ModelMessage } from "@tanstack/ai";
-import { Cause, Deferred, Function, MutableHashMap, Option, Effect, Layer, Schema } from "effect";
+import type { ModelMessage, TokenUsage } from "@tanstack/ai";
+import type { Response } from "effect/ai";
+import { optionalProperty } from "../../src/optional-property.ts";
+import {
+  scriptedModel,
+  scriptedSource,
+  shownScriptedFailure,
+  type ScriptedInvocation,
+  type ScriptedTurn as EffectScriptedTurn,
+} from "../../src/testing/scripted-model.ts";
+import {
+  Cause,
+  Deferred,
+  Function,
+  Match,
+  MutableHashMap,
+  Option,
+  Predicate,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
+import type { StoredMessage, StoredUserMessage } from "../../src/chat-store/schema.ts";
 import {
   GlobalConfig,
   ModelUnavailable,
@@ -299,38 +321,111 @@ export const selectTestModel = Effect.fn("selectTestModel")(function* (
   return { provider: "openai" as const, model, reasoningEffort: effort };
 });
 
+/** The provider's usage as Effect AI reports it, as the subscription models translate it. */
+const effectUsage = (usage: TokenUsage): typeof Response.Usage.Encoded => {
+  const cached = usage.promptTokensDetails?.cachedTokens;
+  const written = usage.promptTokensDetails?.cacheWriteTokens;
+  return {
+    inputTokens: {
+      uncached: usage.promptTokens - (cached ?? 0) - (written ?? 0),
+      total: usage.promptTokens,
+      ...optionalProperty("cacheRead", cached),
+      ...optionalProperty("cacheWrite", written),
+    },
+    outputTokens: {
+      total: usage.completionTokens,
+      ...optionalProperty("reasoning", usage.completionTokensDetails?.reasoningTokens),
+    },
+  };
+};
+
+const contentOf = (content: (typeof StoredUserMessage.Type)["content"]) =>
+  Predicate.isString(content) ? content : [...content];
+
+/** A stored message as the TanStack message the responders read. */
+const modelMessage = Match.type<StoredMessage>().pipe(
+  Match.discriminatorsExhaustive("role")({
+    user: ({ content }): ModelMessage => ({ role: "user", content: contentOf(content) }),
+    assistant: ({ content, toolCalls, thinking }): ModelMessage => ({
+      role: "assistant",
+      content: content ?? null,
+      ...optionalProperty(
+        "toolCalls",
+        toolCalls?.map((call) => ({ ...call, function: { ...call.function } })),
+      ),
+      ...optionalProperty(
+        "thinking",
+        thinking?.map((block) => ({ ...block })),
+      ),
+    }),
+    tool: ({ content, toolCallId }): ModelMessage => ({
+      role: "tool",
+      content: contentOf(content),
+      toolCallId,
+    }),
+  }),
+);
+
+/** A turn scripted for the TanStack adapter, as the Effect AI scripted model takes it. */
+const effectTurn = ({ waitFor, usage, ...turn }: ScriptedTurn): EffectScriptedTurn => ({
+  ...turn,
+  ...optionalProperty(
+    "waitFor",
+    waitFor === undefined || Effect.isEffect(waitFor)
+      ? waitFor
+      : Effect.tryPromise({ try: () => waitFor, catch: (cause) => new Cause.UnknownError(cause) }),
+  ),
+  ...optionalProperty("usage", usage === undefined ? undefined : effectUsage(usage)),
+});
+
 export function testProvider(options: TestProviderOptions = {}): TestProvider {
   let auth: AuthConnectionState =
     options.signedIn === false
       ? AuthConnectionState["signed-out"]({ provider: "openai" })
       : AuthConnectionState["signed-in"]({ provider: "openai" });
   const responder = options.responder ?? defaultTestResponder;
-  const adapter = new ScriptedTextAdapter(
-    Effect.fn("testProvider.responder")((invocation: AdapterInvocation) =>
-      Effect.try({
-        try: () => ({ response: responder(invocation) }),
-        catch: (cause) => new Cause.UnknownError(cause),
-      }).pipe(
-        Effect.flatMap(({ response }) =>
-          Effect.isEffect(response)
-            ? response
-            : Effect.tryPromise({
-                try: () => Promise.resolve(response),
-                catch: (cause) => new Cause.UnknownError(cause),
-              }),
-        ),
-        Effect.map((turn) => {
-          if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
-          const { delayMs: _delayMs, ...gatedTurn } = turn;
-          return { ...gatedTurn, waitFor: options.delayedTurnGate };
-        }),
+  const respond = Effect.fn("testProvider.responder")((invocation: AdapterInvocation) =>
+    Effect.try({
+      try: () => ({ response: responder(invocation) }),
+      catch: (cause) => new Cause.UnknownError(cause),
+    }).pipe(
+      Effect.flatMap(({ response }) =>
+        Effect.isEffect(response)
+          ? response
+          : Effect.tryPromise({
+              try: () => Promise.resolve(response),
+              catch: (cause) => new Cause.UnknownError(cause),
+            }),
       ),
+      Effect.map((turn) => {
+        if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
+        const { delayMs: _delayMs, ...gatedTurn } = turn;
+        return { ...gatedTurn, waitFor: options.delayedTurnGate };
+      }),
     ),
   );
+  const adapter = new ScriptedTextAdapter(respond);
+  /**
+   * The Effect AI loop's steps go to the same responder and the same record of invocations as the
+   * adapter's: its stored messages are the TanStack messages the responders read.
+   */
+  const respondToStep = (invocation: ScriptedInvocation) => {
+    const asked: AdapterInvocation = {
+      index: invocation.index,
+      runId: invocation.run.runId,
+      threadId: invocation.run.threadId,
+      messages: invocation.history.map(modelMessage),
+      systemPrompts: invocation.system,
+      toolNames: invocation.toolNames,
+    };
+    adapter.invocations.push(asked);
+    return Effect.map(respond(asked), effectTurn);
+  };
   const layer = Layer.effect(
     ProviderRegistry,
     Effect.gen(function* () {
       const config = yield* GlobalConfig;
+      const scripted = yield* scriptedModel(respondToStep);
       const configuration = {
         provider: "openai" as const,
         auth: {
@@ -394,6 +489,12 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
           Effect.succeed({
             provider: "openai" as const,
             adapter: options.adapter ?? (() => adapter),
+            model: (_selection: ModelSelection, run: ModelRun) =>
+              Effect.map(scripted.forRun(run), (model) => ({
+                model,
+                source: scriptedSource,
+                shownFailure: shownScriptedFailure,
+              })),
             contextWindow: () => 200_000,
             agentLoop: subscriptionAgentLoop,
             runMiddleware: () => ({ name: "memory-agent/test-provider" }),

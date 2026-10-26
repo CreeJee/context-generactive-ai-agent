@@ -24,11 +24,16 @@ import {
   type OAuthProvider,
 } from "../oauth/protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
-import type { ModelSelection, SubscriptionModelSelection } from "../providers/contracts.ts";
+import type {
+  ModelSelection,
+  ShownFailure,
+  SubscriptionModelSelection,
+} from "../providers/contracts.ts";
 import { providerToolFunction } from "../providers/provider-tools.ts";
 import { providerPrompt } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
+import { shownReason } from "./shown-failure.ts";
 import { toolParameters } from "./tool-schema.ts";
 
 /**
@@ -1140,6 +1145,13 @@ export const subscriptionFailure = (error: AiError.AiError): Option.Option<Subsc
     ? decodeFailure(error.reason.metadata[optionsKey])
     : Option.none();
 
+/** A subscription model's failure as the user sees it, as the TanStack adapter worded it. */
+export const shownSubscriptionFailure = (error: AiError.AiError): ShownFailure =>
+  Option.match(subscriptionFailure(error), {
+    onNone: () => shownReason(error),
+    onSome: (failure) => ({ message: failure.message }),
+  });
+
 const unsupported = (description: string) =>
   AiError.make({
     module: "SubscriptionLanguageModel",
@@ -1154,9 +1166,7 @@ export interface SubscriptionModelOptions {
   readonly promptCache: PromptCache | undefined;
 }
 
-export const makeSubscriptionModel = Effect.fnUntraced(function* (
-  options: SubscriptionModelOptions,
-) {
+export const subscriptionModel = Effect.fnUntraced(function* (options: SubscriptionModelOptions) {
   const { client, selection } = options;
   const provider = selection.provider;
   const streamText = (request: LanguageModel.ProviderOptions) =>

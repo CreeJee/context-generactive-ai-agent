@@ -4,7 +4,7 @@ import { Effect, Logger, Option, References, Schema, Stream } from "effect";
 import { Prompt } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import {
-  makeSubscriptionModel,
+  subscriptionModel,
   publicReasoningLimits,
   subscriptionFailure,
   SubscriptionStreamFailed,
@@ -52,7 +52,7 @@ const clientOf = (
 });
 
 const modelOf = (provider: SubscriptionAccountProvider, client: StreamingOAuthClient) =>
-  makeSubscriptionModel({
+  subscriptionModel({
     client,
     selection: { provider, model: "model-1", reasoningEffort: "medium" },
     promptCache: { retention: "short", key: "thread" },

@@ -91,6 +91,8 @@ const registry = Layer.effect(
         Effect.succeed({
           provider: "openai",
           adapter: () => adapter,
+          // The eval measures the TanStack request until the loop moves to Effect AI.
+          model: () => Effect.die(new Error("not used")),
           contextWindow: () => 400_000,
           agentLoop: subscriptionAgentLoop,
           runMiddleware: () => ({ name: "memory-agent/eval-prompt-overhead" }),

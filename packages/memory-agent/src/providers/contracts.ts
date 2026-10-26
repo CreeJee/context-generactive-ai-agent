@@ -1,6 +1,8 @@
 import type { GlobalConfigFailed } from "../config/global-config.ts";
 import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware } from "@tanstack/ai";
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Schema, type Scope } from "effect";
+import type { AiError, LanguageModel } from "effect/ai";
+import type { MessageSource } from "../chat-store/schema.ts";
 
 /** Persisted model connection ID. Compatible endpoints are not an OpenAI vendor identity. */
 export const ProviderId = Schema.Literals(["openai", "anthropic", "openai-compatible"]);
@@ -151,9 +153,50 @@ export type RunTextAdapter = AnyTextAdapter & {
   readonly historyKey?: string;
 };
 
+/** How long the provider keeps a run's request prefix cached. */
+export const CacheRetention = Schema.Literals(["none", "short", "long"]);
+export type CacheRetention = typeof CacheRetention.Type;
+
+/**
+ * The run a model is made for. The loop makes one model per run, so the model knows the run it
+ * answers: its prompt cache is keyed by the thread.
+ */
+export interface ModelRun {
+  readonly threadId: string;
+  readonly runId: string;
+  readonly cacheRetention: CacheRetention;
+}
+
+/**
+ * A failed model call as the user sees it: the app's words, never the provider's text. The page
+ * words `code` when there is one.
+ */
+export interface ShownFailure {
+  readonly message: string;
+  readonly code?: string;
+}
+
+/** One run's model on Effect AI, with what the run writes about it. */
+export interface RunModel {
+  readonly model: LanguageModel.LanguageModel;
+  /** Written on every message the model writes; replay compares it with the model it sends to. */
+  readonly source: typeof MessageSource.Type;
+  readonly shownFailure: (error: AiError.AiError) => ShownFailure;
+  /** Pinned connection identity for detecting a server change without retaining credentials. */
+  readonly historyKey?: string;
+}
+
 export interface AgentModelRuntime {
   readonly provider: ProviderId;
   readonly adapter: (selection: ModelSelection) => RunTextAdapter;
+  /**
+   * The run's model on Effect AI. What it pins for the run, such as an account, is let go when
+   * the scope closes.
+   */
+  readonly model: (
+    selection: ModelSelection,
+    run: ModelRun,
+  ) => Effect.Effect<RunModel, ModelUnavailable, Scope.Scope>;
   readonly contextWindow: (model: string) => number;
   /** False when contextWindow is only a conservative fallback, not model metadata. */
   readonly contextWindowKnown?: (model: string) => boolean;

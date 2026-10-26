@@ -15,7 +15,7 @@ import {
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { sdkPromise } from "../../src/runtime/sdk-promise.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
-import { makeScriptedModel } from "../../src/testing/scripted-model.ts";
+import { scriptedModel } from "../../src/testing/scripted-model.ts";
 import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
@@ -235,7 +235,7 @@ testAgent()("permission gate", (it) => {
         );
         const services = yield* Layer.build(Layer.merge(RunStore.layer, NodeCrypto.layer));
         const store = Context.get(services, RunStore);
-        const { model } = yield* makeScriptedModel([
+        const { model } = yield* scriptedModel([
           { toolCalls: [{ id: "gated", name: "owner_tool", arguments: "{}" }] },
           { text: "finished" },
         ]);

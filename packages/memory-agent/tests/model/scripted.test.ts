@@ -3,7 +3,7 @@ import { Effect, Stream } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import { toPrompt } from "../../src/model/prompt.ts";
-import { makeScriptedModel } from "../../src/testing/scripted-model.ts";
+import { scriptedModel } from "../../src/testing/scripted-model.ts";
 
 /**
  * The scripted model streams what a provider would for each scripted turn and records the steps it
@@ -21,7 +21,7 @@ const request = {
 describe("scripted model", () => {
   it.effect("streams each turn in order and records the steps", () =>
     Effect.gen(function* () {
-      const { model, invocations } = yield* makeScriptedModel([
+      const { model, invocations } = yield* scriptedModel([
         {
           text: "reading",
           toolCalls: [
@@ -52,6 +52,7 @@ describe("scripted model", () => {
       expect(yield* invocations).toStrictEqual(
         [0, 1, 2].map((index) => ({
           index,
+          run: { threadId: "scripted-thread", runId: "scripted-run" },
           system: ["Follow the rules."],
           history: [{ role: "user", content: "go" }],
           toolNames: ["read_file"],
@@ -62,7 +63,7 @@ describe("scripted model", () => {
 
   it.effect("fails after the text of a turn scripted to fail", () =>
     Effect.gen(function* () {
-      const { model } = yield* makeScriptedModel([{ text: "half", failAfterText: "boom" }]);
+      const { model } = yield* scriptedModel([{ text: "half", failAfterText: "boom" }]);
       const received: Array<string> = [];
       const error = yield* Effect.flip(
         Stream.runForEach(model.streamText(request), (part) =>

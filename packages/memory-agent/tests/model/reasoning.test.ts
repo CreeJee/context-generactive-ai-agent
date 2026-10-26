@@ -9,7 +9,7 @@ import { StoredMessage } from "../../src/chat-store/schema.ts";
 import { migrateMessage } from "../../src/chat-store/tanstack-migration.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { fromPrompt } from "../../src/model/prompt.ts";
-import { makeSubscriptionModel, type StreamingOAuthClient } from "../../src/model/subscription.ts";
+import { subscriptionModel, type StreamingOAuthClient } from "../../src/model/subscription.ts";
 import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import type { SubscriptionModelSelection } from "../../src/providers/contracts.ts";
 import { SubscriptionTextAdapter } from "../../src/providers/subscription-adapter.ts";
@@ -67,7 +67,7 @@ const effectMessage = Effect.fnUntraced(function* (
   selection: SubscriptionModelSelection,
   events: ReadonlyArray<NormalizedStreamEvent>,
 ) {
-  const model = yield* makeSubscriptionModel({
+  const model = yield* subscriptionModel({
     client: clientOf(events),
     selection,
     promptCache: undefined,

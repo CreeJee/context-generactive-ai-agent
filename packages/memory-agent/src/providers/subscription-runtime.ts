@@ -1,8 +1,10 @@
 import { isTruthy } from "../truthy.ts";
-import { Function as EffectFunction, Predicate, Schema } from "effect";
+import { Effect, Function as EffectFunction, Predicate, Schema } from "effect";
 import type { AgentLoopStrategy, ChatMiddleware } from "@tanstack/ai";
+import { subscriptionModel, shownSubscriptionFailure } from "../model/subscription.ts";
 import { SubscriptionTextAdapter, type StreamingOAuthClient } from "./subscription-adapter.ts";
 import {
+  ModelUnavailable,
   SubscriptionModelSelection,
   type AgentModelRuntime,
   type ModelSelection,
@@ -81,6 +83,30 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
           const releaseRun = pinned.releaseRun;
           return isTruthy(releaseRun) ? Object.assign(adapter, { releaseRun }) : adapter;
         },
+        model: (selection, run) =>
+          Effect.gen(function* () {
+            const chosen = yield* Effect.filterOrFail(
+              Effect.succeed(selection),
+              (candidate): candidate is SubscriptionModelSelection =>
+                Schema.is(SubscriptionModelSelection)(candidate) && candidate.provider === provider,
+              () => ModelUnavailable.make(selection),
+            );
+            // Pinned for the run, as the adapter pins it, so the account never changes mid-run.
+            const pinned = yield* Effect.acquireRelease(
+              Effect.sync(() => (Predicate.isFunction(client) ? client() : client)),
+              (held) => Effect.sync(() => held.releaseRun?.()),
+            );
+            return {
+              model: yield* subscriptionModel({
+                client: pinned,
+                selection: chosen,
+                promptCache: { retention: run.cacheRetention, key: run.threadId },
+              }),
+              // As TanStack wrote it: the adapter's name and kind.
+              source: { provider, api: "text", model: chosen.model },
+              shownFailure: shownSubscriptionFailure,
+            };
+          }),
         contextWindow: (model) => catalogWindow(model) ?? fallbackWindow,
         contextWindowKnown: (model) => catalogWindow(model) !== null,
         agentLoop,

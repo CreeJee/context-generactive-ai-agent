@@ -50,6 +50,7 @@ const provider = (adapter: ScriptedTextAdapter): ProviderServices => ({
   runtime: {
     provider: "openai",
     adapter: () => adapter,
+    model: () => Effect.die(new Error("not used")),
     contextWindow: () => 0,
     agentLoop: () => {
       throw new Error("not used");

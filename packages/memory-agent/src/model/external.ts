@@ -2,9 +2,11 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { type Cause, Effect, Match, Option, Predicate, Queue, Schema, Stream } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response } from "effect/ai";
 import { ExternalPromptOutcome } from "../external-agents/agents.ts";
+import type { ShownFailure } from "../providers/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import { optionsKey } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
+import { shownReason } from "./shown-failure.ts";
 
 /**
  * A conversation held directly with an external ACP agent as an Effect `LanguageModel`, as
@@ -126,6 +128,19 @@ export const externalFailure = (error: AiError.AiError): Option.Option<ExternalA
     ? decodeFailure(error.reason.metadata[optionsKey])
     : Option.none();
 
+/**
+ * An external turn's failure as the user sees it: the code the page words with the agent's text
+ * under it, or the message of a preamble or turn that rejected, as the SDK showed it.
+ */
+export const shownExternalFailure = (error: AiError.AiError): ShownFailure =>
+  Option.match(externalFailure(error), {
+    onSome: (failure) => ({ message: failure.message, code: failure.code }),
+    onNone: () =>
+      error.reason._tag === "UnknownError" && error.reason.description !== undefined
+        ? { message: error.reason.description }
+        : shownReason(error),
+  });
+
 /** A preamble or turn that rejected: its message, as the SDK showed the thrown rejection. */
 const rejected = (error: Cause.UnknownError) =>
   aiError(
@@ -160,7 +175,7 @@ export interface ExternalModelOptions {
   readonly preamble: (text: string) => Effect.Effect<string, Cause.UnknownError>;
 }
 
-export const makeExternalModel = ({ agent, turn, preamble }: ExternalModelOptions) => {
+export const externalModel = ({ agent, turn, preamble }: ExternalModelOptions) => {
   const streamText = (request: LanguageModel.ProviderOptions) =>
     Stream.callback<Part, AiError.AiError>((queue) =>
       Effect.gen(function* () {

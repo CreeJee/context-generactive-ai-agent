@@ -11,7 +11,7 @@ import type { AgUiEvent } from "../../src/loop/chunks.ts";
 import type { ResumeEntry } from "../../src/loop/resume.ts";
 import { RunFailed, runChat, type RunSpec } from "../../src/loop/run.ts";
 import { RunStore } from "../../src/loop/store.ts";
-import { makeScriptedModel, type ScriptedTurn } from "../../src/testing/scripted-model.ts";
+import { scriptedModel, type ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 
 /**
@@ -55,7 +55,7 @@ const Path = Schema.Struct({ path: Schema.String });
 const harness = Effect.fnUntraced(function* (
   ...turns: readonly [ScriptedTurn, ...Array<ScriptedTurn>]
 ) {
-  const { model, invocations } = yield* makeScriptedModel(turns);
+  const { model, invocations } = yield* scriptedModel(turns);
   const ran = yield* Ref.make<ReadonlyArray<string>>([]);
   const record = (name: string) => (params: typeof Path.Type) =>
     Effect.as(

@@ -59,6 +59,10 @@ import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model
 import {
   CompatibleRunRequestFailed,
   CompatibleRunRequestFailedReason,
+  compatibleTarget,
+  failingCompatibleModel,
+  compatibleModel,
+  shownCompatibleFailure,
 } from "../model/compatible.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -992,6 +996,56 @@ function makeOpenAICompatibleSettingsBody(
         ).toString("hex"),
       });
     },
+    model: (selection) =>
+      Effect.gen(function* () {
+        const unavailable = () => ModelUnavailable.make(selection);
+        const pinned = yield* Effect.fromNullishOr(account).pipe(Effect.mapError(unavailable));
+        const settings = yield* Effect.fromNullishOr(
+          compatibleEndpointModel(pinned, selection.model),
+        ).pipe(
+          Effect.filterOrFail(
+            (found) =>
+              selection.provider === provider &&
+              model(found, false).supportedReasoningEfforts.includes(selection.reasoningEffort),
+            unavailable,
+          ),
+          Effect.mapError(unavailable),
+        );
+        // Read once for the run, so switching accounts mid-run never swaps its key.
+        const key = yield* updates.withPermit(accountSnapshot(pinned.id)).pipe(
+          Effect.map(({ account: current, key }) =>
+            Option.liftPredicate(key, () =>
+              Equal.equals(compatibleEndpointModel(current, selection.model), settings),
+            ),
+          ),
+          Effect.orElseSucceed(Option.none),
+        );
+        const historyKey = Buffer.from(
+          yield* oauthProtocolCrypto
+            .digest("SHA-256", new TextEncoder().encode(settings.baseUrl))
+            .pipe(Effect.orDie),
+        ).toString("hex");
+        return {
+          model: yield* Option.match(key, {
+            onSome: (found) =>
+              compatibleModel({
+                endpoint: settings,
+                reasoningEffort: selection.reasoningEffort,
+                key: found,
+                fetcher,
+              }),
+            onNone: () =>
+              failingCompatibleModel(
+                CompatibleRunRequestFailed.make({
+                  reason: CompatibleRunRequestFailedReason.cases.KeychainUnavailable.make({}),
+                }),
+              ),
+          }),
+          source: compatibleTarget(settings.model).source,
+          shownFailure: shownCompatibleFailure,
+          historyKey,
+        };
+      }),
     contextWindow: (modelId) => {
       const settings = isTruthy(account) ? compatibleEndpointModel(account, modelId) : null;
       return isTruthy(settings)
