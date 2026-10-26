@@ -1,6 +1,6 @@
 # TanStack AI에서 Effect AI로 전환 계획 (2026-10-25)
 
-상태: 계획(구현 전). 방향은 2026-10-25 대화에서 정했고 [decisions.md](decisions.md)에는 아직 올리지 않았다. 배경 논의: 세션 `0c379bba`(2026-10-25). 코드 위치는 `fe9a74ef` 기준이다.
+상태: 계획(구현 전). 방향은 2026-10-25 대화에서 정했다. 전환 전체는 [decisions.md](decisions.md)에 아직 올리지 않았다. Goal 실행 부분만 2026-10-26에 올렸다("Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"). 배경 논의: 세션 `0c379bba`(2026-10-25), `f5dc93f6`(2026-10-26). 코드 위치는 `fe9a74ef` 기준이다. Goal 부분은 `841dc1a3` 기준이다.
 
 ## 목표
 
@@ -14,9 +14,9 @@ TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채�
   - TanStack과 Effect를 잇는 bridge를 두지 않는다.
   - 옛 Goal용 host와 새 host를 함께 돌리지 않는다.
   - 새 모듈을 모두 만든 뒤 한 릴리즈 안에서 한 번에 바꾼다.
-- 옛 Goal의 worker·native artifact 호환은 하지 않는다.
+- Goal worker를 없앤다(2026-10-26). Goal loop는 일반 채팅처럼 owner 프로세스에서 돌고, 도구는 병렬로 실행한다. 그래서 옮길 worker 프로토콜과 native artifact가 없다("옛 Goal 처리" 참고).
   - 업그레이드는 바이너리 재시작이다. 재시작하면 실행 중이거나 승인을 기다리던 run은 이미 실패로 끝난다(`packages/memory-agent/src/chat-state/chat-state.ts`의 재시작 처리).
-  - Goal 사용량도 많지 않다.
+  - Goal 사용량도 많지 않다. 로컬 DB의 Goal bound run은 8개다(2026-10-26).
 - DB의 테이블·열은 바꾸지 않는다. JSON 열 안의 TanStack 메타데이터는 migration 하나로 지우고, 쓰는 값만 우리 필드로 옮긴다("DB 저장 형식과 migration" 참고).
   - 조건: 기존 채팅이 지금처럼 열리고, 이어서 대화할 수 있어야 한다.
 - API payload는 새 client에 맞춰 바꿔도 된다. chunk는 AG-UI 1.0 표준 모양으로만 쓰고, TanStack 확장 필드는 넣지 않는다.
@@ -89,9 +89,9 @@ src에서 많이 쓰는 것:
 
 ### 옮기면 나아지는 것
 
-- 한 step의 도구를 동시에 실행한다(`concurrency` 기본값 `"unbounded"`).
+- 한 step의 도구를 동시에 실행한다(`concurrency` 기본값 `"unbounded"`). TanStack 1.0도 이미 병렬이다(`toolExecution` 기본값 `'parallel'`). 어떤 도구끼리 기다릴지는 앱이 정한다(4단계).
   - 서브에이전트를 첫 호출 직전에 모두 시작하던 우회를 지울 수 있다(decisions.md "서브에이전트 (2026-09-15)").
-  - parallel-reads 우회도 지울 수 있다.
+  - parallel-reads 우회는 5단계에서 지운다.
 - 도구 진행 결과를 `HandlerContext.preliminary`로 보낼 수 있다.
 - span, GenAI telemetry, 타입이 있는 `AiError` reason을 얻는다.
 - Promise↔Effect 경계가 줄어든다. src에 경계 주석이 171개, `nativePromise`가 122개, `runNativeEffect`가 66개 있다. 상당수가 TanStack 콜백 때문이다.
@@ -175,30 +175,33 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
     - 읽는 곳은 진행 중 run에 다시 붙을 때의 replay뿐이고, 내용을 해석하지 않는다.
     - 재시작하면 진행 중 run은 실패로 끝나므로, 옛 행이 다시 읽힐 일이 없다.
 - `owner_rpc_operations`
-  - TanStack 소유는 아니지만, worker RPC 규칙이 SQL에 들어 있다.
-  - 쓰기 tool의 권한 확인은 `operation_id - 1`, 실행은 `operation_id` 번호에 기록된다.
-  - SQL은 `side_effect`, `status`, `fingerprint`를 본다(`packages/memory-agent/src/agent/owner-read-recovery.ts`의 `recoveredReadRunSql`, `packages/memory-agent/src/workflow/completion-evidence.ts`).
-  - worker 프로토콜을 다시 정의해도 이 규칙은 지킨다.
+  - TanStack 소유는 아니다. Goal worker를 없애면 Goal 도구 장부로만 쓴다(5단계).
+  - 새 행은 도구 호출(`operation = 'tool'`)뿐이다. 번호는 owner가 run 안에서 매긴다. 모델 chunk, middleware, 권한 확인 행은 더 쓰지 않는다.
+  - 열은 그대로다. `side_effect`, `status`, `fingerprint`를 보는 SQL은 새 행에서도 같은 뜻으로 돈다(`packages/memory-agent/src/workflow/uncertain-runs.ts`, `run-bindings.ts`, `completion-evidence.ts`).
+  - 옛 행은 그대로 둔다. 쓰기 tool의 권한 확인은 `operation_id - 1`, 실행은 `operation_id`에 기록되어 있다. read recovery receipt(`packages/memory-agent/src/agent/owner-read-recovery.ts`의 `recoveredReadRunSql`)가 이 규칙으로 옛 행을 가리키므로, receipt를 읽는 SQL은 남긴다.
 - **hook이 채우는 테이블**
   - 대상: `nodes`(`tool_result` 노드의 `detail.ok`와 `text`), `subagents`, work trace
   - TanStack hook 정보에서 값을 만들므로 같은 행이 나와야 한다.
-- **Goal 테이블**(`workflow_goal_native_artifacts`, `workflow_goal_worker_generations`): 스키마는 그대로다. 새 row에 새 contract 값과 새 worker hash만 들어간다.
+- **Goal 테이블**(`workflow_goal_native_artifacts`, `workflow_goal_worker_generations`, `workflow_worker_dispatches`): 스키마는 그대로다. 새 row는 생기지 않는다. 옛 row는 지우지 않는다. 지우는 것은 대화 purge뿐이다(decisions.md "Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)").
 
 ## 옛 Goal 처리
 
-- **거절.** 새 native artifact의 `nativeFactoryLoaderContract`(`packages/memory-agent/src/agent/native-artifact-loader.ts`)를 바꾼다.
-  - 옛 등록은 `Registration`의 `Schema.Literal` decode에서 거절된다(`packages/memory-agent/src/agent/owner-native-artifacts.ts`).
-  - 응답은 이미 있는 409 `goal_native_generation_unavailable`이다(`packages/memory-agent/src/agent/chat.ts`).
-  - legacy artifact fallback을 두지 않는다는 결정(decisions.md "Build-time native and Goal-worker artifacts (2026-10-10)")과도 맞다.
-- **세션은 읽기 전용이 된다.** 옛 Goal이 있던 세션은 새 run을 시작할 수 없다.
-  - Goal 세션의 새 run은 모두 worker 경로로 간다(`chat.ts`의 `workerRevision` 선택).
-  - Goal을 멈춰도 Goal identity가 새 revision에 남는다(`packages/memory-agent/src/workflow/workflow.ts`의 `save`).
-  - 새 Goal은 run 안의 새 Goal 도구로만 만든다(`packages/memory-agent/src/workflow/tools.ts`).
-  - 그래서 사용자는 새 세션에서 시작한다.
-- **자동 진행 문구.** 재시작 때 자동 진행 중이던 Goal은 `external_dependency` blocker로 멈춘다. 지금 문구는 로그인 확인 안내라, 이 경우에 맞는 문구로 고친다(`chat.ts`의 자동 진행 `blockPending`).
+Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세션도 새 코드에서 이어서 진행한다. 그래서 전에 적었던 거절(loader contract 변경과 409 `goal_native_generation_unavailable`), 세션 읽기 전용, 자동 진행 문구 수정은 하지 않는다.
+
+- **새 run.** Goal 세션의 새 run은 일반 채팅과 같은 owner loop로 간다.
+  - `packages/memory-agent/src/agent/chat.ts`의 `workerRevision` 선택과 worker 경로(`createFullLoopExecution`)를 지운다.
+  - bound run 기록(`workflow_run_bindings`)과 durable 실행(`GoalExecution`, `packages/memory-agent/src/workflow/goal-execution.ts`)은 지금처럼 남긴다.
+- **완료 근거.** `packages/memory-agent/src/workflow/completion-evidence.ts`는 worker 세대가 있는 Goal이면 run마다 dispatch 세대(`workflow_worker_dispatches`)를 요구한다. 새 run에는 dispatch가 없으므로 이 조건을 뺀다. binding·revision, durable 실행 완료, 장부에 남은 미해결 쓰기 조건은 그대로다.
+  - `required`(native artifact나 worker 세대가 있으면 근거를 요구)도 같이 본다. 새 Goal에는 둘 다 없다.
+- **옛 기록.** worker 세대, native artifact, dispatch, 옛 장부 행, read recovery receipt는 지우지 않는다. 쓰는 코드는 지우고, 읽는 코드만 남긴다.
+- **끊긴 옛 run.** 업그레이드 재시작에서 진행 중이던 Goal run은 지금 재시작 규칙대로 정리된다.
+  - 결과를 모르는 도구가 없으면 자동으로 이어 간다(`endedWithKnownEffectsSql`).
+  - 있으면 `server_restarted` blocker로 멈추고, 사용자가 확인하면 이어 간다(`uncertainRuns`).
+  - 옛 run의 장부 행도 같은 SQL로 판정한다. 부작용 없는 행과 middleware 행은 지금도 미해결로 세지 않는다(`run-bindings.ts`의 `toolOperationSql`).
 - **packaging과 build.**
-  - packaging은 artifact용으로 `@tanstack/ai`를 runtime root에 복사하던 일을 그만둔다(`apps/agent/scripts/package.ts`).
-  - build의 `neverBundle`에서 `@tanstack/ai`를 뺀다(`packages/memory-agent/scripts/build-runtime-artifacts.ts`).
+  - build는 worker `.mjs`와 native artifact(`dist/runtime/native.mjs`)와 manifest를 만들지 않는다(`packages/memory-agent/scripts/build-runtime-artifacts.ts`). `neverBundle`의 `@tanstack/ai`도 같이 빠진다.
+  - packaging은 manifest 검증과 artifact 복사, artifact용 `@tanstack/ai` 복사를 그만둔다(`apps/agent/scripts/package.ts`).
+  - 디스크에 남은 Goal worker 자산 파일은 지우지 않는다. 시작할 때 manifest가 없어도 실패하지 않아야 한다.
 
 ## 단계
 
@@ -214,7 +217,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
   - 취소, provider 실패
   - reasoning: Anthropic thinking 서명, OpenAI `openai-reasoning:` 접두어
   - named subagent, compaction, model handoff
-  - Goal worker run(tool과 승인)
+  - Goal run: 한 턴의 병렬 읽기·쓰기 tool, 승인, 끊긴 run을 확인하고 이어 가기
   - queue와 steer
 - 비교 대상은 "DB 저장 형식과 migration"의 테이블 전부다. 비교할 때 TanStack 메타데이터는 뺀다.
 - 완료 기준: 지금 코드에서 통과한다. 타입으로 확인할 수 없는 경계라 테스트로 둔다.
@@ -262,7 +265,12 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
   3. 앱이 도구를 해석한다: permission gate, repeat guard, 승인 묶음, 동시 `handle`, 기록.
   4. usage를 읽는다.
   5. 다음 step 여부를 정한다.
+- 동시 `handle`의 규칙(decisions.md 2026-10-26):
+  - 읽기 도구끼리는 admission의 tool gate 말고는 서로 기다리지 않는다.
+  - 쓰기 호출과 앞뒤 호출의 순서는 열린 항목이다. 지금 TanStack 1.0은 한 step의 호출을 순서 없이 동시에 돌린다.
+  - 일부 도구가 실패해도 나머지는 끝까지 돈다. 결과는 호출 순서로 모델에 준다.
 - middleware 21개는 순서가 정해진 typed hook으로 바꾼다.
+  - 도구가 병렬이면 도구 뒤 hook(`onAfterToolCall` 자리)도 겹친다. run 상태를 공유하는 hook은 `Ref`나 permit으로 순서를 지킨다. TanStack 1.0 일반 채팅에서도 이미 겹치므로, 옮기기 전에 21개를 한 번 본다.
 - interrupt는 지금의 `chat_interrupts` 모양으로 만든다. 재개 handshake(새 runId, `parentRunId`, `resume`)를 유지한다.
 - persistence 서비스가 `withPersistence` 동작을 그대로 재현한다:
   - run 생성과 재개
@@ -276,12 +284,32 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
   - 0단계 golden과 같은 행이 나온다.
   - migration한 로컬 DB 사본의 모든 세션에서, history page의 화면 메시지가 지금 코드가 원본에서 만드는 것과 같다.
 
-### 5. worker와 Goal
+### 5. Goal 실행
 
-- worker 안의 loop를 4단계 loop로 바꾼다.
-- RPC payload는 TanStack 타입 없이 Schema로 다시 정의한다. `owner_rpc_operations` 규칙은 유지한다.
-- native artifact를 TanStack import 없이 빌드하고, loader contract 문자열을 바꾼다.
+결정: decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)". 이 단계는 TanStack 위에서 전환보다 먼저 할 수도 있다("열린 항목" 참고).
+
+- Goal worker와 owner RPC를 지운다. Goal loop는 4단계 loop를 owner 프로세스에서 그대로 쓴다. 일반 채팅과 다른 점은 아래 넷뿐이다.
+  - bound run 기록과 durable 실행(`GoalExecution`)
+  - 도구 장부
+  - provider 요청 전 transport 실패의 재시도(decisions.md 2026-10-13). 지금은 owner의 모델 스트림 pull에서 한다. owner loop의 모델 호출에서 같은 조건(`RequestNotSent`, 모델 chunk가 하나도 나가지 않음)으로 한다.
+  - Goal 단계별 도구와 프롬프트. 지금도 owner가 정한다.
+- 도구 장부(`owner_rpc_operations`):
+  - 실행 전에 `pending`으로 예약하고, 끝나면 결과를 적는다. 실행 중 취소되거나 결과 없이 끝난 쓰기는 `uncertain`이다.
+  - 번호는 owner가 run 안에서 예약하는 순서로 매긴다. 순서 검사(`non_monotonic`)는 없앤다.
+  - fingerprint는 지금 도구 행과 같은 모양(operation, 도구 이름, `toolCallId`, 인자)으로 적는다. `uncertainRuns`가 이 값을 읽어 확인 화면에 보여 준다(`invocationFieldSql`).
+  - 권한 확인은 장부에 적지 않는다. 장부에 없는 도구는 실행되지 않았다는 규칙은 그대로다.
+  - run 안에서는 결과를 모르는 쓰기가 다른 쓰기를 막지 않는다(지금의 `uncertain_run` fence). 다음 run의 입장 검사(`run-bindings.ts`의 `unresolved`)가 막는다.
+- 지울 것:
+  - `packages/memory-agent/src/agent`의 Goal worker 모듈(약 5,000줄): `full-loop-*.ts`, `effect-rpc-message-port.ts`, `owner-rpc.ts`, `owner-rpc-ledger.ts`의 RPC 처리, `owner-native-*.ts`, `native-artifact-*.ts`, `goal-worker-*.ts`, `owner-tool-grants.ts`. 목록은 구현 때 CodeGraph로 다시 확인한다.
+  - `packages/memory-agent/src/tools/parallel-reads.ts`
+  - read recovery의 새 receipt를 만드는 operator API. receipt를 읽는 입장 검사는 남긴다(0.0.17 호환).
+  - `ExecutionAdmission`의 `worker` gate와 `CONTEXT_AGENT_WORKER_*` 설정
 - "옛 Goal 처리"의 변경을 넣는다.
+- 완료 기준:
+  - 0단계 Goal golden과 같은 행이 나온다. 단, 지운 장부 행(모델 chunk, middleware, 권한 확인)은 비교에서 뺀다.
+  - 한 턴의 병렬 tool 중 늦게 끝나는 것이 있어도 run이 성공한다.
+  - 병렬 쓰기 일부가 실패해도 나머지 결과가 기록되고, 다음 step의 모델이 모두 본다.
+  - worker 세대가 있는 옛 Goal 세션에서 새 run이 돌고, 완료 근거가 나온다.
 
 ### 6. client
 
@@ -311,7 +339,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
 
 - 커밋 순서:
   1. 모든 진입점을 새 runtime으로 바꾸고, client를 6단계 hook으로 바꾸고, migration을 등록한다.
-     - 진입점: 본 채팅, BTW, 서브에이전트, Goal worker, ACP, MCP, 단발 호출
+     - 진입점: 본 채팅, BTW, 서브에이전트, Goal, ACP, MCP, 단발 호출. Goal은 5단계에서 owner loop로 옮겼으므로 본 채팅과 같이 바뀐다.
      - API payload가 바뀌어 기존 `useChat`으로는 확인할 수 없으므로, backend와 client를 함께 바꾼다.
   2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목.
 - 검사: golden, 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
@@ -321,6 +349,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
 
 - TanStack과 Effect 사이의 bridge adapter, 임시 `toTanStackTool`
 - 옛 Goal용 v1 host, 옛 TanStack 코드를 고정한 package, 릴리즈 artifact 계약 테스트
+- 도구 하나 단위의 복구. 복구 단위는 Goal의 bound run이다(decisions.md 2026-10-26).
 - 저장 메시지 구조를 `Prompt`로 바꾸는 데이터 변환. migration은 TanStack 메타데이터만 지운다.
 - BTW 선행 시험
 
@@ -330,7 +359,9 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
 - migration은 되돌릴 수 없다. 1단계 검사 도구로 로컬 DB 사본에서 먼저 확인한다.
 - Effect AI는 unstable이다. effect와 provider 패키지를 같은 커밋에 묶는다. effect를 올릴 때는 provider 계약 테스트를 함께 확인한다.
 - 승인 묶음과 interrupt 의미를 앱이 직접 지켜야 한다.
-- 옛 Goal 세션은 읽기 전용이 된다.
+- Goal의 코드 고정과 loop의 프로세스 격리를 잃는다. 업그레이드한 코드가 옛 Goal의 다음 run을 돈다.
+- 쓰기 순서 규칙이 틀리면 같은 파일을 동시에 바꾸거나, 쓰기 뒤의 읽기가 쓰기 전 상태를 읽는다.
+- 겹치는 도구 뒤 hook이 run 상태를 같이 바꾸면 기록이 어긋난다. 4단계에서 21개 middleware를 본다.
 
 ## 대체 결정이 필요한 decisions.md 항목
 
@@ -365,6 +396,19 @@ TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체
 - compatible 어댑터의 run id와 bound run 전달 실패 (2026-10-21)
 - 시스템 프롬프트와 도구 설명은 규칙을 한 곳에만 둔다 (2026-10-24)
 
+Goal worker를 전제로 쓴 항목들이다. 5단계를 구현할 때 "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"로 대체한다고 적는다.
+
+- 개발 빌더와 full-loop worker 소스 (2026-10-03)
+- Configurable dev and Goal settlement boundaries (2026-10-10)의 worker 세대·worker 승인 부분
+- Effect execution admission and safe observability (2026-10-10)의 worker gate
+- Build-time native and Goal-worker artifacts (2026-10-10)
+- Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
+- Owner RPC fingerprint의 bounded evidence와 해시 비교 (2026-10-11)
+- 검증된 background 읽기 실패의 명시적 복구 (2026-10-11)
+- 최소 읽기 복구와 DB 단일 기준 (2026-10-11)의 읽기 복구 부분
+- Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)의 "owner의 모델 스트림 pull" 구현 부분
+- TanStack 패키지를 1.0으로 올림 (2026-10-24)의 Goal worker 경계 부분
+
 ## 확인하지 않은 것
 
 - provider 패키지는 받아서 소스만 읽었다. 설치, 타입 검사, 실행은 하지 않았다.
@@ -372,7 +416,15 @@ TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체
 - `@effect/atom-react`는 받아서 export만 봤다. 설치와 실행은 하지 않았다.
 - 공식 `@ag-ui/client`. 설치되어 있지 않고(`@ag-ui/core` 1.0.0만 간접 의존성으로 있다), 소스도 보지 않았다.
 - `toolCallMetadata`와 tool call `metadata`(`model`, `index`)를 지워도 provider 요청이 같은지. 2단계 완료 기준으로 확인한다.
+- 21개 middleware가 겹치는 도구 뒤 hook을 견디는지. TanStack 1.0 일반 채팅에서 이미 겹치지만 따로 보지 않았다.
 
 ## 열린 항목
 
-- 옛 Goal 세션을 읽기 전용으로 둘지(기본), 아니면 일반 채팅만이라도 열어 줄지.
+- 5단계(Goal 실행)를 전환 전에 TanStack 위에서 먼저 할지, 전환 안에서 할지. 먼저 하면 전환이 옮길 코드가 약 5,000줄 줄고, 0단계 golden도 새 Goal 동작으로 잡는다. 그때까지 Goal worker는 owner 호출을 한 번에 하나씩 보낸다(`841dc1a3`).
+- 쓰기 호출의 순서. 안은 셋이다. 사용자는 셋째 안을 검토하고 있다(2026-10-26).
+  - 쓰기를 앞뒤 호출 모두와 순서를 지키는 장벽으로 둔다. "도구 성능 (2026-09-15)" 규칙과 같다.
+  - 쓰기를 도구가 정한 자원 키로 같은 자원끼리만 줄 세운다(`packages/memory-agent/src/concurrency/keyed-limit.ts`의 `keyedSerialLimit`). 키가 없는 쓰기는 장벽으로 둔다. 쓰기 뒤의 읽기가 같은 자원을 읽으면 쓰기를 기다려야 하므로, 읽기 도구에도 키가 필요하다.
+  - 순서를 두지 않는다. 한 턴의 호출은 서로 독립이라고 보고 모두 동시에 돌린다. 순서가 필요하면 모델이 다음 턴으로 나눈다. 지금 TanStack 1.0의 동작이다.
+    - 같은 파일 쓰기의 충돌은 쓰기 도구의 기대 sha256 검사가 하나를 실패시킨다(decisions.md "잘못된 성공 거르기 (2026-10-14)"). 셸·코드 실행·MCP는 이런 검사가 없다.
+    - 모델이 순서를 기대하지 않도록 도구 설명이나 시스템 프롬프트에 한 턴의 호출은 동시에 돈다고 알린다.
+- (닫힘, 2026-10-26) 옛 Goal 세션을 읽기 전용으로 둘지. Goal worker를 없애므로 옛 Goal 세션도 이어서 진행한다.
