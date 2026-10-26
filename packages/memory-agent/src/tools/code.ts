@@ -2,7 +2,6 @@ import {
   isStandardSchema,
   parseWithStandardSchema,
   toolDefinition,
-  validateJsonSchema,
   type AnyServerTool,
   type ToolExecutionContext,
 } from "@tanstack/ai";
@@ -23,7 +22,9 @@ import { isTruthy } from "../truthy.ts";
 import { RunSkillInput } from "./definitions.ts";
 import type { builtinToolEffects } from "./effects.ts";
 import { guardedEffect, ToolFailed, toolFailedOf } from "./failure.ts";
-import { toToolSchema } from "./schema.ts";
+import { jsonSchemaIssues } from "./input-repair.ts";
+import { preparedCall, runTool, type RunTool } from "./run-tool.ts";
+import { definitionOf } from "./schema.ts";
 
 /** run_code's time: a program for the step at hand, unlike a skill's build or test run. */
 const runCodeSeconds = { initial: 60, most: 600 };
@@ -166,52 +167,90 @@ interface Callable {
 }
 
 /**
- * The program's functions for one `run_code` call. Each call is checked against its tool's schema
- * as the chat engine checks the model's, gets an id below the program's own, and stops with it.
+ * The program's functions for one `run_code` call, one per tool. A call that runs gets an id below
+ * the program's own (`nextId`), so the ids count only the calls whose input was accepted.
  */
-const functionsFor = (tools: readonly Callable[], context: ToolExecutionContext | undefined) => {
+const programFunctions = <T extends { readonly name: string }>(
+  tools: readonly T[],
+  parent: string,
+  call: (
+    tool: T,
+    args: JsonValue,
+    nextId: () => string,
+  ) => Effect.Effect<unknown, ProgramCallFailed>,
+) => {
   let calls = 0;
-  const parent = context?.toolCallId ?? "run_code";
+  const nextId = () => `${parent}#${++calls}`;
   return Object.fromEntries(
-    tools.map(({ name, inputSchema, execute }): [string, ProgramFunction] => [
-      name,
-      (args) =>
-        Effect.try({
-          try: () =>
-            isStandardSchema(inputSchema) ? parseWithStandardSchema(inputSchema, args) : args,
-          catch: (error) =>
-            ProgramCallFailed.make({
-              message: `invalid_input: ${Predicate.isError(error) ? error.message : "The input does not match the tool's schema."}`,
-            }),
-        }).pipe(
-          Effect.flatMap((input) =>
-            Effect.tryPromise({
-              // Promise boundary of the SDK's tools; the call's signal also ends with the program.
-              try: (signal) =>
-                Promise.resolve(
-                  execute(input, {
-                    ...context,
-                    toolCallId: `${parent}#${++calls}`,
-                    abortSignal: isTruthy(context?.abortSignal)
-                      ? AbortSignal.any([context.abortSignal, signal])
-                      : signal,
-                    emitCustomEvent: () => undefined,
-                  }),
-                ),
-              catch: (error) =>
-                ProgramCallFailed.make({
-                  message: Predicate.isError(error)
-                    ? toolFailedOf(error).message
-                    : "tool_failed: The call failed.",
-                }),
-            }),
-          ),
-        ),
-    ]),
+    tools.map((tool): [string, ProgramFunction] => [tool.name, (args) => call(tool, args, nextId)]),
   );
 };
 
+/**
+ * The program's functions over the SDK's tools. Each call is checked against its tool's schema as
+ * the chat engine checks the model's, gets an id below the program's own, and stops with it.
+ */
+const functionsFor = (tools: readonly Callable[], context: ToolExecutionContext | undefined) =>
+  programFunctions(
+    tools,
+    context?.toolCallId ?? "run_code",
+    ({ inputSchema, execute }, args, nextId) =>
+      Effect.try({
+        try: () =>
+          isStandardSchema(inputSchema) ? parseWithStandardSchema(inputSchema, args) : args,
+        catch: (error) =>
+          ProgramCallFailed.make({
+            message: `invalid_input: ${Predicate.isError(error) ? error.message : "The input does not match the tool's schema."}`,
+          }),
+      }).pipe(
+        Effect.flatMap((input) =>
+          Effect.tryPromise({
+            // Promise boundary of the SDK's tools; the call's signal also ends with the program.
+            try: (signal) =>
+              Promise.resolve(
+                execute(input, {
+                  ...context,
+                  toolCallId: nextId(),
+                  abortSignal: isTruthy(context?.abortSignal)
+                    ? AbortSignal.any([context.abortSignal, signal])
+                    : signal,
+                  emitCustomEvent: () => undefined,
+                }),
+              ),
+            catch: (error) =>
+              ProgramCallFailed.make({
+                message: Predicate.isError(error)
+                  ? toolFailedOf(error).message
+                  : "tool_failed: The call failed.",
+              }),
+          }),
+        ),
+      ),
+  );
+
+/**
+ * The program's functions over the Effect AI tools. Each call is decoded as the loop decodes the
+ * model's, without the repair, as the chat engine checked a program's calls; it stops with the
+ * program.
+ */
+const runFunctionsFor = (tools: ReadonlyArray<RunTool>, parent: string) =>
+  programFunctions(
+    tools.map((tool) => ({ name: tool.tool.name, tool })),
+    parent,
+    ({ tool }, args, nextId) =>
+      Effect.flatMap(
+        Effect.mapError(tool.prepare(args), (error) =>
+          ProgramCallFailed.make({ message: `invalid_input: ${error.message}` }),
+        ),
+        (run) =>
+          Effect.mapError(run({ toolCallId: nextId() }), (failed) =>
+            ProgramCallFailed.make({ message: failed.message }),
+          ),
+      ),
+  );
+
 const decodeRunSkill = Schema.decodeUnknownOption(RunSkillInput);
+const decodeRunSkillEffect = Schema.decodeUnknownEffect(RunSkillInput);
 const decodeInput = Schema.decodeUnknownEffect(JsonValue);
 
 const inputRejected = (detail: string) =>
@@ -222,21 +261,50 @@ const skillInput = (
   schema: Option.Option<InputSchema>,
   input: NonNullable<(typeof RunSkillInput.Type)["input"]>,
 ): Effect.Effect<JsonValue, ToolFailed> =>
-  Option.match(
-    Option.flatMapNullishOr(schema, (declared) => validateJsonSchema(declared, input).issues),
-    {
-      onNone: () =>
-        decodeInput(input).pipe(
-          Effect.mapError(() => inputRejected("The input is not plain JSON.")),
-        ),
-      onSome: (issues) =>
-        Effect.fail(inputRejected(issues.map((issue) => issue.message).join("; "))),
-    },
+  decodeInput(input).pipe(
+    Effect.mapError(() => inputRejected("The input is not plain JSON.")),
+    Effect.flatMap((value) =>
+      Option.match(
+        Option.flatMap(schema, (declared) => jsonSchemaIssues({ schema: declared, value })),
+        {
+          onNone: () => Effect.succeed(value),
+          onSome: (issues) => Effect.fail(inputRejected(issues.join("; "))),
+        },
+      ),
+    ),
   );
+
+const runCode = (names: readonly string[]) =>
+  ({ name: "run_code", description: describe(names), parameters: RunCodeInput }) as const;
+
+/** Whether a program may call the tool: it runs without asking here and does not steer the run. */
+const programMayCall = ({
+  name,
+  asks,
+  asking,
+}: {
+  readonly name: string;
+  /** The tool itself always asks. */
+  readonly asks: boolean;
+  readonly asking: HashSet.HashSet<string>;
+}) =>
+  !asks &&
+  !HashSet.has(asking, name) &&
+  !HashSet.has(notCallable, name) &&
+  identifierName.test(name);
 
 const make = Effect.gen(function* () {
   const sandbox = yield* CodeSandbox;
   const codeSkills = yield* CodeSkills;
+  const runProgram = (
+    code: string,
+    input: JsonValue,
+    timeout: Duration.Duration,
+    functions: ReturnType<typeof programFunctions>,
+  ) =>
+    sandbox
+      .run({ code, input }, functions, timeout)
+      .pipe(Effect.flatMap(resultOf), Effect.mapError(sandboxFailure));
   return {
     /**
      * Programs over a run's tools: `run_code`, and `codeSkills` to give a run_skill the ts skills.
@@ -246,11 +314,7 @@ const make = Effect.gen(function* () {
     forTools: (tools: readonly AnyServerTool[], asking: HashSet.HashSet<string>) =>
       Effect.map(Effect.context<never>(), (caller) => {
         const callable = tools.flatMap(({ name, inputSchema, execute, needsApproval }) =>
-          isTruthy(execute) &&
-          !isTruthy(needsApproval) &&
-          !HashSet.has(asking, name) &&
-          !HashSet.has(notCallable, name) &&
-          identifierName.test(name)
+          isTruthy(execute) && programMayCall({ name, asks: isTruthy(needsApproval), asking })
             ? [{ name, inputSchema, execute }]
             : [],
         );
@@ -259,21 +323,15 @@ const make = Effect.gen(function* () {
           input: JsonValue,
           timeout: Duration.Duration,
           context: ToolExecutionContext | undefined,
-        ) =>
-          sandbox
-            .run({ code, input }, functionsFor(callable, context), timeout)
-            .pipe(Effect.flatMap(resultOf), Effect.mapError(sandboxFailure));
+        ) => runProgram(code, input, timeout, functionsFor(callable, context));
         return {
-          runCode: toolDefinition({
-            name: "run_code",
-            description: describe(callable.map(({ name }) => name)),
-            inputSchema: toToolSchema(RunCodeInput),
-          }).server(({ code, timeoutSeconds }, context) =>
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            runNativeEffectWith(caller)(
-              run(code, null, secondsOf(timeoutSeconds, runCodeSeconds), context),
-              { signal: context?.abortSignal },
-            ),
+          runCode: toolDefinition(definitionOf(runCode(callable.map(({ name }) => name)))).server(
+            ({ code, timeoutSeconds }, context) =>
+              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+              runNativeEffectWith(caller)(
+                run(code, null, secondsOf(timeoutSeconds, runCodeSeconds), context),
+                { signal: context?.abortSignal },
+              ),
           ),
 
           /**
@@ -311,6 +369,57 @@ const make = Effect.gen(function* () {
           },
         };
       }),
+
+    /** `forTools` over the Effect AI tools (docs/effect-ai-migration.md step 3). */
+    forRunTools: (tools: ReadonlyArray<RunTool>, asking: HashSet.HashSet<string>) => {
+      const callable = tools.filter(({ tool }) =>
+        programMayCall({ name: tool.name, asks: isTruthy(tool.needsApproval), asking }),
+      );
+      return {
+        runCode: runTool({
+          ...runCode(callable.map(({ tool }) => tool.name)),
+          handler: ({ code, timeoutSeconds }, call) =>
+            runProgram(
+              code,
+              null,
+              secondsOf(timeoutSeconds, runCodeSeconds),
+              runFunctionsFor(callable, call.toolCallId),
+            ),
+        }),
+
+        /** `runSkill` that also runs `project`'s ts skills; any other tool comes back as it is. */
+        codeSkills: (project: Project, runSkill: RunTool): RunTool =>
+          runSkill.tool.name === "run_skill"
+            ? {
+                ...runSkill,
+                prepare: (params) =>
+                  Effect.map(
+                    Effect.zip(runSkill.prepare(params), decodeRunSkillEffect(params)),
+                    ([sh, { name, input = {}, timeoutSeconds }]) =>
+                      preparedCall((call) =>
+                        guardedEffect(
+                          name,
+                          Effect.flatMap(codeSkills.runnable(project, name), (saved) =>
+                            SavedProgram.$match(saved, {
+                              sh: () => sh(call),
+                              ts: ({ code, input: schema }) =>
+                                Effect.flatMap(skillInput(schema, input), (value) =>
+                                  runProgram(
+                                    code,
+                                    value,
+                                    secondsOf(timeoutSeconds, skillSeconds),
+                                    runFunctionsFor(callable, call.toolCallId),
+                                  ),
+                                ),
+                            }),
+                          ),
+                        ),
+                      ),
+                  ),
+              }
+            : runSkill,
+      };
+    },
   };
 });
 

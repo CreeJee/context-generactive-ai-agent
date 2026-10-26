@@ -1,6 +1,7 @@
 import {
   deepCompareStrict,
   dereference,
+  initialBaseURI,
   validate,
   type Schema as JsonSchemaNode,
   type SchemaDraft,
@@ -21,11 +22,11 @@ import { optionalProperty } from "../optional-property.ts";
 import type { RunTool } from "./run-tool.ts";
 
 /**
- * TanStack's repair of a call's arguments (`@tanstack/ai` input-validation), which the app keeps
- * now that the loop decodes calls itself (docs/effect-ai-migration.md step 3). Arguments that fail
- * the tool's schema are converted toward the JSON Schema the model was sent: `"5"` for 5, `"true"`
- * for true, `null` for an optional field left out. They are decoded again only when that makes
- * them fit; otherwise the first failure is what the model reads.
+ * TanStack's checks of tool input against JSON Schema (`@tanstack/ai` input-validation), which the
+ * app keeps now that the loop decodes calls itself (docs/effect-ai-migration.md step 3), with the
+ * same validator. Arguments that fail the tool's schema are converted toward the JSON Schema the
+ * model was sent: `"5"` for 5, `"true"` for true, `null` for an optional field left out. They are
+ * decoded again only when that makes them fit; otherwise the first failure is what the model reads.
  */
 
 type JsonObject = Extract<JsonValue, { readonly [key: string]: JsonValue }>;
@@ -331,6 +332,59 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
   };
   return coerce(value, root);
 };
+
+/** Errors that only say that a nested check failed. The nested error says why. */
+const isWrapperKeyword = Schema.is(
+  Schema.Literals([
+    "properties",
+    "patternProperties",
+    "items",
+    "prefixItems",
+    "additionalItems",
+    "unevaluatedItems",
+    "$ref",
+    "$recursiveRef",
+    "allOf",
+    "if",
+  ]),
+);
+
+/** The first line of what kept the validator from reading a schema, without its internal URIs. */
+const unreadable = (error: Error) =>
+  error.message
+    .split("\n", 1)
+    .join("")
+    .replaceAll(initialBaseURI.href, "")
+    .replace(/ +Absolute URI "[^"]*"\.?/, "")
+    .trim();
+
+/**
+ * What is wrong with `value` against the JSON Schema `schema`, as TanStack's `validateJsonSchema`
+ * reported it: each failed check as `location: error`, or why the schema could not be read. Nothing
+ * when the value fits.
+ */
+export const jsonSchemaIssues = ({
+  schema,
+  value,
+}: {
+  readonly schema: JsonSchema.JsonSchema;
+  readonly value: JsonValue;
+}): Option.Option<ReadonlyArray<string>> =>
+  Result.try({
+    try: () => {
+      const root = compile(toJsonObject(schema));
+      const result = validate(value, root.schema, root.draft, root.lookup, false);
+      if (result.valid) return Option.none<ReadonlyArray<string>>();
+      const leaves = result.errors.filter((error) => !isWrapperKeyword(error.keyword));
+      return Option.some(
+        (leaves.length > 0 ? leaves : result.errors).map(
+          (error) => `${error.instanceLocation}: ${error.error}`,
+        ),
+      );
+    },
+    // The validator throws Errors; anything else carries no message.
+    catch: (error) => (Predicate.isError(error) ? error : new Error("")),
+  }).pipe(Result.getOrElse((error) => Option.some([unreadable(error)])));
 
 /**
  * The arguments repaired to fit `schema`, when they do not fit it as sent and the repair makes them

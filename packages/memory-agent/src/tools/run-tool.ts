@@ -62,6 +62,12 @@ const failedCall = <E>(cause: Cause.Cause<E>): Effect.Effect<never, ToolFailed> 
       Effect.fail(toolFailedOf(Predicate.isError(error) ? error : new Error("unknown")));
 };
 
+/** A call that may fail in any way, with its result and failure as the model reads them. */
+export const preparedCall =
+  <A, E>(run: (call: ToolCall) => Effect.Effect<A, E>): PreparedCall =>
+  (call) =>
+    run(call).pipe(Effect.flatMap(toolOutput), Effect.catchCause(failedCall));
+
 /** Makes a tool from its definition and its handler, which may fail in any way. */
 export const runTool = <
   const Name extends string,
@@ -97,11 +103,6 @@ export const runTool = <
         : Tool.dynamic(options.name, { ...definition, parameters: options.jsonSchema }),
     lazy: options.lazy ?? false,
     prepare: (params) =>
-      Effect.map(
-        decode(params),
-        (decoded): PreparedCall =>
-          (call) =>
-            handler(decoded, call).pipe(Effect.flatMap(toolOutput), Effect.catchCause(failedCall)),
-      ),
+      Effect.map(decode(params), (decoded) => preparedCall((call) => handler(decoded, call))),
   };
 };

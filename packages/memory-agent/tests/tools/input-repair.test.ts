@@ -1,10 +1,10 @@
 import { it } from "@effect/vitest";
-import { chat, toolDefinition } from "@tanstack/ai";
-import { Cause, Effect, Schema } from "effect";
+import { chat, toolDefinition, validateJsonSchema } from "@tanstack/ai";
+import { Cause, Effect, type JsonSchema, Option, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { JsonValue } from "../../src/json.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
-import { prepareRepaired } from "../../src/tools/input-repair.ts";
+import { jsonSchemaIssues, prepareRepaired } from "../../src/tools/input-repair.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 import { definitionOf } from "../../src/tools/schema.ts";
 
@@ -61,6 +61,28 @@ const effectInput = (args: string) =>
   });
 
 describe("tool input repair", () => {
+  it("reports what does not fit a JSON Schema as TanStack did", () => {
+    const counted = {
+      type: "object",
+      properties: { count: { type: "integer", minimum: 1 }, tags: { type: "array" } },
+      required: ["count"],
+      additionalProperties: false,
+    };
+    const cases: ReadonlyArray<readonly [JsonSchema.JsonSchema, JsonValue]> = [
+      [counted, { count: 2 }],
+      [counted, { count: "2", extra: true }],
+      [counted, { tags: 1 }],
+      [{ type: "object", properties: { at: { $ref: "#/$defs/missing" } } }, { at: 1 }],
+      [{ type: "string", nullable: true, minLength: 2 }, null],
+    ];
+    for (const [schema, value] of cases) {
+      const tanstack = validateJsonSchema(schema, value);
+      expect(Option.getOrUndefined(jsonSchemaIssues({ schema, value }))).toEqual(
+        tanstack.issues?.map((issue) => issue.message),
+      );
+    }
+  });
+
   it.live("repairs and refuses the arguments TanStack did", () =>
     Effect.gen(function* () {
       const cases = [

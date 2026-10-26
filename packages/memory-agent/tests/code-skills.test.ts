@@ -10,7 +10,7 @@ import { ApprovedTools } from "../src/tools/approved.ts";
 import { CodeTools } from "../src/tools/code.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
 import type { JsonValue } from "../src/json.ts";
-import type { RunTool } from "../src/tools/run-tool.ts";
+import { runTool, type RunTool } from "../src/tools/run-tool.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
 import { runToolRequestDifferences } from "./support/requests.ts";
 import { inRun } from "./support/run-span.ts";
@@ -153,6 +153,49 @@ testAgent()("code skills", (it) => {
       // What a program gets as external_run_skill runs sh skills only.
       expect(yield* rejection(sdk(() => run.execute!({ name: "shout" })))).toMatchObject({
         message: expect.stringContaining("ts_skill"),
+      });
+    }),
+  );
+
+  it.effect("the Effect AI run_skill runs ts skills over the run's tools, and sh skills", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const [save, run] = (yield* ApprovedTools).runToolsFor(project, "gate");
+      const echo = runTool({
+        name: "echo_text",
+        description: "echo_text",
+        parameters: Schema.Struct({ text: Schema.String }),
+        handler: ({ text }) => Effect.succeed({ text }),
+      });
+      const sh = yield* Effect.fromNullishOr(run);
+      const runSkill = (yield* CodeTools)
+        .forRunTools([echo, sh], HashSet.empty())
+        .codeSkills(project, sh);
+      yield* callOf(save, {
+        name: "shout",
+        description: "Echo a text in capitals",
+        program: {
+          runtime: "ts",
+          code: "const { text } = await external_echo_text({ text: input.text.toUpperCase() });\nreturn text;",
+          input: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+        },
+      });
+      yield* callOf(save, {
+        name: "echo-run",
+        description: "Print the arguments",
+        program: { runtime: "sh", script: 'printf "%s|" "$@"' },
+      });
+      expect(yield* callOf(runSkill, { name: "shout", input: { text: "hi" } })).toEqual({
+        status: "returned",
+        value: "HI",
+        logs: [],
+      });
+      expect(yield* Effect.flip(callOf(runSkill, { name: "shout" }))).toMatchObject({
+        message: expect.stringContaining("invalid_input"),
+      });
+      expect(yield* callOf(runSkill, { name: "echo-run", args: ["a"] })).toMatchObject({
+        status: "succeeded",
+        stdout: "a|",
       });
     }),
   );

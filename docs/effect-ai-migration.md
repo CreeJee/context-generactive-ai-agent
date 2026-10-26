@@ -394,17 +394,20 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 결과(2026-10-26, 진행 중): 모두 `packages/memory-agent/src` 아래다.
   - 도구 단위는 `tools/run-tool.ts`의 `RunTool`이다. 모델에 알리는 Effect AI `Tool`, lazy 여부, 인자를 decode해 실행할 호출을 만드는 `prepare`를 담는다. `runTool`이 이름·설명·parameters와 handler로 만든다.
   - `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode를 먼저 하고 게이트를 거친 뒤 실행하므로 둘을 나눠야 한다. handler마다 다른 타입은 closure로 감춘다.
-  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`).
+  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`), `run_code`와 ts skill(`tools/code.ts`의 `forRunTools`).
   - 승인 도구: `ask` 모드(`static`)의 save_code_skill·write_outside_file·delete_outside_file은 `needsApproval: true`를 단다. 다른 모드(`gate`)는 loop의 review가 호출마다 정한다. 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 두고, `effect/ai`는 서버의 `tools/approved.ts`만 import한다.
   - `tests/tool-effects.test.ts`의 등록 검사는 `toolDefinition({ name })`과 함께 `{ name, description, parameters }` spec도 도구 등록으로 읽는다.
   - provider 요청은 TanStack과 같다(`tests/tools/run-tools.test.ts`, `tests/model/tool-schema.test.ts`). parameters는 TanStack처럼 draft-07에서 `$schema`를 빼고, object에 `type`·`properties`·`required`를 채운다(`model/tool-schema.ts`).
   - lazy discovery는 `tools/discovery.ts`의 `lazyToolsFor`다. TanStack `LazyToolManager`와 같은 이름·설명·답을 쓰고, history에서 이미 찾은 도구는 처음부터 연다.
   - 결과는 TanStack처럼 JSON으로 바꾼다. 문자열은 JSON으로 읽히면 읽은 값을, 아니면 문자열 그대로 쓴다. 나머지는 JSON으로 바꾸므로 undefined 필드가 빠진다.
   - 인자 보정: TanStack은 인자가 schema에 맞지 않으면 모델에 보낸 JSON Schema 쪽으로 고쳐 다시 검사했다(`"5"` → 5, `"true"` → true, optional 필드의 `null` 제거). `tools/input-repair.ts`가 같은 검사기(`@cfworker/json-schema` 4.1.1)로 같은 규칙을 옮겼다. loop는 `prepareRepaired`로 호출을 준비한다.
+  - ts skill 입력 검사: TanStack `validateJsonSchema`가 하던 JSON Schema 검사를 `jsonSchemaIssues`(`tools/input-repair.ts`)가 같은 검사기와 같은 문구로 한다.
+  - 프로그램 안의 도구 호출은 `prepare`로 decode한다. 보정은 하지 않는다. TanStack도 프로그램의 호출은 Standard Schema로만 검사했다.
   - 기억 도구의 사용 기록은 middleware `onFinish` 대신 `recordUse(parentMessageId)`로 내보낸다. 4단계 loop가 답을 마친 뒤 부른다.
   - TanStack과 달라진 것:
     - 비밀 가리기가 실패하면 결과 대신 `redaction_failed` 도구 실패를 돌려준다. TanStack 경로는 `{error: message}`를 돌려줬다.
     - JSON이 아닌 결과(undefined 필드가 있는 객체 등)도 JSON으로 바꾼 뒤 가린다. 옛 `redactResult`는 이런 결과를 가리지 않고 넘겼다.
+    - 프로그램 안 호출의 `invalid_input:` 뒤 문구는 Effect Schema의 decode 오류다. TanStack은 Standard Schema의 문구였다. 접두사는 같다.
   - 다음 단계로 넘기는 것:
     - 4단계: 인자 decode 실패를 모델에 돌려주는 문구. TanStack은 `Input validation failed for tool <name>: ...`였다.
 
