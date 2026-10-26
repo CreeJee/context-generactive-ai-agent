@@ -164,8 +164,6 @@ describe("subscription language model", () => {
         "reasoning-start",
         "reasoning-delta",
         "reasoning-end",
-        "reasoning-start",
-        "reasoning-end",
         "tool-params-start",
         "tool-params-delta",
         "tool-params-end",
@@ -178,10 +176,13 @@ describe("subscription language model", () => {
       expect(
         parts.flatMap((part) => (part.type === "reasoning-delta" ? [part.delta] : [])),
       ).toEqual(["Checking", " details.", "Next step."]);
-      expect(parts.flatMap((part) => (part.type === "reasoning-start" ? [part.id] : []))).toEqual([
-        "reasoning-summary-rs-1-0",
-        "reasoning-summary-rs-1-1",
-        "reasoning-encrypted-rs-1",
+      // The encrypted reasoning signs the summary it follows, as TanStack stored it.
+      expect(parts.filter((part) => part.type === "reasoning-end")).toMatchObject([
+        { id: "reasoning-summary-rs-1-0", metadata: { "memory-agent": {} } },
+        {
+          id: "reasoning-summary-rs-1-1",
+          metadata: { "memory-agent": { signature: expect.stringMatching(/^openai-reasoning:/) } },
+        },
       ]);
       expect(parts.find((part) => part.type === "tool-call")).toMatchObject({
         id: "call-1",
@@ -240,6 +241,8 @@ describe("subscription language model", () => {
       expect(parts.find((part) => part.type === "tool-call")).toMatchObject({
         id: "call-2",
         params: { value: { nested: true } },
+        // The arguments as the model sent them, which the next request sends back.
+        metadata: { "memory-agent": { arguments: '{"value":{"nested":true}}' } },
       });
       expect(parts.at(-1)).toMatchObject({
         reason: "tool-calls",

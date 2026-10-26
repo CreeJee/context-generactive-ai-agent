@@ -609,8 +609,9 @@ const metadata = (value: { readonly signature?: string; readonly arguments?: str
 
 /**
  * Turns provider events into response parts, one event at a time, and checks the block protocol.
- * OpenAI encrypted reasoning arrives as its own reasoning block without text, its signature on the
- * block's end; storage attaches it to the summary before it, as TanStack did.
+ * OpenAI sends its encrypted reasoning right after the summary it belongs to, so a summary's end
+ * waits for the next event: encrypted reasoning puts its signature on that end, as TanStack put it
+ * on the current thinking step. Encrypted reasoning after anything else is a block without text.
  */
 const makeTranslator = (provider: OAuthProvider) => {
   const failed = (reason: SubscriptionStreamFailed["reason"]) =>
@@ -636,6 +637,8 @@ const makeTranslator = (provider: OAuthProvider) => {
   let summaryCount = 0;
   let openSummaries = 0;
   const summaries = MutableHashMap.empty<string, SummaryState>();
+  /** The summary whose end waits for its encrypted reasoning. */
+  let endingSummary: string | undefined;
 
   const closeText = (): Array<Part> => {
     if (textId === undefined) return [];
@@ -644,7 +647,24 @@ const makeTranslator = (provider: OAuthProvider) => {
     return [{ type: "text-end", id }];
   };
 
-  const step = (event: NormalizedStreamEvent): Effect.Effect<Array<Part>, SubscriptionFailure> =>
+  const endSummary = (signature?: string): Array<Part> => {
+    if (endingSummary === undefined) return [];
+    const id = endingSummary;
+    endingSummary = undefined;
+    return [{ type: "reasoning-end", id, ...metadata(optionalProperty("signature", signature)) }];
+  };
+
+  const step = (event: NormalizedStreamEvent): Effect.Effect<Array<Part>, SubscriptionFailure> => {
+    const ended =
+      NormalizedStreamEvent.$is("usage")(event) || NormalizedStreamEvent.$is("reasoning")(event)
+        ? []
+        : endSummary();
+    return Effect.map(translate(event), (parts) => [...ended, ...parts]);
+  };
+
+  const translate = (
+    event: NormalizedStreamEvent,
+  ): Effect.Effect<Array<Part>, SubscriptionFailure> =>
     Effect.gen(function* () {
       if (NormalizedStreamEvent.$is("usage")(event)) {
         promptTokens = event.promptTokens ?? promptTokens;
@@ -720,26 +740,22 @@ const makeTranslator = (provider: OAuthProvider) => {
         summaryCharacters += remaining.length;
         openSummaries--;
         MutableHashMap.set(summaries, summaryId, SummaryState.closed());
-        return [
-          ...(remaining.length > 0
-            ? [{ type: "reasoning-delta" as const, id: summaryId, delta: remaining }]
-            : []),
-          { type: "reasoning-end", id: summaryId },
-        ];
+        endingSummary = summaryId;
+        return remaining.length > 0
+          ? [{ type: "reasoning-delta", id: summaryId, delta: remaining }]
+          : [];
       }
       if (NormalizedStreamEvent.$is("reasoning")(event)) {
         if (event.encryptedContent.length > maxEncryptedReasoningCharacters)
           return yield* failed(
             SubscriptionStreamFailedReason.cases.EncryptedReasoningLimit.make({}),
           );
+        const signature = encodeOpenAiReasoning(event.id, event.encryptedContent);
+        if (endingSummary !== undefined) return endSummary(signature);
         const id = `reasoning-encrypted-${event.id}`;
         return [
           { type: "reasoning-start", id },
-          {
-            type: "reasoning-end",
-            id,
-            ...metadata({ signature: encodeOpenAiReasoning(event.id, event.encryptedContent) }),
-          },
+          { type: "reasoning-end", id, ...metadata({ signature }) },
         ];
       }
       if (NormalizedStreamEvent.$is("text")(event)) {
@@ -857,6 +873,7 @@ const makeTranslator = (provider: OAuthProvider) => {
         ? undefined
         : promptTokens - (cachedPromptTokens ?? 0) - (cacheWriteTokens ?? 0);
     return Effect.succeed([
+      ...endSummary(),
       ...closeText(),
       {
         type: "finish",
