@@ -11,6 +11,8 @@ import {
 import { isTruthy } from "../truthy.ts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import {
+  Array as EffectArray,
+  Match,
   MutableHashMap,
   Option,
   Context,
@@ -48,9 +50,12 @@ export type SkillScope = typeof SkillScope.Type;
  * this module into its server build.
  */
 export function builtinSkillsDirectory() {
-  const root = runtimeRoot();
-  if (root !== null) return join(root, "skills");
-  return join(dirname(runtimeRequire().resolve("memory-agent/package.json")), "skills");
+  return join(
+    Option.getOrElse(Option.fromNullishOr(runtimeRoot()), () =>
+      dirname(runtimeRequire().resolve("memory-agent/package.json")),
+    ),
+    "skills",
+  );
 }
 
 /** Shared with other agents: `npx skills add -g` installs here. */
@@ -99,6 +104,14 @@ export interface FrontMatter {
   readonly body: string;
 }
 
+/** `key: >` folds the indented lines after it into one line; `key: |` keeps them as lines. */
+const blockMarkers: readonly string[] = [">", "|", ">-", "|-"];
+const blockValue = (following: readonly string[], marker: string) =>
+  EffectArray.takeWhile(following, (line) => /^(\s+|$)/.test(line))
+    .map((line) => line.trim())
+    .join(marker.startsWith(">") ? " " : "\n")
+    .trim();
+
 /**
  * The front matter keys a skill needs, from the small YAML subset SKILL.md files use: `key: value`
  * (optionally quoted) and folded or literal blocks (`key: >` / `key: |` with indented lines).
@@ -106,29 +119,23 @@ export interface FrontMatter {
 export function parseFrontMatter(text: string): FrontMatter {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (!isTruthy(match)) return { fields: MutableHashMap.empty(), body: text };
-  const fields = MutableHashMap.empty<string, string>();
   const lines = (match[1] ?? "").split(/\r?\n/);
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index] ?? "";
-    const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
-    if (!isTruthy(field)) continue;
-    const key = field[1] ?? "";
-    const value = (field[2] ?? "").trim();
-    if (value === ">" || value === "|" || value === ">-" || value === "|-") {
-      const block: string[] = [];
-      while (index + 1 < lines.length && /^(\s+|$)/.test(lines[index + 1] ?? "")) {
-        index++;
-        block.push((lines[index] ?? "").trim());
-      }
-      MutableHashMap.set(
-        fields,
-        key,
-        value.startsWith(">") ? block.join(" ").trim() : block.join("\n").trim(),
-      );
-      continue;
-    }
-    MutableHashMap.set(fields, key, value.replace(/^(["'])(.*)\1$/, "$2"));
-  }
+  // A block's indented lines never read as a field of their own, so every line is tried as one.
+  const fields = MutableHashMap.fromIterable(
+    lines.flatMap((line, index) =>
+      Option.toArray(Option.fromNullishOr(/^([A-Za-z][\w-]*):\s*(.*)$/.exec(line))).map(
+        ([, key = "", raw = ""]) => {
+          const value = raw.trim();
+          return [
+            key,
+            blockMarkers.includes(value)
+              ? blockValue(lines.slice(index + 1), value)
+              : value.replace(/^(["'])(.*)\1$/, "$2"),
+          ] as const;
+        },
+      ),
+    ),
+  );
   return { fields, body: text.slice(match[0].length) };
 }
 
@@ -205,42 +212,39 @@ const make = (options: SkillsOptions) =>
     });
 
     const scan = Effect.fn("Skills.scan")(function* (scope: SkillScope, root: string) {
-      const skills: Array<{ skill: Skill; body: string }> = [];
-      const problems: SkillProblem[] = [];
-      if (!(yield* fs.exists(root))) return { skills, problems };
-      if ((yield* fs.stat(root)).type !== "Directory") return { skills, problems };
-      for (const folder of (yield* fs.readDirectory(root)).sort()) {
-        if (folder.startsWith(".")) continue;
+      const folders =
+        (yield* fs.exists(root)) && (yield* fs.stat(root)).type === "Directory"
+          ? (yield* fs.readDirectory(root)).filter((folder) => !folder.startsWith(".")).sort()
+          : [];
+      const reads = yield* Effect.forEach(folders, (folder) => {
         const directory = join(root, folder);
-        const plain = yield* fs.lstat(directory).pipe(
-          Effect.map((entry) => entry.type === "Directory"),
-          Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+        return Effect.when(
+          readSkill(scope, directory, folder),
+          fs.lstat(directory).pipe(
+            Effect.map((entry) => entry.type === "Directory"),
+            Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+          ),
         );
-        if (!plain) continue;
-        const read = yield* readSkill(scope, directory, folder);
-        SkillRead.$match(read, {
-          none: () => {},
-          skill: (entry) => {
-            skills.push(entry);
-          },
-          problem: (entry) => {
-            problems.push(entry.problem);
-          },
-        });
-      }
-      return { skills, problems };
+      });
+      const found = EffectArray.getSomes(reads);
+      return {
+        skills: found.filter(SkillRead.$is("skill")),
+        problems: found.filter(SkillRead.$is("problem")).map((read) => read.problem),
+      };
     });
     const filesOf = Effect.fn("Skills.filesOf")(function* (skill: Skill) {
-      switch (skill.scope) {
-        case "builtin":
-          return [];
-        case "global":
-        case "project":
-          return (yield* fs.readDirectory(skill.directory))
-            .filter((file) => file !== "SKILL.md" && !file.startsWith("."))
-            .sort()
-            .slice(0, 100);
-      }
+      return yield* Match.value(skill.scope).pipe(
+        Match.when("builtin", () => Effect.succeed<readonly string[]>([])),
+        Match.whenOr("global", "project", () =>
+          Effect.map(fs.readDirectory(skill.directory), (files) =>
+            files
+              .filter((file) => file !== "SKILL.md" && !file.startsWith("."))
+              .sort()
+              .slice(0, 100),
+          ),
+        ),
+        Match.exhaustive,
+      );
     });
     const load = Effect.fn("Skills.load")(function* (project: Project) {
       // Later scopes win on a shared name: the app's defaults, then the user's, then the project's.
@@ -249,9 +253,9 @@ const make = (options: SkillsOptions) =>
         yield* scan("global", globalSkillsDirectory(home)),
         yield* scan("project", projectSkillsDirectory(project.root)),
       ];
-      const byName = MutableHashMap.empty<string, { skill: Skill; body: string }>();
-      for (const layer of layers)
-        for (const entry of layer.skills) MutableHashMap.set(byName, entry.skill.name, entry);
+      const byName = MutableHashMap.fromIterable(
+        layers.flatMap((layer) => layer.skills).map((entry) => [entry.skill.name, entry] as const),
+      );
       return {
         entries: [...MutableHashMap.values(byName)],
         problems: layers.flatMap((layer) => layer.problems),
@@ -277,11 +281,19 @@ const make = (options: SkillsOptions) =>
         project: Project,
         name: string,
       ): Effect.fn.Return<SkillDocument | null, import("effect/PlatformError").PlatformError> {
-        const entry = (yield* load(project)).entries.find(
+        const entry = EffectArray.findFirst(
+          (yield* load(project)).entries,
           (candidate) => candidate.skill.name === name,
         );
-        if (entry === undefined) return null;
-        return { ...entry.skill, body: entry.body, files: yield* filesOf(entry.skill) };
+        return yield* Option.match(entry, {
+          onNone: () => Effect.succeed(null),
+          onSome: (found) =>
+            Effect.map(filesOf(found.skill), (files) => ({
+              ...found.skill,
+              body: found.body,
+              files,
+            })),
+        });
       }),
     };
   });

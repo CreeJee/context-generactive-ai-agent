@@ -4,7 +4,7 @@
 // as TypeScript; the executable ships it bundled (`scripts/package.ts`).
 // The module itself, not the package index: the index loads every Node service and slows each start.
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Match, Option, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import { RedactionFailed, type RedactKind, RedactRpcs } from "./redact-protocol.ts";
@@ -30,14 +30,12 @@ const handlers = RedactRpcs.toLayer(
           ),
       });
 
-    const hide = (kind: RedactKind, texts: readonly string[]) => {
-      switch (kind) {
-        case "text":
-          return Effect.forEach(texts, (text) => redactor.redactText(text));
-        case "json":
-          return Effect.forEach(texts, hideJson);
-      }
-    };
+    const hide = (kind: RedactKind, texts: readonly string[]) =>
+      Match.value(kind).pipe(
+        Match.when("text", () => Effect.forEach(texts, (text) => redactor.redactText(text))),
+        Match.when("json", () => Effect.forEach(texts, hideJson)),
+        Match.exhaustive,
+      );
 
     return RedactRpcs.of({
       Redact: ({ kind, texts }) =>

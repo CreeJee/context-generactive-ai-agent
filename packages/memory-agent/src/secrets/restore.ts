@@ -1,4 +1,4 @@
-import { Data, Result } from "effect";
+import { Array as EffectArray, Data, Option, Result } from "effect";
 
 /** A hidden value, and where its placeholder sits in the redacted text. */
 export interface HiddenSpan {
@@ -37,12 +37,15 @@ export const mentionsHidden = (text: string) => text.includes("[redacted:");
  */
 function restore(replacement: string, replaced: readonly HiddenSpan[]) {
   const left = [...replaced];
-  return replacement.replace(placeholder, (literal: string, kind: string) => {
-    const index = left.findIndex((span) => span.kind === kind);
-    if (index < 0) return literal;
-    const [span] = left.splice(index, 1);
-    return span?.value ?? literal;
-  });
+  return replacement.replace(placeholder, (literal: string, kind: string) =>
+    Option.match(
+      EffectArray.findFirstIndex(left, (span) => span.kind === kind),
+      {
+        onNone: () => literal,
+        onSome: (index) => left.splice(index, 1)[0]?.value ?? literal,
+      },
+    ),
+  );
 }
 
 /**
@@ -58,36 +61,47 @@ export function replaceKeepingHidden(options: {
   readonly replaceAll: boolean;
 }): Result.Result<{ readonly text: string; readonly replacements: number }, HiddenReplaceFailure> {
   const { view, find, replacement, replaceAll } = options;
-  const starts: number[] = [];
-  for (let at = view.text.indexOf(find); at >= 0; at = view.text.indexOf(find, at + find.length))
-    starts.push(at);
+  const starts = EffectArray.unfold(view.text.indexOf(find), (at) =>
+    at < 0 ? Option.none() : Option.some([at, view.text.indexOf(find, at + find.length)] as const),
+  );
   if (starts.length === 0) return Result.fail(HiddenReplaceFailure.no_match());
   if (starts.length > 1 && !replaceAll)
     return Result.fail(HiddenReplaceFailure.ambiguous({ occurrences: starts.length }));
 
-  let out = "";
-  let cursor = 0;
-  let next = 0;
-  /** Copies the view up to `end`, with the values of the placeholders before it. */
-  const copyUntil = (end: number) => {
-    for (let span = view.hidden[next]; span !== undefined && span.start < end;) {
-      out += view.text.slice(cursor, span.start) + span.value;
-      cursor = span.end;
-      span = view.hidden[++next];
-    }
-    out += view.text.slice(cursor, end);
-    cursor = end;
-  };
-  for (const start of starts) {
+  const matches = starts.map((start) => {
     const end = start + find.length;
-    const replaced = view.hidden.filter((span) => span.end > start && span.start < end);
-    if (replaced.some((span) => span.start < start || span.end > end))
-      return Result.fail(HiddenReplaceFailure.cuts_hidden());
-    copyUntil(start);
-    out += restore(replacement, replaced);
-    cursor = end;
-    next += replaced.length;
-  }
-  copyUntil(view.text.length);
-  return Result.succeed({ text: out, replacements: starts.length });
+    return {
+      start,
+      end,
+      replaced: view.hidden.filter((span) => span.end > start && span.start < end),
+    };
+  });
+  if (
+    matches.some(({ start, end, replaced }) =>
+      replaced.some((span) => span.start < start || span.end > end),
+    )
+  )
+    return Result.fail(HiddenReplaceFailure.cuts_hidden());
+  const text =
+    matches
+      .map(
+        ({ start, replaced }, index) =>
+          unhidden(view, matches[index - 1]?.end ?? 0, start) + restore(replacement, replaced),
+      )
+      .join("") + unhidden(view, matches.at(-1)?.end ?? 0, view.text.length);
+  return Result.succeed({ text, replacements: starts.length });
+}
+
+/** The view from `from` to `to`, with the values of the placeholders inside it. */
+function unhidden(view: RedactedView, from: number, to: number) {
+  const { out, cursor } = view.hidden
+    .filter((span) => span.start >= from && span.end <= to)
+    .reduce(
+      (copied, span) => ({
+        out: copied.out + view.text.slice(copied.cursor, span.start) + span.value,
+        cursor: span.end,
+      }),
+      { out: "", cursor: from },
+    );
+  return out + view.text.slice(cursor, to);
 }

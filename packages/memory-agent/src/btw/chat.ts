@@ -185,13 +185,14 @@ const make = Effect.gen(function* () {
     /** Explicit delete: stops a running answer first so it cannot save into a removed thread. */
     remove: Effect.fn("BtwChat.remove")(function* (threadId: string) {
       yield* threads.get(threadId);
-      const live = liveRuns.get(threadId);
-      if (live !== null) {
-        yield* live.cancel;
-        yield* live.ended;
-      }
-      if (liveRuns.get(threadId) !== null)
-        return yield* BtwError.make({ reason: BtwRunInProgress.make({ threadId }) });
+      yield* Option.match(Option.fromNullishOr(liveRuns.get(threadId)), {
+        onNone: () => Effect.void,
+        onSome: (live) => Effect.andThen(live.cancel, live.ended),
+      });
+      yield* Effect.when(
+        Effect.fail(BtwError.make({ reason: BtwRunInProgress.make({ threadId }) })),
+        Effect.succeed(liveRuns.get(threadId) !== null),
+      );
       yield* threads.remove(threadId);
     }),
   };

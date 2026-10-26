@@ -190,7 +190,10 @@ const make = Effect.gen(function* () {
     remove: (threadId: string) =>
       Effect.gen(function* () {
         const deleted = yield* sql`DELETE FROM btw_threads WHERE id = ${threadId} RETURNING id`;
-        if (deleted.length === 0) return yield* threadNotFound(threadId);
+        yield* Effect.when(
+          Effect.fail(threadNotFound(threadId)),
+          Effect.succeed(deleted.length === 0),
+        );
         yield* attachments.purgeOrphans.pipe(
           Effect.mapError(() =>
             BtwError.make({ reason: BtwStorageFailed.make({ operation: "purge_attachments" }) }),
