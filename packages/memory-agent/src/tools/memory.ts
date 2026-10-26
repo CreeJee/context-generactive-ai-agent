@@ -8,8 +8,11 @@ import {
   Function as EffectFunction,
   Layer,
   Option,
+  Ref,
   Schema,
 } from "effect";
+import { type RunHook, StepEnded } from "../loop/run.ts";
+import { RunEnd } from "../loop/store.ts";
 import { Graph } from "../memory/graph.ts";
 import { readStructuredEvidence, traceStructuredEvidence } from "../memory/evidence.ts";
 import { Interpretations } from "../memory/interpretations.ts";
@@ -356,6 +359,31 @@ export const memoryReadRunTools = ({
   readonly scope?: MemoryToolScope;
 }) => readRunTools(memoryCalls(projectId, scope).reads(), providedBy(memoryServices(env)));
 
+/**
+ * Records the memories the answer declared it used under the last message the model wrote in this
+ * run, once the run finished or waits for the user, as the middleware's finish did. One hook serves
+ * one run.
+ */
+const recordUseHook = <E>(recordUse: (parentMessageId: string) => Effect.Effect<void, E>) =>
+  Effect.map(Ref.make(Option.none<string>()), (written): RunHook => ({
+    stepEnded: (_scope, step) =>
+      StepEnded.$match(step, {
+        Model: ({ message }) => Ref.set(written, Option.fromNullishOr(message.id)),
+        Resume: () => Effect.void,
+      }),
+    ended: (_scope, end) => {
+      const record = Effect.flatMap(Ref.get(written), (id) =>
+        Option.match(id, { onNone: () => Effect.void, onSome: recordUse }),
+      );
+      return RunEnd.$match(end, {
+        Completed: () => record,
+        Interrupted: () => record,
+        Failed: () => Effect.void,
+        Aborted: () => Effect.void,
+      }).pipe(Effect.ignore({ log: "Warn" }));
+    },
+  }));
+
 const make = Effect.gen(function* () {
   const services: MemoryToolEnvironment = {
     search: yield* MemorySearch,
@@ -403,7 +431,7 @@ const make = Effect.gen(function* () {
 
     /**
      * {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). The calls run on
-     * the loop's fiber, so their spans nest under the run; `recordUse` takes the place of the
+     * the loop's fiber, so their spans nest under the run; `hook` takes the place of the
      * middleware's finish.
      */
     runToolsFor: (binding: RunBinding, scope?: MemoryToolScope) => {
@@ -417,7 +445,7 @@ const make = Effect.gen(function* () {
           runTool({ ...promoteMemoryCandidate, handler: provided(bound.promote) }),
           runTool({ ...usePromotedMemory, handler: bound.useMemory }),
         ],
-        recordUse: provided(bound.recordUse),
+        hook: recordUseHook(provided(bound.recordUse)),
       };
     },
   };

@@ -3,6 +3,8 @@ import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
 import { btwEvidenceRunTools, btwEvidenceTools } from "../../src/btw/tools.ts";
+import { StepEnded } from "../../src/loop/run.ts";
+import { RunEnd } from "../../src/loop/store.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { EvidenceReadFailed } from "../../src/memory/evidence.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
@@ -847,7 +849,7 @@ testAgent()("memory tools per run", (it) => {
       const memory = yield* MemoryTools;
       const runId = `${sessionId}:effect-run`;
       const binding = { ...at, runId, userNodeId: user.id };
-      const { tools, recordUse } = memory.runToolsFor(binding);
+      const { tools, hook } = memory.runToolsFor(binding);
       expect(
         yield* runToolRequestDifferences({
           chatTools: (yield* inRun(memory.forRun(binding))).tools,
@@ -876,7 +878,12 @@ testAgent()("memory tools per run", (it) => {
       yield* (yield* Indexer).indexAll();
       yield* callOf(0, { query: "effect-memory-state" });
       expect(yield* callOf(5, { memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
-      yield* recordUse("effect-answer-message");
+      // The run's answer ends it, so the use is recorded under that message.
+      const { stepEnded, ended } = yield* hook;
+      const scope = { threadId: `${sessionId}:effect-thread`, runId, emit: () => Effect.void };
+      const answer = { role: "assistant" as const, id: "effect-answer-message", content: "done" };
+      yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
+      yield* ended!(scope, RunEnd.Completed(), [answer]);
       expect(
         (yield* env.knowledge.usageForTask(handle.taskId)).map((entry) => ({
           kind: entry.kind,
