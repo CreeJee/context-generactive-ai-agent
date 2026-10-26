@@ -375,7 +375,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 다음 단계로 넘기는 것:
     - 3단계: `tool-policy.ts`의 factory와 인자 검사를 `providers/provider-tools.ts`로 바꾼다. descriptor의 `extension.factory`는 아직 TanStack factory다.
     - 3단계: OpenAI `computer_use`의 검사는 type `computer_use_preview`만 받지만 TanStack 1.0 타입은 `computer`다. TanStack은 설정의 type을 도구 이름으로 썼다. 새 도구도 구독 요청에서 같은 이름을 쓴다(`namedBy`).
-    - 3단계: TanStack의 tool 입력 정규화는 optional 필드의 `null`을 `undefined`로 바꿨다. 인자를 앱이 decode할 때 같은 규칙이 필요한지 본다.
+    - 3단계(닫음): TanStack의 tool 입력 정규화는 optional 필드의 `null`을 `undefined`로 바꿨다. 같은 규칙이 필요해 옮겼다(3단계 결과의 "인자 보정").
     - 3단계: scripted 모델은 lazy discovery를 흉내 내지 않는다. discovery 방식을 정한 뒤 넣는다. invocation에 `runId`와 `threadId`가 없다. `LanguageModel.ProviderOptions`에 없기 때문이며, 4단계 loop가 run을 모델에 알리는 방법을 정한다.
     - 3·4단계: `OpenAiClient`의 오류 description에는 URL이 들어간다. 화면 문구는 description이 아니라 reason으로 만든다.
     - 4단계 writer: Effect finish reason을 저장 문자열로 바꾼다(`tool-calls` → `tool_calls` 등). OpenAI 호환 턴의 `source`는 `{provider: "openai-compatible", api: "openai-completions", model}`로 쓴다. 모델 이름은 `response-metadata`의 `modelId`에서 얻을 수 있다.
@@ -391,6 +391,20 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - `withHiddenResults`(`packages/memory-agent/src/secrets/redactor.ts`)를 Toolkit 핸들러 래퍼로 다시 만든다. 지금은 TanStack `AnyServerTool.execute`를 감싼다.
 - `tools/definitions.ts`는 브라우저도 import한다. bundle 영향을 확인한다.
 - 완료 기준: "보안 체크리스트"의 "도구 실패와 비밀" 항목을 확인한다.
+- 결과(2026-10-26, 진행 중): 모두 `packages/memory-agent/src` 아래다.
+  - 도구 단위는 `tools/run-tool.ts`의 `RunTool`이다. 모델에 알리는 Effect AI `Tool`, lazy 여부, 인자를 decode해 실행할 호출을 만드는 `prepare`를 담는다. `runTool`이 이름·설명·parameters와 handler로 만든다.
+  - `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode를 먼저 하고 게이트를 거친 뒤 실행하므로 둘을 나눠야 한다. handler마다 다른 타입은 closure로 감춘다.
+  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`).
+  - provider 요청은 TanStack과 같다(`tests/tools/run-tools.test.ts`, `tests/model/tool-schema.test.ts`). parameters는 TanStack처럼 draft-07에서 `$schema`를 빼고, object에 `type`·`properties`·`required`를 채운다(`model/tool-schema.ts`).
+  - lazy discovery는 `tools/discovery.ts`의 `lazyToolsFor`다. TanStack `LazyToolManager`와 같은 이름·설명·답을 쓰고, history에서 이미 찾은 도구는 처음부터 연다.
+  - 결과는 TanStack처럼 JSON으로 바꾼다. 문자열은 JSON으로 읽히면 읽은 값을, 아니면 문자열 그대로 쓴다. 나머지는 JSON으로 바꾸므로 undefined 필드가 빠진다.
+  - 인자 보정: TanStack은 인자가 schema에 맞지 않으면 모델에 보낸 JSON Schema 쪽으로 고쳐 다시 검사했다(`"5"` → 5, `"true"` → true, optional 필드의 `null` 제거). `tools/input-repair.ts`가 같은 검사기(`@cfworker/json-schema` 4.1.1)로 같은 규칙을 옮겼다. loop는 `prepareRepaired`로 호출을 준비한다.
+  - 기억 도구의 사용 기록은 middleware `onFinish` 대신 `recordUse(parentMessageId)`로 내보낸다. 4단계 loop가 답을 마친 뒤 부른다.
+  - TanStack과 달라진 것:
+    - 비밀 가리기가 실패하면 결과 대신 `redaction_failed` 도구 실패를 돌려준다. TanStack 경로는 `{error: message}`를 돌려줬다.
+    - JSON이 아닌 결과(undefined 필드가 있는 객체 등)도 JSON으로 바꾼 뒤 가린다. 옛 `redactResult`는 이런 결과를 가리지 않고 넘겼다.
+  - 다음 단계로 넘기는 것:
+    - 4단계: 인자 decode 실패를 모델에 돌려주는 문구. TanStack은 `Input validation failed for tool <name>: ...`였다.
 
 ### 4. loop, hook, persistence
 

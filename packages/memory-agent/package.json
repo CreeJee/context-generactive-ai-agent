@@ -63,6 +63,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@anthropic-ai/sandbox-runtime": "catalog:",
+    "@cfworker/json-schema": "catalog:",
     "@effect/ai-openai-compat": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",

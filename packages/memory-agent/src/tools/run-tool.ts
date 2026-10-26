@@ -7,7 +7,8 @@ import { ToolFailed, ToolFailureResult, toolFailedOf } from "./failure.ts";
  * A run's tools for the Effect AI loop (docs/effect-ai-migration.md step 3): the Effect AI tool the
  * model is told about, and how a call of it runs. The loop decodes a call's arguments before
  * anything else, so a call that does not match its schema never reaches a gate, and runs the call
- * once the gates and the scheduler let it.
+ * once the gates and the scheduler let it. It prepares calls through `prepareRepaired`
+ * (`input-repair.ts`), so arguments TanStack repaired are still accepted.
  */
 
 /** One call of a tool, as its handler sees it. */
