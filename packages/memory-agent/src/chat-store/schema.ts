@@ -35,18 +35,19 @@ export const StoredToolCall = Schema.Struct({
 /** Provider, wire API and model of the call that wrote an assistant message. */
 export const MessageSource = Schema.Struct({
   provider: Schema.String,
-  api: Schema.String,
+  /** Absent on messages a Goal worker wrote: its adapter stand-in had no `api` or `kind`. */
+  api: Schema.optionalKey(Schema.String),
   model: Schema.String,
 });
 
-const UserMessage = Schema.Struct({
+export const StoredUserMessage = Schema.Struct({
   role: Schema.Literal("user"),
   id: Schema.optionalKey(Schema.String),
   createdAt: Schema.optionalKey(IsoTime),
   content: Content,
 });
 
-const AssistantMessage = Schema.Struct({
+export const StoredAssistantMessage = Schema.Struct({
   role: Schema.Literal("assistant"),
   id: Schema.optionalKey(Schema.String),
   createdAt: Schema.optionalKey(IsoTime),
@@ -75,7 +76,7 @@ const AssistantMessage = Schema.Struct({
   stopReason: Schema.optionalKey(Schema.Literals(["error", "aborted"])),
 });
 
-const ToolMessage = Schema.Struct({
+export const StoredToolMessage = Schema.Struct({
   role: Schema.Literal("tool"),
   id: Schema.optionalKey(Schema.String),
   createdAt: Schema.optionalKey(IsoTime),
@@ -85,7 +86,11 @@ const ToolMessage = Schema.Struct({
 });
 
 /** One message of `chat_threads.messages` and `chat_history_groups.messages`. */
-export const StoredMessage = Schema.Union([UserMessage, AssistantMessage, ToolMessage]);
+export const StoredMessage = Schema.Union([
+  StoredUserMessage,
+  StoredAssistantMessage,
+  StoredToolMessage,
+]);
 export type StoredMessage = typeof StoredMessage.Type;
 
 /** `chat_history_groups.messages`: the thread's messages one screen message shows, in order. */
