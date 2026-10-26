@@ -24,6 +24,8 @@ export const globalQueries = {
       queryFn: () => api.accountQuota(provider),
     }),
   projects: () => queryOptions({ queryKey: appQueryKeys.global.projects, queryFn: api.projects }),
+  hiddenProjects: () =>
+    queryOptions({ queryKey: appQueryKeys.global.hiddenProjects, queryFn: api.hiddenProjects }),
   imports: () => queryOptions({ queryKey: appQueryKeys.global.imports, queryFn: api.imports }),
   embedding: () =>
     queryOptions({ queryKey: appQueryKeys.global.embedding, queryFn: api.embedding }),
@@ -61,6 +63,7 @@ export const useAccountQuotaQuery: {
   ): (provider: SubscriptionAccountProvider) => ReturnType<typeof useAccountQuotaQueryBody>;
 } & typeof useAccountQuotaQueryBody = EffectFunction.dual(2, useAccountQuotaQueryBody);
 export const useProjectsQuery = () => useQuery(globalQueries.projects());
+export const useHiddenProjectsQuery = () => useQuery(globalQueries.hiddenProjects());
 export const useImageSettingsQuery = () => useQuery(globalQueries.imageSettings());
 export const useSuspenseImageSettingsQuery = () => useSuspenseQuery(globalQueries.imageSettings());
 export const useImportsQuery = () => useSuspenseQuery(globalQueries.imports());

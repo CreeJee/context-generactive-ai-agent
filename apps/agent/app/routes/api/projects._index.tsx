@@ -6,9 +6,10 @@ import type { Route } from "./+types/projects._index";
 
 const AddProject = Schema.Struct({ root: Schema.NonEmptyString });
 
-/** GET /api/projects — registered project roots. */
+/** GET /api/projects — registered project roots; `?hidden=1` lists the archived ones instead. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+  const hidden = new URL(request.url).searchParams.get("hidden") === "1";
   // Native CLI boundary: the stable dev backend is bundled with Vite's DEV flag off.
   const developmentTiming = import.meta.env.DEV || process.argv.includes("--dev-backend");
   const boundaryStarted = performance.now();
@@ -18,7 +19,9 @@ export function loader() {
         const started = developmentTiming ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
         const projects = yield* Projects;
         const serviceAt = developmentTiming ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
-        const result = yield* projects.list;
+        const result = hidden
+          ? (yield* projects.listAll).filter((project) => project.hiddenAt !== null)
+          : yield* projects.list;
         const finished = developmentTiming ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
         return { result, serviceMs: serviceAt - started, queryMs: finished - serviceAt };
       }),
