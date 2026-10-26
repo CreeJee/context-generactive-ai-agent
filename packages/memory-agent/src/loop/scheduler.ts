@@ -23,12 +23,15 @@ export interface StepCall {
 export type CallOutcome<Request> = Data.TaggedEnum<{
   Returned: { readonly result: JsonValue };
   /**
-   * The tool ran and failed. `result` is what the model reads; `message` is the failure as stored
-   * and shown.
+   * The tool ran and failed. `result` is what the model reads; `error` is the stored tool message's
+   * error, the code the result gives; `message` is the failure as recorded and shown.
    */
-  Failed: { readonly result: JsonValue; readonly message: string };
-  /** The call was refused before its tool ran, and is shown as failed like {@link Failed}. */
-  Refused: { readonly result: JsonValue; readonly message: string };
+  Failed: { readonly result: JsonValue; readonly error: string; readonly message: string };
+  /**
+   * The call was refused before its tool ran, and is shown as failed like {@link Failed}. `error`
+   * is the reason the result gives.
+   */
+  Refused: { readonly result: JsonValue; readonly error: string };
   Waiting: { readonly request: Request };
 }>;
 interface CallOutcomeDefinition extends Data.TaggedEnum.WithGenerics<1> {
@@ -57,11 +60,15 @@ const responseIncomplete = ToolFailed.make({
 });
 
 const failedWith = (failure: ToolFailed): CallAnswer =>
-  CallOutcome.Failed({ result: failure[toolResultKey], message: failure.message });
+  CallOutcome.Failed({
+    result: failure[toolResultKey],
+    error: failure.code,
+    message: failure.message,
+  });
 
 const notStarted = CallOutcome.Refused({
   result: responseIncomplete[toolResultKey],
-  message: responseIncomplete.message,
+  error: responseIncomplete.code,
 });
 
 export interface StepScheduler<Request, E, R> {

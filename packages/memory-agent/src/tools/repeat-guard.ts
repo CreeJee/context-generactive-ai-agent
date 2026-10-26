@@ -194,7 +194,7 @@ const outcomeOf = (answer: CallAnswer) =>
   Match.valueTags(answer, {
     Returned: ({ result }) => `ok\n${sameness(result)}`,
     Failed: ({ message }) => `error\n${message}`,
-    Refused: ({ message }) => `error\n${message}`,
+    Refused: ({ error }) => `error\n${error}`,
   });
 
 /** The same guard for the Effect AI loop; one hook serves one run. */

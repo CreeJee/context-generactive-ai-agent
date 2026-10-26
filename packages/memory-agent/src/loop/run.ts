@@ -223,7 +223,7 @@ const decided = (admission: Admission<StoredInterruptPayload>) =>
 
 /** A call that never reaches its tool, as TanStack answered it: the failure text as its result. */
 const refused = (message: string) =>
-  decided(CallOutcome.Refused({ result: { error: message }, message }));
+  decided(CallOutcome.Refused({ result: { error: message }, error: message }));
 
 /** The arguments of a call as the model sent them. */
 interface SentArguments {
@@ -309,12 +309,12 @@ const contentOf = (result: JsonValue) =>
   Predicate.isString(result) ? Effect.succeed(result) : encodeJson(result);
 
 const toolMessage = ({ call, answer }: AnsweredCall) => {
-  const failed = ({ result, message }: { readonly result: JsonValue; readonly message: string }) =>
+  const failed = ({ result, error }: { readonly result: JsonValue; readonly error: string }) =>
     Effect.map(contentOf(result), (content): ToolMessage => ({
       role: "tool",
       toolCallId: call.id,
       content,
-      error: message,
+      error,
     }));
   return Match.valueTags(answer, {
     Returned: ({ result }) =>
@@ -1029,7 +1029,11 @@ function runChatBody<R>(
   input: RunInput,
 ): Stream.Stream<AgUiEvent, never, R | RunStore | Crypto.Crypto> {
   return Stream.callback<AgUiEvent, never, R | RunStore | Crypto.Crypto>((queue) => {
-    const emit = (event: AgUiEvent) => Effect.asVoid(Queue.offer(queue, event));
+    // Every event says when it was sent, as AG-UI's `timestamp` allows.
+    const emit = (event: AgUiEvent) =>
+      Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
+        Effect.asVoid(Queue.offer(queue, { ...event, timestamp })),
+      );
     const refuse = ({ message, code }: ResumeRejected | RunFailed) =>
       emit({ type: "RUN_ERROR", message, ...optionalProperty("code", code) });
     return RunStore.use((store) => store.pendingInterrupts(input.threadId)).pipe(

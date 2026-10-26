@@ -161,6 +161,7 @@ describe("run loop", () => {
             code: "unknown-interrupt",
             message:
               "Thread has pending interrupts; resume is required before accepting new input. Resume entries must resolve or cancel the complete interrupt batch.",
+            timestamp: 0,
           },
         ]);
         expect(
@@ -173,6 +174,7 @@ describe("run loop", () => {
             code: "invalid-payload",
             message:
               "Approval approval_w1 must be a boolean or decision envelope. One or more interrupt resolutions are invalid.",
+            timestamp: 0,
           },
         ]);
         expect(yield* ran).toEqual([]);
@@ -190,6 +192,7 @@ describe("run loop", () => {
         expect((yield* run("run-1", [user])).at(-1)).toEqual({
           type: "RUN_ERROR",
           message: "The model failed.",
+          timestamp: 0,
         });
         expect((yield* store.thread("thread")).at(-1)).toMatchObject({
           role: "assistant",
