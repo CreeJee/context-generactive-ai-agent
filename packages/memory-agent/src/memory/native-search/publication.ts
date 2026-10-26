@@ -101,9 +101,12 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
       Effect.gen(function* () {
         const admitted = yield* admitSnapshot((publication) =>
           Effect.gen(function* () {
-            const handle = yield* start(publication);
-            if (handle.epoch !== publication.epoch)
-              return yield* PublicationFailed.make({ reason: "owner-mismatch" });
+            const handle = yield* start(publication).pipe(
+              Effect.filterOrFail(
+                (handle) => handle.epoch === publication.epoch,
+                () => PublicationFailed.make({ reason: "owner-mismatch" }),
+              ),
+            );
             const admission = yield* handle.admission;
             return { publication, handle, admission };
           }),

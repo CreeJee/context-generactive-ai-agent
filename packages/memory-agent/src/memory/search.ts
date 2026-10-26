@@ -6,6 +6,7 @@ import {
   Context,
   Effect,
   Layer,
+  Match,
   Result,
   Schema,
 } from "effect";
@@ -316,52 +317,57 @@ const make = (tuning: SearchTuning) =>
         morphMs: result.morphMs,
         coverageMs: result.coverageMs,
       });
-      switch (result.kind) {
-        case "cancelled":
-          return yield* Effect.interrupt;
-        case "success": {
-          const spanOf = new Map(
-            (yield* chunkSpans(result.vectorSeqs.map(Number)).pipe(
-              Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
-            )).map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
-          );
-          // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
-          // span stored for a node wins.
-          const spans = result.vectorSeqs.reduce((spans, seq, index) => {
-            const id = result.vectorIds[index]!;
-            const span = spanOf.get(Number(seq));
-            if (span !== undefined && !MutableHashMap.has(spans, id))
-              MutableHashMap.set(spans, id, span);
-            return spans;
-          }, MutableHashMap.empty<string, ChunkSpan>());
-          return {
-            vector: result.vectorIds.map((id, index) => ({
-              id,
-              score: result.vectorScores[index]!,
-            })),
-            text: result.textIds,
-            morph: result.morphIds,
-            vectorUnavailable: result.vectorUnavailable,
-            spans,
-            coverage: {
-              unindexed: result.unindexed,
-              uninterpreted: result.uninterpreted,
-            },
-          };
-        }
-        default:
-          return yield* NativeMemorySearchFailed.make({
-            reason: result.kind,
-            ...optionalProperty("stage", result.failedStage ?? undefined),
-            elapsedMs:
-              result.candidateMs +
-              result.vectorMs +
-              result.mappingMs +
-              result.textMs +
-              result.morphMs +
-              result.coverageMs,
-          });
-      }
+      return yield* Match.value(result.kind).pipe(
+        Match.when("cancelled", () => Effect.interrupt),
+        Match.when("success", () =>
+          chunkSpans(result.vectorSeqs.map(Number)).pipe(
+            Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
+            Effect.map((rows) => {
+              const spanOf = new Map(
+                rows.map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
+              );
+              // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
+              // span stored for a node wins.
+              const spans = result.vectorSeqs.reduce((spans, seq, index) => {
+                const id = result.vectorIds[index]!;
+                const span = spanOf.get(Number(seq));
+                if (span !== undefined && !MutableHashMap.has(spans, id))
+                  MutableHashMap.set(spans, id, span);
+                return spans;
+              }, MutableHashMap.empty<string, ChunkSpan>());
+              return {
+                vector: result.vectorIds.map((id, index) => ({
+                  id,
+                  score: result.vectorScores[index]!,
+                })),
+                text: result.textIds,
+                morph: result.morphIds,
+                vectorUnavailable: result.vectorUnavailable,
+                spans,
+                coverage: {
+                  unindexed: result.unindexed,
+                  uninterpreted: result.uninterpreted,
+                },
+              };
+            }),
+          ),
+        ),
+        Match.orElse((reason) =>
+          Effect.fail(
+            NativeMemorySearchFailed.make({
+              reason,
+              ...optionalProperty("stage", result.failedStage ?? undefined),
+              elapsedMs:
+                result.candidateMs +
+                result.vectorMs +
+                result.mappingMs +
+                result.textMs +
+                result.morphMs +
+                result.coverageMs,
+            }),
+          ),
+        ),
+      );
     });
 
     const collectSeeds = Effect.fn("MemorySearch.collectSeeds")(function* (

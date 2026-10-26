@@ -54,11 +54,15 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     worker: runtimeWorker("native-search-worker"),
     databasePath,
   }));
-  if (opened.databasePath.length === 0)
-    return yield* VectorIndexError.make({
-      operation: "open",
-      cause: NativeOwnerFailed.make({ reason: "native-incompatible" }),
-    });
+  yield* Effect.when(
+    Effect.fail(
+      VectorIndexError.make({
+        operation: "open",
+        cause: NativeOwnerFailed.make({ reason: "native-incompatible" }),
+      }),
+    ),
+    Effect.succeed(opened.databasePath.length === 0),
+  );
   const owner = yield* makeNativeOwner(
     {
       kind: "setup",
@@ -111,14 +115,14 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       const chunkIds = ids.map(Number).filter((id) => id >= chunkVectorIdFloor);
       const parents = yield* mappings("vector_id", chunkIds);
       const parentOf = new Map(parents.map((row) => [row.vector_id, row.node_seq]));
-      const seen = new Set<number>();
-      return ids.flatMap((id, rank): VectorHit[] => {
-        const native = Number(id);
-        const seq = native < chunkVectorIdFloor ? native : parentOf.get(native);
-        if (seq === undefined || seen.has(seq)) return [];
-        seen.add(seq);
-        return [{ seq, score: scores[rank]! }];
-      });
+      return EffectArray.dedupeWith(
+        ids.flatMap((id, rank): VectorHit[] => {
+          const native = Number(id);
+          const seq = native < chunkVectorIdFloor ? native : parentOf.get(native);
+          return seq === undefined ? [] : [{ seq, score: scores[rank]! }];
+        }),
+        (left, right) => left.seq === right.seq,
+      );
     });
 
   // The owner runs one command at a time, so per-id commands only add round trips and let other
@@ -181,24 +185,27 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(failure("remove")));
   });
-  if (!owner.initialNeedsReset) yield* flush;
+  yield* Effect.when(flush, Effect.succeed(!owner.initialNeedsReset));
   const reserved = yield* seqsOf(sql`
     SELECT c.vector_id AS seq FROM node_vector_chunks c
     LEFT JOIN node_vectors v ON v.node_seq = c.node_seq AND v.embedder = c.embedder
     WHERE c.embedder = ${embedder.identity} AND v.node_seq IS NULL`).pipe(
     Effect.mapError(failure("open")),
   );
-  if (reserved.length > 0) {
-    if (!owner.initialNeedsReset) {
-      yield* removeIds(reserved);
-      yield* save;
-    }
-    // Deleting a mapping journals its id for removal. These ids are already gone natively (or
-    // the reset below drops everything), so the journal entry is acknowledged in the same step.
-    yield* sql
-      .withTransaction(Effect.all([deleteChunks(reserved), ackChunkRemovals(reserved)]))
-      .pipe(Effect.mapError(failure("open")));
-  }
+  yield* Effect.when(
+    Effect.gen(function* () {
+      yield* Effect.when(
+        Effect.andThen(removeIds(reserved), save),
+        Effect.succeed(!owner.initialNeedsReset),
+      );
+      // Deleting a mapping journals its id for removal. These ids are already gone natively (or
+      // the reset below drops everything), so the journal entry is acknowledged in the same step.
+      yield* sql
+        .withTransaction(Effect.all([deleteChunks(reserved), ackChunkRemovals(reserved)]))
+        .pipe(Effect.mapError(failure("open")));
+    }),
+    Effect.succeed(reserved.length > 0),
+  );
   const indexed = yield* sql`SELECT count(*) AS count FROM node_vectors v
     LEFT JOIN node_vector_chunks c ON c.node_seq = v.node_seq AND c.embedder = v.embedder
     WHERE v.embedder = ${embedder.identity}`.pipe(
@@ -213,7 +220,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ${embedder.identity}
       WHERE v.node_seq IS NULL`).pipe(Effect.mapError(failure("open")));
     yield* remove(unrecorded);
-    if (owner.size() === indexed) yield* save;
+    yield* Effect.when(save, Effect.succeed(owner.size() === indexed));
   }
   if (owner.initialNeedsReset || owner.size() !== indexed) {
     yield* command(OwnerCommand.cases.reset.make(identity()), "open");
@@ -258,7 +265,10 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       publication.withMutation(
         Effect.gen(function* () {
           const { seqs, vectors, commit } = yield* prepare;
-          if (seqs.length > 0) yield* add(seqs, vectors).pipe(Effect.andThen(save));
+          yield* Effect.when(
+            add(seqs, vectors).pipe(Effect.andThen(save)),
+            Effect.succeed(seqs.length > 0),
+          );
           return yield* commit;
         }),
         publicationError,
@@ -313,8 +323,10 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     backend: {
       kind: "native",
       read: Effect.fnUntraced(function* (input: NativeReadInput) {
-        if (input.embedder !== embedder.identity)
-          return yield* publicationError(NativeOwnerFailed.make({ reason: "invalid-input" }));
+        yield* Effect.when(
+          Effect.fail(publicationError(NativeOwnerFailed.make({ reason: "invalid-input" }))),
+          Effect.succeed(input.embedder !== embedder.identity),
+        );
         const { publication: current, result } = yield* publication
           .read(() =>
             owner.startRead(OwnerCommand.cases["memory-search"].make({ ...identity(), input })),

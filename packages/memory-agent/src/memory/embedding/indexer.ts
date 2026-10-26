@@ -122,14 +122,14 @@ const make = Effect.gen(function* () {
    */
   const outcomeOf = (node: Pending, segmentation: Segmentation, vectorIds: readonly number[]) =>
     selectUnindexed(node.seq).pipe(
-      Effect.map((current): NodeOutcome => {
-        if (Option.exists(current, ({ text }) => text === node.text))
-          return NodeOutcome.indexed({ seq: node.seq });
-        return Segmentation.$match(segmentation, {
-          whole: () => NodeOutcome["stale-whole"]({ seq: node.seq }),
-          chunked: () => NodeOutcome["stale-chunks"]({ vectorIds }),
-        });
-      }),
+      Effect.map((current): NodeOutcome =>
+        Option.exists(current, ({ text }) => text === node.text)
+          ? NodeOutcome.indexed({ seq: node.seq })
+          : Segmentation.$match(segmentation, {
+              whole: () => NodeOutcome["stale-whole"]({ seq: node.seq }),
+              chunked: () => NodeOutcome["stale-chunks"]({ vectorIds }),
+            }),
+      ),
     );
 
   /** Writes one outcome inside the caller's transaction. */
@@ -266,16 +266,15 @@ const make = Effect.gen(function* () {
     work: (limit: number) => Effect.Effect<number, E>,
     budget: number,
     batchSize: number,
-  ) =>
-    Effect.gen(function* () {
-      let total = 0;
-      let last = -1;
-      while (last !== 0 && total < budget) {
-        last = yield* work(Math.min(batchSize, budget - total));
-        total += last;
-      }
-      return total;
-    });
+  ) => {
+    const from = (total: number): Effect.Effect<number, E> =>
+      total >= budget
+        ? Effect.succeed(total)
+        : Effect.flatMap(work(Math.min(batchSize, budget - total)), (done) =>
+            done === 0 ? Effect.succeed(total) : from(total + done),
+          );
+    return from(0);
+  };
 
   return {
     /**

@@ -51,15 +51,17 @@ const load = Effect.fn("KiwiWorker.load")(function* (modelDirectory: string) {
     "kiwi-wasm.wasm",
   );
   const builder = yield* nativePromise(() => KiwiBuilder.create(wasmPath));
-  const modelFiles: Record<string, Uint8Array> = {};
-  for (const name of yield* fs.readDirectory(modelDirectory)) {
-    const path = paths.join(modelDirectory, name);
-    // readdir's previous isFile contract excluded symbolic links, including dangling links.
-    const link = yield* fs.readLink(path).pipe(Effect.result);
-    if (Result.isSuccess(link)) continue;
-    const info = yield* fs.stat(path);
-    if (info.type === "File") modelFiles[name] = yield* fs.readFile(path);
-  }
+  const files = yield* Effect.forEach(
+    yield* fs.readDirectory(modelDirectory),
+    Effect.fnUntraced(function* (name) {
+      const path = paths.join(modelDirectory, name);
+      // readdir's previous isFile contract excluded symbolic links, including dangling links.
+      const link = yield* fs.readLink(path).pipe(Effect.result);
+      const regular = Result.isFailure(link) && (yield* fs.stat(path)).type === "File";
+      return regular ? [[name, yield* fs.readFile(path)] as const] : [];
+    }),
+  );
+  const modelFiles = Object.fromEntries(files.flat());
   return yield* nativePromise(() => builder.build({ modelFiles, modelType: "cong" }));
 });
 

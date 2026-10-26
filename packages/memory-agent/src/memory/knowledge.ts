@@ -259,9 +259,15 @@ const make = Effect.gen(function* () {
     stored(
       Effect.gen(function* () {
         const proposedText = input.proposedText.trim();
-        if (!isTruthy(proposedText)) return yield* promotionRejected("empty_proposed_text");
+        yield* Effect.when(
+          Effect.fail(promotionRejected("empty_proposed_text")),
+          Effect.succeed(!isTruthy(proposedText)),
+        );
         const resolvedText = input.resolvedText.trim();
-        if (!isTruthy(resolvedText)) return yield* promotionRejected("empty_resolved_text");
+        yield* Effect.when(
+          Effect.fail(promotionRejected("empty_resolved_text")),
+          Effect.succeed(!isTruthy(resolvedText)),
+        );
         const userNode = yield* nodes.get(input.authorizedByUserNodeId);
         if (
           !isTruthy(userNode) ||
@@ -334,25 +340,29 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const recordUsage = Effect.fnUntraced(function* (
+  const recordUsage = (
     candidates: readonly (typeof CandidateIdentityRow.Type)[],
     input: { readonly projectId: string; readonly sessionId: string; readonly runId: string },
     parentMessageId: string | null,
     kind: "retrieved" | "used",
-  ) {
-    for (const candidate of candidates)
-      yield* sql`INSERT OR IGNORE INTO memory_usage_events ${sql.insert({
-        id: yield* crypto.randomUUIDv4(),
-        project_id: input.projectId,
-        candidate_id: candidate.id,
-        memory_node_id: candidate.memory_node_id,
-        origin_session_id: input.sessionId,
-        parent_run_id: input.runId,
-        parent_message_id: parentMessageId,
-        kind,
-        created_at: yield* nowMillis,
-      })}`;
-  });
+  ) =>
+    Effect.forEach(
+      candidates,
+      Effect.fnUntraced(function* (candidate) {
+        yield* sql`INSERT OR IGNORE INTO memory_usage_events ${sql.insert({
+          id: yield* crypto.randomUUIDv4(),
+          project_id: input.projectId,
+          candidate_id: candidate.id,
+          memory_node_id: candidate.memory_node_id,
+          origin_session_id: input.sessionId,
+          parent_run_id: input.runId,
+          parent_message_id: parentMessageId,
+          kind,
+          created_at: yield* nowMillis,
+        })}`;
+      }),
+      { discard: true },
+    );
 
   const recordRetrieval = (input: {
     readonly projectId: string;

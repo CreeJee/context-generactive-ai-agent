@@ -42,6 +42,13 @@ export const createResultPageReader = Effect.gen(function* () {
       WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
         AND session_id = ${sessionId}`.pipe(Effect.mapError(failed));
   const cache = MutableHashMap.empty<string, TextIndex>();
+  /** Caches the index; past 32 entries, the earliest cached go first. */
+  const cacheIndex = (id: string, index: TextIndex) => {
+    MutableHashMap.set(cache, id, index);
+    Array.from(MutableHashMap.keys(cache))
+      .slice(0, -32)
+      .forEach((old) => MutableHashMap.remove(cache, old));
+  };
   let generation = 0;
   const read = Effect.fnUntraced(function* (
     id: string,
@@ -113,11 +120,7 @@ export const createResultPageReader = Effect.gen(function* () {
           reason: ResultPageReadReason.cases.Changed.make({}),
         });
       index = { size, length, points };
-      MutableHashMap.set(cache, id, index);
-      for (const old of MutableHashMap.keys(cache)) {
-        if (MutableHashMap.size(cache) <= 32) break;
-        MutableHashMap.remove(cache, old);
-      }
+      cacheIndex(id, index);
     }
     const start = Math.min(Math.max(0, Math.trunc(offset)), index.length);
     let point: Checkpoint = { byte: 0, offset: 0 };
@@ -171,11 +174,7 @@ export const createResultPageReader = Effect.gen(function* () {
           blockStart = byte;
         }
       }
-      MutableHashMap.set(cache, id, { size: byte, length: text.length, points });
-      for (const old of MutableHashMap.keys(cache)) {
-        if (MutableHashMap.size(cache) <= 32) break;
-        MutableHashMap.remove(cache, old);
-      }
+      cacheIndex(id, { size: byte, length: text.length, points });
     },
   };
 });

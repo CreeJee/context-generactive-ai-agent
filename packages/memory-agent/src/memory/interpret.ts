@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
+import { HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { chat } from "@tanstack/ai";
@@ -186,16 +186,16 @@ const make = Effect.gen(function* () {
       const matched = (yield* Effect.forEach(found.matches, (match) => nodes.get(match.id))).filter(
         (node) => node !== null,
       );
-      const byId = MutableHashMap.empty<string, Node>();
-      for (const node of [...recent, ...matched])
-        if (
-          node.id !== statement.id &&
-          node.seq < statement.seq &&
-          node.createdAt <= statement.createdAt &&
-          (node.kind === "user" || node.kind === "assistant")
-        )
-          MutableHashMap.set(byId, node.id, node);
-      return [...MutableHashMap.values(byId)].slice(0, candidatesPerStatement);
+      return EffectArray.dedupeWith(
+        [...recent, ...matched].filter(
+          (node) =>
+            node.id !== statement.id &&
+            node.seq < statement.seq &&
+            node.createdAt <= statement.createdAt &&
+            (node.kind === "user" || node.kind === "assistant"),
+        ),
+        (left, right) => left.id === right.id,
+      ).slice(0, candidatesPerStatement);
     });
 
   const topicNode = (projectId: string, label: string) =>
@@ -207,21 +207,21 @@ const make = Effect.gen(function* () {
 
   const interpretBatch = (pending: readonly Node[], selection: ModelSelection) =>
     Effect.gen(function* () {
-      const candidates = MutableHashMap.empty<string, readonly Node[]>();
-      for (const statement of pending)
-        MutableHashMap.set(candidates, statement.id, yield* candidatesFor(statement));
-      // A statement with no earlier candidate can relate to nothing, so it costs no model call.
-      const batch = pending.filter(
-        (statement) =>
-          (Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? []).length > 0,
+      const candidates = new Map(
+        yield* Effect.forEach(pending, (statement) =>
+          Effect.map(candidatesFor(statement), (found) => [statement.id, found] as const),
+        ),
       );
+      const offeredTo = (statement: Node) => candidates.get(statement.id) ?? [];
+      // A statement with no earlier candidate can relate to nothing, so it costs no model call.
+      const batch = pending.filter((statement) => offeredTo(statement).length > 0);
       const alone = pending.filter((statement) => !batch.includes(statement));
-      if (alone.length > 0) {
-        const now = yield* nowIso;
-        yield* Effect.forEach(alone, (statement) => markDone(statement.id, now), {
-          discard: true,
-        }).pipe(sql.withTransaction);
-      }
+      yield* Effect.when(
+        Effect.flatMap(nowIso, (now) =>
+          Effect.forEach(alone, (statement) => markDone(statement.id, now), { discard: true }),
+        ).pipe(sql.withTransaction),
+        Effect.succeed(alone.length > 0),
+      );
       if (batch.length === 0) return pending.length;
       const projectId = batch[0]!.projectId;
       const input = {
@@ -232,9 +232,7 @@ const make = Effect.gen(function* () {
           createdAt: statement.createdAt,
           sessionId: statement.sessionId,
           text: statement.text.slice(0, statementCharacters),
-          candidates: (
-            Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? []
-          ).map((candidate) => ({
+          candidates: offeredTo(statement).map((candidate) => ({
             id: candidate.id,
             role: candidate.kind,
             createdAt: candidate.createdAt,
@@ -281,74 +279,94 @@ const make = Effect.gen(function* () {
           orElse: () => Effect.fail(InterpretationFailed.make({ reason: "model_call_failed" })),
         }),
       );
-      const labelled = Option.getOrUndefined(
+      const labelled = yield* Effect.fromOption(
         decodeAnswer(answer.text.match(/\{[\s\S]*\}/)?.[0] ?? ""),
+        () => InterpretationFailed.make({ reason: "unreadable_answer" }),
       );
-      if (!isTruthy(labelled))
-        return yield* InterpretationFailed.make({ reason: "unreadable_answer" });
+      const answered = batch.flatMap((statement) => {
+        const result = labelled.statements.find((entry) => entry.id === statement.id);
+        return result === undefined ? [] : [{ statement, result }];
+      });
 
-      yield* Effect.gen(function* () {
-        for (const statement of batch) {
-          const result = labelled.statements.find((entry) => entry.id === statement.id);
-          if (!isTruthy(result)) continue;
-          const offered = Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? [];
-          const allowed = HashSet.fromIterable(offered.map((node) => node.id));
-
-          for (const label of EffectArray.dedupe(result.topics.map(normalizeTopic))) {
-            if (label.length === 0) continue;
-            yield* interpretations.record({
-              nodeId: statement.id,
-              kind: "about",
-              targetId: yield* topicNode(statement.projectId, label),
-              status: "applied",
-              reason: label,
-              model: cheap.model,
-            });
-          }
-
-          for (const link of result.links) {
-            // Only ids offered for this statement: the model cannot point anywhere else.
-            if (!HashSet.has(allowed, link.target)) continue;
-            switch (link.relation) {
-              case "corrects":
-              case "retracts":
-                // Only the user's own words change a decision (R07 authority).
-                if (statement.kind !== "user") break;
-                yield* interpretations.record({
-                  nodeId: statement.id,
-                  kind: link.relation,
-                  targetId: link.target,
-                  status:
-                    link.certainty === "clear" &&
-                    (offered.find((node) => node.id === link.target)?.sessionId ===
-                      statement.sessionId ||
-                      link.sameDecision === true)
-                      ? "applied"
-                      : "unconfirmed",
-                  reason: link.reason,
-                  model: cheap.model,
-                });
-                break;
-              case "related":
-                if (link.certainty !== "clear") break;
-                yield* interpretations.record({
-                  nodeId: statement.id,
-                  kind: "related",
-                  targetId: link.target,
-                  status: "applied",
-                  reason: link.reason,
-                  model: cheap.model,
-                });
-                break;
-            }
-          }
-          yield* markDone(statement.id, yield* nowIso);
-        }
+      yield* Effect.andThen(
+        Effect.forEach(
+          answered,
+          Effect.fnUntraced(function* ({ statement, result }) {
+            const offered = offeredTo(statement);
+            const allowed = HashSet.fromIterable(offered.map((node) => node.id));
+            yield* Effect.forEach(
+              EffectArray.dedupe(result.topics.map(normalizeTopic)).filter(
+                (label) => label.length > 0,
+              ),
+              (label) =>
+                Effect.flatMap(topicNode(statement.projectId, label), (targetId) =>
+                  interpretations.record({
+                    nodeId: statement.id,
+                    kind: "about",
+                    targetId,
+                    status: "applied",
+                    reason: label,
+                    model: cheap.model,
+                  }),
+                ),
+              { discard: true },
+            );
+            yield* Effect.forEach(
+              // Only ids offered for this statement: the model cannot point anywhere else.
+              result.links.filter((link) => HashSet.has(allowed, link.target)),
+              (link) =>
+                Match.value(link.relation).pipe(
+                  // Only the user's own words change a decision (R07 authority).
+                  Match.whenOr("corrects", "retracts", (kind) =>
+                    Effect.when(
+                      interpretations.record({
+                        nodeId: statement.id,
+                        kind,
+                        targetId: link.target,
+                        status:
+                          link.certainty === "clear" &&
+                          (offered.find((node) => node.id === link.target)?.sessionId ===
+                            statement.sessionId ||
+                            link.sameDecision === true)
+                            ? "applied"
+                            : "unconfirmed",
+                        reason: link.reason,
+                        model: cheap.model,
+                      }),
+                      Effect.succeed(statement.kind === "user"),
+                    ),
+                  ),
+                  Match.when("related", () =>
+                    Effect.when(
+                      interpretations.record({
+                        nodeId: statement.id,
+                        kind: "related",
+                        targetId: link.target,
+                        status: "applied",
+                        reason: link.reason,
+                        model: cheap.model,
+                      }),
+                      Effect.succeed(link.certainty === "clear"),
+                    ),
+                  ),
+                  Match.exhaustive,
+                ),
+              { discard: true },
+            );
+            yield* markDone(statement.id, yield* nowIso);
+          }),
+          { discard: true },
+        ),
         // A statement the answer skipped is retried later, like any other failure.
-        for (const statement of batch)
-          if (!labelled.statements.some((entry) => entry.id === statement.id))
-            yield* markFailed(statement.id, "missing_from_answer", yield* nowIso);
-      }).pipe(sql.withTransaction);
+        Effect.forEach(
+          batch.filter(
+            (statement) => !labelled.statements.some((entry) => entry.id === statement.id),
+          ),
+          (statement) =>
+            Effect.flatMap(nowIso, (now) => markFailed(statement.id, "missing_from_answer", now)),
+          { discard: true },
+        ),
+      ).pipe(sql.withTransaction);
       return pending.length;
     });
 

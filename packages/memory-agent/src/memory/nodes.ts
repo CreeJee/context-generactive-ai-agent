@@ -293,17 +293,32 @@ const make = Effect.gen(function* () {
                 WHERE session_id = ${input.sessionId} AND kind = 'user' AND seq < ${node.seq})`;
         }
 
-        if (Option.isSome(previous)) yield* link(previous.value, node.id, "next", createdAt);
-        for (const declared of input.links ?? []) {
-          if (declared.kind === "reply") yield* link(node.id, declared.nodeId, "reply", createdAt);
-          else yield* link(declared.nodeId, node.id, declared.kind, createdAt);
-        }
-        for (const ref of EffectArray.dedupe(input.refs ?? [])) {
-          const earlier = idOf(yield* latestWithRef({ ref, projectId: input.projectId }));
-          yield* sql`INSERT INTO node_refs VALUES (${node.id}, ${ref}) ON CONFLICT DO NOTHING`;
-          if (Option.isSome(earlier)) yield* link(node.id, earlier.value, "touches", createdAt);
-        }
-        if (node.kind === "tool_result") yield* supersedeEarlierReads(node.id);
+        yield* Effect.transposeOption(
+          Option.map(previous, (id) => link(id, node.id, "next", createdAt)),
+        );
+        yield* Effect.forEach(
+          input.links ?? [],
+          (declared) =>
+            declared.kind === "reply"
+              ? link(node.id, declared.nodeId, "reply", createdAt)
+              : link(declared.nodeId, node.id, declared.kind, createdAt),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          EffectArray.dedupe(input.refs ?? []),
+          Effect.fnUntraced(function* (ref) {
+            const earlier = idOf(yield* latestWithRef({ ref, projectId: input.projectId }));
+            yield* sql`INSERT INTO node_refs VALUES (${node.id}, ${ref}) ON CONFLICT DO NOTHING`;
+            yield* Effect.transposeOption(
+              Option.map(earlier, (id) => link(node.id, id, "touches", createdAt)),
+            );
+          }),
+          { discard: true },
+        );
+        yield* Effect.when(
+          supersedeEarlierReads(node.id),
+          Effect.succeed(node.kind === "tool_result"),
+        );
         if (HashSet.has(interpretedKinds, node.kind) && hasStatementText(node.text))
           yield* sql`INSERT INTO interpret_jobs (node_id, status, updated_at)
             VALUES (${node.id}, 'pending', ${createdAt})`;

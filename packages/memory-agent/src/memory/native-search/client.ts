@@ -15,6 +15,7 @@ import {
   FiberMap,
   HashMap,
   Layer,
+  Match,
   Option,
   Predicate,
   Ref,
@@ -149,18 +150,18 @@ export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
 );
 
 /** A worker reporting these has a broken index or reader; nothing after it can be trusted. */
-const fatal = (error: NativeOwnerFailed) => {
-  switch (error.reason) {
-    case "index-failed":
-    case "read-failed":
-    case "native-incompatible":
-    case "worker-exit":
-    case "worker-error":
-      return true;
-    default:
-      return false;
-  }
-};
+const fatal = (error: NativeOwnerFailed) =>
+  Match.value(error.reason).pipe(
+    Match.whenOr(
+      "index-failed",
+      "read-failed",
+      "native-incompatible",
+      "worker-exit",
+      "worker-error",
+      () => true,
+    ),
+    Match.orElse(() => false),
+  );
 
 /**
  * Scoped native owner. Each request is a job fibre in a `FiberMap` keyed by request id: queued
@@ -195,15 +196,20 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     yield* State.$match(previous, {
       failed: () => Effect.void,
       open: (previous) =>
-        Effect.gen(function* () {
-          for (const job of HashMap.values(previous.jobs)) {
-            yield* Effect.sync(() => {
-              if (Option.isSome(job.control)) job.control.value.close();
-            });
-            yield* Deferred.fail(job.result, error);
-          }
-          yield* FiberMap.clear(jobs);
-        }),
+        Effect.andThen(
+          Effect.forEach(
+            HashMap.values(previous.jobs),
+            (job) =>
+              Effect.andThen(
+                Effect.transposeOption(
+                  Option.map(job.control, (control) => Effect.sync(() => control.close())),
+                ),
+                Deferred.fail(job.result, error),
+              ),
+            { discard: true },
+          ),
+          FiberMap.clear(jobs),
+        ),
     });
   });
   yield* Effect.addFinalizer(() => failAll(NativeOwnerFailed.make({ reason: "closed" })));
@@ -313,8 +319,10 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     const input = yield* Schema.decodeEffect(OwnerCommand)(command).pipe(
       Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
     );
-    if (input.epoch !== validated.epoch)
-      return yield* NativeOwnerFailed.make({ reason: "epoch-mismatch" });
+    yield* Effect.when(
+      Effect.fail(NativeOwnerFailed.make({ reason: "epoch-mismatch" })),
+      Effect.succeed(input.epoch !== validated.epoch),
+    );
     if (
       OwnerCommand.guards["memory-search"](input) &&
       nativeReadInputLogicalBytes(input.input) > input.input.inputBudgetBytes
@@ -412,9 +420,9 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           return yield* restore(
             Deferred.await(result).pipe(
               Effect.onInterrupt(() =>
-                Effect.sync(() => {
-                  if (Option.isSome(control)) control.value.cancel();
-                }),
+                Effect.transposeOption(
+                  Option.map(control, (requested) => Effect.sync(() => requested.cancel())),
+                ),
               ),
               Effect.timeoutOrElse({
                 duration: replyDeadline(input),
@@ -487,18 +495,18 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       }),
       (control) => executeRegistered(command, control, admission),
       (control) =>
-        Effect.sync(() => {
-          if (Option.isSome(control)) control.value.close();
-        }),
+        Effect.transposeOption(Option.map(control, (opened) => Effect.sync(() => opened.close()))),
     );
   });
   const cancel = Effect.fn("NativeOwner.cancel")(function* (requestId: string) {
     const current = yield* Ref.get(state);
     if (State.$is("failed")(current)) return yield* current.error;
-    const control = Option.flatMap(HashMap.get(current.jobs, requestId), (job) => job.control);
-    if (Option.isNone(control)) return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+    const control = yield* Effect.fromOption(
+      Option.flatMap(HashMap.get(current.jobs, requestId), (job) => job.control),
+      () => NativeOwnerFailed.make({ reason: "invalid-input" }),
+    );
     // Direct main-thread native atomic store, never a message to the blocked worker.
-    yield* Effect.sync(() => control.value.cancel());
+    yield* Effect.sync(() => control.cancel());
   });
   const startRead = Effect.fn("NativeOwner.startRead")(function* (
     command: (typeof OwnerCommand.cases)["memory-search"]["Type"],

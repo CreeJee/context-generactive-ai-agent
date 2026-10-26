@@ -1,4 +1,14 @@
-import { Effect, FileSystem, Layer, Option, Path, Predicate, Schema, ScopedRef } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+  ScopedRef,
+} from "effect";
 import { RpcServer } from "effect/rpc";
 // Synchronous native/filesystem calls are confined to this owning worker.
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -48,15 +58,18 @@ const owner = Effect.gen(function* () {
     ![1, 2, 4, 8].includes(setup.bits)
   )
     return yield* fail("invalid-input");
-  if (setup.databasePath !== undefined)
-    yield* native(() => {
-      const sqlite = new DatabaseSync(setup.databasePath!, { readOnly: true });
-      try {
-        assertDatabaseSchema(sqlite);
-      } finally {
-        sqlite.close();
-      }
-    }, "native-incompatible");
+  yield* Effect.transposeOption(
+    Option.map(Option.fromUndefinedOr(setup.databasePath), (databasePath) =>
+      native(() => {
+        const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          assertDatabaseSchema(sqlite);
+        } finally {
+          sqlite.close();
+        }
+      }, "native-incompatible"),
+    ),
+  );
   yield* files(fs.makeDirectory(setup.cacheDirectory, { recursive: true, mode: 0o700 }));
   const binding = yield* native(() => {
     const addon = requireRuntime("turbovec");
@@ -109,7 +122,10 @@ const owner = Effect.gen(function* () {
   const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
 
   const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
-    if (command.epoch !== setup.epoch) return yield* fail("epoch-mismatch");
+    yield* Effect.when(
+      Effect.fail(fail("epoch-mismatch")),
+      Effect.succeed(command.epoch !== setup.epoch),
+    );
     // The single owner loop is the only reader and writer of indexRef, so `index` stays current
     // for this command; only reset replaces it, and ack then reads the replacement.
     const index = yield* ScopedRef.get(indexRef);
@@ -163,7 +179,9 @@ const owner = Effect.gen(function* () {
         }),
       "vector-search": (command) =>
         Effect.gen(function* () {
-          if (command.allowedIds !== undefined) yield* ids(command.allowedIds);
+          yield* Effect.transposeOption(
+            Option.map(Option.fromUndefinedOr(command.allowedIds), ids),
+          );
           if (
             command.query.length !== setup.dimensions ||
             !command.query.every(Number.isFinite) ||
@@ -225,13 +243,13 @@ const owner = Effect.gen(function* () {
         }),
       "memory-search": (command) =>
         Effect.gen(function* () {
-          if (Option.isNone(reader)) return yield* fail("read-failed");
+          const session = yield* Effect.fromOption(reader, () => fail("read-failed"));
           if (command.controlToken === undefined || setup.ownerKey === undefined)
             return yield* fail("invalid-input");
           const beforeCpu = process.threadCpuUsage();
           const result = yield* native(
             () =>
-              reader.value.search(
+              session.search(
                 index,
                 command.input,
                 command.controlToken!,
@@ -260,18 +278,18 @@ const owner = Effect.gen(function* () {
  * Only the reason crosses IPC: native messages and cache paths stay in this worker. Requests
  * report their own rejection codes; anything else means the index itself failed.
  */
-const reported = (error: NativeOwnerFailed) => {
-  switch (error.reason) {
-    case "epoch-mismatch":
-    case "invalid-input":
-    case "read-failed":
-    case "native-incompatible":
-    case "lease-unavailable":
-      return NativeOwnerFailed.make({ reason: error.reason });
-    default:
-      return NativeOwnerFailed.make({ reason: "index-failed" });
-  }
-};
+const reported = (error: NativeOwnerFailed) =>
+  Match.value(error.reason).pipe(
+    Match.whenOr(
+      "epoch-mismatch",
+      "invalid-input",
+      "read-failed",
+      "native-incompatible",
+      "lease-unavailable",
+      fail,
+    ),
+    Match.orElse(() => fail("index-failed")),
+  );
 
 const handlers = NativeOwnerRpcs.toLayer(
   Effect.gen(function* () {

@@ -1,4 +1,4 @@
-import { Function as EffectFunction, HashSet } from "effect";
+import { Array as EffectArray, Function as EffectFunction, HashSet } from "effect";
 import type { Provenance } from "./graph.ts";
 import type { Node } from "./nodes.ts";
 
@@ -28,11 +28,8 @@ function changeAuthoritySqlBody(source: string, target: string) {
 export const scopedChain: {
   (allowed: HashSet.HashSet<string>): (trace: Provenance | null) => Node[];
 } & typeof scopedChainBody = EffectFunction.dual(2, scopedChainBody);
-function scopedChainBody(trace: Provenance | null, allowed: HashSet.HashSet<string>) {
-  const chain: Node[] = [];
-  for (const cause of trace?.chain ?? []) {
-    if (!HashSet.has(allowed, cause.projectId)) break;
-    chain.push(cause);
-  }
-  return chain;
+function scopedChainBody(trace: Provenance | null, allowed: HashSet.HashSet<string>): Node[] {
+  return EffectArray.takeWhile(trace?.chain ?? [], (cause) =>
+    HashSet.has(allowed, cause.projectId),
+  );
 }

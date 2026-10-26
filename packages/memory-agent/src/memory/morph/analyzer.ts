@@ -4,6 +4,7 @@ import { NodeFileSystem, NodePath, NodeWorker } from "@effect/platform-node";
 
 import { Worker } from "node:worker_threads";
 import {
+  Array as EffectArray,
   Context,
   Deferred,
   FileSystem,
@@ -71,12 +72,16 @@ const ensureModel = Effect.fn("MorphAnalyzer.ensureModel")(
     const installer = yield* ArchiveInstaller;
     const root = paths.join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
     const modelDirectory = paths.join(root, kiwiModel.directory);
-    if (yield* fs.exists(paths.join(modelDirectory, "cong.mdl"))) return modelDirectory;
-    yield* fs.makeDirectory(paths.dirname(root), { recursive: true, mode: 0o700 });
-    yield* installer.install({
-      archive: { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
-      target: root,
-    });
+    yield* Effect.when(
+      Effect.andThen(
+        fs.makeDirectory(paths.dirname(root), { recursive: true, mode: 0o700 }),
+        installer.install({
+          archive: { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
+          target: root,
+        }),
+      ),
+      Effect.map(fs.exists(paths.join(modelDirectory, "cong.mdl")), (installed) => !installed),
+    );
     return modelDirectory;
   },
   Effect.mapError((cause) => MorphAnalysisFailed.make({ reason: "model_install_failed", cause })),
@@ -127,15 +132,11 @@ const rpcSession = (data: KiwiWorkerData) =>
   );
 
 /** A worker that failed to load or was lost is replaced by the next request's new one. */
-const keepsSession = (error: KiwiWorkerFailed) => {
-  switch (error.stage) {
-    case "run":
-      return true;
-    case "load":
-    case "lost":
-      return false;
-  }
-};
+const keepsSession = {
+  run: true,
+  load: false,
+  lost: false,
+} as const satisfies Record<KiwiWorkerFailed["stage"], boolean>;
 
 const workerFailed = (cause: KiwiWorkerFailed) =>
   Effect.fail(MorphAnalysisFailed.make({ reason: "worker_failed", cause }));
@@ -177,7 +178,7 @@ const makeKiwi = Effect.gen(function* () {
   const request = (texts: readonly string[]) =>
     Effect.flatMap(live, (current) =>
       current.busy(current.terms(texts.map((text) => text.slice(0, maxCharacters)))).pipe(
-        Effect.tapError((error) => (keepsSession(error) ? Effect.void : discard)),
+        Effect.tapError((error) => (keepsSession[error.stage] ? Effect.void : discard)),
         Effect.catchTag("KiwiWorkerFailed", workerFailed),
       ),
     ).pipe(oneRequest.withPermits(1));
@@ -197,14 +198,10 @@ const makeKiwi = Effect.gen(function* () {
         ),
       );
     },
-    terms: Effect.fnUntraced(function* (texts: readonly string[]) {
-      const all: string[][] = [];
-      for (let index = 0; index < texts.length; index += batchSize)
-        all.push(
-          ...(yield* request(texts.slice(index, index + batchSize))).map((terms) => [...terms]),
-        );
-      return all;
-    }),
+    terms: (texts: readonly string[]) =>
+      Effect.map(Effect.forEach(EffectArray.chunksOf(texts, batchSize), request), (batches) =>
+        batches.flat().map((terms) => [...terms]),
+      ),
   } satisfies MorphAnalyzerApi;
 });
 

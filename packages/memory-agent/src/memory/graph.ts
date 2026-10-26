@@ -1,6 +1,6 @@
 import { HashSet, MutableHashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer, Match, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { EdgeKind } from "./edges.ts";
 import { hasStatementText } from "./quality.ts";
@@ -197,15 +197,22 @@ const make = Effect.gen(function* () {
         current = cause;
       }
 
-      const challengedBy: Provenance["challengedBy"][number][] = [];
-      for (const target of chain) {
-        for (const row of yield* challenges(target.id)) {
-          const edge = edgeOfRow(row);
-          if (edge.kind !== "corrects" && edge.kind !== "retracts") continue;
-          const node = yield* nodeById(edge.fromId);
-          if (node !== null) challengedBy.push({ node, kind: edge.kind, target: target.id });
-        }
-      }
+      const challenged = yield* Effect.forEach(chain, (target) =>
+        Effect.flatMap(challenges(target.id), (rows) =>
+          Effect.forEach(rows, (row) => {
+            const edge = edgeOfRow(row);
+            return Match.value(edge.kind).pipe(
+              Match.whenOr("corrects", "retracts", (kind) =>
+                Effect.map(nodeById(edge.fromId), (node) =>
+                  node === null ? [] : [{ node, kind, target: target.id }],
+                ),
+              ),
+              Match.orElse(() => Effect.succeed([])),
+            );
+          }),
+        ),
+      );
+      const challengedBy: Provenance["challengedBy"] = challenged.flat(2);
 
       return { chain, challengedBy } satisfies Provenance;
     }).pipe(Effect.mapError((cause) => GraphReadFailed.make({ cause })));

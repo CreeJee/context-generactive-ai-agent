@@ -71,24 +71,27 @@ const make = Effect.gen(function* () {
      */
     record: (interpretation: Omit<Interpretation, "createdAt">) =>
       stored(
-        Effect.gen(function* () {
-          const { count } = yield* validEndpoints(interpretation);
-          if (count !== 2) return;
-          const createdAt = DateTime.formatIso(yield* DateTime.now);
-          yield* sql`INSERT INTO interpretations ${sql.insert({
-            node_id: interpretation.nodeId,
-            kind: interpretation.kind,
-            target_id: interpretation.targetId,
-            status: interpretation.status,
-            reason: interpretation.reason,
-            model: interpretation.model,
-            created_at: createdAt,
-          })}`;
-          if (interpretation.status === "applied")
-            yield* sql`INSERT INTO edges VALUES (${interpretation.nodeId}, ${interpretation.targetId},
-              ${interpretation.kind}, 'llm', ${edgeWeights[interpretation.kind]}, ${createdAt})
-              ON CONFLICT DO NOTHING`;
-        }).pipe(sql.withTransaction),
+        Effect.when(
+          Effect.gen(function* () {
+            const createdAt = DateTime.formatIso(yield* DateTime.now);
+            yield* sql`INSERT INTO interpretations ${sql.insert({
+              node_id: interpretation.nodeId,
+              kind: interpretation.kind,
+              target_id: interpretation.targetId,
+              status: interpretation.status,
+              reason: interpretation.reason,
+              model: interpretation.model,
+              created_at: createdAt,
+            })}`;
+            yield* Effect.when(
+              sql`INSERT INTO edges VALUES (${interpretation.nodeId}, ${interpretation.targetId},
+                ${interpretation.kind}, 'llm', ${edgeWeights[interpretation.kind]}, ${createdAt})
+                ON CONFLICT DO NOTHING`,
+              Effect.succeed(interpretation.status === "applied"),
+            );
+          }),
+          Effect.map(validEndpoints(interpretation), ({ count }) => count === 2),
+        ).pipe(Effect.asVoid, sql.withTransaction),
       ),
 
     /** Conclusions whose target is one of these nodes, oldest first. */

@@ -78,12 +78,14 @@ const make = Effect.gen(function* () {
   /** One node's repairs, in the batch's transaction. */
   const repairNode = Effect.fnUntraced(function* (id: string) {
     // Remember only topics affected by empty-source links, not every orphan topic.
-    if (yield* emptyNode(id))
-      yield* sql`
+    yield* Effect.when(
+      sql`
         INSERT INTO memory_graph_topic_candidates (node_seq)
         SELECT t.seq FROM edges e JOIN nodes t ON t.id = e.to_id
         WHERE e.from_id = ${id} AND e.origin = 'llm' AND e.kind = 'about' AND t.kind = 'topic'
-        ON CONFLICT DO NOTHING`;
+        ON CONFLICT DO NOTHING`,
+      emptyNode(id),
+    );
     yield* sql`
       INSERT INTO memory_graph_edge_repairs
         (version, from_id, to_id, kind, origin, weight, created_at, action, replacement_added)
@@ -203,8 +205,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* repaired(
           Effect.gen(function* () {
-            for (const node of rows) yield* repairNode(node.id);
-            for (const topic of candidates) yield* retireTopic(topic.seq);
+            yield* Effect.forEach(rows, (node) => repairNode(node.id), { discard: true });
+            yield* Effect.forEach(candidates, (topic) => retireTopic(topic.seq), {
+              discard: true,
+            });
             yield* update(rows.at(-1)?.seq ?? current.after_seq, rows.length);
           }).pipe(sql.withTransaction),
         );
@@ -232,7 +236,7 @@ const make = Effect.gen(function* () {
     yield* repaired(setStatus("running"));
     events.publishGlobal("embedding");
     yield* indexer.exclusive(vectors.flushRemovals);
-    while (yield* batch) yield* Effect.yieldNow;
+    yield* batch.pipe(Effect.tap(Effect.yieldNow), Effect.repeat({ while: (more) => more }));
     yield* repaired(setStatus("completed"));
     events.publishGlobal("embedding");
   }).pipe(

@@ -116,12 +116,9 @@ export class NativeOwnerFailed extends Schema.TaggedError<NativeOwnerFailed>()(
   },
 ) {
   override get message() {
-    switch (this.reason) {
-      case "lease-unavailable":
-        return "Vector index is held by another process using the same storage root";
-      default:
-        return `Native search owner failed: ${this.reason}`;
-    }
+    return this.reason === "lease-unavailable"
+      ? "Vector index is held by another process using the same storage root"
+      : `Native search owner failed: ${this.reason}`;
   }
 }
 
