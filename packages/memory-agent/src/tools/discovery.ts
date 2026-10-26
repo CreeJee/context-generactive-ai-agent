@@ -86,7 +86,7 @@ export type ToolLookup = Data.TaggedEnum<{
 export const ToolLookup = Data.taggedEnum<ToolLookup>();
 
 /** The run's tools with TanStack's lazy discovery, seeded with what `history` discovered. */
-export const makeLazyTools = Effect.fnUntraced(function* (
+export const lazyToolsFor = Effect.fnUntraced(function* (
   tools: ReadonlyArray<RunTool>,
   history: ReadonlyArray<StoredMessage>,
 ) {

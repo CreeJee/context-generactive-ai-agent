@@ -14,7 +14,9 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { sqlRun } from "../support/sql.ts";
 
@@ -786,6 +788,89 @@ testAgent()("memory tools per run", (it) => {
         { kind: "used", parentRunId: runA },
         { kind: "retrieved", parentRunId: runB },
         { kind: "used", parentRunId: runB },
+      ]);
+    }),
+  );
+
+  it.effect("the Effect AI tools ask as the TanStack ones and record use without middleware", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const { sessionId } = at;
+      const env = yield* environment;
+      const trace = yield* WorkTraceStore;
+      const agentId = `${sessionId}:effect-agent`;
+      const parentRunId = `${sessionId}:effect-parent`;
+      yield* sqlRun(
+        `INSERT INTO subagents
+          (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
+          VALUES (?, ?, 'effect', 'research', 'interrupted', ?, 'task', 1, 1)`,
+        agentId,
+        sessionId,
+        parentRunId,
+      );
+      const user = yield* env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "Save this fixture decision: effect-memory-state.",
+      });
+      const handle = yield* trace.startAttempt({
+        sessionId,
+        parentRunId,
+        parentToolCallId: `${sessionId}:effect-call`,
+        agentId,
+        title: "Effect research",
+        request: "Research effect state",
+        kind: "start",
+        threadId: `${sessionId}:effect-thread`,
+      });
+      const claimId = yield* trace.finalizeAnswerClaim({
+        ...at,
+        parentRunId,
+        parentMessageId: "effect-answer",
+        usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
+        reflectedNotificationIds: [],
+      });
+      const memory = yield* MemoryTools;
+      const runId = `${sessionId}:effect-run`;
+      const binding = { ...at, runId, userNodeId: user.id };
+      const { tools, recordUse } = memory.runToolsFor(binding);
+      expect(
+        yield* runToolRequestDifferences({
+          chatTools: (yield* inRun(memory.forRun(binding))).tools,
+          runTools: tools,
+        }),
+      ).toEqual([undefined, undefined, undefined]);
+
+      const callOf = (index: number, params: JsonValue) =>
+        Effect.flatMap(tools[index]!.prepare(params), (run) => run({ toolCallId: "call" }));
+      const promoted = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({ memoryNodeId: Schema.NonEmptyString }),
+      )(
+        yield* callOf(4, {
+          claimId,
+          taskId: handle.taskId,
+          attemptId: handle.id,
+          proposedText: "effect-memory-state is a fixture decision",
+          resolvedText: "effect-memory-state is a fixture decision",
+          disposition: "save",
+        }),
+      );
+      const memoryNodeIds = [promoted.memoryNodeId];
+      expect(yield* Effect.flip(callOf(5, { memoryNodeIds }))).toMatchObject({
+        tag: "PromotedMemoryUseRejected",
+      });
+      yield* (yield* Indexer).indexAll();
+      yield* callOf(0, { query: "effect-memory-state" });
+      expect(yield* callOf(5, { memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
+      yield* recordUse("effect-answer-message");
+      expect(
+        (yield* env.knowledge.usageForTask(handle.taskId)).map((entry) => ({
+          kind: entry.kind,
+          parentRunId: entry.parentRunId,
+        })),
+      ).toEqual([
+        { kind: "retrieved", parentRunId: runId },
+        { kind: "used", parentRunId: runId },
       ]);
     }),
   );

@@ -1,15 +1,12 @@
 import { it } from "@effect/vitest";
-import type { AnyTool } from "@tanstack/ai";
 import { Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../../src/config/storage-root.ts";
 import type { Project } from "../../src/projects/projects.ts";
-import { makeLazyTools } from "../../src/tools/discovery.ts";
 import { FileTools } from "../../src/tools/files.ts";
 import { OutsideTools } from "../../src/tools/outside.ts";
-import type { RunTool } from "../../src/tools/run-tool.ts";
 import { withTestPlatform } from "../support/platform.ts";
-import { compatibleToolRequestDifference, toolRequestDifferences } from "../support/requests.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 
 /**
@@ -27,18 +24,6 @@ const project: Project = {
   hiddenAt: null,
 };
 
-/** Where the requests first differ: anthropic, openai, then the compatible endpoint. */
-const requestDifferences = (chatTools: ReadonlyArray<AnyTool>, runTools: ReadonlyArray<RunTool>) =>
-  Effect.gen(function* () {
-    const lazyTools = yield* makeLazyTools(runTools, []);
-    const modelTools = (yield* lazyTools.offered).map((tool) => tool.tool);
-    const subscription = yield* toolRequestDifferences({ chatTools, modelTools });
-    return [
-      ...subscription.map(({ difference }) => difference),
-      yield* compatibleToolRequestDifference({ chatTools, modelTools }),
-    ];
-  });
-
 const same = [undefined, undefined, undefined];
 
 describe("Effect AI tools", () => {
@@ -47,10 +32,10 @@ describe("Effect AI tools", () => {
       Effect.gen(function* () {
         const files = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
         expect(
-          yield* requestDifferences(
-            yield* inRun(files.forProject(project)),
-            files.runToolsFor(project),
-          ),
+          yield* runToolRequestDifferences({
+            chatTools: yield* inRun(files.forProject(project)),
+            runTools: files.runToolsFor(project),
+          }),
         ).toEqual(same);
       }),
     ),
@@ -66,10 +51,10 @@ describe("Effect AI tools", () => {
           ),
         );
         expect(
-          yield* requestDifferences(
-            yield* inRun(outside.forProject(project)),
-            outside.runToolsFor(project),
-          ),
+          yield* runToolRequestDifferences({
+            chatTools: yield* inRun(outside.forProject(project)),
+            runTools: outside.runToolsFor(project),
+          }),
         ).toEqual(same);
       }),
     ),

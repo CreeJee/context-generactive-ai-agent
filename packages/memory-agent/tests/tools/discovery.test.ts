@@ -4,7 +4,7 @@ import { Effect, Schema } from "effect";
 import { assert, describe, expect } from "vite-plus/test";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import { toolParameters } from "../../src/model/tool-schema.ts";
-import { discoveryToolName, makeLazyTools, ToolLookup } from "../../src/tools/discovery.ts";
+import { discoveryToolName, lazyToolsFor, ToolLookup } from "../../src/tools/discovery.ts";
 import { lazily } from "../../src/tools/lazy.ts";
 import { runTool, type RunTool } from "../../src/tools/run-tool.ts";
 import { toToolSchema } from "../../src/tools/schema.ts";
@@ -30,7 +30,7 @@ const chatTools = () =>
     return lazy ? lazily(tool) : tool;
   });
 
-const discover = (lazyTools: Effect.Success<ReturnType<typeof makeLazyTools>>, names: string[]) =>
+const discover = (lazyTools: Effect.Success<ReturnType<typeof lazyToolsFor>>, names: string[]) =>
   Effect.gen(function* () {
     const found = yield* lazyTools.find(discoveryToolName);
     assert(ToolLookup.$is("Found")(found));
@@ -38,13 +38,13 @@ const discover = (lazyTools: Effect.Success<ReturnType<typeof makeLazyTools>>, n
     return yield* run({ toolCallId: "call-1" });
   });
 
-const offeredNames = (lazyTools: Effect.Success<ReturnType<typeof makeLazyTools>>) =>
+const offeredNames = (lazyTools: Effect.Success<ReturnType<typeof lazyToolsFor>>) =>
   Effect.map(lazyTools.offered, (offered) => offered.map((tool) => tool.tool.name));
 
 describe("lazy tools", () => {
   it.effect("offer what TanStack offered before anything is discovered", () =>
     Effect.gen(function* () {
-      const lazyTools = yield* makeLazyTools(tools, []);
+      const lazyTools = yield* lazyToolsFor(tools, []);
       const modelTools = (yield* lazyTools.offered).map((tool) => tool.tool);
       expect(yield* toolRequestDifferences({ chatTools: chatTools(), modelTools })).toEqual([
         { provider: "anthropic", difference: undefined },
@@ -58,7 +58,7 @@ describe("lazy tools", () => {
 
   it.effect("answer a discovery call and offer what it found from then on", () =>
     Effect.gen(function* () {
-      const lazyTools = yield* makeLazyTools(tools, []);
+      const lazyTools = yield* lazyToolsFor(tools, []);
       expect(yield* lazyTools.find("delete_file")).toEqual(
         ToolLookup.Undiscovered({
           answer: {
@@ -107,7 +107,7 @@ describe("lazy tools", () => {
           content: '{"tools":[{"name":"list_outside","description":""}]}',
         },
       ];
-      const lazyTools = yield* makeLazyTools(tools, history);
+      const lazyTools = yield* lazyToolsFor(tools, history);
       expect(yield* offeredNames(lazyTools)).toEqual([
         "read_file",
         "list_outside",

@@ -24,6 +24,8 @@ import {
 } from "../../src/providers/openai-compatible.ts";
 import { SubscriptionTextAdapter } from "../../src/providers/subscription-adapter.ts";
 import { nativeStream } from "../../src/runtime/native-stream.ts";
+import { lazyToolsFor } from "../../src/tools/discovery.ts";
+import type { RunTool } from "../../src/tools/run-tool.ts";
 
 /**
  * The subscription and compatible requests a continued conversation sends, built by the TanStack
@@ -355,3 +357,24 @@ export const compatibleToolRequestDifference = ({
     ]),
     ([expected, actual]) => firstDifference(expected, actual, compatibleUnordered),
   );
+
+/**
+ * Where a tool set's requests first differ between its TanStack tools and its Effect AI tools as the
+ * loop offers them, lazy ones by name: anthropic, openai, then the compatible endpoint.
+ */
+export const runToolRequestDifferences = ({
+  chatTools,
+  runTools,
+}: {
+  readonly chatTools: ReadonlyArray<AnyTool>;
+  readonly runTools: ReadonlyArray<RunTool>;
+}) =>
+  Effect.gen(function* () {
+    const lazyTools = yield* lazyToolsFor(runTools, []);
+    const modelTools = (yield* lazyTools.offered).map((tool) => tool.tool);
+    const subscription = yield* toolRequestDifferences({ chatTools, modelTools });
+    return [
+      ...subscription.map(({ difference }) => difference),
+      yield* compatibleToolRequestDifference({ chatTools, modelTools }),
+    ];
+  });
