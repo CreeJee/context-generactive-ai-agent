@@ -1,5 +1,5 @@
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { HashSet } from "effect";
+import { Array as Arr, type Data, HashSet } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
@@ -480,25 +480,24 @@ const make = Effect.gen(function* () {
   const activeChildren = yield* FiberMap.make<string>();
   const childMetadata = MutableHashMap.empty<string, ActiveChild>();
   const liveChildren = () =>
-    [...activeChildren].flatMap(([attemptId]) => {
-      const child = Option.getOrUndefined(MutableHashMap.get(childMetadata, attemptId));
-      return child === undefined ? [] : [child];
-    });
+    [...activeChildren].flatMap(([attemptId]) =>
+      Option.toArray(MutableHashMap.get(childMetadata, attemptId)),
+    );
+  /** The latest live attempt of `subagentId`. */
   const activeFor = (
     subagentId: string,
     startedOnly = false,
     exceptAttemptId?: string,
-  ): ActiveChild | undefined => {
-    let latest: ActiveChild | undefined;
-    for (const child of liveChildren())
-      if (
-        child.handle.id !== exceptAttemptId &&
-        child.receipt.subagentId === subagentId &&
-        (!startedOnly || child.started)
-      )
-        latest = child;
-    return latest;
-  };
+  ): ActiveChild | undefined =>
+    Option.getOrUndefined(
+      Arr.findLast(
+        liveChildren(),
+        (child) =>
+          child.handle.id !== exceptAttemptId &&
+          child.receipt.subagentId === subagentId &&
+          (!startedOnly || child.started),
+      ),
+    );
 
   /**
    * A child cannot pause its parent's run for a TanStack approval, so its gated calls wait here
@@ -612,29 +611,35 @@ const make = Effect.gen(function* () {
 
   /** read_subagent_tool_result in the child thread `threadId`. */
   const childResult = (threadId: string, { toolCallId, offset }: typeof ChildResultInput.Type) =>
-    Effect.gen(function* () {
-      const saved = yield* nativePromise(() =>
-        chatState.persistence.stores.messages.loadThread(threadId),
-      );
-      const result = saved.find(
-        (message) => message.role === "tool" && message.toolCallId === toolCallId,
-      );
-      if (!isTruthy(result)) return { error: "tool_result_not_found", toolCallId };
-      const text = Schema.is(Schema.String)(result.content)
-        ? result.content
-        : (result.content ?? [])
-            .flatMap((part) => (part.type === "text" ? [part.content] : []))
-            .join("");
-      const start = Math.min(offset, text.length);
-      const end = Math.min(start + childResultPageLength, text.length);
-      return {
-        toolCallId,
-        text: text.slice(start, end),
-        offset: start,
-        nextOffset: end < text.length ? end : null,
-        length: text.length,
-      };
-    });
+    Effect.map(
+      nativePromise(() => chatState.persistence.stores.messages.loadThread(threadId)),
+      (saved) =>
+        Option.match(
+          Arr.findFirst(
+            saved,
+            (message) => message.role === "tool" && message.toolCallId === toolCallId,
+          ),
+          {
+            onNone: () => ({ error: "tool_result_not_found", toolCallId }),
+            onSome: (result) => {
+              const text = Schema.is(Schema.String)(result.content)
+                ? result.content
+                : (result.content ?? [])
+                    .flatMap((part) => (part.type === "text" ? [part.content] : []))
+                    .join("");
+              const start = Math.min(offset, text.length);
+              const end = Math.min(start + childResultPageLength, text.length);
+              return {
+                toolCallId,
+                text: text.slice(start, end),
+                offset: start,
+                nextOffset: end < text.length ? end : null,
+                length: text.length,
+              };
+            },
+          },
+        ),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const runChild = (
@@ -1064,27 +1069,29 @@ const make = Effect.gen(function* () {
     const { row, kind } = yield* sql.withTransaction(
       Effect.gen(function* () {
         const existing = yield* stored(byName({ sessionId: binding.sessionId, name: agent }));
-        if (Option.isNone(existing))
-          return {
-            row: yield* insert({
-              sessionId: binding.sessionId,
-              name: agent,
-              instructions: instructions ?? null,
-              parentRunId: binding.runId,
-              task: message,
-            }),
-            kind: "start" as const,
-          };
-        const known = existing.value;
-        return {
-          row: yield* startAgain(
-            instructions === undefined ? known.instructions : instructions,
-            binding.runId,
-            message,
-            known.id,
-          ),
-          kind: "continue" as const,
-        };
+        return yield* Option.match(existing, {
+          onNone: () =>
+            Effect.map(
+              insert({
+                sessionId: binding.sessionId,
+                name: agent,
+                instructions: instructions ?? null,
+                parentRunId: binding.runId,
+                task: message,
+              }),
+              (row) => ({ row, kind: "start" as const }),
+            ),
+          onSome: (known) =>
+            Effect.map(
+              startAgain(
+                instructions === undefined ? known.instructions : instructions,
+                binding.runId,
+                message,
+                known.id,
+              ),
+              (row) => ({ row, kind: "continue" as const }),
+            ),
+        });
       }),
     );
     const handle = yield* trace.startAttempt({
@@ -1117,6 +1124,31 @@ const make = Effect.gen(function* () {
     return yield* nativePromise(() => launch(binding, row, message, handle));
   });
 
+  /** Starts the attempt a resume claimed, unless its agent was removed. */
+  const resumeStarted = Effect.fnUntraced(function* (
+    binding: SubagentBinding,
+    taskId: string,
+    claim: Data.TaggedEnum.Value<ResumeClaim, "started">,
+  ) {
+    const existing = yield* byId(binding.sessionId, claim.agentId);
+    return yield* Option.match(existing, {
+      onNone: () =>
+        Effect.succeed<SubagentReport>({
+          status: "resume_blocked",
+          taskId,
+          reason: "agent_not_found",
+        }),
+      onSome: (known) =>
+        startAgain(known.instructions, binding.runId, claim.context.originalRequest, known.id).pipe(
+          Effect.flatMap((row) =>
+            nativePromise((): Promise<SubagentReport> =>
+              launch(binding, row, retryMessage(claim.context), claim.handle),
+            ),
+          ),
+        ),
+    });
+  });
+
   const resumeTask = Effect.fnUntraced(function* (
     binding: SubagentBinding,
     parentToolCallId: string,
@@ -1130,34 +1162,11 @@ const make = Effect.gen(function* () {
       parentToolCallId,
       confirmUncertain: input.confirmUncertain,
     });
-    if (ResumeClaim.$is("blocked")(claim)) {
-      const blocked: SubagentReport = {
-        status: "resume_blocked",
-        taskId: input.taskId,
-        reason: claim.reason,
-      };
-      return blocked;
-    }
-    const existing = yield* byId(binding.sessionId, claim.agentId);
-    if (Option.isNone(existing)) {
-      const missing: SubagentReport = {
-        status: "resume_blocked",
-        taskId: input.taskId,
-        reason: "agent_not_found",
-      };
-      return missing;
-    }
-    const known = existing.value;
-    const row = yield* startAgain(
-      known.instructions,
-      binding.runId,
-      claim.context.originalRequest,
-      known.id,
-    );
-    const receipt: SubagentReport = yield* nativePromise(() =>
-      launch(binding, row, retryMessage(claim.context), claim.handle),
-    );
-    return receipt;
+    return yield* ResumeClaim.$match(claim, {
+      blocked: ({ reason }) =>
+        Effect.succeed<SubagentReport>({ status: "resume_blocked", taskId: input.taskId, reason }),
+      started: (started) => resumeStarted(binding, input.taskId, started),
+    });
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -1173,28 +1182,33 @@ const make = Effect.gen(function* () {
               runEffect(
                 Effect.gen(function* () {
                   const existing = yield* byId(binding.sessionId, claim.agentId);
-                  // The agent was removed after the retry was claimed: end the queued attempt.
-                  if (Option.isNone(existing))
-                    return yield* trace.transitionAttempt(
-                      claim.handle,
-                      binding.sessionId,
-                      "cancelled",
-                      "attempt_cancelled",
-                      "Subagent no longer exists",
-                      null,
-                      true,
-                      binding.runId,
-                    );
-                  const known = existing.value;
-                  const row = yield* startAgain(
-                    known.instructions,
-                    binding.runId,
-                    claim.context.originalRequest,
-                    known.id,
-                  );
-                  yield* nativePromise(() =>
-                    launch(binding, row, retryMessage(claim.context), claim.handle),
-                  );
+                  yield* Option.match(existing, {
+                    // The agent was removed after the retry was claimed: end the queued attempt.
+                    onNone: () =>
+                      trace.transitionAttempt(
+                        claim.handle,
+                        binding.sessionId,
+                        "cancelled",
+                        "attempt_cancelled",
+                        "Subagent no longer exists",
+                        null,
+                        true,
+                        binding.runId,
+                      ),
+                    onSome: (known) =>
+                      startAgain(
+                        known.instructions,
+                        binding.runId,
+                        claim.context.originalRequest,
+                        known.id,
+                      ).pipe(
+                        Effect.flatMap((row) =>
+                          nativePromise(() =>
+                            launch(binding, row, retryMessage(claim.context), claim.handle),
+                          ),
+                        ),
+                      ),
+                  });
                 }),
               ),
             ),
@@ -1203,25 +1217,29 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const attemptState = Effect.fnUntraced(function* (
-    sessionId: string,
-    taskId: string,
-    attemptId: string,
-  ) {
-    const detail = yield* trace.taskDetail(sessionId, taskId);
-    const attempt = detail?.attempts.find((candidate) => candidate.id === attemptId);
-    if (
-      !isTruthy(detail) ||
-      !isTruthy(attempt) ||
-      detail.task.deletedAt !== null ||
-      detail.task.deleteRequestedAt !== null
-    )
-      return yield* WorkTraceRejected.make({
-        reason: "attempt_not_found",
-        message: "Subagent attempt not found in this session",
-      });
-    return { detail, attempt };
-  });
+  const attemptState = (sessionId: string, taskId: string, attemptId: string) =>
+    trace.taskDetail(sessionId, taskId).pipe(
+      Effect.flatMap((found) =>
+        Effect.fromOption(
+          Option.fromNullishOr(found).pipe(
+            Option.filter(
+              (detail) => detail.task.deletedAt === null && detail.task.deleteRequestedAt === null,
+            ),
+            Option.flatMap((detail) =>
+              Option.map(
+                Arr.findFirst(detail.attempts, (candidate) => candidate.id === attemptId),
+                (attempt) => ({ detail, attempt }),
+              ),
+            ),
+          ),
+          () =>
+            WorkTraceRejected.make({
+              reason: "attempt_not_found",
+              message: "Subagent attempt not found in this session",
+            }),
+        ),
+      ),
+    );
   const terminal = (status: string) => !["queued", "running", "waiting"].includes(status);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const getReport = (
@@ -1232,42 +1250,50 @@ const make = Effect.gen(function* () {
     runEffect(
       Effect.gen(function* () {
         const { detail, attempt } = yield* attemptState(sessionId, taskId, attemptId);
-        if (!isTruthy(detail.task.agentId))
-          return yield* new Cause.UnknownError(new Error("Subagent no longer exists"));
-        const found = yield* byId(sessionId, detail.task.agentId);
-        if (Option.isNone(found))
-          return yield* new Cause.UnknownError(new Error("Subagent no longer exists"));
-        const row = found.value;
-        const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
-        if (!terminal(attempt.status)) return { ...base, status: "running" };
-        // The attempt's terminal event names its last assistant message.
-        const answerId = detail.events.findLast(
-          (event) => event.attemptId === attemptId && isAnswerPayload(event.payload),
-        )?.payload;
-        const messages = yield* nativePromise(() =>
-          chatState.persistence.stores.messages.loadThread(attempt.threadId),
+        const gone = () => new Cause.UnknownError(new Error("Subagent no longer exists"));
+        const subagentId = yield* Effect.fromOption(
+          Option.liftPredicate(detail.task.agentId, isTruthy),
+          gone,
         );
-        const message = isAnswerPayload(answerId)
-          ? messages.find((entry) => entry.role === "assistant" && entry.id === answerId.messageId)
-          : undefined;
-        const answer = Schema.is(Schema.String)(message?.content)
-          ? message.content
-          : (message?.content ?? [])
-              .flatMap((part) => (part.type === "text" ? [part.content] : []))
-              .join("");
-        return {
-          ...base,
-          status:
-            attempt.status === "completed"
-              ? "completed"
-              : attempt.status === "cancelled"
-                ? "cancelled"
-                : attempt.status === "failed"
-                  ? "failed"
-                  : "interrupted",
-          answer,
-          error: attempt.failure === null ? null : attemptFailureCode(attempt.failure.reason),
-        };
+        const row = yield* Effect.flatMap(byId(sessionId, subagentId), (found) =>
+          Effect.fromOption(found, gone),
+        );
+        const base = { subagentId, agent: row.name, taskId, attemptId };
+        const settled = Effect.map(
+          nativePromise(() => chatState.persistence.stores.messages.loadThread(attempt.threadId)),
+          (messages): SubagentReport => {
+            // The attempt's terminal event names its last assistant message.
+            const answerId = detail.events.findLast(
+              (event) => event.attemptId === attemptId && isAnswerPayload(event.payload),
+            )?.payload;
+            const message = isAnswerPayload(answerId)
+              ? messages.find(
+                  (entry) => entry.role === "assistant" && entry.id === answerId.messageId,
+                )
+              : undefined;
+            const answer = Schema.is(Schema.String)(message?.content)
+              ? message.content
+              : (message?.content ?? [])
+                  .flatMap((part) => (part.type === "text" ? [part.content] : []))
+                  .join("");
+            return {
+              ...base,
+              status:
+                attempt.status === "completed"
+                  ? "completed"
+                  : attempt.status === "cancelled"
+                    ? "cancelled"
+                    : attempt.status === "failed"
+                      ? "failed"
+                      : "interrupted",
+              answer,
+              error: attempt.failure === null ? null : attemptFailureCode(attempt.failure.reason),
+            };
+          },
+        );
+        return yield* terminal(attempt.status)
+          ? settled
+          : Effect.succeed<SubagentReport>({ ...base, status: "running" });
       }),
     );
 
@@ -1285,15 +1311,14 @@ const make = Effect.gen(function* () {
     const dispatch = <E>(
       toolCallId: string,
       task: Effect.Effect<SubagentReport, E>,
-    ): Promise<SubagentReport> => {
-      const existing = Option.getOrUndefined(MutableHashMap.get(started, toolCallId));
-      if (isTruthy(existing)) return existing;
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      const outcome = runEffect(task);
-      outcome.catch(() => undefined);
-      MutableHashMap.set(started, toolCallId, outcome);
-      return outcome;
-    };
+    ): Promise<SubagentReport> =>
+      Option.getOrElse(MutableHashMap.get(started, toolCallId), () => {
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        const outcome = runEffect(task);
+        outcome.catch(() => undefined);
+        MutableHashMap.set(started, toolCallId, outcome);
+        return outcome;
+      });
 
     const notReviewed = ({ taskId, attemptId }: AdoptionDraft["reports"][number]) =>
       !MutableHashMap.has(reviewed, `${taskId}:${attemptId}`);
@@ -1353,11 +1378,12 @@ const make = Effect.gen(function* () {
         ),
 
       /** Marks the completed reports reviewed. Only this run's memory gates adoption. */
-      review: (reports: readonly SubagentReport[]) => {
-        for (const outcome of reports)
-          if (outcome.status === "completed")
-            MutableHashMap.set(reviewed, `${outcome.taskId}:${outcome.attemptId}`, outcome);
-      },
+      review: (reports: readonly SubagentReport[]) =>
+        reports
+          .flatMap((outcome) => (outcome.status === "completed" ? [outcome] : []))
+          .forEach((outcome) =>
+            MutableHashMap.set(reviewed, `${outcome.taskId}:${outcome.attemptId}`, outcome),
+          ),
 
       adopt: (draft: AdoptionDraft) =>
         Effect.suspend(() =>
@@ -1392,8 +1418,11 @@ const make = Effect.gen(function* () {
       deliver: Effect.map(
         trace.consumeParentNotifications(binding.sessionId, binding.runId),
         (notifications) => {
-          for (const notification of notifications)
-            deliveredNotificationIds = HashSet.add(deliveredNotificationIds, notification.id);
+          deliveredNotificationIds = Arr.reduce(
+            notifications,
+            deliveredNotificationIds,
+            (delivered, notification) => HashSet.add(delivered, notification.id),
+          );
           return notifications.length === 0
             ? Option.none<string>()
             : Option.some(
@@ -1410,22 +1439,27 @@ const make = Effect.gen(function* () {
 
       /** Saves what the answer `parentMessageId` adopted, when it adopted anything. */
       recordAdoption: (parentMessageId: string) =>
-        Effect.suspend(() => {
-          const draft = adoptionDraft;
-          return draft === null ||
-            (draft.reports.length === 0 && draft.reflectedNotificationIds.length === 0)
-            ? Effect.void
-            : Effect.asVoid(
-                trace.finalizeAnswerClaim({
-                  projectId: binding.project.id,
-                  sessionId: binding.sessionId,
-                  parentRunId: binding.runId,
-                  parentMessageId,
-                  usedReports: draft.reports,
-                  reflectedNotificationIds: draft.reflectedNotificationIds,
-                }),
-              );
-        }),
+        Effect.suspend(() =>
+          Option.fromNullishOr(adoptionDraft).pipe(
+            Option.filter(
+              (draft) => draft.reports.length > 0 || draft.reflectedNotificationIds.length > 0,
+            ),
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (draft) =>
+                Effect.asVoid(
+                  trace.finalizeAnswerClaim({
+                    projectId: binding.project.id,
+                    sessionId: binding.sessionId,
+                    parentRunId: binding.runId,
+                    parentMessageId,
+                    usedReports: draft.reports,
+                    reflectedNotificationIds: draft.reflectedNotificationIds,
+                  }),
+                ),
+            }),
+          ),
+        ),
 
       /** Gives the notifications this run did not answer back to the next run. */
       release: Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
@@ -1627,8 +1661,11 @@ const make = Effect.gen(function* () {
       return runEffect(
         Effect.gen(function* () {
           const entries = liveChildren().filter((child) => child.sessionId === sessionId);
-          for (const entry of entries)
-            entry.controller.abort(new Error("session_cancel_requested"));
+          yield* Effect.sync(() =>
+            entries.forEach((entry) =>
+              entry.controller.abort(new Error("session_cancel_requested")),
+            ),
+          );
           yield* Effect.forEach(entries, (entry) => entry.settled, { concurrency: "unbounded" });
         }),
       );
@@ -1638,13 +1675,18 @@ const make = Effect.gen(function* () {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     stopTask(taskId: string) {
       return runEffect(
-        Effect.gen(function* () {
-          const entry = liveChildren().find((child) => child.taskId === taskId);
-          if (!isTruthy(entry)) return "not_running" as const;
-          entry.controller.abort(new Error("task_lifecycle_requested"));
-          yield* entry.settled;
-          return "stopped" as const;
-        }),
+        Effect.suspend(() =>
+          Option.match(
+            Arr.findFirst(liveChildren(), (child) => child.taskId === taskId),
+            {
+              onNone: () => Effect.succeed("not_running" as const),
+              onSome: (entry) =>
+                Effect.sync(() =>
+                  entry.controller.abort(new Error("task_lifecycle_requested")),
+                ).pipe(Effect.andThen(entry.settled), Effect.as("stopped" as const)),
+            },
+          ),
+        ),
       );
     },
 
@@ -1658,13 +1700,16 @@ const make = Effect.gen(function* () {
       runEffect(
         Effect.gen(function* () {
           const row = yield* byId(sessionId, subagentId);
-          if (Option.isNone(row)) return null;
-          return {
-            subagent: toView(row.value),
-            messages: yield* nativePromise(() =>
-              chatState.persistence.stores.messages.loadThread(subagentThreadId(subagentId)),
-            ),
-          };
+          return yield* Option.match(row, {
+            onNone: () => Effect.succeed(null),
+            onSome: (found) =>
+              Effect.map(
+                nativePromise(() =>
+                  chatState.persistence.stores.messages.loadThread(subagentThreadId(subagentId)),
+                ),
+                (messages) => ({ subagent: toView(found), messages }),
+              ),
+          });
         }),
       ),
   };
