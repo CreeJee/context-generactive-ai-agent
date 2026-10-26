@@ -2747,3 +2747,14 @@
 - model handoff의 anchor는 메시지 전체의 해시라 migration이 바꾼다. migration 전 메시지에서 경계를 찾고, migration 뒤의 같은 메시지로 anchor를 다시 계산한다. legacy anchor는 실행 중 upgrade와 같은 규칙으로 v2가 된다. 이미 맞지 않던 anchor는 그대로 둔다. 다른 `chat_metadata` namespace는 메시지 순번과 글자를 저장하므로 바꾸지 않는다.
 - Goal의 옛 chunk(`workflow_run_events`)는 바꾸지 않는다. 계획의 "DB 저장 형식과 migration"대로다.
 - 확인: golden 시나리오마다 DB에서 migration을 돌린 행이 변환 결과와 같고 handoff가 replay된다. 로컬 DB 사본은 `tools/chat-store-check`로 확인했다. 모든 행이 새 Schema로 decode되고, 정의 밖 key도 없다. 메시지 내용과 anchor도 원본과 같다. 결과는 계획의 1단계 "결과"에 있다.
+
+## Effect AI 모델은 TanStack adapter와 같은 요청을 보낸다 (2026-10-26)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 provider 단계다. 구독, OpenAI 호환, external ACP, scripted 모델을 `LanguageModel.make`로 만들었다. 파일과 검사 결과는 계획의 2단계 "결과"에 있다.
+- 기준은 이어서 대화할 때 provider가 받는 요청이 TanStack 때와 같은 것이다. prompt cache와 reasoning 서명이 그대로 이어져야 하기 때문이다. golden과 로컬 DB 사본의 모든 thread에서 같다.
+- 모델은 저장된 대화를 `Prompt`로 받고, history replay는 각 provider가 자기 규칙으로 적용한다. 같은 대화도 보내는 모델에 따라 다르게 다듬기 때문이다. 구독 provider는 다른 모델의 turn도 자기 것으로 읽고, OpenAI 호환 provider는 다른 모델의 turn을 text로 바꾸고 tool call id를 다시 붙인다.
+- OpenAI encrypted reasoning은 바로 앞 요약 block의 서명으로 싣는다. TanStack이 그렇게 저장했다. 따로 빈 block으로 두면 저장할 때 thinking이 하나 더 생긴다.
+- 앱이 정한 실패(구독 stream 실패, OpenAI 호환 요청 거절, external 턴 실패)는 `AiError`의 `UnknownError` metadata에 typed 값으로 싣는다. 화면 code와 로그는 이 값에서 만든다. provider가 쓴 오류 문구와 URL은 화면에 그대로 보이지 않는다.
+- 취소는 fiber interrupt다. 모델은 `AbortSignal`을 받지 않는다.
+- OpenAI 호환 provider는 모든 도구를 작성한 schema 그대로 `strict: false`로 보낸다. TanStack 때와 다른 점은 strict와 맞지 않는 schema에서 지원하지 않는 `format`을 더는 지우지 않는 것 하나다. 앱이 이미 strict를 끄고 원래 schema로 되돌리고 있었다.
+- provider tool 18개는 `Tool.providerDefined`로 만들고, 구독 요청에는 TanStack처럼 이름과 설명만 있는 function tool로 보낸다. 모델 표와 모델별 provider tool 표는 앱이 가진다.

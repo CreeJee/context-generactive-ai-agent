@@ -195,8 +195,8 @@ scheduler 규칙:
 
 provider별 차이:
 
-- `@effect/ai-openai-compat`은 모든 `tool-call` part를 stream 끝(`[DONE]`)에서 finish 바로 앞에 한꺼번에 내보낸다(`OpenAiLanguageModel.ts`의 `makeStreamResponse`). 이 provider에서는 읽기도 응답이 끝난 뒤에 시작한다.
-  - 같은 자리에서 tool 인자가 JSON으로 읽히지 않으면 `"deferred"`여도 stream 전체가 `AiError`(`ToolParameterValidationError`)로 실패한다. 끊긴 응답의 tool call이 그렇다. 지금 동작과 같은지 2단계 provider 계약 테스트에서 확인한다.
+- OpenAI 호환 `LanguageModel`(`packages/memory-agent/src/model/compatible.ts`)은 `@effect/ai-openai-compat`의 `OpenAiClient`로 보내고 받기만 한다. chunk는 TanStack `processStreamChunks`처럼 직접 바꾸고, `tool-call` part는 `finish_reason`을 받을 때 한꺼번에 낸다(TanStack과 같다). 이 provider에서는 읽기도 응답이 끝난 뒤에 시작한다.
+  - 인자가 JSON으로 읽히지 않는 tool call은 실패하지 않고 글자 그대로 `params`로 온다(2단계 결과). 끊긴 응답의 tool call이 그렇다. 패키지의 `OpenAiLanguageModel`은 이때 `"deferred"`여도 stream 전체를 `AiError`(`ToolParameterValidationError`)로 실패시키므로(`makeStreamResponse`) 쓰지 않는다.
 - 구독 Anthropic·ChatGPT `LanguageModel`은 tool call 하나가 끝날 때마다 `tool-call` part를 내보내게 만든다. 지금의 `NormalizedStreamEvent`(`packages/memory-agent/src/oauth/protocol.ts`)에 호출마다 끝을 알리는 `tool-call`과 `content-block-end`가 있다. 이 provider에서만 모델이 생성하는 동안 읽기가 먼저 돈다.
 
 결과를 기다리지 않는 도구:
@@ -356,6 +356,31 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 기존 provider 계약 테스트를 새 provider로 옮겨서 통과한다: subscription-stream-contract, subscription-reasoning-restoration, subscription-sqlite-reasoning, openai-compatible.
   - 변환이 golden과 로컬 DB 사본에서 왕복한다.
   - migration한 로컬 DB 사본의 세션마다, 이어서 대화할 때 provider에 보내는 요청이 지금 코드가 원본에서 만드는 요청과 같다. reasoning 서명도 포함한다.
+- 결과(2026-10-26): 모두 `packages/memory-agent/src` 아래다.
+  - 모델: `model/subscription.ts`(구독), `model/compatible.ts`(OpenAI 호환), `model/external.ts`(external ACP), `testing/scripted-model.ts`(scripted). 저장 메시지와 `Prompt`의 변환은 `model/prompt.ts`(`toPrompt`, `fromPrompt`), replay는 `model/history.ts`(`providerPrompt`)다.
+  - 모델 표는 `providers/model-catalog.ts`, provider tool 18개는 `providers/provider-tools.ts`다.
+  - 로컬 DB 사본 결과(2026-10-26): thread 751개와 history 706개가 `Prompt`로 왕복한다. 이어지는 요청은 anthropic, openai, openai-compatible 모두 TanStack이 원본에서 만든 요청과 같다. reasoning 서명도 같다. golden과 replay 경계 사례(`tests/model/requests.test.ts`)도 같다. 비교는 `tools/chat-store-check`가 한다.
+  - 계약 테스트는 `tests/model/`로 옮겼다. 옛 `openai-compatible.test.ts`의 설정·키 저장 테스트는 provider 설정의 것이라 그대로 둔다. `subscription-sqlite-reasoning`의 저장 부분은 4단계 persistence에서 옮긴다. 2단계는 응답이 TanStack과 같은 thinking과 서명으로 저장되는지만 본다(`tests/model/reasoning.test.ts`).
+  - 정한 것:
+    - replay는 각 provider가 적용한다. 모델은 저장된 대화의 `Prompt`를 받고 `providerPrompt(prompt, target)`로 자기 규칙을 적용한다. 구독 provider는 target이 없고, OpenAI 호환 provider는 `{provider: "openai-compatible", api: "openai-completions", model}`이다.
+    - OpenAI encrypted reasoning은 바로 앞 요약 block의 `reasoning-end` metadata에 서명으로 싣는다. TanStack이 현재 thinking step에 붙인 것과 같다. 앞에 요약이 없으면 text 없는 block이 된다.
+    - 앱의 실패는 `AiError`의 `UnknownError.metadata["memory-agent"]`에 encode해 싣는다. `subscriptionFailure`, `compatibleFailure`, `externalFailure`로 꺼낸다.
+    - 취소는 fiber interrupt다. 모델은 `AbortSignal`을 받지 않는다.
+    - provider tool의 설정은 `args`에 그대로 싣는다(`ProviderToolConfig`). 검사는 지금처럼 `tool-policy.ts`가 한다.
+  - 발견: Goal worker가 쓴 메시지에는 `source.api`가 없다. adapter 대역에 `api`와 `kind`가 없어 TanStack이 `{provider, model}`만 저장했다. Schema가 이 모양을 받는다(`dd39ffca`).
+  - TanStack과 달라진 것:
+    - OpenAI 호환 provider는 모든 도구를 작성한 schema 그대로 `strict: false`로 보낸다. TanStack은 strict와 맞는 schema를 바꿔 보냈고, 앱이 원래 schema와 `strict: false`로 되돌렸다. 남는 차이는 strict와 맞지 않는 schema에서 지원하지 않는 `format`을 더는 지우지 않는 것뿐이다. 그래서 요청 비교는 tool 항목의 key 순서만 보지 않는다.
+    - OpenAI 호환 provider에서 chunk가 하나도 없는 stream은 실패다. TanStack은 아무것도 내지 않았다.
+    - OpenAI 호환 provider는 `toolChoice`를 읽지 않는다. TanStack도 보내지 않았다.
+  - 다음 단계로 넘기는 것:
+    - 3단계: `tool-policy.ts`의 factory와 인자 검사를 `providers/provider-tools.ts`로 바꾼다. descriptor의 `extension.factory`는 아직 TanStack factory다.
+    - 3단계: OpenAI `computer_use`의 검사는 type `computer_use_preview`만 받지만 TanStack 1.0 타입은 `computer`다. TanStack은 설정의 type을 도구 이름으로 썼다. 새 도구도 구독 요청에서 같은 이름을 쓴다(`namedBy`).
+    - 3단계: TanStack의 tool 입력 정규화는 optional 필드의 `null`을 `undefined`로 바꿨다. 인자를 앱이 decode할 때 같은 규칙이 필요한지 본다.
+    - 3단계: scripted 모델은 lazy discovery를 흉내 내지 않는다. discovery 방식을 정한 뒤 넣는다. invocation에 `runId`와 `threadId`가 없다. `LanguageModel.ProviderOptions`에 없기 때문이며, 4단계 loop가 run을 모델에 알리는 방법을 정한다.
+    - 3·4단계: `OpenAiClient`의 오류 description에는 URL이 들어간다. 화면 문구는 description이 아니라 reason으로 만든다.
+    - 4단계 writer: Effect finish reason을 저장 문자열로 바꾼다(`tool-calls` → `tool_calls` 등). OpenAI 호환 턴의 `source`는 `{provider: "openai-compatible", api: "openai-completions", model}`로 쓴다. 모델 이름은 `response-metadata`의 `modelId`에서 얻을 수 있다.
+    - 4단계 writer: usage에 없는 필드는 0으로 채우고, 빈 reasoning block은 저장하지 않는다. TanStack이 그렇게 저장했다.
+    - 4단계: OpenAI 호환 provider의 `KeychainUnavailable`과 `Cancelled`는 이제 호출자가 낸다. 키는 모델을 만들기 전에 읽는다. `agent/chat.ts`의 `historyKey`(baseUrl의 SHA-256)도 이때 옮긴다.
 
 ### 3. tool
 
@@ -607,7 +632,7 @@ Goal worker를 전제로 쓴 항목들이다. 5단계를 구현할 때 "Goal도 
 - `@effect/atom-react`는 받아서 export만 봤다. 설치와 실행은 하지 않았다.
   - 2026-10-26에 확인한 것: peer는 react `>=19.0.0 <20.0.0`, scheduler `>=0.25.0 <0.29.0`, effect `^4.0.3`이고, 설치된 react 19.3.1, scheduler 0.28.0과 맞는다. `HydrationBoundary`와 `useAtom` 계열 hook을 export한다. 6단계에 적은 `Atom.family`, `fn`, `Interrupt`, `pull`, `optimistic`, `optimisticFn`, `withReactivity`, `refresh`, `serializable`은 설치된 `effect/reactivity`의 `Atom`에 모두 있다.
 - 공식 `@ag-ui/client`. 설치되어 있지 않고(`@ag-ui/core` 1.0.0만 간접 의존성으로 있다), 소스도 보지 않았다.
-- `toolCallMetadata`와 tool call `metadata`(`model`, `index`)를 지워도 provider 요청이 같은지. 2단계 완료 기준으로 확인한다.
+- (확인함, 2026-10-26) `toolCallMetadata`와 tool call `metadata`(`model`, `index`)를 지워도 provider 요청이 같은지. 같다. 2단계 "결과"의 로컬 DB 사본 비교다.
 - 21개 middleware가 겹치는 도구 뒤 hook을 견디는지. TanStack 1.0 일반 채팅에서 이미 겹치지만 따로 보지 않았다.
 
 ## 열린 항목
