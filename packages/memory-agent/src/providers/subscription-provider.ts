@@ -3,12 +3,13 @@ import { Cause, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "./model-catalog.ts";
 import {
+  Array as Arr,
   Clock,
   Data,
   Deferred,
-  MutableHashSet,
   Effect,
   Exit,
+  Match,
   Option,
   Ref,
   Schema,
@@ -85,31 +86,37 @@ const CatalogPage = Schema.Union([
 ]);
 const decodeCatalogPage = Schema.decodeUnknownOption(CatalogPage);
 
-const canonicalEffort = (value: string | undefined) => {
-  if (value === undefined) return null;
-  const effort = value.trim().toLowerCase();
-  return ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(effort)
-    ? effort
-    : null;
-};
+const canonicalEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-const effortValues = (model: CatalogModel) => {
-  const raw = model.supported_reasoning_levels ?? model.supported_reasoning_efforts ?? [];
-  const efforts: string[] = [];
-  for (const item of raw) {
-    const effort = canonicalEffort(
-      Schema.is(Schema.String)(item) ? item : (item.reasoning_effort ?? item.effort ?? item.value),
-    );
-    if (effort !== null && !efforts.includes(effort)) efforts.push(effort);
-  }
-  return efforts;
-};
+const canonicalEffort = (value: string | undefined) =>
+  Option.fromNullishOr(value).pipe(
+    Option.map((raw) => raw.trim().toLowerCase()),
+    Option.filter((effort) => canonicalEfforts.includes(effort)),
+  );
 
-const pageModels = (page: typeof CatalogPage.Type): ReadonlyArray<CatalogModel> => {
-  if (Schema.is(CatalogModels)(page)) return page;
-  if ("models" in page) return page.models;
-  return Schema.is(CatalogModels)(page.data) ? page.data : page.data.models;
-};
+const effortValues = (model: CatalogModel) =>
+  Arr.dedupe(
+    (model.supported_reasoning_levels ?? model.supported_reasoning_efforts ?? []).flatMap((item) =>
+      Option.toArray(
+        canonicalEffort(
+          Match.value(item).pipe(
+            Match.when(Match.string, (effort) => effort),
+            Match.orElse((named) => named.reasoning_effort ?? named.effort ?? named.value),
+          ),
+        ),
+      ),
+    ),
+  );
+
+const isCatalogModels = Schema.is(CatalogModels);
+
+const pageModels = (page: typeof CatalogPage.Type): ReadonlyArray<CatalogModel> =>
+  Match.value(page).pipe(
+    Match.when(isCatalogModels, (models) => models),
+    Match.when({ models: isCatalogModels }, ({ models }) => models),
+    Match.when({ data: isCatalogModels }, ({ data }) => data),
+    Match.orElse(({ data }) => data.models),
+  );
 
 const catalogEntries = (provider: SubscriptionAccountProvider, pages: ReadonlyArray<unknown>) =>
   pages
@@ -143,22 +150,27 @@ const anthropicEfforts = (model: string) => {
   const version = [numbers[0] ?? 0, numbers[1] ?? 0] as const;
   const atLeast = (major: number, minor: number) =>
     version[0] > major || (version[0] === major && version[1] >= minor);
-
-  if (
-    (family === "opus" && atLeast(4, 7)) ||
-    (family === "sonnet" && atLeast(5, 0)) ||
-    (family !== "opus" && family !== "sonnet" && atLeast(5, 0))
-  )
-    return ["low", "medium", "high", "xhigh", "max"];
-  if (
-    normalized.includes("mythos") ||
-    (family === "opus" && version[0] === 4 && version[1] === 6) ||
-    (family === "sonnet" && version[0] === 4 && version[1] === 6)
-  )
-    return ["low", "medium", "high", "max"];
-  if (family === "opus" && version[0] === 4 && version[1] === 5) return ["low", "medium", "high"];
-  if (family === "sonnet" && version[0] === 3 && version[1] === 7) return ["low", "medium", "high"];
-  return ["none"];
+  // The first tier the model belongs to; newer tiers come first.
+  const tiers: ReadonlyArray<readonly [applies: boolean, efforts: Array<string>]> = [
+    [
+      (family === "opus" && atLeast(4, 7)) ||
+        (family === "sonnet" && atLeast(5, 0)) ||
+        (family !== "opus" && family !== "sonnet" && atLeast(5, 0)),
+      ["low", "medium", "high", "xhigh", "max"],
+    ],
+    [
+      normalized.includes("mythos") ||
+        (family === "opus" && version[0] === 4 && version[1] === 6) ||
+        (family === "sonnet" && version[0] === 4 && version[1] === 6),
+      ["low", "medium", "high", "max"],
+    ],
+    [family === "opus" && version[0] === 4 && version[1] === 5, ["low", "medium", "high"]],
+    [family === "sonnet" && version[0] === 3 && version[1] === 7, ["low", "medium", "high"]],
+  ];
+  return Arr.findFirst(tiers, ([applies]) => applies).pipe(
+    Option.map(([, efforts]) => efforts),
+    Option.getOrElse(() => ["none"]),
+  );
 };
 
 export const parseSubscriptionCatalog: {
@@ -172,29 +184,27 @@ function parseSubscriptionCatalogBody(
 ): ReadonlyArray<ProviderModel> {
   const entries = catalogEntries(provider, pages);
   const preferred = provider === "openai" ? "gpt-6-astra" : "claude-opus-5";
-  const seen = MutableHashSet.empty<string>();
-  return entries.flatMap(({ entry, id }, index) => {
-    if (MutableHashSet.has(seen, id)) return [];
-    MutableHashSet.add(seen, id);
+  // A model listed twice keeps its first entry, and the place of that entry.
+  const firsts = Arr.dedupeWith(
+    entries.map((listed, index) => ({ ...listed, index })),
+    (left, right) => left.id === right.id,
+  );
+  return firsts.map(({ entry, id, index }) => {
     const advertised = provider === "openai" ? effortValues(entry) : anthropicEfforts(id);
     const efforts = advertised.length > 0 ? advertised : ["none"];
-    const requestedDefault = canonicalEffort(
-      entry.default_reasoning_level ?? entry.default_reasoning_effort,
+    const defaultReasoningEffort = Option.getOrElse(
+      Option.filter(
+        canonicalEffort(entry.default_reasoning_level ?? entry.default_reasoning_effort),
+        (requested) => efforts.includes(requested),
+      ),
+      () => (efforts.includes("medium") ? "medium" : efforts[0]!),
     );
-    const defaultReasoningEffort =
-      requestedDefault !== null && efforts.includes(requestedDefault)
-        ? requestedDefault
-        : efforts.includes("medium")
-          ? "medium"
-          : efforts[0]!;
     const image =
       entry.input_modalities?.some((modality) => modality === "image" || modality === "vision") ??
       false;
-    const contextWindow = Option.getOrNull(
-      Option.filter(
-        Schema.decodeUnknownOption(Schema.Int)(entry.context_window),
-        (limit) => Number.isSafeInteger(limit) && limit > 0,
-      ),
+    const contextWindow = Option.filter(
+      Schema.decodeUnknownOption(Schema.Int)(entry.context_window),
+      (limit) => Number.isSafeInteger(limit) && limit > 0,
     );
     const model: ProviderModel = {
       provider,
@@ -210,9 +220,28 @@ function parseSubscriptionCatalogBody(
         reasoning: efforts.some((effort) => effort !== "none"),
       },
     };
-    return [contextWindow === null ? model : { ...model, contextWindow }];
+    return Option.match(contextWindow, {
+      onNone: () => model,
+      onSome: (limit): ProviderModel => ({ ...model, contextWindow: limit }),
+    });
   });
 }
+
+/** What a person reads for each way a login can fail. */
+const loginFailureMessages = {
+  cancelled: "Login was cancelled.",
+  callback_invalid: "The browser returned an invalid login callback.",
+  callback_state_mismatch: "Login verification failed. Please retry.",
+  callback_timeout: "The browser did not return to this app in time.",
+  credential_store_unavailable: "The system credential store is unavailable.",
+  invalid_token_response: "The provider returned an invalid login response.",
+  login_in_progress: "A login is already in progress.",
+  not_connected: "The provider is not connected.",
+  provider_rejected: "The provider rejected the login request.",
+  transport_unavailable: "The login server or provider could not be reached.",
+} satisfies Record<OAuthHarnessError["code"], string>;
+
+const isHarnessError = Schema.is(OAuthHarnessError);
 
 const anthropicInstalledCatalog = [
   {
@@ -269,34 +298,23 @@ export function createSubscriptionProvider(
   let pending: LoginAttempt | null = null;
   let loginError: Data.TaggedEnum.Value<AuthConnectionState, "error"> | null = null;
   const failureState = (
-    error: OAuthHarnessError | null,
-  ): Data.TaggedEnum.Value<AuthConnectionState, "error"> => {
-    if (error === null)
-      return AuthConnectionState.error({ provider, message: "Login did not complete." });
-    const message = {
-      cancelled: "Login was cancelled.",
-      callback_invalid: "The browser returned an invalid login callback.",
-      callback_state_mismatch: "Login verification failed. Please retry.",
-      callback_timeout: "The browser did not return to this app in time.",
-      credential_store_unavailable: "The system credential store is unavailable.",
-      invalid_token_response: "The provider returned an invalid login response.",
-      login_in_progress: "A login is already in progress.",
-      not_connected: "The provider is not connected.",
-      provider_rejected: "The provider rejected the login request.",
-      transport_unavailable: "The login server or provider could not be reached.",
-    } satisfies Record<OAuthHarnessError["code"], string>;
-    return AuthConnectionState.error({
-      provider,
-      message: message[error.code] ?? "Login did not complete.",
-      code: error.code,
-      ...optionalProperty("operation", error.operation ?? undefined),
-      ...optionalProperty("httpStatus", error.status ?? undefined),
-      ...optionalProperty("providerCode", error.providerCode ?? undefined),
-      ...optionalProperty("credentialStage", error.credentialStage ?? undefined),
-      ...optionalProperty("transportCode", error.transportCode ?? undefined),
-      ...optionalProperty("proxyRoute", error.proxyRoute ?? undefined),
+    harnessError: Option.Option<OAuthHarnessError>,
+  ): Data.TaggedEnum.Value<AuthConnectionState, "error"> =>
+    Option.match(harnessError, {
+      onNone: () => AuthConnectionState.error({ provider, message: "Login did not complete." }),
+      onSome: (error) =>
+        AuthConnectionState.error({
+          provider,
+          message: loginFailureMessages[error.code] ?? "Login did not complete.",
+          code: error.code,
+          ...optionalProperty("operation", error.operation ?? undefined),
+          ...optionalProperty("httpStatus", error.status ?? undefined),
+          ...optionalProperty("providerCode", error.providerCode ?? undefined),
+          ...optionalProperty("credentialStage", error.credentialStage ?? undefined),
+          ...optionalProperty("transportCode", error.transportCode ?? undefined),
+          ...optionalProperty("proxyRoute", error.proxyRoute ?? undefined),
+        }),
     });
-  };
   const connectionState = (connection: { readonly connected: boolean }): AuthConnectionState =>
     connection.connected
       ? AuthConnectionState["signed-in"]({ provider })
@@ -310,48 +328,67 @@ export function createSubscriptionProvider(
     AuthConnectionState,
     Cause.UnknownError
   > {
-    if (pending !== null)
-      return AuthConnectionState.pending({ provider, authorizationUrl: pending.authorizationUrl });
-    if (loginError !== null) return loginError;
-    return yield* nativePromise(() => client.status()).pipe(
-      Effect.map(connectionState),
-      Effect.catchIf(
-        (failure): failure is Cause.UnknownError & { readonly cause: OAuthHarnessError } =>
-          Schema.is(OAuthHarnessError)(failure.cause) &&
-          failure.cause.code === "credential_store_unavailable",
-        (failure) => Effect.succeed(failureState(failure.cause)),
+    // A login in progress or one that failed is known here; otherwise the account is asked.
+    const local = Option.orElse(
+      Option.map(Option.fromNullishOr(pending), (attempt) =>
+        AuthConnectionState.pending({ provider, authorizationUrl: attempt.authorizationUrl }),
       ),
+      () => Option.fromNullishOr(loginError),
     );
+    return yield* Option.match(local, {
+      onSome: (state) => Effect.succeed<AuthConnectionState>(state),
+      onNone: () =>
+        nativePromise(() => client.status()).pipe(
+          Effect.map(connectionState),
+          Effect.catchIf(
+            (failure): failure is Cause.UnknownError & { readonly cause: OAuthHarnessError } =>
+              isHarnessError(failure.cause) &&
+              failure.cause.code === "credential_store_unavailable",
+            (failure) => Effect.succeed(failureState(Option.some(failure.cause))),
+          ),
+        ),
+    });
   });
   const status = authState().pipe(Effect.mapError(() => operationFailure(provider, "auth")));
-  const connect = Effect.gen(function* () {
-    const current = yield* authState();
-    if (
-      AuthConnectionState.$is("signed-in")(current) ||
-      AuthConnectionState.$is("pending")(current)
-    )
-      return current;
+  const login = Effect.gen(function* () {
     loginError = null;
     const started = yield* Effect.result(nativePromise(() => client.startLogin()));
-    if (Result.isFailure(started)) {
-      const error = started.failure.cause;
-      loginError = failureState(Schema.is(OAuthHarnessError)(error) ? error : null);
-      return loginError;
-    }
-    const attempt = started.success;
-    pending = attempt;
-    void attempt.completed.then(
-      () => {
-        if (pending === attempt) pending = null;
+    return Result.match(started, {
+      onFailure: (failure): AuthConnectionState => {
+        loginError = failureState(Option.liftPredicate(failure.cause, isHarnessError));
+        return loginError;
       },
-      (error) => {
-        if (pending !== attempt) return;
-        pending = null;
-        loginError = failureState(Schema.is(OAuthHarnessError)(error) ? error : null);
+      onSuccess: (attempt): AuthConnectionState => {
+        pending = attempt;
+        // Only the attempt still pending settles the login state.
+        const current = () => pending === attempt;
+        void attempt.completed.then(
+          () => {
+            pending = current() ? null : pending;
+          },
+          (error) => {
+            loginError = current()
+              ? failureState(Option.liftPredicate(error, isHarnessError))
+              : loginError;
+            pending = current() ? null : pending;
+          },
+        );
+        return AuthConnectionState.pending({
+          provider,
+          authorizationUrl: attempt.authorizationUrl,
+        });
       },
-    );
-    return AuthConnectionState.pending({ provider, authorizationUrl: attempt.authorizationUrl });
-  }).pipe(Effect.mapError(() => operationFailure(provider, "auth")));
+    });
+  });
+  const connect = authState().pipe(
+    Effect.filterOrElse(
+      (current) =>
+        AuthConnectionState.$is("signed-in")(current) ||
+        AuthConnectionState.$is("pending")(current),
+      () => login,
+    ),
+    Effect.mapError(() => operationFailure(provider, "auth")),
+  );
   const cancel = Effect.sync(() => {
     const attempt = pending;
     pending = null;
@@ -391,26 +428,40 @@ export function createSubscriptionProvider(
       const admission = yield* catalogLock.withPermits(1)(
         Effect.gen(function* () {
           const key = options.catalogKey?.() ?? "__default__";
-          const current = yield* Ref.get(catalogEntry);
-          if (current?.key === key) {
-            const reusable = yield* CatalogState.$match(current.state, {
-              Loading: () => Effect.succeed(true),
-              Cached: (state) =>
-                Effect.map(Clock.currentTimeMillis, (now) => now < state.expiresAt),
-            });
-            if (reusable) return Admission.Waiter({ entry: current });
-          }
-          const next: CatalogEntry = {
-            key,
-            token: {},
-            completion: yield* Deferred.make<
-              ReadonlyArray<ProviderModel>,
-              ProviderOperationFailed
-            >(),
-            state: CatalogState.Loading(),
-          };
-          yield* Ref.set(catalogEntry, next);
-          return Admission.Owner({ entry: next });
+          const current = Option.filter(
+            Option.fromNullishOr(yield* Ref.get(catalogEntry)),
+            (entry) => entry.key === key,
+          );
+          // A load in flight, or models still fresh, for the same key.
+          const reusable = yield* Option.match(current, {
+            onNone: () => Effect.succeedNone,
+            onSome: (entry) =>
+              Effect.map(
+                CatalogState.$match(entry.state, {
+                  Loading: () => Effect.succeed(true),
+                  Cached: (state) =>
+                    Effect.map(Clock.currentTimeMillis, (now) => now < state.expiresAt),
+                }),
+                (fresh) => Option.liftPredicate(entry, () => fresh),
+              ),
+          });
+          const owned = Effect.gen(function* () {
+            const next: CatalogEntry = {
+              key,
+              token: {},
+              completion: yield* Deferred.make<
+                ReadonlyArray<ProviderModel>,
+                ProviderOperationFailed
+              >(),
+              state: CatalogState.Loading(),
+            };
+            yield* Ref.set(catalogEntry, next);
+            return Admission.Owner({ entry: next });
+          });
+          return yield* Option.match(reusable, {
+            onSome: (entry) => Effect.succeed(Admission.Waiter({ entry })),
+            onNone: () => owned,
+          });
         }),
       );
       return yield* Admission.$match(admission, {
@@ -424,31 +475,40 @@ export function createSubscriptionProvider(
                   : yield* fromPromise(provider, "catalog", (signal) =>
                       client.modelCatalog(signal),
                     );
-              const models = parseSubscriptionCatalog(provider, pages);
-              if (models.length === 0) return yield* operationFailure(provider, "catalog");
-              if (
-                Ref.getUnsafe(catalogEntry)?.token === entry.token &&
-                (options.catalogKey?.() ?? "__default__") === entry.key
-              )
-                catalogCache = { key: entry.key, models };
+              const models = yield* Effect.succeed(parseSubscriptionCatalog(provider, pages)).pipe(
+                Effect.filterOrFail(
+                  (parsed) => parsed.length > 0,
+                  () => operationFailure(provider, "catalog"),
+                ),
+              );
+              // Kept for contextWindow while this load is still the current one.
+              yield* Effect.when(
+                Effect.sync(() => {
+                  catalogCache = { key: entry.key, models };
+                }),
+                Effect.sync(
+                  () =>
+                    Ref.getUnsafe(catalogEntry)?.token === entry.token &&
+                    (options.catalogKey?.() ?? "__default__") === entry.key,
+                ),
+              );
               return models;
             }).pipe(
               Effect.onExit((exit) =>
                 catalogLock.withPermits(1)(
                   Effect.gen(function* () {
-                    if (Ref.getUnsafe(catalogEntry)?.token === entry.token) {
-                      yield* Ref.set(
-                        catalogEntry,
-                        Exit.isSuccess(exit)
-                          ? {
-                              ...entry,
-                              state: CatalogState.Cached({
-                                expiresAt: (yield* Clock.currentTimeMillis) + 30_000,
-                              }),
-                            }
-                          : null,
-                      );
-                    }
+                    const settled = Exit.match(exit, {
+                      onSuccess: () =>
+                        Effect.map(Clock.currentTimeMillis, (now): CatalogEntry | null => ({
+                          ...entry,
+                          state: CatalogState.Cached({ expiresAt: now + 30_000 }),
+                        })),
+                      onFailure: () => Effect.succeed<CatalogEntry | null>(null),
+                    });
+                    yield* Effect.when(
+                      Effect.flatMap(settled, (next) => Ref.set(catalogEntry, next)),
+                      Effect.sync(() => Ref.getUnsafe(catalogEntry)?.token === entry.token),
+                    );
                     yield* Deferred.done(entry.completion, exit);
                   }),
                 ),
@@ -494,15 +554,18 @@ export function createSubscriptionProvider(
       select: (model, reasoningEffort) =>
         Effect.gen(function* () {
           const models = yield* list;
-          const found = models.find((candidate) => candidate.id === model);
-          if (!isTruthy(found)) return yield* ModelUnavailable.make({ provider, model });
-          const effort = reasoningEffort ?? found.defaultReasoningEffort;
-          if (!found.supportedReasoningEfforts.includes(effort))
-            return yield* ModelUnavailable.make({
-              provider,
-              model,
-              reasoningEffort: effort,
-            });
+          const found = yield* Effect.fromOption(
+            Arr.findFirst(models, (candidate) => candidate.id === model),
+            () => ModelUnavailable.make({ provider, model }),
+          );
+          const effort = yield* Effect.succeed(
+            reasoningEffort ?? found.defaultReasoningEffort,
+          ).pipe(
+            Effect.filterOrFail(
+              (requested) => found.supportedReasoningEfforts.includes(requested),
+              (requested) => ModelUnavailable.make({ provider, model, reasoningEffort: requested }),
+            ),
+          );
           yield* options.config
             .update({
               provider,
