@@ -1,4 +1,14 @@
-import { Data, Effect, Match, MutableHashMap, Option, Predicate, Schema, Stream } from "effect";
+import {
+  Data,
+  Effect,
+  type JsonSchema,
+  Match,
+  MutableHashMap,
+  Option,
+  Predicate,
+  Schema,
+  Stream,
+} from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import {
@@ -14,6 +24,7 @@ import {
 } from "../oauth/protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { ModelSelection, SubscriptionModelSelection } from "../providers/contracts.ts";
+import { providerToolFunction } from "../providers/provider-tools.ts";
 import { providerPrompt } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
@@ -491,11 +502,13 @@ const systemText = (prompt: Prompt.Prompt) =>
 
 const canonicalTools = (tools: ReadonlyArray<Tool.Any>) =>
   tools
-    .map((tool) => ({
-      name: tool.name,
-      description: Tool.getDescription(tool),
-      input_schema: Tool.getJsonSchema(tool),
-    }))
+    .map((tool): { name: string; description?: string; input_schema: JsonSchema.JsonSchema } =>
+      Option.getOrElse(providerToolFunction(tool), () => ({
+        name: tool.name,
+        ...optionalProperty("description", Tool.getDescription(tool)),
+        input_schema: Tool.getJsonSchema(tool),
+      })),
+    )
     .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 
 /** What a subscription request is made of. */

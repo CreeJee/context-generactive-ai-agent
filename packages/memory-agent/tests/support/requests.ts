@@ -1,6 +1,6 @@
 // Native SDK boundary: the TanStack side runs the real `chat()` with a client that only records
 // the request body, so both sides are compared on what would go over the wire.
-import { chat, toolDefinition, type ModelMessage } from "@tanstack/ai";
+import { chat, toolDefinition, type AnyTool, type ModelMessage } from "@tanstack/ai";
 import { Cause, Context, Effect, Layer, Predicate, Stream } from "effect";
 import { Tool } from "effect/ai";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
@@ -84,11 +84,25 @@ export const asTanStack = (message: StoredMessage): ModelMessage => {
   );
 };
 
+const tanstackTools = () =>
+  tools.map((tool) =>
+    toolDefinition({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.parameters,
+    }),
+  );
+
+const effectTools = tools.map((tool) =>
+  Tool.dynamic(tool.name, { description: tool.description, parameters: tool.parameters }),
+);
+
 /** The body the TanStack adapter sends for `history`, run through the real `chat()`. */
 const tanstackBody = Effect.fnUntraced(function* (
   selection: SubscriptionModelSelection,
   threadId: string,
   history: ReadonlyArray<ModelMessage>,
+  chatTools: ReadonlyArray<AnyTool> = tanstackTools(),
 ) {
   const bodies: string[] = [];
   const adapter = new SubscriptionTextAdapter(
@@ -106,13 +120,7 @@ const tanstackBody = Effect.fnUntraced(function* (
         adapter,
         messages: [...history],
         systemPrompts: [system],
-        tools: tools.map((tool) =>
-          toolDefinition({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.parameters,
-          }),
-        ),
+        tools: [...chatTools],
         threadId,
         promptCache: "long",
       }),
@@ -175,13 +183,7 @@ const tanstackCompatibleBody = Effect.fnUntraced(function* (
         adapter,
         messages: [...history],
         systemPrompts: [system],
-        tools: tools.map((tool) =>
-          toolDefinition({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.parameters,
-          }),
-        ),
+        tools: tanstackTools(),
         threadId,
       }),
       (cause) => new Cause.UnknownError(cause),
@@ -200,9 +202,7 @@ const effectCompatibleBody = (history: ReadonlyArray<StoredMessage>) =>
     endpoint,
     reasoningEffort: "default",
     prompt: providerPrompt(toPrompt(history, [system]), compatibleTarget(endpoint.model)),
-    tools: tools.map((tool) =>
-      Tool.dynamic(tool.name, { description: tool.description, parameters: tool.parameters }),
-    ),
+    tools: effectTools,
   }).pipe(
     Effect.map(wireBody),
     Effect.orElseSucceed(() => undefined),
@@ -213,14 +213,13 @@ const effectBody = (
   selection: SubscriptionModelSelection,
   threadId: string,
   history: ReadonlyArray<StoredMessage>,
+  modelTools: ReadonlyArray<Tool.Any> = effectTools,
 ) =>
   subscriptionBody({
     provider: selection.provider,
     selection,
     prompt: providerPrompt(toPrompt(history, [system]), undefined),
-    tools: tools.map((tool) =>
-      Tool.dynamic(tool.name, { description: tool.description, parameters: tool.parameters }),
-    ),
+    tools: modelTools,
     promptCache: { retention: "long", key: threadId },
   });
 
@@ -318,3 +317,21 @@ export const requestDifferences = ({
       }),
     ),
   ]).pipe(Effect.map(([subscription, compatible]) => [...subscription, compatible]));
+
+/**
+ * For each subscription provider, where the request continuing a one-message thread differs when
+ * TanStack offers `chatTools` and the Effect AI model offers `modelTools`.
+ */
+export const toolRequestDifferences = ({
+  chatTools,
+  modelTools,
+}: {
+  readonly chatTools: ReadonlyArray<AnyTool>;
+  readonly modelTools: ReadonlyArray<Tool.Any>;
+}) =>
+  Effect.forEach(selections, (selection) =>
+    Effect.map(tanstackBody(selection, "thread-1", [asTanStack(next)], chatTools), (expected) => ({
+      provider: selection.provider,
+      difference: firstDifference(expected, effectBody(selection, "thread-1", [next], modelTools)),
+    })),
+  );
