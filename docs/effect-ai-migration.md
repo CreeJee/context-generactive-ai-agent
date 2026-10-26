@@ -463,7 +463,24 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 사용자 취소 없이 interrupt된 run은 서버가 멈춘 것으로 보고 `failed`, `server_restarted`로 남긴다. TanStack의 `service_shutdown` 처리와 같다.
   - RUN_ERROR 문구는 `shownRunErrors`(`agent/run-errors.ts`)가 가린다.
   - 한 응답의 호출이 동시에 돈다는 안내는 standing prompt(`concurrentCallsInstructions`)에 있다. TanStack 1.0도 동시에 돌리므로 지금 경로에도 넣었다.
-  - 남은 것: 자식 run을 새 loop로 옮기기(`relayDecision`을 쓰는 gate hook, trace hook, 자식 기록 줄이기), AgentChat이 새 loop로 run을 돌리는 조립과 테스트 provider, golden과 history page 비교.
+  - 자식 run은 `subagents.ts`의 `runToolsFor`가 새 loop로 돌린다(`relayDecision`을 쓰는 gate hook, trace hook, 자식 기록 줄이기).
+- 결과(2026-10-27):
+  - 스위치: `ChatLoop`(`agent/chat.ts`, `"tanstack"` | `"effect-ai"`)를 `MemoryAgentLayerOptions.chatLoop`로 고른다. 기본값은 `"tanstack"`이고, 7단계에서 스위치와 TanStack 경로를 함께 지운다.
+  - 새 loop로 가는 run: Goal worker run, 구현 Goal run, bound run, 이미지 provider 도구를 쓰는 run이 아닌 run이다. 앞의 셋은 5단계에서 옮긴다.
+  - 조립: `AgentChat.handle`이 도구를 `runToolsFor`로, hook을 middleware 순서대로 묶는다. 기억 범위, workflow 진행, run 시작 알림, 프롬프트 상황은 두 경로가 같은 코드로 준비한다.
+  - 대화: 저장된 thread에 아직 없는 사용자 메시지만 더한다(`agent/page-turns.ts`, id로 비교). 페이지가 보낸 assistant·tool 메시지는 쓰지 않는다. TanStack은 들어온 메시지로 저장된 메시지를 id 기준으로 바꿨다. 페이지에는 편집과 재생성이 없어서 잘라 낼 지점도 없다.
+  - 취소는 실행만 끊는다. run이 어떻게 끝났는지는 loop가 정하고 페이지에 알린다. owner 종료로 끊긴 run은 `server_restarted`다.
+  - steer는 `steerCuttableModel`(`agent/steer-cut.ts`)이 모델 stream을 닫아 답을 자른다.
+  - 승인: 새 loop의 interrupt에는 TanStack binding(`tanstack:interruptBinding`)이 없다. 그래서 지금 페이지의 client는 승인을 풀지 못한다. 스위치를 켠 채 페이지에서 승인하는 흐름은 6단계 client부터 된다. golden driver는 6단계 client처럼 resume을 직접 보낸다(`tests/golden/driver.ts`).
+  - golden: 같은 시나리오를 새 loop에서 돌려 `tests/golden/__golden__/effect-ai/`에 둔다(`tests/golden/effect-ai.test.ts`). TanStack golden과 다른 점은 아래뿐이다. placeholder 번호가 밀린 것은 차이로 세지 않는다.
+    - 도구 호출만 있는 assistant 메시지는 승인 대기로 끝난 run에서도 `content: null`이다. TanStack은 interrupt 때 저장한 메시지에서 `content`를 뺐다.
+    - 승인 대기로 끝난 run의 discovery 도구 메시지에는 id가 없다. TanStack은 `snapshot_<runId>_<n>`을 붙였다. history group에서는 `stored:<thread>:<n>`이 된다.
+    - permission review interrupt의 id는 `interrupt-<uuid>`다.
+    - permission review 호출의 기억 노드는 interrupt된 run에 남는다. TanStack은 재개 run에 남겼다. 도구 승인과 같아졌다.
+    - 거절된 resume은 run 행을 만들지 않는다. TanStack은 `failed` run을 남겼다.
+    - 한 step에 승인 호출과 다른 호출이 섞이면 다른 호출이 승인 전에 돈다(`mixed-step`). 위 완료 기준의 예외다.
+  - 이벤트: RUN_FINISHED는 run 끝에 한 번이고 usage가 없다. 취소된 run은 `outcome: { type: "cancelled" }`로 끝난다. TOOL_CALL_END에 `input`이 없고, MESSAGES_SNAPSHOT이 없다. reasoning의 `messageId`는 `<messageId>:<partId>`다. 모든 이벤트에 `timestamp`가 있다.
+  - history page: `tools/chat-store-check`가 history group을 페이지처럼 TanStack UI 메시지로 바꿔 migration 전후를 비교한다. 로컬 DB 사본에서 화면 메시지 33,046개가 같다. 다른 것은 메시지와 part의 `metadata`뿐이고, 이는 TanStack 메타데이터라 페이지가 읽지 않는다.
 
 ### 5. Goal 실행
 

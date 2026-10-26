@@ -2784,3 +2784,11 @@
 - 모델에는 한 턴의 호출이 동시에 돈다고 시스템 프롬프트에서 한 번 알린다. 여러 도구에 걸친 원칙이라 도구 설명이 아니라 시스템 프롬프트에 둔다("시스템 프롬프트와 도구 설명은 규칙을 한 곳에만 둔다 (2026-10-24)").
 - 같은 파일을 한 턴에 두 번 쓰면 쓰기 도구의 기대 sha256 검사가 하나를 실패시킨다("잘못된 성공 거르기 (2026-10-14)"). 셸·코드 실행·MCP에는 이런 검사가 없다. 받아들이는 위험이다.
 - 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "도구 실행 방식"과 4단계다.
+
+## AgentChat은 ChatLoop 스위치로 새 loop를 고른다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 4단계다. 파일과 TanStack과 달라진 점은 계획의 4단계 "결과"에 있다.
+- `ChatLoop`(`"tanstack"` | `"effect-ai"`)를 `MemoryAgentLayerOptions.chatLoop`로 고른다. 기본값은 `"tanstack"`이다. 스위치는 6단계 client 전까지 테스트와 개발 확인용이다. 새 loop의 interrupt에는 TanStack binding이 없어서 지금 페이지는 승인을 풀지 못한다. 7단계에서 스위치와 TanStack 경로를 함께 지운다.
+- Goal worker run, 구현 Goal run, bound run, 이미지 provider 도구를 쓰는 run은 스위치와 관계없이 지금 경로로 돈다. 앞의 셋은 5단계에서 옮긴다.
+- 새 loop의 대화는 저장된 thread에 아직 저장되지 않은 사용자 메시지(id로 비교)를 더한 것이다. 페이지가 보낸 assistant·tool 메시지는 쓰지 않는다. 서버가 쓴 답과 도구 결과는 서버 저장본이 맞기 때문이다. 페이지에 편집과 재생성이 없으므로 잘라 낼 지점은 두지 않는다.
+- 취소는 실행만 끊는다. run이 어떻게 끝났는지는 loop가 정하고, 그 마지막 이벤트까지 페이지에 보낸다.
