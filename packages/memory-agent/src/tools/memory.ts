@@ -12,7 +12,7 @@ import {
   Schema,
 } from "effect";
 import { type RunHook, StepEnded } from "../loop/run.ts";
-import { RunEnd } from "../loop/store.ts";
+import { finishedRun } from "../loop/store.ts";
 import { Graph } from "../memory/graph.ts";
 import { readStructuredEvidence, traceStructuredEvidence } from "../memory/evidence.ts";
 import { Interpretations } from "../memory/interpretations.ts";
@@ -371,17 +371,10 @@ const recordUseHook = <E>(recordUse: (parentMessageId: string) => Effect.Effect<
         Model: ({ message }) => Ref.set(written, Option.fromNullishOr(message.id)),
         Resume: () => Effect.void,
       }),
-    ended: (_scope, end) => {
-      const record = Effect.flatMap(Ref.get(written), (id) =>
+    ended: (_scope, end) =>
+      Effect.flatMap(Ref.get(written), (id) =>
         Option.match(id, { onNone: () => Effect.void, onSome: recordUse }),
-      );
-      return RunEnd.$match(end, {
-        Completed: () => record,
-        Interrupted: () => record,
-        Failed: () => Effect.void,
-        Aborted: () => Effect.void,
-      }).pipe(Effect.ignore({ log: "Warn" }));
-    },
+      ).pipe(Effect.when(Effect.succeed(finishedRun(end))), Effect.ignore({ log: "Warn" })),
   }));
 
 const make = Effect.gen(function* () {

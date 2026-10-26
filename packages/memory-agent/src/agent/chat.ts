@@ -16,7 +16,7 @@ import {
   SchemaTransformation,
 } from "effect";
 import type { RunHook } from "../loop/run.ts";
-import { RunEnd } from "../loop/store.ts";
+import { finishedRun } from "../loop/store.ts";
 import { projectInstructions } from "./project-instructions.ts";
 import { workflowActions } from "../workflow/actions.ts";
 import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
@@ -1204,17 +1204,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
         ),
       // Waiting for the user is a finish, as it was for the middleware; settlement leaves it.
-      ended: (_scope, end) =>
-        Effect.sync(
-          endedAs(
-            RunEnd.$match(end, {
-              Completed: () => "completed" as const,
-              Interrupted: () => "completed" as const,
-              Failed: () => "failed" as const,
-              Aborted: () => "failed" as const,
-            }),
-          ),
-        ),
+      ended: (_scope, end) => Effect.sync(endedAs(finishedRun(end) ? "completed" : "failed")),
     };
     // Hooks only capture the candidate terminal outcome. Settlement runs after the complete SDK
     // stream and every middleware finalizer has stopped, so a later audited finalizer can still

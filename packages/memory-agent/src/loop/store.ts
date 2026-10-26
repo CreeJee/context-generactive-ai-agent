@@ -33,6 +33,10 @@ export type RunEnd = Data.TaggedEnum<{
 }>;
 export const RunEnd = Data.taggedEnum<RunEnd>();
 
+/** The run finished or waits for the user, as TanStack's `onFinish` saw it: it neither failed nor was cancelled. */
+export const finishedRun = (end: RunEnd) =>
+  RunEnd.$is("Completed")(end) || RunEnd.$is("Interrupted")(end);
+
 /** An answer to one pending interrupt, as the resume run commits it. */
 export type InterruptAnswer = Data.TaggedEnum<{
   Resolved: {

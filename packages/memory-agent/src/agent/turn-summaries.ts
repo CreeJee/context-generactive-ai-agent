@@ -16,6 +16,8 @@ import {
 } from "./compaction-policy.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { fallbackLogged, logDefect } from "../runtime/logged-failures.ts";
+import type { RunHook } from "../loop/run.ts";
+import { finishedRun } from "../loop/store.ts";
 import {
   compactEffect,
   compactionState,
@@ -201,6 +203,12 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       oneAtATime.withPermits(1),
     );
 
+  // Retried after the next run; a failure here never reaches the conversation.
+  const inBackground = (sessionId: string) =>
+    Effect.catchDefect(catchUp(sessionId, false), (defect) =>
+      logDefect("Turn summaries stopped")(Cause.die(defect)),
+    ).pipe(Effect.forkIn(scope), Effect.when(Effect.succeed(automatic)), Effect.asVoid);
+
   return {
     catchUp,
 
@@ -212,18 +220,12 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     /** Summarizes in the background once a run has finished, so compaction never waits for it. */
     afterRun: (sessionId: string): ChatMiddleware => ({
       name: "memory-agent/turn-summaries",
-      onFinish: () => {
-        if (!automatic) return;
-        // Retried after the next run; a failure here never reaches the conversation.
-        void run(
-          Effect.forkIn(
-            Effect.catchDefect(catchUp(sessionId, false), (defect) =>
-              logDefect("Turn summaries stopped")(Cause.die(defect)),
-            ),
-            scope,
-          ),
-        );
-      },
+      onFinish: () => void run(inBackground(sessionId)),
+    }),
+    /** {@link afterRun} for the Effect AI loop; a run that failed or was cancelled starts none. */
+    hookForRun: (sessionId: string): RunHook => ({
+      ended: (_scope, end) =>
+        Effect.when(inBackground(sessionId), Effect.succeed(finishedRun(end))).pipe(Effect.asVoid),
     }),
   };
 });
