@@ -143,19 +143,38 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
     );
   /** A git question answered by exit code 0 or 1. */
   const answers = (operation: Operation, cwd: string, args: ReadonlyArray<string>) =>
-    Effect.flatMap(run(operation, cwd, args), (output) => {
-      switch (output.exitCode) {
-        case 0:
-          return Effect.succeed(true);
-        case 1:
-          return Effect.succeed(false);
-        default:
-          return fail(operation, reasons.GitFailed.make({ exitCode: output.exitCode }));
-      }
-    });
+    Effect.flatMap(run(operation, cwd, args), (output) =>
+      Match.value(output.exitCode).pipe(
+        Match.when(0, () => Effect.succeed(true)),
+        Match.when(1, () => Effect.succeed(false)),
+        Match.orElse((exitCode) => fail(operation, reasons.GitFailed.make({ exitCode }))),
+      ),
+    );
   const revision = (operation: Operation, cwd: string, name: string) =>
     Effect.map(run(operation, cwd, ["rev-parse", "--verify", "--quiet", name]), (output) =>
       output.exitCode === 0 ? Option.some(output.stdout.trim()) : Option.none<string>(),
+    );
+  /** A revision that must exist; its absence fails with `reason`. */
+  const existing = (
+    operation: Operation,
+    cwd: string,
+    name: string,
+    reason: CardWorktreeFailed["reason"],
+  ) =>
+    Effect.flatMap(
+      revision(operation, cwd, name),
+      Option.match({ onNone: () => fail(operation, reason), onSome: Effect.succeed }),
+    );
+  const isClean = (operation: Operation, worktree: string) =>
+    Effect.map(
+      expect(operation, worktree, ["status", "--porcelain", "--untracked-files=all"]),
+      (text) => text.length === 0,
+    );
+  /** Refuses a worktree with uncommitted changes, untracked files included. */
+  const requireClean = (operation: Operation, worktree: string) =>
+    Effect.when(
+      fail(operation, reasons.WorktreeDirty.make({})),
+      Effect.map(isClean(operation, worktree), (clean) => !clean),
     );
 
   const checkIds = (operation: Operation, ids: ReadonlyArray<string>) =>
@@ -174,11 +193,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       "--path-format=absolute",
       "--show-toplevel",
     ]);
-    if (top.exitCode !== 0)
-      return yield* fail(
-        operation,
-        reasons.SequentialRequired.make({ cause: "not_git_repository" }),
-      );
+    yield* Effect.when(
+      fail(operation, reasons.SequentialRequired.make({ cause: "not_git_repository" })),
+      Effect.succeed(top.exitCode !== 0),
+    );
     const repository = top.stdout.trim();
     const prefix = yield* expect(operation, projectRoot, ["rev-parse", "--show-prefix"]);
     const base = yield* canonicalPathEffect(worktreesBase).pipe(
@@ -192,34 +210,29 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
   });
 
   const goalHead = (operation: Operation, repository: string, goal: string) =>
-    Effect.flatMap(revision(operation, repository, `refs/heads/${goalBranchName(goal)}`), (head) =>
-      Option.match(head, {
-        onNone: () => fail(operation, reasons.GoalBranchMissing.make({})),
-        onSome: Effect.succeed,
-      }),
+    existing(
+      operation,
+      repository,
+      `refs/heads/${goalBranchName(goal)}`,
+      reasons.GoalBranchMissing.make({}),
     );
 
   /** Registered worktree paths with the branch each has checked out. */
   const registered = (operation: Operation, repository: string) =>
-    Effect.map(expect(operation, repository, ["worktree", "list", "--porcelain"]), (text) => {
-      const entries: Array<{ readonly path: string; readonly branch: string | undefined }> = [];
-      for (const block of text.split("\n\n")) {
+    Effect.map(expect(operation, repository, ["worktree", "list", "--porcelain"]), (text) =>
+      text.split("\n\n").flatMap((block) => {
         const fields = lines(block);
-        const worktree = fields.find((line) => line.startsWith("worktree "));
         const branch = fields.find((line) => line.startsWith("branch "));
-        if (worktree !== undefined)
-          entries.push({
-            path: worktree.slice("worktree ".length),
-            branch: branch?.slice("branch refs/heads/".length),
-          });
-      }
-      return entries;
-    });
-
-  const isClean = (operation: Operation, worktree: string) =>
-    Effect.map(
-      expect(operation, worktree, ["status", "--porcelain", "--untracked-files=all"]),
-      (text) => text.length === 0,
+        return Option.toArray(
+          Option.map(
+            Option.fromUndefinedOr(fields.find((line) => line.startsWith("worktree "))),
+            (worktree) => ({
+              path: worktree.slice("worktree ".length),
+              branch: branch?.slice("branch refs/heads/".length),
+            }),
+          ),
+        );
+      }),
     );
 
   const describe = Effect.fnUntraced(function* (operation: Operation, card: CardRef) {
@@ -242,8 +255,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       (candidate) => candidate.path === worktree.path,
     );
     if (entry === undefined) return { worktree, state: "absent" as const };
-    if (entry.branch !== worktree.branch)
-      return yield* fail(operation, reasons.WorktreeOccupied.make({}));
+    yield* Effect.when(
+      fail(operation, reasons.WorktreeOccupied.make({})),
+      Effect.succeed(entry.branch !== worktree.branch),
+    );
     const present = yield* fs.exists(worktree.path).pipe(
       Effect.mapError((cause) =>
         CardWorktreeFailed.make({
@@ -257,71 +272,72 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
   });
 
   const ensure = Effect.fnUntraced(function* (card: CardRef) {
-    const found = yield* lookup("lease", card);
-    const { worktree } = found;
-    switch (found.state) {
-      case "present":
-        return worktree;
-      case "stale":
-        // The folder was deleted by hand; forget it so git can check the branch out again.
-        yield* expect("lease", worktree.repository, ["worktree", "prune"]);
-        break;
-      case "absent":
-        break;
-    }
-    const occupied = yield* fs.exists(worktree.path).pipe(
-      Effect.mapError((cause) =>
-        CardWorktreeFailed.make({
-          operation: "lease",
-          reason: reasons.GitFailed.make({ exitCode: null }),
-          cause,
-        }),
+    const { worktree, state } = yield* lookup("lease", card);
+    const add = Effect.gen(function* () {
+      yield* Effect.when(
+        fail("lease", reasons.WorktreeOccupied.make({})),
+        fs.exists(worktree.path).pipe(
+          Effect.mapError((cause) =>
+            CardWorktreeFailed.make({
+              operation: "lease",
+              reason: reasons.GitFailed.make({ exitCode: null }),
+              cause,
+            }),
+          ),
+        ),
+      );
+      yield* fs.makeDirectory(path.dirname(worktree.path), { recursive: true, mode: 0o700 }).pipe(
+        Effect.mapError((cause) =>
+          CardWorktreeFailed.make({
+            operation: "lease",
+            reason: reasons.GitFailed.make({ exitCode: null }),
+            cause,
+          }),
+        ),
+      );
+      const branch = yield* revision("lease", worktree.repository, `refs/heads/${worktree.branch}`);
+      // A redelivered card continues on its existing branch; a new one starts from the Goal's HEAD.
+      const args = Option.isSome(branch)
+        ? ["worktree", "add", worktree.path, worktree.branch]
+        : [
+            "worktree",
+            "add",
+            "-b",
+            worktree.branch,
+            worktree.path,
+            yield* goalHead("lease", worktree.repository, card.goalInstanceId),
+          ];
+      yield* expect("lease", worktree.repository, args).pipe(Effect.uninterruptible);
+      return worktree;
+    });
+    return yield* Match.value(state).pipe(
+      Match.when("present", () => Effect.succeed(worktree)),
+      // The folder was deleted by hand; forget it so git can check the branch out again.
+      Match.when("stale", () =>
+        Effect.andThen(expect("lease", worktree.repository, ["worktree", "prune"]), add),
       ),
+      Match.when("absent", () => add),
+      Match.exhaustive,
     );
-    if (occupied) return yield* fail("lease", reasons.WorktreeOccupied.make({}));
-    yield* fs.makeDirectory(path.dirname(worktree.path), { recursive: true, mode: 0o700 }).pipe(
-      Effect.mapError((cause) =>
-        CardWorktreeFailed.make({
-          operation: "lease",
-          reason: reasons.GitFailed.make({ exitCode: null }),
-          cause,
-        }),
-      ),
-    );
-    const branch = yield* revision("lease", worktree.repository, `refs/heads/${worktree.branch}`);
-    // A redelivered card continues on its existing branch; a new one starts from the Goal's HEAD.
-    const args = Option.isSome(branch)
-      ? ["worktree", "add", worktree.path, worktree.branch]
-      : [
-          "worktree",
-          "add",
-          "-b",
-          worktree.branch,
-          worktree.path,
-          yield* goalHead("lease", worktree.repository, card.goalInstanceId),
-        ];
-    yield* expect("lease", worktree.repository, args).pipe(Effect.uninterruptible);
-    return worktree;
   });
 
   /** Commits everything in the worktree to the card branch; none when there was nothing to commit. */
-  const commitIn = Effect.fnUntraced(function* (
-    operation: Operation,
-    worktree: GitWorktree,
-    message: string,
-  ) {
-    if (yield* isClean(operation, worktree.path)) return Option.none<string>();
-    yield* expect(operation, worktree.path, ["add", "--all"]);
-    // The card branch is internal; repository hooks run when the Goal reaches the user's branch.
-    yield* expect(operation, worktree.path, [
-      "commit",
-      "--no-verify",
-      "--quiet",
-      "-m",
-      message,
-    ]).pipe(Effect.uninterruptible);
-    return Option.some(yield* expect(operation, worktree.path, ["rev-parse", "HEAD"]));
-  });
+  const commitIn = (operation: Operation, worktree: GitWorktree, message: string) =>
+    Effect.when(
+      Effect.gen(function* () {
+        yield* expect(operation, worktree.path, ["add", "--all"]);
+        // The card branch is internal; repository hooks run when the Goal reaches the user's branch.
+        yield* expect(operation, worktree.path, [
+          "commit",
+          "--no-verify",
+          "--quiet",
+          "-m",
+          message,
+        ]).pipe(Effect.uninterruptible);
+        return yield* expect(operation, worktree.path, ["rev-parse", "HEAD"]);
+      }),
+      Effect.map(isClean(operation, worktree.path), (clean) => !clean),
+    );
 
   const cardKey = (card: CardRef) => `card:${card.goalInstanceId}/${card.cardId}`;
   const goalKey = (goal: GoalRef) => `goal:${goal.goalInstanceId}`;
@@ -341,22 +357,21 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       const branch = goalBranchName(goal.goalInstanceId);
       yield* serially(
         goalKey(goal),
-        Effect.gen(function* () {
-          if (Option.isSome(yield* revision("goal_branch", repository, `refs/heads/${branch}`)))
-            return;
-          const head = yield* revision("goal_branch", goal.projectRoot, "HEAD^{commit}");
-          if (Option.isNone(head))
-            return yield* fail(
-              "goal_branch",
-              reasons.SequentialRequired.make({ cause: "no_commits" }),
-            );
-          yield* expect("goal_branch", repository, [
-            "branch",
-            "--no-track",
-            branch,
-            head.value,
-          ]).pipe(Effect.uninterruptible);
-        }),
+        Effect.when(
+          existing(
+            "goal_branch",
+            goal.projectRoot,
+            "HEAD^{commit}",
+            reasons.SequentialRequired.make({ cause: "no_commits" }),
+          ).pipe(
+            Effect.flatMap((head) =>
+              expect("goal_branch", repository, ["branch", "--no-track", branch, head]).pipe(
+                Effect.uninterruptible,
+              ),
+            ),
+          ),
+          Effect.map(revision("goal_branch", repository, `refs/heads/${branch}`), Option.isNone),
+        ),
       );
     }),
 
@@ -366,8 +381,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           cardKey(card),
           Effect.gen(function* () {
             const key = cardKey(card);
-            if (HashSet.has(yield* Ref.get(leases), key))
-              return yield* fail("lease", reasons.InUse.make({}));
+            yield* Effect.when(
+              fail("lease", reasons.InUse.make({})),
+              Effect.map(Ref.get(leases), HashSet.has(key)),
+            );
             const worktree = yield* ensure(card);
             yield* Ref.update(leases, HashSet.add(key));
             return worktree;
@@ -393,41 +410,40 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         serially(
           cardKey(card),
           Effect.gen(function* (): Effect.fn.Return<WorktreeSettlement, CardWorktreeFailed> {
-            if (HashSet.has(yield* Ref.get(leases), cardKey(card)))
-              return yield* fail("settle", reasons.InUse.make({}));
-            const found = yield* lookup("settle", card);
-            const { worktree } = found;
-            switch (found.state) {
-              case "present":
-                if (keepBranch)
-                  yield* commitIn("settle", worktree, `Cancelled card ${card.cardId} (snapshot)`);
-                else if (!(yield* isClean("settle", worktree.path)))
-                  return yield* fail("settle", reasons.WorktreeDirty.make({}));
-                yield* expect("settle", worktree.repository, [
-                  "worktree",
-                  "remove",
-                  worktree.path,
-                ]).pipe(Effect.uninterruptible);
-                break;
-              case "stale":
-                yield* expect("settle", worktree.repository, ["worktree", "prune"]);
-                break;
-              case "absent":
-                break;
-            }
-            if (!keepBranch) {
-              const branch = yield* revision(
-                "settle",
-                worktree.repository,
-                `refs/heads/${worktree.branch}`,
-              );
-              if (Option.isSome(branch))
-                yield* expect("settle", worktree.repository, [
-                  "branch",
-                  "-D",
-                  worktree.branch,
-                ]).pipe(Effect.uninterruptible);
-            }
+            yield* Effect.when(
+              fail("settle", reasons.InUse.make({})),
+              Effect.map(Ref.get(leases), HashSet.has(cardKey(card))),
+            );
+            const { worktree, state } = yield* lookup("settle", card);
+            yield* Match.value(state).pipe(
+              Match.when("present", () =>
+                Effect.andThen(
+                  // A cancelled card's work is kept on its branch; a finished card's must be committed.
+                  keepBranch
+                    ? commitIn("settle", worktree, `Cancelled card ${card.cardId} (snapshot)`)
+                    : requireClean("settle", worktree.path),
+                  expect("settle", worktree.repository, ["worktree", "remove", worktree.path]).pipe(
+                    Effect.uninterruptible,
+                  ),
+                ),
+              ),
+              Match.when("stale", () =>
+                expect("settle", worktree.repository, ["worktree", "prune"]),
+              ),
+              Match.when("absent", () => Effect.void),
+              Match.exhaustive,
+            );
+            yield* Effect.when(
+              expect("settle", worktree.repository, ["branch", "-D", worktree.branch]).pipe(
+                Effect.uninterruptible,
+              ),
+              keepBranch
+                ? Effect.succeed(false)
+                : Effect.map(
+                    revision("settle", worktree.repository, `refs/heads/${worktree.branch}`),
+                    Option.isSome,
+                  ),
+            );
             return WorktreeSettlement.Removed({ branchKept: keepBranch });
           }),
         );
@@ -459,8 +475,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             CardWorktreeFailed | CardIntegrationConflict
           > {
             const worktree = yield* presentWorktree("sync", card);
-            if (!(yield* isClean("sync", worktree.path)))
-              return yield* fail("sync", reasons.WorktreeDirty.make({}));
+            yield* requireClean("sync", worktree.path);
             const head = yield* goalHead("sync", worktree.repository, card.goalInstanceId);
             if (
               yield* answers("sync", worktree.path, ["merge-base", "--is-ancestor", head, "HEAD"])
@@ -525,17 +540,14 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             )[0];
             if (earlier !== undefined)
               return CardIntegration.AlreadyIntegrated({ commit: earlier });
-            if (!(yield* isClean("squash", worktree.path)))
-              return yield* fail("squash", reasons.WorktreeDirty.make({}));
-            if (
-              !(yield* answers("squash", worktree.path, [
-                "merge-base",
-                "--is-ancestor",
-                head,
-                "HEAD",
-              ]))
-            )
-              return yield* fail("squash", reasons.GoalAdvanced.make({}));
+            yield* requireClean("squash", worktree.path);
+            yield* Effect.when(
+              fail("squash", reasons.GoalAdvanced.make({})),
+              Effect.map(
+                answers("squash", worktree.path, ["merge-base", "--is-ancestor", head, "HEAD"]),
+                (contained) => !contained,
+              ),
+            );
             const tree = yield* expect("squash", worktree.path, ["rev-parse", "HEAD^{tree}"]);
             if (
               tree ===
@@ -602,15 +614,18 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           TargetSync,
           CardWorktreeFailed | GoalMergeConflict
         > {
-          const targetHead = yield* revision("goal_merge", repository, `refs/heads/${target}`);
-          if (Option.isNone(targetHead))
-            return yield* fail("goal_merge", reasons.TargetMissing.make({}));
+          const targetHead = yield* existing(
+            "goal_merge",
+            repository,
+            `refs/heads/${target}`,
+            reasons.TargetMissing.make({}),
+          );
           const head = yield* goalHead("goal_merge", repository, goal.goalInstanceId);
           if (
             yield* answers("goal_merge", repository, [
               "merge-base",
               "--is-ancestor",
-              targetHead.value,
+              targetHead,
               head,
             ])
           )
@@ -621,33 +636,31 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             "--name-only",
             "--no-messages",
             head,
-            targetHead.value,
+            targetHead,
           ]);
           const [tree = "", ...conflicted] = lines(merged.stdout);
-          switch (merged.exitCode) {
-            case 0:
-              break;
-            case 1:
-              return yield* GoalMergeConflict.make({
-                goalInstanceId: goal.goalInstanceId,
-                targetBranch: target,
-                goalHead: head,
-                targetHead: targetHead.value,
-                files: conflicted,
-              });
-            default:
-              return yield* fail(
-                "goal_merge",
-                reasons.GitFailed.make({ exitCode: merged.exitCode }),
-              );
-          }
+          yield* Match.value(merged.exitCode).pipe(
+            Match.when(0, () => Effect.void),
+            Match.when(1, () =>
+              Effect.fail(
+                GoalMergeConflict.make({
+                  goalInstanceId: goal.goalInstanceId,
+                  targetBranch: target,
+                  goalHead: head,
+                  targetHead,
+                  files: conflicted,
+                }),
+              ),
+            ),
+            Match.orElse((exitCode) => fail("goal_merge", reasons.GitFailed.make({ exitCode }))),
+          );
           const commit = yield* expect("goal_merge", repository, [
             "commit-tree",
             tree,
             "-p",
             head,
             "-p",
-            targetHead.value,
+            targetHead,
             "-m",
             `Merge ${target} into ${goalBranchName(goal.goalInstanceId)}`,
           ]);
@@ -682,15 +695,18 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         `target:${repository}:${target}`,
         Effect.gen(function* (): Effect.fn.Return<TargetAdvance, CardWorktreeFailed> {
           const read = revision("goal_merge", repository, `refs/heads/${target}`);
-          const before = yield* read;
-          if (Option.isNone(before))
-            return yield* fail("goal_merge", reasons.TargetMissing.make({}));
-          if (before.value === head) return TargetAdvance.Advanced({ commit: head });
+          const before = yield* existing(
+            "goal_merge",
+            repository,
+            `refs/heads/${target}`,
+            reasons.TargetMissing.make({}),
+          );
+          if (before === head) return TargetAdvance.Advanced({ commit: head });
           if (
             !(yield* answers("goal_merge", repository, [
               "merge-base",
               "--is-ancestor",
-              before.value,
+              before,
               head,
             ]))
           )
@@ -705,7 +721,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
               `ctx: merge ${goalBranchName(goal.goalInstanceId)}`,
               `refs/heads/${target}`,
               head,
-              before.value,
+              before,
             ]).pipe(Effect.uninterruptible);
             return moved.exitCode === 0
               ? TargetAdvance.Advanced({ commit: head })
@@ -725,7 +741,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           ]).pipe(Effect.uninterruptible);
           if (moved.exitCode === 0) return TargetAdvance.Advanced({ commit: head });
           const after = yield* read;
-          return Option.contains(after, before.value)
+          return Option.contains(after, before)
             ? TargetAdvance.WorktreeBusy({ worktree: checkout.path })
             : TargetAdvance.TargetMoved();
         }),
@@ -741,8 +757,12 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             yield* checkIds("checkout", [goal.goalInstanceId]);
             const { repository, prefix, base } = yield* repositoryOf("checkout", goal.projectRoot);
             const folder = path.join(base, goal.goalInstanceId, goalCheckoutFolder);
-            if ((yield* registered("checkout", repository)).some((entry) => entry.path === folder))
-              yield* expect("checkout", repository, ["worktree", "remove", "--force", folder]);
+            yield* Effect.when(
+              expect("checkout", repository, ["worktree", "remove", "--force", folder]),
+              Effect.map(registered("checkout", repository), (entries) =>
+                entries.some((entry) => entry.path === folder),
+              ),
+            );
             yield* expect("checkout", repository, ["worktree", "prune"]);
             yield* fs.remove(folder, { recursive: true, force: true }).pipe(
               Effect.mapError((cause) =>
