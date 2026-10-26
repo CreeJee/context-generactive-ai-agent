@@ -2758,3 +2758,15 @@
 - 취소는 fiber interrupt다. 모델은 `AbortSignal`을 받지 않는다.
 - OpenAI 호환 provider는 모든 도구를 작성한 schema 그대로 `strict: false`로 보낸다. TanStack 때와 다른 점은 strict와 맞지 않는 schema에서 지원하지 않는 `format`을 더는 지우지 않는 것 하나다. 앱이 이미 strict를 끄고 원래 schema로 되돌리고 있었다.
 - provider tool 18개는 `Tool.providerDefined`로 만들고, 구독 요청에는 TanStack처럼 이름과 설명만 있는 function tool로 보낸다. 모델 표와 모델별 provider tool 표는 앱이 가진다.
+
+## Effect AI 도구는 loop가 decode·게이트·실행을 나눠 부른다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 tool 단계다. 파일과 TanStack과 달라진 점은 계획의 3단계 "결과"에 있다.
+- 도구 단위는 `RunTool`(모델에 알리는 `Tool`, lazy 여부, 인자를 decode해 호출을 만드는 `prepare`)이다. `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode 뒤 게이트를 거쳐 실행하므로 두 단계를 나눠야 한다.
+- MCP는 `@tanstack/ai-mcp` 대신 SDK `Client`로 붙는다. TanStack 도구와 Effect AI 도구가 같은 연결을 쓴다.
+  - client는 elicitation·sampling capability를 알리지 않는다. 서버가 그래도 입력을 요청하면 도구 실패다. TanStack은 이를 `mcp_input` interrupt로 바꿨지만 앱은 그 interrupt를 다루지 않았다.
+  - 2025 프로토콜 서버의 도구 목록은 `tools/list` 한 번이다. "TanStack 패키지를 1.0으로 올림 (2026-10-24)"의 "`tools/list`를 두 번 받는다"를 대체한다. 프로토콜 협상은 TanStack처럼 `auto`다.
+  - 페이지 상한은 SDK 기본값 64다(TanStack 100). 2026 프로토콜의 `tools/list_changed`는 구독하지 않고 run마다 목록을 다시 읽는다.
+- provider tool 요청은 TanStack factory 인자 배열 대신 `{ id, config }`다. 설정은 `providers/provider-tools.ts`의 표가 검사하고, 등록되지 않은 id는 `invalid_request`로 거절한다.
+- `RunTool`의 결과와 실패 상세는 `withHiddenRunResults`가 가린다. 가리기가 실패하면 원문 대신 `redaction_failed` 실패를 돌려준다. TanStack 경로는 `{error: message}`였다.
+- 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 둔다. 런타임 import 그래프에 secrets·permissions·`effect/ai`가 없다.

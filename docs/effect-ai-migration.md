@@ -391,7 +391,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - `withHiddenResults`(`packages/memory-agent/src/secrets/redactor.ts`)를 Toolkit 핸들러 래퍼로 다시 만든다. 지금은 TanStack `AnyServerTool.execute`를 감싼다.
 - `tools/definitions.ts`는 브라우저도 import한다. bundle 영향을 확인한다.
 - 완료 기준: "보안 체크리스트"의 "도구 실패와 비밀" 항목을 확인한다.
-- 결과(2026-10-26, 진행 중): 모두 `packages/memory-agent/src` 아래다.
+- 결과(2026-10-27 완료): 모두 `packages/memory-agent/src` 아래다.
   - 도구 단위는 `tools/run-tool.ts`의 `RunTool`이다. 모델에 알리는 Effect AI `Tool`, lazy 여부, 인자를 decode해 실행할 호출을 만드는 `prepare`를 담는다. `runTool`이 이름·설명·parameters와 handler로 만든다.
   - `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode를 먼저 하고 게이트를 거친 뒤 실행하므로 둘을 나눠야 한다. handler마다 다른 타입은 closure로 감춘다.
   - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`), `run_code`와 ts skill(`tools/code.ts`의 `forRunTools`), `read_skill`(`tools/skills.ts`), Kagi(`tools/kagi.ts`), background 결과·취소(`tools/background.ts`), `delegate_to_agent`(`tools/delegate.ts`), kanban 보드 도구(`kanban/tools.ts`), verifier의 `record_card_verdict`(`kanban/subagent-card-agent.ts`의 `verdictRecorder`), workflow 도구(`workflow/tools.ts`, phase별 목록은 `phaseTools` 표), 부모의 subagent 도구 4개(`subagents/subagents.ts`의 `runToolsFor`), MCP 도구(`mcp/servers.ts`의 `runTools`).
@@ -421,7 +421,11 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - 2026 프로토콜의 `tools/list_changed` 구독을 열지 않는다. run마다 목록을 다시 읽는다.
     - provider tool 요청은 Anthropic `code_execution`의 `skills`(TanStack factory의 두 번째 인자)를 받지 않는다. 앱은 쓰지 않았다.
     - 등록되지 않은 id의 provider tool 요청은 `invalid_request`로 거절한다. 전에는 검사기가 없어 오류가 던져졌다.
+  - 완료 기준 확인(2026-10-27):
+    - "도구 실패와 비밀": `RunTool`의 결과와 실패 상세는 `withHiddenRunResults`(`secrets/redactor.ts`의 `hiddenCall`)를 지난다. `PreparedCall`은 `ToolFailed`로만 실패하므로 handler의 typed failure도 가린 뒤 loop로 간다. 중간 결과(preliminary)를 내는 경로는 없다. 가리기가 실패하면 원문 대신 `redaction_failed`를 돌려준다. 결과와 실패 상세는 `tests/secret-redactor.test.ts`가 본다.
+    - bundle: `tools/definitions.ts`의 런타임 import 그래프(type-only import 제외)는 19개 파일과 `effect`, `@tanstack/ai`다. `secrets/`, `permissions/`, `tools/run-tool.ts`, `effect/ai`는 없다. `@tanstack/ai`(`defineInterrupt`, `toolDefinition`)는 7단계에서 빠진다.
   - 다음 단계로 넘기는 것:
+    - 4단계: loop가 묶는 모든 도구 세트(children·read-only·verify·report)를 `withHiddenRunResults`로 감싼다. 지금은 `agent/chat.ts`가 TanStack 도구에 `withHiddenResults`를 쓴다.
     - 4단계: 인자 decode 실패를 모델에 돌려주는 문구. TanStack은 `Input validation failed for tool <name>: ...`였다.
     - 자식 run의 `read_subagent_tool_result`: spec과 호출(`childResult`)은 나눴고, RunTool은 자식 run을 새 loop로 옮길 때 만든다. 자식 도구 목록(code 도구, 병렬 읽기, 게이트)과 함께 바뀌기 때문이다.
 
@@ -595,6 +599,7 @@ worker를 없애면 owner와 worker 사이의 검사(`agent/full-loop-execution.
   - redaction 자체가 실패하면 지금처럼 원문을 보이지 않는다.
   - 탐지 규칙(secretlint preset, credential 이름 대입)은 TanStack과 무관하므로 그대로 둔다.
 - `tools/definitions.ts`를 브라우저가 import한다. 번들 그래프에서 permission·secret 내부가 client 번들로 새지 않는지 3단계에서 확인한다.
+- 3단계에서 확인했다(2026-10-27, 3단계 "완료 기준 확인"). 도구 세트 분기마다 감싸는 것은 loop를 만드는 4단계에서 확인한다.
 
 ### 데이터와 절차
 
