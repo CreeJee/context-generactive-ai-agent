@@ -6,6 +6,7 @@ import {
   Option,
   Predicate,
   Schema,
+  Struct,
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import {
@@ -192,11 +193,13 @@ const migrateHandoff = (
     return saved.anchor.startsWith("v2:")
       ? Option.some({ ...saved, anchor }).pipe(Option.filter(() => anchor !== saved.anchor))
       : Option.some({
-          ...saved,
+          ...Struct.omit(saved, ["anchorId"]),
           through: index + 1,
           anchor,
-          anchorId:
+          ...optionalProperty(
+            "anchorId",
             isJsonObject(boundary) && Predicate.isString(boundary.id) ? boundary.id : undefined,
+          ),
         });
   });
 };

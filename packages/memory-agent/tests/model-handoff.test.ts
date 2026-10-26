@@ -16,6 +16,8 @@ import {
   ModelHandoffReason,
 } from "../src/agent/model-handoff.ts";
 import { lookupSources } from "../src/agent/compaction.ts";
+import { tanstackMetadata } from "../src/chat-store/metadata.ts";
+import type { StoredMessage } from "../src/chat-store/schema.ts";
 
 function fixture(stored: readonly ModelMessage[]) {
   const values = MutableHashMap.empty<string, unknown>();
@@ -37,12 +39,12 @@ function fixture(stored: readonly ModelMessage[]) {
     (target: string, model: string, history = stored) =>
     (messages: readonly ModelMessage[]) =>
       modelHandoffHistoryEffect({
-        metadata,
+        metadata: tanstackMetadata(metadata),
         threadId: "session",
         target,
         model,
         provider: "openai-compatible",
-        loadHistory: () => Promise.resolve(history),
+        loadHistory: Effect.succeed(history),
         toolResultIds: lookupSources({
           toolResultId: (toolCallId) => (toolCallId === "old-call" ? "old-result" : null),
           nodeText: () => null,
@@ -82,6 +84,31 @@ it.effect("a new model gets the earlier turns as text and pointers, not the old 
     const restored = yield* f.restore("provider:new-model", "new-model")(input);
     expect(restored).toEqual([notice, past[0], pointer, input.at(-1)]);
     expect(input).toEqual(original);
+  }),
+);
+
+it.effect("stored messages name the model that wrote them", () =>
+  Effect.gen(function* () {
+    const stored: ReadonlyArray<StoredMessage> = [
+      { role: "user", content: "프로젝트를 빌드해 줘" },
+      { role: "assistant", content: "빌드했어", model: "old-model" },
+    ];
+    const restore = (model: string) =>
+      modelHandoffHistoryEffect({
+        metadata: tanstackMetadata(fixture([]).metadata),
+        threadId: "session",
+        target: model,
+        model,
+        provider: "openai-compatible",
+        loadHistory: Effect.succeed(stored),
+        toolResultIds: () => Effect.succeed(new Map()),
+      }).pipe(Effect.flatMap((restore) => restore(stored)));
+    expect(yield* restore("old-model")).toBeNull();
+    expect(yield* restore("new-model")).toEqual([
+      notice,
+      stored[0],
+      { role: "assistant", content: "빌드했어" },
+    ]);
   }),
 );
 
@@ -217,19 +244,19 @@ it.effect(
       let reads = 0;
       const cause = new Error("private metadata details");
       const restore = yield* modelHandoffHistoryEffect({
-        metadata: {
+        metadata: tanstackMetadata({
           get: () => {
             reads += 1;
             return Promise.reject(cause);
           },
           set: () => Promise.resolve(),
           delete: () => Promise.resolve(),
-        },
+        }),
         threadId: "session",
         target: "new",
         model: "new-model",
         provider: "openai-compatible",
-        loadHistory: () => Promise.resolve(past),
+        loadHistory: Effect.succeed(past),
         toolResultIds: () => Effect.succeed(new Map()),
       });
       const failures = yield* Effect.all([Effect.flip(restore(past)), Effect.flip(restore(past))], {
