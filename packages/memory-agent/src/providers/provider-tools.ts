@@ -1,7 +1,7 @@
 import { Option, Predicate, Record, Schema } from "effect";
 import { Tool } from "effect/ai";
 import { JsonValue } from "../json.ts";
-import { ProviderToolId } from "./tool-capabilities.ts";
+import { ProviderToolId } from "./provider-tool-id.ts";
 
 /**
  * The 18 provider tools of `tool-capabilities.ts` as Effect AI provider-defined tools, named and

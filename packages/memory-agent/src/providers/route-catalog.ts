@@ -29,8 +29,8 @@ import {
   type ProviderToolAuth,
   type ProviderToolCategory,
   type ProviderToolCost,
-  type ProviderToolId,
 } from "./tool-capabilities.ts";
+import type { ProviderToolId } from "./provider-tool-id.ts";
 
 export type RouteEvidenceStatus = "verified" | "unverified" | "unsupported";
 

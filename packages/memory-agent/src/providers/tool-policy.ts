@@ -22,10 +22,9 @@ import {
   type AnyProviderToolDescriptor,
   type ProviderToolCategory,
   type ProviderToolExecution,
-  ProviderToolId,
-  type ProviderToolKind,
   type ProviderToolVendor,
 } from "./tool-capabilities.ts";
+import { ProviderToolId, type ProviderToolKind } from "./provider-tool-id.ts";
 
 export type ProviderToolRisk = "read_only" | "elevated" | "high";
 export type ProviderToolApprovalState = "not_requested" | "granted" | "denied" | "cancelled";

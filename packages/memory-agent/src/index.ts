@@ -173,10 +173,8 @@ export {
   installedProviderToolModelMetadata,
   makeProviderToolCapabilityRegistry,
   providerToolDescriptors,
-  type AnthropicProviderToolKind,
   type AnyProviderToolDescriptor,
   type InstalledProviderToolModel,
-  type OpenAIProviderToolKind,
   type ProviderToolCapabilityQuery,
   type ProviderToolApproval,
   type ProviderToolAuth,
@@ -188,14 +186,18 @@ export {
   type ProviderToolExecution,
   type ProviderToolFactoryExtension,
   type ProviderToolFilter,
-  type ProviderToolId,
-  type ProviderToolKind,
   type ProviderToolModelMetadata,
   type ProviderToolVendor,
   type ProviderToolResultNormalizerMetadata,
   type ProviderToolSandbox,
   type ProviderToolSideEffect,
 } from "./providers/tool-capabilities.ts";
+export type {
+  AnthropicProviderToolKind,
+  OpenAIProviderToolKind,
+  ProviderToolId,
+  ProviderToolKind,
+} from "./providers/provider-tool-id.ts";
 export {
   ProviderToolApprovalCancelled,
   ProviderToolApprovalDenied,
