@@ -42,7 +42,8 @@ import { errorTag } from "../tools/failure.ts";
 import { lazily } from "../tools/lazy.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { RepeatedToolCall, repeatGuard } from "../tools/repeat-guard.ts";
-import { toToolSchema } from "../tools/schema.ts";
+import { runTool } from "../tools/run-tool.ts";
+import { definitionOf } from "../tools/schema.ts";
 import {
   ArtifactLocator,
   AttemptFailureReason,
@@ -230,6 +231,51 @@ const AdoptSubagentReportsInput = Schema.Struct({
 });
 
 type AdoptionDraft = typeof AdoptSubagentReportsInput.Type;
+
+const runSubagent = {
+  name: "run_subagent",
+  description:
+    "Start one background task, a one-off or for a named helper, and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_reports. It shares the workspace, model and permissions; it cannot start subagents.",
+  parameters: RunSubagentInput,
+} as const;
+
+const resumeSubagent = {
+  name: "resume_subagent",
+  description:
+    "Retry one failed or interrupted subagent task as a new background attempt in the same conversation and immediately return its running receipt. Completed tool calls are not rerun, unfinished tool calls require explicit user confirmation, and old approvals are not carried over.",
+  parameters: ResumeSubagentInput,
+} as const;
+
+const getSubagentReports = {
+  name: "get_subagent_reports",
+  description:
+    "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running. Only completed reports retrieved here can be adopted; notifications do not count as review, and retrieval does not adopt them.",
+  parameters: AttemptsInput,
+} as const;
+
+const adoptSubagentReports = {
+  name: "adopt_subagent_reports",
+  description:
+    "Declare which reviewed subagent reports are actually used in the upcoming final answer. Call after review and before answering. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer.",
+  parameters: AdoptSubagentReportsInput,
+} as const;
+
+const readSubagentToolResult = {
+  name: "read_subagent_tool_result",
+  description:
+    "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
+  parameters: ChildResultInput,
+} as const;
+
+/** What get_subagent_reports answers. */
+const reportsAnswer = (reports: readonly SubagentReport[]) =>
+  reports.some((report) => report.status === "running")
+    ? {
+        reports,
+        nextAction:
+          "A running attempt reports through its completion notification. Continue independent work, or end your answer when none is left; asking again does not wait.",
+      }
+    : { reports };
 
 const SubagentRow = Schema.Struct({
   id: Schema.String,
@@ -564,6 +610,32 @@ const make = Effect.gen(function* () {
     },
   });
 
+  /** read_subagent_tool_result in the child thread `threadId`. */
+  const childResult = (threadId: string, { toolCallId, offset }: typeof ChildResultInput.Type) =>
+    Effect.gen(function* () {
+      const saved = yield* nativePromise(() =>
+        chatState.persistence.stores.messages.loadThread(threadId),
+      );
+      const result = saved.find(
+        (message) => message.role === "tool" && message.toolCallId === toolCallId,
+      );
+      if (!isTruthy(result)) return { error: "tool_result_not_found", toolCallId };
+      const text = Schema.is(Schema.String)(result.content)
+        ? result.content
+        : (result.content ?? [])
+            .flatMap((part) => (part.type === "text" ? [part.content] : []))
+            .join("");
+      const start = Math.min(offset, text.length);
+      const end = Math.min(start + childResultPageLength, text.length);
+      return {
+        toolCallId,
+        text: text.slice(start, end),
+        offset: start,
+        nextOffset: end < text.length ? end : null,
+        length: text.length,
+      };
+    });
+
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const runChild = (
     binding: SubagentBinding,
@@ -599,38 +671,10 @@ const make = Effect.gen(function* () {
           );
           const messages: ModelMessage[] = [...history, { role: "user", content: task }];
           const runtime = yield* active.runtime(binding.selection);
-          const readChildResult = toolDefinition({
-            name: "read_subagent_tool_result",
-            description:
-              "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
-            inputSchema: toToolSchema(ChildResultInput),
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          }).server(({ toolCallId, offset }) =>
-            runEffect(
-              Effect.gen(function* () {
-                const saved = yield* nativePromise(() =>
-                  chatState.persistence.stores.messages.loadThread(threadId),
-                );
-                const result = saved.find(
-                  (message) => message.role === "tool" && message.toolCallId === toolCallId,
-                );
-                if (!isTruthy(result)) return { error: "tool_result_not_found", toolCallId };
-                const text = Schema.is(Schema.String)(result.content)
-                  ? result.content
-                  : (result.content ?? [])
-                      .flatMap((part) => (part.type === "text" ? [part.content] : []))
-                      .join("");
-                const start = Math.min(offset ?? 0, text.length);
-                const end = Math.min(start + childResultPageLength, text.length);
-                return {
-                  toolCallId,
-                  text: text.slice(start, end),
-                  offset: start,
-                  nextOffset: end < text.length ? end : null,
-                  length: text.length,
-                };
-              }),
-            ),
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          const readChildResult = toolDefinition(definitionOf(readSubagentToolResult)).server(
+            ({ toolCallId, offset }) =>
+              runEffect(childResult(threadId, { toolCallId, offset: offset ?? 0 })),
           );
           const ownTools = [...childTools(binding.tools), readChildResult];
           // The calls that would wait on the relay gate stay with the child.
@@ -1227,244 +1271,285 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  return {
-    /** Dispatch is nonblocking; only explicit retrieval marks a report reviewed in this run. */
-    forRun(binding: SubagentBinding): SubagentRunTools {
-      const started = MutableHashMap.empty<string, Promise<SubagentReport>>();
-      const reviewed = MutableHashMap.empty<string, ChildOutcome>();
-      let deliveredNotificationIds = binding.deliveredParentNotificationIds;
-      let adoptionDraft: AdoptionDraft | null = null;
+  /**
+   * One parent run's subagent calls, and what the run reviewed, was told and adopted. Dispatch is
+   * nonblocking; only explicit retrieval marks a report reviewed in this run.
+   */
+  const parentRun = (binding: SubagentBinding) => {
+    const started = MutableHashMap.empty<string, Promise<SubagentReport>>();
+    const reviewed = MutableHashMap.empty<string, ChildOutcome>();
+    let deliveredNotificationIds = binding.deliveredParentNotificationIds;
+    let adoptionDraft: AdoptionDraft | null = null;
 
-      const start = (
-        toolCallId: string,
-        name: "run_subagent" | "resume_subagent",
-        argumentsJson: string,
-      ) => {
-        const existing = Option.getOrUndefined(MutableHashMap.get(started, toolCallId));
-        if (isTruthy(existing)) return existing;
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const outcome = ((): Promise<SubagentReport> =>
-          runEffect(
-            Effect.gen(function* () {
-              const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
-                argumentsJson || "{}",
+    /** Starts the call's task once; the same call asked again gets the same report. */
+    const dispatch = <E>(
+      toolCallId: string,
+      task: Effect.Effect<SubagentReport, E>,
+    ): Promise<SubagentReport> => {
+      const existing = Option.getOrUndefined(MutableHashMap.get(started, toolCallId));
+      if (isTruthy(existing)) return existing;
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      const outcome = runEffect(task);
+      outcome.catch(() => undefined);
+      MutableHashMap.set(started, toolCallId, outcome);
+      return outcome;
+    };
+
+    const notReviewed = ({ taskId, attemptId }: AdoptionDraft["reports"][number]) =>
+      !MutableHashMap.has(reviewed, `${taskId}:${attemptId}`);
+    const notDelivered = (id: string) => !HashSet.has(deliveredNotificationIds, id);
+    const unadoptable = (
+      draft: AdoptionDraft,
+    ): Option.Option<SubagentAdoptionRejected["reason"]> =>
+      draft.reports.some(notReviewed)
+        ? Option.some("NotReviewed")
+        : draft.reflectedNotificationIds.some(notDelivered)
+          ? Option.some("NotificationNotDelivered")
+          : Option.none();
+
+    return {
+      run: (toolCallId: string, input: typeof RunSubagentInput.Type) => {
+        // Ownership and acceptance belong to this task: a one-off keeps them as its standing
+        // instructions, a named helper gets them with the message.
+        const taskTerms = [
+          isTruthy(input.ownership?.length)
+            ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
+            : null,
+          isTruthy(input.acceptanceCriteria?.length)
+            ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
+            : null,
+        ].filter((part) => part !== null);
+        return dispatch(
+          toolCallId,
+          isTruthy(input.agent)
+            ? startNamed(
+                binding,
+                toolCallId,
+                input.agent,
+                [input.task, ...taskTerms].join("\n\n"),
+                input.instructions,
+              )
+            : startOneOff(
+                binding,
+                toolCallId,
+                input.task,
+                [input.instructions, ...taskTerms]
+                  .filter((part) => part !== undefined)
+                  .join("\n") || null,
+              ),
+        );
+      },
+
+      resume: (toolCallId: string, input: typeof ResumeSubagentInput.Type) =>
+        dispatch(toolCallId, resumeTask(binding, toolCallId, input)),
+
+      reports: ({ attempts }: typeof AttemptsInput.Type) =>
+        nativePromise(() =>
+          Promise.all(
+            attempts.map(({ taskId, attemptId }) =>
+              getReport(binding.sessionId, taskId, attemptId),
+            ),
+          ),
+        ),
+
+      /** Marks the completed reports reviewed. Only this run's memory gates adoption. */
+      review: (reports: readonly SubagentReport[]) => {
+        for (const outcome of reports)
+          if (outcome.status === "completed")
+            MutableHashMap.set(reviewed, `${outcome.taskId}:${outcome.attemptId}`, outcome);
+      },
+
+      adopt: (draft: AdoptionDraft) =>
+        Effect.suspend(() =>
+          Option.match(unadoptable(draft), {
+            onSome: (reason) => Effect.fail(adoptionRejected(reason)),
+            onNone: () =>
+              Effect.sync(() => {
+                adoptionDraft = draft;
+                return {
+                  status: "recorded" as const,
+                  usedReportCount: draft.reports.length,
+                  reflectedNotificationCount: draft.reflectedNotificationIds.length,
+                };
+              }),
+          }),
+        ),
+
+      /** Retries the run's unfinished children in the background. */
+      retry: Effect.forkIn(
+        Effect.tryPromise({
+          try: () => retryForRun(binding),
+          catch: (cause) => SubagentOperationFailed.make({ operation: "recover", cause }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Subagent retry deferred", { error: errorTag(error) }),
+          ),
+        ),
+        scope,
+      ).pipe(Effect.asVoid),
+
+      /** The status notifications for the next model call, as its system prompt, once each. */
+      deliver: Effect.map(
+        trace.consumeParentNotifications(binding.sessionId, binding.runId),
+        (notifications) => {
+          for (const notification of notifications)
+            deliveredNotificationIds = HashSet.add(deliveredNotificationIds, notification.id);
+          return notifications.length === 0
+            ? Option.none<string>()
+            : Option.some(
+                [
+                  "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:",
+                  ...notifications.map(
+                    (notification) =>
+                      `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
+                  ),
+                ].join("\n"),
               );
-              if (name === "resume_subagent") {
-                // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                const input = EffectFunction.flow(
-                  Schema.decodeUnknownResult(ResumeSubagentInput),
-                  Result.getOrThrow,
-                )(parsed);
-                return yield* resumeTask(binding, toolCallId, input);
-              }
-              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              const input = EffectFunction.flow(
-                Schema.decodeUnknownResult(RunSubagentInput),
-                Result.getOrThrow,
-              )(parsed);
-              // Ownership and acceptance belong to this task: a one-off keeps them as its standing
-              // instructions, a named helper gets them with the message.
-              const taskTerms = [
-                isTruthy(input.ownership?.length)
-                  ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
-                  : null,
-                isTruthy(input.acceptanceCriteria?.length)
-                  ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
-                  : null,
-              ].filter((part) => part !== null);
-              return yield* isTruthy(input.agent)
-                ? startNamed(
-                    binding,
-                    toolCallId,
-                    input.agent,
-                    [input.task, ...taskTerms].join("\n\n"),
-                    input.instructions,
-                  )
-                : startOneOff(
-                    binding,
-                    toolCallId,
-                    input.task,
-                    [input.instructions, ...taskTerms]
-                      .filter((part) => part !== undefined)
-                      .join("\n") || null,
-                  );
-            }),
-          ))();
-        outcome.catch(() => undefined);
-        MutableHashMap.set(started, toolCallId, outcome);
-        return outcome;
-      };
+        },
+      ),
 
-      const runTool = toolDefinition({
-        name: "run_subagent",
-        description:
-          "Start one background task, a one-off or for a named helper, and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_reports. It shares the workspace, model and permissions; it cannot start subagents.",
-        inputSchema: toToolSchema(RunSubagentInput),
-      }).server((input, context) =>
-        start(context?.toolCallId ?? randomUUID(), "run_subagent", JSON.stringify(input)),
-      );
+      /** Saves what the answer `parentMessageId` adopted, when it adopted anything. */
+      recordAdoption: (parentMessageId: string) =>
+        Effect.suspend(() => {
+          const draft = adoptionDraft;
+          return draft === null ||
+            (draft.reports.length === 0 && draft.reflectedNotificationIds.length === 0)
+            ? Effect.void
+            : Effect.asVoid(
+                trace.finalizeAnswerClaim({
+                  projectId: binding.project.id,
+                  sessionId: binding.sessionId,
+                  parentRunId: binding.runId,
+                  parentMessageId,
+                  usedReports: draft.reports,
+                  reflectedNotificationIds: draft.reflectedNotificationIds,
+                }),
+              );
+        }),
 
-      const resumeTool = toolDefinition({
-        name: "resume_subagent",
-        description:
-          "Retry one failed or interrupted subagent task as a new background attempt in the same conversation and immediately return its running receipt. Completed tool calls are not rerun, unfinished tool calls require explicit user confirmation, and old approvals are not carried over.",
-        inputSchema: toToolSchema(ResumeSubagentInput),
-      }).server((input, context) =>
-        start(context?.toolCallId ?? randomUUID(), "resume_subagent", JSON.stringify(input)),
-      );
+      /** Gives the notifications this run did not answer back to the next run. */
+      release: Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
+    };
+  };
 
+  return {
+    forRun(binding: SubagentBinding): SubagentRunTools {
+      const parent = parentRun(binding);
       const reportResults = MutableHashMap.empty<string, readonly SubagentReport[]>();
-      const reportsTool = toolDefinition({
-        name: "get_subagent_reports",
-        description:
-          "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running. Only completed reports retrieved here can be adopted; notifications do not count as review, and retrieval does not adopt them.",
-        inputSchema: toToolSchema(AttemptsInput),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server((raw, context) =>
-        runEffect(
-          Effect.gen(function* () {
-            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-            const input = EffectFunction.flow(
-              Schema.decodeResult(AttemptsInput),
-              Result.getOrThrow,
-            )(raw);
-            const reports = yield* nativePromise(() =>
-              Promise.all(
-                input.attempts.map(({ taskId, attemptId }) =>
-                  getReport(binding.sessionId, taskId, attemptId),
+
+      const runSubagentTool = toolDefinition(definitionOf(runSubagent)).server((input, context) =>
+        parent.run(context?.toolCallId ?? randomUUID(), input),
+      );
+      // TanStack types the input as sent; its defaults are filled in here.
+      const resumeTool = toolDefinition(definitionOf(resumeSubagent)).server((input, context) =>
+        parent.resume(context?.toolCallId ?? randomUUID(), {
+          ...input,
+          confirmUncertain: input.confirmUncertain ?? false,
+        }),
+      );
+      const reportsTool = toolDefinition(definitionOf(getSubagentReports)).server(
+        (input, context) =>
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          runEffect(
+            parent.reports(input).pipe(
+              Effect.tap((reports) =>
+                Effect.sync(() =>
+                  MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports),
                 ),
               ),
-            );
-            MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports);
-            return reports.some((report) => report.status === "running")
-              ? {
-                  reports,
-                  nextAction:
-                    "A running attempt reports through its completion notification. Continue independent work, or end your answer when none is left; asking again does not wait.",
-                }
-              : { reports };
+              Effect.map(reportsAnswer),
+            ),
+          ),
+      );
+      const adoptTool = toolDefinition(definitionOf(adoptSubagentReports)).server((input) =>
+        runEffect(
+          parent.adopt({
+            ...input,
+            reflectedNotificationIds: input.reflectedNotificationIds ?? [],
           }),
         ),
       );
-      const adoptTool = toolDefinition({
-        name: "adopt_subagent_reports",
-        description:
-          "Declare which reviewed subagent reports are actually used in the upcoming final answer. Call after review and before answering. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer.",
-        inputSchema: toToolSchema(AdoptSubagentReportsInput),
-      }).server((input) => {
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const draft = EffectFunction.flow(
-          Schema.decodeResult(AdoptSubagentReportsInput),
-          Result.getOrThrow,
-        )(input);
-        for (const report of draft.reports) {
-          const available = Option.getOrUndefined(
-            MutableHashMap.get(reviewed, `${report.taskId}:${report.attemptId}`),
-          );
-          if (!isTruthy(available)) throw adoptionRejected("NotReviewed");
-        }
-        if (draft.reflectedNotificationIds.some((id) => !HashSet.has(deliveredNotificationIds, id)))
-          throw adoptionRejected("NotificationNotDelivered");
-        adoptionDraft = draft;
-        return {
-          status: "recorded" as const,
-          usedReportCount: draft.reports.length,
-          reflectedNotificationCount: draft.reflectedNotificationIds.length,
-        };
-      });
 
       const middleware: ChatMiddleware = {
         name: "memory-agent/subagents",
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onStart() {
-          return runEffect(
-            Effect.forkIn(
-              Effect.tryPromise({
-                try: () => retryForRun(binding),
-                catch: (cause) => SubagentOperationFailed.make({ operation: "recover", cause }),
-              }).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("Subagent retry deferred", { error: errorTag(error) }),
-                ),
-              ),
-              scope,
-            ).pipe(Effect.asVoid),
-          );
+          return runEffect(parent.retry);
         },
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onConfig(ctx, config) {
           if (ctx.phase !== "beforeModel") return;
           return runEffect(
-            Effect.gen(function* () {
-              const notifications = yield* trace.consumeParentNotifications(
-                binding.sessionId,
-                binding.runId,
-              );
-              if (notifications.length === 0) return;
-              for (const notification of notifications)
-                deliveredNotificationIds = HashSet.add(deliveredNotificationIds, notification.id);
-              return {
-                systemPrompts: [
-                  ...config.systemPrompts,
-                  [
-                    "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:",
-                    ...notifications.map(
-                      (notification) =>
-                        `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
-                    ),
-                  ].join("\n"),
-                ],
-              };
-            }),
+            Effect.map(parent.deliver, (prompt) =>
+              Option.getOrUndefined(
+                Option.map(prompt, (notice) => ({
+                  systemPrompts: [...config.systemPrompts, notice],
+                })),
+              ),
+            ),
           );
         },
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onAfterToolCall(_ctx, info) {
           if (info.toolName !== "get_subagent_reports" || !info.ok) return;
-          // Only this run's memory of what it reviewed gates adoption; reviews are not stored.
-          for (const outcome of Option.getOrUndefined(
-            MutableHashMap.get(reportResults, info.toolCallId),
-          ) ?? [])
-            if (outcome.status === "completed")
-              MutableHashMap.set(reviewed, `${outcome.taskId}:${outcome.attemptId}`, outcome);
+          parent.review(
+            Option.getOrElse(MutableHashMap.get(reportResults, info.toolCallId), () => []),
+          );
         },
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         onFinish(ctx) {
-          const draft = adoptionDraft;
-          if (
-            draft === null ||
-            (draft.reports.length === 0 && draft.reflectedNotificationIds.length === 0) ||
-            !isTruthy(ctx.currentMessageId)
-          )
-            return;
-          return runEffect(
-            trace
-              .finalizeAnswerClaim({
-                projectId: binding.project.id,
-                sessionId: binding.sessionId,
-                parentRunId: binding.runId,
-                parentMessageId: ctx.currentMessageId,
-                usedReports: draft.reports,
-                reflectedNotificationIds: draft.reflectedNotificationIds,
-              })
-              .pipe(Effect.asVoid),
-          );
+          if (!isTruthy(ctx.currentMessageId)) return;
+          return runEffect(parent.recordAdoption(ctx.currentMessageId));
         },
         onAbort() {
-          return runEffect(
-            Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
-          );
+          return runEffect(parent.release);
         },
         onError() {
-          return runEffect(
-            Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
-          );
+          return runEffect(parent.release);
         },
       };
 
       return {
-        tools: [runTool, lazily(resumeTool), reportsTool, adoptTool],
+        tools: [runSubagentTool, lazily(resumeTool), reportsTool, adoptTool],
         middleware,
+      };
+    },
+
+    /**
+     * {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). The loop calls
+     * `hooks` where TanStack called the middleware: `retry` as the run starts, `deliver` before each
+     * model call, `recordAdoption` once the answer is saved, and `release` when the run fails or
+     * stops.
+     */
+    runToolsFor(binding: SubagentBinding) {
+      const parent = parentRun(binding);
+      return {
+        tools: [
+          runTool({
+            ...runSubagent,
+            handler: (input, { toolCallId }) => nativePromise(() => parent.run(toolCallId, input)),
+          }),
+          runTool({
+            ...resumeSubagent,
+            lazy: true,
+            handler: (input, { toolCallId }) =>
+              nativePromise(() => parent.resume(toolCallId, input)),
+          }),
+          runTool({
+            ...getSubagentReports,
+            handler: (input) =>
+              parent.reports(input).pipe(
+                Effect.tap((reports) => Effect.sync(() => parent.review(reports))),
+                Effect.map(reportsAnswer),
+              ),
+          }),
+          runTool({ ...adoptSubagentReports, handler: parent.adopt }),
+        ],
+        hooks: {
+          retry: parent.retry,
+          deliver: parent.deliver,
+          recordAdoption: parent.recordAdoption,
+          release: parent.release,
+        },
       };
     },
 

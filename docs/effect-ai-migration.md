@@ -394,7 +394,8 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 결과(2026-10-26, 진행 중): 모두 `packages/memory-agent/src` 아래다.
   - 도구 단위는 `tools/run-tool.ts`의 `RunTool`이다. 모델에 알리는 Effect AI `Tool`, lazy 여부, 인자를 decode해 실행할 호출을 만드는 `prepare`를 담는다. `runTool`이 이름·설명·parameters와 handler로 만든다.
   - `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode를 먼저 하고 게이트를 거친 뒤 실행하므로 둘을 나눠야 한다. handler마다 다른 타입은 closure로 감춘다.
-  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`), `run_code`와 ts skill(`tools/code.ts`의 `forRunTools`), `read_skill`(`tools/skills.ts`), Kagi(`tools/kagi.ts`), background 결과·취소(`tools/background.ts`), `delegate_to_agent`(`tools/delegate.ts`), kanban 보드 도구(`kanban/tools.ts`), verifier의 `record_card_verdict`(`kanban/subagent-card-agent.ts`의 `verdictRecorder`), workflow 도구(`workflow/tools.ts`, phase별 목록은 `phaseTools` 표).
+  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`), 승인 도구와 `run_skill`(`tools/approved.ts`), `run_code`와 ts skill(`tools/code.ts`의 `forRunTools`), `read_skill`(`tools/skills.ts`), Kagi(`tools/kagi.ts`), background 결과·취소(`tools/background.ts`), `delegate_to_agent`(`tools/delegate.ts`), kanban 보드 도구(`kanban/tools.ts`), verifier의 `record_card_verdict`(`kanban/subagent-card-agent.ts`의 `verdictRecorder`), workflow 도구(`workflow/tools.ts`, phase별 목록은 `phaseTools` 표), 부모의 subagent 도구 4개(`subagents/subagents.ts`의 `runToolsFor`).
+  - subagent 도구: 한 부모 run의 상태(검토한 보고서, 전달된 알림, adoption draft)를 `parentRun`이 갖고, TanStack middleware와 Effect AI 도구가 같은 규칙을 쓴다. `runToolsFor`는 middleware 대신 `hooks`(`retry`, `deliver`, `recordAdoption`, `release`)를 내보내고, 4단계 loop가 middleware 자리에서 부른다. 검토 표시는 `onAfterToolCall` 대신 get_subagent_reports의 handler가 성공한 결과로 한다.
   - 승인 도구: `ask` 모드(`static`)의 save_code_skill·write_outside_file·delete_outside_file은 `needsApproval: true`를 단다. 다른 모드(`gate`)는 loop의 review가 호출마다 정한다. 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 두고, `effect/ai`는 서버의 `tools/approved.ts`만 import한다.
   - `tests/tool-effects.test.ts`의 등록 검사는 `toolDefinition({ name })`과 함께 `{ name, description, parameters }` spec도 도구 등록으로 읽는다. 설명이 `${...}`를 쓰는 template literal이어도 읽는다.
   - provider 요청은 TanStack과 같다(`tests/tools/run-tools.test.ts`, `tests/model/tool-schema.test.ts`). parameters는 TanStack처럼 draft-07에서 `$schema`를 빼고, object에 `type`·`properties`·`required`를 채운다(`model/tool-schema.ts`).
@@ -410,6 +411,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - 프로그램 안 호출의 `invalid_input:` 뒤 문구는 Effect Schema의 decode 오류다. TanStack은 Standard Schema의 문구였다. 접두사는 같다.
   - 다음 단계로 넘기는 것:
     - 4단계: 인자 decode 실패를 모델에 돌려주는 문구. TanStack은 `Input validation failed for tool <name>: ...`였다.
+    - 자식 run의 `read_subagent_tool_result`: spec과 호출(`childResult`)은 나눴고, RunTool은 자식 run을 새 loop로 옮길 때 만든다. 자식 도구 목록(code 도구, 병렬 읽기, 게이트)과 함께 바뀌기 때문이다.
 
 ### 4. loop, hook, persistence
 
