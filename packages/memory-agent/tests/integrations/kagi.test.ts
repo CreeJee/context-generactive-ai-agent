@@ -6,8 +6,10 @@ import type { JsonValue } from "../../src/json.ts";
 import { Kagi, KagiKeyMissing } from "../../src/kagi/kagi.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { KagiTools, maxPageCharacters } from "../../src/tools/kagi.ts";
+import type { RunTool } from "../../src/tools/run-tool.ts";
 import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 interface Received {
@@ -214,6 +216,37 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
         yield* rejects(() => search({ query: reason }), reason);
       }
       expect(yield* received).toHaveLength(replies.length);
+    }),
+  );
+
+  it.effect("the Effect AI tools ask as the TanStack ones and send the same requests", () =>
+    Effect.gen(function* () {
+      const { received } = yield* serve();
+      yield* enable;
+      const runTools = yield* Effect.flatMap(KagiTools, (kagiTools) => kagiTools.runTools);
+      expect(yield* runToolRequestDifferences({ chatTools: yield* tools, runTools })).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      const [search, extract] = runTools;
+      const call = (tool: RunTool | undefined, params: JsonValue) =>
+        Effect.fromNullishOr(tool).pipe(
+          Effect.flatMap((found) => found.prepare(params)),
+          Effect.flatMap((run) => run({ toolCallId: "call-1" })),
+        );
+      const searched = yield* call(search, { query: "effect schema", limit: 50 });
+      const tanstackSearch = yield* toolNamed("kagi_search");
+      expect(searched).toEqual(
+        yield* sdk(() => tanstackSearch({ query: "effect schema", limit: 50 })),
+      );
+      expect((yield* received).map(({ body }) => body)).toEqual([
+        { query: "effect schema", limit: 20 },
+        { query: "effect schema", limit: 20 },
+      ]);
+      expect(yield* Effect.flip(call(extract, { urls: ["file:///etc/hosts"] }))).toMatchObject({
+        message: expect.stringContaining("invalid_urls"),
+      });
     }),
   );
 

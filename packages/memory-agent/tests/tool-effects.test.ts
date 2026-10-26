@@ -45,7 +45,7 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
         }
         // A tool that TanStack and Effect AI share names itself in a spec with its parameters.
         for (const spec of source.matchAll(
-          /\bname:\s*["']([^"']+)["'],\s*description:[^{}]*?\bparameters:/g,
+          /\bname:\s*["']([^"']+)["'],\s*description:(?:[^{}]|\$\{[^{}]*\})*?\bparameters:/g,
         ))
           registered.add(spec[1]);
       }

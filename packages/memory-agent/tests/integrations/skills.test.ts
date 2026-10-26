@@ -12,6 +12,7 @@ import {
 import { SkillTools } from "../../src/tools/skills.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
@@ -132,6 +133,17 @@ testAgent()("global and project skills", (it) => {
           error: "skill_not_found",
           name: "linked",
         });
+
+        const runTools = yield* (yield* SkillTools).runToolsFor(project);
+        expect(
+          yield* runToolRequestDifferences({ chatTools: tools.tools, runTools: runTools.tools }),
+        ).toEqual([undefined, undefined, undefined]);
+        expect(runTools.instructions).toBe(tools.instructions);
+        const readRun = yield* Effect.fromNullishOr(runTools.tools[0]);
+        for (const name of ["review", "linked"]) {
+          const call = yield* readRun.prepare({ name });
+          expect(yield* call({ toolCallId: "call-1" })).toEqual(yield* sdk(() => read?.({ name })));
+        }
       }),
   );
 });
