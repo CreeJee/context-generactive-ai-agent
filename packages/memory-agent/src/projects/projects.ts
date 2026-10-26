@@ -240,8 +240,10 @@ const make = Effect.gen(function* () {
               ProjectHostFailed.make({ root, reason: hostFailure.StatFailed.make({ cause }) }),
             ),
           );
-        if (info.type !== "Directory")
-          return yield* ProjectRootRejected.make({ root, reason: "not_directory" });
+        yield* Effect.when(
+          Effect.fail(ProjectRootRejected.make({ root, reason: "not_directory" })),
+          Effect.succeed(info.type !== "Directory"),
+        );
         const contains = (parent: string) => (candidate: string) => {
           const relative = path.relative(parent, candidate);
           return (
@@ -270,10 +272,11 @@ const make = Effect.gen(function* () {
           createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
           hiddenAt: null,
         };
-        const row = yield* insert(project);
-        if (Option.isNone(row))
-          return yield* ProjectRootRejected.make({ root, reason: "already_registered" });
-        return toProject(row.value);
+        const inserted = yield* insert(project);
+        const row = yield* Effect.fromOption(inserted, () =>
+          ProjectRootRejected.make({ root, reason: "already_registered" }),
+        );
+        return toProject(row);
       }),
 
     /** R08: excluded projects keep their memory but are not searched from other projects. */

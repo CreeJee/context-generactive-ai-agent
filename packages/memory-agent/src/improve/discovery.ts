@@ -156,14 +156,15 @@ const make = Effect.gen(function* () {
    * The last recorded scan, or none before the first one. An index in an older shape counts as no
    * scan; the next scan writes it again.
    */
-  const latest = Effect.gen(function* () {
-    if (!(yield* fs.exists(indexFile).pipe(Effect.mapError(failed)))) return Option.none();
-    const text = yield* fs.readFileString(indexFile).pipe(Effect.mapError(failed));
-    return yield* Schema.decodeEffect(IndexJson)(text).pipe(
+  const latest = Effect.when(
+    fs.readFileString(indexFile).pipe(
+      Effect.mapError(failed),
+      Effect.flatMap((text) => Schema.decodeEffect(IndexJson)(text)),
       Effect.asSome,
       Effect.catchTag("SchemaError", () => Effect.succeedNone),
-    );
-  });
+    ),
+    fs.exists(indexFile).pipe(Effect.mapError(failed)),
+  ).pipe(Effect.map(Option.flatten));
 
   /**
    * Discovers and writes one Markdown report per repository under the storage root, never into
@@ -313,7 +314,7 @@ const make = Effect.gen(function* () {
     );
     // Only the claim decides: a scan that just recorded its end may still sit in the handle, and
     // replacing it there loses nothing.
-    if (claimed) yield* FiberHandle.run(running, background);
+    yield* Effect.when(FiberHandle.run(running, background), Effect.succeed(claimed));
     return yield* Ref.get(state);
   });
 

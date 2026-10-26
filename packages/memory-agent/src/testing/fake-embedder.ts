@@ -25,13 +25,17 @@ const vectorEffect = Effect.fn("fakeVector")(function* (text: string) {
     new Intl.Segmenter().segment(text.toLowerCase().replace(/\s+/g, " ")),
     (part) => part.segment,
   );
-  for (let i = 0; i + 3 <= chars.length; i++) {
-    const digest = yield* crypto.digest(
-      "SHA-256",
-      new TextEncoder().encode(chars.slice(i, i + 3).join("")),
-    );
-    vector[digest[0]! % dimensions]! += digest[1]! % 2 === 0 ? 1 : -1;
-  }
+  const trigrams = Array.from({ length: Math.max(chars.length - 2, 0) }, (_, i) =>
+    chars.slice(i, i + 3).join(""),
+  );
+  yield* Effect.forEach(
+    trigrams,
+    (trigram) =>
+      Effect.map(crypto.digest("SHA-256", new TextEncoder().encode(trigram)), (digest) => {
+        vector[digest[0]! % dimensions]! += digest[1]! % 2 === 0 ? 1 : -1;
+      }),
+    { discard: true },
+  );
   return normalize(vector);
 });
 

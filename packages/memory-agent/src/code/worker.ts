@@ -178,18 +178,20 @@ const logBook = (): LogBook => {
 /** `console.log` and its kin: strings as they are, other values as JSON. */
 const installConsole = (vm: QuickJSContext, logs: LogBook) => {
   const console = vm.newObject();
-  for (const [method, prefix] of [
-    ["log", ""],
-    ["info", ""],
-    ["warn", "warn: "],
-    ["error", "error: "],
-  ] as const) {
+  (
+    [
+      ["log", ""],
+      ["info", ""],
+      ["warn", "warn: "],
+      ["error", "error: "],
+    ] as const
+  ).forEach(([method, prefix]) => {
     const write = vm.newFunction(method, (...args: QuickJSHandle[]) => {
       logs.write(`${prefix}${args.map((arg) => textOf(vm, arg)).join(" ")}`);
     });
     vm.setProp(console, method, write);
     write.dispose();
-  }
+  });
   vm.setProp(vm.global, "console", console);
   console.dispose();
 };
@@ -197,12 +199,15 @@ const installConsole = (vm: QuickJSContext, logs: LogBook) => {
 /** Settles a call in the program: with its result's JSON text, or with the error it throws. */
 const settleCall = (vm: QuickJSContext, pending: QuickJSDeferredPromise, reply: CallReply) =>
   CallReply.match(reply, {
-    Returned: ({ value }) => {
-      if (value === undefined) return pending.resolve();
-      const text = vm.newString(value);
-      pending.resolve(text);
-      text.dispose();
-    },
+    Returned: ({ value }) =>
+      Option.match(Option.fromUndefinedOr(value), {
+        onNone: () => pending.resolve(),
+        onSome: (json) => {
+          const text = vm.newString(json);
+          pending.resolve(text);
+          text.dispose();
+        },
+      }),
     Failed: ({ message }) => {
       const error = vm.newError(message);
       pending.reject(error);
@@ -267,8 +272,7 @@ const handlers = CodeRpcs.toLayer(
         let ended = false;
         /** Runs the program's continuations once a call it waits on is answered. */
         const pump = () => {
-          const jobs = runtime.executePendingJobs();
-          if (jobs.error !== undefined) jobs.error.dispose();
+          runtime.executePendingJobs().error?.dispose();
         };
         const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
         const call = vm.newFunction("__call", (name: QuickJSHandle, args: QuickJSHandle) => {

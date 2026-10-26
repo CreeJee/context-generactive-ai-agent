@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { GlobalConfig } from "../config/global-config.ts";
 import { SecretStore, type SecretStoreFailed } from "../config/secrets.ts";
@@ -61,23 +61,18 @@ export class KagiFailed extends Schema.TaggedError<KagiFailed>()("KagiFailed", {
   }
 }
 
-const failureForStatus = (status: number): KagiFailed => {
-  switch (status) {
-    case 400:
-      return KagiFailed.make({ reason: "invalid_request", status });
-    case 401:
-      return KagiFailed.make({ reason: "unauthorized", status });
-    case 403:
-      return KagiFailed.make({ reason: "forbidden", status });
-    case 429:
-      return KagiFailed.make({ reason: "rate_limited", status });
-    default:
-      return KagiFailed.make({
-        reason: status >= 500 ? "server_error" : "invalid_response",
-        status,
-      });
-  }
-};
+const failureForStatus = (status: number): KagiFailed =>
+  KagiFailed.make({
+    reason: Match.value(status).pipe(
+      Match.withReturnType<KagiFailureReason>(),
+      Match.when(400, () => "invalid_request"),
+      Match.when(401, () => "unauthorized"),
+      Match.when(403, () => "forbidden"),
+      Match.when(429, () => "rate_limited"),
+      Match.orElse(() => (status >= 500 ? "server_error" : "invalid_response")),
+    ),
+    status,
+  });
 
 // Response models of the SDK (`models/*.ts`), only the fields the tools pass on.
 const SearchResult = Schema.Struct({
@@ -179,13 +174,19 @@ const make = (options: KagiOptions) =>
           .pipe(
             // Never redirect credentials; the client owns interruption while the caller signal remains effective.
             Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
-            Effect.provideService(FetchHttpClient.Fetch, (url, init) => {
-              if (signal === undefined) return fetch(url, init);
-              return fetch(url, {
-                ...init,
-                signal: AbortSignal.any(init?.signal == null ? [signal] : [signal, init.signal]),
-              });
-            }),
+            Effect.provideService(FetchHttpClient.Fetch, (url, init) =>
+              Option.match(Option.fromUndefinedOr(signal), {
+                onNone: () => fetch(url, init),
+                onSome: (caller) =>
+                  fetch(url, {
+                    ...init,
+                    signal: AbortSignal.any([
+                      caller,
+                      ...Option.toArray(Option.fromNullishOr(init?.signal)),
+                    ]),
+                  }),
+              }),
+            ),
             Effect.mapError(() => KagiFailed.make({ reason: "unavailable", status: null })),
           );
         if (response.status < 200 || response.status >= 300)

@@ -5,7 +5,7 @@ import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
-import { Effect, FileSystem, Result, Schema } from "effect";
+import { Array as Arr, Effect, FileSystem, Option, Result, Schema } from "effect";
 import type { ConfigFileFailureCode, ShownFailure } from "../runtime/shown-failure.ts";
 
 /** Where MCP servers are configured: user-wide in the storage root, or in a project. */
@@ -110,34 +110,46 @@ const readMcpFileBody = Effect.fn("mcp.readConfig")(function* (path: string, sco
   // A file whose presence cannot be checked is treated as absent, like a missing one.
   if (!(yield* fs.exists(path).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(false)))))
     return { path, servers: [], error: null } satisfies McpFileRead;
-  const text = yield* fs.readFileString(path).pipe(Effect.result);
-  if (Result.isFailure(text))
-    return { path, servers: [], error: { code: "unreadable", detail: null } } satisfies McpFileRead;
-  return Result.match(decodeMcpFile(text.success), {
-    onFailure: (error) => ({
-      path,
-      servers: [],
-      error: {
-        code: "invalid_config" as const,
-        detail: String(error).split("\n").slice(0, 4).join("\n"),
-      },
-    }),
-    onSuccess: (file) => {
-      const entries = Object.entries(file.mcpServers);
-      const invalid = entries.filter(([name]) => !isServerName(name)).map(([name]) => name);
-      return {
+  return yield* fs.readFileString(path).pipe(
+    Effect.match({
+      onFailure: (): McpFileRead => ({
         path,
-        // The valid servers stay usable; the others are named so the user can rename them.
-        error:
-          invalid.length > 0
-            ? { code: "invalid_names" as const, detail: invalid.join(", ") }
-            : null,
-        servers: entries
-          .filter(([name]) => isServerName(name))
-          .map(([name, config]) => ({ scope, name, config, fingerprint: fingerprintOf(config) })),
-      };
-    },
-  });
+        servers: [],
+        error: { code: "unreadable", detail: null },
+      }),
+      onSuccess: (text): McpFileRead =>
+        Result.match(decodeMcpFile(text), {
+          onFailure: (error) => ({
+            path,
+            servers: [],
+            error: {
+              code: "invalid_config" as const,
+              detail: String(error).split("\n").slice(0, 4).join("\n"),
+            },
+          }),
+          onSuccess: (file) => {
+            const entries = Object.entries(file.mcpServers);
+            const invalid = entries.filter(([name]) => !isServerName(name)).map(([name]) => name);
+            return {
+              path,
+              // The valid servers stay usable; the others are named so the user can rename them.
+              error:
+                invalid.length > 0
+                  ? { code: "invalid_names" as const, detail: invalid.join(", ") }
+                  : null,
+              servers: entries
+                .filter(([name]) => isServerName(name))
+                .map(([name, config]) => ({
+                  scope,
+                  name,
+                  config,
+                  fingerprint: fingerprintOf(config),
+                })),
+            };
+          },
+        }),
+    }),
+  );
 });
 
 export const readMcpFile: {
@@ -163,10 +175,14 @@ function expandVariablesResultBody(
   value: string,
   env: NodeJS.ProcessEnv,
 ): Result.Result<string, MissingVariable> {
-  for (const [, name] of value.matchAll(variablePattern))
-    if (name !== undefined && env[name] === undefined)
-      return Result.fail(MissingVariable.make({ variable: name }));
-  return Result.succeed(value.replace(variablePattern, (_, name: string) => env[name] ?? ""));
+  const missing = Arr.findFirst(Array.from(value.matchAll(variablePattern)), ([, name]) =>
+    Option.filter(Option.fromUndefinedOr(name), (variable) => env[variable] === undefined),
+  );
+  return Option.match(missing, {
+    onSome: (variable) => Result.fail(MissingVariable.make({ variable })),
+    onNone: () =>
+      Result.succeed(value.replace(variablePattern, (_, name: string) => env[name] ?? "")),
+  });
 }
 
 /** `expandVariablesResult` for synchronous SDK transport builders, which throw the typed error. */

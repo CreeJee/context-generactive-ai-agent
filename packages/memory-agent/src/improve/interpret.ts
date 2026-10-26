@@ -128,10 +128,17 @@ const make = Effect.gen(function* () {
    * instead of every item.
    */
   const model = Effect.gen(function* () {
-    const selection = yield* active.selected.pipe(Effect.mapError(unavailable));
-    if (selection === null) return yield* unavailable(null);
+    const selection = yield* active.selected.pipe(
+      Effect.mapError(unavailable),
+      Effect.flatMap((selected) =>
+        Effect.fromOption(Option.fromNullishOr(selected), () => unavailable(null)),
+      ),
+    );
     const auth = yield* active.auth(selection);
-    if (!AuthConnectionState.$is("signed-in")(auth)) return yield* unavailable(null);
+    yield* Effect.when(
+      Effect.fail(unavailable(null)),
+      Effect.succeed(!AuthConnectionState.$is("signed-in")(auth)),
+    );
     const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
     const adapter = services.runtime.adapter(selection);
     // Per scan: a later scan starts trusting the server again.

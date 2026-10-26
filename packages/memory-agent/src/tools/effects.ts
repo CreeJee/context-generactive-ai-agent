@@ -68,12 +68,7 @@ const retiredToolEffects = {
 } as const satisfies Record<string, "read" | "effectful">;
 
 export const readOnlyToolNames = HashSet.fromIterable(
-  Object.entries({ ...builtinToolEffects, ...retiredToolEffects }).flatMap(([name, effect]) => {
-    switch (effect) {
-      case "read":
-        return [name];
-      case "effectful":
-        return [];
-    }
-  }),
+  Object.entries({ ...builtinToolEffects, ...retiredToolEffects })
+    .filter(([, effect]) => effect === "read")
+    .map(([name]) => name),
 );
