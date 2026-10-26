@@ -2720,4 +2720,14 @@
   - owner가 읽기를 미리 실행하던 `parallelReads`는 지운다. TanStack이 도구를 순서대로 실행하던 때의 우회다. 순서 규칙은 loop의 도구 실행이 맡는다.
 - read recovery(2026-10-11)의 새 receipt는 만들지 않는다. 로컬 DB에서 쓰인 적이 없다. 0.0.17 릴리즈에 들어 있으므로 이미 있는 receipt는 계속 인정한다.
 - 옛 Goal 세션도 새 코드에서 이어서 run을 시작한다. worker 세대·native artifact·dispatch와 옛 장부 행은 지우지 않고 읽기만 한다. 완료 근거는 worker 세대가 있는 Goal의 새 run도 받는다. 지금은 dispatch 세대가 없는 run을 거절한다.
-- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 구현 시점은 정하지 않았다. 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다.
+- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 전환 안에서 한다(아래 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"). 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다.
+
+## TanStack AI를 Effect AI로 전환한다 (2026-10-26)
+
+- 사용자 결정: TanStack AI 패키지 9개와 pnpm patch 2개를 모두 빼고, 모델 호출·도구·agent loop·채팅 전송을 Effect AI(`effect/ai`)와 직접 만든 코드로 옮긴다. 2026-10-26에 시작한다. 계획은 [effect-ai-migration.md](effect-ai-migration.md)다.
+- 점진적 전환은 하지 않는다. TanStack과 Effect를 잇는 bridge를 두지 않고, 새 모듈을 모두 만든 뒤 한 릴리즈에서 한 번에 바꾼다. 새 모듈은 계획의 7단계 전까지 앱에 연결하지 않는다.
+- provider 패키지는 `@effect/ai-openai-compat` 하나만 쓴다. 구독 Anthropic·ChatGPT, external ACP, scripted provider는 `LanguageModel.make`로 직접 만든다. `@effect/ai-anthropic`은 구독 요청의 `display: "summarized"`와 `block_binding`을 표현하지 못한다.
+- DB의 테이블·열은 바꾸지 않는다. JSON 열 안의 TanStack 메타데이터는 migration 하나로 지우고, 쓰는 값만 우리 필드로 옮긴다. 조건은 기존 채팅이 지금처럼 열리고 이어서 대화할 수 있는 것이다.
+- API payload는 새 client에 맞춰 바꾼다. chunk는 AG-UI 1.0 표준 모양으로만 쓴다. client는 `useChat` 대신 `@effect/atom-react`로 만든 hook을 쓴다.
+- 도구는 Effect의 자동 해석 대신 앱이 stream을 읽으며 실행한다(계획의 "도구 실행 방식"). 자동 해석은 등록되지 않은 이름 하나로 호출 전체가 실패하고, 승인 판정이 boolean뿐이며, 응답이 끊기면 실행 중인 핸들러를 끊는다.
+- TanStack을 전제로 한 결정들은 해당 단계를 구현할 때 대체 표시를 단다. 대상 목록은 계획에 있다.

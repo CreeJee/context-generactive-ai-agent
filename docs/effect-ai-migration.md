@@ -1,6 +1,6 @@
 # TanStack AI에서 Effect AI로 전환 계획 (2026-10-25)
 
-상태: 계획(구현 전). 방향은 2026-10-25 대화에서 정했다. 전환 전체는 [decisions.md](decisions.md)에 아직 올리지 않았다. Goal 실행 부분만 2026-10-26에 올렸다("Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"). 배경 논의: 세션 `0c379bba`(2026-10-25), `f5dc93f6`(2026-10-26). 코드 위치는 `fe9a74ef` 기준이다. Goal 부분은 `841dc1a3` 기준이다.
+상태: 구현 중(2026-10-26 시작). 방향은 2026-10-25 대화에서, 도구 실행 방식은 2026-10-26 대화에서 정했다. 전환 시작은 decisions.md "TanStack AI를 Effect AI로 전환한다 (2026-10-26)", Goal 실행은 "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"에 있다. 배경 논의: 세션 `0c379bba`(2026-10-25), `f5dc93f6`(2026-10-26). 코드 위치는 `fe9a74ef` 기준이다. 그 뒤 `c1ba4fff`(2026-10-25)에서 TanStack 패키지가 모두 1.0.0으로 올라갔고, 버전과 TanStack 동작은 1.0.0 기준으로 고쳤다(2026-10-26). Goal 부분은 `b54fcd7c` 기준이다.
 
 ## 목표
 
@@ -8,7 +8,7 @@ TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채�
 
 ## 정한 방향 (2026-10-25)
 
-- TanStack 패키지 9개와 pnpm patch 2개(`@tanstack__ai@0.61.0`, `@tanstack__openai-base@0.11.1`)를 모두 뺀다.
+- TanStack 패키지 9개와 pnpm patch 2개(`@tanstack__ai@1.0.0`, `@tanstack__openai-base@1.0.0`)를 모두 뺀다.
 - provider 패키지는 `@effect/ai-openai-compat` 하나만 쓴다. 구독 Anthropic·ChatGPT, external ACP, scripted provider는 `LanguageModel.make`로 직접 만든다.
 - 점진적 전환은 하지 않는다.
   - TanStack과 Effect를 잇는 bridge를 두지 않는다.
@@ -22,6 +22,7 @@ TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채�
 - API payload는 새 client에 맞춰 바꿔도 된다. chunk는 AG-UI 1.0 표준 모양으로만 쓰고, TanStack 확장 필드는 넣지 않는다.
 - client는 `useChat` 대신 AG-UI 이벤트를 읽는 자체 hook을 `@effect/atom-react`로 만든다.
 - Effect의 AG-UI 지원(#9842, #9852, #9853)은 merge 전이라 기대지 않는다. merge되면 다시 본다("Effect의 AG-UI 지원" 참고).
+- 도구는 Effect 자동 해석 대신 앱이 stream을 읽으며 직접 실행한다(2026-10-26, "도구 실행 방식" 참고).
 
 ## 설치된 패키지로 본 가능성
 
@@ -39,10 +40,11 @@ TanStack AI 패키지를 모두 뺀다. 모델 호출, 도구, agent loop, 채�
   - peer는 react `>=19 <20`, scheduler `>=0.25 <0.29`, `effect ^4.0.3`이다. 지금 react 19.3.1, scheduler 0.28.0이라 맞는다.
   - Atom 본체(`Atom`, `AsyncResult`, `AtomRegistry`, `Hydration`, `Reactivity`)는 이미 설치된 `effect/reactivity`에 있다.
   - frontend는 이미 Effect를 쓴다(`apps/agent/app/entry/chat/chat-panel.tsx`의 `runUiEffect`).
-- 지금 쓰는 TanStack 패키지와 버전:
-  - `@tanstack/ai` 0.61.0(patch), `ai-client` 0.35.1, `ai-react` 0.29.1, `ai-persistence` 0.6.7
-  - `ai-openai` 0.24.1, `ai-anthropic` 0.19.1, `ai-mcp` 0.4.6, `ai-compaction` 0.1.17
-  - `openai-base` 0.11.1(patch)
+- 지금 쓰는 TanStack 패키지는 모두 1.0.0이다(`c1ba4fff`).
+  - `@tanstack/ai`(patch), `ai-client`, `ai-react`, `ai-persistence`
+  - `ai-openai`, `ai-anthropic`, `ai-mcp`, `ai-compaction`
+  - `openai-base`(patch)
+  - `@tanstack/ai` 1.0.0은 `@ag-ui/core` 1.0.0에 의존한다.
 
 ## Effect의 AG-UI 지원 (2026-10-25 기준)
 
@@ -82,16 +84,22 @@ src에서 많이 쓰는 것:
 - `toolDefinition` 45곳은 `Tool.make`로 옮긴다. 입력 스키마는 이미 Effect Schema다(`packages/memory-agent/src/tools/schema.ts`의 `toToolSchema`).
 - `.server()`의 Promise 핸들러는 `Toolkit.toLayer`의 Effect 핸들러가 된다.
 - 모델이 받는 도구 실패 `{ error, cause, detail }`는 `failureMode: "return"`과 `failure` schema로 표현한다. 그러면 `@tanstack/ai` patch가 필요 없다(decisions.md "원문 오류 표시와 백그라운드 루프 실패 정책 (2026-10-18)").
+  - `failureMode` 기본값은 `"error"`라 도구마다 `"return"`을 지정한다(`effect/ai/Tool.ts`의 `make`).
+  - `failure` schema를 따르는 것은 핸들러가 낸 typed failure뿐이다. 인자 decode 실패와 `AiError`는 `AiError` 모양으로 encode된다(`Toolkit.ts`의 `handle`, `Tool.ts`의 `failureResultSchema`). 모든 실패를 지금 모양으로 보이려면 모델에 넘기기 전에 앱이 바꾼다.
 - 직접 만든 adapter(구독, external ACP, compatible 후처리, scripted)는 `LanguageModel.make({ generateText, streamText })`로 옮긴다.
-- `chat({ outputSchema })` 단발 호출 5곳은 `generateObject`나 `streamText`로 옮긴다.
+- `chat({ stream: false })` 단발 호출 5곳은 `generateText`로 옮긴다.
   - 대상: `permissions/classifier.ts`, `report/diagnosis.ts`, `memory/interpret.ts`, `improve/interpret.ts`, `agent/turn-summaries.ts`
-- MCP 도구는 `Tool.dynamic`에 JSON Schema를 그대로 넘긴다.
+  - 지금은 `outputSchema`를 쓰지 않는다. turn-summaries는 text를 그대로 쓰고, 나머지 4곳은 text에서 JSON을 꺼내 Schema로 decode한다.
+  - `generateObject`로 바꾸면 provider의 structured output에 기대게 된다. 직접 만드는 `LanguageModel`이 그것을 지원해야 하므로, 동작을 바꾸는 별도 결정으로 다룬다.
+- MCP 도구는 `Tool.dynamic`에 JSON Schema를 그대로 넘긴다. JSON Schema로 만든 dynamic tool은 핸들러가 `unknown`을 받고 Effect가 인자를 검증하지 않는다. 인자 검증은 앱이 한다.
 
 ### 옮기면 나아지는 것
 
-- 한 step의 도구를 동시에 실행한다(`concurrency` 기본값 `"unbounded"`). TanStack 1.0도 이미 병렬이다(`toolExecution` 기본값 `'parallel'`). 어떤 도구끼리 기다릴지는 앱이 정한다(4단계).
-  - 서브에이전트를 첫 호출 직전에 모두 시작하던 우회를 지울 수 있다(decisions.md "서브에이전트 (2026-09-15)").
-  - parallel-reads 우회는 5단계에서 지운다.
+- 한 step의 도구를 동시에 실행할 수 있다.
+  - Effect의 `concurrency`(기본값 `"unbounded"`)는 자동 도구 해석과 승인된 호출의 사전 실행에만 쓰인다. 이 계획은 `disableToolCallResolution: true`로 해석을 앱이 가져가므로, 동시 실행은 앱 scheduler가 정한다("도구 실행 방식").
+  - 그렇게 만들면 서브에이전트를 첫 호출 직전에 모두 시작하던 우회를 지울 수 있다(decisions.md "서브에이전트 (2026-09-15)").
+  - parallel-reads 우회도 지울 수 있다. 지금은 step의 첫 쓰기 앞에 있는 읽기만 미리 시작하지만, scheduler는 쓰기 사이에 있는 읽기끼리도 동시에 돌린다.
+  - 직접 만드는 provider에서는 모델이 아직 생성하는 동안 읽기를 먼저 시작한다.
 - 도구 진행 결과를 `HandlerContext.preliminary`로 보낼 수 있다.
 - span, GenAI telemetry, 타입이 있는 `AiError` reason을 얻는다.
 - Promise↔Effect 경계가 줄어든다. src에 경계 주석이 171개, `nativePromise`가 122개, `runNativeEffect`가 66개 있다. 상당수가 TanStack 콜백 때문이다.
@@ -99,18 +107,33 @@ src에서 많이 쓰는 것:
 ### 의미가 달라 따로 맞출 것
 
 - **승인 묶음.**
-  - 지금 규칙은 "한 번에 여러 호출 중 하나라도 `ask`면 묶음 전체를 한 번에 묻는다"이다(decisions.md "권한 모드 (2026-09-14)").
-  - Effect는 자동 도구 해석에서 같은 step의 승인 불필요 도구를 바로 실행한다.
+  - 지금 규칙은 "한 번에 여러 호출 중 하나라도 `ask`면 묶음 전체를 한 번에 묻는다"이다(decisions.md "권한 모드 (2026-09-14)"). 근거가 "TanStack 재개 단위"라 전환하면서 바꾼다. 승인 요청은 지금처럼 한 묶음으로 묻고, 승인 대기 호출과 순서가 걸리지 않는 호출은 기다리지 않는다("도구 실행 방식").
+  - Effect는 자동 도구 해석에서 같은 step의 승인 불필요 도구를 순서 없이 바로 실행한다.
   - 그래서 `disableToolCallResolution: true`로 자동 해석을 끄고, 앱이 `toolkit.handle`을 직접 부른다.
-- **permission-review payload.** reason, askedBy 등을 담을 자리가 Effect approval part에 없다. 저장은 지금 interrupt 기록 모양으로 하므로, 앱 쪽 interrupt로 다룬다.
+  - 이 모드에서는 Effect가 `needsApproval`을 평가하지 않는다. 판정 함수(`isApprovalNeeded`)는 export되지 않으므로 앱이 `tool.needsApproval`을 직접 평가한다.
+  - 이 모드에서도 prompt에 `tool-approval-request`와 `tool-approval-response(approved: true)` 쌍이 있고 결과가 없으면, Effect가 모델 호출 전에 그 도구를 실행한다(`LanguageModel.ts`의 `collectToolApprovals`, `executeApprovedToolCalls`). 그래서 승인을 Effect approval part로 표현하지 않는다.
+- **permission-review payload.** Effect approval 흐름으로는 표현할 수 없다.
+  - 승인 응답은 `approved`와 `reason`뿐이라 `responseSchema`도, 승인 인자도 담을 수 없다.
+  - 승인 요청 part에는 `metadata`(Json record)가 있지만, 위의 사전 실행 경로를 피하려면 approval part를 쓰지 않아야 한다.
+  - 저장은 지금 interrupt 기록 모양으로 하므로, 앱 쪽 interrupt로 다룬다.
 - **lazy tool(`DISCOVERY_TOOL_NAME`).** 같은 기능이 없다. step마다 toolkit을 바꾸고, `toolCallValidation: "deferred"`로 등록되지 않은 호출을 받아 직접 처리한다.
+  - 등록되지 않은 호출은 provider가 이 옵션을 지원할 때만 돌아온다. 직접 만드는 `LanguageModel`은 `providerOptions.toolCallValidation`을 읽어 그대로 내보낸다.
+- **tool call 검증 모드.** `disableToolCallResolution: true`의 기본값(`"strict"`)에서는 인자가 schema에 맞지 않는 tool call이나 등록되지 않은 이름이 하나만 있어도 `generateText`·`streamText` 전체가 `AiError`로 실패한다. 자동 해석 모드에서도 등록되지 않은 이름은 같다. 그래서 loop는 step마다 `toolCallValidation: "deferred"`를 쓰고, 앱이 tool schema로 인자를 decode해 실패는 모델에 답으로 돌린다(`answerInvalid`).
+- **끊긴 응답.** 자동 해석 모드의 Effect는 finish reason이 `stop`·`tool-calls`·`pause`가 아니면 핸들러를 시작하지 않는다. 이미 돌던 핸들러는 interrupt하고 `execution-interrupted` 결과를 만든다. 해석을 앱이 가져가면 이 판단도 앱이 한다. 실행 중인 쓰기 도구를 중간에 끊으면 부작용이 반만 남으므로, 앱은 쓰기 호출을 완전한 finish 뒤에만 시작하고 실행 중인 호출은 끊지 않는다("도구 실행 방식").
 - **메시지 구조.** `ModelMessage`와 `Prompt`는 구조가 다르다.
   - `Prompt`에서는 system prompt가 history 안의 메시지다.
   - tool-result에 `name`이 필수다.
-  - 메시지에 `id`·`createdAt`이 없다.
+  - 메시지에 `id`·`createdAt` 필드가 없다. 자유 형식 `options`만 있다.
   - 그래서 저장은 지금 메시지 구조를 우리 Schema로 두고, model을 부르기 직전에만 `Prompt`로 바꾼다.
   - 저장된 tool 메시지에는 `name`이 없다. 같은 `toolCallId`의 assistant tool call에서 찾는다.
-- **usage 이름.** `TokenUsage`는 promptTokens 계열이고 Effect `Usage`는 inputTokens 계열이다. 저장된 `chat_runs.usage`는 migration에서 새 이름으로 바꾼다.
+- **usage 모양.** `TokenUsage`는 promptTokens 계열이다. Effect `Usage`는 중첩 구조다: `inputTokens{total, uncached, cacheRead, cacheWrite}`, `outputTokens{total, text, reasoning}`. 저장된 `chat_runs.usage`는 migration에서 새 모양으로 바꾸고, 필드 대응표는 1단계에서 정한다.
+  - 로컬 DB에 실제로 있는 키(2026-10-26): `promptTokens`, `completionTokens`, `totalTokens`, `promptTokensDetails.{cachedTokens, cacheWriteTokens}`, `completionTokensDetails.reasoningTokens`.
+  - `totalTokens` 말고는 모두 Effect `Usage`에 자리가 있다. `promptTokens`가 cache를 포함하는지는 provider마다 확인해 `inputTokens.total`·`uncached`에 나눈다.
+- **history를 provider 요청으로 바꾸는 규칙.** TanStack 1.0은 요청마다 `transformMessagesForReplay`(`@tanstack/ai`의 `utilities/replay-messages.js`)로 history를 다듬는다. 새 변환이 같은 일을 해야 이어지는 대화의 요청이 같아진다.
+  - `metadata.tanstack.stopReason`이 `error`·`aborted`인 assistant 턴과 그 tool 결과를 뺀다.
+  - `metadata.tanstack.finishReason`이 `length`이고 tool call 인자가 JSON으로 읽히지 않으면 인자를 `{}`로 바꾼다.
+  - 결과가 없는 tool call에는 `"No result provided"` tool 결과를 만든다(로컬 DB에 23개).
+  - openai-compatible adapter는 `metadata.tanstack.source`가 대상 provider·api·model과 다른 assistant 턴을 다른 모델의 것으로 본다. thinking은 평문으로 바꾸고, tool call id는 다시 붙인다.
 
 ### 직접 만들 것
 
@@ -131,19 +154,77 @@ src에서 많이 쓰는 것:
   - provider tool factory 18개(OpenAI 11, Anthropic 7): `packages/memory-agent/src/providers/tool-capabilities.ts`. provider tool은 `Tool.providerDefined`로 만든다.
 - **compaction.** `evictOldest`를 직접 만든다.
 
+## 도구 실행 방식 (2026-10-26)
+
+Effect의 자동 도구 해석을 쓰지 않고, 앱이 stream을 읽으며 도구를 실행한다. step마다 `streamText`를 `disableToolCallResolution: true`, `toolCallValidation: "deferred"`로 부르고, `tool-call` part가 오는 대로 앱 scheduler에 넣는다.
+
+자동 해석을 쓰지 않는 이유(설치된 `844a77b`로 실행해 확인, "확인하지 않은 것" 참고):
+
+- 등록되지 않은 이름이 하나라도 오면 호출 전체가 실패한다. `"deferred"`는 자동 해석에서 효과가 없어 lazy discovery를 만들 수 없다.
+- 승인 판정이 boolean뿐이라 permission-review의 reason, `responseSchema`, `askedBy`를 담을 수 없다. 판정 함수가 실패하면 승인 없이 실행한다.
+- 동시 실행을 `concurrency` 숫자로만 정한다. "쓰기 뒤의 읽기는 쓰기가 끝난 뒤에"(decisions.md "도구 성능 (2026-09-15)"의 `parallelReads`) 같은 순서를 표현할 수 없다.
+- 응답이 끊기면 실행 중인 핸들러를 interrupt한다. 쓰기 도구는 부작용이 반만 남는다.
+
+호출 하나는 이 순서로 처리한다:
+
+1. 받은 순서대로 tool schema로 인자를 decode한다. 실패는 실행하지 않고 모델에 답으로 돌린다(`answerInvalid`). 등록되지 않은 이름은 discovery 요청으로만 해석한다.
+2. 게이트 순서(chatState → delivery → projectInstructions → repeatGuard → 게이트)를 거친다. 거절된 호출은 실행하지 않고 바로 결과를 만든다.
+3. 통과한 호출만 scheduler에 넣는다. 자기 권한 확인을 통과하지 않은 호출은 시작하지 않는다.
+
+scheduler 규칙:
+
+호출 사이의 순서는 열린 항목이다. 아래 규칙은 다른 대화(2026-10-26)에서 정한 장벽 안이다. 같은 날 이 계획의 Goal 결정을 정한 대화에서 사용자는 순서를 두지 않는 안을 검토 중이라고 했다. TanStack 1.0은 지금 순서 없이 돌린다("열린 항목"). 4단계 scheduler를 만들기 전에 정한다. 순서와 무관한 규칙(쓰기는 완전한 finish 뒤, 결과는 호출 순서로, 실행 중 호출은 끊지 않음)은 어느 안이든 지킨다.
+
+- 읽기 호출은 `readOnlyToolNames`(`packages/memory-agent/src/tools/effects.ts`)에 있는 도구의 호출이다. 나머지(쓰기, 셸, MCP, delegation, 서브에이전트)는 쓰기 호출로 본다. MCP의 `readOnlyHint`는 쓰지 않는다(decisions.md "MCP 서버 (2026-09-15)").
+- 읽기끼리는 동시에 돈다. 두 호출 중 하나라도 쓰기면, 뒤 호출은 앞 호출이 끝난 뒤에 시작한다.
+- 앞에 끝나지 않은 쓰기 호출이 없으면, 읽기 호출은 받는 즉시 시작한다.
+- 쓰기 호출은 그 step의 응답이 완전한 finish(`stop`, `tool-calls`, `pause`)로 끝난 뒤에 시작한다.
+  - 응답이 끊기거나 provider가 실패하면 쓰기 호출을 시작하지 않는다. 끊긴 경우에는 "응답이 끊겨 실행하지 않음" 결과를 만든다.
+  - 이유: finish 전에 시작하면 run이 provider 실패로 끝나도 부작용이 남는다. 실패한 턴은 다음 요청의 history에서 빠지므로(`transformMessagesForReplay`의 `stopReason` 규칙), 모델은 그 쓰기를 모른다.
+  - 실행 중인 호출은 응답 사정으로 끊지 않는다. 사용자 취소는 지금 취소 동작을 따른다.
+- 모델에 돌려주는 tool 결과는 끝난 순서가 아니라 호출 순서로 놓는다(지금 `parallelReads`와 같다).
+- 서브에이전트를 첫 호출 직전에 모두 시작하는 우회와 `parallelReads`는 이 scheduler로 대신한다.
+
+승인 대기:
+
+- 승인이 필요한 호출은 승인 뒤에 시작한다. 한 step의 승인 요청은 지금처럼 한 interrupt 묶음으로 묻는다.
+- 승인을 기다리는 동안에도, 승인 대기 호출과 순서가 걸리지 않는 호출은 먼저 실행하고 결과를 기록한다. 순서는 scheduler 규칙과 같다. 승인 대기 호출이 쓰기면 그 뒤의 모든 호출이, 읽기면 그 뒤 첫 쓰기 호출부터의 모든 호출이 재개 run으로 넘어간다.
+- interrupt로 run을 끝내는 때는 실행할 수 있는 호출이 모두 끝난 뒤다. 그래서 오래 걸리는 호출이 승인 표시를 늦출 수 있다.
+- 재개 run은 결과가 없는 호출만 실행한다. 이미 결과가 기록된 호출을 다시 실행하면 쓰기가 두 번 일어난다.
+- decisions.md "권한 모드 (2026-09-14)"의 "묶음 전체를 한 번에 묻는다(TanStack 재개 단위)"를 이 규칙으로 대체한다.
+
+provider별 차이:
+
+- `@effect/ai-openai-compat`은 모든 `tool-call` part를 stream 끝(`[DONE]`)에서 finish 바로 앞에 한꺼번에 내보낸다(`OpenAiLanguageModel.ts`의 `makeStreamResponse`). 이 provider에서는 읽기도 응답이 끝난 뒤에 시작한다.
+  - 같은 자리에서 tool 인자가 JSON으로 읽히지 않으면 `"deferred"`여도 stream 전체가 `AiError`(`ToolParameterValidationError`)로 실패한다. 끊긴 응답의 tool call이 그렇다. 지금 동작과 같은지 2단계 provider 계약 테스트에서 확인한다.
+- 구독 Anthropic·ChatGPT `LanguageModel`은 tool call 하나가 끝날 때마다 `tool-call` part를 내보내게 만든다. 지금의 `NormalizedStreamEvent`(`packages/memory-agent/src/oauth/protocol.ts`)에 호출마다 끝을 알리는 `tool-call`과 `content-block-end`가 있다. 이 provider에서만 모델이 생성하는 동안 읽기가 먼저 돈다.
+
+결과를 기다리지 않는 도구:
+
+- 오래 걸리는 도구는 시작했다는 결과를 바로 돌려주고, 끝나면 알림 후속 턴으로 결과를 전달하게 바꿀 수 있다. 서브에이전트가 이미 이 방식이다(`ad2ccf97`).
+- 대상은 셸처럼 오래 걸리는 도구로만 고른다. 모델이 결과 없이 다음 행동을 정해야 하고, 후속 턴이 늘어나기 때문이다. decisions.md "도구 성능 (2026-09-15)"에서 미룬 셸 실행 handle과 같은 일이다.
+- 이 전환에는 넣지 않는다. TanStack 위에서도 할 수 있는 일이라 따로 한다. 대상 도구는 "열린 항목"에서 정한다.
+
 ## DB 저장 형식과 migration
 
-테이블과 열은 그대로 둔다. JSON 안의 TanStack 메타데이터는 migration 하나로 지운다. 로컬 DB에 있는 TanStack 메타데이터(2026-10-25 확인):
+테이블과 열은 그대로 둔다. JSON 안의 TanStack 메타데이터는 migration 하나로 지운다. 로컬 DB에 있는 TanStack 메타데이터(2026-10-26 확인, 쓸수록 늘어난다):
 
-- 메시지의 `metadata.tanstack`(9,589개): `createdAt`, `model`, `toolCallMetadata`, 드물게 `source`·`finishReason`·`run`
-- tool call의 `metadata.tanstack`(3,099개): `model`·`index`, 또는 `source`
+- 메시지의 `metadata.tanstack`(10,157개): `createdAt`, `model`, `toolCallMetadata`, 드물게 `source`(556개)·`responseId`(244개)·`finishReason`·`run`·`index`·`threadId`·`runId`·`stopReason`
+- tool call의 `metadata.tanstack`(3,773개): `model`·`index`, 또는 `source`(678개)
+
+로컬 DB의 메시지 모양(2026-10-26):
+
+- 메시지 144,123개 가운데 78,497개는 `createdAt`도 `metadata.tanstack.createdAt`도 없다. 새 Schema에서 `createdAt`은 선택 필드다.
+- tool 메시지 77,736개 모두 `name`이 없고, 모두 같은 thread에 짝이 되는 assistant tool call이 있다.
+- 24개 thread에 같은 `toolCallId`의 tool 결과가 여러 번 있다(5,461쌍, 15,066행, 내용은 같다). 2단계의 요청 비교에 이 thread들을 꼭 넣는다.
 
 migration이 하는 일:
 
 - `metadata.tanstack.createdAt`은 메시지에 `createdAt`이 없을 때 그 자리로 옮긴다.
 - `metadata.tanstack.model`은 우리 `model` 필드로 옮긴다. model handoff가 이전 model을 찾을 때 이 값을 읽는다(`packages/memory-agent/src/agent/model-handoff.ts`의 `StoredModel`).
+- `source`·`finishReason`·`stopReason`도 지금 요청을 만들 때 쓰는 값이다("의미가 달라 따로 맞출 것"의 history 변환 규칙). 같은 원칙대로 우리 필드로 옮길지, 변환 규칙을 바꿀지 1단계에서 정한다("열린 항목").
 - 나머지 TanStack 메타데이터를 지우고, 비게 된 `metadata`도 지운다.
-- `chat_runs.usage`를 새 usage 이름으로 바꾼다.
+- `chat_runs.usage`를 새 usage 모양으로 바꾼다.
 - `memory-agent/model-handoff` 상태의 `anchor`를 다시 계산한다.
   - fingerprint는 메시지 전체의 해시라, 메타데이터를 지우면 값이 바뀐다.
   - 다시 계산하지 않으면 그 세션의 handoff가 `HistoryChanged`로 실패한다.
@@ -160,7 +241,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
 - `chat_runs`
   - status 5종: `running`, `interrupted`, `completed`, `failed`, `aborted`
   - `error`, `error_code`
-  - `usage`: 지금은 TanStack `TokenUsage`다. migration에서 새 usage 이름으로 바꾼다. chunk마다 누적한다.
+  - `usage`: 지금은 TanStack `TokenUsage`다. migration에서 새 usage 모양으로 바꾼다. chunk마다 누적한다.
 - `chat_interrupts`
   - `payload`: `RUN_FINISHED` chunk의 `outcome.interrupts` 항목을 얕게 복사한 객체다(`@tanstack/ai-persistence`의 `interruptPayload`). 키는 모두 AG-UI 1.0 `Interrupt`의 필드다.
   - `response`: 응답 JSON이다. 응답이 없으면 NULL이다.
@@ -214,18 +295,23 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 일반 답변
   - 읽기·쓰기 tool
   - 승인 interrupt(승인·거절), permission-review
+  - 한 step에 읽기, 쓰기, 승인 호출이 섞인 경우
   - 취소, provider 실패
   - reasoning: Anthropic thinking 서명, OpenAI `openai-reasoning:` 접두어
   - named subagent, compaction, model handoff
   - Goal run: 한 턴의 병렬 읽기·쓰기 tool, 승인, 끊긴 run을 확인하고 이어 가기
   - queue와 steer
+  - 거절 경로("보안 체크리스트"의 "데이터와 절차"에 있는 부정 케이스). 지금 코드의 거절 응답을 golden으로 둔다.
 - 비교 대상은 "DB 저장 형식과 migration"의 테이블 전부다. 비교할 때 TanStack 메타데이터는 뺀다.
 - 완료 기준: 지금 코드에서 통과한다. 타입으로 확인할 수 없는 경계라 테스트로 둔다.
 
 ### 1. 저장 Schema와 migration
 
-- Effect Schema로 정의할 것: 메시지(TanStack 메타데이터 없음, `model` 필드 추가), usage, interrupt payload, AG-UI 1.0 chunk, history group
+- Effect Schema로 정의할 것: 메시지(TanStack 메타데이터 없음, `model` 필드 추가), usage, interrupt payload, interrupt 응답, AG-UI 1.0 chunk, history group
   - `AgUiSchema`가 merge되면 chunk Schema는 그것으로 바꾼다.
+  - usage는 `TokenUsage` 필드와 Effect `Usage` 필드의 대응표를 함께 정한다.
+  - interrupt 응답은 payload의 `responseSchema`와 승인 인자로 검사한다. Effect에는 이 검사에 해당하는 기능이 없다.
+- `publishIfCurrent`의 `messages = ?` 비교가 새 직렬화에서도 성립하는지 확인한다("보안 체크리스트"의 "데이터와 절차").
 - "DB 저장 형식과 migration"의 migration을 만든다. 7단계 전까지 앱의 migration 목록에는 넣지 않는다.
 - `tools/`에 로컬 DB 사본을 검사하는 도구를 둔다.
   - `~/.context-generactive-agent/agent.db`를 복사하고 migration을 돌린다.
@@ -253,22 +339,22 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 ### 3. tool
 
 - 45곳을 `Tool.make`와 `Toolkit`으로 옮긴다. 실패는 `failureMode: "return"`, 승인은 `needsApproval`로 표현한다.
+  - `needsApproval`은 앱 loop가 읽어 평가한다. 평가가 실패하면 승인을 요구하는 쪽으로 처리한다. Effect 내부 판정은 실패하면 승인 불필요로 처리하므로 그대로 따라 하지 않는다.
 - lazy discovery는 step별 toolkit과 `toolCallValidation: "deferred"`로 만든다.
-- MCP는 `@modelcontextprotocol/sdk` Client와 `Tool.dynamic`으로 옮긴다.
+- MCP는 `@modelcontextprotocol/sdk` Client와 `Tool.dynamic`으로 옮긴다. 인자 검증은 앱이 한다.
+- `withHiddenResults`(`packages/memory-agent/src/secrets/redactor.ts`)를 Toolkit 핸들러 래퍼로 다시 만든다. 지금은 TanStack `AnyServerTool.execute`를 감싼다.
 - `tools/definitions.ts`는 브라우저도 import한다. bundle 영향을 확인한다.
+- 완료 기준: "보안 체크리스트"의 "도구 실패와 비밀" 항목을 확인한다.
 
 ### 4. loop, hook, persistence
 
 - step 순서:
   1. history를 준비한다. onConfig를 대신한다.
-  2. `streamText`를 `disableToolCallResolution: true`로 부른다.
-  3. 앱이 도구를 해석한다: permission gate, repeat guard, 승인 묶음, 동시 `handle`, 기록.
-  4. usage를 읽는다.
-  5. 다음 step 여부를 정한다.
-- 동시 `handle`의 규칙(decisions.md 2026-10-26):
-  - 읽기 도구끼리는 admission의 tool gate 말고는 서로 기다리지 않는다.
-  - 쓰기 호출과 앞뒤 호출의 순서는 열린 항목이다. 지금 TanStack 1.0은 한 step의 호출을 순서 없이 동시에 돌린다.
-  - 일부 도구가 실패해도 나머지는 끝까지 돈다. 결과는 호출 순서로 모델에 준다.
+  2. `streamText`를 `disableToolCallResolution: true`, `toolCallValidation: "deferred"`로 부른다.
+  3. stream을 읽으며 `tool-call` part마다 decode와 게이트를 거쳐 scheduler에 넣는다("도구 실행 방식").
+  4. 완전한 finish를 받으면 쓰기 호출을 풀고, 실행할 수 있는 호출이 모두 끝나기를 기다린다. 승인 대기가 있으면 interrupt로 run을 끝낸다.
+  5. usage를 읽는다.
+  6. 다음 step 여부를 정한다.
 - middleware 21개는 순서가 정해진 typed hook으로 바꾼다.
   - 도구가 병렬이면 도구 뒤 hook(`onAfterToolCall` 자리)도 겹친다. run 상태를 공유하는 hook은 `Ref`나 permit으로 순서를 지킨다. TanStack 1.0 일반 채팅에서도 이미 겹치므로, 옮기기 전에 21개를 한 번 본다.
 - interrupt는 지금의 `chat_interrupts` 모양으로 만든다. 재개 handshake(새 runId, `parentRunId`, `resume`)를 유지한다.
@@ -281,12 +367,13 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - durable stream은 지금과 같은 AG-UI chunk와 event key를 쓴다.
 - 서브에이전트, compaction, model handoff를 새 loop로 옮긴다.
 - 완료 기준:
-  - 0단계 golden과 같은 행이 나온다.
+  - 0단계 golden과 같은 행이 나온다. 예외는 한 step에 승인 호출과 다른 호출이 섞인 시나리오다. 승인 규칙이 바뀌어 앞 호출이 interrupt 전에 실행되므로, 그 차이만 있는지 확인하고 golden을 새 규칙으로 고친다.
   - migration한 로컬 DB 사본의 모든 세션에서, history page의 화면 메시지가 지금 코드가 원본에서 만드는 것과 같다.
+  - scheduler 규칙을 테스트로 둔다: 읽기끼리 동시 실행, 쓰기 전후 순서, 쓰기는 완전한 finish 뒤에 시작, 승인 대기 중 앞 호출 실행, 재개 run은 결과 없는 호출만 실행. 타입으로 확인할 수 없는 순서다.
 
 ### 5. Goal 실행
 
-결정: decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)". 이 단계는 TanStack 위에서 전환보다 먼저 할 수도 있다("열린 항목" 참고).
+결정: decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)".
 
 - Goal worker와 owner RPC를 지운다. Goal loop는 4단계 loop를 owner 프로세스에서 그대로 쓴다. 일반 채팅과 다른 점은 아래 넷뿐이다.
   - bound run 기록과 durable 실행(`GoalExecution`)
@@ -342,7 +429,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
      - 진입점: 본 채팅, BTW, 서브에이전트, Goal, ACP, MCP, 단발 호출. Goal은 5단계에서 owner loop로 옮겼으므로 본 채팅과 같이 바뀐다.
      - API payload가 바뀌어 기존 `useChat`으로는 확인할 수 없으므로, backend와 client를 함께 바꾼다.
   2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목.
-- 검사: golden, 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
+- 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 
 ## 이번에 하지 않는 것
@@ -352,20 +439,93 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 도구 하나 단위의 복구. 복구 단위는 Goal의 bound run이다(decisions.md 2026-10-26).
 - 저장 메시지 구조를 `Prompt`로 바꾸는 데이터 변환. migration은 TanStack 메타데이터만 지운다.
 - BTW 선행 시험
+- 결과를 기다리지 않는 도구(셸 등). 전환과 따로 한다("도구 실행 방식").
 
 ## 위험
 
 - 7단계 전환 커밋이 크다. backend, client, migration이 한 커밋에 들어간다. 안전망은 golden DB, 로컬 DB 검사 도구, browser test다.
 - migration은 되돌릴 수 없다. 1단계 검사 도구로 로컬 DB 사본에서 먼저 확인한다.
 - Effect AI는 unstable이다. effect와 provider 패키지를 같은 커밋에 묶는다. effect를 올릴 때는 provider 계약 테스트를 함께 확인한다.
-- 승인 묶음과 interrupt 의미를 앱이 직접 지켜야 한다.
+- 승인 묶음과 interrupt 의미를 앱이 직접 지켜야 한다. 필요한 검증은 아래의 "보안 체크리스트" 절이다.
+- 도구 실행 순서를 앱 scheduler가 정한다. 규칙이 틀리면 같은 파일을 동시에 바꾸거나, 쓰기 뒤의 읽기가 쓰기 전 상태를 읽는다. 규칙은 "도구 실행 방식"에 있고, 4단계 테스트로 고정한다.
 - Goal의 코드 고정과 loop의 프로세스 격리를 잃는다. 업그레이드한 코드가 옛 Goal의 다음 run을 돈다.
-- 쓰기 순서 규칙이 틀리면 같은 파일을 동시에 바꾸거나, 쓰기 뒤의 읽기가 쓰기 전 상태를 읽는다.
 - 겹치는 도구 뒤 hook이 run 상태를 같이 바꾸면 기록이 어긋난다. 4단계에서 21개 middleware를 본다.
+
+## 보안 체크리스트 (전환 시 앱이 떠안는 검증)
+
+전환할 때 앱 코드가 지켜야 하는 검증이다. 위험 절의 "승인 묶음과 interrupt 의미를 앱이 직접 지켜야 한다"의 구체 목록이다. 두 종류가 섞여 있다.
+
+- TanStack이 지금 대신 하는 검증: interrupt 응답 검사, `ask` 모드 내장 도구의 승인, 승인 대기 중 실행 순서. Effect에는 같은 기능이 없거나 동작이 달라서 앱이 새로 만든다.
+- 이미 앱 코드에 있는 검증: 나머지 항목. loop, persistence, Goal 실행, MCP client를 다시 쓰면서 빠뜨리기 쉬운 것들이다.
+
+심볼 위치는 2026-10-25 작업 트리 기준이고, 경로는 `packages/memory-agent/src/` 아래다. 검토할 때 각 파일에서 다시 확인한다. Effect 동작은 설치된 `effect` `844a77b`의 `src/ai/` 소스로 확인했다(2026-10-26).
+
+### 승인과 권한 게이트
+
+- interrupt 응답 검증. 지금은 SDK가 응답 스키마와 승인 인자를 도구 실행 전에 검사한다(`agent/chat.ts`의 resume 처리 주석). Effect 승인 응답은 `approved`와 `reason`뿐이라 이 검사에 해당하는 기능이 없다. 새 루프는 `chat_interrupts.response`를 payload의 `responseSchema`와 1단계의 interrupt 응답 Schema로 실행 직전에 검사한다. 이 검사가 없으면 변조된 응답이 곧 도구 승인이다.
+- Effect approval part 금지. `disableToolCallResolution: true`여도 prompt에 승인된 `tool-approval-request`·`tool-approval-response` 쌍이 있고 결과가 없으면, Effect가 모델 호출 전에 `toolkit.handle`로 그 도구를 실행한다(`effect/ai/LanguageModel.ts`의 `collectToolApprovals`, `executeApprovedToolCalls`). 이 실행은 게이트, repeatGuard, 승인 묶음 규칙을 거치지 않는다. 저장 메시지를 `Prompt`로 바꿀 때 approval part를 만들지 않는다.
+- `ask` 모드 내장 도구 승인. 지금은 TanStack 자체 승인에 맡기고, 게이트는 MCP·delegation 호출만 묻는다(`agent/chat.ts`의 `askEveryCall` 앞 주석). 새 loop가 `tool.needsApproval`을 직접 평가한다. 평가가 실패하면 승인을 요구한다. Effect 내부 판정(`isApprovalNeeded`)은 실패하면 승인 불필요로 처리하므로 따라 하지 않는다.
+- needsApproval 차단. 지금 Goal worker에서는 owner가 승인 없는 실행을 거절한다(`agent/full-loop-execution.ts`의 `toolAuthorize`와 `resumedApproval`, `agent/full-loop-worker.ts`의 owner-tool-grant). worker를 없애도 같은 검사를 새 loop의 실행 직전에 둔다. 승인이 필요한 호출은 이 run이나 parent run의 승인 응답이 있어야 시작한다.
+- 승인 대기 중 실행 순서. 지금의 interrupt는 step 전체를 멈추고, 묶음에 ask가 하나라도 있으면 묶음 전체를 한 번에 묻는다(decisions.md "권한 모드 (2026-09-14)", 근거는 TanStack 재개 단위). 새 loop는 승인 요청을 한 묶음으로 묻되, 승인 대기 호출과 순서가 걸리지 않는 호출은 먼저 실행한다("도구 실행 방식"). 승인을 기다리는 호출과 그 뒤에 순서가 걸리는 호출은 승인 전에 실행하지 않는다. 재개 run은 결과가 기록되지 않은 호출만 실행한다. 이미 실행한 호출을 다시 실행하면 쓰기가 두 번 일어난다.
+- 쓰기 호출은 완전한 finish 뒤에만 시작한다. finish 전에 시작하면 provider 실패로 run이 실패해도 부작용이 남고, 실패한 턴은 history에서 빠져 모델이 그 쓰기를 모른다.
+- 게이트 순서. 지금 순서는 chatState → delivery → projectInstructions → repeatGuard → 게이트다(`agent/chat.ts`의 middleware 조립). repeatGuard가 게이트 앞이라 거절된 반복은 검토·사용자 질의가 없고, 게이트가 도구 실행 전이라 거절 호출은 실행되지 않는다. middleware를 typed hook으로 바꿀 때 이 순서를 명세로 남긴다.
+- permission-review payload의 `askedBy`("review"/"every_call")를 앱 쪽 interrupt에 유지한다. 빠지면 MCP `ask` 모드의 "호출마다 묻는" 구분이 감사 기록에서 사라진다.
+
+### lazy tool 대체
+
+- `toolCallValidation: "deferred"`는 지금 없는 허용면이다. 미등록 도구 이름이 앱 핸들러까지 도달하므로, 미등록 이름은 discovery 요청으로만 해석하고 등록된 도구 이름으로 우회 매핑하지 않는다.
+- 인자가 스키마에 맞지 않으면 지금처럼 모델에 답으로 돌리고 실행으로 넘기지 않는다(`agent/full-loop-execution.ts`의 `answerInvalid`). `failureMode: "return"` 도구는 `Toolkit.handle`이 decode 실패를 결과로 돌려준다. JSON Schema로 만든 MCP `Tool.dynamic`은 검증하지 않으므로 앱이 검사한다.
+
+### Goal 실행 (5단계)
+
+worker를 없애면 owner와 worker 사이의 검사(`agent/full-loop-execution.ts`의 `authorizeRequest`: 관찰된 tool call만 실행, hook 허용 목록, context snapshot 동일성, 미등록 interrupt 거절)는 대상이 사라진다. loop가 owner 안에서 모델 stream을 직접 읽기 때문이다. 남는 검증은 이것이다.
+
+- 장부는 외부 부작용 재생 방지다: `side_effect`·`status`·`fingerprint`, `workflow/run-bindings.ts`의 `previous`·`unresolved` 검사(`run_outcome_uncertain`), `workflow/uncertain-runs.ts`의 확인, `agent/owner-read-recovery.ts`의 receipt SQL. 새 장부 행이 이 SQL에서 지금 도구 행과 같은 뜻이어야 한다.
+- 장부 예약은 실행 전이다. 예약하지 못한 호출은 실행하지 않는다. 장부에 없는 도구는 실행되지 않았다는 규칙이 재시작 뒤 자동 이어가기의 근거다(decisions.md 2026-10-13).
+- 미리 시작하는 실행의 권한 확인. 지금 owner는 `parallelReads`가 미리 시작할 읽기의 권한 사슬을 시작 전에 모두 평가한다(`agent/full-loop-execution.ts`의 `toolAuthorize`). 새 scheduler는 호출마다 자기 권한 사슬을 통과한 뒤에만 시작한다("도구 실행 방식").
+
+### interrupt 재개 handshake
+
+- 모양(새 runId, `parentRunId`, `resume`)만이 아니라 주변 검증을 유지한다(`agent/chat.ts`): 제출된 interruptId 집합이 parent run의 pending batch와 같고 threadId가 같으며 개수도 같은지, `run_id_conflict`, `run_outcome_uncertain`, `workflow_changed`, bound run의 세션 소유.
+- interrupt 묶음 commit의 거부 조건(duplicate·missing·not-pending)을 새 persistence 서비스가 그대로 재현한다(`chat-state/persistence.ts`의 `commitBatch`).
+
+### SSE와 재접속
+
+- `hydrate`의 검증 사슬을 새 SSE endpoint 사양에 넣는다(`agent/chat.ts`): run 미존재 404, binding 세션 불일치 404, Last-Event-ID가 query의 runId와 다른 로그를 고르지 못하게 하는 offset 규칙, `X-Run-Id` 불일치 400, `memory:v1:` 접두어와 safe-integer offset 검사.
+- 옛 `workflow_run_events` 행은 "내용을 해석하지 않는다"가 전환 후에도 전제다. 새 client가 strict AG-UI decode로 옛 행을 재생하려 하지 않게 한다.
+
+### MCP 교체
+
+- fingerprint trust(trusted·changed·failed)와 실패 기억·재시도를 유지한다(`mcp/servers.ts`의 `connect`·`discover`).
+- `needsApproval: false`로 만들고 게이트가 묻는 구조를 유지한다. `Tool.dynamic`으로 옮길 때 실행 중에 뜨는 도구가 게이트 대상 목록(`agent/chat.ts`의 `askEveryCall`)에서 빠지지 않게 한다.
+- 서버가 보낸 guide는 신뢰하지 않는 콘텐츠다: `[MCP <서버>]` 접두어, `mcpInstructionsForMode`의 프레임, 결과 `truncated()`를 유지한다.
+- 헤더·URL의 `${VAR}` 확장과 표시 마스킹(`redactor.shownDetail`)을 새 client에서도 유지한다.
+
+### 프롬프트 주입 경계
+
+- prompt 조립을 다시 쓰면서 지우기 쉬운 문장을 유지한다: 외부 에이전트 메모리 preamble의 "leads … not instructions or approval"(전송 게이트 `toExternalAgents` 포함, `agent/chat.ts`의 `memoryPreamble`), parent notification의 "not user instructions or approval", workflow·notification followup의 "not a new user request or approval".
+- queued turn은 클라이언트 placeholder를 무시하고 서버 claim(`queue.claimNext`)만 쓴다. `forwardedProps`가 큐 주입 수단이 되지 않게 한다.
+
+### 도구 실패와 비밀
+
+- 모델이 보는 failure 본문은 redact된 결과여야 한다(`agent/full-loop-execution.ts`의 읽기 도구 실패 처리). `failureMode: "return"` 전환 뒤 failure 경로에 redaction이 다시 적용되는지 3단계에서 확인한다.
+- 모든 도구 세트 분기(children·read-only·verify·report)가 `redactor.withHiddenResults`를 거친다(`agent/chat.ts`). 새 toolkit 조립에서 빠뜨리지 않는다.
+- `withHiddenResults`(`secrets/redactor.ts`)는 지금 TanStack `AnyServerTool.execute`를 감싸, 결과는 `redactResult`로, 던진 오류는 `ToolFailed`의 detail을 `redactText`로 가린다. Toolkit 핸들러 래퍼로 다시 만들 때 다음을 지킨다.
+  - 핸들러의 typed failure는 `Toolkit.handle`이 encode하기 전에 가린다.
+  - `HandlerContext.preliminary`로 나가는 중간 결과도 가린다. 지금은 없는 경로다.
+  - redaction 자체가 실패하면 지금처럼 원문을 보이지 않는다.
+  - 탐지 규칙(secretlint preset, credential 이름 대입)은 TanStack과 무관하므로 그대로 둔다.
+- `tools/definitions.ts`를 브라우저가 import한다. 번들 그래프에서 permission·secret 내부가 client 번들로 새지 않는지 3단계에서 확인한다.
+
+### 데이터와 절차
+
+- golden DB와 `tools/`의 로컬 DB 검사 도구는 개인 데이터를 다룬다. 행 내용을 stdout에 대량 출력하지 않고, 사본 파일은 저장소 밖에 둔다. "테스트로 커밋하지 않는다"를 도구 동작으로도 지킨다.
+- migration이 쓰는 새 저장 Schema가 history projection의 검증(user·assistant·tool 외 role을 `invalid-transcript`로 거절, `chat-state/history-projection-native.ts`의 `prepared`)과 호환해야 세션이 읽힌다. `publishIfCurrent`의 `messages = ?` 동등 비교(오래된 snapshot 부활 방지)가 새 직렬화 기준으로 다시 성립하는지 1단계에서 확인한다.
+- golden 비교는 정상 경로 동등성이라 보안 회귀를 잡지 못한다. 0단계 시나리오에 부정 케이스를 더한다: 승인 없는 needsApproval 실행 시도, 타 세션 resumeRunId, 미등록 interrupt 응답, deferred로 온 미등록 도구 호출, binding 불일치 재접속. 지금 코드의 거절 응답을 golden으로 고정해 7단계 전환이 이 검증을 회귀 테스트로 상속하게 한다.
 
 ## 대체 결정이 필요한 decisions.md 항목
 
-TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체 결정을 남긴다.
+TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체 결정을 남긴다. "도구 실행 방식"은 권한 모드의 승인 묶음, 서브에이전트의 동시 시작, 도구 성능의 `parallelReads` 규칙을 바꾼다.
 
 - 범위와 구조 (2026-09-15)
 - 하네스 어댑터 조사 범위 (2026-09-30)
@@ -388,6 +548,7 @@ TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체
 - 이미지 첨부 (2026-09-14)
 - MCP 서버 (2026-09-15)
 - 서브에이전트 (2026-09-15)
+- 도구 성능 (2026-09-15)
 - `run_shell`을 셸 스킬로 바꿈 (2026-10-14)
 - 로컬 API와 이벤트 연결 (2026-09-24)
 - 테스트의 고정 대기 줄이기 (2026-09-29)
@@ -412,19 +573,32 @@ Goal worker를 전제로 쓴 항목들이다. 5단계를 구현할 때 "Goal도 
 ## 확인하지 않은 것
 
 - provider 패키지는 받아서 소스만 읽었다. 설치, 타입 검사, 실행은 하지 않았다.
-- `TokenUsage`의 모든 필드를 Effect `Usage`에서 채울 수 있는지.
+  - `@effect/ai-openai-compat`은 2026-10-26에 소스로 확인했다. `toolCallValidation: "deferred"`면 등록되지 않은 tool call을 그대로 돌려주고, JSON Schema dynamic tool의 인자는 검증 없이 넘긴다(`OpenAiLanguageModel.ts`의 `transformToolCallParams`). reasoning은 `reasoningField`(기본 `reasoning_content`)로 다시 보낸다. streaming에서는 `tool-call` part를 `[DONE]`에서 한꺼번에 내보내고, 인자 JSON이 읽히지 않으면 `"deferred"`여도 stream이 실패한다(`makeStreamResponse`).
+- 2026-10-26에 설치된 `effect` `844a77b`로 실행해 확인한 것(저장소 밖 임시 스크립트):
+  - `disableToolCallResolution: true`여도 prompt의 승인된 approval 쌍은 모델 호출 전에 핸들러가 실행된다.
+  - `needsApproval` 함수가 실패하면 자동 해석에서 승인 없이 실행된다.
+  - `failureMode: "return"`에서 인자 decode 실패는 `AiError`(`ToolParameterValidationError`) 모양으로, 핸들러 typed failure는 `failure` schema 모양으로 encode된다.
+  - JSON Schema로 만든 `Tool.dynamic`은 맞지 않는 인자도 그대로 핸들러에 넘긴다.
+  - `disableToolCallResolution: true`의 strict 모드에서는 인자가 틀린 tool call이나 등록되지 않은 이름 하나로 `generateText`·`streamText`가 `AiError`로 실패한다. `"deferred"`면 둘 다 tool call로 돌아온다. 자동 해석 모드는 틀린 인자를 실패 결과로 돌려주지만, 등록되지 않은 이름에는 실패한다.
+  - 자동 해석 모드에서 finish reason이 `length`면 핸들러를 시작하지 않고 실패 결과를 만든다. 해석을 끄면 tool call과 finish만 돌려준다.
+- 2026-10-26에 함께 확인한 것: `@effect/ai-anthropic` 4.0.3의 adaptive thinking schema는 `{ type: "adaptive" }`뿐이다. AG-UI PR #9842(`cafa88b`)·#9852·#9853(`ddcf3f7`)은 모두 open이고, 9842 ← 9852 ← 9853으로 쌓여 있다. #9853에는 승인을 interrupt로 바꾸는 코드가 없다. `@ag-ui/core` 1.0.0의 `Interrupt` 필드는 `id`, `reason`, `message`, `toolCallId`, `responseSchema`, `expiresAt`, `metadata`, `subagentRunId`이고, `RUN_FINISHED.usage`는 배열이다.
+- `TokenUsage`의 모든 필드를 Effect `Usage`에서 채울 수 있는지. TanStack 1.0 타입에는 `cacheWrite1hTokens`, `cost`, `billed`, `providerUsageDetails`처럼 Effect `Usage`에 없는 필드가 있다. 다만 로컬 DB에 저장된 키는 "usage 모양"의 것뿐이다.
 - `@effect/atom-react`는 받아서 export만 봤다. 설치와 실행은 하지 않았다.
+  - 2026-10-26에 확인한 것: peer는 react `>=19.0.0 <20.0.0`, scheduler `>=0.25.0 <0.29.0`, effect `^4.0.3`이고, 설치된 react 19.3.1, scheduler 0.28.0과 맞는다. `HydrationBoundary`와 `useAtom` 계열 hook을 export한다. 6단계에 적은 `Atom.family`, `fn`, `Interrupt`, `pull`, `optimistic`, `optimisticFn`, `withReactivity`, `refresh`, `serializable`은 설치된 `effect/reactivity`의 `Atom`에 모두 있다.
 - 공식 `@ag-ui/client`. 설치되어 있지 않고(`@ag-ui/core` 1.0.0만 간접 의존성으로 있다), 소스도 보지 않았다.
 - `toolCallMetadata`와 tool call `metadata`(`model`, `index`)를 지워도 provider 요청이 같은지. 2단계 완료 기준으로 확인한다.
 - 21개 middleware가 겹치는 도구 뒤 hook을 견디는지. TanStack 1.0 일반 채팅에서 이미 겹치지만 따로 보지 않았다.
 
 ## 열린 항목
 
-- 5단계(Goal 실행)를 전환 전에 TanStack 위에서 먼저 할지, 전환 안에서 할지. 먼저 하면 전환이 옮길 코드가 약 5,000줄 줄고, 0단계 golden도 새 Goal 동작으로 잡는다. 그때까지 Goal worker는 owner 호출을 한 번에 하나씩 보낸다(`841dc1a3`).
-- 쓰기 호출의 순서. 안은 셋이다. 사용자는 셋째 안을 검토하고 있다(2026-10-26).
-  - 쓰기를 앞뒤 호출 모두와 순서를 지키는 장벽으로 둔다. "도구 성능 (2026-09-15)" 규칙과 같다.
+- 호출 사이의 순서. 4단계 scheduler 전에 정한다.
+  - 쓰기를 앞뒤 호출 모두와 순서를 지키는 장벽으로 둔다. "도구 실행 방식"의 지금 규칙이고, decisions.md "도구 성능 (2026-09-15)"과 같다.
   - 쓰기를 도구가 정한 자원 키로 같은 자원끼리만 줄 세운다(`packages/memory-agent/src/concurrency/keyed-limit.ts`의 `keyedSerialLimit`). 키가 없는 쓰기는 장벽으로 둔다. 쓰기 뒤의 읽기가 같은 자원을 읽으면 쓰기를 기다려야 하므로, 읽기 도구에도 키가 필요하다.
-  - 순서를 두지 않는다. 한 턴의 호출은 서로 독립이라고 보고 모두 동시에 돌린다. 순서가 필요하면 모델이 다음 턴으로 나눈다. 지금 TanStack 1.0의 동작이다.
+  - 순서를 두지 않는다. 한 턴의 호출은 서로 독립이라고 보고 모두 동시에 돌린다. 순서가 필요하면 모델이 다음 턴으로 나눈다. 지금 TanStack 1.0의 동작이고, 사용자가 검토 중인 안이다(2026-10-26).
     - 같은 파일 쓰기의 충돌은 쓰기 도구의 기대 sha256 검사가 하나를 실패시킨다(decisions.md "잘못된 성공 거르기 (2026-10-14)"). 셸·코드 실행·MCP는 이런 검사가 없다.
     - 모델이 순서를 기대하지 않도록 도구 설명이나 시스템 프롬프트에 한 턴의 호출은 동시에 돈다고 알린다.
+- (닫힘, 2026-10-26) 5단계를 전환 전에 TanStack 위에서 먼저 할지. 사용자가 전환을 바로 시작하기로 했다. Goal은 5단계에서 옮긴다.
 - (닫힘, 2026-10-26) 옛 Goal 세션을 읽기 전용으로 둘지. Goal worker를 없애므로 옛 Goal 세션도 이어서 진행한다.
+- 결과를 기다리지 않는 도구로 바꿀 대상(셸 등). 전환과 따로 정한다.
+- `source`·`finishReason`·`stopReason`을 우리 필드로 옮길지, 아니면 history 변환 규칙을 바꿀지.
+- `chat_runs.usage`의 새 모양. Effect `Usage`와 AG-UI 1.0 `TokenUsage`(평평한 `inputTokens`, `outputTokens`, `cachedInputTokens`, `cacheWriteInputTokens`, `reasoningTokens`) 중 무엇으로 저장할지. chunk는 AG-UI 모양을 쓴다.
