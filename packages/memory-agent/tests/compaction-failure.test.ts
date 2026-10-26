@@ -48,7 +48,6 @@ describe("Compaction failure boundaries", () => {
       Effect.gen(function* () {
         const defect = new Error("broken tool-result mapping");
         const exit = yield* compactEffect({
-          threadId: "thread",
           messages,
           state,
           sources: lookupSources({

@@ -142,7 +142,6 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMess
     blocks: summaryBlocks(userIndexes(messages).length),
   };
   const result = yield* compactEffect({
-    threadId: "thread",
     messages,
     state,
     sources: {
@@ -150,8 +149,7 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMess
         toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
         nodeText,
       }),
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      retrievalAppendix: () => Promise.resolve(retrieval),
+      retrievalAppendix: () => Effect.succeed(retrieval),
     },
     budget: { compactAt: 1, leaveOutAt: 1_000_000 },
   });

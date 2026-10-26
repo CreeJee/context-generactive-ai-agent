@@ -67,7 +67,6 @@ describe("compact", () => {
           { role: "user", content: "current question" },
         ];
         const result = yield* compactEffect({
-          threadId: "thread",
           messages,
           state: {
             manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -90,7 +89,6 @@ describe("compact", () => {
   it.effect("drops a tool result when compaction has removed its matching tool call", () =>
     Effect.gen(function* () {
       const result = yield* compactEffect({
-        threadId: "thread",
         messages: [
           { role: "assistant", content: "earlier call was compacted" },
           { role: "tool", toolCallId: "orphaned", content: "result without a call" },
@@ -138,7 +136,6 @@ describe("compact", () => {
         { role: "user", content: "continue" },
       ];
       const result = yield* compactEffect({
-        threadId: "thread",
         messages,
         state: fresh,
         sources: noSources,
@@ -180,7 +177,6 @@ describe("compact", () => {
         ];
         const original = structuredClone(messages);
         const result = yield* compactEffect({
-          threadId: "thread",
           messages,
           state: fresh,
           sources: noSources,
@@ -196,59 +192,48 @@ describe("compact", () => {
       }),
   );
 
-  it.effect(
-    "adds bounded retrieval only after compaction omitted content, and continues on failure",
-    () =>
-      Effect.gen(function* () {
-        let appendixCalls = 0;
-        const sources: CompactionSources = {
-          ...lookupSources({
-            toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
-            nodeText: () => null,
+  // Retrieval cannot fail: its type has no error, so the request always goes.
+  it.effect("adds bounded retrieval only after compaction omitted content", () =>
+    Effect.gen(function* () {
+      let appendixCalls = 0;
+      const sources: CompactionSources = {
+        ...lookupSources({
+          toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
+          nodeText: () => null,
+        }),
+        retrievalAppendix: () =>
+          Effect.sync(() => {
+            appendixCalls += 1;
+            return {
+              role: "assistant" as const,
+              content: "[Retrieval appendix]\n- node omitted-node",
+            };
           }),
-          retrievalAppendix: () =>
-            Promise.resolve().then((): ModelMessage => {
-              appendixCalls += 1;
-              return { role: "assistant", content: "[Retrieval appendix]\n- node omitted-node" };
-            }),
-        };
-        const compacted = yield* compactEffect({
-          threadId: "thread",
-          messages: answeredShell,
-          state: fresh,
-          sources,
-          budget: unlimited,
-        });
-        expect(appendixCalls).toBe(1);
-        expect(compacted.messages.at(-2)).toEqual({
-          role: "assistant",
-          content: "[Retrieval appendix]\n- node omitted-node",
-        });
-        expect(compacted.messages.at(-1)).toEqual({ role: "user", content: "current question" });
-        let intactCalls = 0;
-        yield* compactEffect({
-          threadId: "thread",
-          messages: [{ role: "user", content: "uncompacted" }],
-          state: fresh,
-          sources: {
-            ...sources,
-            retrievalAppendix: () => Promise.resolve().then(() => ((intactCalls += 1), null)),
-          },
-          budget: unlimited,
-        });
-        expect(intactCalls).toBe(0);
-        const fallback = yield* compactEffect({
-          threadId: "thread",
-          messages: answeredShell,
-          state: fresh,
-          sources: {
-            ...sources,
-            retrievalAppendix: () => Promise.reject(new Error("search unavailable")),
-          },
-          budget: unlimited,
-        });
-        expect(fallback.messages.at(-1)).toEqual({ role: "user", content: "current question" });
-      }),
+      };
+      const compacted = yield* compactEffect({
+        messages: answeredShell,
+        state: fresh,
+        sources,
+        budget: unlimited,
+      });
+      expect(appendixCalls).toBe(1);
+      expect(compacted.messages.at(-2)).toEqual({
+        role: "assistant",
+        content: "[Retrieval appendix]\n- node omitted-node",
+      });
+      expect(compacted.messages.at(-1)).toEqual({ role: "user", content: "current question" });
+      let intactCalls = 0;
+      yield* compactEffect({
+        messages: [{ role: "user", content: "uncompacted" }],
+        state: fresh,
+        sources: {
+          ...sources,
+          retrievalAppendix: () => Effect.sync(() => ((intactCalls += 1), null)),
+        },
+        budget: unlimited,
+      });
+      expect(intactCalls).toBe(0);
+    }),
   );
 });
 
@@ -312,7 +297,7 @@ describe("compaction middleware", () => {
               nodeText: () => null,
             }),
             retrievalAppendix: () =>
-              Promise.resolve({ role: "assistant" as const, content: "[Retrieval appendix]" }),
+              Effect.succeed({ role: "assistant" as const, content: "[Retrieval appendix]" }),
           },
           unlimited,
         ),

@@ -1,10 +1,10 @@
-import { Function as EffectFunction } from "effect";
+import { Function as EffectFunction, pipe } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
-import { evictOldest } from "@tanstack/ai-compaction";
 import {
   Array as EffectArray,
-  MutableHashMap,
+  HashMap,
+  HashSet,
   MutableHashSet,
   Effect,
   Option,
@@ -16,9 +16,40 @@ import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import type { NodeStoreFailed } from "../memory/nodes.ts";
 
+/** A tool call as a message carries it. */
+export interface ConversationToolCall {
+  readonly id: string;
+  readonly type: "function";
+  readonly function: { readonly name: string; readonly arguments: string };
+}
+
+/**
+ * What compaction reads of a message. The app's stored messages have it, and so do TanStack's
+ * until step 7 of docs/effect-ai-migration.md.
+ */
+export interface ConversationMessage {
+  readonly role: "user" | "assistant" | "tool";
+  readonly id?: string | undefined;
+  readonly content?:
+    | string
+    | null
+    | ReadonlyArray<{ readonly type: string; readonly content?: string }>
+    | undefined;
+  readonly toolCalls?: ReadonlyArray<ConversationToolCall> | undefined;
+  readonly toolCallId?: string | undefined;
+}
+
+/** A message compaction sends in place of others: a summary, a marker, a pointer or leads. */
+export type CompactionMessage =
+  | { readonly role: "user"; readonly content: string }
+  | {
+      readonly role: "assistant";
+      readonly content: string | null;
+      readonly toolCalls?: Array<ConversationToolCall>;
+    };
+
 export const CompactionReason = Schema.TaggedUnion({
   MetadataFailed: {},
-  EvictionFailed: {},
   RetrievalFailed: {},
   HistoryFailed: {},
   MemoryFailed: {},
@@ -70,17 +101,20 @@ export const budgetFor = (contextWindow: number): Budget => ({
 });
 
 /** The text of a message, without images or other parts. */
-export const messageText = (message: ModelMessage) =>
-  Array.isArray(message.content)
-    ? message.content.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("")
-    : (message.content ?? "");
+export const messageText = (message: ConversationMessage) =>
+  isText(message.content)
+    ? message.content
+    : (message.content ?? [])
+        .flatMap((part) => (part.type === "text" ? [part.content ?? ""] : []))
+        .join("");
+const isText = Schema.is(Schema.String);
 
 /**
  * Tokens of a message, roughly: English and code take about four characters a token, Korean and
  * other scripts about one. The default estimate (characters / 4) would let Korean text grow far
  * past the budget before anything is compacted.
  */
-export function estimateTokens(message: ModelMessage): number {
+export function estimateTokens(message: ConversationMessage): number {
   const calls = isTruthy(message.toolCalls?.length) ? JSON.stringify(message.toolCalls) : "";
   let ascii = 0;
   let other = 0;
@@ -91,7 +125,7 @@ export function estimateTokens(message: ModelMessage): number {
   return Math.ceil(ascii / 4) + other;
 }
 
-export const estimateConversation = (messages: readonly ModelMessage[]) =>
+export const estimateConversation = (messages: ReadonlyArray<ConversationMessage>) =>
   messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 
 const clearedPrefix = "[Tool output cleared to save context.";
@@ -104,7 +138,7 @@ export function clearedOutput(nodeId: string | null) {
 }
 
 /** Tool results the model is sent in full. */
-const wholeToolOutputs = (messages: readonly ModelMessage[]) =>
+const wholeToolOutputs = (messages: ReadonlyArray<ConversationMessage>) =>
   messages.filter(
     (message) => message.role === "tool" && !messageText(message).startsWith(clearedPrefix),
   ).length;
@@ -121,29 +155,33 @@ const wholeToolOutputs = (messages: readonly ModelMessage[]) =>
  * answered. Each cleared result names its memory node, so the model can read it again. Null when
  * there is nothing to clear.
  */
-function clearAnswered(
-  messages: readonly ModelMessage[],
+function clearAnswered<M extends ConversationMessage>(
+  messages: ReadonlyArray<M>,
   toolResultId: (toolCallId: string) => string | null,
   keepLatestAnswered: boolean,
-): ModelMessage[] | null {
-  const answered = messages
-    .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
-    .lastIndexOf(true);
-  if (answered < 0) return null;
+): ReadonlyArray<M> | null {
+  const answered = messages.findLastIndex(
+    (message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0,
+  );
+  // Without an answer, nothing before it is cleared.
   const end = keepLatestAnswered
     ? messages.slice(0, answered + 1).findLastIndex((message) => message.role === "user")
     : answered + 1;
-  if (end <= 0) return null;
-  let changed = false;
   const next = messages.map((message, index) => {
-    if (message.role !== "tool" || index >= end || !isTruthy(message.toolCallId)) return message;
-    const cleared = clearedOutput(toolResultId(message.toolCallId));
-    if (message.content === cleared) return message;
-    changed = true;
-    return { ...message, content: cleared };
+    const content =
+      message.role === "tool" && index < end && isTruthy(message.toolCallId)
+        ? clearedOutput(toolResultId(message.toolCallId))
+        : message.content;
+    return content === message.content ? message : { ...message, content };
   });
-  return changed ? next : null;
+  return changed(messages, next) ? next : null;
 }
+
+/** Whether a step of compaction replaced a message. */
+const changed = (
+  before: ReadonlyArray<ConversationMessage>,
+  after: ReadonlyArray<ConversationMessage>,
+) => after.length !== before.length || after.some((message, index) => message !== before[index]);
 
 /** Where `turnSummaries` keeps a session's summaries. */
 export const turnSummariesNamespace = "memory-agent/turn-summaries";
@@ -163,19 +201,21 @@ export const StoredSummaries = Schema.Struct({ blocks: Schema.Array(SummaryBlock
 const decodeSummaries = Schema.decodeUnknownOption(StoredSummaries);
 
 /** Where each user turn of a conversation starts. */
-export const userTurns = (messages: readonly ModelMessage[]) =>
+export const userTurns = (messages: ReadonlyArray<ConversationMessage>) =>
   messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
 
 /**
  * Whether a user message is the turn a node recorded. Memory keeps a turn without a pasted key,
  * so a node with a hidden secret matches whatever the message says.
  */
-const sameTurnBody = (message: ModelMessage | undefined, recorded: string | null) =>
+const sameTurnBody = (message: ConversationMessage | undefined, recorded: string | null) =>
   message?.role === "user" &&
   recorded !== null &&
   (messageText(message) === recorded || recorded.includes("[redacted:"));
 export const sameTurn: {
-  (recorded: string | null): (message: ModelMessage | undefined) => ReturnType<typeof sameTurnBody>;
+  (
+    recorded: string | null,
+  ): (message: ConversationMessage | undefined) => ReturnType<typeof sameTurnBody>;
 } & typeof sameTurnBody = EffectFunction.dual(2, sameTurnBody);
 
 /** The summaries that fit this conversation, oldest first, up to the first that does not. */
@@ -183,40 +223,34 @@ export const linedUp: {
   (
     blocks: readonly SummaryBlock[],
     nodeText: (id: string) => string | null,
-  ): (messages: readonly ModelMessage[]) => ReturnType<typeof linedUpBody>;
+  ): (messages: ReadonlyArray<ConversationMessage>) => ReturnType<typeof linedUpBody>;
 } & typeof linedUpBody = EffectFunction.dual(3, linedUpBody);
 function linedUpBody(
-  messages: readonly ModelMessage[],
+  messages: ReadonlyArray<ConversationMessage>,
   blocks: readonly SummaryBlock[],
   nodeText: (id: string) => string | null,
 ): SummaryBlock[] {
   const turns = userTurns(messages);
-  const fitting: SummaryBlock[] = [];
-  for (const block of blocks) {
-    const previous = fitting.at(-1)?.end ?? 0;
+  // Every block before one that fits fitted too, so the one before it is the previous fitting one.
+  return EffectArray.takeWhile(blocks, (block, index) => {
     const next = turns[block.end];
-    if (block.end <= previous || next === undefined) break;
-    if (!sameTurn(messages[next], nodeText(block.nextTurnNodeId))) break;
-    fitting.push(block);
-  }
-  return fitting;
+    return (
+      block.end > (blocks[index - 1]?.end ?? 0) &&
+      next !== undefined &&
+      sameTurn(messages[next], nodeText(block.nextTurnNodeId))
+    );
+  });
 }
 
 /**
  * Immutable summaries, one message per stored block. Appending a block never rewrites an earlier
  * message, so the provider can keep the KV prefix through the previous block.
  */
-function summaryMessages(blocks: readonly SummaryBlock[]): ModelMessage[] {
-  let start = 0;
-  return blocks.map((block) => {
-    const message: ModelMessage = {
-      role: "assistant",
-      content: `[Summary of user turns ${start + 1}-${block.end}, written afterwards. The turns themselves were left out to save context and are kept in memory. This summary is a lead, not evidence: read the nodes it cites with read_evidence before relying on a point. Only the user's own words are decisions.]\n\n${block.text}`,
-    };
-    start = block.end;
-    return message;
-  });
-}
+const summaryMessages = (blocks: readonly SummaryBlock[]): ReadonlyArray<CompactionMessage> =>
+  blocks.map((block, index) => ({
+    role: "assistant",
+    content: `[Summary of user turns ${(blocks[index - 1]?.end ?? 0) + 1}-${block.end}, written afterwards. The turns themselves were left out to save context and are kept in memory. This summary is a lead, not evidence: read the nodes it cites with read_evidence before relying on a point. Only the user's own words are decisions.]\n\n${block.text}`,
+  }));
 
 /** Where `/compact` records how far it compacted a session's conversation. */
 export const manualCompactionNamespace = "memory-agent/manual-compaction";
@@ -287,10 +321,12 @@ export interface CompactionSources {
     ids: readonly string[],
   ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
   /**
-   * Bounded, variable-tail leads for content this request left out. It must fail closed: compaction
-   * still sends the request when retrieval is unavailable.
+   * Bounded, variable-tail leads for content this request left out. It fails closed: when
+   * retrieval is unavailable it gives none, and compaction still sends the request.
    */
-  readonly retrievalAppendix?: (sent: readonly ModelMessage[]) => Promise<ModelMessage | null>;
+  readonly retrievalAppendix?: (
+    sent: ReadonlyArray<ConversationMessage>,
+  ) => Effect.Effect<CompactionMessage | null>;
 }
 
 /** Sources answered from lookups already in memory, as evaluations and fixtures have them. */
@@ -315,7 +351,7 @@ export const lookupSources = (lookups: {
 };
 
 /** The tool calls these messages answer. */
-export const answeredToolCalls = (messages: readonly ModelMessage[]) =>
+export const answeredToolCalls = (messages: ReadonlyArray<ConversationMessage>) =>
   EffectArray.dedupe(
     messages.flatMap((message) =>
       message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
@@ -328,7 +364,7 @@ export const answeredToolCalls = (messages: readonly ModelMessage[]) =>
  */
 export const memoryLookups = Effect.fnUntraced(function* (
   sources: CompactionSources,
-  messages: readonly ModelMessage[],
+  messages: ReadonlyArray<ConversationMessage>,
   blocks: readonly SummaryBlock[],
 ) {
   const [results, texts] = yield* Effect.all([
@@ -352,37 +388,43 @@ export const memoryLookups = Effect.fnUntraced(function* (
 /** Where dropped messages went, for the model: they are in memory, not gone. */
 const droppedMarker = (count: number) =>
   `[${count} earlier messages of this conversation were left out to save context. They are kept in memory: use find_memory, read_evidence and trace_evidence to recall them.]`;
-const leaveOutOldest = evictOldest({ marker: droppedMarker });
 
 const decodeToolArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
 
 /** Partial historical calls cannot be replayed; keep the stored transcript intact. */
-export function replayableToolHistory(messages: readonly ModelMessage[]): readonly ModelMessage[] {
+export function replayableToolHistory<M extends ConversationMessage>(
+  messages: ReadonlyArray<M>,
+): ReadonlyArray<M> {
   const replayable = messages.map((message) => {
-    if (message.role !== "assistant" || !isTruthy(message.toolCalls?.length)) return message;
-    const toolCalls = message.toolCalls.filter((call) =>
+    const toolCalls = (message.toolCalls ?? []).filter((call) =>
       Option.isSome(decodeToolArguments(call.function.arguments)),
     );
-    return toolCalls.length === message.toolCalls.length ? message : { ...message, toolCalls };
+    return toolCalls.length === (message.toolCalls ?? []).length
+      ? message
+      : { ...message, toolCalls };
   });
   // A result cannot be sent without its replayable matching call.
-  const callIds = MutableHashSet.fromIterable(
-    replayable.flatMap((message) =>
-      message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
-    ),
+  const callIds = HashSet.fromIterable(
+    replayable.flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
   );
   return replayable.filter(
     (message) =>
       message.role !== "tool" ||
       message.toolCallId === undefined ||
-      MutableHashSet.has(callIds, message.toolCallId),
+      HashSet.has(callIds, message.toolCallId),
   );
 }
 
-export interface Compacted {
-  readonly messages: readonly ModelMessage[];
+/** What a request sends so far, and the strongest operation that made it so. */
+interface Sending<M> {
+  readonly sent: ReadonlyArray<M | CompactionMessage>;
+  readonly stage: CompactionStage;
+}
+
+export interface Compacted<M> {
+  readonly messages: ReadonlyArray<M | CompactionMessage>;
   /** The strongest operation applied while preparing this request. */
   readonly stage: CompactionStage;
   /** The user turns sent as their summaries. */
@@ -390,113 +432,176 @@ export interface Compacted {
 }
 
 /**
+ * Stored, validated blocks are monotonic: even a small request keeps earlier turns summarized.
+ * `firstKept` is where the first turn after them starts.
+ */
+const summarized =
+  (summaries: ReadonlyArray<SummaryBlock>, firstKept: number | undefined) =>
+  <M>(sending: Sending<M>): Sending<M> =>
+    summaries.length > 0 && firstKept !== undefined
+      ? {
+          sent: [...summaryMessages(summaries), ...sending.sent.slice(firstKept)],
+          stage: "summarize",
+        }
+      : sending;
+
+/**
+ * Without a ready summary, a one-shot cold hint can still make the next request smaller: the
+ * messages before `firstKept` give way to a pointer back to the saved conversation.
+ */
+const leftOutEarly =
+  (firstKept: number | undefined) =>
+  <M>(sending: Sending<M>): Sending<M> =>
+    firstKept !== undefined && firstKept > 0
+      ? {
+          sent: [
+            { role: "assistant", content: droppedMarker(firstKept) },
+            ...sending.sent.slice(firstKept),
+          ],
+          stage: "leave-out",
+        }
+      : sending;
+
+/**
+ * Results that cannot be replayed are dropped anyway; measured with them, a request whose history
+ * holds large unreplayable output would leave out messages it has room for.
+ */
+const paired = <M extends ConversationMessage>(sending: Sending<M>): Sending<M> => {
+  const sent = replayableToolHistory(sending.sent);
+  return changed(sending.sent, sent)
+    ? { sent, stage: sending.stage === "none" ? "clear-answered" : sending.stage }
+    : sending;
+};
+
+const isToolResult = (message: ConversationMessage) => message.role === "tool";
+
+/**
+ * Where the latest messages that fit in `keep` tokens begin, at least the last one, moved past a
+ * leading tool result so what is kept never starts with a result whose call was left out. As
+ * `evictOldest` of @tanstack/ai-compaction found it.
+ */
+const keptFrom = (messages: ReadonlyArray<ConversationMessage>, keep: number) => {
+  const fitting = EffectArray.takeWhile(
+    EffectArray.scan(
+      EffectArray.reverse(messages),
+      0,
+      (kept, message) => kept + estimateTokens(message),
+    ).slice(1),
+    (kept) => kept <= keep,
+  ).length;
+  const start = Math.min(messages.length - fitting, messages.length - 1);
+  const afterResults = start + EffectArray.takeWhile(messages.slice(start), isToolResult).length;
+  // Only results follow: keep from the call before them.
+  return afterResults < messages.length
+    ? afterResults
+    : Math.max(
+        0,
+        messages.length -
+          EffectArray.takeWhile(EffectArray.reverse(messages), isToolResult).length -
+          1,
+      );
+};
+
+/** Past `leaveOutAt`, the oldest messages give way to a marker and the latest half is kept. */
+const leftOutPast =
+  (leaveOutAt: number) =>
+  <M extends ConversationMessage>(sending: Sending<M>): Sending<M> => {
+    const cut =
+      estimateConversation(sending.sent) > leaveOutAt
+        ? keptFrom(sending.sent, Math.floor(leaveOutAt / 2))
+        : 0;
+    return cut > 0
+      ? {
+          sent: [{ role: "user", content: droppedMarker(cut) }, ...sending.sent.slice(cut)],
+          stage: "leave-out",
+        }
+      : sending;
+  };
+
+/**
+ * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
+ * optional appendix belongs at its variable tail, immediately before the latest user message, so
+ * providers that require user-last requests still accept it.
+ */
+const withAppendix = <M extends ConversationMessage>(
+  sources: CompactionSources,
+  sending: Sending<M>,
+): Effect.Effect<Sending<M>> =>
+  Option.match(
+    Option.filter(Option.fromNullishOr(sources.retrievalAppendix), () => sending.stage !== "none"),
+    {
+      onNone: () => Effect.succeed(sending),
+      onSome: (retrieve) =>
+        Effect.map(retrieve(sending.sent), (appendix) => {
+          const lastUser = sending.sent.findLastIndex((message) => message.role === "user");
+          return appendix === null
+            ? sending
+            : {
+                ...sending,
+                sent:
+                  lastUser < 0
+                    ? [...sending.sent, appendix]
+                    : [
+                        ...sending.sent.slice(0, lastUser),
+                        appendix,
+                        ...sending.sent.slice(lastUser),
+                      ],
+              };
+        }),
+    },
+  );
+
+/**
  * The conversation as the model is sent it. Answered tool outputs become pointers after a run,
  * and validated older summary blocks replace raw turns regardless of conversation size. Past
  * `leaveOutAt` the oldest messages are left out. The saved conversation is never changed.
  */
-export const compactEffect = Effect.fnUntraced(function* (options: {
-  readonly threadId: string;
-  readonly messages: readonly ModelMessage[];
+export const compactEffect = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
+  readonly messages: ReadonlyArray<M>;
   readonly state: CompactionState;
   readonly sources: CompactionSources;
   readonly budget: Budget;
   readonly early?: boolean;
-}) {
-  const { threadId, messages, state, sources, budget, early = false } = options;
+}): Effect.fn.Return<Compacted<M>, CompactionFailed> {
+  const { messages, state, sources, budget, early = false } = options;
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
-  let sent = messages;
-  let stage: CompactionStage = "none";
   const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.blocks);
+  const turns = userTurns(messages);
+  const summaries = linedUp(messages, state.blocks, nodeText);
+  const summarizedTurns = summaries.at(-1)?.end ?? 0;
+
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
     toolResultId,
     false,
   );
-  if (clearedByHand !== null) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
+  const byHand =
+    clearedByHand === null
+      ? messages
+      : [...clearedByHand, ...messages.slice(manual.clearedThrough)];
   // An answered run's tool payload is cleared once the run after it has answered too. This
   // transition happens once; clearAnswered leaves pointers unchanged and never touches the run
   // still in progress.
-  const cleared = clearAnswered(sent, toolResultId, true);
-  if (cleared !== null) sent = cleared;
-  if (clearedByHand !== null || cleared !== null) stage = "clear-answered";
-
-  // Stored, validated blocks are monotonic: even a small request keeps earlier turns summarized.
-  // The previous 25% gate could not change the chosen blocks: through always started at the end
-  // of fitting, so filtering fitting by through always returned every validated block.
-  const turns = userTurns(messages);
-  const summaries = linedUp(messages, state.blocks, nodeText);
-  const summarizedTurns = summaries.at(-1)?.end ?? 0;
-  const firstKept = turns[summarizedTurns];
-  if (summarizedTurns > 0 && firstKept !== undefined) {
-    sent = [...summaryMessages(summaries), ...sent.slice(firstKept)];
-    stage = "summarize";
-  }
-
-  // Without a ready summary, a one-shot cold hint can still make the next request smaller.
-  // Leave the latest two complete user turns intact and point back to the saved conversation.
-  if (early && summarizedTurns === 0 && turns.length > recentRawUserTurns) {
-    const firstKeptTurn = turns[turns.length - recentRawUserTurns];
-    if (firstKeptTurn !== undefined && firstKeptTurn > 0) {
-      sent = [
-        { role: "assistant", content: droppedMarker(firstKeptTurn) },
-        ...sent.slice(firstKeptTurn),
-      ];
-      stage = "leave-out";
-    }
-  }
-
-  // Results that cannot be replayed are dropped anyway; measured with them, a request whose
-  // history holds large unreplayable output would leave out messages it has room for.
-  const pair = () => {
-    const paired = replayableToolHistory(sent);
-    if (paired.length !== sent.length || paired.some((message, index) => message !== sent[index])) {
-      sent = paired;
-      if (stage === "none") stage = "clear-answered";
-    }
+  const cleared = clearAnswered(byHand, toolResultId, true);
+  const answeredCleared: Sending<M> = {
+    sent: cleared ?? byHand,
+    stage: clearedByHand !== null || cleared !== null ? "clear-answered" : "none",
   };
-  pair();
-  if (estimateConversation(sent) > budget.leaveOutAt) {
-    const leftOut = yield* compactionPromise({
-      operation: "prepare-before",
-      reason: "EvictionFailed",
-      evaluate: () =>
-        Promise.resolve(
-          // Leaving messages out makes no model call, so it has no usage to report.
-          leaveOutOldest(sent, {
-            maxTokens: budget.leaveOutAt,
-            estimate: estimateTokens,
-            addUsage: EffectFunction.constVoid,
-            threadId,
-          }),
-        ),
-    });
-    if (isTruthy(leftOut)) {
-      sent = leftOut;
-      stage = "leave-out";
-    }
-  }
-  // Do not perturb an intact prefix with retrieval. Once this request did omit original content,
-  // an optional appendix belongs at its variable tail, immediately before the latest user message,
-  // so providers that require user-last requests still accept it. Retrieval is deliberately best-effort.
-  if (stage !== "none" && sources.retrievalAppendix !== undefined) {
-    const retrieve = sources.retrievalAppendix;
-    const appendix = yield* compactionPromise({
-      operation: "prepare-before",
-      reason: "RetrievalFailed",
-      evaluate: () => retrieve(sent),
-    }).pipe(Effect.catchReason("CompactionFailed", "RetrievalFailed", () => Effect.succeed(null)));
-    if (isTruthy(appendix)) {
-      const lastUser = sent.findLastIndex((message) => message.role === "user");
-      sent =
-        lastUser < 0
-          ? [...sent, appendix]
-          : [...sent.slice(0, lastUser), appendix, ...sent.slice(lastUser)];
-    }
-  }
-
+  const prepared = pipe(
+    answeredCleared,
+    summarized(summaries, turns[summarizedTurns]),
+    // The latest two complete user turns stay intact.
+    leftOutEarly(
+      early && summarizedTurns === 0 && turns.length > recentRawUserTurns
+        ? turns[turns.length - recentRawUserTurns]
+        : undefined,
+    ),
+    paired,
+    leftOutPast(budget.leaveOutAt),
+  );
   // Leaving out the oldest messages can split a call from its result.
-  pair();
+  const { sent, stage } = paired(yield* withAppendix(sources, prepared));
   return { messages: sent, stage, summarizedTurns };
 });
 
@@ -545,102 +650,107 @@ const largeReportResult = Schema.fromJsonString(
   }),
 );
 
+const preview = (text: string, length = 800) =>
+  text.length <= length
+    ? text
+    : `${text.slice(0, Math.ceil(length / 2))}… (${text.length - length} omitted characters; full result available by ID) …${text.slice(-Math.floor(length / 2))}`;
+
+const shellPreview = (content: string) =>
+  Option.map(Schema.decodeOption(largeShellResult)(content), (result) => ({
+    // The command is already present in the tool call. Avoid echoing it (and the shell path)
+    // on every model request; the recorded original remains available by ID.
+    status: result.status,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    durationMs: result.durationMs,
+    stdoutTruncated: result.stdoutTruncated,
+    stderrTruncated: result.stderrTruncated,
+    // Successful commands mainly need their outcome; failures retain more diagnostics.
+    stdout: preview(result.stdout, result.status === "succeeded" ? 600 : 1_000),
+    stderr: preview(result.stderr, result.status === "succeeded" ? 600 : 1_500),
+  }));
+
+const reportPreview = (content: string) =>
+  Option.map(Schema.decodeOption(largeReportResult)(content), (result) => ({
+    ...result,
+    answer: preview(result.answer, 1_200),
+    error: result.error === null ? null : preview(result.error, 1_500),
+  }));
+
+/** The tools whose large results are sent as previews. */
+const PreviewedTool = Schema.Literals([
+  "run_skill",
+  "run_shell",
+  "list_files",
+  "search_files",
+  "get_subagent_reports",
+  "get_subagent_report",
+]);
+
+/** How each previewed tool's result is shortened, or none when it does not have its shape. */
+const previews: Record<typeof PreviewedTool.Type, (content: string) => Option.Option<object>> = {
+  run_skill: shellPreview,
+  // run_shell and get_subagent_report are in history recorded before their replacements.
+  run_shell: shellPreview,
+  list_files: (content) =>
+    Option.map(Schema.decodeOption(largeListResult)(content), (result) => ({
+      ...result,
+      paths: result.paths.slice(0, 20),
+      shown: Math.min(20, result.paths.length),
+    })),
+  search_files: (content) =>
+    Option.map(Schema.decodeOption(largeSearchResult)(content), (result) => ({
+      ...result,
+      matches: result.matches.slice(0, 8).map((match) => ({
+        ...match,
+        text: preview(match.text, 180),
+      })),
+      shown: Math.min(8, result.matches.length),
+      skipped: result.skipped.slice(0, 5),
+    })),
+  get_subagent_reports: reportPreview,
+  get_subagent_report: reportPreview,
+};
+
 /** Purpose-specific provider previews for recorded results; original history stays unchanged. */
 export const lightweightToolResults: {
   (
     toolResultId: (toolCallId: string) => string | null,
-  ): (messages: readonly ModelMessage[]) => ReturnType<typeof lightweightToolResultsBody>;
+  ): <M extends ConversationMessage>(
+    messages: ReadonlyArray<M>,
+  ) => ReturnType<typeof lightweightToolResultsBody<M>>;
 } & typeof lightweightToolResultsBody = EffectFunction.dual(2, lightweightToolResultsBody);
-function lightweightToolResultsBody(
-  messages: readonly ModelMessage[],
+function lightweightToolResultsBody<M extends ConversationMessage>(
+  messages: ReadonlyArray<M>,
   toolResultId: (toolCallId: string) => string | null,
-): readonly ModelMessage[] {
-  const names = MutableHashMap.fromIterable(
+): ReadonlyArray<M> {
+  const names = HashMap.fromIterable(
     messages.flatMap((message) =>
-      message.role === "assistant"
-        ? (message.toolCalls ?? []).map((call) => [call.id, call.function.name] as const)
-        : [],
+      (message.toolCalls ?? []).map((call) => [call.id, call.function.name] as const),
     ),
   );
-  return messages.map((message) => {
-    if (
-      message.role !== "tool" ||
-      !isTruthy(message.toolCallId) ||
-      !Schema.is(Schema.String)(message.content)
-    )
-      return message;
-    const name = Option.getOrUndefined(MutableHashMap.get(names, message.toolCallId));
-    if (
-      !isTruthy(name) ||
-      // run_shell and get_subagent_report are in history recorded before their replacements.
-      ![
-        "run_skill",
-        "run_shell",
-        "list_files",
-        "search_files",
-        "get_subagent_reports",
-        "get_subagent_report",
-      ].includes(name)
-    )
-      return message;
-    const preview = (text: string, length = 800) => {
-      if (text.length <= length) return text;
-      const head = Math.ceil(length / 2);
-      return `${text.slice(0, head)}… (${text.length - length} omitted characters; full result available by ID) …${text.slice(-Math.floor(length / 2))}`;
-    };
-    let summary;
-    if (name === "run_skill" || name === "run_shell") {
-      const result = Option.getOrUndefined(Schema.decodeOption(largeShellResult)(message.content));
-      if (!isTruthy(result)) return message;
-      summary = {
-        // The command is already present in the tool call. Avoid echoing it (and the shell path)
-        // on every model request; the recorded original remains available by ID.
-        status: result.status,
-        exitCode: result.exitCode,
-        signal: result.signal,
-        durationMs: result.durationMs,
-        stdoutTruncated: result.stdoutTruncated,
-        stderrTruncated: result.stderrTruncated,
-        // Successful commands mainly need their outcome; failures retain more diagnostics.
-        stdout: preview(result.stdout, result.status === "succeeded" ? 600 : 1_000),
-        stderr: preview(result.stderr, result.status === "succeeded" ? 600 : 1_500),
-      };
-    } else if (name === "list_files") {
-      const result = Option.getOrUndefined(Schema.decodeOption(largeListResult)(message.content));
-      if (!isTruthy(result)) return message;
-      summary = {
-        ...result,
-        paths: result.paths.slice(0, 20),
-        shown: Math.min(20, result.paths.length),
-      };
-    } else if (name === "search_files") {
-      const result = Option.getOrUndefined(Schema.decodeOption(largeSearchResult)(message.content));
-      if (!isTruthy(result)) return message;
-      summary = {
-        ...result,
-        matches: result.matches.slice(0, 8).map((match) => ({
-          ...match,
-          text: preview(match.text, 180),
-        })),
-        shown: Math.min(8, result.matches.length),
-        skipped: result.skipped.slice(0, 5),
-      };
-    } else {
-      const result = Option.getOrUndefined(Schema.decodeOption(largeReportResult)(message.content));
-      if (!isTruthy(result)) return message;
-      summary = {
-        ...result,
-        answer: preview(result.answer, 1_200),
-        error: result.error === null ? null : preview(result.error, 1_500),
-      };
-    }
-    const serialized = JSON.stringify(summary);
-    if (serialized.length >= message.content.length) return message;
-    const nodeId = toolResultId(message.toolCallId);
-    if (!isTruthy(nodeId)) return message; // Never promise an ID that has not been recorded.
-    const shortened = `[${name} preview; full result: read_tool_result ID ${nodeId}, page by offset. Check omitted entries before relying on them.]\n${serialized}`;
-    return shortened.length < message.content.length ? { ...message, content: shortened } : message;
-  });
+  const shortened = (message: M) =>
+    Option.gen(function* () {
+      const toolCallId = yield* Option.fromNullishOr(
+        message.role === "tool" ? message.toolCallId : undefined,
+      );
+      const content = yield* Option.liftPredicate(message.content, isText);
+      const name = yield* Option.filter(HashMap.get(names, toolCallId), Schema.is(PreviewedTool));
+      const serialized = JSON.stringify(yield* previews[name](content));
+      // Never promise an ID that has not been recorded.
+      const nodeId = yield* Option.liftPredicate(toolResultId(toolCallId), isTruthy);
+      const text = `[${name} preview; full result: read_tool_result ID ${nodeId}, page by offset. Check omitted entries before relying on them.]\n${serialized}`;
+      return yield* Option.liftPredicate(
+        text,
+        () => serialized.length < content.length && text.length < content.length,
+      );
+    });
+  return messages.map((message) =>
+    Option.match(shortened(message), {
+      onNone: () => message,
+      onSome: (content) => ({ ...message, content }),
+    }),
+  );
 }
 
 /**
@@ -727,7 +837,6 @@ function compactionBody(
             : 0;
           const restoredContext = restored?.[0];
           const { messages, stage } = yield* compactEffect({
-            threadId: ctx.threadId,
             messages: isTruthy(restored) ? restored.slice(1) : config.messages,
             state: isTruthy(restored)
               ? {
@@ -833,7 +942,7 @@ const compactByHandBody = <E>(
 ): Effect.Effect<CompactResult, CompactionFailed | E> =>
   Effect.gen(function* () {
     const initial = yield* compactionStateEffect({ metadata, threadId });
-    const before = yield* compactEffect({ threadId, messages, state: initial, sources, budget });
+    const before = yield* compactEffect({ messages, state: initial, sources, budget });
     const outcome = yield* summarize();
     const state = yield* compactionStateEffect({ metadata, threadId });
     const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
@@ -850,7 +959,6 @@ const compactByHandBody = <E>(
       evaluate: () => metadata.set(manualCompactionNamespace, threadId, manual),
     });
     const after = yield* compactEffect({
-      threadId,
       messages,
       state: { ...state, manual },
       sources,

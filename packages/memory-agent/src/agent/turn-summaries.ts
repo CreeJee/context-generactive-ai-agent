@@ -165,7 +165,6 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         const runtime = yield* active.runtime(selection);
         const threshold = (runtime.contextWindow(selection.model) * (yield* startPercent)) / 100;
         const unsummarized = yield* compactEffect({
-          threadId: sessionId,
           messages,
           state: { manual: state.manual, blocks: [] },
           sources,
