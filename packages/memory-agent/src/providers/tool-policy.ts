@@ -25,6 +25,13 @@ import {
   type ProviderToolVendor,
 } from "./tool-capabilities.ts";
 import { ProviderToolId, type ProviderToolKind } from "./provider-tool-id.ts";
+import {
+  ProviderToolConfig,
+  acceptsConfig,
+  factoryArguments,
+  providerTools,
+} from "./provider-tools.ts";
+import type { Tool } from "effect/ai";
 
 export type ProviderToolRisk = "read_only" | "elevated" | "high";
 export type ProviderToolApprovalState = "not_requested" | "granted" | "denied" | "cancelled";
@@ -705,20 +712,21 @@ export class ProviderToolPolicy extends Context.Service<
 type InstalledDescriptor = (typeof providerToolDescriptors)[number];
 type DescriptorFor<Id extends ProviderToolId> = Extract<InstalledDescriptor, { readonly id: Id }>;
 type FactoryFor<Id extends ProviderToolId> = DescriptorFor<Id>["extension"]["factory"];
-type FactoryRequestFor<Descriptor extends InstalledDescriptor> =
-  Descriptor extends InstalledDescriptor
-    ? Readonly<{
-        id: Descriptor["id"];
-        args: Readonly<Parameters<Descriptor["extension"]["factory"]>>;
-      }>
-    : never;
 
-/** Exact provider factory arguments correlated with each provider-qualified tool id. */
-export type ProviderToolFactoryRequest = FactoryRequestFor<InstalledDescriptor>;
+/** A provider tool asked for, with its configuration (`acceptsConfig` checks it). */
+export const ProviderToolRequest = Schema.Struct({
+  id: ProviderToolId,
+  config: ProviderToolConfig,
+});
+export type ProviderToolRequest = typeof ProviderToolRequest.Type;
+
 export interface ComposedProviderTool<Id extends ProviderToolId = ProviderToolId> {
   readonly id: Id;
   readonly descriptor: DescriptorFor<Id>;
+  /** The tool for TanStack's loop, which goes in docs/effect-ai-migration.md step 7. */
   readonly tool: Awaited<ReturnType<FactoryFor<Id>>>;
+  /** The same tool for the Effect AI loop. */
+  readonly modelTool: Tool.Any;
 }
 export class ProviderToolNotExposed extends Schema.TaggedError<ProviderToolNotExposed>()(
   "ProviderToolNotExposed",
@@ -1027,7 +1035,7 @@ const runtimeEnvelope = <Raw>(
 export interface ProviderToolRuntimeApi {
   readonly compose: (
     policy: ProviderToolPolicyContext,
-    requests?: readonly ProviderToolFactoryRequest[],
+    requests?: readonly ProviderToolRequest[],
   ) => Effect.Effect<
     readonly ComposedProviderTool[],
     | ProviderToolPolicyFailure
@@ -1039,145 +1047,21 @@ export interface ProviderToolRuntimeApi {
     request: ProviderToolExecutionRequest<Raw>,
   ) => Effect.Effect<ProviderToolResultEnvelope<Raw | undefined>, ProviderToolRuntimeFailure>;
 }
-/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- This is the runtime parsing boundary for opaque provider factory option envelopes. */
-type ProviderFactoryValidator = (args: readonly unknown[]) => boolean;
-const plainObject = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  objectRecord(value);
-const hasOnlyKeys = (value: unknown, allowed: readonly string[]): boolean => {
-  const record = plainObject(value);
-  return record !== undefined && Object.keys(record).every((key) => allowed.includes(key));
-};
-const optionalConfig =
-  (allowed: readonly string[], discriminator?: string): ProviderFactoryValidator =>
-  (args) =>
-    args.length <= 1 &&
-    (args.length === 0 ||
-      (hasOnlyKeys(args[0], allowed) &&
-        (discriminator === undefined || plainObject(args[0])?.type === discriminator)));
-const requiredConfig =
-  (
-    allowed: readonly string[],
-    discriminator?: string | ((value: unknown) => boolean),
-  ): ProviderFactoryValidator =>
-  (args) => {
-    if (args.length !== 1 || !hasOnlyKeys(args[0], allowed)) return false;
-    if (discriminator === undefined) return true;
-    const type = plainObject(args[0])?.type;
-    return typeof discriminator === "string" ? type === discriminator : discriminator(type);
-  };
-const versioned = (prefix: string) => (value: unknown) =>
-  typeof value === "string" && value.startsWith(`${prefix}_`);
-const noArgs: ProviderFactoryValidator = (args) => args.length === 0;
-const openAIWebKeys = [
-  "type",
-  "external_web_access",
-  "filters",
-  "search_context_size",
-  "user_location",
-];
-const providerFactoryValidators = {
-  "openai:web_search": requiredConfig(openAIWebKeys, "web_search"),
-  "openai:web_search_preview": requiredConfig(
-    ["type", "search_context_size", "user_location"],
-    "web_search_preview",
-  ),
-  "openai:file_search": requiredConfig(
-    ["type", "vector_store_ids", "filters", "max_num_results", "ranking_options"],
-    "file_search",
-  ),
-  "openai:image_generation": requiredConfig([
-    "action",
-    "background",
-    "input_fidelity",
-    "input_image_mask",
-    "model",
-    "moderation",
-    "output_compression",
-    "output_format",
-    "partial_images",
-    "quality",
-    "size",
-  ]),
-  "openai:code_interpreter": requiredConfig(["type", "container"], "code_interpreter"),
-  "openai:mcp": requiredConfig(
-    [
-      "type",
-      "server_label",
-      "server_url",
-      "connector_id",
-      "authorization",
-      "headers",
-      "allowed_tools",
-      "require_approval",
-      "server_description",
-    ],
-    "mcp",
-  ),
-  "openai:computer_use": requiredConfig(
-    ["type", "display_width", "display_height", "environment"],
-    "computer_use_preview",
-  ),
-  "openai:local_shell": noArgs,
-  "openai:shell": optionalConfig(["type", "environment"], "shell"),
-  "openai:apply_patch": noArgs,
-  "openai:custom": requiredConfig(
-    ["type", "name", "allowed_callers", "defer_loading", "description", "format"],
-    "custom",
-  ),
-  "anthropic:web_search": requiredConfig(
-    ["type", "name", "max_uses", "allowed_domains", "blocked_domains", "user_location"],
-    versioned("web_search"),
-  ),
-  "anthropic:web_fetch": optionalConfig(
-    [
-      "type",
-      "name",
-      "max_uses",
-      "allowed_domains",
-      "blocked_domains",
-      "citations",
-      "max_content_tokens",
-    ],
-    "web_fetch_20250910",
-  ),
-  "anthropic:code_execution": (args) =>
-    args.length >= 1 &&
-    args.length <= 2 &&
-    hasOnlyKeys(args[0], ["type", "name"]) &&
-    versioned("code_execution")(plainObject(args[0])?.type) &&
-    (args.length === 1 || hasOnlyKeys(args[1], ["skills"])),
-  "anthropic:computer_use": requiredConfig(
-    ["type", "name", "display_width_px", "display_height_px", "display_number", "enable_zoom"],
-    versioned("computer"),
-  ),
-  "anthropic:bash": requiredConfig(["type", "name"], versioned("bash")),
-  "anthropic:text_editor": requiredConfig(
-    ["type", "name", "max_characters"],
-    versioned("text_editor"),
-  ),
-  "anthropic:memory": optionalConfig(["type", "name"], "memory_20250818"),
-} satisfies Record<ProviderToolId, ProviderFactoryValidator>;
-/** Kept public for inventory completeness tests; validators themselves remain an implementation detail. */
-// SAFETY: `satisfies Record<ProviderToolId, ...>` above proves every own key is a ProviderToolId.
-export const providerToolFactoryValidatorIds = Object.freeze(
-  Object.keys(providerFactoryValidators).toSorted() as readonly ProviderToolId[],
-);
-const validateProviderFactoryArgs = (id: ProviderToolId, args: readonly unknown[]) =>
-  providerFactoryValidators[id](args);
-/* oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type */
+const isProviderToolRequest = Schema.is(ProviderToolRequest);
+const requestKeys = HashSet.fromIterable(["id", "config"]);
 
-/* oxlint-disable anti-slop/no-unknown-parameters -- This private erased bridge dispatches requests already checked by the public discriminated factory union. */
+/** TanStack's factory for the tool, until its loop goes (docs/effect-ai-migration.md step 7). */
 const invokeProviderFactory = (
   descriptor: AnyProviderToolDescriptor,
-  args: readonly unknown[],
+  args: ReadonlyArray<ProviderToolConfig>,
 ): object | Promise<object> => {
-  // SAFETY: compose correlates descriptor and args by the public ProviderToolFactoryRequest id union.
+  // SAFETY: compose gets the descriptor by the request's id, and `acceptsConfig` checked the
+  // configuration that id's factory takes.
   const factory = descriptor.extension.factory as (
-    ...values: readonly unknown[]
+    ...values: ReadonlyArray<ProviderToolConfig>
   ) => object | Promise<object>;
   return factory(...args);
 };
-/* oxlint-enable anti-slop/no-unknown-parameters */
 export const makeProviderToolRuntime: {
   (
     policyService: ProviderToolPolicy["Service"],
@@ -1194,50 +1078,60 @@ function makeProviderToolRuntimeBody(
       Effect.gen(function* () {
         const exposed = yield* policyService.expose(context);
         const allowed = HashSet.fromIterable(exposed.tools.map((tool) => tool.id));
-        const output: ComposedProviderTool[] = [];
-        for (const request of [...requests].toSorted((a, b) => a.id.localeCompare(b.id))) {
-          const requestKeys = Object.keys(request);
-          if (
-            requestKeys.some((key) => key !== "id" && key !== "args") ||
-            !Array.isArray(request.args)
-          )
-            return yield* ProviderToolFactoryOptionsFailure.make({
-              toolId: String(request.id),
-              reason: "invalid_request",
-            });
-          if (!request.id.startsWith(`${context.provider}:`))
-            return yield* ProviderToolFactoryOptionsFailure.make({
-              toolId: request.id,
-              reason: "provider_mismatch",
-            });
-          if (!validateProviderFactoryArgs(request.id, request.args))
-            return yield* ProviderToolOptionsViolation.make({
-              toolId: request.id,
-              reason: "invalid_factory_options",
-            });
-          if (!HashSet.has(allowed, request.id))
-            return yield* ProviderToolNotExposed.make({
-              toolId: request.id,
-              provider: context.provider,
-              model: context.model,
-            });
-          const descriptor = yield* registry.get(request.id).pipe(
-            Effect.mapError(() =>
-              ProviderToolNotExposed.make({
-                toolId: request.id,
-                provider: context.provider,
-                model: context.model,
-              }),
+        const notExposed = (toolId: string) =>
+          ProviderToolNotExposed.make({ toolId, provider: context.provider, model: context.model });
+        const composed = (request: ProviderToolRequest) =>
+          Effect.succeed(request).pipe(
+            Effect.filterOrFail(
+              (candidate) =>
+                isProviderToolRequest(candidate) &&
+                Object.keys(candidate).every((key) => HashSet.has(requestKeys, key)),
+              () =>
+                ProviderToolFactoryOptionsFailure.make({
+                  toolId: String(request.id),
+                  reason: "invalid_request",
+                }),
+            ),
+            Effect.filterOrFail(
+              ({ id }) => id.startsWith(`${context.provider}:`),
+              ({ id }) =>
+                ProviderToolFactoryOptionsFailure.make({ toolId: id, reason: "provider_mismatch" }),
+            ),
+            Effect.filterOrFail(acceptsConfig, ({ id }) =>
+              ProviderToolOptionsViolation.make({ toolId: id, reason: "invalid_factory_options" }),
+            ),
+            Effect.filterOrFail(
+              ({ id }) => HashSet.has(allowed, id),
+              ({ id }) => notExposed(id),
+            ),
+            Effect.andThen(
+              registry.get(request.id).pipe(Effect.mapError(() => notExposed(request.id))),
+            ),
+            Effect.flatMap((descriptor) =>
+              Effect.tryPromise({
+                try: () =>
+                  Promise.resolve(invokeProviderFactory(descriptor, factoryArguments(request))),
+                catch: (cause) => ProviderToolFactoryFailure.make({ toolId: request.id, cause }),
+              }).pipe(
+                // SAFETY: registry.get returned the same provider-qualified id carried by the request.
+                Effect.map(
+                  (tool) =>
+                    ({
+                      id: request.id,
+                      descriptor,
+                      tool,
+                      modelTool: providerTools[request.id](request.config),
+                    }) as ComposedProviderTool,
+                ),
+              ),
             ),
           );
-          const tool = yield* Effect.tryPromise({
-            try: () => Promise.resolve(invokeProviderFactory(descriptor, request.args)),
-            catch: (cause) => ProviderToolFactoryFailure.make({ toolId: request.id, cause }),
-          });
-          // SAFETY: registry.get returned the same provider-qualified id carried by the request.
-          output.push({ id: request.id, descriptor, tool } as ComposedProviderTool);
-        }
-        return Object.freeze(output);
+        return Object.freeze(
+          yield* Effect.forEach(
+            requests.toSorted((left, right) => left.id.localeCompare(right.id)),
+            composed,
+          ),
+        );
       }),
     execute: (request) =>
       Effect.gen(function* () {

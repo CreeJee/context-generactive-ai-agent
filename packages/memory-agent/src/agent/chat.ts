@@ -2301,7 +2301,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     },
                     route: `chat:${selection.provider}:${selection.model}`,
                   },
-                  [{ id: "openai:image_generation", args: [{}] }],
+                  [{ id: "openai:image_generation", config: {} }],
                 )
                 .pipe(
                   Effect.asSome,

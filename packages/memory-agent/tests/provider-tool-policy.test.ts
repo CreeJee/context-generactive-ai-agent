@@ -1,8 +1,9 @@
 import { withTestPlatform } from "./support/platform.ts";
 import { it as effectTest } from "@effect/vitest";
 import { Deferred, Effect, Result, Fiber, FileSystem, Layer, Path } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
+import { toolRequestDifferences } from "./support/requests.ts";
 import {
   ProviderToolCapabilityRegistry,
   makeProviderToolCapabilityRegistry,
@@ -29,9 +30,8 @@ import {
   makeProviderToolPolicy,
   makeProviderToolRuntime,
   normalizeProviderToolUsage,
-  providerToolFactoryValidatorIds,
   type ProviderToolExecutionRevalidationInput,
-  type ProviderToolFactoryRequest,
+  type ProviderToolRequest,
   type ProviderToolPolicyApi,
   type ProviderToolPolicyContext,
   type ProviderToolRuntimeApi,
@@ -517,7 +517,7 @@ describe("ProviderToolRuntime", () => {
         const openai = yield* runRuntime(
           Effect.flatMap(ProviderToolRuntime, (runtime) =>
             runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
-              { id: "openai:web_search", args: [{ type: "web_search" }] },
+              { id: "openai:web_search", config: { type: "web_search" } },
             ]),
           ),
         );
@@ -531,23 +531,24 @@ describe("ProviderToolRuntime", () => {
                 app: { allowNetwork: true },
                 user: { allowNetwork: true },
               },
-              [{ id: "anthropic:web_fetch", args: [] }],
+              [{ id: "anthropic:web_fetch", config: {} }],
             ),
           ),
         );
         expect(openai.map((entry) => entry.id)).toEqual(["openai:web_search"]);
         expect(anthropic.map((entry) => entry.id)).toEqual(["anthropic:web_fetch"]);
-        expect(openai[0]?.tool).toBeDefined();
-        expect(anthropic[0]?.tool).toBeDefined();
+        // The Effect AI tool reaches the provider as the TanStack one made from the same request.
+        expect(
+          yield* toolRequestDifferences({
+            chatTools: [...openai, ...anthropic].map((entry) => entry.tool),
+            modelTools: [...openai, ...anthropic].map((entry) => entry.modelTool),
+          }),
+        ).toStrictEqual([
+          { provider: "anthropic", difference: undefined },
+          { provider: "openai", difference: undefined },
+        ]);
       }).pipe(withTestPlatform),
   );
-
-  test("has a runtime factory validator for every installed provider tool", () => {
-    expect(providerToolFactoryValidatorIds).toEqual(
-      providerToolDescriptors.map((descriptor) => descriptor.id).toSorted(),
-    );
-    expect(providerToolFactoryValidatorIds).toHaveLength(18);
-  });
 
   /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- Deliberately malformed runtime inputs must bypass the public compile-time request union. */
   effectTest.live("rejects representative hosted and caller-loop factory option violations", () =>
@@ -555,11 +556,11 @@ describe("ProviderToolRuntime", () => {
       const invalid = [
         [
           basePolicy({ accountToolKinds: ["web_search"] }),
-          { id: "openai:web_search", args: [{ type: "web_search", unexpected: true }] },
+          { id: "openai:web_search", config: { type: "web_search", unexpected: true } },
         ],
         [
           basePolicy({ accountToolKinds: ["local_shell"] }),
-          { id: "openai:local_shell", args: [{ type: "local_shell" }] },
+          { id: "openai:local_shell", config: { type: "local_shell" } },
         ],
         [
           {
@@ -569,7 +570,7 @@ describe("ProviderToolRuntime", () => {
             app: { allowNetwork: true },
             user: { allowNetwork: true },
           },
-          { id: "anthropic:web_search", args: [{ type: "wrong_version" }] },
+          { id: "anthropic:web_search", config: { type: "wrong_version" } },
         ],
         [
           {
@@ -579,13 +580,13 @@ describe("ProviderToolRuntime", () => {
             app: { allowHighRisk: true },
             user: { allowHighRisk: true },
           },
-          { id: "anthropic:bash", args: [{ type: "bash_20250124", unexpected: true }] },
+          { id: "anthropic:bash", config: { type: "bash_20250124", unexpected: true } },
         ],
       ] as const;
       const errors = yield* runRuntime(
         Effect.flatMap(ProviderToolRuntime, (runtime) =>
           Effect.forEach(invalid, ([policy, request]) =>
-            errorOf(runtime.compose(policy, [request as unknown as ProviderToolFactoryRequest])),
+            errorOf(runtime.compose(policy, [request])),
           ),
         ),
       );
@@ -609,7 +610,7 @@ describe("ProviderToolRuntime", () => {
                 runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
                   {
                     id: "openai:file_search",
-                    args: [{ type: "file_search", vector_store_ids: ["vs_1"] }],
+                    config: { type: "file_search", vector_store_ids: ["vs_1"] },
                   },
                 ]),
               ),
@@ -627,7 +628,7 @@ describe("ProviderToolRuntime", () => {
       Effect.gen(function* () {
         const original = providerToolDescriptors.find((entry) => entry.id === "openai:web_search");
         if (original === undefined) throw new Error("missing fixture descriptor");
-        const expected: Parameters<typeof original.extension.factory>[0] = { type: "web_search" };
+        const expected = { type: "web_search" };
         let received: unknown;
         const throwing: typeof original = {
           ...original,
@@ -663,7 +664,7 @@ describe("ProviderToolRuntime", () => {
         };
         const error = yield* errorOf(
           makeProviderToolRuntime(registry, policy).compose(basePolicy(), [
-            { id: "openai:web_search", args: [expected] },
+            { id: "openai:web_search", config: expected },
           ]),
         );
         expect(received).toBe(expected);
@@ -894,14 +895,14 @@ describe("ProviderToolRuntime", () => {
     Effect.gen(function* () {
       const unknownFields = {
         id: "openai:web_search",
-        args: [{ type: "web_search" }],
-      } satisfies ProviderToolFactoryRequest;
+        config: { type: "web_search" },
+      } satisfies ProviderToolRequest;
       Reflect.set(unknownFields, "unexpected", true);
       const [unknown, mismatch] = yield* runRuntime(
         Effect.flatMap(ProviderToolRuntime, (runtime) =>
           Effect.all([
             errorOf(runtime.compose(basePolicy(), [unknownFields])),
-            errorOf(runtime.compose(basePolicy(), [{ id: "anthropic:web_fetch", args: [] }])),
+            errorOf(runtime.compose(basePolicy(), [{ id: "anthropic:web_fetch", config: {} }])),
           ]),
         ),
       );

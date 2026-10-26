@@ -232,7 +232,7 @@ export {
   type ProviderToolCost as NormalizedProviderToolCost,
   type ProviderToolExecutionDecision,
   type ProviderToolExecutionRequest,
-  type ProviderToolFactoryRequest,
+  ProviderToolRequest,
   type ProviderToolLease,
   type ProviderToolLifecycleStatus,
   type ProviderToolOperationContext,

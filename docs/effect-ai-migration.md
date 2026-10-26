@@ -373,8 +373,8 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - OpenAI 호환 provider에서 chunk가 하나도 없는 stream은 실패다. TanStack은 아무것도 내지 않았다.
     - OpenAI 호환 provider는 `toolChoice`를 읽지 않는다. TanStack도 보내지 않았다.
   - 다음 단계로 넘기는 것:
-    - 3단계: `tool-policy.ts`의 factory와 인자 검사를 `providers/provider-tools.ts`로 바꾼다. descriptor의 `extension.factory`는 아직 TanStack factory다.
-    - 3단계: OpenAI `computer_use`의 검사는 type `computer_use_preview`만 받지만 TanStack 1.0 타입은 `computer`다. TanStack은 설정의 type을 도구 이름으로 썼다. 새 도구도 구독 요청에서 같은 이름을 쓴다(`namedBy`).
+    - 3단계(닫음): `tool-policy.ts`의 factory와 인자 검사를 `providers/provider-tools.ts`로 바꾼다. descriptor의 `extension.factory`는 아직 TanStack factory다(3단계 결과의 "provider tool").
+    - 3단계(닫음): OpenAI `computer_use`의 검사는 type `computer_use_preview`만 받지만 TanStack 1.0 타입은 `computer`다. TanStack은 설정의 type을 도구 이름으로 썼다. 새 도구도 구독 요청에서 같은 이름을 쓴다(`namedBy`). 검사는 그대로 `computer_use_preview`만 받는다.
     - 3단계(닫음): TanStack의 tool 입력 정규화는 optional 필드의 `null`을 `undefined`로 바꿨다. 같은 규칙이 필요해 옮겼다(3단계 결과의 "인자 보정").
     - 3단계: scripted 모델은 lazy discovery를 흉내 내지 않는다. discovery 방식을 정한 뒤 넣는다. invocation에 `runId`와 `threadId`가 없다. `LanguageModel.ProviderOptions`에 없기 때문이며, 4단계 loop가 run을 모델에 알리는 방법을 정한다.
     - 3·4단계: `OpenAiClient`의 오류 description에는 URL이 들어간다. 화면 문구는 description이 아니라 reason으로 만든다.
@@ -399,6 +399,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - TanStack client에서 옮긴 것: 프로토콜 협상 `auto`, task가 필요한 도구는 서버가 task를 지원할 때만 제공, 2025 프로토콜 task의 polling(`tasks/get`·`tasks/result`, 멈춘 호출은 `tasks/cancel`), 2026 프로토콜의 `Mcp-Param-*` 헤더용 `toolDefinition`, 결과 변환(text 하나는 문자열, 나머지는 part, `ui://` resource 생략, output schema가 있으면 `structuredContent`), 서버 오류 문구 `MCP tool "<name>" returned an error: ...`.
     - 인자는 서버가 보낸 JSON Schema로 `jsonSchemaIssues`가 검사한다. TanStack도 같은 검사기로 검사했다. `Tool.dynamic`은 인자를 검사하지 않는다.
     - 호출 span(`McpServers.call`)은 TanStack 도구에서는 run trace 아래, Effect AI 도구에서는 loop가 호출을 실행하는 곳 아래에 생긴다.
+  - provider tool: 요청은 TanStack factory 인자 배열 대신 `{ id, config }`(`ProviderToolRequest`)다. 설정 검사는 `providers/provider-tools.ts`의 표(`acceptsConfig`)가 한다. `ProviderToolRuntime.compose`가 같은 요청으로 TanStack 도구(`tool`)와 Effect AI 도구(`modelTool`)를 만든다. TanStack 쪽(`factoryArguments`, descriptor의 `extension.factory`)은 7단계에 지운다.
   - subagent 도구: 한 부모 run의 상태(검토한 보고서, 전달된 알림, adoption draft)를 `parentRun`이 갖고, TanStack middleware와 Effect AI 도구가 같은 규칙을 쓴다. `runToolsFor`는 middleware 대신 `hooks`(`retry`, `deliver`, `recordAdoption`, `release`)를 내보내고, 4단계 loop가 middleware 자리에서 부른다. 검토 표시는 `onAfterToolCall` 대신 get_subagent_reports의 handler가 성공한 결과로 한다.
   - 승인 도구: `ask` 모드(`static`)의 save_code_skill·write_outside_file·delete_outside_file은 `needsApproval: true`를 단다. 다른 모드(`gate`)는 loop의 review가 호출마다 정한다. 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 두고, `effect/ai`는 서버의 `tools/approved.ts`만 import한다.
   - `tests/tool-effects.test.ts`의 등록 검사는 `toolDefinition({ name })`과 함께 `{ name, description, parameters }` spec도 도구 등록으로 읽는다. 설명이 `${...}`를 쓰는 template literal이어도 읽는다.
@@ -418,6 +419,8 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - 서버가 오류로 답한 호출의 실패 tag는 `McpToolFailed`다. TanStack 경로는 `Error`였다. 문구는 같다.
     - TanStack 도구에 MCP Apps용 `metadata.mcp`(title, annotations, `uiResourceUri`)가 없다. 앱은 읽지 않았다.
     - 2026 프로토콜의 `tools/list_changed` 구독을 열지 않는다. run마다 목록을 다시 읽는다.
+    - provider tool 요청은 Anthropic `code_execution`의 `skills`(TanStack factory의 두 번째 인자)를 받지 않는다. 앱은 쓰지 않았다.
+    - 등록되지 않은 id의 provider tool 요청은 `invalid_request`로 거절한다. 전에는 검사기가 없어 오류가 던져졌다.
   - 다음 단계로 넘기는 것:
     - 4단계: 인자 decode 실패를 모델에 돌려주는 문구. TanStack은 `Input validation failed for tool <name>: ...`였다.
     - 자식 run의 `read_subagent_tool_result`: spec과 호출(`childResult`)은 나눴고, RunTool은 자식 run을 새 loop로 옮길 때 만든다. 자식 도구 목록(code 도구, 병렬 읽기, 게이트)과 함께 바뀌기 때문이다.
