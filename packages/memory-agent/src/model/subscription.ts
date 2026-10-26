@@ -344,12 +344,12 @@ const textOf = (content: StoredContent) =>
 
 /** File data as `toPrompt` keeps it: base64 or, with the `url` option, a URL. */
 const imageSource = (part: Prompt.FilePart) => {
-  if (part.data instanceof URL) return { url: part.data.toString() } as const;
+  if (part.data instanceof URL) return { type: "url", url: part.data.toString() } as const;
   if (part.data instanceof Uint8Array)
-    return { base64: Buffer.from(part.data).toString("base64") } as const;
+    return { type: "base64", base64: Buffer.from(part.data).toString("base64") } as const;
   return partOptions(part).url === true
-    ? ({ url: part.data } as const)
-    : ({ base64: part.data } as const);
+    ? ({ type: "url", url: part.data } as const)
+    : ({ type: "base64", base64: part.data } as const);
 };
 
 const anthropicImage = (part: Prompt.FilePart): ImageBlock => {
@@ -357,7 +357,7 @@ const anthropicImage = (part: Prompt.FilePart): ImageBlock => {
   return {
     type: "image",
     source:
-      "url" in source
+      source.type === "url"
         ? { type: "url", url: source.url }
         : { type: "base64", media_type: part.mediaType, data: source.base64 },
   };
@@ -367,7 +367,8 @@ const openAiImage = (part: Prompt.FilePart): OpenAiBlock => {
   const source = imageSource(part);
   return {
     type: "input_image",
-    image_url: "url" in source ? source.url : `data:${part.mediaType};base64,${source.base64}`,
+    image_url:
+      source.type === "url" ? source.url : `data:${part.mediaType};base64,${source.base64}`,
   };
 };
 
