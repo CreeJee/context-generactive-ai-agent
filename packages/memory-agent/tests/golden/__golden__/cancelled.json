@@ -1,0 +1,79 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:cancel",
+          "createdAt": "<time>"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:cancel",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-2>",
+      "thread_id": "<session>",
+      "status": "aborted",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": 1
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    },
+    {
+      "namespace": "memory-agent/workflow-execution",
+      "key": "<session>",
+      "value": {
+        "_tag": "stopped",
+        "reason": "user"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:cancel",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "queue": [],
+  "workflow": [],
+  "bindings": [],
+  "events": [],
+  "ledger": [],
+  "usage": []
+}

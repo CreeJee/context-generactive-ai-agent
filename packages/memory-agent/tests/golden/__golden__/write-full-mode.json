@@ -1,0 +1,184 @@
+{
+  "threads": [
+    {
+      "thread_id": "<session>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:write",
+          "createdAt": "<time>"
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "toolCalls": [
+            {
+              "id": "write@<session>",
+              "type": "function",
+              "function": {
+                "name": "write_file",
+                "arguments": "{\"path\":\"out.txt\",\"content\":\"written\\n\"}"
+              }
+            }
+          ],
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "role": "tool",
+          "content": "{\"path\":\"out.txt\",\"created\":true,\"sha256\":\"d9ed84a15ec3aa6e344981cb5b92da385361d08a8b6e579c73ce716e55cdecab\",\"bytes\":8}",
+          "toolCallId": "write@<session>"
+        },
+        {
+          "role": "assistant",
+          "content": "write done",
+          "id": "<id-3>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "thread_id": "<session>",
+      "ordinal": 0,
+      "ui_id": "<id-1>",
+      "messages": [
+        {
+          "id": "<id-1>",
+          "role": "user",
+          "content": "golden:write",
+          "createdAt": "<time>"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 1,
+      "ui_id": "<id-2>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": null,
+          "toolCalls": [
+            {
+              "id": "write@<session>",
+              "type": "function",
+              "function": {
+                "name": "write_file",
+                "arguments": "{\"path\":\"out.txt\",\"content\":\"written\\n\"}"
+              }
+            }
+          ],
+          "id": "<id-2>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        },
+        {
+          "role": "tool",
+          "content": "{\"path\":\"out.txt\",\"created\":true,\"sha256\":\"d9ed84a15ec3aa6e344981cb5b92da385361d08a8b6e579c73ce716e55cdecab\",\"bytes\":8}",
+          "toolCallId": "write@<session>",
+          "id": "stored:<session>:2"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    },
+    {
+      "thread_id": "<session>",
+      "ordinal": 2,
+      "ui_id": "<id-3>",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "write done",
+          "id": "<id-3>",
+          "createdAt": "<time>",
+          "model": "scripted-1"
+        }
+      ],
+      "format_version": 1,
+      "ready": 1
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "<id-4>",
+      "thread_id": "<session>",
+      "status": "completed",
+      "error": null,
+      "error_code": null,
+      "usage": null,
+      "cancel_requested": null
+    }
+  ],
+  "interrupts": [],
+  "metadata": [
+    {
+      "namespace": "memory-agent/model-handoff",
+      "key": "<session>",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:write",
+      "detail": {}
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-4>",
+      "text": "",
+      "detail": {}
+    },
+    {
+      "kind": "tool_call",
+      "run_id": "<id-4>",
+      "text": "write_file {\"path\":\"out.txt\",\"content\":\"written\\n\"}",
+      "detail": {
+        "toolName": "write_file",
+        "toolCallId": "write@<session>"
+      }
+    },
+    {
+      "kind": "tool_result",
+      "run_id": "<id-4>",
+      "text": {
+        "path": "out.txt",
+        "created": true,
+        "sha256": "d9ed84a15ec3aa6e344981cb5b92da385361d08a8b6e579c73ce716e55cdecab",
+        "bytes": 8
+      },
+      "detail": {
+        "toolName": "write_file",
+        "toolCallId": "write@<session>",
+        "ok": true
+      }
+    },
+    {
+      "kind": "assistant",
+      "run_id": "<id-4>",
+      "text": "write done",
+      "detail": {}
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "attempts": [],
+  "queue": [],
+  "workflow": [],
+  "bindings": [],
+  "events": [],
+  "ledger": [],
+  "usage": []
+}

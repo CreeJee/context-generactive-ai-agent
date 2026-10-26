@@ -24,7 +24,8 @@ export default defineConfig({
     "*": "vp check --fix",
   },
   fmt: {
-    ignorePatterns: agentAndVendoredIgnorePatterns,
+    // Golden files are test output compared byte for byte.
+    ignorePatterns: [...agentAndVendoredIgnorePatterns, "**/__golden__/**"],
   },
   lint: {
     ignorePatterns: agentAndVendoredIgnorePatterns,
