@@ -138,6 +138,23 @@ const toolJsonSchema = (
   throw new Error(`Unsupported target: ${target}`);
 };
 
+/**
+ * TanStack's definition of a tool whose name, description and parameters its Effect AI tool
+ * (`run-tool.ts`) shares until the switch (docs/effect-ai-migration.md step 3).
+ */
+export const definitionOf = <
+  const Name extends string,
+  S extends Schema.ConstraintDecoder<unknown, never>,
+>(spec: {
+  readonly name: Name;
+  readonly description: string;
+  readonly parameters: S;
+}) => ({
+  name: spec.name,
+  description: spec.description,
+  inputSchema: toToolSchema(spec.parameters),
+});
+
 /** A tool's parameters in the draft-07 form TanStack sends providers. */
 export const toolParametersJsonSchema = (schema: Schema.Constraint) =>
   toolJsonSchema(schema, "draft-07");

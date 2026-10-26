@@ -4,10 +4,12 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { errorTag } from "../tools/failure.ts";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import { readFileBytesEffect } from "../files/text.ts";
+import type { JsonValue } from "../json.ts";
 import type { Project } from "../projects/projects.ts";
+import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
 import { Attachments } from "./attachments.ts";
 
 /** File tools whose result names the project file they just wrote. */
@@ -89,8 +91,49 @@ const make = Effect.gen(function* () {
           };
         });
       }),
+
+    /** {@link withPreviews} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+    withRunPreviews: (project: Project, tools: ReadonlyArray<RunTool>): Array<RunTool> =>
+      tools.map((tool) =>
+        HashSet.has(writingToolNames, tool.tool.name)
+          ? {
+              ...tool,
+              prepare: (params) =>
+                Effect.map(
+                  tool.prepare(params),
+                  (run): PreparedCall =>
+                    (call) =>
+                      Effect.flatMap(run(call), (result) =>
+                        Option.match(drawingIn(result), {
+                          onNone: () => Effect.succeed(result),
+                          onSome: ({ written, path }) =>
+                            Effect.map(
+                              previewOf(project, path),
+                              Option.match({
+                                onNone: (): JsonValue => written,
+                                onSome: (picture) => ({ ...written, preview: { ...picture } }),
+                              }),
+                            ),
+                        }),
+                      ),
+                ),
+            }
+          : tool,
+      ),
   };
 });
+
+const isJsonRecord = (value: JsonValue): value is { readonly [key: string]: JsonValue } =>
+  Predicate.isObject(value) && !Array.isArray(value);
+
+/** The result of a call that wrote an SVG, with the drawing's path. */
+const drawingIn = (result: JsonValue) =>
+  Option.liftPredicate(result, isJsonRecord).pipe(
+    Option.flatMap((written) =>
+      Option.map(decodeWritten(written), ({ path }) => ({ written, path })),
+    ),
+    Option.filter(({ path }) => isDrawing(path)),
+  );
 
 /** Pictures of the drawings the model writes, for showing them in the conversation. */
 export class DrawingPreviews extends Context.Service<

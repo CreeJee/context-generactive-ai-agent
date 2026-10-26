@@ -82,6 +82,19 @@ const fileTool = Effect.fnUntraced(function* (name: string, args: Record<string,
   );
 });
 
+/** {@link fileTool} through the Effect AI loop's tools (docs/effect-ai-migration.md step 3). */
+const fileRunTool = Effect.fnUntraced(function* (name: string, args: Record<string, JsonValue>) {
+  const { project } = yield* TestEnv;
+  const files = (yield* FileTools).runToolsFor(project);
+  const tool = (yield* DrawingPreviews)
+    .withRunPreviews(project, files)
+    .find((candidate) => candidate.tool.name === name);
+  const run = yield* Effect.fromNullishOr(tool).pipe(
+    Effect.flatMap((found) => found.prepare(args)),
+  );
+  return yield* run({ toolCallId: name });
+});
+
 /** Replace the attachment directory with a file until the test ends. */
 const blockAttachmentStorage = Effect.gen(function* () {
   const { storage } = yield* TestEnv;
@@ -283,6 +296,25 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         expect(picture).not.toBeNull();
         expect(yield* centre(attachments.pathOf(picture!))).toEqual([0, 0, 255]);
       }),
+  );
+
+  it.effect("the Effect AI file tools add the same picture, and only to a written SVG", () =>
+    Effect.gen(function* () {
+      const result = yield* decodeWritten(
+        yield* fileRunTool("write_file", { path: "run/figure.svg", content: square("#0000ff") }),
+      );
+      const attachments = yield* Attachments;
+      const picture = yield* attachments.get(result.preview?.attachmentId ?? "");
+      expect(yield* centre(attachments.pathOf(picture!))).toEqual([0, 0, 255]);
+      expect(
+        (yield* decodeWritten(
+          yield* fileRunTool("write_file", { path: "run/notes.md", content: "# hi" }),
+        )).preview,
+      ).toBeUndefined();
+      expect(
+        yield* encodeJson(yield* fileRunTool("read_file", { path: "run/figure.svg" })),
+      ).not.toContain("preview");
+    }),
   );
 
   it.effect("an edit takes a new picture; the first one stays as it was", () =>
