@@ -1268,26 +1268,31 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     return { middleware, hook, settle };
   };
 
-  const indexInBackground = (): ChatMiddleware => {
-    // Embedding can take seconds (the model loads on first use), and interpretation is a model
-    // call; never hold the response for either. Interpretation searches for earlier statements, so
-    // it runs after indexing.
-    // Background work that dies with the process (database closed mid-batch) is simply redone next
-    // time, so even defects are dropped here rather than surfacing as unhandled rejections. Both
-    // are logged by tag only.
-    const quietly = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>) =>
-      effect.pipe(
-        Effect.catch(logFailure("Background indexing stopped")),
-        Effect.catchDefect((defect) => logDefect("Background indexing stopped")(Cause.die(defect))),
-      );
-    const index = () =>
-      void runEffect(
-        quietly(indexer.indexUpTo(afterRunBudget)).pipe(
-          Effect.andThen(quietly(indexer.analyzeUpTo(afterRunBudget))),
-          Effect.andThen(interpreter.automatic ? quietly(interpreter.runPending) : Effect.void),
-        ),
-      );
-    return { name: "memory-agent/index", onFinish: index, onAbort: index, onError: index };
+  // Embedding can take seconds (the model loads on first use), and interpretation is a model
+  // call; never hold the response for either. Interpretation searches for earlier statements, so
+  // it runs after indexing.
+  // Background work that dies with the process (database closed mid-batch) is simply redone next
+  // time, so even defects are dropped here rather than surfacing as unhandled rejections. Both
+  // are logged by tag only.
+  const quietlyIndexing = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>) =>
+    effect.pipe(
+      Effect.catch(logFailure("Background indexing stopped")),
+      Effect.catchDefect((defect) => logDefect("Background indexing stopped")(Cause.die(defect))),
+    );
+  const indexAfterRun = quietlyIndexing(indexer.indexUpTo(afterRunBudget)).pipe(
+    Effect.andThen(quietlyIndexing(indexer.analyzeUpTo(afterRunBudget))),
+    Effect.andThen(interpreter.automatic ? quietlyIndexing(interpreter.runPending) : Effect.void),
+  );
+  const index = () => void runEffect(indexAfterRun);
+  const indexInBackground = {
+    middleware: {
+      name: "memory-agent/index",
+      onFinish: index,
+      onAbort: index,
+      onError: index,
+    } satisfies ChatMiddleware,
+    /** The same for the Effect AI loop: the work outlives the run that started it. */
+    hook: { ended: () => Effect.asVoid(Effect.forkDetach(indexAfterRun)) } satisfies RunHook,
   };
 
   const traceCursor = (request: Request) => {
@@ -1804,7 +1809,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               },
               externalAgent: answeredBy,
             }),
-            indexInBackground(),
+            indexInBackground.middleware,
           ];
           const stream = withShownRunErrors(
             redactor,
@@ -2282,7 +2287,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             },
           }),
           workflowLifecycle.middleware,
-          indexInBackground(),
+          indexInBackground.middleware,
           summaries.afterRun(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compaction(
