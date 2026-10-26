@@ -8,6 +8,7 @@ import {
   MutableHashSet,
   Effect,
   Option,
+  Ref,
   Schema,
 } from "effect";
 import {
@@ -15,6 +16,10 @@ import {
   type ChatMetadataFailed,
   tanstackMetadata,
 } from "../chat-store/metadata.ts";
+import type { StoredMessage } from "../chat-store/schema.ts";
+import { asRunFailed, type RunHook } from "../loop/run.ts";
+import { RunStore } from "../loop/store.ts";
+import type { ModelHandoffFailed } from "./model-handoff.ts";
 import { recentRawUserTurns } from "./compaction-policy.ts";
 import {
   consumeColdObservationEffect,
@@ -915,6 +920,48 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
     ),
     stage: restored !== null && compacted.stage === "none" ? "summarize" : compacted.stage,
   };
+});
+
+/**
+ * Compaction in the Effect AI loop: what each model step sends of its conversation. Goes last
+ * among the hooks that shape the request, before local images are inlined. `stage` is the stage
+ * the latest request reached, for its usage record.
+ */
+export const compactionHook = Effect.fnUntraced(function* (options: {
+  readonly sources: CompactionSources;
+  readonly budget: Budget;
+  /** The history a model handoff puts in place of the conversation, or null to keep it. */
+  readonly restore: (
+    messages: ReadonlyArray<StoredMessage>,
+  ) => Effect.Effect<ReadonlyArray<StoredMessage> | null, ModelHandoffFailed>;
+}) {
+  const stage = yield* Ref.make<CompactionStage>("none");
+  const hook: RunHook<RunStore> = {
+    request: ({ threadId }, request) =>
+      Effect.gen(function* () {
+        const store = yield* RunStore;
+        const restored = yield* options.restore(request.history).pipe(
+          Effect.mapError((cause) =>
+            CompactionFailed.make({
+              operation: "history",
+              reason: CompactionReason.cases.HistoryFailed.make({}),
+              cause,
+            }),
+          ),
+        );
+        const sent = yield* requestHistory({
+          metadata: store.chatMetadata,
+          threadId,
+          messages: request.history,
+          restored,
+          sources: options.sources,
+          budget: options.budget,
+        });
+        yield* Ref.set(stage, sent.stage);
+        return { ...request, history: sent.messages };
+      }).pipe(Effect.mapError(asRunFailed)),
+  };
+  return { hook, stage: Ref.get(stage) };
 });
 
 const isBudget = Schema.is(Schema.Struct({ compactAt: Schema.Finite, leaveOutAt: Schema.Finite }));
