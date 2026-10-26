@@ -21,21 +21,29 @@ import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { Data, Effect, Stream, Match, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
-  ProviderStatusRejected,
   ProviderStreamFailed,
   ReasoningSummaryProtocolFailed,
   ReasoningSummaryProtocolFailedReason,
-  RequestNotSent,
   ToolArguments,
   NormalizedStreamEvent,
   type OAuthProvider,
 } from "../oauth/protocol.ts";
 import type { ModelSelection, SubscriptionModelSelection } from "./contracts.ts";
+import {
+  SubscriptionStreamFailed,
+  SubscriptionStreamFailedReason,
+  publicReasoningLimits,
+  type StreamingOAuthClient,
+} from "../model/subscription.ts";
 
-export interface StreamingOAuthClient {
-  readonly releaseRun?: () => void;
-  stream(body: string, signal?: AbortSignal): AsyncGenerator<NormalizedStreamEvent>;
-}
+// The failure and the client contract are shared with the Effect AI model, which replaces this
+// adapter (docs/effect-ai-migration.md step 7).
+export {
+  SubscriptionStreamFailed,
+  SubscriptionStreamFailedReason,
+  publicReasoningLimits,
+  type StreamingOAuthClient,
+};
 
 const textOf = (content: ModelMessage["content"]) =>
   Array.isArray(content)
@@ -56,36 +64,6 @@ type WireBlock =
 
 const openAiReasoningPrefix = "openai-reasoning:";
 const maxEncryptedReasoningCharacters = 32 * 1024 * 1024;
-export const publicReasoningLimits = {
-  characters: 2 * 1024 * 1024,
-  parts: 256,
-  idCharacters: 512,
-} as const;
-
-export const SubscriptionStreamFailedReason = Schema.TaggedUnion({
-  ProviderRejected: {},
-  RequestNotSent: { stage: RequestNotSent.fields.stage },
-  ProviderStatusRejected: { statusClass: ProviderStatusRejected.fields.statusClass },
-  ResponseInterrupted: {},
-  RequestOutcomeUnknown: {},
-  InvalidReasoning: {},
-  InvalidToolCall: {},
-  InvalidBlockEnd: {},
-  IncompleteBlocks: {},
-  EncryptedReasoningLimit: {},
-});
-
-export class SubscriptionStreamFailed extends Schema.TaggedError<SubscriptionStreamFailed>()(
-  "SubscriptionStreamFailed",
-  {
-    provider: Schema.Literals(["openai", "anthropic"]),
-    reason: SubscriptionStreamFailedReason,
-  },
-) {
-  override get message() {
-    return "Subscription provider stream failed.";
-  }
-}
 const OpenAiReasoning = Schema.Struct({
   id: Schema.String,
   encryptedContent: Schema.String,

@@ -1,6 +1,7 @@
 // Checks the TanStack chat-row migration on copies of the local database before it ships
-// (docs/effect-ai-migration.md, step 1). The copies hold the user's conversations: they stay
-// outside the repository, and the report holds counts, ids and Schema paths, never row content.
+// (docs/effect-ai-migration.md, steps 1 and 2): the rows, and the requests the Effect AI model
+// builds from them. The copies hold the user's conversations: they stay outside the repository,
+// and the report holds counts, ids, Schema paths and JSON paths, never row content.
 // Submodules only: the package entry also loads NodeRedis and its client.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -9,6 +10,7 @@ import {
   Clock,
   Console,
   Effect,
+  Exit,
   FileSystem,
   MutableHashMap,
   Option,
@@ -36,6 +38,14 @@ import {
 import { migrateTanStackRows } from "../../packages/memory-agent/src/chat-store/tanstack-migration.ts";
 import { migrationClient } from "../../packages/memory-agent/src/db/migration-client.ts";
 import type { JsonValue } from "../../packages/memory-agent/src/json.ts";
+import { fromPrompt, toPrompt } from "../../packages/memory-agent/src/model/prompt.ts";
+import {
+  asTanStack,
+  next,
+  parseTanStackMessages,
+  requestDifferences,
+  system,
+} from "../../packages/memory-agent/tests/support/requests.ts";
 
 class CheckFailed extends Schema.TaggedError<CheckFailed>()("CheckFailed", {
   message: Schema.String,
@@ -94,6 +104,7 @@ const anchored = (saved: SavedHandoff, messages: readonly JsonValue[]) => {
 
 const exact = { onExcessProperty: "error" } as const;
 const decodeMessage = Schema.decodeUnknownEffect(StoredMessage);
+const decodeHistory = Schema.decodeUnknownOption(Schema.Array(StoredMessage));
 const decodeGroup = Schema.decodeUnknownEffect(StoredHistoryGroup);
 const decodeUsage = Schema.decodeUnknownEffect(StoredUsage);
 const decodePayload = Schema.decodeUnknownEffect(StoredInterruptPayload);
@@ -238,6 +249,38 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
               ),
         );
 
+  /**
+   * Whether the prompt keeps the migrated history, and the Effect AI model sends for it the
+   * request TanStack sent for the original. A history that does not decode is reported above.
+   */
+  const checkReplay = Effect.fnUntraced(function* (
+    name: string,
+    where: string,
+    before: ReturnType<typeof parseTanStackMessages>,
+    after: readonly JsonValue[],
+  ) {
+    const decoded = decodeHistory(after);
+    if (Option.isNone(decoded)) return;
+    const history = decoded.value;
+    if (
+      fingerprint(toPrompt(history, [system]).pipe(fromPrompt)) ===
+      fingerprint({ system: [system], history })
+    )
+      report.count(`${name} prompt round trip`);
+    else report.fail(`${name} prompt round trip`, where);
+    const differences = yield* Effect.exit(
+      requestDifferences({
+        threadId: where,
+        tanstack: [...before, asTanStack(next)],
+        stored: [...history, next],
+      }),
+    );
+    if (Exit.isFailure(differences)) return report.fail(`${name} request failed`, where);
+    for (const { provider, difference } of differences.value)
+      if (difference === undefined) report.count(`${name} request same ${provider}`);
+      else report.fail(`${name} request differs ${provider}`, `${where}: ${difference}`);
+  });
+
   yield* Effect.forEach(
     yield* threadIds(),
     Effect.fnUntraced(function* ({ thread_id: id }) {
@@ -250,8 +293,10 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
           report.decoded("message decode", `${id}#${index}`, decodeMessage(message, exact)),
         { discard: true },
       );
+      yield* checkReplay("thread", id, parseTanStackMessages(pair.before), after);
+      const groups = yield* groupPairs(id);
       yield* Effect.forEach(
-        yield* groupPairs(id),
+        groups,
         (group) => {
           const where = `${id}/${group.ordinal}`;
           const migrated = parseArray(group.after);
@@ -261,6 +306,14 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
         },
         { discard: true },
       );
+      // The screen history, group after group, is the longest history the thread had.
+      if (groups.length > 0 && groups.every((group) => group.before !== null))
+        yield* checkReplay(
+          "history",
+          id,
+          groups.flatMap((group) => parseTanStackMessages(group.before ?? "[]")),
+          groups.flatMap((group) => parseArray(group.after)),
+        );
     }),
     { discard: true },
   );
