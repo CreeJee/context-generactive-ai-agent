@@ -12,7 +12,7 @@ import {
 import { Function as EffectFunction } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Effect, Exit, MutableHashMap, Option, Schema, Scope } from "effect";
+import { Effect, Exit, Match, MutableHashMap, Option, Schema, Scope } from "effect";
 import { PathRejected } from "./paths.ts";
 
 // Path operations remain synchronous at these public host boundaries.
@@ -81,6 +81,10 @@ export class TextFileRejected extends Schema.TaggedError<TextFileRejected>()("Te
   path: Schema.String,
   reason: TextFileRejectedReason,
 }) {}
+
+/** The file no longer has the content the caller read. */
+const changed = (path: string) =>
+  Effect.fail(TextFileRejected.make({ path, reason: rejection.changed.make({}) }));
 
 /** The file operation that failed and its system code; see {@link TextFileIoFailed}. */
 export const TextFileIoReason = Schema.TaggedStruct("IoFailed", {
@@ -210,12 +214,11 @@ const readPosixFileBytes = Effect.fn("readPosixFileBytes")(function* (options: F
 });
 
 export const readFileBytesEffect = Effect.fn("readFileBytes")(function* (options: FileReadOptions) {
-  switch (yield* FileReadPlatform) {
-    case "windows":
-      return yield* readWindowsFileBytes(options);
-    case "posix":
-      return yield* readPosixFileBytes(options);
-  }
+  return yield* Match.value(yield* FileReadPlatform).pipe(
+    Match.when("windows", () => readWindowsFileBytes(options)),
+    Match.when("posix", () => readPosixFileBytes(options)),
+    Match.exhaustive,
+  );
 });
 
 export const readFileBytes: {
@@ -240,8 +243,10 @@ export const decodeTextEffect = Effect.fnUntraced(function* (options: {
   readonly path: string;
 }) {
   const { bytes, path } = options;
-  if (bytes.includes(0))
-    return yield* TextFileRejected.make({ path, reason: rejection.binary.make({}) });
+  yield* Effect.when(
+    Effect.fail(TextFileRejected.make({ path, reason: rejection.binary.make({}) })),
+    Effect.succeed(bytes.includes(0)),
+  );
   return yield* Effect.try({
     try: () => decoder.decode(bytes),
     catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
@@ -327,8 +332,7 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
 }) {
   const { absolute, path, expectedSha256, text } = options;
   const current = yield* readTextFileEffect({ absolute, path });
-  if (current.sha256 !== expectedSha256)
-    return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
+  yield* Effect.when(changed(path), Effect.succeed(current.sha256 !== expectedSha256));
   const bytes = Buffer.from(text, "utf8");
   const temporary = join(
     dirname(absolute),
@@ -351,8 +355,7 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
       }).pipe(Scope.provide(scope));
       yield* Scope.close(scope, Exit.void);
       const latest = yield* readTextFileEffect({ absolute, path });
-      if (latest.sha256 !== expectedSha256)
-        return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
+      yield* Effect.when(changed(path), Effect.succeed(latest.sha256 !== expectedSha256));
       // A committed swap must complete before interruption releases its temporary file.
       yield* Effect.uninterruptible(fileIo(path, "rename", fileSystem.rename(temporary, absolute)));
     }),
@@ -383,8 +386,7 @@ export const deleteTextFileEffect = Effect.fn("deleteTextFile")(function* (optio
 }) {
   const { absolute, path, expectedSha256 } = options;
   const current = yield* readTextFileEffect({ absolute, path });
-  if (current.sha256 !== expectedSha256)
-    return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
+  yield* Effect.when(changed(path), Effect.succeed(current.sha256 !== expectedSha256));
   yield* fileIo(path, "remove", fileSystem.remove(absolute));
   return { bytes: current.bytes };
 });
@@ -559,14 +561,13 @@ export const createTextPageReader = () => {
           catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
         });
         const latest = yield* fileIo(path, "stat", handle.stat);
-        if (stampOf(latest) !== stamp)
-          return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
+        yield* Effect.when(changed(path), Effect.succeed(stampOf(latest) !== stamp));
         MutableHashMap.remove(cache, absolute);
         MutableHashMap.set(cache, absolute, index);
-        for (const old of MutableHashMap.keys(cache)) {
-          if (MutableHashMap.size(cache) <= 8) break;
-          MutableHashMap.remove(cache, old);
-        }
+        // Keys come out oldest first; the file just indexed is the newest.
+        Array.from(MutableHashMap.keys(cache))
+          .slice(0, Math.max(0, MutableHashMap.size(cache) - 8))
+          .forEach((old) => MutableHashMap.remove(cache, old));
         const page = linePage(text, 1, maxLines);
         const endLine = first + page.endLine - 1;
         return {

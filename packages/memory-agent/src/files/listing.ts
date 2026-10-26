@@ -197,18 +197,14 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   const fromGit = yield* gitFiles(root, directory);
   const walked = isTruthy(fromGit) ? undefined : yield* walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
-  let excluded = walked?.excluded ?? 0;
-  const kept: string[] = [];
-  for (const path of EffectArray.dedupe(fromGit ?? walked?.files ?? [])) {
-    if (!path.startsWith(prefix)) continue;
-    if (glob !== undefined && !matchesGlob(path.slice(prefix.length), glob)) continue;
-    if (path.split("/").some((segment) => segment.toLowerCase() === ".git")) continue;
-    if (isCredentialPath(path)) {
-      excluded++;
-      continue;
-    }
-    kept.push(path);
-  }
+  const listed = EffectArray.dedupe(fromGit ?? walked?.files ?? []).filter(
+    (path) =>
+      path.startsWith(prefix) &&
+      (glob === undefined || matchesGlob(path.slice(prefix.length), glob)) &&
+      !path.split("/").some((segment) => segment.toLowerCase() === ".git"),
+  );
+  const kept = listed.filter((path) => !isCredentialPath(path));
+  const excluded = (walked?.excluded ?? 0) + listed.length - kept.length;
   // A walk already saw regular files only. Git lists links and deleted files too, so check those,
   // many at a time.
   const fs = yield* nodeFileSystem;
@@ -224,9 +220,8 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
         { concurrency: statConcurrency },
       )).filter((path) => path !== null)
     : kept;
-  paths.sort();
   return {
-    paths,
+    paths: paths.toSorted(),
     source: isTruthy(fromGit) ? "git" : "walk",
     excluded,
     truncated: walked?.truncated ?? false,
@@ -255,16 +250,16 @@ export const listOutsideFilesEffect = Effect.fn("FileListing.outside")(function*
   glob: string | undefined,
 ) {
   const walked = yield* walkFiles(directory, ".", directory);
-  let excluded = walked.excluded;
-  const paths: string[] = [];
-  for (const relative of walked.files) {
-    if (glob !== undefined && !matchesGlob(relative, glob)) continue;
-    const absolute = join(directory, relative);
-    if (isCredentialPath(absolute)) excluded++;
-    else paths.push(absolute);
-  }
-  paths.sort();
-  return { paths, source: "walk", excluded, truncated: walked.truncated } satisfies FileListing;
+  const listed = walked.files
+    .filter((relative) => glob === undefined || matchesGlob(relative, glob))
+    .map((relative) => join(directory, relative));
+  const paths = listed.filter((absolute) => !isCredentialPath(absolute));
+  return {
+    paths: paths.toSorted(),
+    source: "walk",
+    excluded: walked.excluded + listed.length - paths.length,
+    truncated: walked.truncated,
+  } satisfies FileListing;
 });
 
 function listOutsideFilesBody(directory: string, glob: string | undefined): Promise<FileListing> {
@@ -298,10 +293,10 @@ export const createSnapshots = (capacity = 32) =>
           ...listing,
         };
         MutableHashMap.set(entries, snapshot.id, snapshot);
-        for (const id of MutableHashMap.keys(entries)) {
-          if (MutableHashMap.size(entries) <= capacity) break;
-          MutableHashMap.remove(entries, id);
-        }
+        // Keys come out oldest first; the snapshot just added is the newest.
+        Array.from(MutableHashMap.keys(entries))
+          .slice(0, Math.max(0, MutableHashMap.size(entries) - capacity))
+          .forEach((id) => MutableHashMap.remove(entries, id));
         return snapshot;
       },
 

@@ -379,10 +379,18 @@ export const resolveFencedOutsidePath = Effect.fn("Paths.resolveFencedOutsidePat
   kind: "file" | "directory" | "new-or-file",
 ): Effect.fn.Return<OutsidePath, PathRejected | PlatformError.PlatformError> {
   const resolved = yield* resolveOutsidePathBody(projectRoot, storageRoot, path, kind);
-  for (const denied of fence?.deniedRoots ?? []) {
-    const root = yield* canonicalPathEffect(denied);
-    if (pathsOverlap(root, resolved.absolute) || (yield* isSameOrBelow(denied, resolved.absolute)))
-      return yield* reject(path, "outside_tool_root");
-  }
+  yield* Effect.forEach(
+    fence?.deniedRoots ?? [],
+    (denied) =>
+      Effect.gen(function* () {
+        const root = yield* canonicalPathEffect(denied);
+        if (
+          pathsOverlap(root, resolved.absolute) ||
+          (yield* isSameOrBelow(denied, resolved.absolute))
+        )
+          return yield* reject(path, "outside_tool_root");
+      }),
+    { discard: true },
+  );
   return resolved;
 });

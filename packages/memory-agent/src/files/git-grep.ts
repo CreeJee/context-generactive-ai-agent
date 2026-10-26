@@ -3,7 +3,7 @@ import { isTruthy } from "../truthy.ts";
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Effect, HashSet, Layer, Path, Stream, Cause } from "effect";
+import { Context, Effect, HashSet, Layer, Match, Path, Stream, Cause } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
 
@@ -103,15 +103,12 @@ export const gitGrepFilesEffect = (options: {
             (text, chunk) => text + chunk,
           ),
         );
-        const code = yield* child.exitCode;
-        switch (Number(code)) {
-          case 0:
-            return HashSet.fromIterable(stdout.split("\0").filter(Boolean));
-          case 1:
-            return HashSet.empty<string>();
-          default:
-            return null;
-        }
+        // git grep exits 1 when nothing matched; any other failure leaves the search to the caller.
+        return Match.value(Number(yield* child.exitCode)).pipe(
+          Match.when(0, () => HashSet.fromIterable(stdout.split("\0").filter(Boolean))),
+          Match.when(1, () => HashSet.empty<string>()),
+          Match.orElse(() => null),
+        );
       }),
     ).pipe(
       // Without a usable git grep the caller searches the files itself.
