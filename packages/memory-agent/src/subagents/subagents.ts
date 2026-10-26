@@ -1,7 +1,7 @@
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { Array as Arr, type Data, HashSet } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
-import { Result, Function as EffectFunction } from "effect";
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { projectInstructions } from "../agent/project-instructions.ts";
@@ -23,6 +23,7 @@ import {
   Effect,
   FiberMap,
   Layer,
+  Match,
   Option,
   Ref,
   Schema,
@@ -30,6 +31,8 @@ import {
 import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
+import type { ConversationMessage } from "../agent/compaction.ts";
+import type { JsonValue } from "../json.ts";
 import { asRunFailed, type RunHook, StepEnded } from "../loop/run.ts";
 import { finishedRun } from "../loop/store.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -165,42 +168,46 @@ const ChildResultInput = Schema.Struct({
 });
 const childResultPageLength = 4_000;
 
+const isText = Schema.is(Schema.String);
+
 /** Model-only child history reduction; the child's stored transcript remains unchanged. */
 export const compactChildToolResults: {
   (
     savedCallIds: HashSet.HashSet<string>,
-  ): (messages: readonly ModelMessage[]) => ReturnType<typeof compactChildToolResultsBody>;
-} & typeof compactChildToolResultsBody = EffectFunction.dual(2, compactChildToolResultsBody);
-function compactChildToolResultsBody(
-  messages: readonly ModelMessage[],
+  ): <M extends ConversationMessage>(messages: ReadonlyArray<M>) => ReadonlyArray<M>;
+  <M extends ConversationMessage>(
+    messages: ReadonlyArray<M>,
+    savedCallIds: HashSet.HashSet<string>,
+  ): ReadonlyArray<M>;
+} = EffectFunction.dual(2, compactChildToolResultsBody);
+function compactChildToolResultsBody<M extends ConversationMessage>(
+  messages: ReadonlyArray<M>,
   savedCallIds: HashSet.HashSet<string>,
-): readonly ModelMessage[] {
+): ReadonlyArray<M> {
   const answered = messages
     .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
     .lastIndexOf(true);
-  return messages.map((message, index) => {
-    if (
-      message.role !== "tool" ||
-      !isTruthy(message.toolCallId) ||
-      !HashSet.has(savedCallIds, message.toolCallId) ||
-      !Schema.is(Schema.String)(message.content) ||
-      message.content.length <= childResultPageLength ||
-      message.content.startsWith("[Completed child tool result")
-    )
-      return message;
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    const content = EffectFunction.flow(
-      Schema.decodeResult(Schema.String),
-      Result.getOrThrow,
-    )(message.content);
-    return {
-      ...message,
-      content:
-        index < answered
-          ? `[Completed child tool result saved in this subagent's transcript. toolCallId: ${message.toolCallId}; ${message.content.length} characters. Call read_subagent_tool_result with this toolCallId and offset 0 for a bounded page.]`
-          : `[Child tool result preview; full result saved in this subagent's transcript. toolCallId: ${message.toolCallId}; ${content.length} characters. Call read_subagent_tool_result before relying on omitted content.]\n${content.slice(0, 2000)}\n… [omitted] …\n${content.slice(-1000)}`,
-    };
-  });
+  const pointer = (message: M, index: number) =>
+    Option.gen(function* () {
+      const toolCallId = yield* Option.filter(
+        Option.fromNullishOr(message.role === "tool" ? message.toolCallId : undefined),
+        (id) => id.length > 0 && HashSet.has(savedCallIds, id),
+      );
+      const content: string = yield* Option.filter(
+        Option.liftPredicate(message.content, isText),
+        (text) =>
+          text.length > childResultPageLength && !text.startsWith("[Completed child tool result"),
+      );
+      return index < answered
+        ? `[Completed child tool result saved in this subagent's transcript. toolCallId: ${toolCallId}; ${content.length} characters. Call read_subagent_tool_result with this toolCallId and offset 0 for a bounded page.]`
+        : `[Child tool result preview; full result saved in this subagent's transcript. toolCallId: ${toolCallId}; ${content.length} characters. Call read_subagent_tool_result before relying on omitted content.]\n${content.slice(0, 2000)}\n… [omitted] …\n${content.slice(-1000)}`;
+    });
+  return messages.map((message, index) =>
+    Option.match(pointer(message, index), {
+      onNone: () => message,
+      onSome: (content) => ({ ...message, content }),
+    }),
+  );
 }
 
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
@@ -502,10 +509,106 @@ const make = Effect.gen(function* () {
     );
 
   /**
-   * A child cannot pause its parent's run for a TanStack approval, so its gated calls wait here
-   * instead: the review decides first in `auto` mode, and anything left goes to the user, who
-   * answers on the page. Decisions are kept with the parent session's permission reviews.
+   * A child cannot pause its parent's run to ask, so its gated calls wait here instead: the review
+   * decides first in `auto` mode, and anything left goes to the user, who answers on the page.
+   * Decisions are kept with the parent session's permission reviews. Gives what the call answers
+   * instead of running, or none when it may run.
    */
+  const relayDecision = (
+    binding: SubagentBinding,
+    row: SubagentRow,
+    handle: AttemptHandle,
+    signal: AbortSignal,
+    call: { readonly id: string; readonly name: string; readonly written: string },
+  ) => {
+    const record = (
+      decision: "allow" | "ask" | "block" | "approved" | "denied",
+      decidedBy: "classifier" | "fallback" | "user",
+      reason: string,
+    ) =>
+      reviews.record({
+        sessionId: binding.sessionId,
+        toolCallId: `${subagentThreadId(row.id)}:${call.id}`,
+        toolName: call.name,
+        input: call.written,
+        decision,
+        decidedBy,
+        reason,
+      });
+    const askUser = (reason: string, askedBy: "review" | "every_call") =>
+      Effect.gen(function* () {
+        yield* trace.transitionAttempt(
+          handle,
+          binding.sessionId,
+          "waiting",
+          "approval_waiting",
+          `Waiting for approval: ${call.name}`,
+        );
+        const decision = relayed.ask(
+          binding.sessionId,
+          binding.runId,
+          {
+            requester: ApprovalRequester.cases.subagent.make({
+              subagentId: row.id,
+              name: row.name,
+            }),
+            toolName: call.name,
+            argumentsJson: call.written,
+            reason,
+            askedBy,
+          },
+          signal,
+        );
+        yield* events.publishSession(binding.sessionId, "relayed-approvals");
+        const approved = yield* nativePromise(() => decision);
+        yield* events.publishSession(binding.sessionId, "relayed-approvals");
+        yield* record(
+          approved ? "approved" : "denied",
+          "user",
+          approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+        );
+        yield* trace.transitionAttempt(
+          handle,
+          binding.sessionId,
+          "running",
+          "approval_resolved",
+          approved ? `Approved: ${call.name}` : `Denied: ${call.name}`,
+        );
+        return Option.liftPredicate<JsonValue>(
+          { approved: false, message: "User denied this action" },
+          () => !approved,
+        );
+      });
+    const reviewed = Effect.gen(function* () {
+      const verdict = yield* classifier.classify({
+        project: binding.project,
+        sessionId: binding.sessionId,
+        selection: binding.selection,
+        toolName: call.name,
+        argumentsJson: call.written,
+      });
+      yield* record(verdict.decision, verdict.decidedBy, verdict.reason);
+      return yield* Match.value(verdict.decision).pipe(
+        Match.when("allow", () => Effect.succeedNone),
+        Match.when("block", () =>
+          Effect.succeedSome<JsonValue>({
+            error: `blocked_by_permission_review: ${verdict.reason}`,
+          }),
+        ),
+        Match.when("ask", () => askUser(verdict.reason, "review")),
+        Match.exhaustive,
+      );
+    });
+    return HashSet.has(binding.gated, call.name)
+      ? Match.value(binding.project.permissionMode).pipe(
+          Match.when("full", () => Effect.succeedNone),
+          Match.when("auto", () => reviewed),
+          Match.orElse(() => askUser(everyCallReason, "every_call")),
+        )
+      : Effect.succeedNone;
+  };
+
+  /** {@link relayDecision} for a TanStack child run. */
   const relayGate = (
     binding: SubagentBinding,
     row: SubagentRow,
@@ -516,95 +619,18 @@ const make = Effect.gen(function* () {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     onBeforeToolCall(_ctx, hook) {
       return runEffect(
-        Effect.gen(function* () {
-          if (!HashSet.has(binding.gated, hook.toolName)) return undefined;
-          const argumentsJson = hook.toolCall.function.arguments;
-          const toolCallId = `${subagentThreadId(row.id)}:${hook.toolCallId}`;
-          const record = (
-            decision: "allow" | "ask" | "block" | "approved" | "denied",
-            decidedBy: "classifier" | "fallback" | "user",
-            reason: string,
-          ) =>
-            reviews.record({
-              sessionId: binding.sessionId,
-              toolCallId,
-              toolName: hook.toolName,
-              input: argumentsJson,
-              decision,
-              decidedBy,
-              reason,
-            });
-
-          if (binding.project.permissionMode === "full") return undefined;
-
-          let reason = everyCallReason;
-          let askedBy: "review" | "every_call" = "every_call";
-          if (binding.project.permissionMode === "auto") {
-            const verdict = yield* classifier.classify({
-              project: binding.project,
-              sessionId: binding.sessionId,
-              selection: binding.selection,
-              toolName: hook.toolName,
-              argumentsJson,
-            });
-            yield* record(verdict.decision, verdict.decidedBy, verdict.reason);
-            switch (verdict.decision) {
-              case "allow":
-                return undefined;
-              case "block":
-                return {
-                  type: "skip" as const,
-                  result: { error: `blocked_by_permission_review: ${verdict.reason}` },
-                };
-              case "ask":
-                reason = verdict.reason;
-                askedBy = "review";
-            }
-          }
-          yield* trace.transitionAttempt(
-            handle,
-            binding.sessionId,
-            "waiting",
-            "approval_waiting",
-            `Waiting for approval: ${hook.toolName}`,
-          );
-          const decision = relayed.ask(
-            binding.sessionId,
-            binding.runId,
-            {
-              requester: ApprovalRequester.cases.subagent.make({
-                subagentId: row.id,
-                name: row.name,
-              }),
-              toolName: hook.toolName,
-              argumentsJson,
-              reason,
-              askedBy,
-            },
-            signal,
-          );
-          yield* events.publishSession(binding.sessionId, "relayed-approvals");
-          const approved = yield* nativePromise(() => decision);
-          yield* events.publishSession(binding.sessionId, "relayed-approvals");
-          yield* record(
-            approved ? "approved" : "denied",
-            "user",
-            approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
-          );
-          yield* trace.transitionAttempt(
-            handle,
-            binding.sessionId,
-            "running",
-            "approval_resolved",
-            approved ? `Approved: ${hook.toolName}` : `Denied: ${hook.toolName}`,
-          );
-          return approved
-            ? undefined
-            : {
-                type: "skip" as const,
-                result: { approved: false, message: "User denied this action" },
-              };
-        }),
+        relayDecision(binding, row, handle, signal, {
+          id: hook.toolCallId,
+          name: hook.toolName,
+          written: hook.toolCall.function.arguments,
+        }).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => undefined,
+              onSome: (result) => ({ type: "skip" as const, result }),
+            }),
+          ),
+        ),
       );
     },
   });
