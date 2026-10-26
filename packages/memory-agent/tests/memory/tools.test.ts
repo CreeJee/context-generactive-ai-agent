@@ -2,6 +2,7 @@ import { chat } from "@tanstack/ai";
 import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
+import { btwEvidenceRunTools, btwEvidenceTools } from "../../src/btw/tools.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { EvidenceReadFailed } from "../../src/memory/evidence.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
@@ -789,6 +790,19 @@ testAgent()("memory tools per run", (it) => {
         { kind: "retrieved", parentRunId: runB },
         { kind: "used", parentRunId: runB },
       ]);
+    }),
+  );
+
+  it.effect("btw's Effect AI evidence tools ask as its TanStack ones", () =>
+    Effect.gen(function* () {
+      const { projectId } = yield* freshSession;
+      const env = yield* environment;
+      expect(
+        yield* runToolRequestDifferences({
+          chatTools: btwEvidenceTools(env, projectId),
+          runTools: btwEvidenceRunTools({ env, projectId }),
+        }),
+      ).toEqual([undefined, undefined, undefined]);
     }),
   );
 

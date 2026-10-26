@@ -307,6 +307,37 @@ function createMemoryToolsBody(
   };
 }
 
+/** Runs a call of {@link memoryCalls} on these services, keeping the caller's fiber and span. */
+const providedBy =
+  (context: Context.Context<MemoryService>) =>
+  <I, A, E>(call: (input: I) => Effect.Effect<A, E, MemoryService>) =>
+  (input: I) =>
+    Effect.provideContext(call(input), context);
+
+const readRunTools = (
+  calls: ReturnType<ReturnType<typeof memoryCalls>["reads"]>,
+  provided: ReturnType<typeof providedBy>,
+) => [
+  runTool({ ...findMemory, handler: provided(calls.findMemory) }),
+  runTool({ ...readEvidence, handler: provided(calls.readEvidence) }),
+  runTool({ ...traceEvidence, handler: provided(calls.traceEvidence) }),
+];
+
+/**
+ * The read-only memory tools for the Effect AI loop (docs/effect-ai-migration.md step 3), with no
+ * run binding: nothing records a retrieval, a use or a promotion. The calls run on the loop's
+ * fiber, so `env.caller` is not used.
+ */
+export const memoryReadRunTools = ({
+  env,
+  projectId,
+  scope,
+}: {
+  readonly env: MemoryToolEnvironment;
+  readonly projectId: string;
+  readonly scope?: MemoryToolScope;
+}) => readRunTools(memoryCalls(projectId, scope).reads(), providedBy(memoryServices(env)));
+
 const make = Effect.gen(function* () {
   const services: MemoryToolEnvironment = {
     search: yield* MemorySearch,
@@ -358,19 +389,12 @@ const make = Effect.gen(function* () {
      * middleware's finish.
      */
     runToolsFor: (binding: RunBinding, scope?: MemoryToolScope) => {
-      const context = memoryServices(services);
-      const provided =
-        <I, A, E>(call: (input: I) => Effect.Effect<A, E, MemoryService>) =>
-        (input: I) =>
-          Effect.provideContext(call(input), context);
+      const provided = providedBy(memoryServices(services));
       const { reads, runCalls } = memoryCalls(binding.projectId, scope);
-      const calls = reads(runBinding(binding));
       const bound = runCalls(runBinding(binding));
       return {
         tools: [
-          runTool({ ...findMemory, handler: provided(calls.findMemory) }),
-          runTool({ ...readEvidence, handler: provided(calls.readEvidence) }),
-          runTool({ ...traceEvidence, handler: provided(calls.traceEvidence) }),
+          ...readRunTools(reads(runBinding(binding)), provided),
           runTool({ ...readToolResult, handler: provided(bound.readToolResult) }),
           runTool({ ...promoteMemoryCandidate, handler: provided(bound.promote) }),
           runTool({ ...usePromotedMemory, handler: bound.useMemory }),

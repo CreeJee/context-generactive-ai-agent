@@ -394,7 +394,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 결과(2026-10-26, 진행 중): 모두 `packages/memory-agent/src` 아래다.
   - 도구 단위는 `tools/run-tool.ts`의 `RunTool`이다. 모델에 알리는 Effect AI `Tool`, lazy 여부, 인자를 decode해 실행할 호출을 만드는 `prepare`를 담는다. `runTool`이 이름·설명·parameters와 handler로 만든다.
   - `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode를 먼저 하고 게이트를 거친 뒤 실행하므로 둘을 나눠야 한다. handler마다 다른 타입은 closure로 감춘다.
-  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), report 증거 도구(`tools/report-evidence.ts`).
+  - 도구 모듈은 같은 spec과 handler로 TanStack 도구와 `RunTool`을 함께 만든다. TanStack 쪽은 7단계까지 Promise 경계로 남는다. 옮긴 것: 파일 도구와 SVG 미리보기(`tools/files.ts`, `attachments/previews.ts`), 프로젝트 밖 읽기(`tools/outside.ts`), 기억 도구(`tools/memory.ts`), btw 증거 도구(`btw/tools.ts`), report 증거 도구(`tools/report-evidence.ts`).
   - provider 요청은 TanStack과 같다(`tests/tools/run-tools.test.ts`, `tests/model/tool-schema.test.ts`). parameters는 TanStack처럼 draft-07에서 `$schema`를 빼고, object에 `type`·`properties`·`required`를 채운다(`model/tool-schema.ts`).
   - lazy discovery는 `tools/discovery.ts`의 `lazyToolsFor`다. TanStack `LazyToolManager`와 같은 이름·설명·답을 쓰고, history에서 이미 찾은 도구는 처음부터 연다.
   - 결과는 TanStack처럼 JSON으로 바꾼다. 문자열은 JSON으로 읽히면 읽은 값을, 아니면 문자열 그대로 쓴다. 나머지는 JSON으로 바꾸므로 undefined 필드가 빠진다.

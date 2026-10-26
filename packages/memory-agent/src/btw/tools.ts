@@ -1,6 +1,10 @@
 import type { AnyServerTool, ChatMiddleware } from "@tanstack/ai";
 import { Function as EffectFunction, Schema } from "effect";
-import { createMemoryTools, type MemoryToolEnvironment } from "../tools/memory.ts";
+import {
+  createMemoryTools,
+  memoryReadRunTools,
+  type MemoryToolEnvironment,
+} from "../tools/memory.ts";
 import { BtwToolName } from "./contracts.ts";
 
 const allowed = Schema.is(BtwToolName);
@@ -15,6 +19,15 @@ export const btwEvidenceTools: {
 function btwEvidenceToolsBody(env: MemoryToolEnvironment, projectId: string): AnyServerTool[] {
   return [...createMemoryTools(env, projectId, undefined, "project").tools];
 }
+
+/** {@link btwEvidenceTools} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+export const btwEvidenceRunTools = ({
+  env,
+  projectId,
+}: {
+  readonly env: MemoryToolEnvironment;
+  readonly projectId: string;
+}) => memoryReadRunTools({ env, projectId, scope: "project" });
 
 /**
  * Server-side allowlist. Drops any other tool from every model request and refuses a call to one
