@@ -13,7 +13,11 @@ import { Attachments } from "../attachments/attachments.ts";
 import { messageText } from "../messages/text.ts";
 import { SqlClient } from "effect/sql";
 import { Nodes } from "../memory/nodes.ts";
-import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run-state.ts";
+import {
+  interruptContinuationLostCode,
+  serverRestartedCode,
+  serverRestartedMessage,
+} from "../agent/run-state.ts";
 import {
   latestChatRun,
   migrateLegacyChatThreads,
@@ -101,7 +105,7 @@ const make = Effect.gen(function* () {
       sql`
         UPDATE chat_runs
         SET status = 'failed', finished_at = ${restartedAt},
-            error = 'The server stopped before this answer finished.',
+            error = ${serverRestartedMessage},
             error_code = ${serverRestartedCode}
         WHERE status IN ('running', 'interrupted')`,
     ),
@@ -150,7 +154,7 @@ const make = Effect.gen(function* () {
                 yield* sql`
                   UPDATE chat_runs
                   SET status = 'failed', finished_at = ${yield* Clock.currentTimeMillis},
-                      error = 'The server stopped before this answer finished.',
+                      error = ${serverRestartedMessage},
                       error_code = ${serverRestartedCode}
                   WHERE run_id = ${ctx.runId} AND status = 'aborted'`;
             }),

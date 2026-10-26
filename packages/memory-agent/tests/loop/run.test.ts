@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, type Crypto, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Context, type Crypto, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
@@ -216,6 +216,25 @@ describe("run loop", () => {
         expect(events.map(({ type }) => type)).toEqual(["RUN_STARTED", "RUN_FINISHED"]);
         expect(events.at(-1)).toMatchObject({ outcome: { type: "cancelled" } });
         expect(yield* runs).toEqual([{ run_id: "run-1", status: "aborted", error: null }]);
+      }),
+    ),
+  );
+
+  it.effect("records a run interrupted without a cancel as stopped by the server", () =>
+    withRows(
+      Effect.gen(function* () {
+        const asked = yield* Deferred.make<void>();
+        const { run } = yield* harness({
+          text: "never sent",
+          waitFor: Effect.andThen(Deferred.succeed(asked, undefined), Effect.never),
+        });
+
+        const running = yield* Effect.forkChild(run("run-1", [user]));
+        yield* Deferred.await(asked);
+        yield* Fiber.interrupt(running);
+        expect(yield* rows("SELECT run_id, status, error_code FROM chat_runs")).toEqual([
+          { run_id: "run-1", status: "failed", error_code: "server_restarted" },
+        ]);
       }),
     ),
   );

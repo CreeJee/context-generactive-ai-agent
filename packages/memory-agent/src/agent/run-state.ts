@@ -10,6 +10,8 @@ import type { UncertainRun } from "../workflow/uncertain-runs.ts";
 
 /** Error code on runs that were still producing when the previous server process ended. */
 export const serverRestartedCode = "server_restarted";
+/** The error of those runs. */
+export const serverRestartedMessage = "The server stopped before this answer finished.";
 
 /** Error code after the user discards an approval whose continuation can no longer start. */
 export const interruptContinuationLostCode = "interrupt_continuation_lost";

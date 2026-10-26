@@ -41,6 +41,7 @@ import { optionalProperty } from "../optional-property.ts";
 import { lazyToolsFor, ToolLookup } from "../tools/discovery.ts";
 import { jsonSchemaIssues, prepareRepaired } from "../tools/input-repair.ts";
 import type { RunTool } from "../tools/run-tool.ts";
+import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
 import type { AgUiEvent } from "./chunks.ts";
 import { type ResumeEntry, type ResumeRejected, type Resumed, resumeAnswers } from "./resume.ts";
 import {
@@ -935,27 +936,40 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       yield* ended(end, saved);
     }).pipe(Effect.ignore({ log: "Warn" }));
 
+  const failedWith = (failure: RunFailed) =>
+    Effect.gen(function* () {
+      yield* stoppedAt(
+        "error",
+        RunEnd.Failed({ message: failure.message, code: Option.fromNullishOr(failure.code) }),
+      );
+      yield* emit({
+        type: "RUN_ERROR",
+        message: failure.message,
+        ...optionalProperty("code", failure.code),
+      });
+    });
+
+  const aborted = stoppedAt("aborted", RunEnd.Aborted()).pipe(
+    Effect.andThen(emit({ type: "RUN_FINISHED", threadId, runId, outcome: { type: "cancelled" } })),
+  );
+
+  /** The user cancelled the run. A run interrupted without it was stopped by the server. */
+  const cancelled = yield* Ref.make(false);
+
   const stopped = (cause: Cause.Cause<RunFailed>) =>
     Cause.hasInterruptsOnly(cause)
-      ? stoppedAt("aborted", RunEnd.Aborted()).pipe(
-          Effect.andThen(
-            emit({ type: "RUN_FINISHED", threadId, runId, outcome: { type: "cancelled" } }),
-          ),
+      ? Effect.flatMap(Ref.get(cancelled), (byUser) =>
+          byUser
+            ? aborted
+            : failedWith(
+                RunFailed.make({ message: serverRestartedMessage, code: serverRestartedCode }),
+              ),
         )
-      : Effect.gen(function* () {
-          const failure = Option.getOrElse(Cause.findErrorOption(cause), () =>
+      : failedWith(
+          Option.getOrElse(Cause.findErrorOption(cause), () =>
             RunFailed.make({ message: "The run stopped unexpectedly." }),
-          );
-          yield* stoppedAt(
-            "error",
-            RunEnd.Failed({ message: failure.message, code: Option.fromNullishOr(failure.code) }),
-          );
-          yield* emit({
-            type: "RUN_ERROR",
-            message: failure.message,
-            ...optionalProperty("code", failure.code),
-          });
-        });
+          ),
+        );
 
   const running = Effect.gen(function* () {
     yield* Ref.set(usage, yield* store.startRun(run));
@@ -984,7 +998,12 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   );
 
   const fiber = yield* Effect.forkChild(running);
-  yield* Effect.forkChild(Effect.andThen(input.cancel, Fiber.interrupt(fiber)));
+  yield* Effect.forkChild(
+    input.cancel.pipe(
+      Effect.andThen(Ref.set(cancelled, true)),
+      Effect.andThen(Fiber.interrupt(fiber)),
+    ),
+  );
   yield* Fiber.await(fiber);
 });
 
