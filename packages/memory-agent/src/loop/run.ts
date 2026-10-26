@@ -91,11 +91,14 @@ export interface AnsweredCall {
   readonly answer: CallAnswer;
 }
 
-/** A model step that ended, with its message and the calls that got answers. */
-export interface StepEnded {
-  readonly message: AssistantMessage;
-  readonly answered: ReadonlyArray<AnsweredCall>;
-}
+/** A step that ended, with the message whose calls it ran and the calls that got answers. */
+export type StepEnded = Data.TaggedEnum<{
+  /** The model wrote `message` in this step. */
+  Model: { readonly message: AssistantMessage; readonly answered: ReadonlyArray<AnsweredCall> };
+  /** A resume run answered calls that `message`, written by an earlier run, made. */
+  Resume: { readonly message: AssistantMessage; readonly answered: ReadonlyArray<AnsweredCall> };
+}>;
+export const StepEnded = Data.taggedEnum<StepEnded>();
 
 /** What the app adds to a run. Every member is optional; hooks run in the order they are listed. */
 export interface RunHook<R = never> {
@@ -139,7 +142,7 @@ export interface RunHook<R = never> {
     usage: Response.Usage,
     source: Source,
   ) => Effect.Effect<void, RunFailed, R>;
-  /** A model step ended and its calls that do not wait for the user got their answers. */
+  /** A step ended and its calls that do not wait for the user got their answers. */
   readonly stepEnded?: (scope: RunScope, step: StepEnded) => Effect.Effect<void, RunFailed, R>;
   /** The run goes on to another model step; a failure stops it instead. */
   readonly continues?: (
@@ -226,7 +229,7 @@ const decided = (admission: Admission<StoredInterruptPayload>) =>
 
 /** A call that never reaches its tool, as TanStack answered it: the failure text as its result. */
 const refused = (message: string) =>
-  decided(CallOutcome.Failed({ result: { error: message }, message }));
+  decided(CallOutcome.Refused({ result: { error: message }, message }));
 
 /** The arguments of a call as the model sent them. */
 interface SentArguments {
@@ -311,22 +314,25 @@ const approvalRequest = (call: StepCall, tool: RunTool) =>
 const contentOf = (result: JsonValue) =>
   Predicate.isString(result) ? Effect.succeed(result) : encodeJson(result);
 
-const toolMessage = ({ call, answer }: AnsweredCall) =>
-  Match.valueTags(answer, {
+const toolMessage = ({ call, answer }: AnsweredCall) => {
+  const failed = ({ result, message }: { readonly result: JsonValue; readonly message: string }) =>
+    Effect.map(contentOf(result), (content): ToolMessage => ({
+      role: "tool",
+      toolCallId: call.id,
+      content,
+      error: message,
+    }));
+  return Match.valueTags(answer, {
     Returned: ({ result }) =>
       Effect.map(contentOf(result), (content): ToolMessage => ({
         role: "tool",
         toolCallId: call.id,
         content,
       })),
-    Failed: ({ result, message }) =>
-      Effect.map(contentOf(result), (content): ToolMessage => ({
-        role: "tool",
-        toolCallId: call.id,
-        content,
-        error: message,
-      })),
+    Failed: failed,
+    Refused: failed,
   });
+};
 
 /** Calls in the order the model made them, split into those answered and those that wait. */
 const sorted = (
@@ -340,6 +346,7 @@ const sorted = (
         Waiting: (): ReadonlyArray<AnsweredCall> => [],
         Returned: (answer) => [{ call, answer }],
         Failed: (answer) => [{ call, answer }],
+        Refused: (answer) => [{ call, answer }],
       }),
     ),
     waiting: pairs.flatMap(([, outcome]) =>
@@ -506,6 +513,13 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       { discard: true },
     );
 
+  const stepEnded = (step: StepEnded) =>
+    Effect.forEach(
+      hooks.flatMap((hook) => hook.stepEnded ?? []),
+      (hook) => hook(scope, step),
+      { discard: true },
+    );
+
   const ended = (end: RunEnd, saved: ReadonlyArray<StoredMessage>) =>
     Effect.forEach(
       hooks.flatMap((hook) => hook.ended ?? []),
@@ -636,6 +650,11 @@ const runAccepted = Effect.fnUntraced(function* <R>(
         onSome: (assistant) => placed(current, assistant, added),
       });
       yield* Ref.set(conversation, next);
+      yield* Effect.transposeOption(
+        Option.map(last, (message) =>
+          stepEnded(StepEnded.Resume({ message, answered: outcome.answered })),
+        ),
+      );
       return {
         conversation: next,
         next: Arr.match(outcome.waiting, {
@@ -839,11 +858,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       );
       yield* Effect.transposeOption(
         Option.map(message, (written) =>
-          Effect.forEach(
-            hooks.flatMap((hook) => hook.stepEnded ?? []),
-            (hook) => hook(scope, { message: written, answered: outcome.answered }),
-            { discard: true },
-          ),
+          stepEnded(StepEnded.Model({ message: written, answered: outcome.answered })),
         ),
       );
       return {

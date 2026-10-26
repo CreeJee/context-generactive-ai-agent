@@ -91,7 +91,7 @@ describe("step scheduler", () => {
       expect(yield* started).toEqual(["r1"]);
       expect(outcomes[0]).toEqual(CallOutcome.Returned({ result: "r1" }));
       expect(outcomes[1]).toMatchObject({
-        _tag: "Failed",
+        _tag: "Refused",
         result: { error: "response_incomplete" },
       });
     }).pipe(Effect.scoped),

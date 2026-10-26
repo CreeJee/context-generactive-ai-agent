@@ -22,8 +22,13 @@ export interface StepCall {
 /** What a call answers the model with, or the user's decision it waits for. */
 export type CallOutcome<Request> = Data.TaggedEnum<{
   Returned: { readonly result: JsonValue };
-  /** `result` is what the model reads; `message` is the failure as stored and shown. */
+  /**
+   * The tool ran and failed. `result` is what the model reads; `message` is the failure as stored
+   * and shown.
+   */
   Failed: { readonly result: JsonValue; readonly message: string };
+  /** The call was refused before its tool ran, and is shown as failed like {@link Failed}. */
+  Refused: { readonly result: JsonValue; readonly message: string };
   Waiting: { readonly request: Request };
 }>;
 interface CallOutcomeDefinition extends Data.TaggedEnum.WithGenerics<1> {
@@ -54,6 +59,11 @@ const responseIncomplete = ToolFailed.make({
 const failedWith = (failure: ToolFailed): CallAnswer =>
   CallOutcome.Failed({ result: failure[toolResultKey], message: failure.message });
 
+const notStarted = CallOutcome.Refused({
+  result: responseIncomplete[toolResultKey],
+  message: responseIncomplete.message,
+});
+
 export interface StepScheduler<Request, E, R> {
   /**
    * Takes a call as the model makes it, with what the gates decide for it; the decision and the
@@ -80,27 +90,26 @@ export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options
   const finished = yield* Deferred.make<boolean>();
   const calls = yield* Ref.make<ReadonlyArray<Fiber.Fiber<CallOutcome<Request>, E>>>([]);
 
-  const started = (call: StepCall, run: Run["run"]) =>
-    HashSet.has(readOnlyToolNames, call.name)
-      ? run
-      : Deferred.await(finished).pipe(
-          Effect.flatMap((complete) => (complete ? run : Effect.fail(responseIncomplete))),
-        );
-
-  const answerOf = (call: StepCall, run: Run["run"]) =>
-    started(call, run).pipe(
-      Effect.match({
-        onSuccess: (result): CallAnswer => CallOutcome.Returned({ result }),
-        onFailure: failedWith,
-      }),
-      Effect.tap((answer) => options.answered(call, answer)),
-    );
+  const answerOf = (call: StepCall, run: Run["run"]) => {
+    const ran = Effect.match(run, {
+      onSuccess: (result): CallAnswer => CallOutcome.Returned({ result }),
+      onFailure: failedWith,
+    });
+    return (
+      HashSet.has(readOnlyToolNames, call.name)
+        ? ran
+        : Effect.flatMap(Deferred.await(finished), (complete) =>
+            complete ? ran : Effect.succeed(notStarted),
+          )
+    ).pipe(Effect.tap((answer) => options.answered(call, answer)));
+  };
 
   const outcomeOf = (call: StepCall) => (admission: Admission<Request>) =>
     Match.valueTags(admission, {
       Run: ({ run }) => answerOf(call, run),
       Returned: (answer) => Effect.as(options.answered(call, answer), answer),
       Failed: (answer) => Effect.as(options.answered(call, answer), answer),
+      Refused: (answer) => Effect.as(options.answered(call, answer), answer),
       Waiting: Effect.succeed,
     });
 
