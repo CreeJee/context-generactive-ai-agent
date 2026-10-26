@@ -1,5 +1,6 @@
 import { Function as EffectFunction } from "effect";
-import { Context, Data, Effect, HashSet, Layer, Schema } from "effect";
+import { Context, Data, Effect, HashSet, Layer, Option, Schema } from "effect";
+import { failedReasons } from "./failed-checks.ts";
 import {
   GlobalConfig,
   GlobalConfigFailed,
@@ -72,21 +73,25 @@ function decideModelFeatureFlagBody(
   query: ModelFeatureFlagQuery,
   known: HashSet.HashSet<string>,
 ): ModelFeatureFlagDecision {
-  const reasons: string[] = [];
-  if (!HashSet.has(known, query.capability)) reasons.push("unknown_capability");
-  if (settings === undefined) reasons.push("settings_missing");
-  else {
-    if (!settings.global) reasons.push("global_disabled");
-    if (settings.providers[query.provider] !== true) reasons.push("provider_disabled");
-    if (settings.capabilities[query.capability] !== true) reasons.push("capability_disabled");
-    if (
-      query.model !== undefined &&
-      settings.models[modelKey(query.provider, query.model)]?.[query.capability] === false
-    )
-      reasons.push("model_disabled");
-    if (query.route !== undefined && settings.routes[query.route] === false)
-      reasons.push("route_disabled");
-  }
+  const reasons = [
+    ...failedReasons([[!HashSet.has(known, query.capability), "unknown_capability"]]),
+    ...Option.match(Option.fromUndefinedOr(settings), {
+      onNone: () => ["settings_missing"],
+      onSome: (configured) =>
+        failedReasons([
+          [!configured.global, "global_disabled"],
+          [configured.providers[query.provider] !== true, "provider_disabled"],
+          [configured.capabilities[query.capability] !== true, "capability_disabled"],
+          [
+            query.model !== undefined &&
+              configured.models[modelKey(query.provider, query.model)]?.[query.capability] ===
+                false,
+            "model_disabled",
+          ],
+          [query.route !== undefined && configured.routes[query.route] === false, "route_disabled"],
+        ]),
+    }),
+  ];
   return Object.freeze({
     allowed: reasons.length === 0,
     reasons: Object.freeze(reasons),

@@ -1,4 +1,4 @@
-import { Effect, Function as EffectFunction, Schema } from "effect";
+import { Array as EffectArray, Effect, Function as EffectFunction, Option, Schema } from "effect";
 
 /** Used when the server never reports the model's real context window. */
 export const OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW = 32_000;
@@ -152,10 +152,12 @@ function compatibleEndpointModelBody(
   account: CompatibleAccount,
   modelId: string,
 ): OpenAICompatibleConfiguration | null {
-  const found = account.models.find((model) => model.id === modelId);
-  if (found === undefined) return null;
-  const { id, ...limits } = found;
-  return { ...limits, baseUrl: account.baseUrl, model: id };
+  return Option.getOrNull(
+    Option.map(
+      EffectArray.findFirst(account.models, (model) => model.id === modelId),
+      ({ id, ...limits }) => ({ ...limits, baseUrl: account.baseUrl, model: id }),
+    ),
+  );
 }
 
 export const CompatibleAccountStatus = Schema.Struct({
