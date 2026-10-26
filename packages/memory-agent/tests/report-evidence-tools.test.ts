@@ -8,8 +8,10 @@ import { SqlClient } from "effect/sql";
 import {
   initialReportEvidence,
   reportBinding,
+  reportRunToolsForSession,
   reportToolsForSession,
 } from "../src/tools/report-evidence.ts";
+import { runToolRequestDifferences } from "./support/requests.ts";
 
 const redactSecret = (text: string) => Effect.succeed(text.replaceAll("SECRET", "[redacted]"));
 const keep = (text: string) => Effect.succeed(text);
@@ -232,6 +234,26 @@ describe("report evidence tools", () => {
       expect(trace.text).toContain("[redacted] request");
       expect(trace.toolCallId).toBe("call-1");
       expect((yield* invoke("list_report_evidence", { section: "trace" })).items).toHaveLength(1);
+    }),
+  );
+
+  it.effect("the Effect AI tools ask and answer as the TanStack ones", () =>
+    Effect.gen(function* () {
+      const { db, tools, invoke } = yield* fixture;
+      const runTools = yield* over(db)(
+        reportRunToolsForSession("report", "p", redactSecret, Effect.succeed([])),
+      );
+      expect(yield* runToolRequestDifferences({ chatTools: tools, runTools })).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      const read = runTools.find((tool) => tool.tool.name === "read_report_item");
+      if (read === undefined) return expect.unreachable("Expected read_report_item");
+      const input = { section: "node", id: "result" };
+      expect(
+        yield* Effect.flatMap(read.prepare(input), (run) => run({ toolCallId: "call" })),
+      ).toEqual(yield* invoke("read_report_item", input));
     }),
   );
 });

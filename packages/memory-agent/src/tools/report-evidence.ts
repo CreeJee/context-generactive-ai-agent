@@ -3,7 +3,8 @@ import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Effect, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { toToolSchema } from "./schema.ts";
+import { runTool, type RunTool } from "./run-tool.ts";
+import { definitionOf } from "./schema.ts";
 
 const ReportBinding = Schema.Struct({
   sourceSessionId: Schema.String,
@@ -157,8 +158,22 @@ export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
   );
 });
 
-/** The trace callback must already be scoped to the source session; no session id is passed to it. */
-export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
+const listReportEvidence = {
+  name: "list_report_evidence",
+  description:
+    "List bounded, redacted evidence from this report's bound source session only. Sections: runs, approvals, transcript, calls, trace. Offset is capped at 200.",
+  parameters: ListInput,
+} as const;
+
+const readReportItem = {
+  name: "read_report_item",
+  description:
+    "Read one bounded, redacted run, approval, evidence node or Work Trace item belonging to this report's source. Never executes a tool.",
+  parameters: ReadInput,
+} as const;
+
+/** The report tools' calls, when the report is still bound to its source. */
+const reportCalls = Effect.fnUntraced(function* <E, TraceE>(
   reportSessionId: string,
   projectId: string,
   redact: Redact<E>,
@@ -166,8 +181,21 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
 ) {
   const sql = yield* SqlClient.SqlClient;
   const found = yield* reportBinding(reportSessionId, projectId);
-  if (Option.isNone(found)) return [];
-  const bound = found.value;
+  return Option.map(found, (bound) => boundReportCalls({ sql, bound, redact, taskTree }));
+});
+
+const boundReportCalls = <E, TraceE>({
+  sql,
+  bound,
+  redact,
+  taskTree,
+}: {
+  readonly sql: SqlClient.SqlClient;
+  readonly bound: ReportBinding;
+  readonly redact: Redact<E>;
+  readonly taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>;
+}) => {
+  const { reportSessionId, projectId } = bound;
   const current = reportBinding(reportSessionId, projectId).pipe(
     Effect.map(
       Option.exists(
@@ -230,100 +258,118 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
             AND kind IN ('user','assistant','tool_call','tool_result')`;
     }
   };
-  const list = toolDefinition({
-    name: "list_report_evidence",
-    description:
-      "List bounded, redacted evidence from this report's bound source session only. Sections: runs, approvals, transcript, calls, trace. Offset is capped at 200.",
-    inputSchema: toToolSchema(ListInput),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server((input) =>
-    runNativeEffect(
-      Effect.gen(function* () {
-        const { section, offset } = yield* Schema.decodeEffect(ListInput)(input);
-        if (!(yield* current)) return absent;
-        if (section === "trace") {
-          const all = yield* traces;
-          const items = all.slice(offset, offset + PAGE);
-          return {
-            section,
-            items: yield* Effect.forEach(
-              items,
-              (item) =>
-                Effect.gen(function* () {
-                  return {
-                    id: item.id,
-                    status: item.status,
-                    time: item.createdAt,
-                    toolCallId: item.parentToolCallId,
-                    ...(yield* limited(item.title)),
-                  };
-                }),
-              { concurrency: "unbounded" },
-            ),
-            nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
-          };
-        }
-        const rows = yield* listed(section, offset).pipe(Effect.flatMap(reportRows));
+  const list = ({ section, offset }: typeof ListInput.Type) =>
+    Effect.gen(function* () {
+      if (!(yield* current)) return absent;
+      if (section === "trace") {
+        const all = yield* traces;
+        const items = all.slice(offset, offset + PAGE);
         return {
           section,
           items: yield* Effect.forEach(
-            rows.slice(0, PAGE),
-            (row) =>
+            items,
+            (item) =>
               Effect.gen(function* () {
                 return {
-                  id: String(row.id),
-                  status: row.status,
-                  time: row.time,
-                  toolCallId: row.toolCallId,
-                  ...(yield* limited(row.text)),
+                  id: item.id,
+                  status: item.status,
+                  time: item.createdAt,
+                  toolCallId: item.parentToolCallId,
+                  ...(yield* limited(item.title)),
                 };
               }),
             { concurrency: "unbounded" },
           ),
-          nextOffset: rows.length > PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
+          nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
         };
-      }),
-    ),
-  );
-  const read = toolDefinition({
-    name: "read_report_item",
-    description:
-      "Read one bounded, redacted run, approval, evidence node or Work Trace item belonging to this report's source. Never executes a tool.",
-    inputSchema: toToolSchema(ReadInput),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server((input) =>
-    runNativeEffect(
-      Effect.gen(function* () {
-        const { section, id } = yield* Schema.decodeEffect(ReadInput)(input);
-        if (!(yield* current)) return absent;
-        if (section === "trace") {
-          const item = (yield* traces).find((entry) => entry.id === id);
-          if (!isTruthy(item)) return absent;
-          return {
-            id,
-            section,
-            status: item.status,
-            time: item.createdAt,
-            toolCallId: item.parentToolCallId,
-            ...(yield* limited([item.title, item.request, item.latestActivity ?? ""].join("\n"))),
-          };
-        }
-        // Numeric ids are canonicalized to prevent accepting prefixes or coercing arbitrary ids.
-        if (section === "approval" && (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))))
-          return absent;
-        const [row] = yield* item(section, id).pipe(Effect.flatMap(reportRows));
-        if (!isTruthy(row)) return absent;
+      }
+      const rows = yield* listed(section, offset).pipe(Effect.flatMap(reportRows));
+      return {
+        section,
+        items: yield* Effect.forEach(
+          rows.slice(0, PAGE),
+          (row) =>
+            Effect.gen(function* () {
+              return {
+                id: String(row.id),
+                status: row.status,
+                time: row.time,
+                toolCallId: row.toolCallId,
+                ...(yield* limited(row.text)),
+              };
+            }),
+          { concurrency: "unbounded" },
+        ),
+        nextOffset: rows.length > PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
+      };
+    });
+  const read = ({ section, id }: typeof ReadInput.Type) =>
+    Effect.gen(function* () {
+      if (!(yield* current)) return absent;
+      if (section === "trace") {
+        const item = (yield* traces).find((entry) => entry.id === id);
+        if (!isTruthy(item)) return absent;
         return {
-          id: String(row.id),
+          id,
           section,
-          status: row.status,
-          time: row.time,
-          toolCallId: row.toolCallId,
-          ...(yield* limited(row.text)),
+          status: item.status,
+          time: item.createdAt,
+          toolCallId: item.parentToolCallId,
+          ...(yield* limited([item.title, item.request, item.latestActivity ?? ""].join("\n"))),
         };
-      }),
-    ),
-  );
-  const tools: AnyServerTool[] = [list, read];
-  return tools;
+      }
+      // Numeric ids are canonicalized to prevent accepting prefixes or coercing arbitrary ids.
+      if (section === "approval" && (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))))
+        return absent;
+      const [row] = yield* item(section, id).pipe(Effect.flatMap(reportRows));
+      if (!isTruthy(row)) return absent;
+      return {
+        id: String(row.id),
+        section,
+        status: row.status,
+        time: row.time,
+        toolCallId: row.toolCallId,
+        ...(yield* limited(row.text)),
+      };
+    });
+  return { list, read };
+};
+
+/** The trace callback must already be scoped to the source session; no session id is passed to it. */
+export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
+  reportSessionId: string,
+  projectId: string,
+  redact: Redact<E>,
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
+) {
+  const calls = yield* reportCalls(reportSessionId, projectId, redact, taskTree);
+  return Option.match(calls, {
+    onNone: (): AnyServerTool[] => [],
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    onSome: ({ list, read }): AnyServerTool[] => [
+      toolDefinition(definitionOf(listReportEvidence)).server((input) =>
+        runNativeEffect(Effect.flatMap(Schema.decodeEffect(ListInput)(input), list)),
+      ),
+      toolDefinition(definitionOf(readReportItem)).server((input) =>
+        runNativeEffect(Effect.flatMap(Schema.decodeEffect(ReadInput)(input), read)),
+      ),
+    ],
+  });
+});
+
+/** {@link reportToolsForSession} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+export const reportRunToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
+  reportSessionId: string,
+  projectId: string,
+  redact: Redact<E>,
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
+) {
+  const calls = yield* reportCalls(reportSessionId, projectId, redact, taskTree);
+  return Option.match(calls, {
+    onNone: (): Array<RunTool> => [],
+    onSome: ({ list, read }) => [
+      runTool({ ...listReportEvidence, handler: list }),
+      runTool({ ...readReportItem, handler: read }),
+    ],
+  });
 });
