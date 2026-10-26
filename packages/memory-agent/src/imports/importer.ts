@@ -25,6 +25,7 @@ import {
   Schema,
   ScopedRef,
   Stream,
+  SynchronizedRef,
 } from "effect";
 import { RpcClient } from "effect/rpc";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -272,7 +273,9 @@ const make = (watching: boolean, home: string) =>
     );
 
     let activity: ImportActivity | null = null;
-    let running: Deferred.Deferred<number, ImportWorkerFailed> | null = null;
+    const running = yield* SynchronizedRef.make(
+      Option.none<Deferred.Deferred<number, ImportWorkerFailed>>(),
+    );
 
     const pass = (startedAt: string) =>
       request((current) =>
@@ -331,16 +334,18 @@ const make = (watching: boolean, home: string) =>
         }),
       );
 
-    /** The running pass, or a new one. Two passes would import a line twice before either marks it. */
-    const begin = Effect.suspend(() =>
-      Option.match(Option.fromNullishOr(running), {
-        onSome: Effect.succeed,
+    /**
+     * The running pass, or a new one. Two passes would import a line twice before either marks it,
+     * so the check and the start hold the ref together.
+     */
+    const begin = SynchronizedRef.modifyEffect(running, (current) =>
+      Option.match(current, {
+        onSome: (done) => Effect.succeed([done, current] as const),
         onNone: () =>
           Effect.gen(function* () {
             const effectClock = yield* Clock.Clock;
 
             const done = yield* Deferred.make<number, ImportWorkerFailed>();
-            running = done;
             const startedAt = DateTime.formatIso(
               DateTime.makeUnsafe(yield* Clock.currentTimeMillis),
             );
@@ -383,15 +388,13 @@ const make = (watching: boolean, home: string) =>
               Effect.map((progress) => progress.written),
               Effect.onExit((exit) =>
                 Effect.andThen(
-                  Effect.sync(() => {
-                    running = null;
-                  }),
+                  SynchronizedRef.set(running, Option.none()),
                   Deferred.done(done, exit),
                 ),
               ),
               Effect.forkIn(layerScope),
             );
-            return done;
+            return [done, Option.some(done)] as const;
           }),
       }),
     );
