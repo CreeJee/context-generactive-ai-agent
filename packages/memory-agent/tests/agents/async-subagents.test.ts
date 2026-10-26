@@ -3,6 +3,8 @@ import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import type { JsonValue } from "../../src/json.ts";
+import { StepEnded } from "../../src/loop/run.ts";
+import { RunEnd } from "../../src/loop/store.ts";
 import { messageText } from "../../src/messages/text.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import type { AdapterInvocation, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
@@ -366,7 +368,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         deliveredParentNotificationIds: HashSet.empty<string>(),
         gated: HashSet.empty<string>(),
       };
-      const { tools, hooks } = children.runToolsFor(binding);
+      const { tools, hook } = children.runToolsFor(binding);
       expect(
         yield* runToolRequestDifferences({
           chatTools: children.forRun({ ...binding, runId: "run-tanstack" }).tools,
@@ -402,7 +404,12 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         usedReportCount: 1,
         reflectedNotificationCount: 0,
       });
-      yield* hooks.recordAdoption("message-1");
+      // The run's answer ends it, so the adoption is recorded under that message.
+      const { stepEnded, ended } = yield* hook;
+      const scope = { threadId: sessionId, runId: binding.runId, emit: () => Effect.void };
+      const answer = { role: "assistant" as const, id: "message-1", content: "done" };
+      yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
+      yield* ended!(scope, RunEnd.Completed(), [answer]);
       expect(
         (yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims.flatMap(
           (claim) => claim.sources,

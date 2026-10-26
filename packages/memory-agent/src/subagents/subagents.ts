@@ -30,6 +30,8 @@ import {
 import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
+import { asRunFailed, type RunHook, StepEnded } from "../loop/run.ts";
+import { finishedRun } from "../loop/store.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
@@ -1547,13 +1549,39 @@ const make = Effect.gen(function* () {
     },
 
     /**
-     * {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). The loop calls
-     * `hooks` where TanStack called the middleware: `retry` as the run starts, `deliver` before each
-     * model call, `recordAdoption` once the answer is saved, and `release` when the run fails or
-     * stops.
+     * {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). Its `hook` does
+     * what the middleware did: retries the run's unfinished children as it starts, delivers status
+     * notifications before each model call, records what the last answer adopted once the run
+     * finishes or waits, and gives the notifications back when it fails or is cancelled.
      */
     runToolsFor(binding: SubagentBinding) {
       const parent = parentRun(binding);
+      const hook = Effect.map(Ref.make(Option.none<string>()), (written): RunHook => ({
+        started: () => parent.retry,
+        request: (_scope, request) =>
+          parent.deliver.pipe(
+            Effect.map(
+              Option.match({
+                onNone: () => request,
+                onSome: (notice) => ({ ...request, system: [...request.system, notice] }),
+              }),
+            ),
+            Effect.mapError(asRunFailed),
+          ),
+        stepEnded: (_scope, step) =>
+          StepEnded.$match(step, {
+            Model: ({ message }) => Ref.set(written, Option.fromNullishOr(message.id)),
+            Resume: () => Effect.void,
+          }),
+        ended: (_scope, end) =>
+          (finishedRun(end)
+            ? Effect.flatMap(
+                Ref.get(written),
+                Option.match({ onNone: () => Effect.void, onSome: parent.recordAdoption }),
+              )
+            : parent.release
+          ).pipe(Effect.ignore({ log: "Warn" })),
+      }));
       return {
         tools: [
           runTool({
@@ -1576,12 +1604,7 @@ const make = Effect.gen(function* () {
           }),
           runTool({ ...adoptSubagentReports, handler: parent.adopt }),
         ],
-        hooks: {
-          retry: parent.retry,
-          deliver: parent.deliver,
-          recordAdoption: parent.recordAdoption,
-          release: parent.release,
-        },
+        hook,
       };
     },
 
