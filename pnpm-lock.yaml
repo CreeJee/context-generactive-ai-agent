@@ -182,6 +182,9 @@ catalogs:
     '@dnd-kit/utilities':
       specifier: 3.2.2
       version: 3.2.2
+    '@effect/ai-openai-compat':
+      specifier: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
+      version: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
     '@effect/tsgo':
       specifier: 0.53.3
       version: 0.53.3
@@ -604,6 +607,9 @@ importers:
       '@anthropic-ai/sandbox-runtime':
         specifier: 'catalog:'
         version: 0.0.79
+      '@effect/ai-openai-compat':
+        specifier: 'catalog:'
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
         version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
@@ -973,6 +979,12 @@ packages:
 
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
+
+  '@effect/ai-openai-compat@https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7':
+    resolution: {integrity: sha512-RKjyPkZFzA3ZZTeghZ2K6ejPABeQ6B3GFxqYxhXn6t+L7daPpks8a7xAK8EImwBUsEZKx3Y2wVbUxG+N4PgYZA==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7}
+    version: 4.0.3
+    peerDependencies:
+      effect: ^4.0.3
 
   '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7':
     resolution: {integrity: sha512-so2qmRvmS9+9CRG4t2tEXTcjxu/zaUa9FNfbuUoK8gu9mEycWD/kt7iiT/d0rTfy6DsyVxn19lx3d5eWMEAZww==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7}
@@ -5943,6 +5955,10 @@ snapshots:
       yocto-spinner: 1.2.2
 
   '@dotenvx/primitives@0.8.0': {}
+
+  '@effect/ai-openai-compat@https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))':
+    dependencies:
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
 
   '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))':
     dependencies:

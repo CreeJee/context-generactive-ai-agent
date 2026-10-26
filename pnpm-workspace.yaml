@@ -27,6 +27,7 @@ catalog:
   effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
   "@effect/vitest": https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
   "@effect/platform-node-shared": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7
+  "@effect/ai-openai-compat": https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
   lucide-react: ^1.58.0
   react: ^19.3.0
   react-dom: ^19.3.0
