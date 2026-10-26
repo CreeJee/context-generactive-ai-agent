@@ -1,10 +1,19 @@
 import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
-import { isTruthy } from "../truthy.ts";
 import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Context,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import type { ShownFailure } from "../runtime/shown-failure.ts";
@@ -82,17 +91,17 @@ const notASecret = [
 ];
 
 function assignmentFindings(text: string): Finding[] {
-  const found: Finding[] = [];
-  for (const pattern of [environmentAssignment, quotedConfigValue])
-    for (const match of text.matchAll(pattern)) {
+  return [environmentAssignment, quotedConfigValue].flatMap((pattern) =>
+    Array.from(text.matchAll(pattern)).flatMap((match): Finding[] => {
       const value = match[1] ?? "";
-      if (notASecret.some((exclusion) => exclusion.test(value))) continue;
       const end = (match.index ?? 0) + match[0].length;
       // The value is the last capture; the closing quote of a quoted value follows it.
       const valueEnd = match[0].endsWith(value) ? end : end - 1;
-      found.push({ start: valueEnd - value.length, end: valueEnd, kind: "credential" });
-    }
-  return found;
+      return notASecret.some((exclusion) => exclusion.test(value))
+        ? []
+        : [{ start: valueEnd - value.length, end: valueEnd, kind: "credential" }];
+    }),
+  );
 }
 
 /** `@secretlint/secretlint-rule-github` → `github`. */
@@ -125,39 +134,51 @@ const formatFindings = (text: string) =>
  */
 export function mergeFindings(findings: readonly Finding[]): Finding[] {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
-  const merged: Finding[] = [];
-  for (const finding of sorted) {
-    const last = merged.at(-1);
-    if (!isTruthy(last) || finding.start >= last.end) {
-      merged.push(finding);
-      continue;
-    }
-    // A provider's name says more than "credential", so it wins.
-    merged[merged.length - 1] = {
-      start: last.start,
-      end: Math.max(last.end, finding.end),
-      kind: last.kind === "credential" ? finding.kind : last.kind,
-    };
-  }
-  return merged;
+  return Arr.reduce(sorted, Arr.empty<Finding>(), (merged, finding) =>
+    Option.match(
+      Option.filter(Arr.last(merged), (last) => finding.start < last.end),
+      {
+        onNone: () => [...merged, finding],
+        // A provider's name says more than "credential", so it wins.
+        onSome: (last) => [
+          ...merged.slice(0, -1),
+          {
+            start: last.start,
+            end: Math.max(last.end, finding.end),
+            kind: last.kind === "credential" ? finding.kind : last.kind,
+          },
+        ],
+      },
+    ),
+  );
+}
+
+/** The text replaced so far, where the rest starts, and the spans its placeholders hide. */
+interface Replacing {
+  readonly out: string;
+  readonly at: number;
+  readonly hidden: ReadonlyArray<HiddenSpan>;
 }
 
 function replaceFindings(text: string, findings: readonly Finding[]): RedactedView {
-  let out = "";
-  let at = 0;
-  const hidden: HiddenSpan[] = [];
-  for (const finding of findings) {
-    out += text.slice(at, finding.start);
+  const start: Replacing = { out: "", at: 0, hidden: [] };
+  const { out, at, hidden } = Arr.reduce(findings, start, (state, finding): Replacing => {
+    const before = state.out + text.slice(state.at, finding.start);
     const shown = placeholderOf(finding.kind);
-    hidden.push({
-      start: out.length,
-      end: out.length + shown.length,
-      kind: finding.kind,
-      value: text.slice(finding.start, finding.end),
-    });
-    out += shown;
-    at = finding.end;
-  }
+    return {
+      out: before + shown,
+      at: finding.end,
+      hidden: [
+        ...state.hidden,
+        {
+          start: before.length,
+          end: before.length + shown.length,
+          kind: finding.kind,
+          value: text.slice(finding.start, finding.end),
+        },
+      ],
+    };
+  });
   return { text: out + text.slice(at), hidden };
 }
 
@@ -174,6 +195,7 @@ const maxShownDetail = 1_000;
 const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Finite);
 const isBoolean = Schema.is(Schema.Boolean);
+const isJsonArray = (value: Json): value is readonly Json[] => Array.isArray(value);
 
 const decodeJson = Schema.decodeUnknownOption(JsonValue);
 
@@ -184,14 +206,15 @@ const make = Effect.sync(() => {
   secretLintProfiler.setEnabled(false);
 
   /** The text as the model reads it, with the values its placeholders stand for. */
-  const redactView = (text: string) =>
-    Effect.gen(function* (): Effect.fn.Return<RedactedView, SecretRedactionFailed> {
-      if (text.length === 0) return { text, hidden: [] };
-      const detected = yield* formatFindings(text).pipe(
-        Effect.mapError((failure) => SecretRedactionFailed.make({ cause: failure.cause })),
-      );
-      return replaceFindings(text, mergeFindings([...detected, ...assignmentFindings(text)]));
-    });
+  const redactView = (text: string): Effect.Effect<RedactedView, SecretRedactionFailed> =>
+    text.length === 0
+      ? Effect.succeed({ text, hidden: [] })
+      : formatFindings(text).pipe(
+          Effect.mapError((failure) => SecretRedactionFailed.make({ cause: failure.cause })),
+          Effect.map((detected) =>
+            replaceFindings(text, mergeFindings([...detected, ...assignmentFindings(text)])),
+          ),
+        );
 
   const redactText = (text: string) =>
     Effect.map(redactView(text), (view): Redaction => ({
@@ -199,17 +222,22 @@ const make = Effect.sync(() => {
       hidden: view.hidden.length,
     }));
 
-  const redactJson = (value: Json): Effect.Effect<Json, SecretRedactionFailed> => {
-    if (isString(value)) return Effect.map(redactText(value), (redaction) => redaction.text);
-    if (value === null || isNumber(value) || isBoolean(value)) return Effect.succeed(value);
-    if (Array.isArray(value)) return Effect.forEach(value, redactJson);
-    return Effect.map(
-      Effect.forEach(Object.entries(value), ([key, item]) =>
-        Effect.map(redactJson(item), (redacted) => [key, redacted] as const),
+  const redactJson = (value: Json): Effect.Effect<Json, SecretRedactionFailed> =>
+    Match.value(value).pipe(
+      Match.when(isString, (text) => Effect.map(redactText(text), (redaction) => redaction.text)),
+      Match.when(Match.null, (empty) => Effect.succeed(empty)),
+      Match.when(isNumber, (number) => Effect.succeed(number)),
+      Match.when(isBoolean, (flag) => Effect.succeed(flag)),
+      Match.when(isJsonArray, (items) => Effect.forEach(items, redactJson)),
+      Match.orElse((object) =>
+        Effect.map(
+          Effect.forEach(Object.entries(object), ([key, item]) =>
+            Effect.map(redactJson(item), (redacted) => [key, redacted] as const),
+          ),
+          (entries) => Object.fromEntries(entries),
+        ),
       ),
-      (entries) => Object.fromEntries(entries),
     );
-  };
 
   /**
    * A tool's result with its secrets hidden, keeping its structure. A result that is not plain
@@ -276,37 +304,46 @@ const make = Effect.sync(() => {
      * web pages, MCP servers, other agents — because any of them can print a key.
      */
     withHiddenResults(tools: readonly AnyServerTool[]): AnyServerTool[] {
-      return tools.map((tool): AnyServerTool => {
-        const execute = tool.execute;
-        if (!isTruthy(execute)) return tool;
-        return {
-          ...tool,
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          execute: (...call: Parameters<typeof execute>) =>
-            runNativeEffect(
-              nativePromise(() => Promise.resolve(execute(...call))).pipe(
-                Effect.catchCause((cause) => {
-                  const error = nativeFailure(cause).cause;
-                  if (!(error instanceof Error)) return Effect.fail(new Cause.UnknownError(error));
-                  // The model reads the failure's code, tag and redacted text (ToolFailed).
-                  const failed = toolFailedOf(error);
-                  return redactText(failed.detail).pipe(
-                    Effect.flatMap(({ text }) =>
-                      Effect.fail(
-                        new Cause.UnknownError(
-                          text === failed.detail
-                            ? failed
-                            : ToolFailed.make({ code: failed.code, tag: failed.tag, detail: text }),
-                        ),
+      return tools.map((tool): AnyServerTool =>
+        Option.match(Option.fromNullishOr(tool.execute), {
+          onNone: () => tool,
+          onSome: (execute) => ({
+            ...tool,
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            execute: (...call: Parameters<typeof execute>) =>
+              runNativeEffect(
+                nativePromise(() => Promise.resolve(execute(...call))).pipe(
+                  Effect.catchCause(
+                    (cause): Effect.Effect<never, Cause.UnknownError | SecretRedactionFailed> =>
+                      Match.value(nativeFailure(cause).cause).pipe(
+                        // The model reads the failure's code, tag and redacted text (ToolFailed).
+                        Match.when(Predicate.isError, (error) => {
+                          const failed = toolFailedOf(error);
+                          return redactText(failed.detail).pipe(
+                            Effect.flatMap(({ text }) =>
+                              Effect.fail(
+                                new Cause.UnknownError(
+                                  text === failed.detail
+                                    ? failed
+                                    : ToolFailed.make({
+                                        code: failed.code,
+                                        tag: failed.tag,
+                                        detail: text,
+                                      }),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                        Match.orElse((error) => Effect.fail(new Cause.UnknownError(error))),
                       ),
-                    ),
-                  );
-                }),
-                Effect.flatMap(redactResult),
+                  ),
+                  Effect.flatMap(redactResult),
+                ),
               ),
-            ),
-        };
-      });
+          }),
+        }),
+      );
     },
 
     /** {@link withHiddenResults} for the Effect AI loop's tools (docs/effect-ai-migration.md). */

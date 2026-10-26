@@ -4,7 +4,17 @@ import { isTruthy } from "../truthy.ts";
 import { path as platformPath, posix } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
 import { toolDefinition } from "@tanstack/ai";
-import { MutableHashMap, Option, Context, Effect, Fiber, Result, Layer, Schema } from "effect";
+import {
+  Array as Arr,
+  MutableHashMap,
+  Option,
+  Context,
+  Effect,
+  Fiber,
+  Result,
+  Layer,
+  Schema,
+} from "effect";
 import { gitGrepFilesEffect } from "../files/git-grep.ts";
 import { listProjectFilesEffect, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
@@ -156,9 +166,48 @@ export const listPageSize = 500;
 
 /** Search candidates kept per snapshot and query, so later pages do not ask Git again. */
 const candidateCacheSize = 32;
+
+/** The file's new text when `find` occurs once, or more than once with `replaceAll`. */
+const replaced = (edit: {
+  readonly path: string;
+  readonly current: string;
+  readonly find: string;
+  readonly replacement: string;
+  readonly replaceAll: boolean;
+}) =>
+  Effect.succeed(edit.current.split(edit.find).length - 1).pipe(
+    Effect.filterOrFail(
+      (occurrences) => occurrences > 0,
+      () =>
+        new Cause.UnknownError(
+          new Error(`no_match: ${edit.path}. oldText does not occur; read the file again.`),
+        ),
+    ),
+    Effect.filterOrFail(
+      (occurrences) => occurrences <= 1 || edit.replaceAll,
+      (occurrences) =>
+        new Cause.UnknownError(
+          new Error(
+            `ambiguous_match: ${edit.path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
+          ),
+        ),
+    ),
+    Effect.map((occurrences) => ({
+      text: edit.current.replaceAll(edit.find, () => edit.replacement),
+      replacements: occurrences,
+    })),
+  );
+
 const make = Effect.gen(function* () {
   const redactor = yield* SecretRedactor;
   const snapshots = yield* createSnapshots();
+  const unexpired = <E>(lookup: Effect.Effect<Snapshot | undefined, E>, expired: string) =>
+    Effect.flatMap(lookup, (found) =>
+      Effect.fromOption(
+        Option.liftPredicate(found, isTruthy),
+        () => new Cause.UnknownError(new Error(expired)),
+      ),
+    );
 
   /**
    * The file's new text when the model's change mentions a hidden value. The model reads files
@@ -180,55 +229,68 @@ const make = Effect.gen(function* () {
       replacement: options.replacement,
       replaceAll: options.replaceAll,
     });
-    if (Result.isSuccess(replaced)) return replaced.success;
-    return yield* new Cause.UnknownError(
-      new Error(
-        HiddenReplaceFailure.$match(replaced.failure, {
-          no_match: () => `no_match: ${options.path}. oldText does not occur; read the file again.`,
-          ambiguous: ({ occurrences }) =>
-            `ambiguous_match: ${options.path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
-          cuts_hidden: () =>
-            `hidden_value_split: ${options.path}. oldText starts or ends inside a [redacted:…] placeholder; include the whole placeholder.`,
-        }),
-      ),
+    return yield* Effect.mapError(
+      Effect.fromResult(replaced),
+      (failure) =>
+        new Cause.UnknownError(
+          new Error(
+            HiddenReplaceFailure.$match(failure, {
+              no_match: () =>
+                `no_match: ${options.path}. oldText does not occur; read the file again.`,
+              ambiguous: ({ occurrences }) =>
+                `ambiguous_match: ${options.path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
+              cuts_hidden: () =>
+                `hidden_value_split: ${options.path}. oldText starts or ends inside a [redacted:…] placeholder; include the whole placeholder.`,
+            }),
+          ),
+        ),
     );
   });
-  const candidateCache = MutableHashMap.empty<string, HashSet.HashSet<string> | null>();
+  type Candidates = HashSet.HashSet<string> | null;
+  const candidateCache = MutableHashMap.empty<string, Candidates>();
   const readPage = createTextPageReader();
+
+  /** Keeps `candidates` under `key`, dropping the oldest entries past the cache's size. */
+  const remember = (key: string, candidates: Candidates) =>
+    Effect.sync(() => {
+      MutableHashMap.set(candidateCache, key, candidates);
+      Arr.take(
+        Array.from(MutableHashMap.keys(candidateCache)),
+        MutableHashMap.size(candidateCache) - candidateCacheSize,
+      ).forEach((old) => MutableHashMap.remove(candidateCache, old));
+    });
 
   /**
    * In a Git work tree, the files that can match at all; null means search every file. The first
    * page starts `git grep` together with the listing and owns its Fiber as `started`.
    */
-  const candidatesFor = Effect.fnUntraced(function* (
+  const candidatesFor = (
     view: Snapshot,
     query: string,
     caseSensitive: boolean,
-    started?: Fiber.Fiber<HashSet.HashSet<string> | null>,
-  ) {
-    if (view.source !== "git") {
-      if (started !== undefined) yield* Fiber.interrupt(started);
-      return null;
-    }
+    started: Option.Option<Fiber.Fiber<Candidates>>,
+  ): Effect.Effect<Candidates> => {
     const key = `${view.id}\u0000${caseSensitive}\u0000${query}`;
-    const cached = Option.getOrUndefined(MutableHashMap.get(candidateCache, key));
-    if (cached !== undefined) return cached;
-    const candidates =
-      started === undefined
-        ? yield* gitGrepFilesEffect({
-            root: view.root,
-            directory: view.directory,
-            query,
-            caseSensitive,
-          })
-        : yield* Fiber.join(started);
-    MutableHashMap.set(candidateCache, key, candidates);
-    for (const old of MutableHashMap.keys(candidateCache)) {
-      if (MutableHashMap.size(candidateCache) <= candidateCacheSize) break;
-      MutableHashMap.remove(candidateCache, old);
-    }
-    return candidates;
-  });
+    return view.source === "git"
+      ? Option.match(MutableHashMap.get(candidateCache, key), {
+          onSome: (cached) => Effect.succeed(cached),
+          onNone: () =>
+            Option.match(started, {
+              onNone: () =>
+                gitGrepFilesEffect({
+                  root: view.root,
+                  directory: view.directory,
+                  query,
+                  caseSensitive,
+                }),
+              onSome: Fiber.join,
+            }).pipe(Effect.tap((candidates) => remember(key, candidates))),
+        })
+      : Effect.as(
+          Option.match(started, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
+          null,
+        );
+  };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const snapshotFor = Effect.fn("FileTools.snapshot")(function* (
@@ -251,13 +313,13 @@ const make = Effect.gen(function* () {
       guardedEffect(
         directory ?? ".",
         Effect.gen(function* () {
-          const view = !isTruthy(snapshot)
-            ? yield* snapshotFor(root, directory, glob)
-            : snapshots.get(snapshot, root);
-          if (!isTruthy(view))
-            return yield* new Cause.UnknownError(
-              new Error("snapshot_expired: start again without snapshot and offset."),
-            );
+          const view = yield* unexpired(
+            Option.match(Option.liftPredicate(snapshot, isTruthy), {
+              onNone: () => snapshotFor(root, directory, glob),
+              onSome: (id) => Effect.sync(() => snapshots.get(id, root)),
+            }),
+            "snapshot_expired: start again without snapshot and offset.",
+          );
           const start = Math.max(0, offset ?? 0);
           const paths = view.paths.slice(start, start + listPageSize);
           const next = start + paths.length;
@@ -285,35 +347,51 @@ const make = Effect.gen(function* () {
       guardedEffect(
         directory ?? ".",
         Effect.gen(function* () {
-          const position = isTruthy(cursor) ? decodeSearchCursor(cursor) : undefined;
-          if (
-            isTruthy(cursor) &&
-            (position?.query !== query || position.caseSensitive !== caseSensitive)
-          )
-            return yield* new Cause.UnknownError(
-              new Error("invalid_cursor: pass the same query and caseSensitive as the first page."),
-            );
+          // A cursor continues only the search that made it.
+          const given = Option.liftPredicate(cursor, isTruthy);
+          const position = yield* Effect.succeed(
+            Option.flatMapNullishOr(given, decodeSearchCursor),
+          ).pipe(
+            Effect.filterOrFail(
+              (decoded) =>
+                Option.isNone(given) ||
+                Option.exists(
+                  decoded,
+                  (at) => at.query === query && at.caseSensitive === caseSensitive,
+                ),
+              () =>
+                new Cause.UnknownError(
+                  new Error(
+                    "invalid_cursor: pass the same query and caseSensitive as the first page.",
+                  ),
+                ),
+            ),
+          );
           // On the first page, ask Git for candidate files while the listing is being taken.
-          const started =
-            position !== undefined
-              ? undefined
-              : yield* Effect.forkChild(
-                  gitGrepFilesEffect({
-                    root,
-                    directory: (yield* resolveProjectPath(root, directory ?? ".", "directory"))
-                      .relative,
-                    query,
-                    caseSensitive,
-                  }),
-                );
-          const view =
-            position !== undefined
-              ? snapshots.get(position.snapshot, root)
-              : yield* snapshotFor(root, directory, glob);
-          if (!isTruthy(view))
-            return yield* new Cause.UnknownError(
-              new Error("snapshot_expired: start the search again without cursor."),
-            );
+          const started = yield* Option.match(position, {
+            onSome: () => Effect.succeedNone,
+            onNone: () =>
+              resolveProjectPath(root, directory ?? ".", "directory").pipe(
+                Effect.flatMap((resolved) =>
+                  Effect.forkChild(
+                    gitGrepFilesEffect({
+                      root,
+                      directory: resolved.relative,
+                      query,
+                      caseSensitive,
+                    }),
+                  ),
+                ),
+                Effect.asSome,
+              ),
+          });
+          const view = yield* unexpired(
+            Option.match(position, {
+              onSome: (at) => Effect.sync(() => snapshots.get(at.snapshot, root)),
+              onNone: () => snapshotFor(root, directory, glob),
+            }),
+            "snapshot_expired: start the search again without cursor.",
+          );
 
           // Each directory is checked once per page (no links, still inside the project); the file
           // itself is checked on the opened handle, so thousands of files do not mean thousands of
@@ -324,14 +402,19 @@ const make = Effect.gen(function* () {
             paths: view.paths,
             readBytes: Effect.fnUntraced(function* (path: string) {
               const directory = posix.dirname(path);
-              let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
-              if (!isTruthy(checked)) {
-                checked = yield* resolveProjectPath(root, directory, "directory").pipe(
-                  Effect.as(Result.succeed(undefined)),
-                  Effect.catchTag("PathRejected", (error) => Effect.succeed(Result.fail(error))),
-                );
-                MutableHashMap.set(directories, directory, checked);
-              }
+              const checked = yield* Option.match(MutableHashMap.get(directories, directory), {
+                onSome: (known) => Effect.succeed(known),
+                onNone: () =>
+                  resolveProjectPath(root, directory, "directory").pipe(
+                    Effect.as<Result.Result<void, PathRejected>>(Result.succeed(undefined)),
+                    Effect.catchTag("PathRejected", (error) =>
+                      Effect.succeed<Result.Result<void, PathRejected>>(Result.fail(error)),
+                    ),
+                    Effect.tap((result) =>
+                      Effect.sync(() => MutableHashMap.set(directories, directory, result)),
+                    ),
+                  ),
+              });
               yield* Result.match(checked, {
                 onSuccess: Effect.succeed,
                 onFailure: (rejection) =>
@@ -355,16 +438,18 @@ const make = Effect.gen(function* () {
             }),
             query,
             caseSensitive,
-            start: position ?? { file: 0, line: 0 },
+            start: Option.getOrElse(position, () => ({ file: 0, line: 0 })),
             candidates,
           });
           return {
             filesInView: view.paths.length,
             matches: page.matches,
             skipped: page.skipped,
-            nextCursor: isTruthy(page.next)
-              ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
-              : null,
+            nextCursor: Option.getOrNull(
+              Option.map(Option.fromNullishOr(page.next), (next) =>
+                encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...next }),
+              ),
+            ),
             complete: page.next === null && page.skipped.length === 0,
           };
         }),
@@ -394,39 +479,49 @@ const make = Effect.gen(function* () {
         path,
         Effect.gen(function* () {
           const resolved = yield* resolveProjectPath(root, path, "new-or-file");
-          if (expectedSha256 === undefined) {
-            const created = yield* createTextFileEffect({
-              absolute: resolved.absolute,
-              path: path,
-              text: content,
-            });
-            return { path, created: true, ...created };
-          }
-          if (!(resolved.stats !== undefined))
-            return yield* PathRejected.make({ path, reason: "not_found" });
-          let text = content;
-          if (mentionsHidden(content)) {
-            const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
-            if (file.sha256 !== expectedSha256)
-              return yield* TextFileRejected.make({
-                path,
-                reason: TextFileRejectedReason.cases.changed.make({}),
+          const create = Effect.map(
+            createTextFileEffect({ absolute: resolved.absolute, path: path, text: content }),
+            (created) => ({ path, created: true, ...created }),
+          );
+          const replace = (expected: string) =>
+            Effect.gen(function* () {
+              yield* Effect.fromOption(Option.fromNullishOr(resolved.stats), () =>
+                PathRejected.make({ path, reason: "not_found" }),
+              );
+              // The values hidden behind placeholders the model wrote are put back.
+              const restored = readTextFileEffect({ absolute: resolved.absolute, path: path }).pipe(
+                Effect.filterOrFail(
+                  (file) => file.sha256 === expected,
+                  () =>
+                    TextFileRejected.make({
+                      path,
+                      reason: TextFileRejectedReason.cases.changed.make({}),
+                    }),
+                ),
+                Effect.flatMap((file) =>
+                  keepingHidden({
+                    path,
+                    current: file.text,
+                    find: null,
+                    replacement: content,
+                    replaceAll: false,
+                  }),
+                ),
+                Effect.map((edited) => edited.text),
+              );
+              const text = yield* mentionsHidden(content) ? restored : Effect.succeed(content);
+              const replaced = yield* replaceTextFileEffect({
+                absolute: resolved.absolute,
+                path: path,
+                expectedSha256: expected,
+                text,
               });
-            text = (yield* keepingHidden({
-              path,
-              current: file.text,
-              find: null,
-              replacement: content,
-              replaceAll: false,
-            })).text;
-          }
-          const replaced = yield* replaceTextFileEffect({
-            absolute: resolved.absolute,
-            path: path,
-            expectedSha256: expectedSha256,
-            text,
+              return { path, created: false, ...replaced };
+            });
+          return yield* Option.match(Option.fromNullishOr(expectedSha256), {
+            onNone: () => create,
+            onSome: replace,
           });
-          return { path, created: false, ...replaced };
         }),
       ),
 
@@ -441,50 +536,28 @@ const make = Effect.gen(function* () {
         path,
         Effect.gen(function* () {
           const resolved = yield* resolveProjectPath(root, path, "file");
-          const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
-          if (expectedSha256 !== undefined && expectedSha256 !== file.sha256)
-            return yield* TextFileRejected.make({
-              path,
-              reason: TextFileRejectedReason.cases.changed.make({}),
-            });
+          const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path }).pipe(
+            Effect.filterOrFail(
+              (read) => expectedSha256 === undefined || expectedSha256 === read.sha256,
+              () =>
+                TextFileRejected.make({
+                  path,
+                  reason: TextFileRejectedReason.cases.changed.make({}),
+                }),
+            ),
+          );
           const crlf = file.text.includes("\r\n") && !oldText.includes("\r\n");
           const find = crlf ? oldText.replaceAll("\n", "\r\n") : oldText;
           const replacement = crlf ? newText.replaceAll("\n", "\r\n") : newText;
-          if (mentionsHidden(oldText)) {
-            const edited = yield* keepingHidden({
-              path,
-              current: file.text,
-              find,
-              replacement,
-              replaceAll,
-            });
-            const written = yield* replaceTextFileEffect({
-              absolute: resolved.absolute,
-              path: path,
-              expectedSha256: file.sha256,
-              text: edited.text,
-            });
-            return { path, replacements: edited.replacements, ...written };
-          }
-          const occurrences = file.text.split(find).length - 1;
-          if (occurrences === 0)
-            return yield* new Cause.UnknownError(
-              new Error(`no_match: ${path}. oldText does not occur; read the file again.`),
-            );
-          if (occurrences > 1 && !replaceAll)
-            return yield* new Cause.UnknownError(
-              new Error(
-                `ambiguous_match: ${path}. oldText occurs ${occurrences} times; add surrounding lines or pass replaceAll.`,
-              ),
-            );
-          const text = file.text.replaceAll(find, () => replacement);
+          const edit = { path, current: file.text, find, replacement, replaceAll };
+          const edited = yield* mentionsHidden(oldText) ? keepingHidden(edit) : replaced(edit);
           const written = yield* replaceTextFileEffect({
             absolute: resolved.absolute,
             path: path,
             expectedSha256: file.sha256,
-            text: text,
+            text: edited.text,
           });
-          return { path, replacements: occurrences, ...written };
+          return { path, replacements: edited.replacements, ...written };
         }),
       ),
 

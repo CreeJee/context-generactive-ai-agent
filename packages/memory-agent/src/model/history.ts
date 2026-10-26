@@ -1,4 +1,13 @@
-import { Function as EffectFunction, Option, Predicate, Schema } from "effect";
+import {
+  Array as Arr,
+  Function as EffectFunction,
+  HashMap,
+  HashSet,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import type { Prompt } from "effect/ai";
 import type { MessageSource, StoredMessage } from "../chat-store/schema.ts";
 import { JsonValue } from "../json.ts";
@@ -12,6 +21,7 @@ import { fromPrompt, toPrompt } from "./prompt.ts";
  */
 
 type AssistantMessage = Extract<StoredMessage, { readonly role: "assistant" }>;
+type ToolMessage = Extract<StoredMessage, { readonly role: "tool" }>;
 type ToolCall = NonNullable<AssistantMessage["toolCalls"]>[number];
 
 /** The model a request goes to, and how it renames another model's tool call ids. */
@@ -46,18 +56,129 @@ const isCut = (call: ToolCall) =>
  */
 const asForeign = (
   message: AssistantMessage,
-  rename: (call: ToolCall) => ToolCall,
+  toolCalls: ReadonlyArray<ToolCall>,
 ): AssistantMessage => {
-  let content = "";
-  for (const thinking of message.thinking ?? [])
-    if (thinking.redacted !== true && thinking.content.trim() !== "") content += thinking.content;
-  content += message.content ?? "";
+  const content = [
+    ...(message.thinking ?? [])
+      .filter((thinking) => thinking.redacted !== true && thinking.content.trim() !== "")
+      .map((thinking) => thinking.content),
+    message.content ?? "",
+  ].join("");
   const { thinking: _thinking, ...rest } = message;
   return {
     ...rest,
     content: content === "" ? null : content,
-    ...optionalProperty("toolCalls", message.toolCalls?.map(rename)),
+    ...optionalProperty(
+      "toolCalls",
+      Option.getOrUndefined(Option.as(Option.fromNullishOr(message.toolCalls), [...toolCalls])),
+    ),
   };
+};
+
+/** What replaying has seen so far. */
+interface Replay {
+  /** Ids the calls this request sends already take. */
+  readonly used: HashSet.HashSet<string>;
+  /** The id each call is sent under. */
+  readonly renamed: HashMap.HashMap<string, string>;
+  /** Whether the turn that made each call failed. */
+  readonly failedCalls: HashMap.HashMap<string, boolean>;
+  /** The open turn's calls, the ids answered since it opened, and its message id. */
+  readonly pending: ReadonlyArray<ToolCall>;
+  readonly answered: HashSet.HashSet<string>;
+  readonly turnId: Option.Option<string>;
+}
+
+/** The state after one message, and the messages it adds to the request. */
+type Replayed = readonly [Replay, ReadonlyArray<StoredMessage>];
+
+/** Closes the open turn: a call it left without a result is answered with {@link noResult}. */
+const closed = (state: Replay): Replayed => [
+  { ...state, pending: [], answered: HashSet.empty(), turnId: Option.none() },
+  state.pending
+    .filter((call) => !HashSet.has(state.answered, call.id))
+    .map((call) => ({ role: "tool", toolCallId: call.id, content: noResult, error: noResult })),
+];
+
+/** The first id `rule` gives for `id` that no call takes yet. */
+const freeId = (rule: ReplayTarget["toolCallId"], id: string, used: HashSet.HashSet<string>) =>
+  Arr.findFirst(Arr.range(0, 999), (attempt) =>
+    Option.liftPredicate(rule(id, attempt), (candidate) => !HashSet.has(used, candidate)),
+  ).pipe(
+    // The same limit as TanStack: a rule that never yields a free id is a bug in the rule.
+    Option.getOrThrowWith(() => new Error(`Tool ID rule could not allocate a unique ID for ${id}`)),
+  );
+
+/** A tool result, sent under its call's id unless its call's turn failed. */
+const answer = (state: Replay, message: ToolMessage): Replayed => {
+  const id = Option.getOrElse(
+    HashMap.get(state.renamed, message.toolCallId),
+    () => message.toolCallId,
+  );
+  return Option.exists(HashMap.get(state.failedCalls, message.toolCallId), (failed) => failed)
+    ? [state, []]
+    : [
+        { ...state, answered: HashSet.add(state.answered, id) },
+        [id === message.toolCallId ? message : { ...message, toolCallId: id }],
+      ];
+};
+
+/** An assistant turn that did not fail, as `target` reads it. */
+const sent = (
+  state: Replay,
+  message: AssistantMessage,
+  target: ReplayTarget | undefined,
+): Replayed => {
+  const calls = message.toolCalls ?? [];
+  const [renamed, replayed] = Option.match(
+    Option.filter(Option.fromNullishOr(target), (to) => isForeign(message, to)),
+    {
+      onSome: (to): readonly [Replay, AssistantMessage] => {
+        const [ids, toolCalls] = Arr.mapAccum(
+          calls,
+          { used: state.used, renamed: state.renamed },
+          (taken, call) => {
+            const id = freeId(to.toolCallId, call.id, taken.used);
+            return [
+              {
+                used: HashSet.add(taken.used, id),
+                renamed: HashMap.set(taken.renamed, call.id, id),
+              },
+              id === call.id ? call : { ...call, id },
+            ] as const;
+          },
+        );
+        return [{ ...state, ...ids }, asForeign(message, toolCalls)];
+      },
+      onNone: (): readonly [Replay, AssistantMessage] => [
+        {
+          ...state,
+          renamed: Arr.reduce(calls, state.renamed, (known, call) =>
+            HashMap.set(known, call.id, call.id),
+          ),
+        },
+        message,
+      ],
+    },
+  );
+  const replayedCalls = replayed.toolCalls ?? [];
+  const turn =
+    message.finishReason === "length" && replayedCalls.some(isCut)
+      ? {
+          ...replayed,
+          toolCalls: replayedCalls.map((call) =>
+            isCut(call) ? { ...call, function: { ...call.function, arguments: "{}" } } : call,
+          ),
+        }
+      : replayed;
+  return [
+    {
+      ...renamed,
+      pending: [...renamed.pending, ...(turn.toolCalls ?? [])],
+      turnId: Option.orElse(renamed.turnId, () => Option.fromNullishOr(message.id)),
+    },
+    [turn],
+  ];
 };
 
 /**
@@ -69,78 +190,50 @@ const replayHistory = (
   history: ReadonlyArray<StoredMessage>,
   target: ReplayTarget | undefined,
 ): Array<StoredMessage> => {
-  const usedIds = new Set<string>();
-  for (const message of history)
-    if (message.role === "assistant" && !isForeign(message, target) && !isFailed(message))
-      for (const call of message.toolCalls ?? []) usedIds.add(call.id);
-  const renamed = new Map<string, string>();
-  const failedCalls = new Map<string, boolean>();
-  const output: Array<StoredMessage> = [];
-  let pending: Array<ToolCall> = [];
-  const answered = new Set<string>();
-  let turnId: string | undefined;
-  const closePending = () => {
-    for (const call of pending)
-      if (!answered.has(call.id))
-        output.push({ role: "tool", toolCallId: call.id, content: noResult, error: noResult });
-    pending = [];
-    answered.clear();
-    turnId = undefined;
+  const start: Replay = {
+    used: HashSet.fromIterable(
+      history
+        .filter((message): message is AssistantMessage => message.role === "assistant")
+        .filter((message) => !isForeign(message, target) && !isFailed(message))
+        .flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
+    ),
+    renamed: HashMap.empty(),
+    failedCalls: HashMap.empty(),
+    pending: [],
+    answered: HashSet.empty(),
+    turnId: Option.none(),
   };
-  const rename =
-    (rule: ReplayTarget["toolCallId"]) =>
-    (call: ToolCall): ToolCall => {
-      let id = call.id;
-      let attempt = 0;
-      do {
-        if (attempt === 1000)
-          // The same limit as TanStack: a rule that never yields a free id is a bug in the rule.
-          throw new Error(`Tool ID rule could not allocate a unique ID for ${call.id}`);
-        id = rule(call.id, attempt++);
-      } while (usedIds.has(id));
-      usedIds.add(id);
-      renamed.set(call.id, id);
-      return id === call.id ? call : { ...call, id };
-    };
-  for (const message of history) {
+  const [last, added] = Arr.mapAccum(history, start, (state, message): Replayed => {
+    // A turn split into segments keeps its calls open until a result answers one of them.
     const nextSegment =
       message.role === "assistant" &&
-      answered.size === 0 &&
-      turnId !== undefined &&
-      message.id !== undefined &&
-      (message.id === turnId || message.id.startsWith(`${turnId}-segment-`));
-    if (message.role !== "tool" && !nextSegment) closePending();
-    if (message.role === "assistant")
-      for (const call of message.toolCalls ?? []) failedCalls.set(call.id, isFailed(message));
-    if (isFailed(message)) continue;
-    if (message.role === "tool") {
-      if (failedCalls.get(message.toolCallId) === true) continue;
-      const id = renamed.get(message.toolCallId) ?? message.toolCallId;
-      answered.add(id);
-      output.push(id === message.toolCallId ? message : { ...message, toolCallId: id });
-      continue;
-    }
-    if (message.role === "user") {
-      output.push(message);
-      continue;
-    }
-    let replayed = message;
-    if (target !== undefined && isForeign(message, target))
-      replayed = asForeign(message, rename(target.toolCallId));
-    else for (const call of message.toolCalls ?? []) renamed.set(call.id, call.id);
-    if (message.finishReason === "length" && (replayed.toolCalls ?? []).some(isCut))
-      replayed = {
-        ...replayed,
-        toolCalls: (replayed.toolCalls ?? []).map((call) =>
-          isCut(call) ? { ...call, function: { ...call.function, arguments: "{}" } } : call,
-        ),
-      };
-    pending = [...pending, ...(replayed.toolCalls ?? [])];
-    turnId ??= message.id;
-    output.push(replayed);
-  }
-  closePending();
-  return output;
+      HashSet.size(state.answered) === 0 &&
+      Option.exists(
+        state.turnId,
+        (turnId) =>
+          message.id !== undefined &&
+          (message.id === turnId || message.id.startsWith(`${turnId}-segment-`)),
+      );
+    const [open, unanswered] =
+      message.role !== "tool" && !nextSegment ? closed(state) : ([state, []] as const);
+    const [after, own] = Match.value(message).pipe(
+      Match.discriminatorsExhaustive("role")({
+        user: (user): Replayed => [open, [user]],
+        tool: (tool) => answer(open, tool),
+        assistant: (assistant): Replayed => {
+          const recorded = {
+            ...open,
+            failedCalls: Arr.reduce(assistant.toolCalls ?? [], open.failedCalls, (known, call) =>
+              HashMap.set(known, call.id, isFailed(assistant)),
+            ),
+          };
+          return isFailed(assistant) ? [recorded, []] : sent(recorded, assistant, target);
+        },
+      }),
+    );
+    return [after, [...unanswered, ...own]];
+  });
+  return [...added.flat(), ...closed(last)[1]];
 };
 
 /** Removes lone UTF-16 surrogates, which are invalid on the wire; valid pairs stay. */
@@ -172,28 +265,30 @@ const sanitizeContent = (content: Extract<StoredMessage, { readonly role: "user"
 
 /** Removes lone surrogates from message text and tool call arguments. Thinking stays as signed. */
 const sanitizeHistory = (history: ReadonlyArray<StoredMessage>): Array<StoredMessage> =>
-  history.map((message): StoredMessage => {
-    switch (message.role) {
-      case "user":
-      case "tool":
-        return { ...message, content: sanitizeContent(message.content) };
-      case "assistant":
-        return {
-          ...message,
-          content:
-            message.content === undefined || message.content === null
-              ? null
-              : sanitizeText(message.content),
+  history.map((message): StoredMessage =>
+    Match.value(message).pipe(
+      Match.discriminatorsExhaustive("role")({
+        user: (user): StoredMessage => ({ ...user, content: sanitizeContent(user.content) }),
+        tool: (tool): StoredMessage => ({ ...tool, content: sanitizeContent(tool.content) }),
+        assistant: (assistant): StoredMessage => ({
+          ...assistant,
+          content: Option.getOrNull(
+            Option.map(Option.fromNullishOr(assistant.content), sanitizeText),
+          ),
           ...optionalProperty(
             "toolCalls",
-            message.toolCalls?.map((call) => ({
+            assistant.toolCalls?.map((call) => ({
               ...call,
-              function: { ...call.function, arguments: sanitizeArguments(call.function.arguments) },
+              function: {
+                ...call.function,
+                arguments: sanitizeArguments(call.function.arguments),
+              },
             })),
           ),
-        };
-    }
-  });
+        }),
+      }),
+    ),
+  );
 
 /**
  * The history a request to `target` carries. The subscription providers pass no target: they
