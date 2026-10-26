@@ -1,4 +1,12 @@
-import { Function as EffectFunction, Option, Predicate, Schema } from "effect";
+import {
+  Array as Arr,
+  Function as EffectFunction,
+  HashMap,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import { Prompt } from "effect/ai";
 import {
   StoredAssistantMessage,
@@ -169,123 +177,139 @@ function toPromptBody(
   history: ReadonlyArray<StoredMessage>,
   system: ReadonlyArray<string>,
 ): Prompt.Prompt {
-  const names = new Map<string, string>();
-  const messages: Array<Prompt.Message> = system.map((content) =>
-    Prompt.systemMessage({ content }),
+  const [, messages] = Arr.mapAccum(
+    history,
+    HashMap.empty<string, string>(),
+    (names, message): readonly [HashMap.HashMap<string, string>, Prompt.Message] =>
+      Match.value(message).pipe(
+        Match.discriminatorsExhaustive("role")({
+          user: (user) => [names, userMessage(user)] as const,
+          assistant: (assistant) =>
+            [
+              Arr.reduce(assistant.toolCalls ?? [], names, (known, call) =>
+                HashMap.set(known, call.id, call.function.name),
+              ),
+              assistantMessage(assistant),
+            ] as const,
+          tool: (tool) =>
+            [
+              names,
+              toolMessage(
+                tool,
+                Option.getOrElse(HashMap.get(names, tool.toolCallId), () => ""),
+              ),
+            ] as const,
+        }),
+      ),
   );
-  for (const message of history)
-    switch (message.role) {
-      case "user":
-        messages.push(userMessage(message));
-        break;
-      case "assistant":
-        for (const call of message.toolCalls ?? []) names.set(call.id, call.function.name);
-        messages.push(assistantMessage(message));
-        break;
-      case "tool":
-        messages.push(toolMessage(message, names.get(message.toolCallId) ?? ""));
-        break;
-    }
-  return Prompt.fromMessages(messages);
+  return Prompt.fromMessages([
+    ...system.map((content) => Prompt.systemMessage({ content })),
+    ...messages,
+  ]);
 }
 
+const storedImage = (part: Prompt.FilePart): ContentPart => {
+  const options = partOptions(part);
+  // `toPrompt` keeps image data as the stored string.
+  const value = String(part.data);
+  return options.url === true
+    ? {
+        type: "image",
+        source: {
+          type: "url",
+          value,
+          ...optionalProperty("mimeType", options.untyped === true ? undefined : part.mediaType),
+        },
+      }
+    : { type: "image", source: { type: "data", value, mimeType: part.mediaType } };
+};
+
 const storedContent = (parts: ReadonlyArray<Prompt.UserMessagePart>): Array<ContentPart> =>
-  parts.map((part) => {
-    if (part.type === "text") return { type: "text", content: part.text };
-    const options = partOptions(part);
-    // `toPrompt` keeps image data as the stored string.
-    const value = String(part.data);
-    if (options.url !== true)
-      return { type: "image", source: { type: "data", value, mimeType: part.mediaType } };
-    return {
-      type: "image",
-      source: {
-        type: "url",
-        value,
-        ...optionalProperty("mimeType", options.untyped === true ? undefined : part.mediaType),
-      },
-    };
-  });
+  parts.map((part) =>
+    Match.value(part).pipe(
+      Match.discriminatorsExhaustive("type")({
+        text: (text): ContentPart => ({ type: "text", content: text.text }),
+        file: storedImage,
+      }),
+    ),
+  );
 
 const textOf = (parts: ReadonlyArray<Prompt.AssistantMessagePart>) =>
   parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 
-/** The system prompts and stored messages a prompt holds; the inverse of `toPrompt`. */
-export const fromPrompt = (prompt: Prompt.Prompt) => {
-  const system: Array<string> = [];
-  const history: Array<StoredMessage> = [];
-  for (const message of prompt.content)
-    switch (message.role) {
-      case "system":
-        system.push(message.content);
-        break;
-      case "user": {
-        const { text, content: _content, ...kept } = messageOptions(message);
-        const content = storedContent(message.content);
-        history.push({
-          role: "user",
-          ...kept,
-          content:
-            text === true
-              ? content.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("")
-              : content,
-        });
-        break;
-      }
-      case "assistant": {
-        const { text: _text, content: empty, ...kept } = messageOptions(message);
-        const thinking = message.content.flatMap((part) => {
-          if (part.type !== "reasoning") return [];
-          const { signature, redacted } = partOptions(part);
-          return [
-            {
-              content: part.text,
-              ...optionalProperty("signature", signature),
-              ...optionalProperty("redacted", redacted),
-            },
-          ];
-        });
-        const toolCalls = message.content.flatMap((part) =>
-          part.type === "tool-call"
-            ? [
-                {
-                  id: part.id,
-                  type: "function" as const,
-                  function: {
-                    name: part.name,
-                    arguments:
-                      partOptions(part).arguments ??
-                      Option.getOrElse(encodeArguments(part.params), () => "{}"),
-                  },
-                },
-              ]
-            : [],
-        );
-        const text = textOf(message.content);
-        history.push({
-          role: "assistant",
-          ...kept,
-          ...(text !== "" ? { content: text } : optionalProperty("content", empty)),
-          ...optionalProperty("thinking", thinking.length > 0 ? thinking : undefined),
-          ...optionalProperty("toolCalls", toolCalls.length > 0 ? toolCalls : undefined),
-        });
-        break;
-      }
-      case "tool": {
-        const { id: messageId, createdAt: messageCreatedAt } = messageOptions(message);
-        for (const part of message.content) {
-          if (part.type !== "tool-result") continue;
-          history.push({
-            role: "tool",
-            ...optionalProperty("id", messageId),
-            ...optionalProperty("createdAt", messageCreatedAt),
-            toolCallId: part.id,
-            content: toolResultContent(part),
-            ...optionalProperty("error", partOptions(part).error),
-          });
-        }
-        break;
-      }
-    }
-  return { system, history };
+const storedUser = (message: Prompt.UserMessage): StoredMessage => {
+  const { text, content: _content, ...kept } = messageOptions(message);
+  const content = storedContent(message.content);
+  return {
+    role: "user",
+    ...kept,
+    content:
+      text === true
+        ? content.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("")
+        : content,
+  };
 };
+
+const storedAssistant = (message: Prompt.AssistantMessage): StoredMessage => {
+  const { text: _text, content: empty, ...kept } = messageOptions(message);
+  const thinking = message.content
+    .filter((part): part is Prompt.ReasoningPart => part.type === "reasoning")
+    .map((part) => {
+      const { signature, redacted } = partOptions(part);
+      return {
+        content: part.text,
+        ...optionalProperty("signature", signature),
+        ...optionalProperty("redacted", redacted),
+      };
+    });
+  const toolCalls = message.content
+    .filter((part): part is Prompt.ToolCallPart => part.type === "tool-call")
+    .map((part) => ({
+      id: part.id,
+      type: "function" as const,
+      function: {
+        name: part.name,
+        arguments:
+          partOptions(part).arguments ?? Option.getOrElse(encodeArguments(part.params), () => "{}"),
+      },
+    }));
+  const text = textOf(message.content);
+  return {
+    role: "assistant",
+    ...kept,
+    ...(text !== "" ? { content: text } : optionalProperty("content", empty)),
+    ...optionalProperty("thinking", thinking.length > 0 ? thinking : undefined),
+    ...optionalProperty("toolCalls", toolCalls.length > 0 ? toolCalls : undefined),
+  };
+};
+
+const storedTools = (message: Prompt.ToolMessage): Array<StoredMessage> => {
+  const { id: messageId, createdAt: messageCreatedAt } = messageOptions(message);
+  return message.content
+    .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+    .map((part) => ({
+      role: "tool",
+      ...optionalProperty("id", messageId),
+      ...optionalProperty("createdAt", messageCreatedAt),
+      toolCallId: part.id,
+      content: toolResultContent(part),
+      ...optionalProperty("error", partOptions(part).error),
+    }));
+};
+
+/** The system prompts and stored messages a prompt holds; the inverse of `toPrompt`. */
+export const fromPrompt = (prompt: Prompt.Prompt) => ({
+  system: prompt.content
+    .filter((message): message is Prompt.SystemMessage => message.role === "system")
+    .map((message) => message.content),
+  history: prompt.content.flatMap((message) =>
+    Match.value(message).pipe(
+      Match.discriminatorsExhaustive("role")({
+        system: (): Array<StoredMessage> => [],
+        user: (user) => [storedUser(user)],
+        assistant: (assistant) => [storedAssistant(assistant)],
+        tool: storedTools,
+      }),
+    ),
+  ),
+});

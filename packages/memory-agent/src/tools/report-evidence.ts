@@ -1,7 +1,7 @@
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Effect, Option, Schema } from "effect";
+import { Array as Arr, Effect, Match, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { runTool, type RunTool } from "./run-tool.ts";
 import { definitionOf } from "./schema.ts";
@@ -73,18 +73,20 @@ const ReportRow = Schema.Struct({
 });
 const reportRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
 
-/** Small, failure-first snapshot for the first diagnostic request. Source text is untrusted data. */
-export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
-  reportSessionId: string,
-  projectId: string,
-  redact: Redact<E>,
-  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  const binding = yield* reportBinding(reportSessionId, projectId);
-  if (Option.isNone(binding))
-    return "원본 바인딩을 확인할 수 없음; 증상만으로 계속 진행하고 추측을 사실로 적지 마세요.";
-  const { sourceSessionId } = binding.value;
+/** {@link initialReportEvidence} for a report still bound to `sourceSessionId`. */
+const sourceSnapshot = Effect.fnUntraced(function* <E, TraceE>({
+  sql,
+  projectId,
+  sourceSessionId,
+  redact,
+  taskTree,
+}: {
+  readonly sql: SqlClient.SqlClient;
+  readonly projectId: string;
+  readonly sourceSessionId: string;
+  readonly redact: Redact<E>;
+  readonly taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>;
+}) {
   // A failed section is reported as unverified evidence; the snapshot still covers the others.
   const collect = <LoadE, R>(
     name: keyof typeof INITIAL_LIMITS,
@@ -158,6 +160,25 @@ export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
   );
 });
 
+/** Small, failure-first snapshot for the first diagnostic request. Source text is untrusted data. */
+export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
+  reportSessionId: string,
+  projectId: string,
+  redact: Redact<E>,
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const binding = yield* reportBinding(reportSessionId, projectId);
+  return yield* Option.match(binding, {
+    onNone: () =>
+      Effect.succeed(
+        "원본 바인딩을 확인할 수 없음; 증상만으로 계속 진행하고 추측을 사실로 적지 마세요.",
+      ),
+    onSome: ({ sourceSessionId }) =>
+      sourceSnapshot({ sql, projectId, sourceSessionId, redact, taskTree }),
+  });
+});
+
 const listReportEvidence = {
   name: "list_report_evidence",
   description:
@@ -219,70 +240,86 @@ const boundReportCalls = <E, TraceE>({
     ),
   );
   const absent = { error: "not_found" as const };
-  const listed = (
-    section: Exclude<(typeof ListInput.Type)["section"], "trace">,
-    offset: number,
-  ) => {
-    switch (section) {
-      case "runs":
-        return sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
+  /** `found` while the report is still bound to its source, and `absent` once it is not. */
+  const whileBound = <A, E2>(found: Effect.Effect<A, E2>) =>
+    Effect.flatMap(current, (still): Effect.Effect<A | typeof absent, E2> =>
+      still ? found : Effect.succeed(absent),
+    );
+  const nodes = (kinds: string, offset: number) =>
+    sql`SELECT id, kind AS status, created_at AS time, text,
+      json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
+      WHERE session_id = ${bound.sourceSessionId} AND project_id = ${bound.projectId}
+        AND kind IN (${sql.literal(kinds)})
+      ORDER BY seq DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
+  const listed = (section: Exclude<(typeof ListInput.Type)["section"], "trace">, offset: number) =>
+    Match.value(section).pipe(
+      Match.when(
+        "runs",
+        () => sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
           FROM chat_runs WHERE thread_id = ${bound.sourceSessionId}
-          ORDER BY started_at DESC, run_id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
-      case "approvals":
-        return sql`SELECT id, decision AS status, created_at AS time, reason AS text,
+          ORDER BY started_at DESC, run_id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`,
+      ),
+      Match.when(
+        "approvals",
+        () => sql`SELECT id, decision AS status, created_at AS time, reason AS text,
           tool_call_id AS toolCallId FROM permission_reviews WHERE session_id = ${bound.sourceSessionId}
-          ORDER BY id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
-      case "calls":
-      case "transcript":
-        return sql`SELECT id, kind AS status, created_at AS time, text,
-          json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
-          WHERE session_id = ${bound.sourceSessionId} AND project_id = ${bound.projectId}
-            AND kind IN (${sql.literal(section === "calls" ? "'tool_call','tool_result'" : "'user','assistant'")})
-          ORDER BY seq DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
-    }
-  };
-  const item = (section: Exclude<(typeof ReadInput.Type)["section"], "trace">, id: string) => {
-    switch (section) {
-      case "run":
-        return sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
-          FROM chat_runs WHERE run_id = ${id} AND thread_id = ${bound.sourceSessionId}`;
-      case "approval":
-        return sql`SELECT id, decision AS status, created_at AS time,
+          ORDER BY id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`,
+      ),
+      Match.when("calls", () => nodes("'tool_call','tool_result'", offset)),
+      Match.when("transcript", () => nodes("'user','assistant'", offset)),
+      Match.exhaustive,
+    );
+  const item = (section: Exclude<(typeof ReadInput.Type)["section"], "trace">, id: string) =>
+    Match.value(section).pipe(
+      Match.when(
+        "run",
+        () => sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
+          FROM chat_runs WHERE run_id = ${id} AND thread_id = ${bound.sourceSessionId}`,
+      ),
+      Match.when(
+        "approval",
+        () => sql`SELECT id, decision AS status, created_at AS time,
           reason || '\nTool: ' || tool_name || '\nInput: ' || input AS text,
           tool_call_id AS toolCallId FROM permission_reviews
-          WHERE id = ${Number(id)} AND session_id = ${bound.sourceSessionId}`;
-      case "node":
-        return sql`SELECT id, kind AS status, created_at AS time, text,
+          WHERE id = ${Number(id)} AND session_id = ${bound.sourceSessionId}`,
+      ),
+      Match.when(
+        "node",
+        () => sql`SELECT id, kind AS status, created_at AS time, text,
           json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
           WHERE id = ${id} AND session_id = ${bound.sourceSessionId} AND project_id = ${bound.projectId}
-            AND kind IN ('user','assistant','tool_call','tool_result')`;
-    }
-  };
-  const list = ({ section, offset }: typeof ListInput.Type) =>
+            AND kind IN ('user','assistant','tool_call','tool_result')`,
+      ),
+      Match.exhaustive,
+    );
+  const listTraces = (offset: number) =>
     Effect.gen(function* () {
-      if (!(yield* current)) return absent;
-      if (section === "trace") {
-        const all = yield* traces;
-        const items = all.slice(offset, offset + PAGE);
-        return {
-          section,
-          items: yield* Effect.forEach(
-            items,
-            (item) =>
-              Effect.gen(function* () {
-                return {
-                  id: item.id,
-                  status: item.status,
-                  time: item.createdAt,
-                  toolCallId: item.parentToolCallId,
-                  ...(yield* limited(item.title)),
-                };
-              }),
-            { concurrency: "unbounded" },
-          ),
-          nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
-        };
-      }
+      const all = yield* traces;
+      const items = all.slice(offset, offset + PAGE);
+      return {
+        section: "trace" as const,
+        items: yield* Effect.forEach(
+          items,
+          (item) =>
+            Effect.gen(function* () {
+              return {
+                id: item.id,
+                status: item.status,
+                time: item.createdAt,
+                toolCallId: item.parentToolCallId,
+                ...(yield* limited(item.title)),
+              };
+            }),
+          { concurrency: "unbounded" },
+        ),
+        nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
+      };
+    });
+  const listRows = (
+    section: Exclude<(typeof ListInput.Type)["section"], "trace">,
+    offset: number,
+  ) =>
+    Effect.gen(function* () {
       const rows = yield* listed(section, offset).pipe(Effect.flatMap(reportRows));
       return {
         section,
@@ -303,35 +340,60 @@ const boundReportCalls = <E, TraceE>({
         nextOffset: rows.length > PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
       };
     });
-  const read = ({ section, id }: typeof ReadInput.Type) =>
+  const list = ({ section, offset }: typeof ListInput.Type) =>
+    whileBound(
+      Match.value(section).pipe(
+        Match.when("trace", () => listTraces(offset)),
+        Match.orElse((table) => listRows(table, offset)),
+      ),
+    );
+  const readTrace = (id: string) =>
     Effect.gen(function* () {
-      if (!(yield* current)) return absent;
-      if (section === "trace") {
-        const item = (yield* traces).find((entry) => entry.id === id);
-        if (!isTruthy(item)) return absent;
-        return {
-          id,
-          section,
-          status: item.status,
-          time: item.createdAt,
-          toolCallId: item.parentToolCallId,
-          ...(yield* limited([item.title, item.request, item.latestActivity ?? ""].join("\n"))),
-        };
-      }
-      // Numeric ids are canonicalized to prevent accepting prefixes or coercing arbitrary ids.
-      if (section === "approval" && (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))))
-        return absent;
-      const [row] = yield* item(section, id).pipe(Effect.flatMap(reportRows));
-      if (!isTruthy(row)) return absent;
-      return {
-        id: String(row.id),
-        section,
-        status: row.status,
-        time: row.time,
-        toolCallId: row.toolCallId,
-        ...(yield* limited(row.text)),
-      };
+      const found = Arr.findFirst(yield* traces, (entry) => entry.id === id);
+      return yield* Option.match(found, {
+        onNone: () => Effect.succeed(absent),
+        onSome: (item) =>
+          Effect.map(
+            limited([item.title, item.request, item.latestActivity ?? ""].join("\n")),
+            (text) => ({
+              id,
+              section: "trace" as const,
+              status: item.status,
+              time: item.createdAt,
+              toolCallId: item.parentToolCallId,
+              ...text,
+            }),
+          ),
+      });
     });
+  const readRow = (section: Exclude<(typeof ReadInput.Type)["section"], "trace">, id: string) =>
+    Effect.gen(function* () {
+      const rows = yield* item(section, id).pipe(Effect.flatMap(reportRows));
+      return yield* Option.match(Arr.head(rows), {
+        onNone: () => Effect.succeed(absent),
+        onSome: (row) =>
+          Effect.map(limited(row.text), (text) => ({
+            id: String(row.id),
+            section,
+            status: row.status,
+            time: row.time,
+            toolCallId: row.toolCallId,
+            ...text,
+          })),
+      });
+    });
+  // Numeric ids are canonicalized to prevent accepting prefixes or coercing arbitrary ids.
+  const canonical = (section: (typeof ReadInput.Type)["section"], id: string) =>
+    section !== "approval" || (/^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)));
+  const read = ({ section, id }: typeof ReadInput.Type) =>
+    whileBound(
+      Match.value(section).pipe(
+        Match.when("trace", () => readTrace(id)),
+        Match.orElse((table) =>
+          canonical(table, id) ? readRow(table, id) : Effect.succeed(absent),
+        ),
+      ),
+    );
   return { list, read };
 };
 

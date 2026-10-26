@@ -311,9 +311,9 @@ export const migratedRows = Effect.fnUntraced(function* (sessionId: string) {
     sessionId,
   );
   yield* Effect.forEach(handoffs, (row) =>
-    Effect.map(decodeHandoffRow(row), ({ messages, value }) =>
+    Effect.flatMap(decodeHandoffRow(row), ({ messages, value }) =>
       HandoffState.match(value, {
-        baseline: () => [],
+        baseline: () => Effect.succeed([]),
         handoff: (saved) => handoffHistory(parseMessages(messages), saved, () => null),
       }),
     ),
