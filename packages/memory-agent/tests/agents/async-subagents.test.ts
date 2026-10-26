@@ -6,7 +6,7 @@ import type { JsonValue } from "../../src/json.ts";
 import { StepEnded } from "../../src/loop/run.ts";
 import { RunEnd } from "../../src/loop/store.ts";
 import { messageText } from "../../src/messages/text.ts";
-import { Subagents } from "../../src/subagents/subagents.ts";
+import { ChildTools, Subagents } from "../../src/subagents/subagents.ts";
 import type { AdapterInvocation, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
@@ -363,7 +363,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         runId: "run-effect-ai",
         selection: yield* current(selectTestModel()),
         abortSignal: yield* Effect.abortSignal,
-        tools: [],
+        tools: ChildTools.RunTools({ tools: [] }),
         systemPrompts: [],
         deliveredParentNotificationIds: HashSet.empty<string>(),
         gated: HashSet.empty<string>(),
@@ -371,7 +371,11 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const { tools, hook } = children.runToolsFor(binding);
       expect(
         yield* runToolRequestDifferences({
-          chatTools: children.forRun({ ...binding, runId: "run-tanstack" }).tools,
+          chatTools: children.forRun({
+            ...binding,
+            runId: "run-tanstack",
+            tools: ChildTools.TanStack({ tools: [] }),
+          }).tools,
           runTools: tools,
         }),
       ).toEqual([undefined, undefined, undefined]);

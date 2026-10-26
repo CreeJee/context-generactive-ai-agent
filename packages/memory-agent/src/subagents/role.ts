@@ -1,5 +1,6 @@
 import { HashSet } from "effect";
 import type { AnyServerTool } from "@tanstack/ai";
+import type { RunTool } from "../tools/run-tool.ts";
 
 const parentToolNames = HashSet.fromIterable([
   "start_new_goal",
@@ -19,3 +20,7 @@ const parentToolNames = HashSet.fromIterable([
 export function childTools(tools: readonly AnyServerTool[]) {
   return tools.filter((tool) => !HashSet.has(parentToolNames, tool.name));
 }
+
+/** {@link childTools} for the Effect AI loop's tools. */
+export const childRunTools = (tools: ReadonlyArray<RunTool>) =>
+  tools.filter(({ tool }) => !HashSet.has(parentToolNames, tool.name));

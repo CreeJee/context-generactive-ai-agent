@@ -119,7 +119,7 @@ import type { Worker } from "node:worker_threads";
 import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { repeatGuard } from "../tools/repeat-guard.ts";
-import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
+import { ChildTools, Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgentAdapter } from "../external-agents/adapter.ts";
@@ -2207,12 +2207,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           runId,
           selection,
           abortSignal: abortController.signal,
-          tools: [
-            ...childSharedTools,
-            ...(workflowReadOnly || reportSource !== null
-              ? []
-              : redactor.withHiddenResults(yield* approvedTools.forProject(project, "gate"))),
-          ],
+          tools: ChildTools.TanStack({
+            tools: [
+              ...childSharedTools,
+              ...(workflowReadOnly || reportSource !== null
+                ? []
+                : redactor.withHiddenResults(yield* approvedTools.forProject(project, "gate"))),
+            ],
+          }),
           systemPrompts: promptLayout(
             standingPromptsFor(childSharedTools),
             [

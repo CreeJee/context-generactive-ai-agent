@@ -12,6 +12,7 @@ import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
 import { ReportDiagnoser } from "./report/diagnosis.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
+import { RunStore } from "./loop/store.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
 import { DrawingPreviews } from "./attachments/previews.ts";
@@ -306,6 +307,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Graph.layer,
     VectorIndex.layer,
     ChatState.layer,
+    RunStore.layer,
     // Above the stores: the webhook URL is read from the keychain right before each send.
     ReportDelivery.layer(),
     Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),

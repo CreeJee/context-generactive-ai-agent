@@ -33,7 +33,7 @@ import { PermissionClassifier } from "../../src/permissions/classifier.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { nativeStream } from "../../src/runtime/native-stream.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { Subagents } from "../../src/subagents/subagents.ts";
+import { ChildTools, Subagents } from "../../src/subagents/subagents.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
 import { ToolFailed } from "../../src/tools/failure.ts";
@@ -1037,7 +1037,7 @@ testAgent()("full-loop owner tool read/write semantics", (it) => {
           runId: `${session.id}:r`,
           selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
           abortSignal: controller.signal,
-          tools: [],
+          tools: ChildTools.TanStack({ tools: [] }),
           systemPrompts: [],
           deliveredParentNotificationIds: HashSet.empty(),
           gated: HashSet.empty(),

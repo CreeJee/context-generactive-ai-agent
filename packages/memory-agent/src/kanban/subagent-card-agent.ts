@@ -4,7 +4,7 @@ import { Context, Crypto, Effect, HashSet, Layer, Match, Option, Ref, Schema } f
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
-import { Subagents } from "../subagents/subagents.ts";
+import { ChildTools, Subagents } from "../subagents/subagents.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
 import { errorTag } from "../tools/failure.ts";
@@ -175,11 +175,13 @@ const make = Effect.gen(function* () {
                 sessionId: run.sessionId,
                 runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
                 selection: chosen,
-                tools: [
-                  ...(yield* fileTools.forProject(project)),
-                  ...(yield* outsideTools.forProject(project)),
-                  ...(yield* approvedTools.forProject(project, "gate")),
-                ],
+                tools: ChildTools.TanStack({
+                  tools: [
+                    ...(yield* fileTools.forProject(project)),
+                    ...(yield* outsideTools.forProject(project)),
+                    ...(yield* approvedTools.forProject(project, "gate")),
+                  ],
+                }),
                 systemPrompts: [],
                 gated: gatedToolNames,
               },
@@ -253,7 +255,7 @@ const make = Effect.gen(function* () {
               sessionId: input.sessionId,
               runId,
               selection: chosen,
-              tools,
+              tools: ChildTools.TanStack({ tools }),
               systemPrompts: [],
               gated: gatedToolNames,
             },

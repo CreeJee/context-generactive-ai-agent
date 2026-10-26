@@ -35,6 +35,8 @@ const decodeFresh = Schema.decodeUnknownOption(
   ),
 );
 
+export const repeatedToolCallCode = "repeated_tool_call";
+
 /**
  * The run stopped because its model kept repeating tool calls whose result could not change.
  * Persistence and the page read `code`; the message is the run's detail.
@@ -45,7 +47,7 @@ export class RepeatedToolCall extends Schema.TaggedError<RepeatedToolCall>()("Re
   threadId: Schema.String,
 }) {
   get code() {
-    return "repeated_tool_call" as const;
+    return repeatedToolCallCode;
   }
 
   override get message() {
@@ -55,7 +57,7 @@ export class RepeatedToolCall extends Schema.TaggedError<RepeatedToolCall>()("Re
 
 const refusal = (toolName: string): ToolFailureResult =>
   ToolFailed.make({
-    code: "repeated_tool_call",
+    code: repeatedToolCallCode,
     tag: "RepeatedToolCall",
     detail: `${toolName} returned the same result ${sameResultLimit} times in a row for these arguments, so it was not run again. Use that result, change the arguments, or answer. Another refused repeat stops this run.`,
   })[toolResultKey];

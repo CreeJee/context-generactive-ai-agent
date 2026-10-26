@@ -20,14 +20,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect";
-import {
-  type AiError,
-  type LanguageModel,
-  Prompt,
-  type Response,
-  type Tool,
-  Toolkit,
-} from "effect/ai";
+import { AiError, type LanguageModel, Prompt, type Response, type Tool, Toolkit } from "effect/ai";
 import type {
   MessageSource,
   StoredInterruptPayload,
@@ -486,6 +479,17 @@ const isRunFailed = Schema.is(RunFailed);
 /** A failure as the run fails with it: its own message, which the run row keeps. */
 export const asRunFailed = (error: { readonly message: string }) =>
   isRunFailed(error) ? error : RunFailed.make({ message: error.message });
+
+/**
+ * {@link RunSpec.modelFailure} from the text a model shows for its failures; an answer that could
+ * not be read shows none of its own.
+ */
+export const modelFailureOf =
+  (shown: (error: AiError.AiError) => { readonly message: string; readonly code?: string }) =>
+  (error: AiError.AiError | Schema.SchemaError) =>
+    AiError.isAiError(error)
+      ? RunFailed.make(shown(error))
+      : RunFailed.make({ message: "The model's answer could not be read." });
 
 /** The run after its resume was accepted: it starts, goes on until it ends, and keeps its rows. */
 const runAccepted = Effect.fnUntraced(function* <R>(
