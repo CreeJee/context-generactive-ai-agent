@@ -40,7 +40,7 @@ const isObject = (value: JsonValue): value is JsonObject =>
  * is shared by every test in the file.
  */
 const volatileId =
-  /(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]+-\d{13}-[a-z0-9]{4,})(?:-message)?(?:-\d+)?(?![a-z0-9])/g;
+  /(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]+-\d{13}-[a-z0-9]+)(?:-message)?(?:-\d+)?(?![a-z0-9])/g;
 const isoTime = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
 /** Model handoff's hash of a stored message, which holds ids and times. */
 const messageFingerprint = /^v2:[0-9a-f]{64}$/;
