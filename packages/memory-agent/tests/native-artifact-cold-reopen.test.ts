@@ -32,6 +32,7 @@ it.live(
           "effect",
           "@effect/platform-node",
           "@tanstack/ai",
+          "@cfworker/json-schema",
           "@secretlint/core",
           "@secretlint/profiler",
           "@secretlint/secretlint-rule-preset-recommend",

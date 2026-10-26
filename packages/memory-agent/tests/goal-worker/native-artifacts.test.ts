@@ -54,6 +54,7 @@ const hostPackages = HashSet.fromIterable([
   "effect",
   "@effect/platform-node",
   "@tanstack/ai",
+  "@cfworker/json-schema",
   "@secretlint/core",
   "@secretlint/profiler",
   "@secretlint/secretlint-rule-preset-recommend",
@@ -72,8 +73,8 @@ const external = (id: string) => {
 const mutations = [
   {
     file: "permissions/gate.ts",
-    needle: "return { error: `blocked_by_permission_review: ${review.reason}` };",
-    replacement: "return { error: `copied-B:blocked_by_permission_review: ${review.reason}` };",
+    needle: "error: `blocked_by_permission_review: ${reason}`,",
+    replacement: "error: `copied-B:blocked_by_permission_review: ${reason}`,",
   },
   {
     file: "tools/memory.ts",
