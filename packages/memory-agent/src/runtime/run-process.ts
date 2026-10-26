@@ -18,7 +18,7 @@ export function runProcess(
   const { command, args } = options;
   const program = Effect.scoped(
     Effect.gen(function* () {
-      if (options.signal?.aborted === true) return yield* Effect.interrupt;
+      yield* Effect.when(Effect.interrupt, Effect.succeed(options.signal?.aborted === true));
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const child = yield* spawner.spawn(
         ChildProcess.make(command, args, {
@@ -49,10 +49,10 @@ export function runProcess(
         [collect(child.stdout), collect(child.stderr), child.exitCode],
         { concurrency: "unbounded" },
       );
-      if (exit !== 0)
-        return yield* new Cause.UnknownError(
-          new Error(`Command failed: ${command} (exit ${exit})`),
-        );
+      yield* Effect.when(
+        Effect.fail(new Cause.UnknownError(new Error(`Command failed: ${command} (exit ${exit})`))),
+        Effect.succeed(exit !== 0),
+      );
       return { stdout, stderr };
     }),
   );

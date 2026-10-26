@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Array as EffectArray, Context, Effect, Layer, Option, Schema } from "effect";
 
 export interface PinnedArchive {
   readonly url: string;
@@ -79,28 +79,35 @@ export class ArchiveInstaller extends Context.Service<
         const { archive, target } = options;
         const bytes = yield* host.download(archive.url);
         const digest = yield* host.checksum({ bytes, algorithm: archive.algorithm });
-        if (digest !== archive.digest) {
-          return yield* ArchiveInstallFailed.make({
-            reason: ArchiveInstallFailedReason.cases.ChecksumMismatch.make({
-              algorithm: archive.algorithm,
+        yield* Effect.when(
+          Effect.fail(
+            ArchiveInstallFailed.make({
+              reason: ArchiveInstallFailedReason.cases.ChecksumMismatch.make({
+                algorithm: archive.algorithm,
+              }),
             }),
-          });
-        }
+          ),
+          Effect.succeed(digest !== archive.digest),
+        );
         yield* Effect.acquireUseRelease(
           host.stage(target),
           (staging) =>
             Effect.gen(function* () {
               yield* host.write({ staging, bytes });
               const listing = yield* host.list(staging);
-              const unsafe = listing
-                .trim()
-                .split(/\r?\n/)
-                .find((entry) => entry.startsWith("/") || entry.split("/").includes(".."));
-              if (unsafe !== undefined) {
-                return yield* ArchiveInstallFailed.make({
-                  reason: ArchiveInstallFailedReason.cases.UnsafeEntry.make({ entry: unsafe }),
-                });
-              }
+              const unsafe = EffectArray.findFirst(
+                listing.trim().split(/\r?\n/),
+                (entry) => entry.startsWith("/") || entry.split("/").includes(".."),
+              );
+              yield* Option.match(unsafe, {
+                onNone: () => Effect.void,
+                onSome: (entry) =>
+                  Effect.fail(
+                    ArchiveInstallFailed.make({
+                      reason: ArchiveInstallFailedReason.cases.UnsafeEntry.make({ entry }),
+                    }),
+                  ),
+              });
               yield* host.extract(staging);
               yield* host.publish({ staging, target });
             }),

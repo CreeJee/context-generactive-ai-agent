@@ -65,10 +65,10 @@ function npmIntegrityBody(url: string, integrity: string): PinnedArchive {
   return { url, algorithm, digest: Buffer.from(base64, "base64").toString("hex") };
 }
 
-const explain = (cause: unknown): string => {
-  if (!(cause instanceof Error)) return String(cause);
-  return cause.cause instanceof Error ? `${cause.message}: ${explain(cause.cause)}` : cause.message;
-};
+const explain = (cause: unknown): string =>
+  cause instanceof Error
+    ? `${cause.message}${cause.cause instanceof Error ? `: ${explain(cause.cause)}` : ""}`
+    : String(cause);
 
 const HostOperationFailed = ArchiveInstallFailedReason.cases.HostOperationFailed;
 
@@ -101,15 +101,7 @@ const archiveCommand = Effect.fn("ArchiveHost.command")(function* (
           return Effect.succeed({ chunks: state.chunks, size });
         },
       ),
-      Effect.map(({ chunks, size }) => {
-        const bytes = new Uint8Array(size);
-        let offset = 0;
-        for (const chunk of chunks) {
-          bytes.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        return new TextDecoder().decode(bytes);
-      }),
+      Effect.map(({ chunks, size }) => new TextDecoder().decode(Buffer.concat(chunks, size))),
     );
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -120,8 +112,10 @@ const archiveCommand = Effect.fn("ArchiveHost.command")(function* (
         [collect(child.stdout), collect(child.stderr), child.exitCode],
         { concurrency: "unbounded" },
       );
-      if (exitCode !== 0)
-        return yield* hostFailure(options.operation)(`tar exited with code ${exitCode}`);
+      yield* Effect.when(
+        Effect.fail(hostFailure(options.operation)(`tar exited with code ${exitCode}`)),
+        Effect.succeed(exitCode !== 0),
+      );
       return stdout;
     }).pipe(
       Effect.mapError((cause) =>

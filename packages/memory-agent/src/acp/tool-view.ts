@@ -42,10 +42,10 @@ const views = HashMap.fromIterable<string, ToolView>([
 ]);
 
 export function toolView(name: string): ToolView {
-  const known = Option.getOrUndefined(HashMap.get(views, name));
-  if (isTruthy(known)) return known;
-  const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
-  return { title: isTruthy(mcp) ? `MCP ${mcp[1]} · ${mcp[2]}` : name, kind: "other" };
+  return Option.getOrElse(HashMap.get(views, name), (): ToolView => {
+    const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
+    return { title: isTruthy(mcp) ? `MCP ${mcp[1]} · ${mcp[2]}` : name, kind: "other" };
+  });
 }
 
 const PathArguments = Schema.fromJsonString(

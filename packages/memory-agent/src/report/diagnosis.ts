@@ -1,6 +1,6 @@
 import { chat } from "@tanstack/ai";
 import { AuthConnectionState } from "../providers/contracts.ts";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { abortControllerFor } from "../runtime/abort-controller.ts";
@@ -111,10 +111,17 @@ export class ReportDiagnoser extends Context.Service<
       const diagnose = Effect.fn("ReportDiagnoser.diagnose")(function* (
         input: ReportDiagnosisInput,
       ) {
-        const selection = yield* active.selected.pipe(Effect.mapError(unavailable));
-        if (selection === null) return yield* unavailable(null);
+        const selection = yield* active.selected.pipe(
+          Effect.mapError(unavailable),
+          Effect.flatMap((selected) =>
+            Effect.fromOption(Option.fromNullishOr(selected), () => unavailable(null)),
+          ),
+        );
         const auth = yield* active.auth(selection);
-        if (!AuthConnectionState.$is("signed-in")(auth)) return yield* unavailable(null);
+        yield* Effect.when(
+          Effect.fail(unavailable(null)),
+          Effect.succeed(!AuthConnectionState.$is("signed-in")(auth)),
+        );
         const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
         const threadId = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
         const sourceSessionId = input.sourceSessionId;

@@ -1,4 +1,4 @@
-import { Config, Crypto, DateTime, Effect, Option, Schema } from "effect";
+import { Config, Crypto, DateTime, Effect, Match, Option, Schema } from "effect";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -355,12 +355,11 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
     let callSeq = 0;
     rows.forEach((row, index) => {
       const text = texts[index] ?? { text: "", cut: false };
-      switch (row.kind) {
-        case "user":
-        case "assistant":
-          events.push(BundleEvent.cases.Message.make({ role: row.kind, at: row.created_at, text }));
-          return;
-        case "tool_call":
+      Match.value(row.kind).pipe(
+        Match.whenOr("user", "assistant", (role) => {
+          events.push(BundleEvent.cases.Message.make({ role, at: row.created_at, text }));
+        }),
+        Match.when("tool_call", () => {
           callSeq += 1;
           if (row.tool_call_id !== null) calls.set(row.tool_call_id, events.length);
           events.push(
@@ -372,8 +371,8 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
               result: null,
             }),
           );
-          return;
-        case "tool_result": {
+        }),
+        Match.when("tool_result", () => {
           const result = { ok: row.ok === null ? null : row.ok !== 0, at: row.created_at, text };
           const at = row.tool_call_id === null ? undefined : calls.get(row.tool_call_id);
           const call = at === undefined ? undefined : events[at];
@@ -392,9 +391,9 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
               result,
             }),
           );
-          return;
-        }
-      }
+        }),
+        Match.exhaustive,
+      );
     });
     return { events, calls };
   };

@@ -1,5 +1,13 @@
-import { isTruthy } from "../truthy.ts";
-import { HashMap, MutableHashMap, Option, DateTime, Clock, Semaphore, Fiber, Scope } from "effect";
+import {
+  Array as EffectArray,
+  MutableHashMap,
+  Option,
+  DateTime,
+  Clock,
+  Semaphore,
+  Fiber,
+  Scope,
+} from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -57,14 +65,24 @@ function toAttachment(decoded: typeof AttachmentRow.Type): Attachment {
 const startsWith = (bytes: Uint8Array, signature: readonly number[], offset = 0) =>
   signature.every((value, index) => bytes[offset + index] === value);
 
+/** Each image type's signature: bytes it holds at an offset (WebP's RIFF header names it at 8). */
+const signatures = {
+  "image/png": [[0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]]],
+  "image/jpeg": [[0, [0xff, 0xd8, 0xff]]],
+  "image/gif": [[0, [0x47, 0x49, 0x46, 0x38]]],
+  "image/webp": [
+    [0, [0x52, 0x49, 0x46, 0x46]],
+    [8, [0x57, 0x45, 0x42, 0x50]],
+  ],
+} satisfies Record<AttachmentMimeType, ReadonlyArray<readonly [number, readonly number[]]>>;
+
 /** The image type the bytes really are, from their signature; a declared type is not trusted. */
 export function sniffImageType(bytes: Uint8Array): AttachmentMimeType | null {
-  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
-  if (startsWith(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg";
-  if (startsWith(bytes, [0x47, 0x49, 0x46, 0x38])) return "image/gif";
-  if (startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWith(bytes, [0x57, 0x45, 0x42, 0x50], 8))
-    return "image/webp";
-  return null;
+  return Option.getOrNull(
+    EffectArray.findFirst(AttachmentMimeType.literals, (type) =>
+      signatures[type].every(([offset, signature]) => startsWith(bytes, signature, offset)),
+    ),
+  );
 }
 
 /** Attachment ids are sha256 hex digests; anything else never touches the filesystem. */
@@ -89,12 +107,12 @@ export interface ModelImage {
   readonly mimeType: AttachmentMimeType;
 }
 
-const extensions = HashMap.fromIterable<AttachmentMimeType, string>([
-  ["image/png", "png"],
-  ["image/jpeg", "jpg"],
-  ["image/gif", "gif"],
-  ["image/webp", "webp"],
-]);
+const extensions = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+} satisfies Record<AttachmentMimeType, string>;
 
 const make = Effect.gen(function* () {
   const conversionScope = yield* Scope.Scope;
@@ -140,10 +158,7 @@ const make = Effect.gen(function* () {
   });
 
   const fileOf = (attachment: Attachment) =>
-    path.join(
-      directory,
-      `${attachment.id}.${Option.getOrUndefined(HashMap.get(extensions, attachment.mimeType))}`,
-    );
+    path.join(directory, `${attachment.id}.${extensions[attachment.mimeType]}`);
 
   const get = (id: string) =>
     isAttachmentId(id)
@@ -254,18 +269,22 @@ const make = Effect.gen(function* () {
   const conversions = MutableHashMap.empty<string, Fiber.Fiber<ModelImage>>();
   const conversionLock = yield* Semaphore.make(1);
   const conversionFor = Effect.fn("Attachments.conversionFor")(function* (attachment: Attachment) {
-    const existing = MutableHashMap.get(conversions, attachment.id);
-    if (Option.isSome(existing)) return existing.value;
-    const fiber = yield* Effect.forkIn(
-      encodeForModel(attachment).pipe(
-        Effect.uninterruptible,
-        Effect.ensuring(Effect.sync(() => MutableHashMap.remove(conversions, attachment.id))),
-      ),
-      conversionScope,
-      { startImmediately: true },
-    );
-    MutableHashMap.set(conversions, attachment.id, fiber);
-    return fiber;
+    return yield* Option.match(MutableHashMap.get(conversions, attachment.id), {
+      onSome: Effect.succeed,
+      onNone: () =>
+        Effect.forkIn(
+          encodeForModel(attachment).pipe(
+            Effect.uninterruptible,
+            Effect.ensuring(Effect.sync(() => MutableHashMap.remove(conversions, attachment.id))),
+          ),
+          conversionScope,
+          { startImmediately: true },
+        ).pipe(
+          Effect.tap((fiber) =>
+            Effect.sync(() => MutableHashMap.set(conversions, attachment.id, fiber)),
+          ),
+        ),
+    });
   }, conversionLock.withPermits(1));
   const forModelEffect = (attachment: Attachment) =>
     Effect.flatMap(conversionFor(attachment), Fiber.join);
@@ -283,12 +302,17 @@ const make = Effect.gen(function* () {
    */
   const save = (bytes: Uint8Array) =>
     Effect.gen(function* () {
-      if (bytes.length === 0) return yield* AttachmentRejected.make({ reason: "empty" });
-      if (bytes.length > maxAttachmentBytes)
-        return yield* AttachmentRejected.make({ reason: "too_large" });
-      const mimeType = sniffImageType(bytes);
-      if (!isTruthy(mimeType))
-        return yield* AttachmentRejected.make({ reason: "unsupported_type" });
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "empty" })),
+        Effect.succeed(bytes.length === 0),
+      );
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "too_large" })),
+        Effect.succeed(bytes.length > maxAttachmentBytes),
+      );
+      const mimeType = yield* Effect.fromOption(Option.fromNullishOr(sniffImageType(bytes)), () =>
+        AttachmentRejected.make({ reason: "unsupported_type" }),
+      );
 
       const attachment: Attachment = {
         id: Hex.encode(yield* fileIo("save", crypto.digest("SHA-256", bytes))),
@@ -324,9 +348,14 @@ const make = Effect.gen(function* () {
    */
   const saveDrawing = (svg: Uint8Array) =>
     Effect.gen(function* () {
-      if (svg.length === 0) return yield* AttachmentRejected.make({ reason: "empty" });
-      if (svg.length > maxDrawingBytes)
-        return yield* AttachmentRejected.make({ reason: "too_large" });
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "empty" })),
+        Effect.succeed(svg.length === 0),
+      );
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "too_large" })),
+        Effect.succeed(svg.length > maxDrawingBytes),
+      );
       const png = yield* Effect.tryPromise({
         try: () =>
           requireRuntime("sharp")(Buffer.from(svg), { density: 144 })
@@ -387,17 +416,20 @@ const make = Effect.gen(function* () {
     /** Removes content-addressed blobs only after their last message reference is gone. */
     purgeOrphans: Effect.gen(function* () {
       const orphaned = (yield* deleteOrphans()).map(toAttachment);
-      for (const attachment of orphaned) {
-        yield* Effect.forEach(
-          [
-            fileOf(attachment),
-            path.join(directory, `${attachment.id}.model.webp`),
-            path.join(directory, `${attachment.id}.model-original`),
-          ],
-          (path) => fileIo("purge", fs.remove(path, { force: true })),
-          { concurrency: 3, discard: true },
-        );
-      }
+      yield* Effect.forEach(
+        orphaned,
+        (attachment) =>
+          Effect.forEach(
+            [
+              fileOf(attachment),
+              path.join(directory, `${attachment.id}.model.webp`),
+              path.join(directory, `${attachment.id}.model-original`),
+            ],
+            (path) => fileIo("purge", fs.remove(path, { force: true })),
+            { concurrency: 3, discard: true },
+          ),
+        { discard: true },
+      );
       return orphaned.length;
     }),
   };

@@ -66,17 +66,16 @@ function findExecutableBody(
     const path = pathModule(platform);
     const extensions =
       platform === "win32" ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
-    for (const directory of searchPath(env, platform).split(platform === "win32" ? ";" : ":")) {
-      if (!path.isAbsolute(directory)) continue;
-      for (const extension of extensions) {
-        const candidate = path.join(directory, `${name}${extension.toLowerCase()}`);
-        if (
-          yield* isFile === undefined ? fileExists(candidate) : Effect.sync(() => isFile(candidate))
-        )
-          return candidate;
-      }
-    }
-    return null;
+    const candidates = searchPath(env, platform)
+      .split(platform === "win32" ? ";" : ":")
+      .filter((directory) => path.isAbsolute(directory))
+      .flatMap((directory) =>
+        extensions.map((extension) => path.join(directory, `${name}${extension.toLowerCase()}`)),
+      );
+    const found = yield* Effect.findFirst(candidates, (candidate) =>
+      isFile === undefined ? fileExists(candidate) : Effect.sync(() => isFile(candidate)),
+    );
+    return Option.getOrNull(found);
   });
 }
 
@@ -151,14 +150,11 @@ export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function
 ) {
   const { from, to, platform = process.platform, rename } = options;
   const mapFailure = (cause: unknown) => {
-    const decoded = Schema.decodeUnknownOption(ErrorCode)(cause);
-    if (Option.isNone(decoded)) throw cause;
-    return DirectoryRenameFailed.make({
-      from,
-      to,
-      reason: RenameFailed.make({ code: decoded.value.code }),
-      cause,
-    });
+    const { code } = Option.getOrThrowWith(
+      Schema.decodeUnknownOption(ErrorCode)(cause),
+      () => cause,
+    );
+    return DirectoryRenameFailed.make({ from, to, reason: RenameFailed.make({ code }), cause });
   };
   const operation =
     rename === undefined

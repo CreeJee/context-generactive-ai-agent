@@ -60,9 +60,12 @@ export function runtimeWorkerOptions<A extends object>(setup: A) {
  * this module into its server build.
  */
 export function runtimeRequire() {
-  const root = runtimeRoot();
-  if (root !== null) return createRequire(path.join(root, "package.json"));
-  return createRequire(createRequire(import.meta.url).resolve("memory-agent/package.json"));
+  return createRequire(
+    Option.match(Option.fromNullishOr(runtimeRoot()), {
+      onNone: () => createRequire(import.meta.url).resolve("memory-agent/package.json"),
+      onSome: (root) => path.join(root, "package.json"),
+    }),
+  );
 }
 
 /** Loads a runtime package with `require` (its CommonJS build, or require(esm) for turbovec). */
