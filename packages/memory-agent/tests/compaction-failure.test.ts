@@ -10,6 +10,7 @@ import {
   compactionStateEffect,
   lookupSources,
 } from "../src/agent/compaction.ts";
+import { tanstackMetadata } from "../src/chat-store/metadata.ts";
 
 const state = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
 const messages: readonly ModelMessage[] = [
@@ -34,7 +35,10 @@ describe("Compaction failure boundaries", () => {
         set: () => Promise.resolve(),
         delete: () => Promise.resolve(),
       };
-      const error = yield* compactionStateEffect({ metadata, threadId: "t1" }).pipe(Effect.flip);
+      const error = yield* compactionStateEffect({
+        metadata: tanstackMetadata(metadata),
+        threadId: "t1",
+      }).pipe(Effect.flip);
       expect(error).toBeInstanceOf(CompactionFailed);
       expect(error.operation).toBe("read-state");
       expect(CompactionReason.guards.MetadataFailed(error.reason)).toBe(true);
@@ -77,7 +81,9 @@ describe("Compaction failure boundaries", () => {
         delete: () => Promise.resolve(),
       };
       yield* Effect.acquireUseRelease(
-        Effect.forkChild(compactionStateEffect({ metadata, threadId: "t1" })),
+        Effect.forkChild(
+          compactionStateEffect({ metadata: tanstackMetadata(metadata), threadId: "t1" }),
+        ),
         (fiber) =>
           Effect.gen(function* () {
             yield* Deferred.await(started);

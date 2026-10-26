@@ -10,8 +10,17 @@ import {
   Option,
   Schema,
 } from "effect";
+import {
+  type ChatMetadata,
+  type ChatMetadataFailed,
+  tanstackMetadata,
+} from "../chat-store/metadata.ts";
 import { recentRawUserTurns } from "./compaction-policy.ts";
-import { consumeColdObservationEffect, pendingColdObservationEffect } from "./context-usage.ts";
+import {
+  consumeColdObservationEffect,
+  type ContextUsageFailed,
+  pendingColdObservationEffect,
+} from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import type { NodeStoreFailed } from "../memory/nodes.ts";
@@ -278,29 +287,32 @@ export const compactionState: {
   (threadId: string): (metadata: MetadataStore) => ReturnType<typeof compactionStateBody>;
 } & typeof compactionStateBody = EffectFunction.dual(2, compactionStateBody);
 function compactionStateBody(metadata: MetadataStore, threadId: string): Promise<CompactionState> {
-  return Effect.runPromise(compactionStateEffect({ metadata, threadId }));
+  return Effect.runPromise(
+    compactionStateEffect({ metadata: tanstackMetadata(metadata), threadId }),
+  );
 }
 
+const metadataFailed =
+  (operation: CompactionFailed["operation"]) =>
+  ({ cause }: ChatMetadataFailed | ContextUsageFailed) =>
+    CompactionFailed.make({
+      operation,
+      reason: CompactionReason.cases.MetadataFailed.make({}),
+      cause,
+    });
+
 export const compactionStateEffect = Effect.fnUntraced(function* (options: {
-  readonly metadata: MetadataStore;
+  readonly metadata: ChatMetadata;
   readonly threadId: string;
 }) {
   const { metadata, threadId } = options;
   const [manual, summaries] = yield* Effect.all(
     [
-      compactionPromise({
-        operation: "read-state",
-        reason: "MetadataFailed",
-        evaluate: () => metadata.get(manualCompactionNamespace, threadId),
-      }),
-      compactionPromise({
-        operation: "read-state",
-        reason: "MetadataFailed",
-        evaluate: () => metadata.get(turnSummariesNamespace, threadId),
-      }),
+      metadata.get(manualCompactionNamespace, threadId),
+      metadata.get(turnSummariesNamespace, threadId),
     ],
     { concurrency: "unbounded" },
-  );
+  ).pipe(Effect.mapError(metadataFailed("read-state")));
   return {
     manual: Option.getOrElse(decodeManualCompaction(manual), () => noManualCompaction),
     blocks: Option.match(decodeSummaries(summaries), {
@@ -811,19 +823,6 @@ function compactionBody(
               },
             };
           }
-          const state = yield* compactionStateEffect({ metadata, threadId: ctx.threadId });
-          const coldId = yield* pendingColdObservationEffect({
-            metadata,
-            threadId: ctx.threadId,
-          }).pipe(
-            Effect.mapError((failure) =>
-              CompactionFailed.make({
-                operation: "read-cold",
-                reason: CompactionReason.cases.MetadataFailed.make({}),
-                cause: failure.cause,
-              }),
-            ),
-          );
           const restored =
             historyForModel === undefined
               ? null
@@ -832,63 +831,91 @@ function compactionBody(
                   reason: "HistoryFailed",
                   evaluate: () => historyForModel(config.messages),
                 });
-          const removedTurns = isTruthy(restored)
-            ? userTurns(config.messages).length - userTurns(restored).length
-            : 0;
-          const restoredContext = restored?.[0];
-          const { messages, stage } = yield* compactEffect({
-            messages: isTruthy(restored) ? restored.slice(1) : config.messages,
-            state: isTruthy(restored)
-              ? {
-                  manual: noManualCompaction,
-                  blocks: state.blocks
-                    .filter((block) => block.end > removedTurns)
-                    .map((block) => ({ ...block, end: block.end - removedTurns })),
-                }
-              : state,
+          const { messages, stage } = yield* requestHistory({
+            metadata: tanstackMetadata(metadata),
+            threadId: ctx.threadId,
+            messages: config.messages,
+            restored,
             sources,
-            budget: isTruthy(restoredContext)
-              ? {
-                  ...budget,
-                  leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
-                }
-              : budget,
-            early: coldId !== null,
+            budget,
           });
-          if (coldId !== null)
-            yield* consumeColdObservationEffect({
-              metadata,
-              threadId: ctx.threadId,
-              observationId: coldId,
-            }).pipe(
-              Effect.mapError((failure) =>
-                CompactionFailed.make({
-                  operation: "consume-cold",
-                  reason: CompactionReason.cases.MetadataFailed.make({}),
-                  cause: failure.cause,
-                }),
-              ),
-            );
-          observed(isTruthy(restored) && stage === "none" ? "summarize" : stage);
-          const question = restored?.findLast(
-            (message) => message.role === "user" && messageText(message).trim(),
-          );
-          const retained =
-            isTruthy(question) && !messages.includes(question) ? [question, ...messages] : messages;
-          const outgoing = isTruthy(restoredContext) ? [restoredContext, ...retained] : messages;
-          const { toolResultId } = yield* memoryLookups(sources, outgoing, []);
-          const providerMessages = lightweightToolResults(outgoing, toolResultId).filter(
-            (message) => !isEmptyUserText(message),
-          );
-          return providerMessages.every((message, index) => message === config.messages[index]) &&
-            providerMessages.length === config.messages.length
-            ? undefined
-            : { providerMessages: [...providerMessages] };
+          observed(stage);
+          return changed(config.messages, messages)
+            ? { providerMessages: [...messages] }
+            : undefined;
         }),
         { signal: ctx.signal },
       ),
   };
 }
+
+/**
+ * What one model request of a session sends of its conversation, and the stage that made it so
+ * (see {@link compactEffect}). `restored` is the history a model handoff put in place of
+ * `messages`, headed by its notice. A pending cold-cache observation leaves out early once and is
+ * used up.
+ */
+export const requestHistory = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
+  readonly metadata: ChatMetadata;
+  readonly threadId: string;
+  readonly messages: ReadonlyArray<M>;
+  readonly restored: ReadonlyArray<M | CompactionMessage> | null;
+  readonly sources: CompactionSources;
+  readonly budget: Budget;
+}): Effect.fn.Return<
+  { readonly messages: ReadonlyArray<M | CompactionMessage>; readonly stage: CompactionStage },
+  CompactionFailed
+> {
+  const { metadata, threadId, messages, restored, sources, budget } = options;
+  const state = yield* compactionStateEffect({ metadata, threadId });
+  const coldId = yield* pendingColdObservationEffect({ metadata, threadId }).pipe(
+    Effect.mapError(metadataFailed("read-cold")),
+  );
+  const removedTurns =
+    restored === null ? 0 : userTurns(messages).length - userTurns(restored).length;
+  const restoredContext = restored?.[0];
+  const compacted = yield* compactEffect({
+    messages: restored === null ? messages : restored.slice(1),
+    state:
+      restored === null
+        ? state
+        : {
+            manual: noManualCompaction,
+            blocks: state.blocks
+              .filter((block) => block.end > removedTurns)
+              .map((block) => ({ ...block, end: block.end - removedTurns })),
+          },
+    sources,
+    budget:
+      restoredContext === undefined
+        ? budget
+        : {
+            ...budget,
+            leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
+          },
+    early: coldId !== null,
+  });
+  if (coldId !== null)
+    yield* consumeColdObservationEffect({ metadata, threadId, observationId: coldId }).pipe(
+      Effect.mapError(metadataFailed("consume-cold")),
+    );
+  const question = restored?.findLast(
+    (message) => message.role === "user" && messageText(message).trim(),
+  );
+  const retained =
+    question !== undefined && !compacted.messages.includes(question)
+      ? [question, ...compacted.messages]
+      : compacted.messages;
+  const outgoing =
+    restoredContext === undefined ? compacted.messages : [restoredContext, ...retained];
+  const { toolResultId } = yield* memoryLookups(sources, outgoing, []);
+  return {
+    messages: lightweightToolResults(outgoing, toolResultId).filter(
+      (message) => !isEmptyUserText(message),
+    ),
+    stage: restored !== null && compacted.stage === "none" ? "summarize" : compacted.stage,
+  };
+});
 
 const isBudget = Schema.is(Schema.Struct({ compactAt: Schema.Finite, leaveOutAt: Schema.Finite }));
 type CompactionObserver = ((stage: CompactionStage) => void) | undefined;
@@ -933,7 +960,7 @@ export type SummaryOutcome = "done" | "failed" | "unavailable";
  * whatever the budget, for this and every later run.
  */
 const compactByHandBody = <E>(
-  metadata: MetadataStore,
+  metadata: ChatMetadata,
   threadId: string,
   messages: readonly ModelMessage[],
   sources: CompactionSources,
@@ -953,11 +980,9 @@ const compactByHandBody = <E>(
       clearedThrough: messages.length,
       summarizedTurns: summaries.at(-1)?.end ?? 0,
     };
-    yield* compactionPromise({
-      operation: "persist",
-      reason: "MetadataFailed",
-      evaluate: () => metadata.set(manualCompactionNamespace, threadId, manual),
-    });
+    yield* metadata
+      .set(manualCompactionNamespace, threadId, manual)
+      .pipe(Effect.mapError(metadataFailed("persist")));
     const after = yield* compactEffect({
       messages,
       state: { ...state, manual },
@@ -987,5 +1012,5 @@ export const compactByHand: {
     sources: CompactionSources,
     budget: Budget,
     summarize: () => Effect.Effect<SummaryOutcome, E>,
-  ): (metadata: MetadataStore) => ReturnType<typeof compactByHandBody<E>>;
+  ): (metadata: ChatMetadata) => ReturnType<typeof compactByHandBody<E>>;
 } & typeof compactByHandBody = EffectFunction.dual(6, compactByHandBody);

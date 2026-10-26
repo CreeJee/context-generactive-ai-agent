@@ -1,5 +1,6 @@
 import { Clock, Context, Data, Effect, HashSet, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { type ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import {
   StoredInterruptPayload,
   StoredInterruptResponse,
@@ -283,6 +284,19 @@ const make = Effect.gen(function* () {
       Effect.asVoid(sql`DELETE FROM chat_metadata WHERE namespace = ${namespace} AND key = ${key}`),
   };
 
+  /** The same rows as compaction, model handoff and context usage use them. */
+  const chatMetadata: ChatMetadata = {
+    get: (namespace, key) =>
+      metadata.get(namespace, key).pipe(
+        Effect.map(Option.getOrUndefined),
+        Effect.mapError((cause) => ChatMetadataFailed.make({ cause })),
+      ),
+    set: (namespace, key, value) =>
+      Effect.mapError(metadata.set(namespace, key, value), (cause) =>
+        ChatMetadataFailed.make({ cause }),
+      ),
+  };
+
   return {
     thread,
     saveThread,
@@ -292,6 +306,7 @@ const make = Effect.gen(function* () {
     createInterrupts,
     commitInterrupts,
     metadata,
+    chatMetadata,
   };
 });
 

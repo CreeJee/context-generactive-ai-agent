@@ -2,6 +2,11 @@ import { Crypto, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
+import {
+  type ChatMetadata,
+  type ChatMetadataFailed,
+  tanstackMetadata,
+} from "../chat-store/metadata.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
@@ -67,35 +72,31 @@ export class ContextUsageFailed extends Schema.TaggedError<ContextUsageFailed>()
   },
 ) {}
 
-const metadataOperation = <A>(
-  operation: ContextUsageFailed["operation"],
-  run: () => Promise<A>,
-): Effect.Effect<A, ContextUsageFailed> =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) =>
-      ContextUsageFailed.make({
-        operation,
-        reason:
-          operation === "read-usage" || operation === "read-consumed"
-            ? ContextUsageReason.cases.ReadFailed.make({})
-            : ContextUsageReason.cases.WriteFailed.make({}),
-        cause,
-      }),
-  });
+const metadataFailed =
+  (operation: ContextUsageFailed["operation"]) =>
+  ({ cause }: ChatMetadataFailed) =>
+    ContextUsageFailed.make({
+      operation,
+      reason:
+        operation === "read-usage" || operation === "read-consumed"
+          ? ContextUsageReason.cases.ReadFailed.make({})
+          : ContextUsageReason.cases.WriteFailed.make({}),
+      cause,
+    });
 
 export const lastContextUsageEffect = (input: {
-  readonly metadata: MetadataStore;
+  readonly metadata: ChatMetadata;
   readonly threadId: string;
 }) =>
-  metadataOperation("read-usage", () =>
-    input.metadata.get(contextUsageNamespace, input.threadId),
-  ).pipe(Effect.map((stored) => Option.getOrNull(decodeContextUsage(stored))));
+  input.metadata.get(contextUsageNamespace, input.threadId).pipe(
+    Effect.mapError(metadataFailed("read-usage")),
+    Effect.map((stored) => Option.getOrNull(decodeContextUsage(stored))),
+  );
 
 /** The latest provider-reported prompt/cache usage in a session, if it has made a request. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const lastContextUsageBody = (metadata: MetadataStore, threadId: string) =>
-  Effect.runPromise(lastContextUsageEffect({ metadata, threadId }));
+  Effect.runPromise(lastContextUsageEffect({ metadata: tanstackMetadata(metadata), threadId }));
 export const lastContextUsage: {
   (threadId: string): (metadata: MetadataStore) => ReturnType<typeof lastContextUsageBody>;
 } & typeof lastContextUsageBody = EffectFunction.dual(2, lastContextUsageBody);
@@ -120,16 +121,16 @@ export const pendingColdObservation: {
   (threadId: string): (metadata: MetadataStore) => ReturnType<typeof pendingColdObservationBody>;
 } & typeof pendingColdObservationBody = EffectFunction.dual(2, pendingColdObservationBody);
 export const pendingColdObservationEffect = (input: {
-  readonly metadata: MetadataStore;
+  readonly metadata: ChatMetadata;
   readonly threadId: string;
 }) =>
   Effect.gen(function* () {
     const [usage, consumed] = yield* Effect.all(
       [
         lastContextUsageEffect(input),
-        metadataOperation("read-consumed", () =>
-          input.metadata.get(consumedColdUsageNamespace, input.threadId),
-        ),
+        input.metadata
+          .get(consumedColdUsageNamespace, input.threadId)
+          .pipe(Effect.mapError(metadataFailed("read-consumed"))),
       ],
       { concurrency: "unbounded" },
     );
@@ -140,7 +141,9 @@ function pendingColdObservationBody(
   metadata: MetadataStore,
   threadId: string,
 ): Promise<string | null> {
-  return Effect.runPromise(pendingColdObservationEffect({ metadata, threadId }));
+  return Effect.runPromise(
+    pendingColdObservationEffect({ metadata: tanstackMetadata(metadata), threadId }),
+  );
 }
 
 /** Consume an observation when the request has attempted its early compact. */
@@ -149,15 +152,17 @@ const consumeColdObservationBody = (
   threadId: string,
   observationId: string,
 ): Promise<void> =>
-  Effect.runPromise(consumeColdObservationEffect({ metadata, threadId, observationId }));
+  Effect.runPromise(
+    consumeColdObservationEffect({ metadata: tanstackMetadata(metadata), threadId, observationId }),
+  );
 export const consumeColdObservationEffect = (input: {
-  readonly metadata: MetadataStore;
+  readonly metadata: ChatMetadata;
   readonly threadId: string;
   readonly observationId: string;
 }) =>
-  metadataOperation("consume", () =>
-    input.metadata.set(consumedColdUsageNamespace, input.threadId, input.observationId),
-  );
+  input.metadata
+    .set(consumedColdUsageNamespace, input.threadId, input.observationId)
+    .pipe(Effect.mapError(metadataFailed("consume")));
 export const consumeColdObservation: {
   (
     threadId: string,
@@ -169,7 +174,7 @@ export const consumeColdObservation: {
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const lastInputTokensBody = (metadata: MetadataStore, threadId: string) =>
   Effect.runPromise(
-    lastContextUsageEffect({ metadata, threadId }).pipe(
+    lastContextUsageEffect({ metadata: tanstackMetadata(metadata), threadId }).pipe(
       Effect.map((usage) => usage?.inputTokens ?? null),
     ),
   );
@@ -205,9 +210,9 @@ export function recordContextUsage({
             observationId: randomUUID(),
             compactionStage: compactionStage(),
           };
-          yield* metadataOperation("write-usage", () =>
-            metadata.set(contextUsageNamespace, ctx.threadId, stored),
-          );
+          yield* tanstackMetadata(metadata)
+            .set(contextUsageNamespace, ctx.threadId, stored)
+            .pipe(Effect.mapError(metadataFailed("write-usage")));
           ctx.emitCustomEvent(
             contextUsageEvent,
             contextView({

@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
-import type { MetadataStore } from "@tanstack/ai";
 import { Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
+import { tanstackMetadata } from "../src/chat-store/metadata.ts";
 import {
   consumeColdObservationEffect,
   ContextUsageFailed,
@@ -13,11 +13,11 @@ import {
 it.effect("keeps context metadata read and write failures typed", () =>
   Effect.gen(function* () {
     const cause = new Error("private metadata failure");
-    const metadata: MetadataStore = {
+    const metadata = tanstackMetadata({
       get: () => Promise.reject(cause),
       set: () => Promise.reject(cause),
       delete: () => Promise.resolve(),
-    };
+    });
     const read = yield* Effect.flip(lastContextUsageEffect({ metadata, threadId: "thread" }));
     expect(read).toBeInstanceOf(ContextUsageFailed);
     expect(read.operation).toBe("read-usage");
@@ -36,7 +36,7 @@ it.effect("retains cold-observation identity and excludes consumed or legacy rep
   Effect.gen(function* () {
     let consumed: string | null = null;
     let observationId: string | null = "observation";
-    const metadata: MetadataStore = {
+    const metadata = tanstackMetadata({
       get: (namespace) =>
         Promise.resolve(
           namespace.endsWith("consumed-cold-usage")
@@ -48,7 +48,7 @@ it.effect("retains cold-observation identity and excludes consumed or legacy rep
         return Promise.resolve();
       },
       delete: () => Promise.resolve(),
-    };
+    });
     const input = { metadata, threadId: "thread" };
     expect(yield* pendingColdObservationEffect(input)).toBe("observation");
     yield* consumeColdObservationEffect({ ...input, observationId: "observation" });

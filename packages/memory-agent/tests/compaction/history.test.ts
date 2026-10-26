@@ -16,6 +16,7 @@ import {
   type StoredContextUsage,
 } from "../../src/agent/context-usage.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { tanstackMetadata } from "../../src/chat-store/metadata.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
@@ -106,7 +107,10 @@ testAgent()("compaction over recorded history", (it) => {
     Effect.gen(function* () {
       const { sessionId: threadId } = yield* freshSession;
       const metadata = yield* metadataStore;
-      const pending = pendingColdObservationEffect({ metadata, threadId });
+      const pending = pendingColdObservationEffect({
+        metadata: tanstackMetadata(metadata),
+        threadId,
+      });
       const usage = (value: LegacyUsage) =>
         call(() => metadata.set(contextUsageNamespace, threadId, value));
       const cold = (observationId: string) =>
@@ -116,7 +120,11 @@ testAgent()("compaction over recorded history", (it) => {
       expect(yield* pending).toBeNull();
       yield* cold("first");
       expect(yield* pending).toBe("first");
-      yield* consumeColdObservationEffect({ metadata, threadId, observationId: "first" });
+      yield* consumeColdObservationEffect({
+        metadata: tanstackMetadata(metadata),
+        threadId,
+        observationId: "first",
+      });
       expect(yield* pending).toBeNull();
       yield* cold("second");
       expect(yield* pending).toBe("second");
@@ -146,7 +154,12 @@ testAgent()("compaction over recorded history", (it) => {
       expect(early[0]?.content).toContain("earlier messages of this conversation were left out");
       expect(early).toContainEqual({ role: "user", content: "질문 4" });
       expect(early.at(-1)).toEqual({ role: "user", content: "질문 5" });
-      expect(yield* pendingColdObservationEffect({ metadata, threadId: at.sessionId })).toBeNull();
+      expect(
+        yield* pendingColdObservationEffect({
+          metadata: tanstackMetadata(metadata),
+          threadId: at.sessionId,
+        }),
+      ).toBeNull();
       // Consumption is durable: the same observation does not trigger again after the first attempt.
       expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
       yield* usage({ inputTokens: 100, cachedTokens: 0, observationId: "cold-2" });

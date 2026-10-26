@@ -16,6 +16,7 @@ import {
   SchemaTransformation,
 } from "effect";
 import type { RunHook } from "../loop/run.ts";
+import { tanstackMetadata } from "../chat-store/metadata.ts";
 import { finishedRun } from "../loop/store.ts";
 import { projectInstructions } from "./project-instructions.ts";
 import { workflowActions } from "../workflow/actions.ts";
@@ -3000,7 +3001,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const { messages } = chatState.persistence.stores;
         const stored = yield* agentPromise("load-messages", () => messages.loadThread(sessionId));
         const result: CompactResult = yield* compactByHand(
-          metadata,
+          tanstackMetadata(metadata),
           sessionId,
           stored,
           compactionSources(sessionId),
