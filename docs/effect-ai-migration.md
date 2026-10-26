@@ -244,6 +244,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
   - `usage`: 지금은 TanStack `TokenUsage`다. migration에서 새 usage 모양으로 바꾼다. chunk마다 누적한다.
 - `chat_interrupts`
   - `payload`: `RUN_FINISHED` chunk의 `outcome.interrupts` 항목을 얕게 복사한 객체다(`@tanstack/ai-persistence`의 `interruptPayload`). 키는 모두 AG-UI 1.0 `Interrupt`의 필드다.
+    - `metadata`에는 TanStack의 재개 binding(`tanstack:interruptBinding`)이 있다. 재개할 때 도구 이름과 스키마를 이 값으로 확인하고, 도구가 없으면 `stale`로 거절한다. golden은 이 키를 빼고 비교한다. 새 loop의 재개 검증에 같은 정보가 필요하면 1단계 interrupt payload Schema에 앱 키로 둔다.
   - `response`: 응답 JSON이다. 응답이 없으면 NULL이다.
 - `chat_metadata`
   - namespace는 모두 우리 것이다: `memory-agent/context-usage`, `memory-agent/consumed-cold-usage`, `memory-agent/turn-summaries`, `memory-agent/manual-compaction`, `memory-agent/model-handoff`, `memory-agent/workflow-execution`, `background-task-result`, history group.
@@ -304,6 +305,13 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 거절 경로("보안 체크리스트"의 "데이터와 절차"에 있는 부정 케이스). 지금 코드의 거절 응답을 golden으로 둔다.
 - 비교 대상은 "DB 저장 형식과 migration"의 테이블 전부다. 비교할 때 TanStack 메타데이터는 뺀다.
 - 완료 기준: 지금 코드에서 통과한다. 타입으로 확인할 수 없는 경계라 테스트로 둔다.
+- 결과(2026-10-26): `packages/memory-agent/tests/golden/`. `driver.ts`만 클라이언트를 안다. 전환할 때는 이 파일만 바꾸고 시나리오와 golden 파일은 그대로 둔다.
+  - 거절 경로는 페이지와 같은 모양의 요청을 직접 보내고, 응답과 행을 같이 저장한다(`rejections`).
+  - Goal worker가 owner에 보내는 요청의 거절(승인 없는 실행 등)은 golden이 아니라 `tests/full-loop/owner-authority.test.ts`가 맡는다. 5단계에서 worker와 함께 사라진다.
+  - 지금 코드의 결함도 golden에 그대로 남겼다. 이 자리의 golden 차이는 의도한 수정이다.
+    - 확인한 끊긴 Goal run 뒤의 Goal 턴은 시작하지 못한다. 장부의 부작용 예약이 확인 기록(`workflow_uncertain_acknowledgements`)을 보지 않고 `uncertain_run`으로 거절한다(`agent/owner-rpc-ledger.ts`). `goal-restart`는 확인까지만 두고, 5단계가 다음 턴을 더한다.
+    - 모델이 없는 도구를 부르면 `tool_result` 노드의 text가 `[object Object]`다(`unknown-tool`).
+  - golden에 넣지 않은 결함: 사용자 메시지가 저장되기 전에 취소하면 run이 `aborted`가 아니라 `failed`("All fibers interrupted without error")로 끝난다. `cancelled`는 모델 호출이 시작된 뒤에 취소한다.
 
 ### 1. 저장 Schema와 migration
 
