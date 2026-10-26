@@ -861,9 +861,7 @@ layer(ownerWithReviews, { excludeTestServices: true })("full-loop owner RPC auth
         }).pipe(
           Effect.provideService(PermissionClassifier, {
             classify: () =>
-              Promise.reject(
-                new Error("Existing review must be reused only for the observed call"),
-              ),
+              Effect.die(new Error("Existing review must be reused only for the observed call")),
           }),
         );
         const workerUrl = maliciousWorker(`

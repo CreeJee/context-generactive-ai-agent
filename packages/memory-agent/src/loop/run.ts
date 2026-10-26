@@ -116,11 +116,13 @@ export interface RunHook<R = never> {
   ) => Effect.Effect<StepRequest, RunFailed, R>;
   /**
    * A gate for a call whose arguments fit its tool: its decision, or none to let the next gate
-   * decide. A call that every gate lets through runs.
+   * decide. A call that every gate lets through runs. `written` is the arguments as the model wrote
+   * them, which the stored message keeps.
    */
   readonly admit?: (
     scope: RunScope,
     call: StepCall,
+    written: string,
   ) => Effect.Effect<Option.Option<Admission<StoredInterruptPayload>>, RunFailed, R>;
   /** A call got its answer, as soon as it did. */
   readonly answered?: (
@@ -233,6 +235,8 @@ interface SentArguments {
 /** A call as the scheduler gets it, with what its admission needs to know. */
 interface OfferedCall {
   readonly call: StepCall;
+  /** The arguments as the model wrote them. */
+  readonly written: string;
   readonly sent: SentArguments;
   /** The user's approval changed the arguments. */
   readonly edited: boolean;
@@ -524,6 +528,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
     });
     return {
       call: { id, name, params: Option.getOrElse(edits, () => sentParams) },
+      written,
       sent: { text, parsed: Option.isSome(parsed) },
       edited: Option.isSome(edits),
     };
@@ -531,7 +536,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
 
   /** Whether the call runs, in the order TanStack decided it, then the hooks' gates. */
   const admission = (offered: OfferedCall) => {
-    const { call, sent } = offered;
+    const { call, written, sent } = offered;
     const approval = HashMap.get(approvals, call.id);
     return Effect.gen(function* () {
       const tool = yield* Effect.flatMap(
@@ -567,7 +572,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
         hooks.flatMap((hook) => hook.admit ?? []),
         (gate) =>
           Effect.flatMap(
-            gate(scope, call),
+            gate(scope, call, written),
             Option.match({ onNone: () => Effect.void, onSome: decided }),
           ),
         { discard: true },

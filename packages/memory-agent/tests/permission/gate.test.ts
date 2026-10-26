@@ -1,12 +1,23 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { chat, toolDefinition } from "@tanstack/ai";
-import { Effect, HashSet } from "effect";
-import { expect } from "vite-plus/test";
+import { Context, Effect, HashSet, Layer, Ref, Schema, Stream } from "effect";
+import { assert, expect } from "vite-plus/test";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
+import type { ResumeEntry } from "../../src/loop/resume.ts";
+import { RunFailed, runChat } from "../../src/loop/run.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { PermissionClassifier } from "../../src/permissions/classifier.ts";
-import { PermissionGate, type GateBinding } from "../../src/permissions/gate.ts";
+import {
+  makePermissionGateHook,
+  PermissionGate,
+  type GateBinding,
+} from "../../src/permissions/gate.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { sdkPromise } from "../../src/runtime/sdk-promise.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
+import { makeScriptedModel } from "../../src/testing/scripted-model.ts";
 import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
+import { runTool } from "../../src/tools/run-tool.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 /** Who decides a gated call: the classifier in `auto` mode, the user in `ask` mode. */
@@ -29,13 +40,13 @@ const binding = Effect.fnUntraced(function* (
 const classifier = (
   seen: string[],
   decide: (request: { readonly sessionId: string; readonly argumentsJson: string }) => {
-    readonly decision: "allow" | "block";
+    readonly decision: "allow" | "ask" | "block";
     readonly reason: string;
   },
 ): PermissionClassifier["Service"] => ({
   classify: (request) => {
     seen.push(`${request.sessionId}:${request.argumentsJson}`);
-    return Promise.resolve({ ...decide(request), decidedBy: "classifier" });
+    return Effect.succeed({ ...decide(request), decidedBy: "classifier" as const });
   },
 });
 
@@ -205,5 +216,84 @@ testAgent()("permission gate", (it) => {
         expect(runs.count).toBe(1);
         expect(yield* reviews.latest(session, "approved-id")).toEqual(original);
       }),
+  );
+
+  it.effect(
+    "the Effect AI loop asks about a call the review is unsure of and runs it once approved",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* freshSession;
+        const reviews = yield* PermissionReviews;
+        const runs = yield* Ref.make(0);
+        const hook = yield* makePermissionGateHook(
+          yield* binding(session, "owner_tool", "classifier"),
+        ).pipe(
+          Effect.provideService(
+            PermissionClassifier,
+            classifier([], () => ({ decision: "ask", reason: "확인이 필요해요." })),
+          ),
+        );
+        const services = yield* Layer.build(Layer.merge(RunStore.layer, NodeCrypto.layer));
+        const store = Context.get(services, RunStore);
+        const { model } = yield* makeScriptedModel([
+          { toolCalls: [{ id: "gated", name: "owner_tool", arguments: "{}" }] },
+          { text: "finished" },
+        ]);
+        const run = (
+          runId: string,
+          conversation: ReadonlyArray<StoredMessage>,
+          resume: ReadonlyArray<ResumeEntry>,
+        ) =>
+          Stream.runCollect(
+            runChat(
+              {
+                model,
+                source: { provider: "scripted", api: "text", model: "scripted-1" },
+                system: [],
+                tools: [
+                  runTool({
+                    name: "owner_tool",
+                    description: "permission gate fixture",
+                    parameters: Schema.Struct({}),
+                    handler: () =>
+                      Effect.as(
+                        Ref.update(runs, (count) => count + 1),
+                        "executed",
+                      ),
+                  }),
+                ],
+                hooks: [hook],
+                modelFailure: () => RunFailed.make({ message: "The model failed." }),
+              },
+              { threadId: session, runId, conversation, resume, cancel: Effect.never },
+            ),
+          ).pipe(Effect.provideContext(services));
+
+        const first = (yield* run("run-1", [{ role: "user", content: "go" }], [])).at(-1);
+        assert(first?.type === "RUN_FINISHED" && first.outcome?.type === "interrupt");
+        const [asked] = first.outcome.interrupts;
+        expect(asked).toMatchObject({
+          reason: "permission_review",
+          message: "확인이 필요해요.",
+          metadata: {
+            payload: {
+              toolCallId: "gated",
+              toolName: "owner_tool",
+              arguments: "{}",
+              askedBy: "review",
+            },
+          },
+        });
+        expect(yield* Ref.get(runs)).toBe(0);
+
+        yield* run("run-2", yield* store.thread(session), [
+          { interruptId: asked!.id, status: "resolved", payload: { approved: true } },
+        ]);
+        expect(yield* Ref.get(runs)).toBe(1);
+        expect(yield* reviews.latest(session, "gated")).toMatchObject({
+          decision: "approved",
+          decidedBy: "user",
+        });
+      }).pipe(Effect.scoped),
   );
 });

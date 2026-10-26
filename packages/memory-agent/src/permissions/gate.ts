@@ -1,7 +1,12 @@
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { runNativeEffect } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
-import { HashSet, Context, Effect, Layer } from "effect";
+import { Array as Arr, Context, Crypto, Effect, HashSet, Layer, Match, Option } from "effect";
+import type { StoredInterruptPayload } from "../chat-store/schema.ts";
+import type { JsonValue } from "../json.ts";
+import { asRunFailed, type RunHook } from "../loop/run.ts";
+import { type Admission, CallOutcome } from "../loop/scheduler.ts";
+import { InterruptAnswer } from "../loop/store.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
 import { permissionReviewInterrupt } from "../tools/definitions.ts";
@@ -25,6 +30,19 @@ export interface GateBinding {
 /** Asked of the user when no review ran: the tool needs a decision on every call. */
 const askEveryCallReason = "호출할 때마다 확인하는 도구예요.";
 
+/** A gated call, with its arguments as the model wrote them, which its review keeps. */
+interface GatedCall {
+  readonly id: string;
+  readonly name: string;
+  readonly written: string;
+}
+
+const gatedCallOf = (call: ToolCall): GatedCall => ({
+  id: call.id,
+  name: call.function.name,
+  written: call.function.arguments,
+});
+
 /** Gated calls the model made that have no result yet: the batch about to execute. */
 function pendingGatedCalls(
   messages: ReadonlyArray<ModelMessage>,
@@ -46,12 +64,122 @@ function pendingGatedCalls(
 }
 
 /** What the model receives instead of a result when a call does not run. */
-function refusal(review: PermissionReview | null) {
-  if (review?.decision === "block")
-    return { error: `blocked_by_permission_review: ${review.reason}` };
-  if (review?.decision === "denied") return { approved: false, message: "User denied this action" };
-  return { error: "permission_review_missing: the call was not reviewed, so it did not run." };
+const refusal = (review: Option.Option<PermissionReview>): JsonValue =>
+  Match.value(Option.getOrNull(review)).pipe(
+    Match.when({ decision: "block" }, ({ reason }) => ({
+      error: `blocked_by_permission_review: ${reason}`,
+    })),
+    Match.when({ decision: "denied" }, () => ({
+      approved: false,
+      message: "User denied this action",
+    })),
+    Match.orElse(() => ({
+      error: "permission_review_missing: the call was not reviewed, so it did not run.",
+    })),
+  );
+
+/** Why the user is asked: the review was unsure, or the tool asks on every call. */
+interface Asking {
+  readonly reason: string;
+  readonly askedBy: "review" | "every_call";
 }
+
+/** The schema of the user's answer, as the stored interrupt carries it. */
+const reviewResponseSchema = {
+  type: "object",
+  properties: { approved: { type: "boolean" } },
+  required: ["approved"],
+  additionalProperties: false,
+};
+
+/** The decision in force lets the call run. */
+const isAllowed = (review: Option.Option<PermissionReview>) =>
+  Option.exists(review, ({ decision }) => decision === "allow" || decision === "approved");
+
+/**
+ * One run's gate: the review in force for a call, and the review a call gets when it has none.
+ * Everything a gate decides is appended to the review log, which a resumed run reads.
+ */
+const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
+  const classifier = yield* PermissionClassifier;
+  const reviews = yield* PermissionReviews;
+  const { sessionId } = binding;
+
+  const record = (
+    call: GatedCall,
+    review: Pick<PermissionReview, "decision" | "decidedBy" | "reason">,
+  ) =>
+    reviews.record({
+      sessionId,
+      toolCallId: call.id,
+      toolName: call.name,
+      input: call.written,
+      ...review,
+    });
+
+  /** The review in force for the call; one for other arguments or another tool does not count. */
+  const reviewOf = (call: GatedCall) =>
+    Effect.map(reviews.latest(sessionId, call.id), (latest) =>
+      Option.filter(
+        Option.fromNullishOr(latest),
+        (review) => review.toolName === call.name && review.input === call.written,
+      ),
+    );
+
+  /**
+   * The review the call is decided by, the classifier's when it had none; none when the user
+   * decides every call of its tool.
+   */
+  const decisionOf = (call: GatedCall) =>
+    Effect.flatMap(
+      reviewOf(call),
+      Option.match({
+        onSome: Effect.succeedSome,
+        onNone: () =>
+          binding.decider === "user"
+            ? Effect.succeedNone
+            : classifier
+                .classify({
+                  project: binding.project,
+                  sessionId,
+                  selection: binding.selection,
+                  toolName: call.name,
+                  argumentsJson: call.written,
+                })
+                .pipe(
+                  Effect.flatMap(({ decision, decidedBy, reason }) =>
+                    record(call, { decision, decidedBy, reason }),
+                  ),
+                  Effect.asSome,
+                ),
+      }),
+    );
+
+  /** Why the user is asked about the call, or none when the decision needs no one. */
+  const askingOf = (decision: Option.Option<PermissionReview>) =>
+    Option.match(decision, {
+      onNone: () => Option.some<Asking>({ reason: askEveryCallReason, askedBy: "every_call" }),
+      onSome: ({ decision, reason }) =>
+        decision === "ask" ? Option.some<Asking>({ reason, askedBy: "review" }) : Option.none(),
+    });
+
+  /** The user's answers to the reviews a resumed run brings, each its own append. */
+  const answered = (
+    answers: ReadonlyArray<{ readonly call: GatedCall; readonly approved: boolean }>,
+  ) =>
+    Effect.forEach(
+      answers,
+      ({ call, approved }) =>
+        record(call, {
+          decision: approved ? "approved" : "denied",
+          decidedBy: "user",
+          reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+        }),
+      { discard: true },
+    );
+
+  return { reviewOf, decisionOf, askingOf, answered };
+});
 
 /**
  * The implementation factory carries no owner services or first-run binding. A Goal may retain
@@ -65,66 +193,40 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
   never,
   PermissionClassifier | PermissionReviews
 > {
-  const classifier = yield* PermissionClassifier;
-  const reviews = yield* PermissionReviews;
-  const { sessionId, gated } = binding;
+  const gate = yield* gateFor(binding);
+  const { gated } = binding;
 
   return {
     name: "memory-agent/permission-gate",
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     onInterruptBoundary(ctx) {
+      const ask = (call: ToolCall, { reason, askedBy }: Asking) =>
+        permissionReviewInterrupt.interrupt({
+          key: call.id,
+          reason: "permission_review",
+          message: reason,
+          payload: {
+            toolCallId: call.id,
+            toolName: call.function.name,
+            arguments: call.function.arguments,
+            reason,
+            askedBy,
+          },
+        });
+      const batch = ctx.phase === "beforeTools" ? pendingGatedCalls(ctx.messages, gated) : [];
       return runNativeEffect(
-        Effect.gen(function* () {
-          if (ctx.phase !== "beforeTools") return undefined;
-          const asks = [];
-          const ask = (call: ToolCall, reason: string, askedBy: "review" | "every_call") =>
-            permissionReviewInterrupt.interrupt({
-              key: call.id,
-              reason: "permission_review",
-              message: reason,
-              payload: {
-                toolCallId: call.id,
-                toolName: call.function.name,
-                arguments: call.function.arguments,
-                reason,
-                askedBy,
-              },
-            });
-          for (const call of pendingGatedCalls(ctx.messages, gated)) {
-            const latest = yield* reviews.latest(sessionId, call.id);
-            let review =
-              latest?.toolName === call.function.name && latest.input === call.function.arguments
-                ? latest
-                : null;
-            if (!isTruthy(review) && binding.decider === "user") {
-              asks.push(ask(call, askEveryCallReason, "every_call"));
-              continue;
-            }
-            if (!isTruthy(review)) {
-              const verdict = yield* nativePromise(() =>
-                classifier.classify({
-                  project: binding.project,
-                  sessionId,
-                  selection: binding.selection,
-                  toolName: call.function.name,
-                  argumentsJson: call.function.arguments,
-                }),
-              );
-              review = yield* reviews.record({
-                sessionId,
-                toolCallId: call.id,
-                toolName: call.function.name,
-                input: call.function.arguments,
-                decision: verdict.decision,
-                decidedBy: verdict.decidedBy,
-                reason: verdict.reason,
-              });
-            }
-            if (review.decision === "ask") asks.push(ask(call, review.reason, "review"));
-          }
-          return asks.length > 0 ? { interrupts: asks } : undefined;
-        }),
+        Effect.map(
+          Effect.forEach(batch, (call) =>
+            Effect.map(gate.decisionOf(gatedCallOf(call)), (decision) =>
+              Option.toArray(Option.map(gate.askingOf(decision), (asking) => ask(call, asking))),
+            ),
+          ),
+          (asks) => {
+            const interrupts = asks.flat();
+            return interrupts.length > 0 ? { interrupts } : undefined;
+          },
+        ),
       );
     },
 
@@ -132,48 +234,125 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
     onInterruptResolution(_ctx, resolutions) {
       // Answers are recorded in the order the user gave them, each its own append.
       return runNativeEffect(
-        Effect.forEach(
+        gate.answered(
           resolutions.for(permissionReviewInterrupt).flatMap((resolution) => {
             const { payload } = resolution.request;
-            return isTruthy(payload) ? [{ payload, resolution }] : [];
+            return isTruthy(payload)
+              ? [
+                  {
+                    call: {
+                      id: payload.toolCallId,
+                      name: payload.toolName,
+                      written: payload.arguments,
+                    },
+                    approved: resolution.status === "resolved" && resolution.response.approved,
+                  },
+                ]
+              : [];
           }),
-          ({ payload, resolution }) => {
-            const approved = resolution.status === "resolved" && resolution.response.approved;
-            return reviews.record({
-              sessionId,
-              toolCallId: payload.toolCallId,
-              toolName: payload.toolName,
-              input: payload.arguments,
-              decision: approved ? "approved" : "denied",
-              decidedBy: "user",
-              reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
-            });
-          },
-          { discard: true },
         ),
       );
     },
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     onBeforeToolCall(ctx, hook) {
-      if (!HashSet.has(gated, hook.toolName)) return undefined;
-      const call = ctx.messages
-        .flatMap((message) => (message.role === "assistant" ? (message.toolCalls ?? []) : []))
-        .findLast((entry) => entry.id === hook.toolCallId);
-      return runNativeEffect(
-        Effect.map(reviews.latest(sessionId, hook.toolCallId), (latest) => {
-          const review =
-            isTruthy(call) &&
-            call.function.name === hook.toolName &&
-            latest?.toolName === hook.toolName &&
-            latest.input === call.function.arguments
-              ? latest
-              : null;
-          return review?.decision === "allow" || review?.decision === "approved"
-            ? undefined
-            : { type: "skip" as const, result: refusal(review) };
-        }),
+      const call = Option.filter(
+        Arr.findLast(
+          ctx.messages.flatMap((message) =>
+            message.role === "assistant" ? (message.toolCalls ?? []) : [],
+          ),
+          (entry) => entry.id === hook.toolCallId,
+        ),
+        (entry) => entry.function.name === hook.toolName,
       );
+      return HashSet.has(gated, hook.toolName)
+        ? runNativeEffect(
+            Effect.map(
+              Option.match(call, {
+                onNone: () => Effect.succeedNone,
+                onSome: (entry) => gate.reviewOf(gatedCallOf(entry)),
+              }),
+              (review) =>
+                isAllowed(review) ? undefined : { type: "skip" as const, result: refusal(review) },
+            ),
+          )
+        : undefined;
+    },
+  };
+});
+
+/** The interrupt that asks the user about a gated call. */
+const askUser = (call: GatedCall, { reason, askedBy }: Asking) =>
+  Effect.map(
+    Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv7()),
+    (id): Admission<StoredInterruptPayload> =>
+      CallOutcome.Waiting({
+        request: {
+          id: `interrupt-${id}`,
+          reason: "permission_review",
+          message: reason,
+          responseSchema: reviewResponseSchema,
+          metadata: {
+            payload: {
+              toolCallId: call.id,
+              toolName: call.name,
+              arguments: call.written,
+              reason,
+              askedBy,
+            },
+          },
+        },
+      }),
+  );
+
+/**
+ * The same gate for the Effect AI loop. A call waiting on the user no longer holds the others back:
+ * each gated call is decided on its own, and the user is asked about those the review cannot decide.
+ */
+export const makePermissionGateHook = Effect.fnUntraced(function* (
+  binding: GateBinding,
+): Effect.fn.Return<RunHook<Crypto.Crypto>, never, PermissionClassifier | PermissionReviews> {
+  const gate = yield* gateFor(binding);
+  return {
+    // A cancelled question counts as the user's refusal.
+    started: (_scope, resumed) =>
+      gate
+        .answered(
+          resumed.flatMap(({ interrupt: { payload }, answer }) =>
+            payload.reason === "permission_review"
+              ? [
+                  {
+                    call: {
+                      id: payload.metadata.payload.toolCallId,
+                      name: payload.metadata.payload.toolName,
+                      written: payload.metadata.payload.arguments,
+                    },
+                    approved: InterruptAnswer.$match(answer, {
+                      Resolved: ({ response }) => response.approved,
+                      Cancelled: () => false,
+                    }),
+                  },
+                ]
+              : [],
+          ),
+        )
+        .pipe(Effect.mapError(asRunFailed)),
+
+    admit: (_scope, { id, name }, written) => {
+      const call: GatedCall = { id, name, written };
+      return HashSet.has(binding.gated, name)
+        ? Effect.flatMap(gate.decisionOf(call), (decision) =>
+            Option.match(gate.askingOf(decision), {
+              onSome: (asking) => Effect.asSome(askUser(call, asking)),
+              onNone: () =>
+                Effect.succeed(
+                  isAllowed(decision)
+                    ? Option.none()
+                    : Option.some(CallOutcome.Returned({ result: refusal(decision) })),
+                ),
+            }),
+          ).pipe(Effect.mapError(asRunFailed))
+        : Effect.succeedNone;
     },
   };
 });
@@ -189,6 +368,10 @@ const make = Effect.gen(function* () {
      */
     forRun(binding: GateBinding): ChatMiddleware<unknown, typeof permissionReviewInterrupt> {
       return run(makePermissionGateMiddleware(binding));
+    },
+    /** The gate of one Effect AI run. */
+    hookForRun(binding: GateBinding): RunHook<Crypto.Crypto> {
+      return run(makePermissionGateHook(binding));
     },
   };
 });

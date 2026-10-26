@@ -94,7 +94,7 @@ const ownerRun = Effect.fnUntraced(function* (
     .pipe(
       Effect.provideService(PermissionClassifier, {
         classify: () =>
-          Promise.resolve({
+          Effect.succeed({
             decision: index === 0 ? "allow" : "block",
             decidedBy: "classifier",
             reason: runId,

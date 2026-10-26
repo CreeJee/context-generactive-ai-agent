@@ -119,7 +119,6 @@ function routineShellVerdictBody(toolName: string, argumentsJson: string): Verdi
 }
 
 const make = Effect.gen(function* () {
-  const run = Effect.runPromiseWith(yield* Effect.context());
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const nodes = yield* Nodes;
@@ -187,7 +186,7 @@ const make = Effect.gen(function* () {
 
   return {
     /** Timeout, provider errors and unreadable output always require user review. */
-    classify: (request: ReviewRequest): Promise<Verdict> => run(classify(request)),
+    classify,
   };
 });
 

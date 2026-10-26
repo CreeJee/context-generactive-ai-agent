@@ -538,15 +538,13 @@ const make = Effect.gen(function* () {
           let reason = everyCallReason;
           let askedBy: "review" | "every_call" = "every_call";
           if (binding.project.permissionMode === "auto") {
-            const verdict = yield* nativePromise(() =>
-              classifier.classify({
-                project: binding.project,
-                sessionId: binding.sessionId,
-                selection: binding.selection,
-                toolName: hook.toolName,
-                argumentsJson,
-              }),
-            );
+            const verdict = yield* classifier.classify({
+              project: binding.project,
+              sessionId: binding.sessionId,
+              selection: binding.selection,
+              toolName: hook.toolName,
+              argumentsJson,
+            });
             yield* record(verdict.decision, verdict.decidedBy, verdict.reason);
             switch (verdict.decision) {
               case "allow":
