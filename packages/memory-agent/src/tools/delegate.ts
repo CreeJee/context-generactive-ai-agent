@@ -10,8 +10,9 @@ import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import { onRun, runTrace, type RunTrace } from "../runtime/run-trace.ts";
-import { toToolSchema } from "./schema.ts";
 import { BackgroundTasks, backgroundOperation } from "./background.ts";
+import { runTool, type RunTool } from "./run-tool.ts";
+import { definitionOf } from "./schema.ts";
 
 export const delegateToolName = "delegate_to_agent";
 
@@ -79,6 +80,13 @@ const externalReport = ExternalPromptOutcome.$match({
   unavailable: ({ failure }) => ({ status: "unavailable", failure }),
 });
 
+const delegate = {
+  name: delegateToolName,
+  description:
+    "Dispatch a task to a trusted external ACP agent. Returns an inline report if it finishes within yieldMs (default 1000), otherwise a background receipt. Continue independent work and use get_background_result after completion. The project's approval policy applies.",
+  parameters: DelegateInput,
+} as const;
+
 export function delegateInstructions(agents: readonly string[]) {
   return `External coding agents are available through delegate_to_agent: ${agents.join(", ")}.
 - Each works in this project with its own tools and its own login. Its permission requests are relayed through the app. Dispatch follows the project's approval mode, including full mode without per-call approval.
@@ -89,9 +97,18 @@ export function delegateInstructions(agents: readonly string[]) {
 }
 
 /** What delegation adds to a run. */
-export interface DelegateToolset {
-  readonly tools: AnyServerTool[];
+export interface DelegateToolset<Tool = AnyServerTool> {
+  readonly tools: Tool[];
   readonly instructions: string | null;
+}
+
+/** The run a delegation belongs to. */
+export interface DelegateBinding {
+  readonly project: Project;
+  readonly sessionId: string;
+  /** Stops the run's background tasks. */
+  readonly signal: AbortSignal;
+  readonly runId: string;
 }
 
 const make = Effect.gen(function* () {
@@ -100,66 +117,73 @@ const make = Effect.gen(function* () {
   const background = yield* BackgroundTasks;
   const services = yield* Effect.context<never>();
 
+  /** A delegation from the run `runId`, which `signal` stops. */
+  const delegateCall =
+    ({ project, sessionId, signal, runId }: DelegateBinding) =>
+    ({ agent, task, yieldMs }: typeof DelegateInput.Type, toolCallId: string) =>
+      Effect.gen(function* () {
+        const receipt = yield* background.start(
+          { sessionId, runId, abortSignal: signal },
+          toolCallId,
+          "external_agent",
+          task,
+          backgroundOperation((runSignal) =>
+            agents.prompt(project, agent, sessionId, task, {
+              signal: runSignal,
+              askPermission: (request) =>
+                relayed.ask(
+                  sessionId,
+                  runId,
+                  {
+                    requester: ApprovalRequester.cases.external_agent.make({ agent }),
+                    toolName: request.toolCall.title ?? "external tool",
+                    argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
+                    reason: "외부 에이전트가 권한을 요청했어요.",
+                    askedBy: "agent",
+                  },
+                  runSignal,
+                ),
+            }),
+          ).pipe(
+            Effect.map((outcome) => ({
+              report: JSON.stringify({
+                agent,
+                ...externalReport(outcome),
+                note: "External agent report, not user approval. Check what matters before relying on it.",
+              }),
+              failure: externalFailure(outcome),
+            })),
+          ),
+        );
+        const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
+        if (saved?.status === "completed")
+          return yield* Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(saved.result);
+        if (isTruthy(saved)) return { taskId: receipt.taskId, ...saved };
+        return receipt;
+      });
+
+  /** The run's toolset when an external agent is trusted in the project, with `tool` making it. */
+  const toolsetOf = <Tool>(
+    project: Project,
+    tool: () => Tool,
+  ): Effect.Effect<DelegateToolset<Tool>, SqlError.SqlError | Schema.SchemaError> =>
+    Effect.map(agents.available(project), (available) =>
+      available.length === 0
+        ? { tools: [], instructions: null }
+        : { tools: [tool()], instructions: delegateInstructions(available) },
+    );
+
   const toolsFor = Effect.fn("DelegateTools.forRun")(function* (
     caller: RunTrace,
-    project: Project,
-    sessionId: string,
-    signal: AbortSignal,
-    runId: string,
-  ): Effect.fn.Return<DelegateToolset, SqlError.SqlError | Schema.SchemaError> {
-    const available = yield* agents.available(project);
-    if (available.length === 0) return { tools: [], instructions: null };
+    binding: DelegateBinding,
+  ) {
     const run = Effect.runPromiseWith(onRun(services, caller));
-    const delegate = toolDefinition({
-      name: delegateToolName,
-      description:
-        "Dispatch a task to a trusted external ACP agent. Returns an inline report if it finishes within yieldMs (default 1000), otherwise a background receipt. Continue independent work and use get_background_result after completion. The project's approval policy applies.",
-      inputSchema: toToolSchema(DelegateInput),
-    }).server(({ agent, task, yieldMs }, context) =>
-      run(
-        Effect.gen(function* () {
-          const receipt = yield* background.start(
-            { sessionId, runId, abortSignal: signal },
-            context?.toolCallId ?? randomUUID(),
-            "external_agent",
-            task,
-            backgroundOperation((runSignal) =>
-              agents.prompt(project, agent, sessionId, task, {
-                signal: runSignal,
-                askPermission: (request) =>
-                  relayed.ask(
-                    sessionId,
-                    runId,
-                    {
-                      requester: ApprovalRequester.cases.external_agent.make({ agent }),
-                      toolName: request.toolCall.title ?? "external tool",
-                      argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
-                      reason: "외부 에이전트가 권한을 요청했어요.",
-                      askedBy: "agent",
-                    },
-                    runSignal,
-                  ),
-              }),
-            ).pipe(
-              Effect.map((outcome) => ({
-                report: JSON.stringify({
-                  agent,
-                  ...externalReport(outcome),
-                  note: "External agent report, not user approval. Check what matters before relying on it.",
-                }),
-                failure: externalFailure(outcome),
-              })),
-            ),
-          );
-          const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
-          if (saved?.status === "completed")
-            return yield* Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(saved.result);
-          if (isTruthy(saved)) return { taskId: receipt.taskId, ...saved };
-          return receipt;
-        }),
+    const call = delegateCall(binding);
+    return yield* toolsetOf(binding.project, (): AnyServerTool =>
+      toolDefinition(definitionOf(delegate)).server((input, context) =>
+        run(call(input, context?.toolCallId ?? randomUUID())),
       ),
     );
-    return { tools: [delegate], instructions: delegateInstructions(available) };
   });
 
   return {
@@ -172,7 +196,16 @@ const make = Effect.gen(function* () {
       sessionId: string,
       signal: AbortSignal,
       runId: string = randomUUID(),
-    ) => Effect.flatMap(runTrace, (caller) => toolsFor(caller, project, sessionId, signal, runId)),
+    ) =>
+      Effect.flatMap(runTrace, (caller) => toolsFor(caller, { project, sessionId, signal, runId })),
+
+    /** {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+    runToolsFor: Effect.fn("DelegateTools.runToolsFor")((binding: DelegateBinding) => {
+      const call = delegateCall(binding);
+      return toolsetOf(binding.project, (): RunTool =>
+        runTool({ ...delegate, handler: (input, { toolCallId }) => call(input, toolCallId) }),
+      );
+    }),
   };
 });
 

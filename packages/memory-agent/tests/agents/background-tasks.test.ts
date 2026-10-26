@@ -9,7 +9,9 @@ import {
 } from "../../src/tools/background.ts";
 import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
 import { LifecycleOutcome, LifecycleRequest, WorkTraceStore } from "../../src/work-trace/store.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { freshSession, sdk } from "./agent-env.ts";
 import { sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
@@ -235,6 +237,39 @@ testAgent()("background task lifecycle", (it) => {
         yield* sdk(() => persistence.stores.metadata.get("background-task-result", receipt.taskId)),
       ).toBeNull();
       expect(yield* rejection(readResult(sessionId, { taskId: receipt.taskId }))).toMatchObject({
+        message: expect.stringContaining("not found"),
+      });
+    }),
+  );
+
+  it.effect("the Effect AI tools ask as the TanStack ones and page the same result", () =>
+    Effect.gen(function* () {
+      const sessionId = yield* freshSession;
+      const tasks = yield* BackgroundTasks;
+      const receipt = yield* tasks.start(
+        yield* runOf(sessionId),
+        `${sessionId}:call`,
+        "external_agent",
+        "task",
+        Effect.succeed(reported("x".repeat(6000))),
+      );
+      yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
+      const runTools = tasks.runToolsFor(sessionId);
+      expect(
+        yield* runToolRequestDifferences({
+          chatTools: yield* inRun(tasks.forSession(sessionId)),
+          runTools,
+        }),
+      ).toEqual([undefined, undefined, undefined]);
+      const [get] = runTools;
+      const call = (params: JsonValue) =>
+        Effect.fromNullishOr(get).pipe(
+          Effect.flatMap((found) => found.prepare(params)),
+          Effect.flatMap((run) => run({ toolCallId: "call-1" })),
+        );
+      for (const params of [{ taskId: receipt.taskId }, { taskId: receipt.taskId, offset: 4000 }])
+        expect(yield* call(params)).toEqual(yield* readResult(sessionId, params));
+      expect(yield* Effect.flip(call({ taskId: "missing-task" }))).toMatchObject({
         message: expect.stringContaining("not found"),
       });
     }),

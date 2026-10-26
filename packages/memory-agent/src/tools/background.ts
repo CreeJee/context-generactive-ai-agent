@@ -19,7 +19,8 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { lazily } from "./lazy.ts";
-import { toToolSchema } from "./schema.ts";
+import { runTool, type RunTool } from "./run-tool.ts";
+import { definitionOf } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -91,6 +92,20 @@ const SavedResult = Schema.Struct({
   result: Schema.String,
 });
 const namespace = "background-task-result";
+
+const getBackgroundResult = {
+  name: "get_background_result",
+  description:
+    "Retrieve one background shell or ACP task's saved, redacted result by taskId. Result is JSON text, paged in 4000-character chunks with nextOffset; read all required pages before relying on it. Returns running if unfinished; interrupted after restart means do not retry blindly. A notification alone is not a result.",
+  parameters: ResultInput,
+} as const;
+
+const cancelBackgroundTask = {
+  name: "cancel_background_task",
+  description:
+    "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
+  parameters: ResultInput,
+} as const;
 
 const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
@@ -332,6 +347,33 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** The tools' calls in `sessionId`. */
+  const callsFor = (sessionId: string) => ({
+    getResult: ({ taskId, offset = 0 }: typeof ResultInput.Type) =>
+      Effect.gen(function* () {
+        const detail = yield* owned(sessionId, taskId);
+        const result = yield* readResult(sessionId, taskId);
+        if (result !== null) {
+          const end = Math.min(offset + 4000, result.result.length);
+          return {
+            taskId,
+            status: result.status,
+            result: result.result.slice(offset, end),
+            offset,
+            nextOffset: end < result.result.length ? end : null,
+            length: result.result.length,
+          };
+        }
+        return { taskId, status: detail.attempts.at(-1)?.status ?? "interrupted" };
+      }),
+    cancel: ({ taskId }: typeof ResultInput.Type) =>
+      Effect.gen(function* () {
+        yield* owned(sessionId, taskId);
+        yield* FiberMap.remove(fibers, taskId);
+        return { taskId, status: "stopped" as const };
+      }),
+  });
+
   return {
     start,
     waitResult: Effect.fn("BackgroundTasks.waitResult")(function* (
@@ -381,50 +423,27 @@ const make = Effect.gen(function* () {
     forSession: (sessionId: string) =>
       Effect.map(runTrace, (caller): AnyServerTool[] => {
         const run = Effect.runPromiseWith(onRun(context, caller));
+        const calls = callsFor(sessionId);
         return [
-          toolDefinition({
-            name: "get_background_result",
-            description:
-              "Retrieve one background shell or ACP task's saved, redacted result by taskId. Result is JSON text, paged in 4000-character chunks with nextOffset; read all required pages before relying on it. Returns running if unfinished; interrupted after restart means do not retry blindly. A notification alone is not a result.",
-            inputSchema: toToolSchema(ResultInput),
-          }).server(({ taskId, offset = 0 }) =>
-            run(
-              Effect.gen(function* () {
-                const detail = yield* owned(sessionId, taskId);
-                const result = yield* readResult(sessionId, taskId);
-                if (result !== null) {
-                  const end = Math.min(offset + 4000, result.result.length);
-                  return {
-                    taskId,
-                    status: result.status,
-                    result: result.result.slice(offset, end),
-                    offset,
-                    nextOffset: end < result.result.length ? end : null,
-                    length: result.result.length,
-                  };
-                }
-                return { taskId, status: detail.attempts.at(-1)?.status ?? "interrupted" };
-              }),
-            ),
+          toolDefinition(definitionOf(getBackgroundResult)).server((input) =>
+            run(calls.getResult(input)),
           ),
           lazily(
-            toolDefinition({
-              name: "cancel_background_task",
-              description:
-                "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
-              inputSchema: toToolSchema(ResultInput),
-            }).server(({ taskId }) =>
-              run(
-                Effect.gen(function* () {
-                  yield* owned(sessionId, taskId);
-                  yield* FiberMap.remove(fibers, taskId);
-                  return { taskId, status: "stopped" as const };
-                }),
-              ),
+            toolDefinition(definitionOf(cancelBackgroundTask)).server((input) =>
+              run(calls.cancel(input)),
             ),
           ),
         ];
       }),
+
+    /** {@link forSession} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+    runToolsFor: (sessionId: string): RunTool[] => {
+      const calls = callsFor(sessionId);
+      return [
+        runTool({ ...getBackgroundResult, handler: calls.getResult }),
+        runTool({ ...cancelBackgroundTask, lazy: true, handler: calls.cancel }),
+      ];
+    },
   };
 });
 

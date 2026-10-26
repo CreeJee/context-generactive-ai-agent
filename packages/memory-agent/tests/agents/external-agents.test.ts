@@ -19,6 +19,7 @@ import { BackgroundTasks } from "../../src/tools/background.ts";
 import { DelegateTools } from "../../src/tools/delegate.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { current, encodeJson, freshProject, post, sdk, until } from "./agent-env.ts";
@@ -231,6 +232,30 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       expect(ExternalPromptOutcome.$is("completed")(yield* prompt("after cancellation"))).toBe(
         true,
       );
+    }),
+  );
+
+  it.effect("the Effect AI delegate asks as the TanStack one and returns the inline report", () =>
+    Effect.gen(function* () {
+      const { project, sessionId, trust } = yield* fakeAgentProject();
+      yield* trust;
+      const delegateTools = yield* DelegateTools;
+      const binding = { project, sessionId, signal: yield* Effect.abortSignal, runId: "run-1" };
+      const chat = yield* inRun(
+        delegateTools.forRun(project, sessionId, binding.signal, binding.runId),
+      );
+      const runTools = yield* delegateTools.runToolsFor(binding);
+      expect(
+        yield* runToolRequestDifferences({ chatTools: chat.tools, runTools: runTools.tools }),
+      ).toEqual([undefined, undefined, undefined]);
+      expect(runTools.instructions).toBe(chat.instructions);
+      const delegate = yield* Effect.fromNullishOr(runTools.tools[0]);
+      const run = yield* delegate.prepare({ agent: "fake", task: "hi", yieldMs: 5000 });
+      expect(yield* run({ toolCallId: "call-1" })).toMatchObject({
+        agent: "fake",
+        status: "completed",
+        answer: "external: hi (turn 1)",
+      });
     }),
   );
 
