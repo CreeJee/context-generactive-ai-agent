@@ -1,4 +1,4 @@
-import { Cause, Effect, Option, Predicate, Schema } from "effect";
+import { Cause, Effect, type JsonSchema, Option, Predicate, Schema } from "effect";
 import { Tool } from "effect/ai";
 import { JsonValue } from "../json.ts";
 import { ToolFailed, ToolFailureResult, toolFailedOf } from "./failure.ts";
@@ -74,21 +74,26 @@ export const runTool = <
   readonly name: Name;
   readonly description: string;
   readonly parameters: Parameters;
+  /** Sent as written in place of the parameters' own JSON Schema; they still decode the call. */
+  readonly jsonSchema?: JsonSchema.JsonSchema;
   /** `true`: the call never runs without the user's approval (`definitions.ts`). */
   readonly needsApproval?: boolean;
   readonly lazy?: boolean;
   readonly handler: (params: Parameters["Type"], call: ToolCall) => Effect.Effect<A, E>;
 }): RunTool => {
   const decode = Schema.decodeUnknownEffect(options.parameters);
+  const definition = {
+    description: options.description,
+    success: JsonValue,
+    failure: ToolFailureResult,
+    failureMode: "return",
+    needsApproval: options.needsApproval,
+  } as const;
   return {
-    tool: Tool.make(options.name, {
-      description: options.description,
-      parameters: options.parameters,
-      success: JsonValue,
-      failure: ToolFailureResult,
-      failureMode: "return",
-      needsApproval: options.needsApproval,
-    }),
+    tool:
+      options.jsonSchema === undefined
+        ? Tool.make(options.name, { ...definition, parameters: options.parameters })
+        : Tool.dynamic(options.name, { ...definition, parameters: options.jsonSchema }),
     lazy: options.lazy ?? false,
     prepare: (params) =>
       Effect.map(
