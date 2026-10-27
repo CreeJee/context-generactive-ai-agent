@@ -8,7 +8,6 @@ import {
   HashSet,
   MutableHashMap,
   MutableHashSet,
-  MutableRef,
   DateTime,
   Predicate,
 } from "effect";
@@ -978,90 +977,82 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       fallbackLogged("Memory search for an external agent failed", () => ""),
     );
 
-  const workflowAfterRun = (
+  const workflowAfterRun = Effect.fnUntraced(function* (
     sessionId: string,
     phase: WorkflowPhase,
     runId: string,
     goalExecution: () => GoalExecutionPayload | null,
-  ) => {
+  ) {
     // The progress the run's tools made, each once in the order made, and how the run ended.
-    const progress = MutableRef.make<ReadonlyArray<string>>([]);
-    const terminalOutcome = MutableRef.make<"pending" | "completed" | "failed">("pending");
-    const settled = MutableRef.make(false);
+    const progress = yield* Ref.make<ReadonlyArray<string>>([]);
+    const terminalOutcome = yield* Ref.make<"pending" | "completed" | "failed">("pending");
+    const settled = yield* Ref.make(false);
     const madeProgress = (made: ReadonlyArray<string | null>) =>
-      MutableRef.update(progress, (all) =>
+      Ref.update(progress, (all) =>
         EffectArray.dedupe([...all, ...EffectArray.filter(made, Predicate.isNotNull)]),
       );
-    const endedAs = (outcome: "completed" | "failed") => () => {
-      MutableRef.set(terminalOutcome, outcome);
-    };
     const hook: RunHook = {
       // Only a call whose tool ran and returned counts; what a gate answers always carries an
       // error, which never counts either.
       stepEnded: (_scope, { answered }) =>
-        Effect.sync(() =>
-          madeProgress(
-            answered.map(({ call, answer }) =>
-              answer._tag === "Returned"
-                ? toolProgressFingerprint(call.name, JSON.stringify(call.params), answer.result)
-                : null,
-            ),
+        madeProgress(
+          answered.map(({ call, answer }) =>
+            answer._tag === "Returned"
+              ? toolProgressFingerprint(call.name, JSON.stringify(call.params), answer.result)
+              : null,
           ),
         ),
       // Waiting for the user is a finish; settlement leaves it.
-      ended: (_scope, end) => Effect.sync(endedAs(finishedRun(end) ? "completed" : "failed")),
+      ended: (_scope, end) => Ref.set(terminalOutcome, finishedRun(end) ? "completed" : "failed"),
     };
     // Hooks only capture the candidate terminal outcome. Settlement runs after the run's whole
     // stream has stopped, hooks included, so a later audited finalizer can still downgrade an
     // earlier finish to failure before the durable decision is published.
-    const settle = Effect.suspend(() => {
-      if (MutableRef.getAndSet(settled, true)) return Effect.void;
-      return Effect.gen(function* () {
-        const outcome = MutableRef.get(terminalOutcome);
-        const persistedStatus = Option.getOrUndefined(
-          yield* persistedRunStatus({ runId, sessionId }),
-        )?.status;
-        if (
-          persistedStatus === "interrupted" ||
-          (outcome === "pending" &&
-            (persistedStatus === undefined || persistedStatus === "running"))
-        )
-          return;
-        const unresolved = Option.getOrUndefined(yield* unresolvedOperation(runId));
-        const completed =
-          outcome === "completed" && persistedStatus !== "failed" && persistedStatus !== "aborted";
-        const durable = goalExecution();
-        if (durable !== null) {
-          if (unresolved !== undefined)
-            yield* goalExecutions.fail(
-              durable,
-              GoalExecutionErrorReason.cases.SideEffectUncertain.make({
-                operationId: String(unresolved.operation_id),
-                state: unresolved.status === "pending" ? "pending" : "uncertain",
-              }),
-            );
-          else if (completed) yield* goalExecutions.succeed(durable);
-          else
-            yield* goalExecutions.fail(
-              durable,
-              GoalExecutionErrorReason.cases.ExecutionFailed.make({
-                phase: "sdk_loop",
-                code: "run_failed",
-              }),
-            );
-        }
-        const state =
-          completed && unresolved === undefined
-            ? yield* workflows.finishRun(sessionId, phase)
-            : yield* workflows.get(sessionId);
-        if (completed && unresolved === undefined)
-          yield* execution.finish(sessionId, runId, state, [...MutableRef.get(progress)]);
-        else yield* execution.stop(sessionId, "run_failed", runId);
-        yield* events.publishSession(sessionId, "run-state");
-      });
+    const settle = Effect.gen(function* () {
+      if (yield* Ref.getAndSet(settled, true)) return;
+      const outcome = yield* Ref.get(terminalOutcome);
+      const persistedStatus = Option.getOrUndefined(
+        yield* persistedRunStatus({ runId, sessionId }),
+      )?.status;
+      if (
+        persistedStatus === "interrupted" ||
+        (outcome === "pending" && (persistedStatus === undefined || persistedStatus === "running"))
+      )
+        return;
+      const unresolved = Option.getOrUndefined(yield* unresolvedOperation(runId));
+      const completed =
+        outcome === "completed" && persistedStatus !== "failed" && persistedStatus !== "aborted";
+      const durable = goalExecution();
+      if (durable !== null) {
+        if (unresolved !== undefined)
+          yield* goalExecutions.fail(
+            durable,
+            GoalExecutionErrorReason.cases.SideEffectUncertain.make({
+              operationId: String(unresolved.operation_id),
+              state: unresolved.status === "pending" ? "pending" : "uncertain",
+            }),
+          );
+        else if (completed) yield* goalExecutions.succeed(durable);
+        else
+          yield* goalExecutions.fail(
+            durable,
+            GoalExecutionErrorReason.cases.ExecutionFailed.make({
+              phase: "sdk_loop",
+              code: "run_failed",
+            }),
+          );
+      }
+      const state =
+        completed && unresolved === undefined
+          ? yield* workflows.finishRun(sessionId, phase)
+          : yield* workflows.get(sessionId);
+      if (completed && unresolved === undefined)
+        yield* execution.finish(sessionId, runId, state, [...(yield* Ref.get(progress))]);
+      else yield* execution.stop(sessionId, "run_failed", runId);
+      yield* events.publishSession(sessionId, "run-state");
     });
     return { hook, settle };
-  };
+  });
 
   // Embedding can take seconds (the model loads on first use), and interpretation is a model
   // call; never hold the response for either. Interpretation searches for earlier statements, so
@@ -1722,7 +1713,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...(promotion.adoptedClaims ? [] : ["promote_memory_candidate"]),
           ...(promotion.promotedMemory ? [] : ["use_promoted_memory"]),
         ]);
-        const workflowLifecycle = workflowAfterRun(
+        const workflowLifecycle = yield* workflowAfterRun(
           sessionId,
           workflow.phase,
           runId,
@@ -2060,7 +2051,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           runId,
           abortSignal: abortController.signal,
         });
-        const memory = memoryTools.runToolsFor(answers, memoryScope);
+        const memory = yield* memoryTools.runToolsFor(answers, memoryScope);
         const allSharedTools = redactor.withHiddenResults([
           ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
           // An SVG the model writes comes back with a picture of it, for the page to show.
@@ -2102,7 +2093,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
         const childSharedTools = sharedTools.filter(({ tool }) => !(tool.name in promotionRules));
-        const children = subagents.runToolsFor({
+        const children = yield* subagents.runToolsFor({
           project,
           sessionId,
           runId,

@@ -583,7 +583,7 @@ layer(
           id: b.id,
         });
         const wrapper = yield* second.use(MemoryTools);
-        const bound = wrapper.runToolsFor({
+        const bound = yield* wrapper.runToolsFor({
           projectId: second.project.id,
           sessionId: second.session.id,
           runId: `${second.session.id}:run`,
@@ -617,7 +617,7 @@ testAgent()("memory tools per run", (it) => {
         let currentUser = "missing";
         let readsA = 0;
         let readsB = 0;
-        const a = memoryRunTools({
+        const a = yield* memoryRunTools({
           env,
           binding: {
             ...at,
@@ -628,7 +628,7 @@ testAgent()("memory tools per run", (it) => {
             },
           },
         });
-        const b = memoryRunTools({
+        const b = yield* memoryRunTools({
           env,
           binding: {
             ...at,
@@ -667,7 +667,7 @@ testAgent()("memory tools per run", (it) => {
       const env = yield* environment;
       let reads = 0;
       const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = (yield* MemoryTools).runToolsFor({
+      const prepared = yield* (yield* MemoryTools).runToolsFor({
         ...at,
         runId: `${at.sessionId}:deferred-run`,
         get userNodeId() {
@@ -695,7 +695,7 @@ testAgent()("memory tools per run", (it) => {
           return span;
         },
       });
-      const { tools } = (yield* MemoryTools).runToolsFor({
+      const { tools } = yield* (yield* MemoryTools).runToolsFor({
         ...at,
         runId: `${at.sessionId}:traced-run`,
         userNodeId: "user",
@@ -753,8 +753,8 @@ testAgent()("memory tools per run", (it) => {
       const runB = `${sessionId}:memory-run-b`;
       const makeRun = (runId: string) =>
         memoryRunTools({ env, binding: { ...at, runId, userNodeId: () => user.id } });
-      const first = makeRun(runA);
-      const second = makeRun(runB);
+      const first = yield* makeRun(runA);
+      const second = yield* makeRun(runB);
       const firstCalls = callers(first.tools);
       const secondCalls = callers(second.tools);
       const promoted = yield* Schema.decodeUnknownEffect(

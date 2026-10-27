@@ -1,13 +1,4 @@
-import {
-  Array as EffectArray,
-  MutableHashSet,
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-} from "effect";
+import { Array as EffectArray, Context, Effect, HashSet, Layer, Option, Ref, Schema } from "effect";
 import { type RunHook, StepEnded } from "../loop/run.ts";
 import { finishedRun } from "../loop/store.ts";
 import { Graph } from "../memory/graph.ts";
@@ -15,7 +6,7 @@ import { readStructuredEvidence, traceStructuredEvidence } from "../memory/evide
 import { Interpretations } from "../memory/interpretations.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
-import { MemorySearch } from "../memory/search.ts";
+import { type FindResult, MemorySearch } from "../memory/search.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { runTool } from "./run-tool.ts";
 
@@ -161,40 +152,20 @@ const memoryServices = (env: MemoryToolEnvironment): Context.Context<MemoryServi
   );
 
 /**
- * What the memory tools do for one project, and for one run when bound to it. The calls share the
- * run's retrieval and use state, so `use_promoted_memory` only accepts what `find_memory` found.
+ * What the read-only memory tools do for one project. `found` hears each search's result.
  */
-const memoryCalls = (projectId: string, scope?: MemoryToolScope) => {
+const memoryReads = <E>(
+  projectId: string,
+  scope: MemoryToolScope | undefined,
+  found: (result: FindResult) => Effect.Effect<void, E, MemoryService>,
+) => {
   // Without a scope the tools read every project cross recall allows.
   const crossProject = scope !== "project";
-  const retrieved = MutableHashSet.empty<string>();
-  let usedDraft: string[] = [];
-
-  const reads = (binding?: MemoryToolRunBinding) => ({
+  return {
     findMemory: ({ query }: typeof findMemoryInput.Type) =>
       Effect.flatMap(MemorySearch, (search) =>
         search.find({ query, projectId, crossProject }),
-      ).pipe(
-        // A run remembers what it found, which is all `use_promoted_memory` accepts.
-        Effect.tap((result) =>
-          Option.match(Option.fromNullishOr(binding), {
-            onNone: () => Effect.void,
-            onSome: (bound) =>
-              Effect.flatMap(KnowledgePromotions, (knowledge) =>
-                knowledge.recordRetrieval({
-                  projectId,
-                  sessionId: bound.sessionId,
-                  runId: bound.runId,
-                  memoryNodeIds: result.matches.map((match) => match.id),
-                }),
-              ).pipe(
-                Effect.tap((ids) =>
-                  Effect.sync(() => ids.forEach((id) => MutableHashSet.add(retrieved, id))),
-                ),
-              ),
-          }),
-        ),
-      ),
+      ).pipe(Effect.tap(found)),
     readEvidence: ({ id, offset }: typeof readEvidenceInput.Type) =>
       Effect.map(
         readStructuredEvidence(id, offset ?? 0, projectId, crossProject),
@@ -205,9 +176,37 @@ const memoryCalls = (projectId: string, scope?: MemoryToolScope) => {
         traceStructuredEvidence(id, projectId, crossProject),
         (trace) => trace ?? notFound(id),
       ),
-  });
+  };
+};
 
-  const runCalls = (binding: MemoryToolRunBinding) => ({
+/**
+ * What the memory tools do for one run. The calls share the run's retrieval and use state, so
+ * `use_promoted_memory` only accepts what `find_memory` found.
+ */
+const memoryRunCalls = Effect.fnUntraced(function* (
+  binding: MemoryToolRunBinding,
+  scope?: MemoryToolScope,
+) {
+  const { projectId } = binding;
+  const retrieved = yield* Ref.make(HashSet.empty<string>());
+  const usedDraft = yield* Ref.make<ReadonlyArray<string>>([]);
+
+  // A run remembers what it found, which is all `use_promoted_memory` accepts.
+  const reads = memoryReads(projectId, scope, (result) =>
+    Effect.flatMap(KnowledgePromotions, (knowledge) =>
+      knowledge.recordRetrieval({
+        projectId,
+        sessionId: binding.sessionId,
+        runId: binding.runId,
+        memoryNodeIds: result.matches.map((match) => match.id),
+      }),
+    ).pipe(
+      Effect.flatMap((ids) => Ref.update(retrieved, HashSet.union(HashSet.fromIterable(ids)))),
+    ),
+  );
+
+  return {
+    reads,
     readToolResult: ({ id, offset }: typeof readToolResultInput.Type) =>
       Effect.flatMap(Nodes, (nodes) =>
         nodes.readToolResultPage(id, projectId, binding.sessionId, offset),
@@ -222,45 +221,44 @@ const memoryCalls = (projectId: string, scope?: MemoryToolScope) => {
         }),
       ),
     useMemory: ({ memoryNodeIds: ids }: typeof UsePromotedMemoryInput.Type) =>
-      Effect.succeed(ids).pipe(
+      Ref.get(retrieved).pipe(
         Effect.filterOrFail(
-          (given) => given.every((id) => MutableHashSet.has(retrieved, id)),
+          (found) => ids.every((id) => HashSet.has(found, id)),
           () =>
             PromotedMemoryUseRejected.make({
               reason: NotRetrieved.make({}),
               message: "Only promoted memories retrieved in this run can be used",
             }),
         ),
-        Effect.map((given) => {
-          usedDraft = EffectArray.dedupe(given);
-          return { status: "recorded" as const, usedMemoryCount: usedDraft.length };
-        }),
+        Effect.as(EffectArray.dedupe(ids)),
+        Effect.tap((given) => Ref.set(usedDraft, given)),
+        Effect.map((given) => ({ status: "recorded" as const, usedMemoryCount: given.length })),
       ),
     /** Records the memories the answer declared it used, under the answer's message. */
     recordUse: (parentMessageId: string) =>
-      Effect.flatMap(KnowledgePromotions, (knowledge) =>
-        knowledge.recordUsed({
-          projectId,
-          sessionId: binding.sessionId,
-          runId: binding.runId,
-          parentMessageId,
-          memoryNodeIds: [...usedDraft],
-        }),
-      ).pipe(Effect.when(Effect.sync(() => usedDraft.length > 0)), Effect.asVoid),
-  });
+      Effect.flatMap(Ref.get(usedDraft), (memoryNodeIds) =>
+        Effect.flatMap(KnowledgePromotions, (knowledge) =>
+          knowledge.recordUsed({
+            projectId,
+            sessionId: binding.sessionId,
+            runId: binding.runId,
+            parentMessageId,
+            memoryNodeIds: [...memoryNodeIds],
+          }),
+        ).pipe(Effect.when(Effect.succeed(memoryNodeIds.length > 0))),
+      ).pipe(Effect.asVoid),
+  };
+});
 
-  return { reads, runCalls };
-};
-
-/** Runs a call of {@link memoryCalls} on these services, keeping the caller's fiber and span. */
+/** Runs a call of {@link memoryReads} or {@link memoryRunCalls} on these services, keeping the caller's fiber and span. */
 const providedBy =
   (context: Context.Context<MemoryService>) =>
   <I, A, E>(call: (input: I) => Effect.Effect<A, E, MemoryService>) =>
   (input: I) =>
     Effect.provideContext(call(input), context);
 
-const readRunTools = (
-  calls: ReturnType<ReturnType<typeof memoryCalls>["reads"]>,
+const readRunTools = <E>(
+  calls: ReturnType<typeof memoryReads<E>>,
   provided: ReturnType<typeof providedBy>,
 ) => [
   runTool({ ...findMemory, handler: provided(calls.findMemory) }),
@@ -280,7 +278,11 @@ export const memoryReadRunTools = ({
   readonly env: MemoryToolEnvironment;
   readonly projectId: string;
   readonly scope?: MemoryToolScope;
-}) => readRunTools(memoryCalls(projectId, scope).reads(), providedBy(memoryServices(env)));
+}) =>
+  readRunTools(
+    memoryReads(projectId, scope, () => Effect.void),
+    providedBy(memoryServices(env)),
+  );
 
 /**
  * Records the memories the answer declared it used under the last message the model wrote in this
@@ -304,7 +306,7 @@ const recordUseHook = <E>(recordUse: (parentMessageId: string) => Effect.Effect<
  * Memory tools plus durable retrieval/use attribution for one chat run. The calls run on the loop's
  * fiber, so their spans nest under the run; `hook` records the memories the answer used.
  */
-export const memoryRunTools = ({
+export const memoryRunTools = Effect.fnUntraced(function* ({
   env,
   binding,
   scope,
@@ -312,20 +314,19 @@ export const memoryRunTools = ({
   readonly env: MemoryToolEnvironment;
   readonly binding: MemoryToolRunBinding;
   readonly scope?: MemoryToolScope;
-}) => {
+}) {
   const provided = providedBy(memoryServices(env));
-  const { reads, runCalls } = memoryCalls(binding.projectId, scope);
-  const bound = runCalls(binding);
+  const bound = yield* memoryRunCalls(binding, scope);
   return {
     tools: [
-      ...readRunTools(reads(binding), provided),
+      ...readRunTools(bound.reads, provided),
       runTool({ ...readToolResult, handler: provided(bound.readToolResult) }),
       runTool({ ...promoteMemoryCandidate, handler: provided(bound.promote) }),
       runTool({ ...usePromotedMemory, handler: bound.useMemory }),
     ],
     hook: recordUseHook(provided(bound.recordUse)),
   };
-};
+});
 
 const make = Effect.gen(function* () {
   const env: MemoryToolEnvironment = {
