@@ -72,10 +72,7 @@ const endpoint: typeof fetch = (input, init) => {
 
 testAgent({
   compatibleSettings: OpenAICompatibleSettings.layerWith(
-    Layer.succeed(CompatibleKeyring, () => ({
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-    })),
+    Layer.succeed(CompatibleKeyring, () => ({ get: Effect.succeed(null), set: () => Effect.void })),
     Layer.succeed(CompatibleFetch, endpoint),
   ),
 })("compatible chat tools", (it) => {

@@ -10,7 +10,7 @@ import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { compatibleAccountAction } from "../../.server/compatible-handlers";
 
-const keys = () => ({ get: () => Promise.resolve(null), set: () => Promise.resolve() });
+const keys = () => ({ get: Effect.succeed(null), set: () => Effect.void });
 const settingsWith = (overrides: Partial<Parameters<typeof makeOpenAICompatibleSettings>[0]>) => {
   let saved: Settings = {};
   return makeOpenAICompatibleSettings({

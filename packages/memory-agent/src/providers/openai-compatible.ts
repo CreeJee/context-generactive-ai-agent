@@ -8,8 +8,10 @@ import {
   Context,
   Effect,
   Equal,
+  FileSystem,
   Layer,
   Option,
+  Path,
   Schema,
   Semaphore,
 } from "effect";
@@ -19,7 +21,7 @@ import {
   type GlobalConfigFailed,
   type Settings,
 } from "../config/global-config.ts";
-import { openKeyringEntry } from "../runtime/keyring.ts";
+import { type KeyringOpenFailure, openKeyringEntry } from "../runtime/keyring.ts";
 import {
   AuthConnectionState,
   ModelUnavailable,
@@ -75,41 +77,37 @@ export class OpenAICompatibleFailed extends Schema.TaggedError<OpenAICompatibleF
   },
 ) {}
 export interface CompatibleKeyStore {
-  get(): Promise<string | null>;
-  set(value: string | null): Promise<void>;
+  readonly get: Effect.Effect<string | null, KeyringOpenFailure>;
+  /** Null deletes the stored key. */
+  readonly set: (value: string | null) => Effect.Effect<void, KeyringOpenFailure>;
 }
 /** One keychain entry per compatible account, named by the account's `credentialEntry`. */
 export type CompatibleKeychain = (entry: string) => CompatibleKeyStore;
 const keyEntry = (entry: string) =>
-  openKeyringEntry(
-    // Native host/SDK configuration boundary reads or forwards the host environment.
-    Effect.runSync(
-      Config.String("CONTEXT_AGENT_CREDENTIAL_NAMESPACE").pipe(
-        Config.withDefault("context-generactive-agent"),
-      ),
-    ),
-    entry,
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  Config.String("CONTEXT_AGENT_CREDENTIAL_NAMESPACE").pipe(
+    Config.withDefault("context-generactive-agent"),
+    Effect.flatMap((namespace) => openKeyringEntry(namespace, entry)),
   );
-const keychain: CompatibleKeychain = (entry) => ({
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  get: () =>
-    keyEntry(entry)
-      .getPassword()
-      .then((password) => password ?? null),
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  set: (value) =>
-    value === null
-      ? keyEntry(entry)
-          .deletePassword()
-          .then(() => undefined)
-      : keyEntry(entry)
-          .setPassword(value)
-          .then(() => undefined),
-});
+/** The keychain, reading a file backend through the platform services it was built with. */
+const keychain = Effect.map(
+  Effect.context<FileSystem.FileSystem | Path.Path>(),
+  (platform): CompatibleKeychain =>
+    (entry) => {
+      const opened = Effect.provideContext(keyEntry(entry), platform);
+      return {
+        get: Effect.flatMap(opened, (key) => key.getPassword),
+        set: (value) =>
+          Effect.flatMap(opened, (key) =>
+            value === null ? Effect.asVoid(key.deletePassword) : key.setPassword(value),
+          ),
+      };
+    },
+);
 export class CompatibleKeyring extends Context.Service<CompatibleKeyring, CompatibleKeychain>()(
   "memory-agent/providers/openai-compatible/CompatibleKeyring",
 ) {
-  static readonly layer = Layer.succeed(CompatibleKeyring, keychain);
+  static readonly layer = Layer.effect(CompatibleKeyring, keychain);
 }
 export class CompatibleFetch extends Context.Service<CompatibleFetch, typeof fetch>()(
   "memory-agent/providers/openai-compatible/CompatibleFetch",
@@ -181,7 +179,7 @@ export const validateCompatibleLabel = (
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function makeOpenAICompatibleSettings(options: {
   readonly config: GlobalConfigApi;
-  readonly keys?: CompatibleKeychain | undefined;
+  readonly keys: CompatibleKeychain;
   readonly fetcher?: typeof fetch | undefined;
 }) {
   return makeOpenAICompatibleSettingsBody(options.config, options.keys, options.fetcher);
@@ -199,7 +197,7 @@ const publishedReasoning = (settings: OpenAICompatibleConfiguration) =>
     : null;
 function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
-  keys: CompatibleKeychain = keychain,
+  keys: CompatibleKeychain,
   fetcher: typeof fetch = fetch,
 ) {
   const updates = Semaphore.makeUnsafe(1);
@@ -214,7 +212,9 @@ function makeOpenAICompatibleSettingsBody(
       Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "missing" })),
     );
   const storedKey = (account: CompatibleAccount) =>
-    attempt("keychain", () => keys(account.credentialEntry).get());
+    keys(account.credentialEntry).get.pipe(
+      Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "keychain" })),
+    );
   /** Writing accounts replaces the pre-account single endpoint for good. */
   const writeAccounts = (accounts: CompatibleAccounts, patch: Partial<Settings> = {}) =>
     config.update({ ...patch, compatibleAccounts: accounts, openaiCompatible: undefined });
@@ -235,7 +235,9 @@ function makeOpenAICompatibleSettingsBody(
       }),
     );
   const setKey = (account: CompatibleAccount, value: string | null) =>
-    attempt("partial", () => keys(account.credentialEntry).set(value));
+    keys(account.credentialEntry)
+      .set(value)
+      .pipe(Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "partial" })));
   const boundKey = (baseUrl: string, apiKey: string | null) =>
     apiKey === null || apiKey === ""
       ? null
@@ -803,7 +805,7 @@ export class OpenAICompatibleSettings extends Context.Service<
     Effect.gen(function* () {
       return makeOpenAICompatibleSettings({
         config: yield* GlobalConfig,
-        keys: keychain,
+        keys: yield* keychain,
         fetcher: fetch,
       });
     }),

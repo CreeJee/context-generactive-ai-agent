@@ -1,4 +1,5 @@
 import {
+  Cause,
   Config,
   Data,
   Effect,
@@ -10,18 +11,9 @@ import {
   Schema,
 } from "effect";
 import { Base64 } from "effect/encoding";
-import { runNativeEffect } from "./native-effect.ts";
-import { nodePlatform } from "./node-platform.ts";
+import { nativePromise } from "./native-effect.ts";
 import { requireRuntime } from "./resources.ts";
 import { sha256 } from "./synchronous-crypto.ts";
-
-/** The keychain entry operations the app uses; `@napi-rs/keyring`'s `AsyncEntry` has this shape. */
-export interface KeyringEntry {
-  getPassword(): Promise<string | null | undefined>;
-  setPassword(password: string): Promise<void>;
-  deletePassword(): Promise<boolean>;
-  deleteCredential(): Promise<boolean>;
-}
 
 /** The encrypted secret directory could not be used. Never answered by falling back to the OS keychain. */
 export class SecretFileStoreFailed extends Schema.TaggedError<SecretFileStoreFailed>()(
@@ -31,6 +23,18 @@ export class SecretFileStoreFailed extends Schema.TaggedError<SecretFileStoreFai
   },
 ) {}
 type FailureReason = SecretFileStoreFailed["reason"];
+
+/** A keychain call failed, or the encrypted secret directory could not be used. */
+export type KeyringFailure = SecretFileStoreFailed | Cause.UnknownError;
+
+/** The entry operations the app uses, over `@napi-rs/keyring`'s `AsyncEntry` or an encrypted file. */
+export interface KeyringEntry {
+  /** Null when nothing is stored. */
+  readonly getPassword: Effect.Effect<string | null, KeyringFailure>;
+  readonly setPassword: (password: string) => Effect.Effect<void, KeyringFailure>;
+  readonly deletePassword: Effect.Effect<boolean, KeyringFailure>;
+  readonly deleteCredential: Effect.Effect<boolean, KeyringFailure>;
+}
 
 /**
  * Where secrets live. `keychain` is the OS keychain (macOS Keychain, Windows Credential Manager,
@@ -47,11 +51,6 @@ export type SecretBackend = Data.TaggedEnum<{
   };
 }>;
 export const SecretBackend = Data.taggedEnum<SecretBackend>();
-
-// The file system and path services own no resources; entries run their Effects through the
-// process's platform runtime.
-const fs = nodePlatform.runSync(FileSystem.FileSystem);
-const path = nodePlatform.runSync(Path.Path);
 
 const failure = (reason: FailureReason) => SecretFileStoreFailed.make({ reason });
 const failWith = (reason: FailureReason) => () => failure(reason);
@@ -84,30 +83,37 @@ const base64 = (
 
 type FileBackend = Data.TaggedEnum.Value<SecretBackend, "file">;
 
-/** 32 random bytes in Base64, e.g. `openssl rand -base64 32`. Read on use, so a rotated key file applies. */
-const fileKey = Effect.fn("keyring.fileKey")(function* ({ key, keyFile }: FileBackend) {
-  const encoded = yield* Option.match(key, {
-    onSome: Effect.succeed,
-    onNone: () =>
-      Option.match(keyFile, {
-        onSome: (file) => fs.readFileString(file).pipe(Effect.mapError(failWith("key_missing"))),
-        onNone: () => fail("key_missing"),
-      }),
-  });
-  const bytes = yield* base64(encoded.trim(), "key_invalid").pipe(
-    Effect.filterOrFail((key) => key.length === 32, failWith("key_invalid")),
-  );
-  return yield* Effect.tryPromise({
-    try: () => crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]),
-    catch: failWith("key_invalid"),
-  });
-});
-
-const fileEntry = (backend: FileBackend, service: string, account: string): KeyringEntry => {
+const fileEntry = Effect.fnUntraced(function* (
+  backend: FileBackend,
+  service: string,
+  account: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const { directory } = backend;
   const file = path.join(directory, `${sha256(`${service}\n${account}`)}.secret`);
   // Binds each ciphertext to its entry, so a file copied over another entry does not decrypt.
   const additionalData = new TextEncoder().encode(`${service}\n${account}`);
+
+  /** 32 random bytes in Base64, e.g. `openssl rand -base64 32`. Read on use, so a rotated key file applies. */
+  const fileKey = Effect.fn("keyring.fileKey")(function* () {
+    const encoded = yield* Option.match(backend.key, {
+      onSome: Effect.succeed,
+      onNone: () =>
+        Option.match(backend.keyFile, {
+          onSome: (keyFile) =>
+            fs.readFileString(keyFile).pipe(Effect.mapError(failWith("key_missing"))),
+          onNone: () => fail("key_missing"),
+        }),
+    });
+    const bytes = yield* base64(encoded.trim(), "key_invalid").pipe(
+      Effect.filterOrFail((key) => key.length === 32, failWith("key_invalid")),
+    );
+    return yield* Effect.tryPromise({
+      try: () => crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]),
+      catch: failWith("key_invalid"),
+    });
+  });
 
   const read = Effect.gen(function* () {
     const stored = yield* fs.readFileString(file).pipe(Effect.mapError(failWith("read")));
@@ -117,7 +123,7 @@ const fileEntry = (backend: FileBackend, service: string, account: string): Keyr
         Effect.all([base64(iv, "decrypt"), base64(ciphertext, "decrypt")]),
       ),
     );
-    const key = yield* fileKey(backend);
+    const key = yield* fileKey();
     const plain = yield* Effect.tryPromise({
       try: () => crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData }, key, ciphertext),
       catch: failWith("decrypt"),
@@ -127,7 +133,7 @@ const fileEntry = (backend: FileBackend, service: string, account: string): Keyr
 
   const write = (password: string) =>
     Effect.gen(function* () {
-      const key = yield* fileKey(backend);
+      const key = yield* fileKey();
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const ciphertext = yield* Effect.tryPromise({
         try: () =>
@@ -159,35 +165,54 @@ const fileEntry = (backend: FileBackend, service: string, account: string): Keyr
   );
 
   return {
-    getPassword: () =>
-      runNativeEffect(
-        read.pipe(
-          Effect.when(fs.exists(file).pipe(Effect.mapError(failWith("read")))),
-          Effect.map(Option.getOrNull),
-        ),
+    getPassword: read.pipe(
+      Effect.when(fs.exists(file).pipe(Effect.mapError(failWith("read")))),
+      Effect.map(Option.getOrNull),
+    ),
+    setPassword: write,
+    deletePassword: remove,
+    deleteCredential: remove,
+  } satisfies KeyringEntry;
+});
+
+/** The OS keychain entry. Opening it loads the native addon, so a failure to load fails the open. */
+const keychainEntry = (service: string, account: string) =>
+  Effect.try(() => requireRuntime("@napi-rs/keyring")).pipe(
+    Effect.flatMap(({ AsyncEntry }) => Effect.try(() => new AsyncEntry(service, account))),
+    Effect.map((entry): KeyringEntry => ({
+      // Native Windows keyring returns null for an absent entry, despite its undefined-only typings.
+      getPassword: nativePromise(() => entry.getPassword()).pipe(
+        Effect.map((password) => password ?? null),
       ),
-    setPassword: (password) => runNativeEffect(write(password)),
-    deletePassword: () => runNativeEffect(remove),
-    deleteCredential: () => runNativeEffect(remove),
-  };
-};
+      setPassword: (password) => nativePromise(() => entry.setPassword(password)),
+      deletePassword: nativePromise(() => entry.deletePassword()),
+      deleteCredential: nativePromise(() => entry.deleteCredential()),
+    })),
+  );
 
 /** Opens one secret entry in the given backend. */
 export const keyringEntry: {
-  (account: string, backend: SecretBackend): (service: string) => KeyringEntry;
+  (account: string, backend: SecretBackend): (service: string) => OpenedEntry;
 } & typeof keyringEntryBody = EffectFunction.dual(3, keyringEntryBody);
-function keyringEntryBody(service: string, account: string, backend: SecretBackend): KeyringEntry {
+type OpenedEntry = Effect.Effect<
+  KeyringEntry,
+  Cause.UnknownError,
+  FileSystem.FileSystem | Path.Path
+>;
+function keyringEntryBody(service: string, account: string, backend: SecretBackend): OpenedEntry {
   return SecretBackend.$match(backend, {
-    keychain: (): KeyringEntry =>
-      new (requireRuntime("@napi-rs/keyring").AsyncEntry)(service, account),
-    file: (file) => fileEntry(file, service, account),
+    keychain: (): OpenedEntry => keychainEntry(service, account),
+    file: (file): OpenedEntry => fileEntry(file, service, account),
   });
 }
 
+/** Why an entry in the backend this process was started with could not be opened or used. */
+export type KeyringOpenFailure = KeyringFailure | Config.ConfigError;
+
 /** Opens one secret entry in the backend this process was started with. */
 export const openKeyringEntry: {
-  (account: string): (service: string) => KeyringEntry;
+  (account: string): (service: string) => ReturnType<typeof openKeyringEntryBody>;
 } & typeof openKeyringEntryBody = EffectFunction.dual(2, openKeyringEntryBody);
-function openKeyringEntryBody(service: string, account: string): KeyringEntry {
-  return keyringEntry(service, account, Effect.runSync(configuredBackend));
+function openKeyringEntryBody(service: string, account: string) {
+  return Effect.flatMap(configuredBackend, (backend) => keyringEntry(service, account, backend));
 }

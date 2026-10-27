@@ -132,10 +132,6 @@ const nativeFetch =
 /** The body a fetch fixture was given; the model's client sends bytes, not a string. */
 const requestText = (init: RequestInit | undefined) =>
   Effect.tryPromise(() => new Response(init?.body).text());
-const nativeWrite =
-  (write: (value: string | null) => Effect.Effect<void, Cause.UnknownError>) =>
-  (value: string | null) =>
-    nativeEffect(write(value));
 // Wire fixtures encode synchronously at the SDK boundary; Effect assertions use typed decoders.
 const jsonStringify = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -165,12 +161,11 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
     update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
   };
   const keys = {
-    get: () => Promise.resolve(key),
-    set: nativeWrite((value: string | null) =>
+    get: Effect.sync(() => key),
+    set: (value: string | null) =>
       Effect.sync(() => {
         key = value;
       }),
-    ),
   };
   return {
     config,
@@ -618,10 +613,8 @@ describe("OpenAI compatible settings", () => {
           update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
         keys: {
-          get: () => Promise.resolve(null),
-          set: nativeWrite(() =>
-            Effect.fail(new Cause.UnknownError(new Error("private keyring detail"))),
-          ),
+          get: Effect.succeed(null),
+          set: () => Effect.fail(new Cause.UnknownError(new Error("private keyring detail"))),
         },
       });
       const result = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
@@ -650,12 +643,11 @@ describe("OpenAI compatible settings", () => {
               ),
           },
           keys: {
-            get: () => Promise.resolve(key),
-            set: nativeWrite((value) =>
+            get: Effect.sync(() => key),
+            set: (value) =>
               Effect.sync(() => {
                 key = value;
               }),
-            ),
           },
         });
         const error = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
@@ -684,8 +676,8 @@ describe("OpenAI compatible settings", () => {
                 Effect.sync(() => (saved = { ...saved, ...patch })),
             },
             keys: {
-              get: () => Promise.resolve(key),
-              set: nativeWrite((value) =>
+              get: Effect.sync(() => key),
+              set: (value) =>
                 Effect.gen(function* () {
                   if (value?.includes('"key":"second"') === true) {
                     yield* Deferred.succeed(writing, undefined);
@@ -693,7 +685,6 @@ describe("OpenAI compatible settings", () => {
                   }
                   key = value;
                 }),
-              ),
             },
             fetcher: nativeFetch((url, init) =>
               Effect.sync(() => {
@@ -740,14 +731,13 @@ describe("OpenAI compatible settings", () => {
           update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
         keys: {
-          get: () => Promise.resolve(key),
-          set: nativeWrite((value) =>
+          get: Effect.sync(() => key),
+          set: (value) =>
             Effect.gen(function* () {
               key = value;
               if (rejectWrite)
                 return yield* new Cause.UnknownError(new Error("uncertain keyring outcome"));
             }),
-          ),
         },
         fetcher: nativeFetch((_url, init) =>
           Effect.sync(() => {
@@ -799,13 +789,12 @@ describe("OpenAI compatible settings", () => {
               Effect.sync(() => (saved = { ...saved, ...patch })),
           },
           keys: {
-            get: () => Promise.resolve(null),
-            set: nativeWrite(() =>
+            get: Effect.succeed(null),
+            set: () =>
               Effect.gen(function* () {
                 yield* Deferred.succeed(writing, undefined);
                 yield* Deferred.await(gate);
               }),
-            ),
           },
         });
         yield* api.update(configuration);
@@ -841,10 +830,7 @@ describe("OpenAI compatible settings", () => {
             update: (patch: Partial<Settings>) =>
               Effect.sync(() => (saved = { ...saved, ...patch })),
           },
-          keys: {
-            get: () => nativeEffect(Fiber.join(neverRead)),
-            set: nativeWrite(() => Effect.sync(() => {})),
-          },
+          keys: { get: Fiber.join(neverRead), set: () => Effect.void },
           fetcher: nativeFetch(() =>
             Effect.fail(new Cause.UnknownError(new Error("must not reach network"))),
           ),
@@ -882,12 +868,11 @@ describe("OpenAI compatible settings", () => {
                 Effect.sync(() => (saved = { ...saved, ...patch })),
             },
             keys: {
-              get: () => Promise.resolve(key),
-              set: nativeWrite((value) =>
+              get: Effect.sync(() => key),
+              set: (value) =>
                 Effect.sync(() => {
                   key = value;
                 }),
-              ),
             },
             fetcher: nativeFetch((url, init) =>
               Effect.map(requestText(init), (body) => {
@@ -1086,10 +1071,10 @@ describe("OpenAI compatible settings", () => {
               Effect.sync(() => (saved = { ...saved, ...patch })),
           },
           keys: (entry) => ({
-            get: () => Promise.resolve(stored.get(entry) ?? null),
+            get: Effect.sync(() => stored.get(entry) ?? null),
             set: (value) =>
-              Promise.resolve(
-                void (value === null ? stored.delete(entry) : stored.set(entry, value)),
+              Effect.sync(
+                () => void (value === null ? stored.delete(entry) : stored.set(entry, value)),
               ),
           }),
         });

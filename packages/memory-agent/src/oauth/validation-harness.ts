@@ -24,9 +24,9 @@ import {
   Exit,
 } from "effect";
 import { NetAddress } from "effect/net";
-import { openKeyringEntry } from "../runtime/keyring.ts";
+import { type KeyringEntry, type KeyringFailure, openKeyringEntry } from "../runtime/keyring.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
-import { oauthProtocolCrypto } from "./node-runtime.ts";
+import { oauthProtocolCrypto, runOAuthNodeEffect } from "./node-runtime.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
 import {
@@ -95,14 +95,24 @@ const credentialStoreFailure = (provider: OAuthProvider, stage: CredentialStoreS
     credentialStage: stage,
   });
 
+/** A failed open keeps its `entry_open` stage; any other failure is the stage of the call. */
+const storeFailure = (provider: OAuthProvider, stage: CredentialStoreStage) => (cause: unknown) =>
+  Schema.is(OAuthHarnessError)(cause) ? cause : credentialStoreFailure(provider, stage);
+
 const keychainEntry = (provider: OAuthProvider, account = "subscription-oauth") => {
   // Opening an entry also loads the native keyring addon; `module_load` stays decodable for old records.
-  const open = (account: string) => {
-    try {
-      return openKeyringEntry(providerKeychainService(provider), account);
-    } catch {
-      throw credentialStoreFailure(provider, "entry_open");
-    }
+  const open = (account: string): PasswordEntry => {
+    const entry = openKeyringEntry(providerKeychainService(provider), account).pipe(
+      Effect.mapError(() => credentialStoreFailure(provider, "entry_open")),
+    );
+    // Each call opens the entry again, as the Promise-based credential store calls it.
+    const use = <A>(call: (opened: KeyringEntry) => Effect.Effect<A, KeyringFailure>) =>
+      runOAuthNodeEffect(Effect.flatMap(entry, call));
+    return {
+      getPassword: () => use((opened) => opened.getPassword),
+      setPassword: (password) => use((opened) => opened.setPassword(password)),
+      deleteCredential: () => use((opened) => opened.deleteCredential),
+    };
   };
   return process.platform === "win32" ? createChunkedPasswordEntry(open, account) : open(account);
 };
@@ -116,7 +126,7 @@ export const createKeychainCredentialStore = (
         const entry = open(provider);
         const encoded = yield* Effect.tryPromise({
           try: () => entry.getPassword(),
-          catch: () => credentialStoreFailure(provider, "read"),
+          catch: storeFailure(provider, "read"),
         });
         if (encoded == null) return null;
         const credential = yield* Effect.fromOption(decodeStoredCredential(encoded), () =>
@@ -140,7 +150,7 @@ export const createKeychainCredentialStore = (
         );
         yield* Effect.tryPromise({
           try: () => entry.setPassword(encoded),
-          catch: () => credentialStoreFailure(provider, "write"),
+          catch: storeFailure(provider, "write"),
         });
       }),
     ),
@@ -150,7 +160,7 @@ export const createKeychainCredentialStore = (
         const entry = open(provider);
         yield* Effect.tryPromise({
           try: () => entry.deleteCredential(),
-          catch: () => credentialStoreFailure(provider, "delete"),
+          catch: storeFailure(provider, "delete"),
         });
       }),
     ).then(() => undefined),
