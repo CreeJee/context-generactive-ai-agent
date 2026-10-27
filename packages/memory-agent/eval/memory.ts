@@ -1,4 +1,4 @@
-import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { nativePromise } from "../src/runtime/native-effect.ts";
 import { isTruthy } from "../src/truthy.ts";
 // Memory use of the in-process models, one scenario per process so peaks do not mix:
 //   node --expose-gc --no-warnings eval/memory.ts            all scenarios
@@ -7,9 +7,9 @@ import { isTruthy } from "../src/truthy.ts";
 // (`footprint`), which is what memory pressure counts; compare scenarios run together.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
-import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { nodePlatform } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { Duration, FileSystem } from "effect";
+import { Cause, Duration, FileSystem, Option, Schema } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { dirname, join } = path;
@@ -19,6 +19,7 @@ import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
 import { kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { runtimeRequire } from "../src/runtime/resources.ts";
+import { JsonValue } from "../src/json.ts";
 
 const home = await Effect.runPromise(defaultStorageRoot);
 /**
@@ -111,46 +112,51 @@ const scenarios = {
   }),
 };
 
-const only = process.argv[2];
-if (isTruthy(only)) {
-  const scenario = Object.entries(scenarios).find(([name]) => name === only)?.[1];
-  if (!isTruthy(scenario)) throw new Error(`unknown scenario: ${only}`);
-  const [elapsed, { details, peakMB }] = await runOAuthNodeEffect<
-    [Duration.Duration, { details: object; peakMB: number | null }],
-    Effect.Error<ReturnType<(typeof scenarios)[keyof typeof scenarios]>>
-  >(
-    Effect.timed(
-      Effect.gen(function* () {
-        const details: object = yield* scenario();
-        return { details, peakMB: yield* footprint("phys_footprint_peak") };
-      }),
-    ),
+/** Runs one scenario in this process and prints its line. */
+const runScenario = Effect.fn("eval.runScenario")(function* (only: string) {
+  const scenario = yield* Effect.fromOption(
+    Option.fromUndefinedOr(Object.entries(scenarios).find(([name]) => name === only)?.[1]),
+    () => new Cause.NoSuchElementError(`unknown scenario: ${only}`),
+  );
+  const [elapsed, { details, peakMB }] = yield* Effect.timed(
+    Effect.gen(function* () {
+      const details: object = yield* scenario();
+      return { details, peakMB: yield* footprint("phys_footprint_peak") };
+    }),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(
-    Console.log(
-      JSON.stringify({
-        scenario: only,
-        peakMB,
-        ...details,
-        ms: Math.round(Duration.toMillis(elapsed)),
-      }),
-    ),
+  yield* Console.log(
+    yield* Schema.encodeEffect(Schema.fromJsonString(JsonValue))({
+      scenario: only,
+      peakMB,
+      ...details,
+      ms: Math.round(Duration.toMillis(elapsed)),
+    }),
   );
-} else {
-  const script = await runNativeEffect(path.fromFileUrl(new URL(import.meta.url)));
-  for (const name of Object.keys(scenarios)) {
-    try {
-      const result = await runProcess({
-        command: process.execPath,
-        args: [...process.execArgv, script, name],
-      });
-      const line = result.stdout.trim().split("\n").at(-1) ?? "";
-      Effect.runSync(Console.log(line));
-    } catch (error) {
-      Effect.runSync(
-        Console.log(`${name}: failed (${error instanceof Error ? error.message : "unknown"})`),
-      );
-    }
-  }
-}
+});
+
+/** Runs every scenario in a process of its own and prints each one's line. */
+const runAll = Effect.fn("eval.runAll")(function* () {
+  const script = yield* path.fromFileUrl(new URL(import.meta.url));
+  yield* Effect.forEach(
+    Object.keys(scenarios),
+    (name) =>
+      nativePromise(() =>
+        runProcess({ command: process.execPath, args: [...process.execArgv, script, name] }),
+      ).pipe(
+        Effect.map((result) => result.stdout.trim().split("\n").at(-1) ?? ""),
+        Effect.catch((error) =>
+          Effect.succeed(
+            `${name}: failed (${error.cause instanceof Error ? error.cause.message : "unknown"})`,
+          ),
+        ),
+        Effect.flatMap(Console.log),
+      ),
+    { discard: true },
+  );
+});
+
+const only = process.argv[2];
+await (isTruthy(only)
+  ? nodePlatform.runPromise(runScenario(only))
+  : nodePlatform.runPromise(runAll()));

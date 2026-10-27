@@ -1,6 +1,6 @@
 import { Function as EffectFunction } from "effect";
-import { Cache, Effect, Schema } from "effect";
-import { encodingForModel, getEncoding, getEncodingNameForModel } from "js-tiktoken";
+import { Schema } from "effect";
+import { encodingForModel, getEncoding, getEncodingNameForModel, type Tiktoken } from "js-tiktoken";
 
 type KnownModel = Parameters<typeof encodingForModel>[0];
 
@@ -11,14 +11,10 @@ export interface RequestTokenEstimate {
   readonly fallback: boolean;
 }
 
-const encoders = Effect.runSync(
-  Cache.make({
-    capacity: 8,
-    lookup: (name: Parameters<typeof getEncoding>[0]) => Effect.sync(() => getEncoding(name)),
-  }),
-);
-const encoderFor = (name: Parameters<typeof getEncoding>[0]) =>
-  Effect.runSync(Cache.get(encoders, name));
+type EncodingName = Parameters<typeof getEncoding>[0];
+/** Each encoding is built once, on first use: building one reads its whole rank table. */
+const encoders: Partial<Record<EncodingName, Tiktoken>> = {};
+const encoderFor = (name: EncodingName) => (encoders[name] ??= getEncoding(name));
 
 const estimateRequestTokensBody = (
   serializedRequest: string,

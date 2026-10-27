@@ -170,24 +170,29 @@ const firstRequest = Effect.fn("eval.promptOverhead")(function* () {
   );
 }, Effect.scoped);
 
-const request = await runNativeEffect(firstRequest());
-const systemMessages = request.prompt.content.filter((message) => message.role === "system");
-const otherMessages = request.prompt.content.filter((message) => message.role !== "system");
-const base = tokens(Prompt.empty);
-const report = {
-  model: selection.model,
-  total: tokens(request.prompt, request.tools),
-  system: tokens(Prompt.fromMessages(systemMessages)) - base,
-  tools: tokens(Prompt.empty, request.tools) - base,
-  messages: tokens(Prompt.fromMessages(otherMessages)) - base,
-  toolCount: request.tools.length,
-  systemBlocks: systemMessages.map((message) => ({
-    tokens: tokens(Prompt.fromMessages([message])) - base,
-    head: message.content.slice(0, 70).replaceAll("\n", " "),
-  })),
-  perTool: request.tools
-    .map((tool) => ({ name: tool.name, tokens: tokens(Prompt.empty, [tool]) - base }))
-    .toSorted((left, right) => right.tokens - left.tokens),
+const reportOf = (request: Effect.Success<ReturnType<typeof firstRequest>>) => {
+  const systemMessages = request.prompt.content.filter((message) => message.role === "system");
+  const otherMessages = request.prompt.content.filter((message) => message.role !== "system");
+  const base = tokens(Prompt.empty);
+  return {
+    model: selection.model,
+    total: tokens(request.prompt, request.tools),
+    system: tokens(Prompt.fromMessages(systemMessages)) - base,
+    tools: tokens(Prompt.empty, request.tools) - base,
+    messages: tokens(Prompt.fromMessages(otherMessages)) - base,
+    toolCount: request.tools.length,
+    systemBlocks: systemMessages.map((message) => ({
+      tokens: tokens(Prompt.fromMessages([message])) - base,
+      head: message.content.slice(0, 70).replaceAll("\n", " "),
+    })),
+    perTool: request.tools
+      .map((tool) => ({ name: tool.name, tokens: tokens(Prompt.empty, [tool]) - base }))
+      .toSorted((left, right) => right.tokens - left.tokens),
+  };
 };
 // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-Effect.runSync(Console.log(JSON.stringify(report, null, 2)));
+await runNativeEffect(
+  Effect.flatMap(firstRequest(), (request) =>
+    Console.log(JSON.stringify(reportOf(request), null, 2)),
+  ),
+);

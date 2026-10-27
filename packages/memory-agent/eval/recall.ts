@@ -9,7 +9,7 @@ import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
 import { Context, FileSystem } from "effect";
-import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { nodePlatform } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
@@ -42,7 +42,9 @@ const home = await Effect.runPromise(defaultStorageRoot);
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 for (const file of [embeddingModel, kiwiFile])
-  if (!(await runOAuthNodeEffect(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(file)))))
+  if (
+    !(await nodePlatform.runPromise(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(file))))
+  )
     throw new Error(`model missing: ${file}`);
 
 const sharedModels = StorageRoot.layer(home);
@@ -189,37 +191,45 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
   );
 }, Effect.scoped);
 
-const only = process.argv[2];
-if (only === "--terms") {
+/** Kiwi terms of the decision corpus and queries, one line each. */
+const printTerms = Effect.gen(function* () {
   const texts = [
     ...recallQueries.map((item) => item.query),
     ...recallSessions.flat().map((statement) => statement.text),
   ];
-  const terms = await Effect.runPromise(
-    Effect.gen(function* () {
-      const services = yield* Layer.build(kiwi);
-      return yield* Effect.provideContext(
-        Effect.flatMap(MorphAnalyzer, (analyzer) => analyzer.terms(texts)),
-        services,
-      );
-    }).pipe(Effect.scoped),
+  const services = yield* Layer.build(kiwi);
+  const terms = yield* Effect.provideContext(
+    Effect.flatMap(MorphAnalyzer, (analyzer) => analyzer.terms(texts)),
+    services,
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  texts.forEach((text, index) =>
-    Effect.runSync(Console.log(`${text} | ${terms[index]?.join(" ")}`)),
+  yield* Console.log(texts.map((text, index) => `${text} | ${terms[index]?.join(" ")}`).join("\n"));
+}).pipe(Effect.scoped);
+
+/** Every configuration on both sets, or only the configuration `only` names. */
+const printRecall = (only: string | undefined) =>
+  Effect.forEach(
+    recallSets.flatMap((set) =>
+      configurations
+        .filter((configuration) => !isTruthy(only) || configuration.name === only)
+        .map((configuration) => ({ set, configuration })),
+    ),
+    ({ set, configuration }) =>
+      Effect.flatMap(evaluate(configuration, set), (result) =>
+        // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+        Console.log(
+          [
+            `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
+            ...result.misses.map((miss) => `  - ${miss}`),
+          ].join("\n"),
+        ),
+      ),
+    { discard: true },
   );
+
+const only = process.argv[2];
+if (only === "--terms") {
+  await runNativeEffect(printTerms);
   process.exit(0);
 }
-for (const set of recallSets)
-  for (const configuration of configurations) {
-    if (isTruthy(only) && configuration.name !== only) continue;
-    const result = await runNativeEffect(evaluate(configuration, set));
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(
-      Console.log(
-        `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
-      ),
-    );
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    for (const miss of result.misses) Effect.runSync(Console.log(`  - ${miss}`));
-  }
+await runNativeEffect(printRecall(only));

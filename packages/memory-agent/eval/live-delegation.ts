@@ -222,7 +222,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     servicesContext,
   );
   const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-  const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>Effect.runSync(Console.log("ready")),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
+  const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>console.log("ready"),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
   const events = yield* Effect.provideContext(
     services.chat
       .run({
@@ -266,22 +266,20 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     usage: yield* services.usage.byRootSession(services.session.id),
   };
 }, Effect.scoped);
-const results = [
-  await runNativeEffect(arm("baseline-guidance")),
-  await runNativeEffect(arm("optimized-guidance")),
-];
-// Native stdout/stderr or SDK logging boundary preserves the existing output format.
-Effect.runSync(
-  Console.log(
-    stringifyJson(
-      {
-        results,
-        totalCalls,
-        estimatedInputTokens,
-        note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
-      },
-      null,
-      2,
+await runNativeEffect(
+  Effect.flatMap(Effect.all([arm("baseline-guidance"), arm("optimized-guidance")]), (results) =>
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    Console.log(
+      stringifyJson(
+        {
+          results,
+          totalCalls,
+          estimatedInputTokens,
+          note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
+        },
+        null,
+        2,
+      ),
     ),
   ),
 );

@@ -4,7 +4,7 @@ import {
   type ModelRun,
   type ModelSelection,
 } from "../src/providers/contracts.ts";
-import { Config, Console, Result, Function as EffectFunction, Stream } from "effect";
+import { Cause, Config, Console, Result, Function as EffectFunction, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
 import { Context, Crypto, FileSystem } from "effect";
@@ -225,36 +225,50 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
 // This historical A/B is invalid if automatic catch-up has already done manual /compact's work.
 // Do not accidentally repeat it. A redesigned comparator needs a fresh explicit paid opt-in.
 // Native host/SDK configuration boundary reads or forwards the host environment.
-if (
-  Effect.runSync(
-    Config.String("MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT").pipe(Config.withDefault("")),
-  ) !== "1"
-) {
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(
-    Console.log(stringifyJson({ stopped: true, reason: "paid_pilot_disabled_until_redesign" })),
-  );
-} else {
-  try {
-    for (const variant of ["auto", "auto-plus-manual"] as const) {
-      const outcome = await runNativeEffect(runArm(variant));
-      // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-      Effect.runSync(Console.log(stringifyJson(outcome)));
-      // A comparison of failed coding/evidence tasks is not worth another paid arm.
-      if (!outcome.evidenceCorrect || !outcome.computationCorrect)
-        throw new Error("pilot_baseline_quality_failed");
-    }
-  } catch (error) {
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(
-      Console.log(
-        stringifyJson({
-          stopped: true,
-          reason: error instanceof Error ? error.message : "unknown",
-          providerCallsSoFar: calls,
-        }),
+const pilotEnabled = Effect.map(
+  Config.String("MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT").pipe(Config.withDefault("")),
+  (value) => value === "1",
+);
+
+/** Both arms in order, then whether the pilot stopped on a failure. */
+const runArms = Effect.forEach(
+  ["auto", "auto-plus-manual"] as const,
+  (variant) =>
+    Effect.flatMap(runArm(variant), (outcome) =>
+      Effect.andThen(
+        // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+        Console.log(stringifyJson(outcome)),
+        // A comparison of failed coding/evidence tasks is not worth another paid arm.
+        Effect.when(
+          Effect.die(new Error("pilot_baseline_quality_failed")),
+          Effect.succeed(!outcome.evidenceCorrect || !outcome.computationCorrect),
+        ),
       ),
-    );
-    process.exitCode = 1;
-  }
-}
+    ),
+  { discard: true },
+).pipe(
+  Effect.as(false),
+  Effect.catchCause((cause) => {
+    const error = Cause.squash(cause);
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    return Console.log(
+      stringifyJson({
+        stopped: true,
+        reason: error instanceof Error ? error.message : "unknown",
+        providerCallsSoFar: calls,
+      }),
+    ).pipe(Effect.as(true));
+  }),
+);
+
+const failed = await runNativeEffect(
+  Effect.flatMap(pilotEnabled, (enabled) =>
+    enabled
+      ? runArms
+      : // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+        Console.log(
+          stringifyJson({ stopped: true, reason: "paid_pilot_disabled_until_redesign" }),
+        ).pipe(Effect.as(false)),
+  ),
+);
+if (failed) process.exitCode = 1;

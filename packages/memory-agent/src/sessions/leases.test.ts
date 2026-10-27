@@ -1,3 +1,4 @@
+import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeLeases } from "./leases.ts";
@@ -31,17 +32,19 @@ test("one page holds a session until it lets go or stops renewing", () => {
   expect(leases.view("s", "tab-a")).toEqual({ state: "free" });
 });
 
-test("expired leases are reclaimed even when their sessions are not requested again", () => {
-  let clock = 0;
-  const leases = makeLeases(100, () => clock);
-  leases.claim("old", "tab-a");
-  clock = 50;
-  leases.claim("fresh", "tab-b");
-  clock = 110;
-  const freed: string[] = [];
-  leases.onExpired((sessionId) => Effect.sync(() => freed.push(sessionId)));
-  expect(Effect.runSync(leases.sweepExpired)).toEqual(["old"]);
-  expect(freed).toEqual(["old"]);
-  expect(leases.view("old", "tab-a")).toEqual({ state: "free" });
-  expect(leases.view("fresh", "tab-b")).toEqual({ state: "mine" });
-});
+it.effect("expired leases are reclaimed even when their sessions are not requested again", () =>
+  Effect.gen(function* () {
+    let clock = 0;
+    const leases = makeLeases(100, () => clock);
+    leases.claim("old", "tab-a");
+    clock = 50;
+    leases.claim("fresh", "tab-b");
+    clock = 110;
+    const freed: string[] = [];
+    leases.onExpired((sessionId) => Effect.sync(() => freed.push(sessionId)));
+    expect(yield* leases.sweepExpired).toEqual(["old"]);
+    expect(freed).toEqual(["old"]);
+    expect(leases.view("old", "tab-a")).toEqual({ state: "free" });
+    expect(leases.view("fresh", "tab-b")).toEqual({ state: "mine" });
+  }),
+);
