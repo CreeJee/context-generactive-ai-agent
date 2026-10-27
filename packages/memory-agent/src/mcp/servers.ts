@@ -1,4 +1,4 @@
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise } from "../runtime/native-effect.ts";
 import { Cause, Function as EffectFunction, type JsonSchema, Predicate } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
@@ -10,6 +10,7 @@ import {
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import {
   Array as EffectArray,
+  HashMap,
   HashSet,
   MutableHashMap,
   Option,
@@ -18,10 +19,13 @@ import {
   Context,
   Data,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Match,
+  Ref,
   Schema,
+  SynchronizedRef,
 } from "effect";
 import { JsonValue } from "../json.ts";
 import { jsonSchemaIssues } from "../tools/input-repair.ts";
@@ -32,6 +36,7 @@ import {
   inputSchemaOf,
   listTools,
   type JsonObject,
+  type McpConnectFailed,
   type McpToolFailed,
 } from "./client.ts";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -95,11 +100,6 @@ export interface McpOverview {
  * reserved for provider-native MCP tools and unavailable to dynamic tools.
  */
 export const mcpToolPrefix = "mcp_";
-
-export class McpOperationFailed extends Schema.TaggedError<McpOperationFailed>()(
-  "McpOperationFailed",
-  { operation: Schema.Literals(["trust", "tools"]), cause: Schema.Defect() },
-) {}
 
 /** A server did not finish a step in time; its message is the server state settings show. */
 export class McpStepTimedOut extends Schema.TaggedError<McpStepTimedOut>()("McpStepTimedOut", {
@@ -200,14 +200,23 @@ const nothingDiscovered: Discovered = { tools: [], guide: null };
 
 interface Connection {
   readonly fingerprint: string;
-  readonly client: Promise<Client>;
-  state: McpServerState;
-  discovering: Promise<Discovered> | null;
+  readonly client: Fiber.Fiber<Client, Cause.UnknownError | McpConnectFailed>;
+  readonly state: Ref.Ref<McpServerState>;
+  /** The discovery in flight, which callers meanwhile share. */
+  readonly discovering: SynchronizedRef.SynchronizedRef<Option.Option<Fiber.Fiber<Discovered>>>;
 }
 
 /** Stops a connection's client, whether or not it started. */
 const stopClient = (connection: Connection) =>
-  void connection.client.then((client) => client.close()).catch(() => undefined);
+  Fiber.join(connection.client).pipe(
+    Effect.flatMap((client) => nativePromise(() => client.close())),
+    // Best-effort: a client that never started or fails to close is dropped.
+    Effect.ignore,
+  );
+
+/** Stops a connection's client without waiting for a start that may still be running. */
+const stopInBackground = (connection: Connection) =>
+  Effect.asVoid(Effect.forkDetach(stopClient(connection)));
 
 /** The server's or the SDK's own text, with the cause it wraps. */
 const describeFailure = (error: Error) => {
@@ -295,15 +304,18 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const redactor = yield* SecretRedactor;
-  const connections = MutableHashMap.empty<string, Connection>();
+  const serviceScope = yield* Effect.scope;
+  const connections = yield* SynchronizedRef.make(HashMap.empty<string, Connection>());
 
   /** Why discovery failed, with the server's own text as the hidden detail. */
   const failureOf = Match.typeTags<
-    McpStepTimedOut | Cause.UnknownError | Schema.SchemaError,
+    McpStepTimedOut | McpConnectFailed | Cause.UnknownError | Schema.SchemaError,
     Effect.Effect<ShownFailure<McpFailureCode>>
   >()({
     McpStepTimedOut: (timedOut) =>
       Effect.succeed({ code: stepTimedOutCode[timedOut.step], detail: null }),
+    McpConnectFailed: (failed) =>
+      redactor.hideDetail({ code: "start_failed", detail: describeFailure(failed) }),
     UnknownError: ({ cause: error }) =>
       isMissingVariable(error)
         ? Effect.succeed({ code: "missing_env", detail: error.variable })
@@ -347,16 +359,14 @@ const make = Effect.gen(function* () {
         .filter((entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint)
         .map((entry) => [connectionKey(project, entry.server), entry.server.fingerprint]),
     );
-    Array.from(connections)
-      .filter(
-        ([key, connection]) =>
-          key.startsWith(`${project.id}/`) &&
-          !Option.exists(
-            MutableHashMap.get(usableFingerprints, key),
-            (fingerprint) => fingerprint === connection.fingerprint,
-          ),
-      )
-      .forEach(([key]) => close(key));
+    yield* closeWhere(
+      (connection, key) =>
+        key.startsWith(`${project.id}/`) &&
+        !Option.exists(
+          MutableHashMap.get(usableFingerprints, key),
+          (fingerprint) => fingerprint === connection.fingerprint,
+        ),
+    );
     const files = yield* Effect.forEach([global, local], (file, index) =>
       // A decode error can quote the file, header and environment values included.
       Effect.map(
@@ -371,11 +381,18 @@ const make = Effect.gen(function* () {
     return { files, servers };
   });
 
-  const close = (key: string) =>
-    Option.map(MutableHashMap.get(connections, key), (connection) => {
-      MutableHashMap.remove(connections, key);
-      stopClient(connection);
-    });
+  /** Removes the connections `stale` picks and stops their clients. */
+  const closeWhere = (stale: (connection: Connection, key: string) => boolean) =>
+    SynchronizedRef.modify(
+      connections,
+      (current) =>
+        [
+          HashMap.values(HashMap.filter(current, stale)),
+          HashMap.filter(current, (connection, key) => !stale(connection, key)),
+        ] as const,
+    ).pipe(
+      Effect.flatMap((removed) => Effect.forEach(removed, stopInBackground, { discard: true })),
+    );
 
   const transportFor = (project: Project, config: McpServerConfig) =>
     McpServerConfig.match<StdioClientTransport | StreamableHTTPClientTransport>(config, {
@@ -407,34 +424,36 @@ const make = Effect.gen(function* () {
     });
 
   /** The live connection for a trusted server, started on first use or after a failure. */
-  const connect = (project: Project, server: ConfiguredServer): Connection => {
+  const connect = (project: Project, server: ConfiguredServer) => {
     const key = connectionKey(project, server);
-    return MutableHashMap.get(connections, key).pipe(
-      Option.filter(
-        (existing) =>
-          existing.fingerprint === server.fingerprint &&
-          !McpServerState.$is("failed")(existing.state),
-      ),
-      Option.getOrElse(() => {
-        close(key);
-        // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const client = runNativeEffect(
+    const start = Effect.gen(function* () {
+      const connection: Connection = {
+        fingerprint: server.fingerprint,
+        // Detached: a start that outlives its timeout still gets closed with the connection.
+        client: yield* Effect.forkDetach(
           Effect.try({
             // A missing `${VAR}` throws here, and settings show which one.
             try: () => transportFor(project, server.config),
             catch: (error) => new Cause.UnknownError(error),
           }).pipe(Effect.flatMap(connectClient)),
-        );
-        client.catch(() => undefined);
-        const connection: Connection = {
-          fingerprint: server.fingerprint,
-          client,
-          state: McpServerState.trusted(),
-          discovering: null,
-        };
-        MutableHashMap.set(connections, key, connection);
-        return connection;
+        ),
+        state: yield* Ref.make<McpServerState>(McpServerState.trusted()),
+        discovering: yield* SynchronizedRef.make(Option.none<Fiber.Fiber<Discovered>>()),
+      };
+      return connection;
+    });
+    return SynchronizedRef.modifyEffect(connections, (current) =>
+      Effect.gen(function* () {
+        const existing = HashMap.get(current, key);
+        if (
+          Option.isSome(existing) &&
+          existing.value.fingerprint === server.fingerprint &&
+          !McpServerState.$is("failed")(yield* Ref.get(existing.value.state))
+        )
+          return [existing.value, current] as const;
+        yield* Effect.transposeOption(Option.map(existing, stopInBackground));
+        const connection = yield* start;
+        return [connection, HashMap.set(current, key, connection)] as const;
       }),
     );
   };
@@ -443,13 +462,22 @@ const make = Effect.gen(function* () {
    * Lists a server's tools as agent tools, with the guide it sent at connect. A failure is
    * remembered and retried next time.
    */
-  const discover = (project: Project, server: ConfiguredServer): Promise<Discovered> => {
-    const connection = connect(project, server);
-    return (
-      connection.discovering ??
-      discovery({ key: connectionKey(project, server), server, connection })
+  const discover = (project: Project, server: ConfiguredServer) =>
+    Effect.flatMap(connect(project, server), (connection) =>
+      SynchronizedRef.modifyEffect(connection.discovering, (current) =>
+        Option.match(current, {
+          onSome: (running) => Effect.succeed([running, current] as const),
+          onNone: () =>
+            discovery({ key: connectionKey(project, server), server, connection }).pipe(
+              // A connection starts another discovery only once this one is cleared, so it is still this one.
+              Effect.ensuring(SynchronizedRef.set(connection.discovering, Option.none())),
+              // A caller that stops waiting does not stop the discovery the others share.
+              Effect.forkIn(serviceScope),
+              Effect.map((running) => [running, Option.some(running)] as const),
+            ),
+        }),
+      ).pipe(Effect.flatMap(Fiber.join)),
     );
-  };
 
   /** A discovery on `connection`, which it keeps until it ends so callers meanwhile share it. */
   const discovery = ({
@@ -462,12 +490,12 @@ const make = Effect.gen(function* () {
     readonly connection: Connection;
   }) => {
     /** Whether the connection was not replaced or closed meanwhile. */
-    const isCurrent = () =>
-      Option.exists(MutableHashMap.get(connections, key), (current) => current === connection);
-    const offered = (client: Client, tools: ReadonlyArray<McpTool>): Discovered => {
-      connection.state = McpServerState.connected({ tools: tools.map((tool) => tool.name) });
+    const isCurrent = Effect.map(SynchronizedRef.get(connections), (current) =>
+      Option.exists(HashMap.get(current, key), (live) => live === connection),
+    );
+    const offered = (client: Client, tools: ReadonlyArray<McpTool>) => {
       const guide = client.getInstructions()?.trim() ?? "";
-      return {
+      const discovered: Discovered = {
         tools: tools.map((tool): ServerTool => ({
           name: mcpToolName(server.name, tool.name),
           description: `[MCP ${server.name}] ${tool.description ?? ""}`.trim(),
@@ -477,64 +505,58 @@ const make = Effect.gen(function* () {
         })),
         guide: guide === "" ? null : guide,
       };
+      return Effect.as(
+        Ref.set(
+          connection.state,
+          McpServerState.connected({ tools: tools.map((tool) => tool.name) }),
+        ),
+        discovered,
+      );
     };
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const pending = runNativeEffect(
-      Effect.gen(function* () {
-        const client = yield* withTimeout(
-          nativePromise(() => connection.client),
-          connectTimeoutMs,
-          "connect",
-        );
-        const tools = yield* withTimeout(listTools(client), connectTimeoutMs, "tools/list");
-        return isCurrent() ? offered(client, tools) : nothingDiscovered;
-      }).pipe(
-        // A server that fails to start or list is remembered as failed and offers no tools.
-        Effect.catch((failure) =>
-          // Stop whatever did start; the next run starts it again.
-          Effect.sync(() => stopClient(connection)).pipe(
-            Effect.andThen(failureOf(failure)),
-            Effect.flatMap((shown) =>
-              Effect.when(
-                Effect.sync(() => {
-                  connection.state = McpServerState.failed({ failure: shown });
-                }),
-                Effect.sync(isCurrent),
-              ),
+    return Effect.gen(function* () {
+      const client = yield* withTimeout(Fiber.join(connection.client), connectTimeoutMs, "connect");
+      const tools = yield* withTimeout(listTools(client), connectTimeoutMs, "tools/list");
+      return (yield* isCurrent) ? yield* offered(client, tools) : nothingDiscovered;
+    }).pipe(
+      // A server that fails to start or list is remembered as failed and offers no tools.
+      Effect.catch((failure) =>
+        // Stop whatever did start; the next run starts it again.
+        stopInBackground(connection).pipe(
+          Effect.andThen(failureOf(failure)),
+          Effect.flatMap((shown) =>
+            Effect.when(
+              Ref.set(connection.state, McpServerState.failed({ failure: shown })),
+              isCurrent,
             ),
-            Effect.as(nothingDiscovered),
           ),
+          Effect.as(nothingDiscovered),
         ),
       ),
     );
-    connection.discovering = pending;
-    // A connection starts another discovery only once this one is cleared, so it is still this one.
-    void pending.finally(() => {
-      connection.discovering = null;
-    });
-    return pending;
   };
 
   const stateOf = (
     project: Project,
     entry: Effect.Success<ReturnType<typeof configured>>["servers"][number],
-  ): McpServerState =>
+  ): Effect.Effect<McpServerState> =>
     Match.value(entry).pipe(
       Match.when(
         ({ trusted }) => trusted === null,
-        () => McpServerState.untrusted(),
+        () => Effect.succeed(McpServerState.untrusted()),
       ),
       Match.when(
         ({ trusted, server }) => trusted !== server.fingerprint,
-        () => McpServerState.changed(),
+        () => Effect.succeed(McpServerState.changed()),
       ),
       Match.orElse(({ server }) =>
-        MutableHashMap.get(connections, connectionKey(project, server)).pipe(
-          Option.filter((connection) => connection.fingerprint === server.fingerprint),
-          Option.match({
-            onNone: () => McpServerState.trusted(),
-            onSome: (connection) => connection.state,
-          }),
+        Effect.flatMap(SynchronizedRef.get(connections), (current) =>
+          HashMap.get(current, connectionKey(project, server)).pipe(
+            Option.filter((connection) => connection.fingerprint === server.fingerprint),
+            Option.match({
+              onNone: () => Effect.succeed(McpServerState.trusted()),
+              onSome: (connection) => Ref.get(connection.state),
+            }),
+          ),
         ),
       ),
     );
@@ -544,9 +566,12 @@ const make = Effect.gen(function* () {
     const views = yield* Effect.forEach(servers, (entry) => {
       const summary = summarize(entry.server.config);
       return Effect.map(
-        // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
-        redactor.shownDetail(summary.target),
-        (target): McpServerView => ({
+        Effect.all({
+          // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
+          target: redactor.shownDetail(summary.target),
+          state: stateOf(project, entry),
+        }),
+        ({ target, state }): McpServerView => ({
           scope: entry.server.scope,
           name: entry.server.name,
           transport: summary.transport,
@@ -554,7 +579,7 @@ const make = Effect.gen(function* () {
           envNames: summary.envNames,
           headerNames: summary.headerNames,
           shadowed: entry.shadowed,
-          state: stateOf(project, entry),
+          state,
         }),
       );
     });
@@ -570,24 +595,21 @@ const make = Effect.gen(function* () {
       return yield* Effect.forEach(
         usable,
         (entry) =>
-          Effect.tryPromise({
-            try: () => discover(project, entry.server),
-            catch: (cause) => McpOperationFailed.make({ operation: "tools", cause }),
-          }).pipe(Effect.map((discovered) => ({ server: entry.server.name, ...discovered }))),
+          Effect.map(discover(project, entry.server), (discovered) => ({
+            server: entry.server.name,
+            ...discovered,
+          })),
         { concurrency: "unbounded" },
       );
     });
 
   yield* Effect.addFinalizer(() =>
-    Effect.forEach(
-      MutableHashMap.values(connections),
-      (connection) =>
-        nativePromise(() => connection.client).pipe(
-          Effect.flatMap((client) => nativePromise(() => client.close())),
-          // Shutdown is best-effort: a client that never started or fails to close is dropped.
-          Effect.catchTag("UnknownError", () => Effect.void),
-        ),
-      { concurrency: "unbounded", discard: true },
+    Effect.flatMap(SynchronizedRef.get(connections), (current) =>
+      // Shutdown is best-effort: a client that never started or fails to close is dropped.
+      Effect.forEach(HashMap.values(current), stopClient, {
+        concurrency: "unbounded",
+        discard: true,
+      }),
     ),
   );
 
@@ -610,9 +632,7 @@ const make = Effect.gen(function* () {
             DELETE FROM mcp_trust
             WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`;
           // A global server may be running for any project.
-          Array.from(MutableHashMap.keys(connections))
-            .filter((key) => key.endsWith(`/${scope}/${name}`))
-            .forEach((key) => close(key));
+          yield* closeWhere((_, key) => key.endsWith(`/${scope}/${name}`));
         });
         const trust = Option.match(entry, {
           onNone: () => Effect.void,
@@ -626,13 +646,7 @@ const make = Effect.gen(function* () {
                 VALUES (${scope}, ${projectId}, ${name}, ${server.fingerprint}, ${trustedAt})
                 ON CONFLICT (scope, project_id, name) DO UPDATE
                 SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`;
-              yield* Effect.when(
-                Effect.tryPromise({
-                  try: () => discover(project, server),
-                  catch: (cause) => McpOperationFailed.make({ operation: "trust", cause }),
-                }),
-                Effect.succeed(!shadowed),
-              );
+              yield* Effect.when(discover(project, server), Effect.succeed(!shadowed));
             }),
         });
         yield* trusted ? trust : distrust;
