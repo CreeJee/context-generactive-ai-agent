@@ -203,7 +203,7 @@ testAgent({ testProvider: {} })("chat runs", (it) => {
         session,
         (nodeId) => images.find((entry) => entry.nodeId === nodeId)?.found ?? [],
       );
-      expect(firstUser?.parts).toEqual([{ type: "text", content: "look at #1 please" }, part]);
+      expect(firstUser?.content).toEqual([{ type: "text", content: "look at #1 please" }, part]);
     }),
   );
 

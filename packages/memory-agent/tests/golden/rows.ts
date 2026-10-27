@@ -1,8 +1,8 @@
-import type { ModelMessage } from "@tanstack/ai";
 import { Effect, Function as EffectFunction, MutableHashMap, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { HandoffState, modelHandoffNamespace } from "../../src/agent/handoff-state.ts";
 import { handoffHistory } from "../../src/agent/model-handoff.ts";
+import { StoredMessage } from "../../src/chat-store/schema.ts";
 import {
   migrateInterruptPayload,
   migrateMessage,
@@ -276,12 +276,10 @@ export const withoutChunkMetadata = (chunk: JsonValue): JsonValue => {
 };
 
 const HandoffRow = Schema.Struct({
-  messages: Schema.String,
+  messages: Schema.fromJsonString(Schema.Array(StoredMessage)),
   value: Schema.fromJsonString(HandoffState),
 });
 const decodeHandoffRow = Schema.decodeUnknownEffect(HandoffRow);
-// The thread's text is what the message store wrote, so parsing restores its messages.
-const parseMessages = (text: string): readonly ModelMessage[] => JSON.parse(text);
 
 /**
  * The conversation's rows after the TanStack migration (src/chat-store/tanstack-migration.ts). Its
@@ -311,7 +309,7 @@ export const migratedRows = Effect.fnUntraced(function* (sessionId: string) {
     Effect.flatMap(decodeHandoffRow(row), ({ messages, value }) =>
       HandoffState.match(value, {
         baseline: () => Effect.succeed([]),
-        handoff: (saved) => handoffHistory(parseMessages(messages), saved, () => null),
+        handoff: (saved) => handoffHistory(messages, saved, () => null),
       }),
     ),
   );

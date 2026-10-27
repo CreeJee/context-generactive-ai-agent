@@ -2,7 +2,7 @@ import { Effect, Layer, Match, Schema, Result, Function as EffectFunction } from
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
-import type { ModelMessage } from "@tanstack/ai";
+import type { StoredMessage } from "../chat-store/schema.ts";
 import { Database } from "../db/database.ts";
 import { groupHistoryMessages, HistoryGroupingResult } from "./history-groups.ts";
 import {
@@ -37,7 +37,7 @@ function run<A, E>(
 ) {
   return program.pipe(provideFixture(layer));
 }
-function publication(messages: ModelMessage[]): HistoryProjectionPublication {
+function publication(messages: StoredMessage[]): HistoryProjectionPublication {
   return HistoryGroupingResult.$match(groupHistoryMessages("a", messages), {
     "id-collision": () => {
       throw new Error("Unexpected fixture ID collision");

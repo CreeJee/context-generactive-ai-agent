@@ -25,7 +25,6 @@ export {
   workspaceInstructions,
 } from "./agent/chat.ts";
 export { BtwApiHandlers, ChatApiHandlers } from "./api/chat-api-live.ts";
-export { sessionMessages } from "./agent/history.ts";
 export { UncertainContinueRequest } from "./workflow/uncertain-runs.ts";
 export { createLiveRuns, type LiveRun, type LiveRuns } from "./agent/live-runs.ts";
 export {
@@ -37,7 +36,6 @@ export {
   type SessionRunState,
 } from "./agent/run-state.ts";
 export { ChatState } from "./chat-state/chat-state.ts";
-export { chatPersistence } from "./chat-state/persistence.ts";
 export {
   OAuthProfileRejected,
   OAuthProfileStoreFailed,

@@ -10,12 +10,12 @@ import {
   Result,
   Function as EffectFunction,
 } from "effect";
+import type { StoredMessage } from "../chat-store/schema.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import type { ModelMessage } from "@tanstack/ai";
 
 export interface HistoryGroup {
   readonly id: string;
-  readonly messages: ModelMessage[];
+  readonly messages: StoredMessage[];
 }
 
 export type HistoryGroupingResult = Data.TaggedEnum<{
@@ -25,7 +25,7 @@ export type HistoryGroupingResult = Data.TaggedEnum<{
 export const HistoryGroupingResult = Data.taggedEnum<HistoryGroupingResult>();
 
 export type HistoryMessagesResult = Data.TaggedEnum<{
-  ready: { readonly messages: ModelMessage[] };
+  ready: { readonly messages: StoredMessage[] };
   "id-collision": { readonly id: string };
 }>;
 export const HistoryMessagesResult = Data.taggedEnum<HistoryMessagesResult>();
@@ -33,7 +33,7 @@ export const HistoryMessagesResult = Data.taggedEnum<HistoryMessagesResult>();
 /** Preserve released fallback cursors unless an explicit ID already reserves them. */
 export const historyProjectionMessages: {
   (
-    messages: readonly ModelMessage[],
+    messages: readonly StoredMessage[],
     retainedCursorIds: readonly string[],
   ): (threadId: string) => ReturnType<typeof historyProjectionMessagesBody>;
 } & typeof historyProjectionMessagesBody = EffectFunction.dual(
@@ -42,7 +42,7 @@ export const historyProjectionMessages: {
 );
 function historyProjectionMessagesBody(
   threadId: string,
-  messages: readonly ModelMessage[],
+  messages: readonly StoredMessage[],
   retainedCursorIds: readonly string[],
 ): HistoryMessagesResult {
   const reservedIds = MutableHashSet.fromIterable(
@@ -95,11 +95,10 @@ function historyProjectionMessagesBody(
       ),
     );
   /** The ID a message without one shows as; fails with a retained cursor an explicit ID holds. */
-  const idOf = (message: ModelMessage, ordinal: number) => {
+  const idOf = (message: StoredMessage, ordinal: number) => {
     // Linked tool results belong to the assistant's cursor. A stored-looking
     // explicit cursor elsewhere must not reserve the tool result's source ordinal.
-    const linkedTool =
-      message.role === "tool" && message.toolCallId !== undefined && answering[ordinal] === true;
+    const linkedTool = message.role === "tool" && answering[ordinal] === true;
     return Option.match(
       Option.filter(MutableHashMap.get(retainedByOrdinal, ordinal), () => !linkedTool),
       {
@@ -115,7 +114,7 @@ function historyProjectionMessagesBody(
   };
   // Each ID is reserved as it is given, so later fallbacks step past it. Only the first
   // collision is reported; what comes after it is never published.
-  const normalized = messages.map((message, ordinal): Result.Result<ModelMessage, string> =>
+  const normalized = messages.map((message, ordinal): Result.Result<StoredMessage, string> =>
     message.id === undefined
       ? Result.map(idOf(message, ordinal), (id) => {
           MutableHashSet.add(reservedIds, id);
@@ -136,19 +135,19 @@ interface Grouping {
 }
 
 /**
- * Build storage units matching @tanstack/ai's modelMessagesToUIMessages.
+ * Build storage units, one per message the screen shows: a user message, or an assistant
+ * message with its later segments and tool results until the next user message.
  * Only used to build a derived projection, never to rewrite the model transcript.
- * A tool without toolCallId creates a standalone UI message without resetting
- * the SDK's current assistant; subsequent results/segments still join that assistant.
+ * A tool result with no assistant before it shows alone.
  */
 export const groupHistoryMessages: {
   (
-    messages: readonly ModelMessage[],
+    messages: readonly StoredMessage[],
   ): (threadId: string) => ReturnType<typeof groupHistoryMessagesBody>;
 } & typeof groupHistoryMessagesBody = EffectFunction.dual(2, groupHistoryMessagesBody);
 function groupHistoryMessagesBody(
   threadId: string,
-  messages: readonly ModelMessage[],
+  messages: readonly StoredMessage[],
 ): HistoryGroupingResult {
   const reservedIds = MutableHashSet.fromIterable(
     messages.flatMap((message) =>
@@ -171,7 +170,7 @@ function groupHistoryMessagesBody(
       },
     );
   /** Adds `message` to its group: the assistant's, or a new one. */
-  const place = (state: Grouping, message: ModelMessage, id: string) => {
+  const place = (state: Grouping, message: StoredMessage, id: string) => {
     const joined = (group: HistoryGroup) => {
       group.messages.push(message);
       return state;
@@ -185,10 +184,10 @@ function groupHistoryMessagesBody(
     return Match.value(message.role).pipe(
       Match.withReturnType<Grouping>(),
       Match.when("tool", () =>
-        Option.match(
-          Option.filter(state.assistant, () => message.toolCallId !== undefined),
-          { onSome: joined, onNone: () => started(EffectFunction.constant(state.assistant)) },
-        ),
+        Option.match(state.assistant, {
+          onSome: joined,
+          onNone: () => started(EffectFunction.constant(state.assistant)),
+        }),
       ),
       Match.when("assistant", () =>
         Option.match(
@@ -197,10 +196,10 @@ function groupHistoryMessagesBody(
         ),
       ),
       Match.when("user", () => started(Option.none)),
-      Match.orElse(() => state),
+      Match.exhaustive,
     );
   };
-  const step = (state: Grouping, original: ModelMessage, index: number) =>
+  const step = (state: Grouping, original: StoredMessage, index: number) =>
     Result.gen(function* () {
       const own = yield* Option.match(
         Option.liftPredicate(original.id ?? "", (id) => id.length > 0),
@@ -209,8 +208,8 @@ function groupHistoryMessagesBody(
           onNone: () => reserve(`history-legacy-${namespace}-${index}`),
         },
       );
-      // Stable derived IDs allow the SDK to return retained UI IDs as cursors.
-      // Reused assistant IDs become SDK segments only in this derived view.
+      // Stable derived IDs let a page return retained UI IDs as cursors.
+      // Reused assistant IDs become segments only in this derived view.
       const id =
         original.role === "assistant" &&
         Option.exists(state.assistant, (answer) => answer.id === own)

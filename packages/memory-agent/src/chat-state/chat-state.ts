@@ -1,16 +1,19 @@
-import { convertMessagesToModelMessages } from "@tanstack/ai";
-import { Clock, Context, Effect, Layer, MutableHashMap, Option } from "effect";
+import { Clock, Context, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
 import type { Attachment } from "../attachments/attachments.ts";
 import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
-import { SqlClient } from "effect/sql";
+import { StoredMessage } from "../chat-store/schema.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
 import { Nodes } from "../memory/nodes.ts";
 import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
-import {
-  migrateLegacyChatThreads,
-  migrateMissingChatThread,
-  ownedChatPersistence,
-} from "./persistence.ts";
+import { historyProjection } from "./history-projection-native.ts";
+
+const MissingThread = Schema.Struct({ id: Schema.String });
+const NewThread = Schema.Struct({
+  threadId: Schema.String,
+  messages: Schema.fromJsonString(Schema.Array(StoredMessage)),
+  updatedAt: Schema.Finite,
+});
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -33,14 +36,54 @@ const make = Effect.gen(function* () {
             ),
         ),
       );
-      return convertMessagesToModelMessages(
-        sessionMessages(session, (nodeId) =>
-          Option.getOrElse(MutableHashMap.get(images, nodeId), () => []),
-        ),
+      return sessionMessages(session, (nodeId) =>
+        Option.getOrElse(MutableHashMap.get(images, nodeId), () => []),
       );
     });
-  yield* migrateLegacyChatThreads(fallbackThread);
-  const persistence = yield* ownedChatPersistence;
+
+  const missingThreads = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: MissingThread,
+    execute: () => sql`
+      SELECT sessions.id FROM sessions
+      LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
+      WHERE chat_threads.thread_id IS NULL
+      ORDER BY sessions.created_at, sessions.id`,
+  });
+  const missingThread = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: MissingThread,
+    execute: (id) => sql`
+      SELECT sessions.id FROM sessions
+      LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
+      WHERE sessions.id = ${id} AND chat_threads.thread_id IS NULL`,
+  });
+  const insertThread = SqlSchema.void({
+    Request: NewThread,
+    execute: (thread) => sql`
+      INSERT OR IGNORE INTO chat_threads (thread_id, messages, updated_at)
+      VALUES (${thread.threadId}, ${thread.messages}, ${thread.updatedAt})`,
+  });
+  /** Writes the session's thread as its nodes recorded it. */
+  const materialize = (threadId: string, updatedAt: number) =>
+    Effect.flatMap(fallbackThread(threadId), (messages) =>
+      insertThread({ threadId, messages, updatedAt }),
+    );
+
+  // Existing chat threads are authoritative and are never overwritten. The session id remains the
+  // thread id, so titles, memory nodes, attachments and URLs keep pointing at the same
+  // conversation after the provider runtime migration.
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const updatedAt = yield* Clock.currentTimeMillis;
+      // Sessions are rebuilt one after another: each reads its own nodes and attachments.
+      yield* Effect.forEach(yield* missingThreads(), ({ id }) => materialize(id, updatedAt), {
+        discard: true,
+      });
+    }),
+  );
+  const projection = yield* historyProjection();
+  yield* projection.prepare();
 
   // One process owns the database, so running and approval-interrupted runs belonged to the old
   // process after a restart. The provider continuation they depended on is gone: leaving their
@@ -66,10 +109,16 @@ const make = Effect.gen(function* () {
 
   /** Imports may create sessions after this service's startup migration has already run. */
   const prepare = (sessionId: string) =>
-    Effect.gen(function* () {
-      if (yield* migrateMissingChatThread(sessionId, fallbackThread))
-        yield* persistence.prepareThread(sessionId);
-    }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    Effect.flatMap(
+      missingThread(sessionId),
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: ({ id }) =>
+          Effect.flatMap(Clock.currentTimeMillis, (updatedAt) => materialize(id, updatedAt)).pipe(
+            Effect.andThen(projection.prepare(id)),
+          ),
+      }),
+    );
 
   return {
     /** Makes the session's thread and its pages before they are read. */

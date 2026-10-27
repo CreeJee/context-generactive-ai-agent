@@ -1,6 +1,8 @@
 import { DateTime, Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { sessionMessages } from "../../src/agent/history.ts";
+import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -38,53 +40,83 @@ const sessionWithMessage = Effect.fnUntraced(function* (
 });
 
 testAgent()("session history", (it) => {
-  it.effect("groups a run's text, tool calls and results into one assistant message", () =>
+  it.effect(
+    "splits a run's answer at each tool result, which follows the part that called it",
+    () =>
+      Effect.gen(function* () {
+        const { project } = yield* TestEnv;
+        const sessionId = (yield* (yield* Sessions).create(project.id)).id;
+        const nodes = yield* Nodes;
+        const at = { projectId: project.id, sessionId };
+        const runId = `${sessionId}-r1`;
+        const user = yield* nodes.append({ ...at, kind: "user", text: "DB 뭐로 했지?" });
+        const empty = yield* nodes.append({ ...at, runId, kind: "assistant", text: "" });
+        yield* nodes.append({
+          ...at,
+          runId,
+          kind: "tool_call",
+          text: 'find_memory {"query":"DB"}',
+          detail: { toolName: "find_memory", toolCallId: "c1" },
+        });
+        yield* nodes.append({
+          ...at,
+          runId,
+          kind: "tool_result",
+          text: '{"matches":[]}',
+          detail: { toolName: "find_memory", toolCallId: "c1", ok: true },
+        });
+        yield* nodes.append({ ...at, runId, kind: "assistant", text: "SQLite로 했어요." });
+        yield* nodes.append({ ...at, kind: "user", text: "고마워" });
+
+        // Every part of the answer has the id of the run's first node.
+        const answer = { id: empty.id, createdAt: expect.any(String), role: "assistant" };
+        expect(sessionMessages(yield* nodes.session(sessionId), () => [])).toEqual([
+          { id: user.id, role: "user", content: "DB 뭐로 했지?", createdAt: expect.any(String) },
+          {
+            ...answer,
+            content: null,
+            toolCalls: [
+              {
+                id: "c1",
+                type: "function",
+                function: { name: "find_memory", arguments: '{"query":"DB"}' },
+              },
+            ],
+          },
+          { role: "tool", content: '{"matches":[]}', toolCallId: "c1" },
+          { ...answer, content: "SQLite로 했어요." },
+          {
+            id: expect.any(String),
+            role: "user",
+            content: "고마워",
+            createdAt: expect.any(String),
+          },
+        ]);
+      }),
+  );
+
+  it.effect("writes the thread of a session imported after startup when it is first read", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
       const sessionId = (yield* (yield* Sessions).create(project.id)).id;
-      const nodes = yield* Nodes;
-      const at = { projectId: project.id, sessionId };
-      const runId = `${sessionId}-r1`;
-      const user = yield* nodes.append({ ...at, kind: "user", text: "DB 뭐로 했지?" });
-      const empty = yield* nodes.append({ ...at, runId, kind: "assistant", text: "" });
-      yield* nodes.append({
-        ...at,
-        runId,
-        kind: "tool_call",
-        text: 'find_memory {"query":"DB"}',
-        detail: { toolName: "find_memory", toolCallId: "c1" },
+      const question = yield* (yield* Nodes).append({
+        projectId: project.id,
+        sessionId,
+        kind: "user",
+        text: "가져온 대화",
       });
-      yield* nodes.append({
-        ...at,
-        runId,
-        kind: "tool_result",
-        text: '{"matches":[]}',
-        detail: { toolName: "find_memory", toolCallId: "c1", ok: true },
-      });
-      yield* nodes.append({ ...at, runId, kind: "assistant", text: "SQLite로 했어요." });
-      yield* nodes.append({ ...at, kind: "user", text: "고마워" });
-
-      const messages = sessionMessages(yield* nodes.session(sessionId), () => []);
-      expect(messages.map((message) => [message.role, message.parts])).toEqual([
-        ["user", [{ type: "text", content: "DB 뭐로 했지?" }]],
-        [
-          "assistant",
-          [
-            {
-              type: "tool-call",
-              id: "c1",
-              name: "find_memory",
-              arguments: '{"query":"DB"}',
-              state: "input-complete",
-            },
-            { type: "tool-result", toolCallId: "c1", content: '{"matches":[]}', state: "complete" },
-            { type: "text", content: "SQLite로 했어요." },
-          ],
-        ],
-        ["user", [{ type: "text", content: "고마워" }]],
+      const chatState = yield* ChatState;
+      const store = yield* RunStore;
+      yield* chatState.prepare(sessionId);
+      expect(yield* store.thread(sessionId)).toEqual([
+        { id: question.id, role: "user", content: "가져온 대화", createdAt: expect.any(String) },
       ]);
-      expect(messages[0]!.id).toBe(user.id);
-      expect(messages[1]!.id).toBe(empty.id);
+      // A written thread is the conversation from then on; it is never rebuilt.
+      yield* store.saveThread(sessionId, [{ role: "user", content: "kept" }]);
+      yield* chatState.prepare(sessionId);
+      expect(yield* store.thread(sessionId)).toEqual([{ role: "user", content: "kept" }]);
+      yield* chatState.prepare("unknown");
+      expect(yield* store.threadSaved("unknown")).toBe(false);
     }),
   );
 
@@ -136,5 +168,39 @@ testAgent()("session history", (it) => {
         const empty = yield* sessions.create(project.id);
         expect((yield* sessions.get(empty.id)).title).toBeNull();
       }),
+  );
+});
+
+// Restarting the agent affects every test of the block.
+testAgent()("chat state at startup", (it) => {
+  it.effect("writes the threads of sessions recorded before chat state and keeps saved ones", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const { legacy, question, saved } = yield* env.use(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions;
+          const legacy = (yield* sessions.create(env.project.id)).id;
+          const question = yield* (yield* Nodes).append({
+            projectId: env.project.id,
+            sessionId: legacy,
+            kind: "user",
+            text: "예전 질문",
+          });
+          const saved = (yield* sessions.create(env.project.id)).id;
+          yield* (yield* RunStore).saveThread(saved, [{ role: "assistant", content: "keep me" }]);
+          return { legacy, question, saved };
+        }),
+      );
+      yield* env.reopen;
+      const threads = yield* env.use(
+        Effect.flatMap(RunStore, (store) =>
+          Effect.all([store.thread(legacy), store.thread(saved)]),
+        ),
+      );
+      expect(threads).toEqual([
+        [{ id: question.id, role: "user", content: "예전 질문", createdAt: expect.any(String) }],
+        [{ role: "assistant", content: "keep me" }],
+      ]);
+    }),
   );
 });

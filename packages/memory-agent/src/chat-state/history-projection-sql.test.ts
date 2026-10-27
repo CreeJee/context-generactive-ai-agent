@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { modelMessagesToUIMessages, type ModelMessage } from "@tanstack/ai";
 import { describe, expect, it } from "vite-plus/test";
+import type { StoredMessage } from "../chat-store/schema.ts";
 import { groupHistoryMessages, HistoryGroupingResult } from "./history-groups.ts";
 import {
   historyProjectionRollback,
@@ -26,7 +26,7 @@ function fixture() {
   return db;
 }
 
-function publish(db: DatabaseSync, threadId: string, messages: ModelMessage[]) {
+function publish(db: DatabaseSync, threadId: string, messages: StoredMessage[]) {
   const groups = HistoryGroupingResult.$match(groupHistoryMessages(threadId, messages), {
     "id-collision": ({ id }) => {
       throw new Error(`Unexpected fixture collision: ${id}`);
@@ -49,12 +49,12 @@ function publish(db: DatabaseSync, threadId: string, messages: ModelMessage[]) {
   }
 }
 
-function parseFixtureMessages(text: string): ModelMessage[] {
-  // SAFETY: only publish's JSON.stringify of typed ModelMessage[] populates this isolated fixture column.
-  return JSON.parse(text) as ModelMessage[];
+function parseFixtureMessages(text: string): StoredMessage[] {
+  // SAFETY: only publish's JSON.stringify of typed StoredMessage[] populates this isolated fixture column.
+  return JSON.parse(text) as StoredMessage[];
 }
 
-function transcript(count: number): ModelMessage[] {
+function transcript(count: number): StoredMessage[] {
   return Array.from({ length: count }, (_, index) => ({
     id: `message-${index}`,
     role: index % 2 === 0 ? "user" : "assistant",
@@ -214,10 +214,10 @@ describe("isolated history projection SQLite contract", () => {
     }
   });
 
-  it("preserves SDK page results, tool details and retained UI-ID cursors", () => {
+  it("preserves page results, tool details and retained UI-ID cursors", () => {
     const db = fixture();
     try {
-      const messages: ModelMessage[] = [
+      const messages: StoredMessage[] = [
         { id: "user", role: "user", content: "Question" },
         {
           id: "assistant",
@@ -227,24 +227,22 @@ describe("isolated history projection SQLite contract", () => {
             { id: "call", type: "function", function: { name: "read", arguments: "{}" } },
           ],
         },
-        { id: "orphan", role: "tool", content: "Standalone" },
         { id: "result", role: "tool", toolCallId: "call", content: "Detail", error: "read failed" },
         { id: "assistant-segment-1", role: "assistant", content: "Done" },
         { id: "last", role: "user", content: "Next" },
       ];
       publish(db, "a", messages);
-      const fullUI = modelMessagesToUIMessages(messages);
+      // The newest two messages the page shows: the answer with its result and segment, then the
+      // last question.
       const initial = db.prepare(sql.initial).all("a", 2).reverse();
       const pageModels = initial.flatMap((row) => parseFixtureMessages(String(row.messages)));
-      expect(modelMessagesToUIMessages(pageModels)).toEqual(fullUI.slice(-2));
+      expect(pageModels).toEqual(messages.slice(1));
       const cursor = String(initial[0]?.ui_id);
       const ordinal = db.prepare(sql.cursor).get("a", cursor)?.ordinal;
       const older = db.prepare(sql.older).all("a", ordinal!, 2).reverse();
-      expect(
-        modelMessagesToUIMessages(
-          older.flatMap((row) => parseFixtureMessages(String(row.messages))),
-        ),
-      ).toEqual(fullUI.slice(0, -2));
+      expect(older.flatMap((row) => parseFixtureMessages(String(row.messages)))).toEqual(
+        messages.slice(0, 1),
+      );
       expect(db.prepare(sql.cursor).get("b", cursor)).toBeUndefined();
       expect(db.prepare(sql.cursor).get("a", "nonexistent")).toBeUndefined();
       expect(

@@ -104,8 +104,7 @@ const InterruptStatus = Schema.Struct({
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // Pages still decode the TanStack shape until the switch; a saved thread is read back as JSON.
-  const projection = yield* historyProjection((json) => JSON.parse(json));
+  const projection = yield* historyProjection();
 
   const storedThread = SqlSchema.findOneOption({
     Request: Schema.String,
@@ -113,7 +112,11 @@ const make = Effect.gen(function* () {
     execute: (threadId) => sql`SELECT messages FROM chat_threads WHERE thread_id = ${threadId}`,
   });
 
-  /** The thread's messages; a thread never saved is empty. */
+  /**
+   * The thread's messages; a thread never saved is empty. `ChatState` writes the threads of
+   * sessions recorded before chat state at startup, so a missing thread is a new one: rebuilding
+   * it from nodes would repeat the user node `AgentChat` records just before a first run.
+   */
   const thread = (threadId: string) =>
     Effect.map(
       storedThread(threadId),
@@ -154,16 +157,15 @@ const make = Effect.gen(function* () {
     threadId: string,
     messages: ReadonlyArray<StoredMessage>,
   ) {
-    const sourceJSON = yield* Schema.encodeEffect(Thread)(
-      messages.filter((message) => !isEmptyUserText(message)),
-    );
+    const kept = messages.filter((message) => !isEmptyUserText(message));
+    const sourceJSON = yield* Schema.encodeEffect(Thread)(kept);
     const updatedAt = yield* Clock.currentTimeMillis;
     yield* sql.withTransaction(
       sql`
         INSERT INTO chat_threads VALUES (${threadId}, ${sourceJSON}, ${updatedAt})
         ON CONFLICT(thread_id) DO UPDATE
         SET messages = excluded.messages, updated_at = excluded.updated_at`.pipe(
-        Effect.andThen(projection.replace({ threadId, sourceJSON })),
+        Effect.andThen(projection.replace({ threadId, sourceJSON, messages: kept })),
         // Valid messages survive a UI-only id collision; reads of the stale pages fail instead.
         Effect.catchTag("HistoryPageUnavailable", (failure) =>
           failure.reason === "id-collision" ? Effect.void : Effect.fail(failure),

@@ -3,6 +3,7 @@ import { it } from "@effect/vitest";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import { connectionContext } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import { InterruptAnswer, RunStore } from "../../src/loop/store.ts";
@@ -20,6 +21,12 @@ const database = Effect.acquireRelease(
   }),
   (sqlite) => Effect.sync(() => sqlite.close()),
 );
+
+/** A `RunStore` over a fresh database. */
+const fixture = Effect.gen(function* () {
+  const sql = yield* connectionContext(yield* database);
+  return Context.merge(sql, yield* Effect.provideContext(Layer.build(RunStore.layer), sql));
+});
 
 const approval = (id: string) => ({
   id,
@@ -43,13 +50,32 @@ const statuses = Effect.flatMap(SqlClient.SqlClient, (sql) =>
 const resolved = (interruptId: string) =>
   InterruptAnswer.Resolved({ interruptId, response: { approved: true } });
 
+it.effect("does not keep empty user text, and keeps tool-only answers and images", () =>
+  Effect.gen(function* () {
+    const store = yield* Effect.map(fixture, Context.get(RunStore));
+    const kept: StoredMessage[] = [
+      { role: "user", content: "continue" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "call", type: "function", function: { name: "read_file", arguments: "{}" } },
+        ],
+      },
+      { role: "tool", content: "", toolCallId: "call" },
+      {
+        role: "user",
+        content: [{ type: "image", source: { type: "url", value: "https://example.com/a.png" } }],
+      },
+    ];
+    yield* store.saveThread("thread", [{ id: "empty", role: "user", content: "" }, ...kept]);
+    expect(yield* store.thread("thread")).toEqual(kept);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("refuses an interrupt batch that is not all pending, and writes none of it", () =>
   Effect.gen(function* () {
-    const sql = yield* connectionContext(yield* database);
-    const services = Context.merge(
-      sql,
-      yield* Effect.provideContext(Layer.build(RunStore.layer), sql),
-    );
+    const services = yield* fixture;
     yield* Effect.gen(function* () {
       const store = yield* RunStore;
       yield* store.createInterrupts({ runId: "run", threadId: "thread" }, [
