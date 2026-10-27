@@ -365,7 +365,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         deliveredParentNotificationIds: HashSet.empty<string>(),
         gated: HashSet.empty<string>(),
       };
-      const { tools, hook } = yield* children.runToolsFor(binding);
+      const { tools, hook } = yield* children.toolsFor(binding);
       const [run, , reports, adopt] = tools;
       const call = (tool: RunTool | undefined, params: JsonValue) =>
         Effect.fromNullishOr(tool).pipe(

@@ -31,7 +31,7 @@ const outsideTools = Effect.fn("outsideTools")(function* (project: string, stora
     OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
   );
   const service = yield* Effect.provideContext(OutsideTools, services);
-  const tools = service.runToolsFor({
+  const tools = service.toolsFor({
     id: "p1",
     root: project,
     name: "project",

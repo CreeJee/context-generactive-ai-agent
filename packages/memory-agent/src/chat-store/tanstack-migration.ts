@@ -17,7 +17,7 @@ import {
   type SavedHandoff,
 } from "../agent/handoff-state.ts";
 import { historyProjectionSchema } from "../chat-state/history-projection-sql.ts";
-import type { JsonValue } from "../json.ts";
+import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
 
 /**
@@ -208,9 +208,12 @@ const migrateHandoff = (
   });
 };
 
-// The stores wrote these texts from JSON values, so parsing restores them.
-const parseJson = (text: string): JsonValue => JSON.parse(text);
-const parseMessages = (text: string): readonly JsonValue[] => JSON.parse(text);
+// The stores wrote these texts from JSON values, so decoding restores them; a text that does not
+// decode breaks that and is a defect.
+const decodeJson = (text: string) =>
+  Effect.orDie(Schema.decodeEffect(Schema.fromJsonString(JsonValue))(text));
+const decodeMessages = (text: string) =>
+  Effect.orDie(Schema.decodeEffect(Schema.fromJsonString(Schema.Array(JsonValue)))(text));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeHandoff = Schema.decodeEffect(Schema.fromJsonString(HandoffState));
 const encodeHandoff = Schema.encodeEffect(Schema.fromJsonString(HandoffState));
@@ -300,14 +303,11 @@ export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(fu
     text: string,
     migrate: (value: JsonValue) => JsonValue,
     write: (text: string) => Effect.Effect<A, E, R>,
-  ) => {
-    const before = parseJson(text);
-    return rewrite(before, migrate(before), write);
-  };
+  ) => Effect.flatMap(decodeJson(text), (before) => rewrite(before, migrate(before), write));
 
   const migrateThread = Effect.fnUntraced(function* (id: string) {
     const row = yield* thread(id);
-    const before = parseMessages(row.messages);
+    const before = yield* decodeMessages(row.messages);
     const after = before.map(migrateMessage);
     yield* rewrite(
       before,

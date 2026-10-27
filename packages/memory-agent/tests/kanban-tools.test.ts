@@ -11,7 +11,7 @@ testAgent()("kanban tools", (it) => {
   it.effect("a session whose Goal is not a board: the read says so, a change is refused", () =>
     Effect.gen(function* () {
       const { session } = yield* TestEnv;
-      const tools = (yield* KanbanTools).runToolsFor(session.id, "run-1");
+      const tools = (yield* KanbanTools).toolsFor(session.id, "run-1");
       const call = (index: number, params: JsonValue) =>
         Effect.flatMap(Effect.fromNullishOr(tools[index]), (tool) => tool.prepare(params)).pipe(
           Effect.flatMap((run) => run({ toolCallId: "call-1" })),

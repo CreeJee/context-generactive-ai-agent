@@ -261,7 +261,7 @@ const make = Effect.gen(function* () {
      * version-tracked project files. Writing outside the project is a separate, approved tool.
      * They run on the loop's fiber, so their spans join the run's trace.
      */
-    runToolsFor: (project: Fenced<Project>) => {
+    toolsFor: (project: Fenced<Project>) => {
       const calls = callsFor(project);
       return [
         runTool({ ...listOutside, lazy: true, handler: calls.listOutside }),

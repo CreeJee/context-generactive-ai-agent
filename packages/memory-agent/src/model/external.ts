@@ -124,7 +124,7 @@ const failWith = (failure: ExternalAgentTurnFailed) =>
 
 /** The turn failure an `AiError` from an external model carries. */
 export const externalFailure = (error: AiError.AiError): Option.Option<ExternalAgentTurnFailed> =>
-  error.reason._tag === "UnknownError"
+  Predicate.isTagged(error.reason, "UnknownError")
     ? decodeFailure(error.reason.metadata[optionsKey])
     : Option.none();
 
@@ -136,7 +136,7 @@ export const shownExternalFailure = (error: AiError.AiError): ShownFailure =>
   Option.match(externalFailure(error), {
     onSome: (failure) => ({ message: failure.message, code: failure.code }),
     onNone: () =>
-      error.reason._tag === "UnknownError" && error.reason.description !== undefined
+      Predicate.isTagged(error.reason, "UnknownError") && error.reason.description !== undefined
         ? { message: error.reason.description }
         : shownReason(error),
   });

@@ -45,7 +45,7 @@ const project = Effect.fn("fileToolsTest.project")(function* (
 });
 const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string) {
   const service = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
-  const tools = service.runToolsFor({
+  const tools = service.toolsFor({
     id: "p1",
     root,
     name: "project",

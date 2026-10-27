@@ -74,8 +74,8 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /** The project's file tools wrapped with drawing previews, called as the model would. */
 const fileTool = Effect.fnUntraced(function* (name: string, args: Record<string, JsonValue>) {
   const { project } = yield* TestEnv;
-  const files = (yield* FileTools).runToolsFor(project);
-  return yield* callTool((yield* DrawingPreviews).withRunPreviews(project, files), name, args);
+  const files = (yield* FileTools).toolsFor(project);
+  return yield* callTool((yield* DrawingPreviews).withPreviews(project, files), name, args);
 });
 
 /** Replace the attachment directory with a file until the test ends. */

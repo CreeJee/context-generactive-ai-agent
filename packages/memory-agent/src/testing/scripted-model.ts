@@ -85,7 +85,7 @@ const failed = (description: string) =>
 
 /** A scripted failure as the user sees it: the text the turn was scripted to fail with. */
 export const shownScriptedFailure = (error: AiError.AiError): ShownFailure =>
-  error.reason._tag === "UnknownError" && error.reason.description !== undefined
+  Predicate.isTagged(error.reason, "UnknownError") && error.reason.description !== undefined
     ? { message: error.reason.description }
     : shownReason(error);
 

@@ -216,7 +216,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
      * Summarizes in the background once a run has finished, so compaction never waits for it. A
      * run that failed or was cancelled starts none.
      */
-    hookForRun: (sessionId: string): RunHook => ({
+    hookFor: (sessionId: string): RunHook => ({
       ended: (_scope, end) =>
         Effect.when(inBackground(sessionId), Effect.succeed(finishedRun(end))).pipe(Effect.asVoid),
     }),

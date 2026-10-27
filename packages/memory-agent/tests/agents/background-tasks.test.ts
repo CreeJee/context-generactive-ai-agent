@@ -44,7 +44,7 @@ const readResult = Effect.fnUntraced(function* (
   input: { readonly taskId: string; readonly offset?: number },
 ) {
   const tasks = yield* BackgroundTasks;
-  return yield* callTool(tasks.runToolsFor(sessionId), "get_background_result", input);
+  return yield* callTool(tasks.toolsFor(sessionId), "get_background_result", input);
 });
 
 testAgent()("background task lifecycle", (it) => {
@@ -321,7 +321,7 @@ testAgent()("background shell across restart", (it) => {
         const { project, session } = env;
         const background = yield* BackgroundTasks;
         const run = yield* runOf(session.id);
-        const tools = (yield* ApprovedTools).runToolsFor(project, "gate", run);
+        const tools = (yield* ApprovedTools).toolsFor(project, "gate", run);
         const script = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
         yield* callTool(tools, "save_code_skill", {
           name: "wait-release",

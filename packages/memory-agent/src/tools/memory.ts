@@ -338,7 +338,7 @@ const make = Effect.gen(function* () {
   };
   return {
     /** {@link memoryRunTools} over the agent's own memory. */
-    runToolsFor: (binding: RunBinding, scope?: MemoryToolScope) =>
+    toolsFor: (binding: RunBinding, scope?: MemoryToolScope) =>
       memoryRunTools({
         env,
         binding: {

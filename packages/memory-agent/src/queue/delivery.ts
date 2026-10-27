@@ -104,7 +104,7 @@ const make = Effect.gen(function* () {
      * Delivers waiting messages when a tool call returns, before the next model step: they join the
      * request the model is about to get, and the conversation, in queue order.
      */
-    hookForRun(binding: DeliveryBinding): RunHook {
+    hookFor(binding: DeliveryBinding): RunHook {
       return {
         joining: (scope, conversation) =>
           deliver(binding, afterTool(conversation), (ids) =>

@@ -152,7 +152,7 @@ const make = Effect.gen(function* () {
 
   return {
     /** The board tools of a run in `sessionId`. */
-    runToolsFor(sessionId: string, runId: string): RunTool[] {
+    toolsFor(sessionId: string, runId: string): RunTool[] {
       const calls = callsFor(sessionId, runId);
       return [
         runTool({ ...readBoard, handler: calls.readBoard }),

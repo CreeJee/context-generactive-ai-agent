@@ -194,7 +194,7 @@ layer(NodeServices.layer)((it) => {
       const absolute = path.join(directory, "text");
       yield* fs.writeFileString(absolute, "x\n".repeat(maxTextBytes / 2));
       const files = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
-      const tools = files.runToolsFor({
+      const tools = files.toolsFor({
         id: "p",
         root: directory,
         name: "fixture",

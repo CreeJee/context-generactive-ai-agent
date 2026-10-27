@@ -580,7 +580,7 @@ const make = Effect.gen(function* () {
      * project run without approval; `.git`, links and credential files are refused. They run on
      * the loop's fiber, so their spans join the run's trace.
      */
-    runToolsFor: (project: Project) => {
+    toolsFor: (project: Project) => {
       const calls = callsFor(project.root);
       return [
         runTool({ ...listFiles, handler: calls.listFiles }),

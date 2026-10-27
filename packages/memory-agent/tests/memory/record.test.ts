@@ -82,7 +82,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           conversation: [{ role: "user", content: user.text }],
           tools: [readFile, runTests],
           hooks: [
-            yield* (yield* Recorder).hookForRun({
+            yield* (yield* Recorder).hookFor({
               projectId: project.id,
               sessionId: session.id,
               runId,
@@ -173,7 +173,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           conversation: [{ role: "user", content: user.text }],
           tools: [shell],
           hooks: [
-            yield* (yield* Recorder).hookForRun({
+            yield* (yield* Recorder).hookFor({
               projectId: project.id,
               sessionId: session.id,
               runId,
@@ -213,7 +213,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
             conversation: [{ role: "user", content: user.text }],
             tools: [readFile],
             hooks: [
-              yield* recorder.hookForRun({
+              yield* recorder.hookFor({
                 projectId: project.id,
                 sessionId: session.id,
                 runId,
@@ -245,7 +245,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
           runId,
           conversation: [{ role: "user", content: user.text }],
           hooks: [
-            yield* (yield* Recorder).hookForRun({
+            yield* (yield* Recorder).hookFor({
               projectId: project.id,
               sessionId: session.id,
               runId,

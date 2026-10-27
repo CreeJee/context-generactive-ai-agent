@@ -62,7 +62,7 @@ const make = Effect.gen(function* () {
      * an SVG. The model gets the result too, and the preview only tells it a picture was made.
      * The preview runs on the loop's fiber, so its spans join the run's trace.
      */
-    withRunPreviews: (project: Project, tools: ReadonlyArray<RunTool>): Array<RunTool> =>
+    withPreviews: (project: Project, tools: ReadonlyArray<RunTool>): Array<RunTool> =>
       tools.map((tool) =>
         HashSet.has(writingToolNames, tool.tool.name)
           ? {

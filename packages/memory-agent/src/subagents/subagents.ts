@@ -767,7 +767,13 @@ const make = Effect.gen(function* () {
             ),
         answered: (_scope, call, answer) =>
           Effect.when(
-            callSettled(handle, binding.sessionId, call, answer._tag === "Returned", answer.result),
+            callSettled(
+              handle,
+              binding.sessionId,
+              call,
+              Predicate.isTagged(answer, "Returned"),
+              answer.result,
+            ),
             Effect.map(Ref.get(started), HashSet.has(call.id)),
           ).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
       };
@@ -1494,7 +1500,7 @@ const make = Effect.gen(function* () {
      * adopted once the run finishes or waits, and gives the notifications back when it fails or is
      * cancelled.
      */
-    runToolsFor: Effect.fnUntraced(function* (binding: SubagentBinding) {
+    toolsFor: Effect.fnUntraced(function* (binding: SubagentBinding) {
       const parent = yield* parentRun(binding);
       const hook = Effect.map(Ref.make(Option.none<string>()), (written): RunHook => ({
         started: () => parent.retry,

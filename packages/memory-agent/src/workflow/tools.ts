@@ -217,7 +217,7 @@ const make = Effect.gen(function* () {
 
   return {
     /** The tools run on the loop's fiber, so their spans join the run's trace. */
-    runToolsFor: (sessionId: string, phase: WorkflowPhase, runId = ""): RunTool[] => {
+    toolsFor: (sessionId: string, phase: WorkflowPhase, runId = ""): RunTool[] => {
       const calls = callsFor(sessionId, runId);
       const tools = {
         recordBlocker: runTool({ ...recordBlocker, handler: calls.recordBlocker }),

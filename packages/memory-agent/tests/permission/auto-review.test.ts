@@ -67,8 +67,8 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
       const approved = yield* ApprovedTools;
-      const [ask] = approved.runToolsFor({ ...project, permissionMode: "ask" });
-      const [full] = approved.runToolsFor({ ...project, permissionMode: "full" });
+      const [ask] = approved.toolsFor({ ...project, permissionMode: "ask" });
+      const [full] = approved.toolsFor({ ...project, permissionMode: "full" });
       expect(ask?.tool.needsApproval).toBe(true);
       expect(full?.tool.needsApproval).toBe(false);
     }),

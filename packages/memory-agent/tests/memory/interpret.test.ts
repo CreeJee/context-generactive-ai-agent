@@ -67,7 +67,7 @@ const freshProject = Effect.gen(function* () {
   const find = (query: string) =>
     Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId: project.id }));
   const trace = Effect.fnUntraced(function* (id: string) {
-    const { tools } = yield* (yield* MemoryTools).runToolsFor({
+    const { tools } = yield* (yield* MemoryTools).toolsFor({
       projectId: project.id,
       sessionId: session.id,
       runId: `${session.id}:trace`,

@@ -168,9 +168,9 @@ const make = Effect.gen(function* () {
                 runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
                 selection: chosen,
                 tools: [
-                  ...fileTools.runToolsFor(project),
-                  ...outsideTools.runToolsFor(project),
-                  ...approvedTools.runToolsFor(project, "gate"),
+                  ...fileTools.toolsFor(project),
+                  ...outsideTools.toolsFor(project),
+                  ...approvedTools.toolsFor(project, "gate"),
                 ],
                 systemPrompts: [],
                 gated: gatedToolNames,
@@ -232,10 +232,10 @@ const make = Effect.gen(function* () {
           const recorder = yield* verdictRecorder;
           const tools: RunTool[] = [
             ...fileTools
-              .runToolsFor(project)
+              .toolsFor(project)
               .filter(({ tool }) => HashSet.has(readToolNames, tool.name)),
             ...approvedTools
-              .runToolsFor(project, "gate")
+              .toolsFor(project, "gate")
               .filter(({ tool }) => HashSet.has(checkToolNames, tool.name)),
             recorder.runTool,
           ];

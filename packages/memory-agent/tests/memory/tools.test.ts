@@ -583,7 +583,7 @@ layer(
           id: b.id,
         });
         const wrapper = yield* second.use(MemoryTools);
-        const bound = yield* wrapper.runToolsFor({
+        const bound = yield* wrapper.toolsFor({
           projectId: second.project.id,
           sessionId: second.session.id,
           runId: `${second.session.id}:run`,
@@ -667,7 +667,7 @@ testAgent()("memory tools per run", (it) => {
       const env = yield* environment;
       let reads = 0;
       const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = yield* (yield* MemoryTools).runToolsFor({
+      const prepared = yield* (yield* MemoryTools).toolsFor({
         ...at,
         runId: `${at.sessionId}:deferred-run`,
         get userNodeId() {
@@ -695,7 +695,7 @@ testAgent()("memory tools per run", (it) => {
           return span;
         },
       });
-      const { tools } = yield* (yield* MemoryTools).runToolsFor({
+      const { tools } = yield* (yield* MemoryTools).toolsFor({
         ...at,
         runId: `${at.sessionId}:traced-run`,
         userNodeId: "user",

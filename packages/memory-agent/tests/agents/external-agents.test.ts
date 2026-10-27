@@ -205,7 +205,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const { project, sessionId, agents, log, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
-      const { tools } = yield* (yield* DelegateTools).runToolsFor({
+      const { tools } = yield* (yield* DelegateTools).toolsFor({
         project,
         sessionId,
         signal: yield* Effect.abortSignal,
@@ -233,7 +233,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
     Effect.gen(function* () {
       const { project, sessionId, trust } = yield* fakeAgentProject();
       yield* trust;
-      const { tools } = yield* (yield* DelegateTools).runToolsFor({
+      const { tools } = yield* (yield* DelegateTools).toolsFor({
         project,
         sessionId,
         signal: yield* Effect.abortSignal,

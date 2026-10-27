@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Array as EffectArray, Effect } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 import type { StoredMessage } from "../src/chat-store/schema.ts";
 import {
@@ -160,14 +160,10 @@ const sameMessage = (left: StoredMessage, right: StoredMessage) =>
   JSON.stringify(left) === JSON.stringify(right);
 
 function commonPrefixTokens(previous: readonly StoredMessage[], current: readonly StoredMessage[]) {
-  let count = 0;
-  while (
-    count < previous.length &&
-    count < current.length &&
-    sameMessage(previous[count]!, current[count]!)
-  )
-    count++;
-  return estimateConversation(current.slice(0, count));
+  const shared = EffectArray.takeWhile(EffectArray.zip(previous, current), ([before, now]) =>
+    sameMessage(before, now),
+  );
+  return estimateConversation(current.slice(0, shared.length));
 }
 
 function profile(

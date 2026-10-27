@@ -68,7 +68,7 @@ const make = Effect.gen(function* () {
      * read_skill and the skill list for a run, or nothing when the project has no skills. The tool
      * runs on the loop's fiber, so its spans join the run's trace.
      */
-    runToolsFor: Effect.fn("SkillTools.runToolsFor")((project: Project) =>
+    toolsFor: Effect.fn("SkillTools.toolsFor")((project: Project) =>
       Effect.map(skills.catalog(project), ({ skills: listed }): SkillToolset =>
         listed.length === 0
           ? { skills: [], tools: [], instructions: null }

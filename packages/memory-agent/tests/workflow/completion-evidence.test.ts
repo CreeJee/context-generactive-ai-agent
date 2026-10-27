@@ -348,7 +348,7 @@ testAgent()("criterion-linked Goal completion", (it) => {
     Effect.gen(function* () {
       const fx = yield* fixture("native");
       const result = yield* callTool(
-        (yield* WorkflowTools).runToolsFor(fx.sessionId, "execute", fx.run),
+        (yield* WorkflowTools).toolsFor(fx.sessionId, "execute", fx.run),
         "update_workflow_progress",
         { ...fx.complete, recorderRunId: "spoofed" },
       );

@@ -231,7 +231,7 @@ const make = Effect.gen(function* () {
   const context = yield* Effect.context<PermissionClassifier | PermissionReviews>();
   return {
     /** The gate of one Effect AI run. */
-    hookForRun: (binding: GateBinding) =>
+    hookFor: (binding: GateBinding) =>
       Effect.provideContext(makePermissionGateHook(binding), context),
   };
 });

@@ -1135,7 +1135,7 @@ const toAiError = (failure: SubscriptionFailure) =>
 
 /** The subscription failure an `AiError` from a subscription model carries. */
 export const subscriptionFailure = (error: AiError.AiError): Option.Option<SubscriptionFailure> =>
-  error.reason._tag === "UnknownError"
+  Predicate.isTagged(error.reason, "UnknownError")
     ? decodeFailure(error.reason.metadata[optionsKey])
     : Option.none();
 

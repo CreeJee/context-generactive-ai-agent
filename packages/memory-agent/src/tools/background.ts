@@ -433,7 +433,7 @@ const make = Effect.gen(function* () {
       );
     }),
     /** The tools run on the loop's fiber, so their spans join the run's trace. */
-    runToolsFor: (sessionId: string): RunTool[] => {
+    toolsFor: (sessionId: string): RunTool[] => {
       const calls = callsFor(sessionId);
       return [
         runTool({ ...getBackgroundResult, handler: calls.getResult }),

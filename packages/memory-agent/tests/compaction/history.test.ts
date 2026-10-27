@@ -74,7 +74,7 @@ testAgent()("compaction over recorded history", (it) => {
         const own = yield* nodes.append({ ...at, kind: "tool_result", text });
         const foreign = yield* nodes.append({ ...other, kind: "tool_result", text });
         const wrongKind = yield* nodes.append({ ...at, kind: "assistant", text });
-        const { tools } = yield* (yield* MemoryTools).runToolsFor({
+        const { tools } = yield* (yield* MemoryTools).toolsFor({
           ...at,
           runId: `${at.sessionId}:r1`,
           userNodeId: wrongKind.id,
@@ -240,7 +240,7 @@ testAgent()("compaction over recorded history", (it) => {
           runId,
           threadId: at.sessionId,
           conversation: messages,
-          tools: (yield* (yield* MemoryTools).runToolsFor({
+          tools: (yield* (yield* MemoryTools).toolsFor({
             ...at,
             runId,
             userNodeId: question.id,

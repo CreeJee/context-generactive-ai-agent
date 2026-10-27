@@ -307,7 +307,7 @@ const make = Effect.gen(function* () {
   >();
   return {
     /** The recording of one Effect AI run. */
-    hookForRun: (binding: RunBinding) => Effect.provideContext(makeRecordingHook(binding), context),
+    hookFor: (binding: RunBinding) => Effect.provideContext(makeRecordingHook(binding), context),
   };
 });
 

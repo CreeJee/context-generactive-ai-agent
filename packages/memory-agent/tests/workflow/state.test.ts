@@ -76,7 +76,7 @@ const workflowTool = Effect.fnUntraced(function* (
   phase: WorkflowState["phase"],
   name: string,
 ) {
-  const tools = (yield* WorkflowTools).runToolsFor(sessionId, phase);
+  const tools = (yield* WorkflowTools).toolsFor(sessionId, phase);
   return (input: JsonValue) => callTool(tools, name, input);
 });
 

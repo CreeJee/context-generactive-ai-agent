@@ -105,9 +105,9 @@ const tools = await runNative(
     const git = yield* projects.add(join(base, "git"));
     const pick = (list: ReadonlyArray<RunTool>, name: string) => (input: JsonValue) =>
       callTool(list, name, input);
-    const plainFiles = files.runToolsFor(plain);
-    const gitFiles = files.runToolsFor(git);
-    const skills = approved.runToolsFor(plain, "gate");
+    const plainFiles = files.toolsFor(plain);
+    const gitFiles = files.toolsFor(git);
+    const skills = approved.toolsFor(plain, "gate");
     yield* callTool(skills, "save_code_skill", {
       name: "print-ok",
       description: "Print ok",

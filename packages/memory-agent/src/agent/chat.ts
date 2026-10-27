@@ -997,7 +997,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       stepEnded: (_scope, { answered }) =>
         madeProgress(
           answered.map(({ call, answer }) =>
-            answer._tag === "Returned"
+            Predicate.isTagged(answer, "Returned")
               ? toolProgressFingerprint(call.name, JSON.stringify(call.params), answer.result)
               : null,
           ),
@@ -1555,7 +1555,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               source: { provider: "external-acp", api: "text", model: answeredBy },
               system: [],
               tools: [],
-              hooks: [yield* recorder.hookForRun(binding), indexInBackground],
+              hooks: [yield* recorder.hookFor(binding), indexInBackground],
               modelFailure: modelFailureOf(shownExternalFailure),
             },
             {
@@ -1994,11 +1994,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
-            : yield* skillTools.runToolsFor(project);
+            : yield* skillTools.toolsFor(project);
         // Trusted external ACP agents (R17); every delegation is gated below.
         const delegation = readOnly
           ? { tools: [], instructions: null }
-          : yield* delegateTools.runToolsFor({
+          : yield* delegateTools.toolsFor({
               project,
               sessionId,
               signal: abortController.signal,
@@ -2035,14 +2035,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Match.when("full", () => []),
           Match.exhaustive,
         );
-        const gate = yield* Effect.forEach(gateBindings, permissionGate.hookForRun);
+        const gate = yield* Effect.forEach(gateBindings, permissionGate.hookFor);
         // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code
         // skill tools from the approved tool set, so it can build and test without editing source.
         const phaseApproved = (binding?: BackgroundBinding) =>
           reportSource !== null || (workflowReadOnly && workflow.phase !== "verify")
             ? []
             : approvedTools
-                .runToolsFor(project, undefined, binding)
+                .toolsFor(project, undefined, binding)
                 .filter(
                   ({ tool }) => !workflowReadOnly || HashSet.has(verificationToolNames, tool.name),
                 );
@@ -2051,18 +2051,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           runId,
           abortSignal: abortController.signal,
         });
-        const memory = yield* memoryTools.runToolsFor(answers, memoryScope);
+        const memory = yield* memoryTools.toolsFor(answers, memoryScope);
         const allSharedTools = redactor.withHiddenResults([
           ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
           // An SVG the model writes comes back with a picture of it, for the page to show.
-          ...drawingPreviews.withRunPreviews(project, fileTools.runToolsFor(project)),
-          ...outsideTools.runToolsFor(project),
+          ...drawingPreviews.withPreviews(project, fileTools.toolsFor(project)),
+          ...outsideTools.toolsFor(project),
           ...webTools,
           ...mcp.tools,
           ...skills.tools,
           ...delegation.tools,
-          ...workflowTools.runToolsFor(sessionId, workflow.phase, runId),
-          ...background.runToolsFor(sessionId),
+          ...workflowTools.toolsFor(sessionId, workflow.phase, runId),
+          ...background.toolsFor(sessionId),
         ]);
         const sharedTools =
           reportSource !== null
@@ -2093,7 +2093,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
         const childSharedTools = sharedTools.filter(({ tool }) => !(tool.name in promotionRules));
-        const children = yield* subagents.runToolsFor({
+        const children = yield* subagents.toolsFor({
           project,
           sessionId,
           runId,
@@ -2103,7 +2103,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...childSharedTools,
             ...(readOnly
               ? []
-              : redactor.withHiddenResults(approvedTools.runToolsFor(project, "gate"))),
+              : redactor.withHiddenResults(approvedTools.toolsFor(project, "gate"))),
           ],
           systemPrompts: promptLayout(
             standingPromptsFor(childSharedTools),
@@ -2118,7 +2118,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // The board's tools are the parent's alone; card agents never change the board.
         const boardTools =
           situation.onKanbanBoard && !workflowReadOnly
-            ? kanbanTools.runToolsFor(sessionId, runId)
+            ? kanbanTools.toolsFor(sessionId, runId)
             : [];
         // A program calls the run's tools as the model would, except the ones that ask first. Its
         // run_skill runs a sh skill to the end: a program has no way to wait on a background task.
@@ -2200,7 +2200,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           restore,
         });
         const hooks: ReadonlyArray<RunHook<RunStore | Crypto.Crypto>> = [
-          delivery.hookForRun({ projectId, sessionId, runId }),
+          delivery.hookFor({ projectId, sessionId, runId }),
           ...(reportSource !== null
             ? []
             : [
@@ -2213,10 +2213,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...gate,
           yield* children.hook,
           ...(reportSource !== null ? [] : [yield* memory.hook]),
-          yield* recorder.hookForRun(answers),
+          yield* recorder.hookFor(answers),
           workflowLifecycle.hook,
           indexInBackground,
-          summaries.hookForRun(sessionId),
+          summaries.hookFor(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,
           modelImagesHook(attachments),

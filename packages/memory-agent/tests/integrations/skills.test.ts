@@ -111,7 +111,7 @@ testAgent()("global and project skills", (it) => {
         expect(catalog.problems).toEqual([
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
-        const tools = yield* (yield* SkillTools).runToolsFor(project);
+        const tools = yield* (yield* SkillTools).toolsFor(project);
         expect(tools.instructions).toContain("- review (project): Project review.");
         // How to treat a skill comes with the skill read, not with the list.
         expect(yield* callTool(tools.tools, "read_skill", { name: "review" })).toMatchObject({

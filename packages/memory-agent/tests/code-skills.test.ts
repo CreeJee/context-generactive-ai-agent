@@ -30,7 +30,7 @@ testAgent()("code skills", (it) => {
   it.effect("an approved script runs with its arguments; an edited one is refused", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
-      const tools = (yield* ApprovedTools).runToolsFor(project, "gate");
+      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
       yield* callTool(tools, "save_code_skill", {
         name: "echo-args",
         description: "Print the arguments",
@@ -55,10 +55,7 @@ testAgent()("code skills", (it) => {
         },
       );
 
-      const full = (yield* ApprovedTools).runToolsFor(
-        { ...project, permissionMode: "full" },
-        "gate",
-      );
+      const full = (yield* ApprovedTools).toolsFor({ ...project, permissionMode: "full" }, "gate");
       expect(yield* callTool(full, "run_skill", { name: "echo-args" })).toMatchObject({
         stdout: "changed",
       });
@@ -68,7 +65,7 @@ testAgent()("code skills", (it) => {
   it.effect("run_skill runs ts skills over the run's tools, and sh skills; a program cannot", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
-      const tools = (yield* ApprovedTools).runToolsFor(project, "gate");
+      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
       const [, run] = tools;
       const echo = runTool({
         name: "echo_text",
@@ -124,7 +121,7 @@ testAgent()("code skills", (it) => {
         const storage = yield* StorageRoot;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const tools = (yield* ApprovedTools).runToolsFor(project, "gate");
+        const tools = (yield* ApprovedTools).toolsFor(project, "gate");
         const server = yield* NodeHttpServer.make(NodeHttpServer.createServer, {
           port: 0,
           host: "127.0.0.1",

@@ -945,7 +945,7 @@ export const compatibleRequest = (request: CompatibleRequest) =>
 export const compatibleFailure = (
   error: AiError.AiError,
 ): Option.Option<CompatibleRunRequestFailed> =>
-  error.reason._tag === "UnknownError"
+  Predicate.isTagged(error.reason, "UnknownError")
     ? decodeFailure(error.reason.metadata[optionsKey])
     : Option.none();
 

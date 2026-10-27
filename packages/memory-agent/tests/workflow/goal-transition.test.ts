@@ -233,7 +233,7 @@ const transitionCases: ReadonlyArray<{
 
 /** The session's start_new_goal, called as the model would. */
 const goalTool = Effect.fnUntraced(function* (session: string) {
-  const tools = (yield* WorkflowTools).runToolsFor(session, "goal");
+  const tools = (yield* WorkflowTools).toolsFor(session, "goal");
   return (input: JsonValue) => callTool(tools, "start_new_goal", input);
 });
 
@@ -300,7 +300,7 @@ testAgent()("explicit new Goal transition", (it) => {
       const { workflows, session, old } = yield* withHistory();
       const tools = yield* WorkflowTools;
       const exposed = (phase: WorkflowState["phase"]) =>
-        tools.runToolsFor(session, phase).some(({ tool }) => tool.name === "start_new_goal");
+        tools.toolsFor(session, phase).some(({ tool }) => tool.name === "start_new_goal");
       for (const phase of ["chat", "execute"] as const) expect(exposed(phase)).toBe(false);
       for (const phase of ["goal", "plan", "verify", "completed"] as const)
         expect(exposed(phase)).toBe(true);

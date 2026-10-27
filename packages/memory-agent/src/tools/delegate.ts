@@ -169,7 +169,7 @@ const make = Effect.gen(function* () {
      * delegate_to_agent for a run, or nothing when no external agent is trusted in the project.
      * The tool runs on the loop's fiber, so its spans join the run's trace.
      */
-    runToolsFor: Effect.fn("DelegateTools.runToolsFor")((binding: DelegateBinding) => {
+    toolsFor: Effect.fn("DelegateTools.toolsFor")((binding: DelegateBinding) => {
       const call = delegateCall(binding);
       return Effect.map(agents.available(binding.project), (available): DelegateToolset =>
         available.length === 0

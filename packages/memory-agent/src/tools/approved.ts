@@ -320,7 +320,7 @@ const make = Effect.gen(function* () {
      * never lifts path, credential or `.git` rules. They run on the loop's fiber, so their spans
      * join the run's trace.
      */
-    runToolsFor: (
+    toolsFor: (
       project: Fenced<Project>,
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
       binding?: BackgroundBinding,
