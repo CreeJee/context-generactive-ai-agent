@@ -1,4 +1,4 @@
-import { Cause, Effect, Stream } from "effect";
+import { Cause, Effect, Schema, Stream } from "effect";
 import { Nodes } from "memory-agent";
 import { AgUiEvent } from "../../../../packages/memory-agent/src/loop/chunks.ts";
 import { expect } from "vite-plus/test";
@@ -94,7 +94,9 @@ testAgent({
       expect(yield* sdk(() => listed.json())).toMatchObject([
         { id: thread, title: "side question one" },
       ]);
-      const transcript = JSON.stringify(yield* btw.messages({ params: { thread } }));
+      const transcript = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+        yield* btw.messages({ params: { thread } }),
+      );
       expect(transcript).toContain("side question two");
       expect(transcript).toContain("find_memory");
 
