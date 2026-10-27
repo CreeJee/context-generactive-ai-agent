@@ -4,6 +4,7 @@ import {
   Cause,
   Console,
   Context,
+  Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -20,8 +21,6 @@ import { Projects } from "../src/projects/projects.ts";
 import { AuthConnectionState, type ModelSelection } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -126,6 +125,7 @@ const tokens = (prompt: Prompt.Prompt, tools: ReadonlyArray<Tool.Any> = []) =>
 const firstRequest = Effect.fn("eval.promptOverhead")(function* () {
   const platform = yield* Layer.build(NodeServices.layer);
   const fs = Context.get(platform, FileSystem.FileSystem);
+  const crypto = Context.get(platform, Crypto.Crypto);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-prompt-overhead-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -157,8 +157,8 @@ const firstRequest = Effect.fn("eval.promptOverhead")(function* () {
           params: { session: session.id },
           headers: {},
           payload: {
-            runId: randomUUID(),
-            messages: [{ id: randomUUID(), role: "user", content: "hi" }],
+            runId: yield* crypto.randomUUIDv4(),
+            messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: "hi" }],
           },
         }),
       );

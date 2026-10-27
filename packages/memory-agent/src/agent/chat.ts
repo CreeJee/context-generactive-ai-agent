@@ -28,7 +28,6 @@ import type { Refusal, RunInput } from "../api/chat-api.ts";
 import { ImagePart, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
 import { optionalProperty } from "../optional-property.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import dayjs from "dayjs";
 import {
   Clock,
@@ -639,7 +638,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const scope = yield* Effect.scope;
   // One owner-process fence for durable workflow admission: a restarted owner cannot create a
   // second workflow execution for a run.
-  const goalExecutionOwnerGeneration = randomUUID();
+  const goalExecutionOwnerGeneration = yield* crypto.randomUUIDv4();
   /** The answer a steered message may cut, per session, while an app-run model answers. */
   const steerCuts = MutableHashMap.empty<string, SteerCut>();
   /** Lets go of a run's cut, unless a later run of the session already holds its own. */
@@ -2574,7 +2573,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       sessionId: string,
       holder: string | null,
       archived: boolean,
-      idempotencyKey: string = randomUUID(),
+      idempotencyKey?: string,
     ) =>
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
@@ -2582,7 +2581,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
           intent: archived ? "archive" : "restore",
-          idempotencyKey,
+          idempotencyKey: idempotencyKey ?? (yield* crypto.randomUUIDv4()),
         });
         if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
         if (LifecycleRequest.$is("completed")(requested)) {
@@ -2731,26 +2730,23 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // Completion delivery is service-scoped and coalesced per session. The same live-run claim
   // used by HTTP admission prevents an internal follow-up racing a user turn or another child.
   const followup = (sessionId: string) => {
-    const followupRunId = randomUUID();
     const notStarted = (code: string) => () => Effect.succeed(Result.fail(code));
     /** Starts the follow-up run as the chat API does: the run's log, or the refusal's code. */
-    const send = (kind: InternalFollowup) =>
-      api
-        .start({ holder: null, input: { runId: followupRunId, messages: [] } }, sessionId, kind)
-        .pipe(
-          Effect.flatMap(
-            ChatStart.$match({
-              Refused: ({ refusal }) => Effect.succeed(Result.fail(refusal.error)),
-              Following: (following) => Effect.succeed(Result.succeed(following)),
-            }),
-          ),
-          Effect.catchTags({
-            SessionNotFound: notStarted("session_not_found"),
-            ProjectNotFound: notStarted("project_not_found"),
-            ProviderUnavailable: notStarted("provider_unavailable"),
-            ModelUnavailable: notStarted("provider_unavailable"),
+    const send = (runId: string, kind: InternalFollowup) =>
+      api.start({ holder: null, input: { runId, messages: [] } }, sessionId, kind).pipe(
+        Effect.flatMap(
+          ChatStart.$match({
+            Refused: ({ refusal }) => Effect.succeed(Result.fail(refusal.error)),
+            Following: (following) => Effect.succeed(Result.succeed(following)),
           }),
-        );
+        ),
+        Effect.catchTags({
+          SessionNotFound: notStarted("session_not_found"),
+          ProjectNotFound: notStarted("project_not_found"),
+          ProviderUnavailable: notStarted("provider_unavailable"),
+          ModelUnavailable: notStarted("provider_unavailable"),
+        }),
+      );
     // The run fills its log whether or not anyone reads it. Reading the log to its end keeps the
     // session's next follow-up waiting until this run ends.
     const drain = Result.match({
@@ -2762,104 +2758,112 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
         ),
     });
-    return Effect.gen(function* () {
-      yield* Effect.sleep("25 millis");
-      if (isTruthy(liveRuns.get(sessionId))) return;
-      const session = yield* sessions.get(sessionId);
-      if (session.archivedAt !== null) return;
-      const last = yield* lastRun(sessionId);
-      if (!isTruthy(last)) return;
-      // A steered message reaches the model whether or not a page is open: after a normal finish
-      // the server sends it as the next turn. If that cannot start, the user confirms it instead.
-      const unsent = queue
-        .holdWaiting(sessionId, "stopped")
-        .pipe(
-          Effect.andThen(events.publishSession(sessionId, "queue")),
-          Effect.catch(logFailure("Unsent steered message was not held")),
+    const run = (followupRunId: string) =>
+      Effect.gen(function* () {
+        yield* Effect.sleep("25 millis");
+        if (isTruthy(liveRuns.get(sessionId))) return;
+        const session = yield* sessions.get(sessionId);
+        if (session.archivedAt !== null) return;
+        const last = yield* lastRun(sessionId);
+        if (!isTruthy(last)) return;
+        // A steered message reaches the model whether or not a page is open: after a normal finish
+        // the server sends it as the next turn. If that cannot start, the user confirms it instead.
+        const unsent = queue
+          .holdWaiting(sessionId, "stopped")
+          .pipe(
+            Effect.andThen(events.publishSession(sessionId, "queue")),
+            Effect.catch(logFailure("Unsent steered message was not held")),
+          );
+        const steered = send(followupRunId, InternalFollowup.steered()).pipe(
+          Effect.onError(() => unsent),
+          Effect.tap((started) => Effect.when(unsent, Effect.succeed(Result.isFailure(started)))),
+          Effect.flatMap(drain),
         );
-      const steered = send(InternalFollowup.steered()).pipe(
-        Effect.onError(() => unsent),
-        Effect.tap((started) => Effect.when(unsent, Effect.succeed(Result.isFailure(started)))),
-        Effect.flatMap(drain),
-      );
-      const automatic = Effect.gen(function* () {
-        if ((yield* workTrace.parentNotificationsHeld(sessionId)) || session.agent !== null) return;
-        // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
-        // a run a restart cut off before it ran any tool.
-        const restarted = last.status !== "completed";
-        if (
-          restarted &&
-          !WorkflowExecutionState.isAnyOf(["retrying"])(yield* execution.get(sessionId))
-        )
-          return;
-        const workflow = yield* workflows.reconcile(sessionId);
-        // A kanban board's loop executes the Plan; the model runs only when the loop needs it.
-        if (yield* kanbanBoard(sessionId)) {
-          const reasons = (yield* Ref.get(kanbanAttention))[sessionId];
+        const automatic = Effect.gen(function* () {
+          if ((yield* workTrace.parentNotificationsHeld(sessionId)) || session.agent !== null)
+            return;
+          // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
+          // a run a restart cut off before it ran any tool.
+          const restarted = last.status !== "completed";
           if (
-            reasons === undefined ||
-            restarted ||
-            !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
-            (yield* relayed.pending(sessionId)).length > 0
+            restarted &&
+            !WorkflowExecutionState.isAnyOf(["retrying"])(yield* execution.get(sessionId))
           )
             return;
-          yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
-          return yield* drain(yield* send(InternalFollowup.kanban({ reasons })));
-        }
-        const continuing = restarted
-          ? yield* execution.canResume(sessionId, last.runId, workflow)
-          : yield* execution.canContinue(sessionId, last.runId, workflow);
-        if (
-          !continuing &&
-          (restarted || !(yield* workTrace.pendingParentNotificationSessions).includes(sessionId))
-        )
-          return;
-        // A user's queued request or pending approval takes precedence over automatic work.
-        if (
-          continuing &&
-          (!NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
-            (yield* relayed.pending(sessionId)).length > 0)
-        )
-          return;
-        const pendingApprovals = yield* runStore.pendingInterrupts(sessionId);
-        if (pendingApprovals.length > 0) return;
-        const started = yield* send(
-          continuing
-            ? InternalFollowup.workflow({ afterRunId: last.runId })
-            : InternalFollowup.notification(),
+          const workflow = yield* workflows.reconcile(sessionId);
+          // A kanban board's loop executes the Plan; the model runs only when the loop needs it.
+          if (yield* kanbanBoard(sessionId)) {
+            const reasons = (yield* Ref.get(kanbanAttention))[sessionId];
+            if (
+              reasons === undefined ||
+              restarted ||
+              !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
+              (yield* relayed.pending(sessionId)).length > 0
+            )
+              return;
+            yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
+            return yield* drain(yield* send(followupRunId, InternalFollowup.kanban({ reasons })));
+          }
+          const continuing = restarted
+            ? yield* execution.canResume(sessionId, last.runId, workflow)
+            : yield* execution.canContinue(sessionId, last.runId, workflow);
+          if (
+            !continuing &&
+            (restarted || !(yield* workTrace.pendingParentNotificationSessions).includes(sessionId))
+          )
+            return;
+          // A user's queued request or pending approval takes precedence over automatic work.
+          if (
+            continuing &&
+            (!NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
+              (yield* relayed.pending(sessionId)).length > 0)
+          )
+            return;
+          const pendingApprovals = yield* runStore.pendingInterrupts(sessionId);
+          if (pendingApprovals.length > 0) return;
+          const started = yield* send(
+            followupRunId,
+            continuing
+              ? InternalFollowup.workflow({ afterRunId: last.runId })
+              : InternalFollowup.notification(),
+          );
+          if (Result.isFailure(started) && continuing) {
+            yield* execution.blockPending(sessionId, last.runId, {
+              reason: "external_dependency",
+              detail:
+                "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
+              evidence: [started.failure],
+            });
+            yield* events.publishSession(sessionId, "run-state");
+          }
+          yield* drain(started);
+        });
+        yield* Effect.when(
+          steered,
+          Effect.map(
+            queue.snapshot(sessionId),
+            (snapshot) =>
+              last.status === "completed" && NextDelivery.$is("server")(snapshot.nextDelivery),
+          ),
+        ).pipe(
+          Effect.flatMap(Option.match({ onSome: () => Effect.void, onNone: () => automatic })),
         );
-        if (Result.isFailure(started) && continuing) {
-          yield* execution.blockPending(sessionId, last.runId, {
-            reason: "external_dependency",
-            detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
-            evidence: [started.failure],
-          });
-          yield* events.publishSession(sessionId, "run-state");
-        }
-        yield* drain(started);
-      });
-      yield* Effect.when(
-        steered,
-        Effect.map(
-          queue.snapshot(sessionId),
-          (snapshot) =>
-            last.status === "completed" && NextDelivery.$is("server")(snapshot.nextDelivery),
+      }).pipe(
+        Effect.onInterrupt(() =>
+          Effect.gen(function* () {
+            const live = liveRuns.get(sessionId);
+            if (live?.runId !== followupRunId) return;
+            live.controller.abort(new Error("service_shutdown"));
+            yield* live.cancel;
+            yield* live.ended;
+          }),
         ),
-      ).pipe(Effect.flatMap(Option.match({ onSome: () => Effect.void, onNone: () => automatic })));
-    }).pipe(
+      );
+    return Effect.flatMap(crypto.randomUUIDv4(), run).pipe(
       // A later wakeup tries again; the loop that forked this follow-up never stops for it.
       Effect.catch(logFailure("Subagent notification follow-up deferred")),
       Effect.catchDefect((defect) =>
         logDefect("Subagent notification follow-up deferred")(Cause.die(defect)),
-      ),
-      Effect.onInterrupt(() =>
-        Effect.gen(function* () {
-          const live = liveRuns.get(sessionId);
-          if (live?.runId !== followupRunId) return;
-          live.controller.abort(new Error("service_shutdown"));
-          yield* live.cancel;
-          yield* live.ended;
-        }),
       ),
     );
   };

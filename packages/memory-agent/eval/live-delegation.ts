@@ -2,10 +2,8 @@ import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
-import { Context, FileSystem } from "effect";
+import { Context, Crypto, FileSystem } from "effect";
 import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -108,6 +106,7 @@ let estimatedInputTokens = 0;
 const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "optimized-guidance") {
   const platform = yield* Layer.build(NodeServices.layer);
   const fs = Context.get(platform, FileSystem.FileSystem);
+  const crypto = Context.get(platform, Crypto.Crypto);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "delegation-live-eval-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -230,8 +229,8 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
         params: { session: services.session.id },
         headers: {},
         payload: {
-          runId: randomUUID(),
-          messages: [{ id: randomUUID(), role: "user", content: prompt }],
+          runId: yield* crypto.randomUUIDv4(),
+          messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: prompt }],
         },
       })
       .pipe(Effect.flatMap(Stream.runCollect)),

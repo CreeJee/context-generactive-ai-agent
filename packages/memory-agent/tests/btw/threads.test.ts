@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Schema, Stream } from "effect";
+import { Crypto, Effect, FileSystem, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
@@ -8,7 +8,6 @@ import { BtwError, BtwThreadNotFound, btwToolNames } from "../../src/btw/contrac
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { randomUUID } from "../../src/runtime/synchronous-crypto.ts";
 import type { ScriptedResponder } from "../../src/testing/scripted-model.ts";
 import { btwApi } from "../support/chat-api.ts";
 import { tinyPng } from "../support/images.ts";
@@ -16,19 +15,22 @@ import { selectTestModel } from "../support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet } from "../support/sql.ts";
 
-const question = (text: string, imageIds: readonly string[] = []) => ({
-  runId: `run-${randomUUID()}`,
-  message: {
-    id: randomUUID(),
-    role: "user" as const,
-    content: [
-      { type: "text" as const, content: text },
-      ...imageIds.map((id) => ({
-        type: "image" as const,
-        source: { type: "url" as const, value: attachmentUrl(id) },
-      })),
-    ],
-  },
+const question = Effect.fnUntraced(function* (text: string, imageIds: readonly string[]) {
+  const crypto = yield* Crypto.Crypto;
+  return {
+    runId: `run-${yield* crypto.randomUUIDv4()}`,
+    message: {
+      id: yield* crypto.randomUUIDv4(),
+      role: "user" as const,
+      content: [
+        { type: "text" as const, content: text },
+        ...imageIds.map((id) => ({
+          type: "image" as const,
+          source: { type: "url" as const, value: attachmentUrl(id) },
+        })),
+      ],
+    },
+  };
 });
 
 const Count = Schema.Struct({ count: Schema.Finite });
@@ -47,7 +49,7 @@ const responder: ScriptedResponder = (invocation) => {
     ? ["promote_memory_candidate", { claimId: "c", taskId: "t" }]
     : ["find_memory", { query: "SQLite" }];
   return {
-    toolCalls: [{ id: `call-${randomUUID()}`, name, arguments: JSON.stringify(args) }],
+    toolCalls: [{ id: `call-${invocation.index}`, name, arguments: JSON.stringify(args) }],
   };
 };
 
@@ -59,7 +61,7 @@ const ask = Effect.fn("btwTest.ask")(function* (
 ) {
   const events = yield* (yield* btwApi).ask({
     params: { thread: threadId },
-    payload: question(text, images),
+    payload: yield* question(text, images),
   });
   return yield* Stream.runFold(
     events,

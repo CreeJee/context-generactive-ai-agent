@@ -6,10 +6,8 @@ import {
 } from "../src/providers/contracts.ts";
 import { Config, Console, Result, Function as EffectFunction, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
-import { Context, FileSystem } from "effect";
+import { Context, Crypto, FileSystem } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
@@ -89,6 +87,7 @@ const fixture =
 const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-manual") {
   const platform = yield* Layer.build(NodeServices.layer);
   const fs = Context.get(platform, FileSystem.FileSystem);
+  const crypto = Context.get(platform, Crypto.Crypto);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-paid-ab-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -173,8 +172,8 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
           params: { session: services.sessionId },
           headers: {},
           payload: {
-            runId: randomUUID(),
-            messages: [{ id: randomUUID(), role: "user", content: text }],
+            runId: yield* crypto.randomUUIDv4(),
+            messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: text }],
           },
         })
         .pipe(Effect.flatMap(Stream.runCollect), Effect.timeout("45 seconds")),

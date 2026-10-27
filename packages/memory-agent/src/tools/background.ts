@@ -1,9 +1,9 @@
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   MutableHashMap,
   Cause,
   Clock,
   Context,
+  Crypto,
   Effect,
   Exit,
   FiberMap,
@@ -104,6 +104,7 @@ const cancelBackgroundTask = {
 
 const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
+  const crypto = yield* Crypto.Crypto;
   const sql = yield* SqlClient.SqlClient;
   const priorDispatch = SqlSchema.findOneOption({
     Request: Schema.Struct({
@@ -201,7 +202,7 @@ const make = Effect.gen(function* () {
           title: hiddenRequest.text.replace(/\s+/gu, " ").slice(0, 80),
           request: hiddenRequest.text,
           kind: "start",
-          threadId: `background-${randomUUID()}`,
+          threadId: `background-${yield* traceEffect(crypto.randomUUIDv4())}`,
         }),
       );
       MutableHashMap.set(sessions, handle.taskId, binding.sessionId);

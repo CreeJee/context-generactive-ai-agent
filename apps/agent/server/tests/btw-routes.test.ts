@@ -1,8 +1,7 @@
-import { Cause, Effect, Schema, Stream } from "effect";
+import { Cause, Crypto, Effect, Schema, Stream } from "effect";
 import { Nodes } from "memory-agent";
 import { AgUiEvent } from "../../../../packages/memory-agent/src/loop/chunks.ts";
 import { expect } from "vite-plus/test";
-import { randomUUID } from "../../../../packages/memory-agent/src/runtime/synchronous-crypto.ts";
 import { btwApi } from "../../../../packages/memory-agent/tests/support/chat-api.ts";
 import { selectTestModel } from "../../../../packages/memory-agent/tests/support/provider.ts";
 import {
@@ -23,9 +22,12 @@ const local = (url: string, init: RequestInit = {}) =>
     ...init,
     headers: { "Content-Type": "application/json", Origin: "http://localhost" },
   });
-const question = (text: string) => ({
-  runId: `run-${randomUUID()}`,
-  message: { id: randomUUID(), role: "user" as const, content: text },
+const question = Effect.fnUntraced(function* (text: string) {
+  const crypto = yield* Crypto.Crypto;
+  return {
+    runId: `run-${yield* crypto.randomUUIDv4()}`,
+    message: { id: yield* crypto.randomUUIDv4(), role: "user" as const, content: text },
+  };
 });
 
 testAgent({
@@ -70,7 +72,8 @@ testAgent({
       const { id: thread } = yield* sdk(() => created.json());
 
       const btw = yield* btwApi;
-      const ask = (text: string) => btw.ask({ params: { thread }, payload: question(text) });
+      const ask = (text: string) =>
+        Effect.flatMap(question(text), (payload) => btw.ask({ params: { thread }, payload }));
       const answer = (text: string) =>
         Effect.flatMap(ask(text), (events) =>
           Stream.runFold(

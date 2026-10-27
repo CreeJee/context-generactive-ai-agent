@@ -2,8 +2,7 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { Cause, Context, Effect, Layer, Match, Option, Schema } from "effect";
+import { Cause, Context, Crypto, Effect, Layer, Match, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
@@ -86,6 +85,7 @@ const make = Effect.gen(function* () {
   const interpretations = yield* Interpretations;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
+  const crypto = yield* Crypto.Crypto;
   const oneRunAtATime = yield* Semaphore.make(1);
   const meaningful = sql.literal(meaningfulNodeFilter);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -244,7 +244,7 @@ const make = Effect.gen(function* () {
 
       const { services } = yield* active.resolve(selection);
       const cheap = yield* services.models.cheapestEffort(selection);
-      const threadId = randomUUID();
+      const threadId = yield* crypto.randomUUIDv4();
       const answer = yield* singleAnswer({
         runtime: services.runtime,
         selection: cheap,

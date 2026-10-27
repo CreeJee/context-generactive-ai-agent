@@ -2,7 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Crypto, ManagedRuntime, Schema } from "effect";
 import { Hex } from "effect/encoding";
 
-// NodeCrypto's digest and UUID Effects are synchronous and its Layer owns no external resources.
+// NodeCrypto's digest Effect is synchronous and its Layer owns no external resources.
 // Retain one service context for synchronous SQLite transactions and native SDK callbacks.
 // This boundary must stay Node-specific: an asynchronous Crypto implementation cannot satisfy it.
 const runtime = ManagedRuntime.make(NodeCrypto.layer);
@@ -17,5 +17,3 @@ export const sha256 = (input: string | Uint8Array): string =>
       ),
     ),
   );
-
-export const randomUUID = (): string => runtime.runSync(crypto.randomUUIDv4());

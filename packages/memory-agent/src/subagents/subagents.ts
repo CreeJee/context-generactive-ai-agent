@@ -4,7 +4,6 @@ import { Function as EffectFunction } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { isTruthy } from "../truthy.ts";
 import { aborted } from "../runtime/aborted.ts";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { projectInstructionsHook } from "../agent/project-instructions.ts";
 import {
   Cause,
@@ -481,17 +480,18 @@ const make = Effect.gen(function* () {
   /** The row a write returned; a write that matched nothing has no row to decode. */
   const returned = (statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
     stored(Effect.flatMap(statement, (rows) => decodeRow(rows[0])));
-  const insert = (row: {
+  const insert = Effect.fnUntraced(function* (row: {
     readonly sessionId: string;
     readonly name: string | null;
     readonly instructions: string | null;
     readonly parentRunId: string;
     readonly task: string;
-  }) => {
-    const now = effectClock.currentTimeMillisUnsafe();
-    return returned(
+  }) {
+    const id = yield* stored(crypto.randomUUIDv4());
+    const now = yield* Clock.currentTimeMillis;
+    return yield* returned(
       sql`INSERT INTO subagents ${sql.insert({
-        id: randomUUID(),
+        id,
         session_id: row.sessionId,
         name: row.name,
         instructions: row.instructions,
@@ -502,7 +502,7 @@ const make = Effect.gen(function* () {
         updated_at: now,
       })} RETURNING *`,
     );
-  };
+  });
   const startAgain = (
     instructions: string | null,
     parentRunId: string,

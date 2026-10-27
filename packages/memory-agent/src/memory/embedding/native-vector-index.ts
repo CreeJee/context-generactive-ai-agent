@@ -1,6 +1,6 @@
 // Native transport/filesystem/SQLite boundaries; the worker is the sole index and lease owner.
-import { randomUUID, sha256 } from "../../runtime/synchronous-crypto.ts";
-import { Array as EffectArray, Effect, Path, Schema } from "effect";
+import { sha256 } from "../../runtime/synchronous-crypto.ts";
+import { Array as EffectArray, Crypto, Effect, Path, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
@@ -24,6 +24,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
   const embedder = yield* Embedder;
+  const crypto = yield* Crypto.Crypto;
   const failure = (operation: VectorIndexError["operation"]) => (cause: unknown) =>
     VectorIndexError.make({ operation, cause });
   const io = <A>(operation: VectorIndexError["operation"], work: () => A) =>
@@ -50,7 +51,6 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     Effect.mapError(failure("open")),
   );
   const opened = yield* io("open", () => ({
-    epoch: randomUUID(),
     worker: runtimeWorker("native-search-worker"),
     databasePath,
   }));
@@ -66,7 +66,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const owner = yield* makeNativeOwner(
     {
       kind: "setup",
-      epoch: opened.epoch,
+      epoch: yield* crypto.randomUUIDv4().pipe(Effect.mapError(failure("open"))),
       dimensions: embedder.dimensions,
       bits: 4,
       cacheDirectory: paths.join(storage.path, "vectors", sha256(embedder.identity).slice(0, 16)),
@@ -77,8 +77,14 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   ).pipe(Effect.mapError(failure("open")));
   const command = (input: OwnerCommand, operation: VectorIndexError["operation"]) =>
     owner.execute(input).pipe(Effect.mapError(failure(operation)));
-  const identity = () => ({ epoch: owner.epoch, requestId: randomUUID() });
-  const save = Effect.suspend(() => command(OwnerCommand.cases.save.make(identity()), "save")).pipe(
+  /** The owner's epoch and a fresh request id for one command. */
+  const identity = (operation: VectorIndexError["operation"]) =>
+    crypto.randomUUIDv4().pipe(
+      Effect.map((requestId) => ({ epoch: owner.epoch, requestId })),
+      Effect.mapError(failure(operation)),
+    );
+  const save = identity("save").pipe(
+    Effect.flatMap((id) => command(OwnerCommand.cases.save.make(id), "save")),
     Effect.asVoid,
   );
   const ChunkMapping = Schema.Array(
@@ -130,12 +136,12 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const removeIds = (ids: readonly number[]) =>
     ids.length === 0
       ? Effect.void
-      : Effect.suspend(() =>
-          command(
-            OwnerCommand.cases.remove.make({ ...identity(), ids: ids.map(String) }),
-            "remove",
+      : identity("remove").pipe(
+          Effect.flatMap((id) =>
+            command(OwnerCommand.cases.remove.make({ ...id, ids: ids.map(String) }), "remove"),
           ),
-        ).pipe(Effect.asVoid);
+          Effect.asVoid,
+        );
   const remove = Effect.fnUntraced(function* (seqs: readonly number[]) {
     // Read every node's chunk ids in one transaction before the native await, not one node
     // per await: a purge between reads would otherwise leave a partial snapshot.
@@ -223,7 +229,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     yield* Effect.when(save, Effect.succeed(owner.size() === indexed));
   }
   if (owner.initialNeedsReset || owner.size() !== indexed) {
-    yield* command(OwnerCommand.cases.reset.make(identity()), "open");
+    yield* command(OwnerCommand.cases.reset.make(yield* identity("open")), "open");
     yield* sql
       .withTransaction(
         Effect.all([
@@ -246,7 +252,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     });
     yield* command(
       OwnerCommand.cases.add.make({
-        ...identity(),
+        ...(yield* identity("add")),
         vectors: new Float32Array(batch),
         ids: seqs.map(String),
       }),
@@ -302,7 +308,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
         Effect.gen(function* () {
           const reply = yield* command(
             OwnerCommand.cases["vector-search"].make({
-              ...identity(),
+              ...(yield* identity("search")),
               query: new Float32Array(query),
               k: take,
               allowedIds,
@@ -327,10 +333,9 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
           Effect.fail(publicationError(NativeOwnerFailed.make({ reason: "invalid-input" }))),
           Effect.succeed(input.embedder !== embedder.identity),
         );
+        const id = yield* identity("search");
         const { publication: current, result } = yield* publication
-          .read(() =>
-            owner.startRead(OwnerCommand.cases["memory-search"].make({ ...identity(), input })),
-          )
+          .read(() => owner.startRead(OwnerCommand.cases["memory-search"].make({ ...id, input })))
           .pipe(Effect.mapError(publicationError));
         if (!OwnerReply.guards["memory-result"](result)) return yield* publicationError(result);
         return { publication: current, result: result.result };
