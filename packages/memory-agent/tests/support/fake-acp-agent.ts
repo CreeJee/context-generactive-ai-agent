@@ -161,6 +161,9 @@ acp
           for (let step = 0; step < 50; step++) {
             if (MutableHashSet.has(cancelled, sessionId)) {
               MutableHashSet.remove(cancelled, sessionId);
+              // Lets a test see that the cancellation arrived before the turn answered.
+              if (log.length > 0)
+                yield* fs.writeFileString(`${log}.cancelled`, `${sessionId}\n`, { flag: "a" });
               return { stopReason: "cancelled" };
             }
             yield* Effect.sleep(40);

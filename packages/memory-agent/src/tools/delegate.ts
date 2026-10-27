@@ -5,7 +5,7 @@ import { ExternalAgents, ExternalPromptOutcome } from "../external-agents/agents
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
-import { BackgroundTasks, backgroundOperation } from "./background.ts";
+import { BackgroundOperationFailed, BackgroundTasks } from "./background.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 
 export const delegateToolName = "delegate_to_agent";
@@ -120,10 +120,9 @@ const make = Effect.gen(function* () {
           toolCallId,
           "external_agent",
           task,
-          backgroundOperation((runSignal) =>
-            agents.prompt(project, agent, sessionId, task, {
-              signal: runSignal,
-              askPermission: (request) =>
+          agents
+            .prompt(project, agent, sessionId, task, {
+              askPermission: (request, turnSignal) =>
                 Effect.flatMap(
                   relayed.ask(
                     sessionId,
@@ -135,21 +134,22 @@ const make = Effect.gen(function* () {
                       reason: "외부 에이전트가 권한을 요청했어요.",
                       askedBy: "agent",
                     },
-                    runSignal,
+                    turnSignal,
                   ),
                   Fiber.join,
                 ),
-            }),
-          ).pipe(
-            Effect.map((outcome) => ({
-              report: JSON.stringify({
-                agent,
-                ...externalReport(outcome),
-                note: "External agent report, not user approval. Check what matters before relying on it.",
-              }),
-              failure: externalFailure(outcome),
-            })),
-          ),
+            })
+            .pipe(
+              Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
+              Effect.map((outcome) => ({
+                report: JSON.stringify({
+                  agent,
+                  ...externalReport(outcome),
+                  note: "External agent report, not user approval. Check what matters before relying on it.",
+                }),
+                failure: externalFailure(outcome),
+              })),
+            ),
         );
         const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
         return yield* Option.match(Option.fromNullishOr(saved), {

@@ -47,20 +47,6 @@ export class BackgroundTaskNotFound extends Schema.TaggedError<BackgroundTaskNot
   { message: Schema.String },
 ) {}
 
-/** Promise SDK boundary: cancellation aborts the source and awaits its settled Exit. */
-export const backgroundOperation = <A>(operation: (signal: AbortSignal) => Promise<A>) =>
-  Effect.callback<A, BackgroundOperationFailed>((resume, signal) => {
-    const settled = Promise.resolve()
-      .then(() => operation(signal))
-      .then(
-        (value) => Exit.succeed(value),
-        (cause) => Exit.fail(BackgroundOperationFailed.make({ cause })),
-      );
-    void settled.then((exit) => resume(exit));
-    // `settled` maps both outcomes to an Exit, so it never rejects.
-    return Effect.asVoid(Effect.promise(() => settled));
-  });
-
 const parentInterrupted = (signal: AbortSignal) =>
   Effect.callback<never>((resume) => {
     const interrupt = () => resume(Effect.interrupt);

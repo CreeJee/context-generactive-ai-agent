@@ -23,6 +23,7 @@ import {
   Context,
   Data,
   Effect,
+  Fiber,
   FiberMap,
   FileSystem,
   Path,
@@ -148,11 +149,16 @@ export type ExternalPromptOutcome = Data.TaggedEnum<{
 export const ExternalPromptOutcome = Data.taggedEnum<ExternalPromptOutcome>();
 
 export interface PromptHooks {
-  readonly signal: AbortSignal;
   /** Every update, for callers that stream progress. */
   readonly onUpdate?: (update: SessionUpdate) => void;
-  /** The agent's own permission request; true only for an explicit approval. */
-  readonly askPermission: (request: RequestPermissionRequest) => Effect.Effect<boolean>;
+  /**
+   * The agent's own permission request; true only for an explicit approval. `signal` aborts when
+   * the turn is interrupted.
+   */
+  readonly askPermission: (
+    request: RequestPermissionRequest,
+    signal: AbortSignal,
+  ) => Effect.Effect<boolean>;
 }
 
 interface SessionHandlers {
@@ -745,163 +751,169 @@ const make = Effect.gen(function* () {
 
     /**
      * Sends one prompt to the agent in the conversation `sessionKey` (a new agent session the first
-     * time, or after the process restarted) and waits for its answer.
+     * time, or after the process restarted) and waits for its answer. Interrupting it asks the
+     * agent to stop the turn and waits for that answer, so the session is idle for its next prompt.
      */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     prompt: (
       project: Project,
       name: string,
       sessionKey: string,
       text: string,
       hooks: PromptHooks,
-    ): Promise<ExternalPromptOutcome> =>
-      runNativeEffect(
-        Effect.gen(function* () {
-          const agent = yield* usable(project, name);
-          if (!isTruthy(agent))
-            return ExternalPromptOutcome.unavailable({
-              failure: { code: "not_trusted", detail: null },
-            });
-          const link = linkFor(project, agent);
-          if (
-            link.failures >= maxConsecutiveFailures &&
-            !isTruthy(link.live) &&
-            !isTruthy(link.attempt)
-          )
-            return ExternalPromptOutcome.unavailable({
-              failure: { code: "stopped_after_failures", detail: null },
-            });
-          const connected = yield* Effect.result(
+    ) => {
+      // Aborted when the turn is interrupted; the turn's permission requests wait on it.
+      const turn = new AbortController();
+      return Effect.gen(function* () {
+        const agent = yield* usable(project, name);
+        if (!isTruthy(agent))
+          return ExternalPromptOutcome.unavailable({
+            failure: { code: "not_trusted", detail: null },
+          });
+        const link = linkFor(project, agent);
+        if (
+          link.failures >= maxConsecutiveFailures &&
+          !isTruthy(link.live) &&
+          !isTruthy(link.attempt)
+        )
+          return ExternalPromptOutcome.unavailable({
+            failure: { code: "stopped_after_failures", detail: null },
+          });
+        const connected = yield* Effect.result(
+          nativePromise(() =>
+            link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
+          ),
+        );
+        if (Result.isFailure(connected))
+          return ExternalPromptOutcome.unavailable({
+            failure: yield* connected.failure.pipe(
+              rejectionError,
+              connectFailure,
+              redactor.hideDetail,
+            ),
+          });
+        const live = connected.success;
+
+        let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
+        if (!isTruthy(sessionId)) {
+          const created = yield* Effect.result(
             nativePromise(() =>
-              link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
+              live.connection.agent.request(acp.methods.agent.session.new, {
+                cwd: project.root,
+                mcpServers: [],
+              }),
             ),
           );
-          if (Result.isFailure(connected))
+          if (Result.isFailure(created)) {
+            const error = rejectionError(created.failure);
             return ExternalPromptOutcome.unavailable({
-              failure: yield* connected.failure.pipe(
-                rejectionError,
-                connectFailure,
-                redactor.hideDetail,
-              ),
+              failure: yield* redactor.hideDetail({
+                code: "session_failed" as const,
+                detail: rejectionText(error),
+              }),
             });
-          const live = connected.success;
-
-          let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
-          if (!isTruthy(sessionId)) {
-            const created = yield* Effect.result(
-              nativePromise(() =>
-                live.connection.agent.request(acp.methods.agent.session.new, {
-                  cwd: project.root,
-                  mcpServers: [],
-                }),
-              ),
-            );
-            if (Result.isFailure(created)) {
-              const error = rejectionError(created.failure);
-              return ExternalPromptOutcome.unavailable({
-                failure: yield* redactor.hideDetail({
-                  code: "session_failed" as const,
-                  detail: rejectionText(error),
-                }),
-              });
-            }
-            sessionId = created.success.sessionId;
-            MutableHashMap.set(live.sessions, sessionKey, sessionId);
           }
+          sessionId = created.success.sessionId;
+          MutableHashMap.set(live.sessions, sessionKey, sessionId);
+        }
 
-          let answer = "";
-          const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
-          MutableHashMap.set(live.handlers, sessionId, {
-            onUpdate: (update) => {
-              Match.value(update).pipe(
-                Match.discriminators("sessionUpdate")({
-                  agent_message_chunk: (chunk) => {
-                    answer += chunk.content.type === "text" ? chunk.content.text : "";
-                  },
-                  tool_call: (call) =>
-                    MutableHashMap.set(toolCalls, call.toolCallId, {
-                      title: call.title,
-                      kind: call.kind ?? null,
-                      status: call.status ?? null,
-                    }),
-                  tool_call_update: (call) => {
-                    const known = Option.getOrUndefined(
-                      MutableHashMap.get(toolCalls, call.toolCallId),
-                    );
-                    MutableHashMap.set(toolCalls, call.toolCallId, {
-                      title: call.title ?? known?.title ?? "",
-                      kind: call.kind ?? known?.kind ?? null,
-                      status: call.status ?? known?.status ?? null,
-                    });
-                  },
-                }),
-                Match.orElse(EffectFunction.constVoid),
-              );
-              hooks.onUpdate?.(update);
-            },
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            askPermission: (request) =>
-              runNativeEffect(
-                Effect.map(hooks.askPermission(request), (answer) =>
-                  permissionAnswer(request, answer),
-                ),
+        let answer = "";
+        const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
+        MutableHashMap.set(live.handlers, sessionId, {
+          onUpdate: (update) => {
+            Match.value(update).pipe(
+              Match.discriminators("sessionUpdate")({
+                agent_message_chunk: (chunk) => {
+                  answer += chunk.content.type === "text" ? chunk.content.text : "";
+                },
+                tool_call: (call) =>
+                  MutableHashMap.set(toolCalls, call.toolCallId, {
+                    title: call.title,
+                    kind: call.kind ?? null,
+                    status: call.status ?? null,
+                  }),
+                tool_call_update: (call) => {
+                  const known = Option.getOrUndefined(
+                    MutableHashMap.get(toolCalls, call.toolCallId),
+                  );
+                  MutableHashMap.set(toolCalls, call.toolCallId, {
+                    title: call.title ?? known?.title ?? "",
+                    kind: call.kind ?? known?.kind ?? null,
+                    status: call.status ?? known?.status ?? null,
+                  });
+                },
+              }),
+              Match.orElse(EffectFunction.constVoid),
+            );
+            hooks.onUpdate?.(update);
+          },
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          askPermission: (request) =>
+            runNativeEffect(
+              Effect.map(hooks.askPermission(request, turn.signal), (answer) =>
+                permissionAnswer(request, answer),
               ),
-          });
-          const agentSession = sessionId;
-          const cancel = () =>
-            void live.connection.agent
-              .notify(acp.methods.agent.session.cancel, { sessionId: agentSession })
-              .catch(() => undefined);
-          hooks.signal.addEventListener("abort", cancel, { once: true });
-          return yield* nativePromise(() =>
+            ),
+        });
+        const agentSession = sessionId;
+        const cancel = nativePromise(() =>
+          live.connection.agent.notify(acp.methods.agent.session.cancel, {
+            sessionId: agentSession,
+          }),
+        ).pipe(Effect.ignore);
+        const answered = yield* Effect.forkChild(
+          nativePromise(() =>
             live.connection.agent.request(acp.methods.agent.session.prompt, {
               sessionId: agentSession,
               prompt: [{ type: "text", text }],
             }),
-          ).pipe(
-            Effect.matchEffect({
-              onSuccess: ({ stopReason }): Effect.Effect<ExternalPromptOutcome> => {
-                const answered = {
-                  stopReason,
-                  answer,
-                  toolCalls: [...MutableHashMap.values(toolCalls)],
-                };
-                return Effect.succeed(
-                  stopReason === "cancelled"
-                    ? ExternalPromptOutcome.cancelled(answered)
-                    : ExternalPromptOutcome.completed(answered),
-                );
-              },
-              onFailure: (failure): Effect.Effect<ExternalPromptOutcome> =>
-                live.connection.signal.aborted || link.live !== live
-                  ? Effect.succeed(
-                      ExternalPromptOutcome.disconnected({
+          ),
+          { startImmediately: true },
+        );
+        return yield* Fiber.join(answered).pipe(
+          Effect.onInterrupt(() =>
+            Effect.sync(() => turn.abort()).pipe(
+              Effect.andThen(cancel),
+              Effect.andThen(Fiber.await(answered)),
+            ),
+          ),
+          Effect.matchEffect({
+            onSuccess: ({ stopReason }): Effect.Effect<ExternalPromptOutcome> => {
+              const answered = {
+                stopReason,
+                answer,
+                toolCalls: [...MutableHashMap.values(toolCalls)],
+              };
+              return Effect.succeed(
+                stopReason === "cancelled"
+                  ? ExternalPromptOutcome.cancelled(answered)
+                  : ExternalPromptOutcome.completed(answered),
+              );
+            },
+            onFailure: (failure): Effect.Effect<ExternalPromptOutcome> =>
+              live.connection.signal.aborted || link.live !== live
+                ? Effect.succeed(
+                    ExternalPromptOutcome.disconnected({
+                      answer,
+                      toolCalls: [...MutableHashMap.values(toolCalls)],
+                    }),
+                  )
+                : Effect.map(
+                    redactor.hideDetail({
+                      code: "agent_error" as const,
+                      detail: failure.pipe(rejectionError, rejectionText),
+                    }),
+                    (shown) =>
+                      ExternalPromptOutcome.failed({
+                        failure: shown,
                         answer,
                         toolCalls: [...MutableHashMap.values(toolCalls)],
                       }),
-                    )
-                  : Effect.map(
-                      redactor.hideDetail({
-                        code: "agent_error" as const,
-                        detail: failure.pipe(rejectionError, rejectionText),
-                      }),
-                      (shown) =>
-                        ExternalPromptOutcome.failed({
-                          failure: shown,
-                          answer,
-                          toolCalls: [...MutableHashMap.values(toolCalls)],
-                        }),
-                    ),
-            }),
-            Effect.ensuring(
-              Effect.sync(() => {
-                hooks.signal.removeEventListener("abort", cancel);
-                MutableHashMap.remove(live.handlers, agentSession);
-              }),
-            ),
-          );
-        }),
-      ),
+                  ),
+          }),
+          Effect.ensuring(Effect.sync(() => MutableHashMap.remove(live.handlers, agentSession))),
+        );
+      });
+    },
   };
 });
 

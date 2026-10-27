@@ -1,5 +1,5 @@
 // Native ACP processes prove actual OS environment isolation, reconnect and cancellation.
-import { Cause, Effect, Fiber, FileSystem, Path, Schedule, Schema, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Path, Schedule, Schema, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { GlobalConfig } from "../../src/config/global-config.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
@@ -90,14 +90,9 @@ const fakeAgentProject = Effect.fnUntraced(function* () {
   const link = Effect.map(agents.overview(project), ({ agents: [view] }) =>
     view !== undefined && AgentTrustState.$is("trusted")(view.state) ? view.state.link : null,
   );
-  const prompt = (text: string, options: { signal?: AbortSignal; approve?: boolean } = {}) =>
-    Effect.tryPromise({
-      try: (signal) =>
-        agents.prompt(project, "fake", sessionId, text, {
-          signal: options.signal ?? signal,
-          askPermission: () => Effect.succeed(options.approve ?? false),
-        }),
-      catch: (cause) => new Cause.UnknownError(cause),
+  const prompt = (text: string, options: { approve?: boolean } = {}) =>
+    agents.prompt(project, "fake", sessionId, text, {
+      askPermission: () => Effect.succeed(options.approve ?? false),
     });
   const trust = agents.setTrusted(project, "project", "fake", true);
   return { project, sessionId, agents, config, log, refuse, starts, link, prompt, trust };
@@ -193,24 +188,15 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       }),
   );
 
-  it.effect("cancelling sends session/cancel", () =>
+  it.effect("interrupting a prompt sends session/cancel and waits for the agent's answer", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { log, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
-      // The ACP caller cancels its own request through its AbortSignal.
-      const controller = yield* Effect.acquireRelease(
-        Effect.sync(() => new AbortController()),
-        (controller) => Effect.sync(() => controller.abort()),
-      );
-      const pending = yield* Effect.forkChild(prompt("slow", { signal: controller.signal }), {
-        startImmediately: true,
-      });
+      const pending = yield* Effect.forkChild(prompt("slow"), { startImmediately: true });
       yield* eventually(fs.exists(`${log}.slow`), "the slow prompt to reach the agent");
-      controller.abort();
-      const cancelled = yield* Fiber.join(pending);
-      expect(ExternalPromptOutcome.$is("cancelled")(cancelled)).toBe(true);
-      expect(cancelled).toMatchObject({ stopReason: "cancelled" });
+      yield* Fiber.interrupt(pending);
+      expect(yield* fs.exists(`${log}.cancelled`)).toBe(true);
     }),
   );
 

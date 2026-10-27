@@ -1548,15 +1548,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const model = yield* externalModel({
             agent: answeredBy,
             turn: (text, onUpdate) =>
-              Effect.tryPromise({
-                try: (signal) =>
-                  externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
-                    signal,
-                    onUpdate,
-                    askPermission,
-                  }),
-                catch: (cause) => new Cause.UnknownError(cause),
-              }),
+              externalAgents
+                .prompt(project, answeredBy, `direct:${sessionId}`, text, {
+                  onUpdate,
+                  askPermission,
+                })
+                .pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
             preamble: (text) =>
               Effect.try({ try: userNodeId, catch: (cause) => new Cause.UnknownError(cause) }).pipe(
                 Effect.flatMap((nodeId) => memoryPreamble(project, text, nodeId)),
