@@ -555,16 +555,7 @@ export { OutsideTools, outsideReadToolNames } from "./tools/outside.ts";
 export { ApprovedTools } from "./tools/approved.ts";
 export { CodeSkillRejected, CodeSkills, builtinOverlap } from "./skills/code-skills.ts";
 export { CodeTools } from "./tools/code.ts";
-export {
-  PermissionReviewResponse,
-  approvalToolDefinitions,
-  deleteOutsideFileDefinition,
-  gatedToolNames,
-  permissionReviewInterrupt,
-  reviewedToolDefinitions,
-  saveCodeSkillDefinition,
-  writeOutsideFileDefinition,
-} from "./tools/definitions.ts";
+export { PermissionReviewResponse, gatedToolNames } from "./tools/definitions.ts";
 export {
   PermissionClassifier,
   reviewInstructions,

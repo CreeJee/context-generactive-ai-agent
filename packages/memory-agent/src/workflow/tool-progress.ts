@@ -2,7 +2,6 @@ import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import type { ToolPhaseCompleteInfo } from "@tanstack/ai";
 import { HashSet, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 
@@ -25,7 +24,6 @@ const volatileKeys = HashSet.fromIterable([
 const isString = Schema.is(Schema.String);
 const isArray = Schema.is(Schema.Array(JsonValue));
 const isObject = Schema.is(Schema.Record(Schema.String, JsonValue));
-const decodeResult = Schema.decodeUnknownOption(JsonValue);
 const decodeText = Schema.decodeUnknownOption(Schema.fromJsonString(JsonValue));
 const decodeInput = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -50,24 +48,19 @@ function stable(value: JsonValue): JsonValue {
   return value;
 }
 
-/** Parse the SDK's heterogeneous result at this boundary before measuring progress. */
+/**
+ * What a call's result counts as for workflow progress: a fingerprint of its substance, or null
+ * when it made none. A text result that holds JSON counts as that JSON.
+ */
 export const toolProgressFingerprint: {
   (
     args: string,
-    result: ToolPhaseCompleteInfo["results"][number]["result"],
+    result: JsonValue,
   ): (name: string) => ReturnType<typeof toolProgressFingerprintBody>;
 } & typeof toolProgressFingerprintBody = EffectFunction.dual(3, toolProgressFingerprintBody);
-function toolProgressFingerprintBody(
-  name: string,
-  args: string,
-  result: ToolPhaseCompleteInfo["results"][number]["result"],
-): string | null {
+function toolProgressFingerprintBody(name: string, args: string, result: JsonValue): string | null {
   if (HashSet.has(bookkeeping, name)) return null;
-  const parsed = isString(result)
-    ? Option.orElse(decodeText(result), () => decodeResult(result))
-    : decodeResult(result);
-  if (Option.isNone(parsed)) return null;
-  const value = parsed.value;
+  const value = isString(result) ? Option.getOrElse(decodeText(result), () => result) : result;
   if (value === null || (isString(value) && !isTruthy(value.trim()))) return null;
   if (isObject(value)) {
     if (

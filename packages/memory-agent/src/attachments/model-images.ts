@@ -1,17 +1,10 @@
-import type { ChatMiddleware, ChatMiddlewareConfig, ModelMessage } from "@tanstack/ai";
-import { Array as Arr, Effect, Function as EffectFunction, HashMap, Option, Schema } from "effect";
+import { Array as Arr, Effect, HashMap, Option, Schema } from "effect";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import type { Attachment, AttachmentsApi } from "./attachments.ts";
 import { attachmentIdOf } from "./urls.ts";
 
-/** Image inlining must never replace the already-compacted provider view with transcript history. */
-export const modelBoundMessages = (
-  config: Pick<ChatMiddlewareConfig, "messages" | "providerMessages">,
-): readonly ModelMessage[] => config.providerMessages ?? config.messages;
-
 type ImageAttachments = Pick<AttachmentsApi, "get" | "forModelEffect" | "dataUrlEffect">;
-type ImageRun = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 
 interface Part {
   readonly type: string;
@@ -88,44 +81,16 @@ const inlinerFor = Effect.fnUntraced(function* (
     );
 });
 
-const modelParts = (message: ModelMessage): ReadonlyArray<Part> =>
-  Array.isArray(message.content) ? message.content : [];
-
-/**
- * Stored transcripts use browser-safe relative attachment URLs. Providers cannot fetch those, so
- * only the model-bound copy gets the smaller stored image as provider-neutral inline data.
- * `run` is the owner's runtime: SDK middleware is a Promise boundary.
- */
-export const modelImages: {
-  (run: ImageRun): (attachments: ImageAttachments) => ChatMiddleware;
-} & typeof modelImagesBody = EffectFunction.dual(2, modelImagesBody);
-function modelImagesBody(attachments: ImageAttachments, run: ImageRun): ChatMiddleware {
-  return {
-    name: "memory-agent/model-images",
-    onConfig: (ctx, config) => {
-      const messages = modelBoundMessages(config);
-      const ids = attachmentsIn(messages.map(modelParts));
-      return ctx.phase === "init" || ids.length === 0
-        ? undefined
-        : run(
-            Effect.map(inlinerFor(attachments, ids), (inline) => ({
-              providerMessages: messages.map((message) =>
-                Array.isArray(message.content)
-                  ? { ...message, content: message.content.map(inline) }
-                  : message,
-              ),
-            })),
-          );
-    },
-  };
-}
-
 const isText = Schema.is(Schema.String);
 
 const storedParts = (message: StoredMessage): ReadonlyArray<Part> =>
   message.role === "assistant" || isText(message.content) ? [] : message.content;
 
-/** The same for the Effect AI loop: each model step's history gets the images inline. */
+/**
+ * Stored transcripts use browser-safe relative attachment URLs. Providers cannot fetch those, so
+ * only the model-bound copy gets the smaller stored image as provider-neutral inline data: each
+ * model step's history gets the images inline.
+ */
 export const modelImagesHook = (attachments: ImageAttachments): RunHook => ({
   request: (_scope, request) =>
     inlinerFor(attachments, attachmentsIn(request.history.map(storedParts))).pipe(

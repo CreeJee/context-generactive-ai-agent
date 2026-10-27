@@ -1,7 +1,4 @@
-import { runNativeEffect } from "../runtime/native-effect.ts";
-import { isTruthy } from "../truthy.ts";
-import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
-import { Array as Arr, Context, Crypto, Effect, HashSet, Layer, Match, Option } from "effect";
+import { Context, Crypto, Effect, HashSet, Layer, Match, Option } from "effect";
 import type { StoredInterruptPayload } from "../chat-store/schema.ts";
 import type { JsonValue } from "../json.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
@@ -9,7 +6,6 @@ import { type Admission, CallOutcome } from "../loop/scheduler.ts";
 import { InterruptAnswer } from "../loop/store.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
-import { permissionReviewInterrupt } from "../tools/definitions.ts";
 import { PermissionClassifier } from "./classifier.ts";
 import { PermissionReviews, type PermissionReview } from "./reviews.ts";
 
@@ -21,8 +17,8 @@ export interface GateBinding {
   readonly gated: HashSet.HashSet<string>;
   /**
    * `classifier`: the permission review decides first and asks the user only when unsure (`auto`
-   * mode). `user`: every call asks the user (tools without a static TanStack approval in `ask`
-   * mode, such as MCP tools).
+   * mode). `user`: every call asks the user (tools without a static approval in `ask` mode, such
+   * as MCP tools).
    */
   readonly decider: "classifier" | "user";
 }
@@ -35,32 +31,6 @@ interface GatedCall {
   readonly id: string;
   readonly name: string;
   readonly written: string;
-}
-
-const gatedCallOf = (call: ToolCall): GatedCall => ({
-  id: call.id,
-  name: call.function.name,
-  written: call.function.arguments,
-});
-
-/** Gated calls the model made that have no result yet: the batch about to execute. */
-function pendingGatedCalls(
-  messages: ReadonlyArray<ModelMessage>,
-  gatedToolNames: HashSet.HashSet<string>,
-): ToolCall[] {
-  const answered = HashSet.fromIterable(
-    messages.flatMap((message) =>
-      message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
-    ),
-  );
-  return messages.flatMap((message) =>
-    message.role === "assistant"
-      ? (message.toolCalls ?? []).filter(
-          (call) =>
-            HashSet.has(gatedToolNames, call.function.name) && !HashSet.has(answered, call.id),
-        )
-      : [],
-  );
 }
 
 /** What the model receives instead of a result when a call does not run. */
@@ -181,106 +151,6 @@ const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
   return { reviewOf, decisionOf, askingOf, answered };
 });
 
-/**
- * The implementation factory carries no owner services or first-run binding. A Goal may retain
- * this function reference and provide the current central services separately for every run.
- * SDK callbacks below remain the existing Promise/callback interoperability boundary.
- */
-export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
-  binding: GateBinding,
-): Effect.fn.Return<
-  ChatMiddleware<unknown, typeof permissionReviewInterrupt>,
-  never,
-  PermissionClassifier | PermissionReviews
-> {
-  const gate = yield* gateFor(binding);
-  const { gated } = binding;
-
-  return {
-    name: "memory-agent/permission-gate",
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onInterruptBoundary(ctx) {
-      const ask = (call: ToolCall, { reason, askedBy }: Asking) =>
-        permissionReviewInterrupt.interrupt({
-          key: call.id,
-          reason: "permission_review",
-          message: reason,
-          payload: {
-            toolCallId: call.id,
-            toolName: call.function.name,
-            arguments: call.function.arguments,
-            reason,
-            askedBy,
-          },
-        });
-      const batch = ctx.phase === "beforeTools" ? pendingGatedCalls(ctx.messages, gated) : [];
-      return runNativeEffect(
-        Effect.map(
-          Effect.forEach(batch, (call) =>
-            Effect.map(gate.decisionOf(gatedCallOf(call)), (decision) =>
-              Option.toArray(Option.map(gate.askingOf(decision), (asking) => ask(call, asking))),
-            ),
-          ),
-          (asks) => {
-            const interrupts = asks.flat();
-            return interrupts.length > 0 ? { interrupts } : undefined;
-          },
-        ),
-      );
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onInterruptResolution(_ctx, resolutions) {
-      // Answers are recorded in the order the user gave them, each its own append.
-      return runNativeEffect(
-        gate.answered(
-          resolutions.for(permissionReviewInterrupt).flatMap((resolution) => {
-            const { payload } = resolution.request;
-            return isTruthy(payload)
-              ? [
-                  {
-                    call: {
-                      id: payload.toolCallId,
-                      name: payload.toolName,
-                      written: payload.arguments,
-                    },
-                    approved: resolution.status === "resolved" && resolution.response.approved,
-                  },
-                ]
-              : [];
-          }),
-        ),
-      );
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onBeforeToolCall(ctx, hook) {
-      const call = Option.filter(
-        Arr.findLast(
-          ctx.messages.flatMap((message) =>
-            message.role === "assistant" ? (message.toolCalls ?? []) : [],
-          ),
-          (entry) => entry.id === hook.toolCallId,
-        ),
-        (entry) => entry.function.name === hook.toolName,
-      );
-      return HashSet.has(gated, hook.toolName)
-        ? runNativeEffect(
-            Effect.map(
-              Option.match(call, {
-                onNone: () => Effect.succeedNone,
-                onSome: (entry) => gate.reviewOf(gatedCallOf(entry)),
-              }),
-              (review) =>
-                isAllowed(review) ? undefined : { type: "skip" as const, result: refusal(review) },
-            ),
-          )
-        : undefined;
-    },
-  };
-});
-
 /** The interrupt that asks the user about a gated call. */
 const askUser = (call: GatedCall, { reason, askedBy }: Asking) =>
   Effect.map(
@@ -306,8 +176,8 @@ const askUser = (call: GatedCall, { reason, askedBy }: Asking) =>
   );
 
 /**
- * The same gate for the Effect AI loop. A call waiting on the user no longer holds the others back:
- * each gated call is decided on its own, and the user is asked about those the review cannot decide.
+ * The gate of an Effect AI run. A call waiting on the user does not hold the others back: each
+ * gated call is decided on its own, and the user is asked about those the review cannot decide.
  */
 export const makePermissionGateHook = Effect.fnUntraced(function* (
   binding: GateBinding,
@@ -360,15 +230,6 @@ export const makePermissionGateHook = Effect.fnUntraced(function* (
 const make = Effect.gen(function* () {
   const run = Effect.runSyncWith(yield* Effect.context<PermissionClassifier | PermissionReviews>());
   return {
-    /** Native factory for implementation pinning with a fresh central Context on every run. */
-    factory: makePermissionGateMiddleware,
-    /**
-     * Compatibility boundary for existing SDK callers. This service-bound method is not the
-     * implementation-only factory and must not be cached as a Goal's current authority.
-     */
-    forRun(binding: GateBinding): ChatMiddleware<unknown, typeof permissionReviewInterrupt> {
-      return run(makePermissionGateMiddleware(binding));
-    },
     /** The gate of one Effect AI run. */
     hookForRun(binding: GateBinding): RunHook<Crypto.Crypto> {
       return run(makePermissionGateHook(binding));

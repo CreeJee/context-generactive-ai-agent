@@ -68,8 +68,9 @@ try {
             ],
       });
     }
-    if (url.pathname === "/api/chat") {
-      const id = url.searchParams.get("threadId") ?? url.searchParams.get("session");
+    const messages = /^\/api\/sessions\/([^/]+)\/messages$/.exec(url.pathname);
+    if (messages) {
+      const id = decodeURIComponent(messages[1]);
       if (delayed && id === other)
         await new Promise((resolve) => {
           releaseLate = resolve;
@@ -83,6 +84,7 @@ try {
               parts: [{ type: "text", content: `NAV-HISTORY-${id}` }],
             },
           ],
+          older: null,
           activeRun: null,
           interrupts: approvals ? { runId: `nav-run-${id}`, pending: [interruptFor(id)] } : null,
         },

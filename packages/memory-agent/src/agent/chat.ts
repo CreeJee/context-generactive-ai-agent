@@ -23,7 +23,6 @@ import type { RunTool } from "../tools/run-tool.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { workflowActions } from "../workflow/actions.ts";
 import { Scope } from "effect";
-import type { ChatMiddleware } from "@tanstack/ai";
 import type { AgUiEvent } from "../loop/chunks.ts";
 import { memoryRunLogs, runAcceptedEvent, type RunLog } from "../loop/run-log.ts";
 import type { Refusal, RunInput } from "../api/chat-api.ts";
@@ -56,7 +55,7 @@ import { KanbanOrchestrator, type KanbanAttentionReason } from "../kanban/orches
 import { KanbanTools, kanbanAttentionPrompt, kanbanInstructions } from "../kanban/tools.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
-import { modelBoundMessages, modelImagesHook } from "../attachments/model-images.ts";
+import { modelImagesHook } from "../attachments/model-images.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
@@ -421,8 +420,6 @@ export type ChatStart = Data.TaggedEnum<{
 }>;
 export const ChatStart = Data.taggedEnum<ChatStart>();
 const refused = (refusal: Refusal) => ChatStart.Refused({ refusal });
-
-export { modelBoundMessages };
 
 /** The reason the owner aborts a run's controller with when it shuts down; a cancel has another. */
 const serviceShutdown = "service_shutdown";
@@ -1024,31 +1021,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const endedAs = (outcome: "completed" | "failed") => () => {
       MutableRef.set(terminalOutcome, outcome);
     };
-    const successfulCalls = MutableHashSet.empty<string>();
-    const middleware: ChatMiddleware = {
-      name: "memory-agent/workflow-lifecycle",
-      onAfterToolCall(_ctx, info) {
-        if (info.ok) MutableHashSet.add(successfulCalls, info.toolCallId);
-      },
-      onToolPhaseComplete(_ctx, info) {
-        // Declined approvals have no after-call hook; skipped/error results never count.
-        madeProgress(
-          info.toolCalls
-            .filter((call) => MutableHashSet.has(successfulCalls, call.id))
-            .map((call) =>
-              toolProgressFingerprint(
-                call.function.name,
-                call.function.arguments,
-                info.results.find((entry) => entry.toolCallId === call.id)?.result,
-              ),
-            ),
-        );
-        MutableHashSet.clear(successfulCalls);
-      },
-      onFinish: endedAs("completed"),
-      onAbort: endedAs("failed"),
-      onError: endedAs("failed"),
-    };
     const hook: RunHook = {
       // Only a call whose tool ran and returned counts; what a gate answers always carries an
       // error, which never counts either.
@@ -1062,12 +1034,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
         ),
-      // Waiting for the user is a finish, as it was for the middleware; settlement leaves it.
+      // Waiting for the user is a finish; settlement leaves it.
       ended: (_scope, end) => Effect.sync(endedAs(finishedRun(end) ? "completed" : "failed")),
     };
-    // Hooks only capture the candidate terminal outcome. Settlement runs after the complete SDK
-    // stream and every middleware finalizer has stopped, so a later audited finalizer can still
-    // downgrade an earlier onFinish to failure before the durable decision is published.
+    // Hooks only capture the candidate terminal outcome. Settlement runs after the run's whole
+    // stream has stopped, hooks included, so a later audited finalizer can still downgrade an
+    // earlier finish to failure before the durable decision is published.
     const settle = Effect.suspend(() => {
       if (MutableRef.getAndSet(settled, true)) return Effect.void;
       return Effect.gen(function* () {
@@ -1114,7 +1086,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* events.publishSession(sessionId, "run-state");
       });
     });
-    return { middleware, hook, settle };
+    return { hook, settle };
   };
 
   // Embedding can take seconds (the model loads on first use), and interpretation is a model
@@ -1132,16 +1104,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.andThen(quietlyIndexing(indexer.analyzeUpTo(afterRunBudget))),
     Effect.andThen(interpreter.automatic ? quietlyIndexing(interpreter.runPending) : Effect.void),
   );
-  const index = () => void runEffect(indexAfterRun);
-  const indexInBackground = {
-    middleware: {
-      name: "memory-agent/index",
-      onFinish: index,
-      onAbort: index,
-      onError: index,
-    } satisfies ChatMiddleware,
-    /** The same for the Effect AI loop: the work outlives the run that started it. */
-    hook: { ended: () => Effect.asVoid(Effect.forkDetach(indexAfterRun)) } satisfies RunHook,
+  /** Indexes once a run has ended; the work outlives the run that started it. */
+  const indexInBackground: RunHook = {
+    ended: () => Effect.asVoid(Effect.forkDetach(indexAfterRun)),
   };
 
   const traceCursor = (request: Request) => {
@@ -1630,7 +1595,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               source: { provider: "external-acp", api: "text", model: answeredBy },
               system: [],
               tools: [],
-              hooks: [recorder.hookForRun(binding), indexInBackground.hook],
+              hooks: [recorder.hookForRun(binding), indexInBackground],
               modelFailure: modelFailureOf(shownExternalFailure),
             },
             {
@@ -2285,7 +2250,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...(reportSource !== null ? [] : [yield* memory.hook]),
           recorder.hookForRun(answers),
           workflowLifecycle.hook,
-          indexInBackground.hook,
+          indexInBackground,
           summaries.hookForRun(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,

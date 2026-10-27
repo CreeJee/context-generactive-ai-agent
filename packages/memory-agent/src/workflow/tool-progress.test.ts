@@ -19,7 +19,6 @@ test("successful modifications count but no-op writes and edits do not", () => {
 
 test("failures, refusals and empty results are not substantive progress", () => {
   for (const result of [
-    undefined,
     null,
     "",
     {},

@@ -1,5 +1,3 @@
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import type { ChatMiddleware } from "@tanstack/ai";
 import { Array as Arr, Context, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
@@ -19,7 +17,6 @@ export interface DeliveryBinding {
 export { queueDeliveredEvent };
 
 const make = Effect.gen(function* () {
-  const run = runNativeEffectWith(yield* Effect.context());
   const queue = yield* MessageQueue;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
@@ -104,29 +101,9 @@ const make = Effect.gen(function* () {
     toUserMessage,
 
     /**
-     * Delivers waiting messages when a tool call returns: they join the request the model is about
-     * to get, and the conversation, in queue order.
+     * Delivers waiting messages when a tool call returns, before the next model step: they join the
+     * request the model is about to get, and the conversation, in queue order.
      */
-    forRun(binding: DeliveryBinding): ChatMiddleware {
-      return {
-        name: "memory-agent/queue-delivery",
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onConfig: (ctx, config) =>
-          run(
-            deliver(binding, ctx.phase === "beforeModel" && afterTool(config.messages), (ids) =>
-              Effect.sync(() => {
-                ctx.emitCustomEvent(queueDeliveredEvent, { ids });
-              }),
-            ).pipe(
-              Effect.map((messages) =>
-                messages.length > 0 ? { messages: [...config.messages, ...messages] } : undefined,
-              ),
-            ),
-          ),
-      };
-    },
-
-    /** The same delivery for the Effect AI loop, before each model step. */
     hookForRun(binding: DeliveryBinding): RunHook {
       return {
         joining: (scope, conversation) =>

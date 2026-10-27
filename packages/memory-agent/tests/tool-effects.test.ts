@@ -2,7 +2,7 @@ import { HashSet, Effect, FileSystem, Layer, Path } from "effect";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { layer } from "@effect/vitest";
 import { test, expect } from "vite-plus/test";
-import { approvalToolDefinitions } from "../src/tools/definitions.ts";
+import { gatedToolNames } from "../src/tools/definitions.ts";
 import { delegateToolName } from "../src/tools/delegate.ts";
 import { builtinToolEffects, readOnlyToolNames } from "../src/tools/effects.ts";
 
@@ -14,10 +14,7 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = yield* (yield* Path.Path).fromFileUrl(new URL("../src/", import.meta.url));
-      const registered = new Set<string>([
-        ...approvalToolDefinitions.map((tool) => tool.name),
-        delegateToolName,
-      ]);
+      const registered = new Set<string>([...gatedToolNames, delegateToolName]);
       for (const entry of yield* fs.readDirectory(root, { recursive: true })) {
         const path = String(entry);
         if (!path.endsWith(".ts")) continue;
@@ -31,9 +28,6 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
             continue;
           }
           switch (String(path)) {
-            case "tools/definitions.ts":
-              expect(call[1]).toMatch(/\.\.\.(saveCodeSkill|writeOutsideFile|deleteOutsideFile)\b/);
-              break;
             case "tools/delegate.ts":
               expect(call[1]).toMatch(/name:\s*delegateToolName\b/);
               break;
