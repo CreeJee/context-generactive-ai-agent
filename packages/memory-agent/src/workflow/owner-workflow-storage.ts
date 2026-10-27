@@ -1,5 +1,3 @@
-/* Effect's encoded workflow boundary necessarily accepts parsed unknown values. */
-/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns */
 import { type Cause, Context, Data, Effect, Exit, Layer, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
@@ -14,7 +12,7 @@ export class OwnerWorkflowStorageError extends Schema.TaggedError<OwnerWorkflowS
 
 export const StoredWorkflowResult = Schema.TaggedUnion({
   Suspended: {},
-  Complete: { exit: Schema.Unknown },
+  Complete: { exit: Schema.Json },
 });
 export type StoredWorkflowResult = typeof StoredWorkflowResult.Type;
 
@@ -69,7 +67,7 @@ const ClockRow = Schema.Struct({
   due_at: Schema.Finite,
 });
 const JsonObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
-const JsonUnknown = Schema.fromJsonString(Schema.Unknown);
+const JsonText = Schema.fromJsonString(Schema.Json);
 
 const failure = (operation: string, reason: OwnerWorkflowStorageError["reason"], cause: unknown) =>
   OwnerWorkflowStorageError.make({ operation, reason, cause });
@@ -79,19 +77,25 @@ const firedClockExit = Schema.encodeEffect(
   Schema.toCodecJson(Schema.Exit(Schema.Null, Schema.Never, Schema.Defect())),
 )(Exit.succeed(null)).pipe(Effect.mapError((cause) => failure("clock.fire", "codec", cause)));
 
-const encodeJson = (operation: string, value: unknown) =>
-  Schema.encodeUnknownEffect(JsonUnknown)(value).pipe(
+const encodeJson = (operation: string, value: Schema.Json) =>
+  Schema.encodeEffect(JsonText)(value).pipe(
     Effect.mapError((cause) => failure(operation, "codec", cause)),
   );
 
-const decodeUnknown = (operation: string, value: string) =>
-  Schema.decodeEffect(JsonUnknown)(value).pipe(
+/** A workflow payload is stored as the JSON object its record fields encode to. */
+const encodePayload = (owner: Pick<StoredExecution, "payload">) =>
+  Schema.encodeUnknownEffect(JsonObject)(owner.payload).pipe(
+    Effect.mapError((cause) => failure("execution.payload", "codec", cause)),
+  );
+
+const decodeJson = (operation: string, value: string) =>
+  Schema.decodeEffect(JsonText)(value).pipe(
     Effect.mapError((cause) => failure(operation, "codec", cause)),
   );
 
 const storedResult = Effect.fnUntraced(function* (operation: string, value: string | null) {
   if (value === null) return undefined;
-  const result = yield* decodeUnknown(operation, value);
+  const result = yield* decodeJson(operation, value);
   return yield* Schema.decodeUnknownEffect(StoredWorkflowResult)(result).pipe(
     Effect.mapError((cause) => failure(operation, "invalid_state", cause)),
   );
@@ -126,12 +130,12 @@ export interface OwnerWorkflowStorageApi {
   readonly deferredResult: (
     executionId: string,
     deferredName: string,
-  ) => Stored<Option.Option<unknown>>;
+  ) => Stored<Option.Option<Schema.Json>>;
   readonly setDeferredResult: (
     workflowName: string,
     executionId: string,
     deferredName: string,
-    exit: unknown,
+    exit: Schema.Json,
   ) => Stored<boolean>;
   readonly scheduleClock: (clock: ScheduledClock) => Stored<number>;
   readonly pendingClocks: Stored<ReadonlyArray<ScheduledClock>>;
@@ -254,12 +258,12 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
     );
 
   const admitRaw = Effect.fnUntraced(function* (request: OwnerWorkflowAdmissionRequest) {
-    const payloadJson = yield* encodeJson("execution.payload", request.payload);
+    const payloadJson = yield* encodePayload(request);
     const existing = yield* readExecution(request.executionId);
     if (Option.isSome(existing)) {
       if (
         existing.value.workflowName !== request.workflowName ||
-        (yield* encodeJson("execution.payload", existing.value.payload)) !== payloadJson ||
+        (yield* encodePayload(existing.value)) !== payloadJson ||
         existing.value.parentExecutionId !== request.parentExecutionId
       )
         return yield* failure("execution.admit", "execution_conflict", request.executionId);
@@ -279,7 +283,7 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
     workflowName: string,
     executionId: string,
     deferredName: string,
-    exit: unknown,
+    exit: Schema.Json,
   ) {
     const json = yield* encodeJson("deferred.encode", exit);
     const inserted = yield* step("deferred.complete")(sql`
@@ -377,7 +381,7 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
     deferredResult: (executionId, deferredName) =>
       Effect.flatMap(step("deferred.read")(deferredRow({ executionId, deferredName })), (row) =>
         Effect.transposeOption(
-          Option.map(row, (value) => decodeUnknown("deferred.exit", value.exit_json)),
+          Option.map(row, (value) => decodeJson("deferred.exit", value.exit_json)),
         ),
       ),
     setDeferredResult: (workflowName, executionId, deferredName, exit) =>

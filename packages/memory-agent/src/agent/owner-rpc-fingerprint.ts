@@ -1,4 +1,4 @@
-import { Data, Function as EffectFunction, Match, Option, Result, Schema } from "effect";
+import { Data, Function as EffectFunction, Match, Option, Predicate, Result, Schema } from "effect";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { JsonValue } from "../json.ts";
 
@@ -38,30 +38,31 @@ const fail = (reason: OwnerRpcFingerprintFailed["reason"]): never => {
   throw OwnerRpcFingerprintFailed.make({ reason });
 };
 
-/** The existing canonical byte contract, including key ordering and finite numbers. */
-export function ownerRpcCanonicalJson(value: OwnerRpcJson): string {
-  if (value === null) return "null";
-  // Primitive discrimination belongs to this JSON serialization boundary.
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof
-  switch (typeof value) {
-    case "boolean":
-    case "string":
-      return JSON.stringify(value);
-    case "number":
-      if (!Number.isFinite(value)) return fail("non_finite");
-      return JSON.stringify(value);
-    case "object":
-      if (Array.isArray(value)) return `[${value.map(ownerRpcCanonicalJson).join(",")}]`;
-      return `{${Object.entries(value)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, entry]) => `${JSON.stringify(key)}:${ownerRpcCanonicalJson(entry)}`)
-        .join(",")}}`;
-    default:
-      return fail("non_json");
-  }
-}
-
 const isList = (value: JsonValue): value is ReadonlyArray<JsonValue> => Array.isArray(value);
+const isFields = (value: JsonValue): value is { readonly [key: string]: JsonValue } =>
+  Predicate.isObject(value) && !isList(value);
+
+/** The existing canonical byte contract, including key ordering and finite numbers. */
+export const ownerRpcCanonicalJson = (value: OwnerRpcJson): string =>
+  Match.value(value).pipe(
+    Match.when(Match.null, () => "null"),
+    Match.when(Match.boolean, (flag) => JSON.stringify(flag)),
+    Match.when(Match.string, (text) => JSON.stringify(text)),
+    Match.when(Match.number, (number) =>
+      Number.isFinite(number) ? JSON.stringify(number) : fail("non_finite"),
+    ),
+    Match.when(isList, (items) => `[${items.map(ownerRpcCanonicalJson).join(",")}]`),
+    Match.when(
+      isFields,
+      (fields) =>
+        `{${Object.entries(fields)
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .map(([key, entry]) => `${JSON.stringify(key)}:${ownerRpcCanonicalJson(entry)}`)
+          .join(",")}}`,
+    ),
+    // Values outside the JSON type, such as undefined, reach here only from untyped callers.
+    Match.orElse(() => fail("non_json")),
+  );
 
 /**
  * A value in the frame the Goal worker's codec sent it in, which ledger rows keep their input in

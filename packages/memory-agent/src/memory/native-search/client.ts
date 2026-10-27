@@ -54,6 +54,10 @@ type RequestControl = {
   cancel(): void;
   close(): void;
 };
+/** A native SearchControl whose prototype reports whether a read pinned its snapshot. */
+const SnapshotPinningControl = Schema.Struct({
+  snapshotWasPinned: Schema.declare(Predicate.isFunction),
+});
 type Job = {
   readonly command: OwnerCommand;
   readonly control: Option.Option<RequestControl>;
@@ -459,11 +463,10 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               const binding = turbovec.loadTurbovec();
               if (!Predicate.isFunction(binding.SearchControl))
                 throw NativeOwnerFailed.make({ reason: "native-incompatible" });
-              // eslint-disable-next-line typescript/unbound-method -- ABI capability inspection only; the method is never invoked without its receiver.
+              // ABI capability inspection only; the method is never invoked without its receiver.
               if (
                 admission !== undefined &&
-                // eslint-disable-next-line typescript/unbound-method -- Inspection only, not an unbound invocation.
-                !Predicate.isFunction(binding.SearchControl.prototype.snapshotWasPinned)
+                !Schema.is(SnapshotPinningControl)(binding.SearchControl.prototype)
               )
                 throw NativeOwnerFailed.make({ reason: "native-incompatible" });
               const control = new binding.SearchControl(

@@ -934,34 +934,34 @@ export type ProviderToolRuntimeFailure =
   | ProviderToolNormalizationFailure
   | ProviderToolPolicyPropagationFailure;
 
-/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- Provider SDK payloads are intentionally opaque; normalization reads optional reported counters while retaining the exact raw value. */
-const finite = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
-const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  Predicate.isReadonlyObject(value) ? value : undefined;
-const firstNumber = (source: Readonly<Record<string, unknown>>, keys: readonly string[]) =>
-  keys.map((key) => finite(source[key])).find((found) => found !== undefined);
-const numberRecord = (value: unknown): Readonly<Record<string, number>> | undefined => {
-  const entries = Object.entries(objectRecord(value) ?? {}).filter(
-    (entry): entry is [string, number] => finite(entry[1]) !== undefined,
+// Provider SDK payloads are intentionally opaque; normalization reads optional reported counters
+// while retaining the exact raw value.
+const ReportedFields = Schema.Record(Schema.String, Schema.Unknown);
+type ReportedFields = typeof ReportedFields.Type;
+const reportedFields = Schema.decodeUnknownOption(ReportedFields);
+const isFiniteNumber = Schema.is(Schema.Finite);
+const firstNumber = (source: ReportedFields, keys: readonly string[]) =>
+  keys.map((key) => source[key]).find(isFiniteNumber);
+const numberRecord = (source: ReportedFields, key: string) =>
+  reportedFields(source[key]).pipe(
+    Option.map((fields) =>
+      Object.entries(fields).filter((entry): entry is [string, number] => isFiniteNumber(entry[1])),
+    ),
+    Option.filter((entries) => entries.length > 0),
+    Option.map((entries): Readonly<Record<string, number>> =>
+      Object.freeze(Object.fromEntries(entries)),
+    ),
+    Option.getOrUndefined,
   );
-  return entries.length === 0 ? undefined : Object.freeze(Object.fromEntries(entries));
-};
 /** Normalize reported values only; never estimate absent tokens or cost. */
-export function normalizeProviderToolUsage(options: {
-  readonly raw: unknown;
+export function normalizeProviderToolUsage<Raw>(options: {
+  readonly raw: Raw;
   readonly attribution?: ProviderToolUsageAttribution | undefined;
-}) {
-  return normalizeProviderToolUsageBody(options.raw, options.attribution);
-}
-function normalizeProviderToolUsageBody(
-  raw: unknown,
-  attribution?: ProviderToolUsageAttribution,
-): ProviderToolUsage | undefined {
-  const source = objectRecord(raw);
-  return source === undefined
-    ? undefined
-    : Object.freeze({
+}): ProviderToolUsage | undefined {
+  const { raw, attribution } = options;
+  return Option.getOrUndefined(
+    Option.map(reportedFields(raw), (source) =>
+      Object.freeze({
         ...optionalProperty(
           "attribution",
           attribution === undefined ? undefined : Object.freeze({ ...attribution }),
@@ -985,29 +985,28 @@ function normalizeProviderToolUsageBody(
         ),
         ...optionalProperty(
           "serverToolRequests",
-          numberRecord(source.serverToolRequests) ??
-            numberRecord(source.server_tool_requests) ??
-            numberRecord(source.server_tool_use),
+          numberRecord(source, "serverToolRequests") ??
+            numberRecord(source, "server_tool_requests") ??
+            numberRecord(source, "server_tool_use"),
         ),
         raw,
-      });
+      }),
+    ),
+  );
 }
-export function normalizeProviderToolCost(raw: unknown): ProviderToolCost | undefined {
+export function normalizeProviderToolCost<Raw>(raw: Raw): ProviderToolCost | undefined {
   // Anything but an object reports no amount.
-  const source = objectRecord(raw) ?? {};
-  const amount = finite(source.amount) ?? finite(source.cost);
+  const source = Option.getOrElse(reportedFields(raw), (): ReportedFields => ({}));
+  const amount = firstNumber(source, ["amount", "cost"]);
+  const currency = source.currency;
   return amount === undefined
     ? undefined
     : Object.freeze({
         amount,
-        ...optionalProperty(
-          "currency",
-          typeof source.currency === "string" ? source.currency : undefined,
-        ),
+        ...optionalProperty("currency", Schema.is(Schema.String)(currency) ? currency : undefined),
         raw,
       });
 }
-/* oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type */
 const providerStatus = HashMap.fromIterable<string, ProviderToolLifecycleStatus>([
   ["pending", "pending"],
   ["queued", "pending"],

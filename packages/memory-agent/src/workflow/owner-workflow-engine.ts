@@ -13,8 +13,6 @@ import {
   Schema,
   Scope,
 } from "effect";
-/* Effect's low-level encoded workflow contract necessarily crosses object and unknown boundaries. */
-/* oxlint-disable anti-slop/no-object-parameters, anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/require-safety-comment-for-type-assertion */
 import { Workflow } from "effect/workflow";
 import type { Activity, DurableDeferred } from "effect/workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -42,11 +40,13 @@ export class OwnerWorkflowEngineError extends Schema.TaggedError<OwnerWorkflowEn
   },
 ) {}
 
+/** A workflow body as effect/workflow registers it with the low-level engine. */
+type EncodedWorkflowBody = Parameters<WorkflowEngine.Encoded["register"]>[1];
+
 type RegisteredWorkflow = {
   readonly workflow: Workflow.Any;
   readonly execute: (
-    payload: object,
-    executionId: string,
+    ...input: Parameters<EncodedWorkflowBody>
   ) => Effect.Effect<
     Workflow.Result<unknown, unknown>,
     never,
@@ -72,10 +72,15 @@ type ExitSchemaOwner = {
 const jsonExit = (owner: ExitSchemaOwner) =>
   // Effect's type-erased Workflow.Any exposes Top schemas although every registered workflow
   // carries a concrete service-free codec at runtime; keep that unavoidable cast in this adapter.
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions
+  // SAFETY: registered workflows declare success and error schemas without decoding or encoding
+  // services, so the derived JSON codec needs none either.
   Schema.toCodecJson(
-    Schema.Exit(owner.successSchema, owner.errorSchema, Schema.Defect()),
-  ) as unknown as Schema.Codec<Exit.Exit<unknown, unknown>, unknown>;
+    Schema.Exit(
+      owner.successSchema as Schema.Codec<unknown, unknown>,
+      owner.errorSchema as Schema.Codec<unknown, unknown>,
+      Schema.Defect(),
+    ),
+  );
 
 const engineFailure = (
   operation: string,
@@ -83,27 +88,27 @@ const engineFailure = (
   cause: unknown,
 ) => OwnerWorkflowEngineError.make({ operation, reason, cause });
 
-const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): unknown =>
-  Result.getOrThrowWith(Schema.encodeUnknownResult(jsonExit(owner))(exit), (failure) =>
+const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): Schema.Json =>
+  Result.getOrThrowWith(Schema.encodeResult(jsonExit(owner))(exit), (failure) =>
     engineFailure("exit.encode", "codec", failure),
   );
 
-const decodeExit = (owner: ExitSchemaOwner, encoded: unknown): Exit.Exit<unknown, unknown> =>
-  Result.getOrThrowWith(Schema.decodeUnknownResult(jsonExit(owner))(encoded), (failure) =>
+const decodeExit = (owner: ExitSchemaOwner, encoded: Schema.Json): Exit.Exit<unknown, unknown> =>
+  Result.getOrThrowWith(Schema.decodeResult(jsonExit(owner))(encoded), (failure) =>
     engineFailure("exit.decode", "codec", failure),
-  ) as Exit.Exit<unknown, unknown>;
+  );
 
 // `makeUnsafe` owns the typed deferred codecs. The low-level engine only reconstructs the Exit/Cause
 // shape after JSON persistence and must leave success/error payloads encoded for that outer codec.
 const encodedExit = Schema.toCodecJson(
   Schema.Exit(Schema.Unknown, Schema.Unknown, Schema.Defect()),
 );
-const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): unknown =>
-  Result.getOrThrowWith(Schema.encodeUnknownResult(encodedExit)(exit), (failure) =>
+const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): Schema.Json =>
+  Result.getOrThrowWith(Schema.encodeResult(encodedExit)(exit), (failure) =>
     engineFailure("deferred.exit.encode", "codec", failure),
   );
-const decodeEncodedExit = (encoded: unknown): Exit.Exit<unknown, unknown> =>
-  Result.getOrThrowWith(Schema.decodeUnknownResult(encodedExit)(encoded), (failure) =>
+const decodeEncodedExit = (encoded: Schema.Json): Exit.Exit<unknown, unknown> =>
+  Result.getOrThrowWith(Schema.decodeResult(encodedExit)(encoded), (failure) =>
     engineFailure("deferred.exit.decode", "codec", failure),
   );
 
@@ -300,8 +305,7 @@ const makeEngine = Effect.gen(function* () {
     register: Effect.fnUntraced(function* <A, E>(
       workflow: Workflow.Any,
       execute: (
-        payload: object,
-        executionId: string,
+        ...input: Parameters<EncodedWorkflowBody>
       ) => Effect.Effect<A, E, WorkflowEngine.WorkflowInstance | WorkflowEngine.WorkflowEngine>,
     ) {
       const scope = yield* Effect.scope;
@@ -345,23 +349,24 @@ const makeEngine = Effect.gen(function* () {
           }),
         );
         if (Predicate.isTagged(admitted.result, "Complete")) {
-          return (
-            options.discard ? undefined : decodeResult(workflow, admitted.result)
-          ) as Discard extends true ? void : Workflow.Result<unknown, unknown>;
+          return options.discard ? undefined : decodeResult(workflow, admitted.result);
         }
         yield* resumeExecution(workflow, options.executionId);
-        if (options.discard)
-          return undefined as Discard extends true ? void : Workflow.Result<unknown, unknown>;
+        if (options.discard) return undefined;
         const state = yield* liveExecution(workflow, options.executionId);
         const fiber = state.fiber;
         if (fiber === undefined)
           return yield* Effect.die(
             engineFailure("execution.await", "execution_conflict", options.executionId),
           );
-        return (yield* Fiber.join(fiber)) as Discard extends true
-          ? void
-          : Workflow.Result<unknown, unknown>;
-      }),
+        return yield* Fiber.join(fiber);
+      }).pipe(
+        // SAFETY: every branch above answers undefined exactly when `discard` is true, as the
+        // conditional result type states; TypeScript cannot narrow that type through the generic.
+        Effect.map(
+          (result) => result as Discard extends true ? void : Workflow.Result<unknown, unknown>,
+        ),
+      ),
     poll: (_workflow, executionId) =>
       defect("execution.poll", () =>
         Effect.map(storage.execution(executionId), (execution) =>

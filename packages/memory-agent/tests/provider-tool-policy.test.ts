@@ -557,7 +557,6 @@ describe("ProviderToolRuntime", () => {
       }).pipe(withTestPlatform),
   );
 
-  /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- Deliberately malformed runtime inputs must bypass the public compile-time request union. */
   effectTest.live("rejects representative hosted and caller-loop factory option violations", () =>
     Effect.gen(function* () {
       const invalid = [
@@ -603,7 +602,6 @@ describe("ProviderToolRuntime", () => {
       );
     }).pipe(withTestPlatform),
   );
-  /* oxlint-enable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion */
 
   effectTest.live(
     "rejects requested IDs that exposure did not allow and defaults to no tools",
