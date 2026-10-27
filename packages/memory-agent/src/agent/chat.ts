@@ -1,7 +1,7 @@
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { ExecutionAdmission, ExecutionSaturated } from "../runtime/execution-admission.ts";
+import { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import { runTrace } from "../runtime/run-trace.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
@@ -161,7 +161,6 @@ import { fallbackLogged, logDefect, logFailure } from "../runtime/logged-failure
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
-import type { SdkRequestFailed } from "../runtime/sdk-promise.ts";
 import { createChatExecution } from "./chat-execution.ts";
 import { shownRunErrors, withShownRunErrors } from "./run-errors.ts";
 import { createFullLoopExecution, preflightFullLoopExecution } from "./full-loop-execution.ts";
@@ -216,9 +215,11 @@ import {
 import { workflowRunEvents } from "../workflow/run-events.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowExecution, WorkflowExecutionState } from "../workflow/execution.ts";
-import { GoalExecutionAdmissionRefused, GoalExecutions } from "../workflow/goal-execution.ts";
+import { GoalExecutions } from "../workflow/goal-execution.ts";
 import { OwnerWorkflowAdmissionResult } from "../workflow/owner-workflow-storage.ts";
-import { ProviderRetries } from "../workflow/provider-retry.ts";
+import { ProviderRetries, ProviderRetryOutcome } from "../workflow/provider-retry.ts";
+import { toolLedger } from "../workflow/tool-ledger.ts";
+import { type UnsentRetry, unsentRetried } from "../model/unsent-retry.ts";
 import {
   GoalExecutionErrorReason,
   GoalExecutionPayload,
@@ -592,8 +593,8 @@ export const GoalWorkerConfiguration = Context.Reference<GoalWorkerOptions>(
 
 /**
  * The loop that runs a chat run the app's model answers: TanStack's, or Effect AI's
- * (docs/effect-ai-migration.md step 4). Effect AI runs only fresh conversations until step 7 moves
- * the stored rows, and never a Goal run, a pre-bound run or a run with the provider image tool.
+ * (docs/effect-ai-migration.md step 4). Effect AI runs Goal runs too (step 5), but never a run with
+ * the provider image tool.
  */
 export const ChatLoop = Context.Reference<"tanstack" | "effect-ai">(
   "memory-agent/agent/chat/ChatLoop",
@@ -680,6 +681,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const providerToolRuntime = yield* ProviderToolRuntime;
   const sessions = yield* Sessions;
   const runBindings = yield* workflowRunBindings;
+  const goalLedger = yield* toolLedger;
   const uncertain = yield* uncertainRuns;
   const readRecovery = yield* OwnerReadRecovery;
   const workerAuthority = yield* goalWorkerAuthority;
@@ -1871,11 +1873,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Only a new run may select the current Goal. A persisted continuation uses its
         // immutable binding (or the legacy implementation when no binding exists). Replay
         // and hydration paths above never select or bind an implementation.
-        const implementationGoal = isTruthy(boundRun)
+        const pinnedGoal = isTruthy(boundRun)
           ? boundRun.goal_instance_id
           : isTruthy(previousRun)
             ? null
             : (Option.getOrUndefined(yield* latestRevision(sessionId))?.goal_instance_id ?? null);
+        // Effect AI runs every Goal on today's code (docs/effect-ai-migration.md "옛 Goal 처리").
+        const implementationGoal = chatLoop === "effect-ai" ? null : pinnedGoal;
         if (implementationGoal !== null) {
           const loaded = yield* ownerNativeArtifacts
             .acquire(implementationGoal)
@@ -2168,15 +2172,122 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             return { prompts, workspace, parentNotifications, onKanbanBoard };
           });
 
-        if (
-          chatLoop === "effect-ai" &&
-          workerRevision === null &&
-          implementationGoal === null &&
-          !isTruthy(boundRun) &&
-          !injectImageProviderTool
-        ) {
-          // Recorded before the run: only a Goal worker's turn waits for its admission.
-          const answers = userNodeId();
+        /**
+         * Binds a Goal's new run and starts its durable execution: the run's binding, or the
+         * response that refuses the run.
+         */
+        const admitGoalRun = (goalInstanceId: string, workflowRevisionId: number) =>
+          Effect.gen(function* () {
+            const payload = GoalExecutionPayload.make({
+              identity: {
+                owner: { ownerId: projectId, generation: goalExecutionOwnerGeneration },
+                sessionId,
+                runId,
+                goalInstanceId,
+                workflowRevisionId,
+              },
+            });
+            goalExecutionPayload = payload;
+            return yield* goalExecutions
+              .admitAndStart(
+                payload,
+                runBindings.bind(sessionId, runId, workflowRevisionId, resumeRunId),
+              )
+              .pipe(
+                Effect.map((admitted) =>
+                  OwnerWorkflowAdmissionResult.$is("existing")(admitted)
+                    ? Result.fail(json(409, { error: "run_outcome_uncertain" }))
+                    : Result.succeed(admitted.value),
+                ),
+                Effect.catch((error) =>
+                  Effect.succeed(
+                    Result.fail(
+                      Match.value(error).pipe(
+                        Match.tags({
+                          GoalExecutionAdmissionRefused: ({ reason }) =>
+                            json(409, { error: reason }),
+                          ExecutionSaturated: () => json(503, { error: "goal_workflow_saturated" }),
+                        }),
+                        Match.orElse(() => json(500, { error: "goal_workflow_admission_failed" })),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+          });
+        /**
+         * A bound run's output, each chunk committed before it is delivered. A failure ends the
+         * delivery with a coded RUN_ERROR: thrown, the SDK words it "Unknown error occurred".
+         */
+        const boundRunRecorded = (chunks: Stream.Stream<StreamChunk, Cause.UnknownError>) =>
+          Stream.unwrap(
+            Effect.map(Ref.make(0), (recorded) => {
+              const ended = (
+                code: "run_failed" | "run_record_failed",
+                message: string,
+                error: Error,
+                reason: string | null,
+              ) =>
+                Stream.fromEffect(
+                  Effect.gen(function* () {
+                    yield* Effect.logError("Bound run delivery failed", {
+                      code,
+                      error: errorTag(error),
+                      reason,
+                      chunks: yield* Ref.get(recorded),
+                    });
+                    return {
+                      type: EventType.RUN_ERROR,
+                      runId,
+                      threadId: sessionId,
+                      timestamp: DateTime.toEpochMillis(yield* DateTime.now),
+                      code,
+                      message,
+                    } satisfies StreamChunk;
+                  }),
+                );
+              const notRecorded = (error: Error, reason: string | null) =>
+                ended(
+                  "run_record_failed",
+                  "The run's output could not be recorded, so it is no longer delivered.",
+                  error,
+                  reason,
+                );
+              return chunks.pipe(
+                Stream.tap((chunk) =>
+                  Effect.flatMap(
+                    Ref.getAndUpdate(recorded, (count) => count + 1),
+                    (sequence) =>
+                      runEvents.append(sessionId, runId, `chunk:${sequence}`, "chunk", chunk),
+                  ),
+                ),
+                Stream.catchTags({
+                  UnknownError: (error) =>
+                    ended(
+                      "run_failed",
+                      "The run's output stream failed before the run ended.",
+                      error,
+                      null,
+                    ),
+                  RunEventRejected: (error) => notRecorded(error, error.reason),
+                  SchemaError: (error) => notRecorded(error, null),
+                  SqlError: (error) => notRecorded(error, null),
+                }),
+              );
+            }),
+          );
+
+        if (chatLoop === "effect-ai" && !injectImageProviderTool) {
+          // A Goal run is admitted once it is ready to start, and only then records its turn.
+          const goalRun = workerRevision !== null || isTruthy(boundRun);
+          const answers = {
+            projectId,
+            sessionId,
+            runId,
+            get userNodeId() {
+              return userNodeId();
+            },
+          };
           const readOnly = workflowReadOnly || reportSource !== null;
           // Present only while the user has Kagi turned on with a key (R19).
           const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
@@ -2242,10 +2353,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             runId,
             abortSignal: abortController.signal,
           });
-          const memory = memoryTools.runToolsFor(
-            { projectId, sessionId, runId, userNodeId: answers },
-            memoryScope,
-          );
+          const memory = memoryTools.runToolsFor(answers, memoryScope);
           const allSharedTools = redactor.withHiddenRunResults([
             ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
             // An SVG the model writes comes back with a picture of it, for the page to show.
@@ -2368,7 +2476,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               cacheRetention: "long",
             })
             .pipe(Effect.provideService(Scope.Scope, modelScope));
-          const cuttable = steerCuttableModel(runModel.model);
+          // A Goal run sends a request the provider never got again, after a durable wait.
+          const sentAgain = (retry: UnsentRetry) =>
+            providerRetries
+              .wait(
+                { ...retry, sessionId, runId },
+                abortController.signal,
+                events.publishSession(sessionId, "run-state"),
+              )
+              .pipe(
+                fallbackLogged("Provider retry wait failed", () =>
+                  ProviderRetryOutcome.Exhausted(),
+                ),
+              );
+          const cuttable = steerCuttableModel(
+            goalRun ? unsentRetried(runModel.model, sentAgain) : runModel.model,
+          );
           const restore = yield* modelHandoffHistoryEffect({
             metadata: runStore.chatMetadata,
             threadId: sessionId,
@@ -2402,7 +2525,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...gate,
             yield* children.hook,
             ...(reportSource !== null ? [] : [yield* memory.hook]),
-            recorder.hookForRun({ projectId, sessionId, runId, userNodeId: answers }),
+            recorder.hookForRun(answers),
             workflowLifecycle.hook,
             indexInBackground.hook,
             summaries.hookForRun(sessionId),
@@ -2423,6 +2546,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               model: selection.model,
             }),
           ];
+          // A Goal's new run is bound now that it is ready to start; only then is its turn recorded.
+          if (workerRevision !== null && workerGoalId !== null) {
+            const admitted = yield* admitGoalRun(workerGoalId, workerRevision);
+            if (Result.isFailure(admitted)) return admitted.failure;
+            yield* persistUserTurn;
+          }
+          // A Goal run writes each call in its ledger before the call runs.
+          const runTools = goalRun
+            ? yield* goalLedger.forRun(runId).pipe(
+                Effect.map((ledgered) => ledgered(tools)),
+                Effect.option,
+              )
+            : Option.some(tools);
+          if (Option.isNone(runTools)) return json(500, { error: "goal_ledger_unavailable" });
           const loopEvents = runChat(
             {
               model: cuttable.model,
@@ -2431,7 +2568,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ...(holdsImages ? [attachmentInstructions] : []),
                 ...(!workflowReadOnly ? [subagentInstructions] : []),
               ]),
-              tools,
+              tools: runTools.value,
               hooks,
               modelFailure: modelFailureOf(runModel.shownFailure),
             },
@@ -2468,15 +2605,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Effect.ensuring(claim.release),
             Effect.ensuring(Scope.close(modelScope, Exit.void)),
           );
-          MutableHashMap.set(steerCuts, sessionId, cuttable.steer);
+          // A Goal run's answer is never cut: stopping it early would end the Goal step.
+          yield* Effect.when(
+            Effect.sync(() => MutableHashMap.set(steerCuts, sessionId, cuttable.steer)),
+            Effect.succeed(!goalRun),
+          );
           stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
           yield* runStarted;
-          const published = yield* cancellation.publish(
-            yield* Stream.toAsyncIterableEffect(loopEvents),
-          );
           // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types leave
           // `undefined` out of optional fields, where the SDK's types allow it.
-          const chunks = published as Stream.Stream<StreamChunk, SdkRequestFailed>;
+          const loopChunks = loopEvents as Stream.Stream<StreamChunk>;
+          const chunks = yield* cancellation.publish(
+            yield* Stream.toAsyncIterableEffect(
+              goalRun ? boundRunRecorded(loopChunks) : loopChunks,
+            ),
+          );
           const response = toServerSentEventsResponse(
             Stream.toAsyncIterable(
               claim
@@ -2490,7 +2633,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             {
               // Only the execution aborts on a cancel, so the run's last events reach the page.
               abortController: yield* cancellation.delivery,
-              durability: { adapter: memoryStream({ runId }), batch: 1 },
+              // A Goal run's page reads its committed output, as on the TanStack path.
+              durability: {
+                adapter: goalRun
+                  ? yield* streamDurability({ sessionId, runId })
+                  : memoryStream({ runId }),
+                batch: 1,
+              },
             },
           );
           cancellationToRelease = Effect.void;
@@ -2860,39 +3009,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // Capability preparation may yield: owner admission rechecks the captured revision and
           // commits the run binding with the first durable Effect Workflow request atomically.
           const generation = randomUUID();
-          const durablePayload = GoalExecutionPayload.make({
-            identity: {
-              owner: { ownerId: projectId, generation: goalExecutionOwnerGeneration },
-              sessionId,
-              runId,
-              goalInstanceId: workerGoalId,
-              workflowRevisionId: workerRevision,
-            },
-          });
-          goalExecutionPayload = durablePayload;
-          const durableAdmission = yield* goalExecutions
-            .admitAndStart(
-              durablePayload,
-              runBindings.bind(sessionId, runId, workerRevision, resumeRunId),
-            )
-            .pipe(Effect.result);
-          if (Result.isFailure(durableAdmission)) {
-            const error = durableAdmission.failure;
-            if (Schema.is(GoalExecutionAdmissionRefused)(error))
-              return json(409, { error: error.reason });
-            return Schema.is(ExecutionSaturated)(error)
-              ? json(503, { error: "goal_workflow_saturated" })
-              : json(500, { error: "goal_workflow_admission_failed" });
-          }
-          const admitted = durableAdmission.success;
-          if (OwnerWorkflowAdmissionResult.$is("existing")(admitted))
-            return json(409, { error: "run_outcome_uncertain" });
-          workerCapability = yield* workerAuthority.issue(admitted.value, generation);
+          const admitted = yield* admitGoalRun(workerGoalId, workerRevision);
+          if (Result.isFailure(admitted)) return admitted.failure;
+          workerCapability = yield* workerAuthority.issue(admitted.success, generation);
           if (!(workerCapability !== null)) return json(409, { error: "run_outcome_uncertain" });
           boundRun = {
             session_id: sessionId,
-            goal_instance_id: admitted.value.goalInstanceId,
-            workflow_revision_id: admitted.value.workflowRevisionId,
+            goal_instance_id: admitted.success.goalInstanceId,
+            workflow_revision_id: admitted.success.workflowRevisionId,
           };
           yield* persistUserTurn;
         }
@@ -3048,64 +3172,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 }),
               )
             : withShownRunErrors(redactor, executionStream);
-        // Commit each bound run's output before delivering it to the page. A failure ends the
-        // delivery with a coded RUN_ERROR: thrown, the SDK words it "Unknown error occurred".
+        // Commit each bound run's output before delivering it to the page.
         const recorded = isTruthy(boundRun)
           ? Stream.toAsyncIterable(
-              Stream.suspend(() => {
-                let sequence = 0;
-                const ended = (
-                  code: "run_failed" | "run_record_failed",
-                  message: string,
-                  error: Error,
-                  reason: string | null,
-                ) =>
-                  Stream.fromEffect(
-                    Effect.gen(function* () {
-                      yield* Effect.logError("Bound run delivery failed", {
-                        code,
-                        error: errorTag(error),
-                        reason,
-                        chunks: sequence,
-                      });
-                      return {
-                        type: EventType.RUN_ERROR,
-                        runId,
-                        threadId: sessionId,
-                        timestamp: DateTime.toEpochMillis(yield* DateTime.now),
-                        code,
-                        message,
-                      } satisfies StreamChunk;
-                    }),
-                  );
-                const notRecorded = (error: Error, reason: string | null) =>
-                  ended(
-                    "run_record_failed",
-                    "The run's output could not be recorded, so it is no longer delivered.",
-                    error,
-                    reason,
-                  );
-                return Stream.fromAsyncIterable(
-                  stream,
-                  (cause) => new Cause.UnknownError(cause),
-                ).pipe(
-                  Stream.tap((chunk) =>
-                    runEvents.append(sessionId, runId, `chunk:${sequence++}`, "chunk", chunk),
-                  ),
-                  Stream.catchTags({
-                    UnknownError: (error) =>
-                      ended(
-                        "run_failed",
-                        "The run's output stream failed before the run ended.",
-                        error,
-                        null,
-                      ),
-                    RunEventRejected: (error) => notRecorded(error, error.reason),
-                    SchemaError: (error) => notRecorded(error, null),
-                    SqlError: (error) => notRecorded(error, null),
-                  }),
-                );
-              }),
+              boundRunRecorded(
+                Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)),
+              ),
             )
           : stream;
         const published = yield* cancellation.publish(recorded);

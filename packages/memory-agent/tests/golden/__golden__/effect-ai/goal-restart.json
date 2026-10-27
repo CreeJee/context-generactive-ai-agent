@@ -1,0 +1,1193 @@
+{
+  "acknowledgements": [
+    {
+      "run_id": "<id-8>"
+    }
+  ],
+  "artifacts": [],
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "chat_run_id": "<id-11>",
+      "failure": null,
+      "pending_tool_call_ids": [],
+      "resumability": {
+        "state": "not_needed"
+      },
+      "resume_reason": null,
+      "status": "cancelled",
+      "task_id": "<id-10>",
+      "thread_id": "background-<id-12>"
+    }
+  ],
+  "bindings": [
+    {
+      "goal_version": 1,
+      "plan_version": null,
+      "run_id": "<id-8>"
+    },
+    {
+      "goal_version": 1,
+      "plan_version": null,
+      "run_id": "<id-9>"
+    }
+  ],
+  "events": [
+    {
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "name": "run.accepted",
+        "timestamp": "<time>",
+        "type": "CUSTOM",
+        "value": {}
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-8>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-8>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "toolCallName": "__lazy__tool__discovery__",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "toolCallName": "__lazy__tool__discovery__",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"toolNames\":[\"save_code_skill\"]}",
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"toolNames\":[\"save_code_skill\"]}",
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"tools\":[{\"name\":\"save_code_skill\",\"description\":\"Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":64,\"description\":\"Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).\"},\"description\":{\"type\":\"string\",\"minLength\":1,\"description\":\"One line on what the skill does and when to use it; it is listed so later runs can find it.\"},\"program\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"ts\"]},\"code\":{\"type\":\"string\",\"minLength\":1,\"description\":\"TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.\"},\"input\":{\"type\":\"object\",\"description\":\"JSON Schema of `input`, of type \\\"object\\\"; every run is checked against it. Omit when the skill takes no input.\"}},\"required\":[\"runtime\",\"code\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"sh\"]},\"script\":{\"type\":\"string\",\"minLength\":1,\"description\":\"POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.\"},\"network\":{\"type\":\"array\",\"maxItems\":32,\"description\":\"The only hosts the script may connect to, exactly as it needs them (e.g. \\\"registry.npmjs.org\\\", \\\"*.github.com\\\", \\\"api.example.com:443\\\"). Omit for no network; localhost only if listed.\",\"items\":{\"type\":\"string\",\"maxLength\":253}}},\"required\":[\"runtime\",\"script\"],\"additionalProperties\":false}],\"description\":\"ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.\"},\"usage\":{\"type\":\"string\",\"description\":\"What the input or arguments mean and what the result shows.\"},\"reason\":{\"type\":\"string\",\"description\":\"One sentence on why, shown to the user when asking.\"}},\"required\":[\"name\",\"description\",\"program\"],\"additionalProperties\":false}}]}",
+        "messageId": "<id-14>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"tools\":[{\"name\":\"save_code_skill\",\"description\":\"Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":64,\"description\":\"Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).\"},\"description\":{\"type\":\"string\",\"minLength\":1,\"description\":\"One line on what the skill does and when to use it; it is listed so later runs can find it.\"},\"program\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"ts\"]},\"code\":{\"type\":\"string\",\"minLength\":1,\"description\":\"TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.\"},\"input\":{\"type\":\"object\",\"description\":\"JSON Schema of `input`, of type \\\"object\\\"; every run is checked against it. Omit when the skill takes no input.\"}},\"required\":[\"runtime\",\"code\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"sh\"]},\"script\":{\"type\":\"string\",\"minLength\":1,\"description\":\"POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.\"},\"network\":{\"type\":\"array\",\"maxItems\":32,\"description\":\"The only hosts the script may connect to, exactly as it needs them (e.g. \\\"registry.npmjs.org\\\", \\\"*.github.com\\\", \\\"api.example.com:443\\\"). Omit for no network; localhost only if listed.\",\"items\":{\"type\":\"string\",\"maxLength\":253}}},\"required\":[\"runtime\",\"script\"],\"additionalProperties\":false}],\"description\":\"ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.\"},\"usage\":{\"type\":\"string\",\"description\":\"What the input or arguments mean and what the result shows.\"},\"reason\":{\"type\":\"string\",\"description\":\"One sentence on why, shown to the user when asking.\"}},\"required\":[\"name\",\"description\",\"program\"],\"additionalProperties\":false}}]}",
+        "messageId": "<id-14>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "scripted-discovery-<id-3>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "toolCallName": "save_code_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:13",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-4>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "toolCallName": "save_code_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:6",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:15",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:17",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:8",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+        "messageId": "<id-15>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:19",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+        "messageId": "<id-15>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-sleeper@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-16>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "toolCallName": "run_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:21",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-16>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "toolCallName": "run_skill",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:10",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:23",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"name\":\"goal-sleeper\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:25",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-run@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:26",
+      "kind": "chunk",
+      "payload_json": {
+        "error": {
+          "message": "All fibers interrupted without error"
+        },
+        "message": "All fibers interrupted without error",
+        "timestamp": "<time>",
+        "type": "RUN_ERROR"
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      },
+      "run_id": "<id-8>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "name": "run.accepted",
+        "timestamp": "<time>",
+        "type": "CUSTOM",
+        "value": {}
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-9>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:30",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-9>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-6>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "toolCallName": "write_file",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:32",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-6>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "toolCallName": "write_file",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"path\":\"after-restart.txt\",\"content\":\"after\\n\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:34",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"path\":\"after-restart.txt\",\"content\":\"after\\n\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:36",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"path\":\"after-restart.txt\",\"created\":true,\"sha256\":\"7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919\",\"bytes\":6}",
+        "messageId": "<id-17>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:38",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"path\":\"after-restart.txt\",\"created\":true,\"sha256\":\"7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919\",\"bytes\":6}",
+        "messageId": "<id-17>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-after@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-7>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_START"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:40",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-7>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_START"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:6",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "after restart done",
+        "messageId": "<id-7>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_CONTENT"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:42",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "after restart done",
+        "messageId": "<id-7>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_CONTENT"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-7>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_END"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:44",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-7>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_END"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "chunk:8",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-9>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:46",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-9>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-9>"
+    },
+    {
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      },
+      "run_id": "<id-9>"
+    }
+  ],
+  "history": [
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:goal-restart",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"toolNames\":[\"save_code_skill\"]}",
+                "name": "__lazy__tool__discovery__"
+              },
+              "id": "scripted-discovery-<id-3>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"tools\":[{\"name\":\"save_code_skill\",\"description\":\"Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":64,\"description\":\"Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).\"},\"description\":{\"type\":\"string\",\"minLength\":1,\"description\":\"One line on what the skill does and when to use it; it is listed so later runs can find it.\"},\"program\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"ts\"]},\"code\":{\"type\":\"string\",\"minLength\":1,\"description\":\"TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.\"},\"input\":{\"type\":\"object\",\"description\":\"JSON Schema of `input`, of type \\\"object\\\"; every run is checked against it. Omit when the skill takes no input.\"}},\"required\":[\"runtime\",\"code\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"sh\"]},\"script\":{\"type\":\"string\",\"minLength\":1,\"description\":\"POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.\"},\"network\":{\"type\":\"array\",\"maxItems\":32,\"description\":\"The only hosts the script may connect to, exactly as it needs them (e.g. \\\"registry.npmjs.org\\\", \\\"*.github.com\\\", \\\"api.example.com:443\\\"). Omit for no network; localhost only if listed.\",\"items\":{\"type\":\"string\",\"maxLength\":253}}},\"required\":[\"runtime\",\"script\"],\"additionalProperties\":false}],\"description\":\"ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.\"},\"usage\":{\"type\":\"string\",\"description\":\"What the input or arguments mean and what the result shows.\"},\"reason\":{\"type\":\"string\",\"description\":\"One sentence on why, shown to the user when asking.\"}},\"required\":[\"name\",\"description\",\"program\"],\"additionalProperties\":false}}]}",
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "scripted-discovery-<id-3>"
+        }
+      ],
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-4>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
+                "name": "save_code_skill"
+              },
+              "id": "goal-sleeper@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+          "id": "stored:<session>:4",
+          "role": "tool",
+          "toolCallId": "goal-sleeper@<session>"
+        }
+      ],
+      "ordinal": 2,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-4>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:goal-after-restart",
+          "createdAt": "<time>",
+          "id": "<id-5>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 3,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-5>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-6>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"after-restart.txt\",\"content\":\"after\\n\"}",
+                "name": "write_file"
+              },
+              "id": "goal-after@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"after-restart.txt\",\"created\":true,\"sha256\":\"7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919\",\"bytes\":6}",
+          "id": "stored:<session>:7",
+          "role": "tool",
+          "toolCallId": "goal-after@<session>"
+        }
+      ],
+      "ordinal": 4,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-6>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "after restart done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-7>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 5,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-7>"
+    }
+  ],
+  "interrupts": [],
+  "ledger": [
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "save_code_skill"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-sleeper"
+                  ]
+                ],
+                [
+                  "description",
+                  [
+                    "string",
+                    "Print a line"
+                  ]
+                ],
+                [
+                  "program",
+                  [
+                    "object",
+                    [
+                      [
+                        "runtime",
+                        [
+                          "string",
+                          "sh"
+                        ]
+                      ],
+                      [
+                        "script",
+                        [
+                          "string",
+                          "sleep 3; printf slept"
+                        ]
+                      ]
+                    ]
+                  ]
+                ],
+                [
+                  "reason",
+                  [
+                    "string",
+                    "golden scenario"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-sleeper@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 1,
+      "run_id": "<id-8>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "run_skill"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "name",
+                  [
+                    "string",
+                    "goal-sleeper"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-run@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 2,
+      "run_id": "<id-8>",
+      "side_effect": 1,
+      "status": "uncertain"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "write_file"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "after-restart.txt"
+                  ]
+                ],
+                [
+                  "content",
+                  [
+                    "string",
+                    "after\n"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-after@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 1,
+      "run_id": "<id-9>",
+      "side_effect": 1,
+      "status": "succeeded"
+    }
+  ],
+  "metadata": [
+    {
+      "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:goal-restart"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-8>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "goal-sleeper@<session>",
+        "toolName": "save_code_skill"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-8>",
+      "text": "save_code_skill {\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-sleeper@<session>",
+        "toolName": "save_code_skill"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-8>",
+      "text": {
+        "directory": ".agents/skills/goal-sleeper",
+        "name": "goal-sleeper",
+        "network": [],
+        "replaced": false,
+        "runtime": "sh",
+        "scriptSha256": "9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1"
+      }
+    },
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:goal-after-restart"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-9>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "goal-after@<session>",
+        "toolName": "write_file"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-9>",
+      "text": "write_file {\"path\":\"after-restart.txt\",\"content\":\"after\\n\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-after@<session>",
+        "toolName": "write_file"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-9>",
+      "text": {
+        "bytes": 6,
+        "created": true,
+        "path": "after-restart.txt",
+        "sha256": "7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919"
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-9>",
+      "text": "after restart done"
+    }
+  ],
+  "notifications": [
+    {
+      "delivered_to_run_id": "<id-9>",
+      "kind": "stopped",
+      "parent_run_id": "<id-8>",
+      "payload": {
+        "attemptId": "<id-13>"
+      },
+      "summary": "Background shell cancelled; retrieve with get_background_result taskId <id-10>",
+      "task_id": "<id-10>"
+    }
+  ],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": "The server stopped before this answer finished.",
+      "error_code": "server_restarted",
+      "run_id": "<id-8>",
+      "status": "failed",
+      "thread_id": "<session>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-9>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    }
+  ],
+  "subagents": [],
+  "tasks": [
+    {
+      "agent_id": null,
+      "agent_name": "background_shell",
+      "id": "<id-10>",
+      "parent_run_id": "<id-8>",
+      "parent_task_id": null,
+      "parent_tool_call_id": "goal-run@<session>",
+      "request": "goal-sleeper",
+      "status": "cancelled",
+      "title": "goal-sleeper"
+    }
+  ],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:goal-restart",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"toolNames\":[\"save_code_skill\"]}",
+                "name": "__lazy__tool__discovery__"
+              },
+              "id": "scripted-discovery-<id-3>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"tools\":[{\"name\":\"save_code_skill\",\"description\":\"Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":64,\"description\":\"Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports).\"},\"description\":{\"type\":\"string\",\"minLength\":1,\"description\":\"One line on what the skill does and when to use it; it is listed so later runs can find it.\"},\"program\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"ts\"]},\"code\":{\"type\":\"string\",\"minLength\":1,\"description\":\"TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value.\"},\"input\":{\"type\":\"object\",\"description\":\"JSON Schema of `input`, of type \\\"object\\\"; every run is checked against it. Omit when the skill takes no input.\"}},\"required\":[\"runtime\",\"code\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"runtime\":{\"type\":\"string\",\"enum\":[\"sh\"]},\"script\":{\"type\":\"string\",\"minLength\":1,\"description\":\"POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.\"},\"network\":{\"type\":\"array\",\"maxItems\":32,\"description\":\"The only hosts the script may connect to, exactly as it needs them (e.g. \\\"registry.npmjs.org\\\", \\\"*.github.com\\\", \\\"api.example.com:443\\\"). Omit for no network; localhost only if listed.\",\"items\":{\"type\":\"string\",\"maxLength\":253}}},\"required\":[\"runtime\",\"script\"],\"additionalProperties\":false}],\"description\":\"ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers.\"},\"usage\":{\"type\":\"string\",\"description\":\"What the input or arguments mean and what the result shows.\"},\"reason\":{\"type\":\"string\",\"description\":\"One sentence on why, shown to the user when asking.\"}},\"required\":[\"name\",\"description\",\"program\"],\"additionalProperties\":false}}]}",
+          "role": "tool",
+          "toolCallId": "scripted-discovery-<id-3>"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-4>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"name\":\"goal-sleeper\",\"description\":\"Print a line\",\"program\":{\"runtime\":\"sh\",\"script\":\"sleep 3; printf slept\"},\"reason\":\"golden scenario\"}",
+                "name": "save_code_skill"
+              },
+              "id": "goal-sleeper@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"name\":\"goal-sleeper\",\"directory\":\".agents/skills/goal-sleeper\",\"scriptSha256\":\"9e2790c4dbbff8b5a6c155b12e98fa26889fb824716c0df765b8718d805693c1\",\"replaced\":false,\"runtime\":\"sh\",\"network\":[]}",
+          "role": "tool",
+          "toolCallId": "goal-sleeper@<session>"
+        },
+        {
+          "content": "golden:goal-after-restart",
+          "createdAt": "<time>",
+          "id": "<id-5>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-6>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"after-restart.txt\",\"content\":\"after\\n\"}",
+                "name": "write_file"
+              },
+              "id": "goal-after@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"after-restart.txt\",\"created\":true,\"sha256\":\"7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919\",\"bytes\":6}",
+          "role": "tool",
+          "toolCallId": "goal-after@<session>"
+        },
+        {
+          "content": "after restart done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-7>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
+  "workflow": [
+    {
+      "state_json": {
+        "goal": {
+          "assumptions": [],
+          "constraints": [],
+          "evidence": [],
+          "nonGoals": [],
+          "openQuestions": [],
+          "outcomes": [
+            "The notes are read and written"
+          ],
+          "statement": "Keep the golden notes",
+          "status": "active",
+          "updatedAt": "<time>",
+          "verification": {
+            "evidence": [],
+            "recoveryPhase": null,
+            "status": "not_run",
+            "summary": "",
+            "updatedAt": null
+          },
+          "version": 1
+        },
+        "ledger": [
+          {
+            "at": "<time>",
+            "detail": "goal v1 (active)",
+            "kind": "goal_updated",
+            "sequence": 1
+          }
+        ],
+        "phase": "chat",
+        "plan": null
+      }
+    }
+  ]
+}

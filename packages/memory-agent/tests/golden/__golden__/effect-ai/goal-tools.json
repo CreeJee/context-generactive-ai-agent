@@ -1,0 +1,904 @@
+{
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [
+    {
+      "goal_version": 1,
+      "plan_version": null,
+      "run_id": "<id-5>"
+    }
+  ],
+  "events": [
+    {
+      "event_key": "sdk-stream:v1:chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "name": "run.accepted",
+        "timestamp": "<time>",
+        "type": "CUSTOM",
+        "value": {}
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:0",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-5>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-5>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_STARTED"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:1",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "toolCallName": "read_file",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "toolCallName": "read_file",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:2",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"path\":\"notes.txt\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"path\":\"notes.txt\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:3",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:4",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "toolCallName": "list_files",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "toolCallName": "list_files",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:5",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"glob\":\"notes*\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:13",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"glob\":\"notes*\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:6",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:15",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:7",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "toolCallName": "write_file",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:17",
+      "kind": "chunk",
+      "payload_json": {
+        "parentMessageId": "<id-2>",
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "toolCallName": "write_file",
+        "type": "TOOL_CALL_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:8",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:19",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "type": "TOOL_CALL_ARGS"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:9",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:21",
+      "kind": "chunk",
+      "payload_json": {
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "type": "TOOL_CALL_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:10",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+        "messageId": "<id-6>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:11",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
+        "messageId": "<id-7>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:12",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+        "messageId": "<id-8>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:25",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+        "messageId": "<id-6>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-read@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:26",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
+        "messageId": "<id-7>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-list@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:27",
+      "kind": "chunk",
+      "payload_json": {
+        "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+        "messageId": "<id-8>",
+        "role": "tool",
+        "timestamp": "<time>",
+        "toolCallId": "goal-write@<session>",
+        "type": "TOOL_CALL_RESULT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:13",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-4>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:29",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-4>",
+        "role": "assistant",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_START"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:14",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "goal tools done",
+        "messageId": "<id-4>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_CONTENT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:31",
+      "kind": "chunk",
+      "payload_json": {
+        "delta": "goal tools done",
+        "messageId": "<id-4>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_CONTENT"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:15",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-4>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:33",
+      "kind": "chunk",
+      "payload_json": {
+        "messageId": "<id-4>",
+        "timestamp": "<time>",
+        "type": "TEXT_MESSAGE_END"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "chunk:16",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-5>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:chunk:35",
+      "kind": "chunk",
+      "payload_json": {
+        "runId": "<id-5>",
+        "threadId": "<session>",
+        "timestamp": "<time>",
+        "type": "RUN_FINISHED"
+      },
+      "run_id": "<id-5>"
+    },
+    {
+      "event_key": "sdk-stream:v1:closed",
+      "kind": "run_completed",
+      "payload_json": {
+        "deliveryClosed": true
+      },
+      "run_id": "<id-5>"
+    }
+  ],
+  "history": [
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:goal-tools",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "read_file"
+              },
+              "id": "goal-read@<session>",
+              "type": "function"
+            },
+            {
+              "function": {
+                "arguments": "{\"glob\":\"notes*\"}",
+                "name": "list_files"
+              },
+              "id": "goal-list@<session>",
+              "type": "function"
+            },
+            {
+              "function": {
+                "arguments": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+                "name": "write_file"
+              },
+              "id": "goal-write@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "goal-read@<session>"
+        },
+        {
+          "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
+          "id": "stored:<session>:3",
+          "role": "tool",
+          "toolCallId": "goal-list@<session>"
+        },
+        {
+          "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+          "id": "stored:<session>:4",
+          "role": "tool",
+          "toolCallId": "goal-write@<session>"
+        }
+      ],
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "goal tools done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-4>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 2,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-4>"
+    }
+  ],
+  "interrupts": [],
+  "ledger": [
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "read_file"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "notes.txt"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-read@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 1,
+      "run_id": "<id-5>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "list_files"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "glob",
+                  [
+                    "string",
+                    "notes*"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-list@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 2,
+      "run_id": "<id-5>",
+      "side_effect": 1,
+      "status": "succeeded"
+    },
+    {
+      "input": [
+        "object",
+        [
+          [
+            "name",
+            [
+              "string",
+              "write_file"
+            ]
+          ],
+          [
+            "args",
+            [
+              "object",
+              [
+                [
+                  "path",
+                  [
+                    "string",
+                    "goal.txt"
+                  ]
+                ],
+                [
+                  "content",
+                  [
+                    "string",
+                    "goal output\n"
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            "toolCallId",
+            [
+              "string",
+              "goal-write@<session>"
+            ]
+          ]
+        ]
+      ],
+      "input_kind": "complete",
+      "operation": "tool",
+      "operation_id": 3,
+      "run_id": "<id-5>",
+      "side_effect": 1,
+      "status": "succeeded"
+    }
+  ],
+  "metadata": [
+    {
+      "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:goal-tools"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-5>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "goal-read@<session>",
+        "toolName": "read_file"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-5>",
+      "text": "read_file {\"path\":\"notes.txt\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-read@<session>",
+        "toolName": "read_file"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-5>",
+      "text": {
+        "content": "first line\nsecond line\n",
+        "endLine": 2,
+        "lineTruncated": false,
+        "nextStartLine": null,
+        "path": "notes.txt",
+        "sha256": "c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f",
+        "startLine": 1,
+        "totalLines": 2
+      }
+    },
+    {
+      "detail": {
+        "toolCallId": "goal-list@<session>",
+        "toolName": "list_files"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-5>",
+      "text": "list_files {\"glob\":\"notes*\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-list@<session>",
+        "toolName": "list_files"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-5>",
+      "text": {
+        "directory": ".",
+        "excludedCredentialFiles": 0,
+        "glob": "notes*",
+        "nextOffset": null,
+        "paths": [
+          "notes.txt"
+        ],
+        "snapshot": "<id-3>",
+        "source": "walk",
+        "total": 1,
+        "truncated": false
+      }
+    },
+    {
+      "detail": {
+        "toolCallId": "goal-write@<session>",
+        "toolName": "write_file"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-5>",
+      "text": "write_file {\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "goal-write@<session>",
+        "toolName": "write_file"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-5>",
+      "text": {
+        "bytes": 12,
+        "created": true,
+        "path": "goal.txt",
+        "sha256": "d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7"
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-5>",
+      "text": "goal tools done"
+    }
+  ],
+  "notifications": [],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-5>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:goal-tools",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "read_file"
+              },
+              "id": "goal-read@<session>",
+              "type": "function"
+            },
+            {
+              "function": {
+                "arguments": "{\"glob\":\"notes*\"}",
+                "name": "list_files"
+              },
+              "id": "goal-list@<session>",
+              "type": "function"
+            },
+            {
+              "function": {
+                "arguments": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
+                "name": "write_file"
+              },
+              "id": "goal-write@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "role": "tool",
+          "toolCallId": "goal-read@<session>"
+        },
+        {
+          "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
+          "role": "tool",
+          "toolCallId": "goal-list@<session>"
+        },
+        {
+          "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
+          "role": "tool",
+          "toolCallId": "goal-write@<session>"
+        },
+        {
+          "content": "goal tools done",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-4>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
+  "workflow": [
+    {
+      "state_json": {
+        "goal": {
+          "assumptions": [],
+          "constraints": [],
+          "evidence": [],
+          "nonGoals": [],
+          "openQuestions": [],
+          "outcomes": [
+            "The notes are read and written"
+          ],
+          "statement": "Keep the golden notes",
+          "status": "active",
+          "updatedAt": "<time>",
+          "verification": {
+            "evidence": [],
+            "recoveryPhase": null,
+            "status": "not_run",
+            "summary": "",
+            "updatedAt": null
+          },
+          "version": 1
+        },
+        "ledger": [
+          {
+            "at": "<time>",
+            "detail": "goal v1 (active)",
+            "kind": "goal_updated",
+            "sequence": 1
+          }
+        ],
+        "phase": "chat",
+        "plan": null
+      }
+    }
+  ]
+}

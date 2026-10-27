@@ -109,11 +109,12 @@ const scripts = {
     { toolCalls: [call("second", "run_subagent", { agent: "helper", task: "second task" })] },
     { text: "second started" },
   ],
+  // The calls of a step run at once, so the listing leaves out the file the write makes.
   "goal-tools": [
     {
       toolCalls: [
         call("goal-read", "read_file", { path: "notes.txt" }),
-        call("goal-list", "list_files", {}),
+        call("goal-list", "list_files", { glob: "notes*" }),
         call("goal-write", "write_file", { path: "goal.txt", content: "goal output\n" }),
       ],
     },
@@ -146,6 +147,28 @@ const scripts = {
     { toolCalls: [call("goal-run", "run_skill", { name: "goal-sleeper" })] },
     { text: "never reached" },
   ],
+  // The Goal's next turn after the user continued past the cut run.
+  "goal-after-restart": [
+    {
+      toolCalls: [
+        call("goal-after", "write_file", { path: "after-restart.txt", content: "after\n" }),
+      ],
+    },
+    { text: "after restart done" },
+  ],
+  // The skill ends after its sibling writes, and one write fails: notes.txt exists, and replacing it
+  // needs the sha256 from read_file.
+  "goal-parallel": [
+    { toolCalls: [saveSkill("goal-slow", "sleep 1; printf slow")] },
+    {
+      toolCalls: [
+        call("goal-slow-run", "run_skill", { name: "goal-slow", yieldMs: 10_000 }),
+        call("goal-stale", "write_file", { path: "notes.txt", content: "replaced\n" }),
+        call("goal-new", "write_file", { path: "parallel.txt", content: "parallel\n" }),
+      ],
+    },
+    { text: "parallel done" },
+  ],
 } satisfies { readonly [scenario: string]: ReadonlyArray<ScriptedTurn> };
 
 const Scenario = Schema.Literals([
@@ -162,6 +185,8 @@ const Scenario = Schema.Literals([
   "goal-tools",
   "goal-approval",
   "goal-restart",
+  "goal-after-restart",
+  "goal-parallel",
   "queue",
   "steer",
   "unknown-tool",

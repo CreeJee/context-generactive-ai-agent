@@ -143,7 +143,7 @@
       "event_key": "chunk:5",
       "kind": "chunk",
       "payload_json": {
-        "delta": "{}",
+        "delta": "{\"glob\":\"notes*\"}",
         "timestamp": "<time>",
         "toolCallId": "goal-list@<session>",
         "type": "TOOL_CALL_ARGS"
@@ -154,7 +154,7 @@
       "event_key": "sdk-stream:v1:chunk:13",
       "kind": "chunk",
       "payload_json": {
-        "delta": "{}",
+        "delta": "{\"glob\":\"notes*\"}",
         "timestamp": "<time>",
         "toolCallId": "goal-list@<session>",
         "type": "TOOL_CALL_ARGS"
@@ -165,7 +165,9 @@
       "event_key": "chunk:6",
       "kind": "chunk",
       "payload_json": {
-        "input": {},
+        "input": {
+          "glob": "notes*"
+        },
         "timestamp": "<time>",
         "toolCallId": "goal-list@<session>",
         "type": "TOOL_CALL_END"
@@ -176,7 +178,9 @@
       "event_key": "sdk-stream:v1:chunk:15",
       "kind": "chunk",
       "payload_json": {
-        "input": {},
+        "input": {
+          "glob": "notes*"
+        },
         "timestamp": "<time>",
         "toolCallId": "goal-list@<session>",
         "type": "TOOL_CALL_END"
@@ -309,7 +313,7 @@
       "event_key": "chunk:12",
       "kind": "chunk",
       "payload_json": {
-        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
         "messageId": "<id-4>",
         "role": "tool",
         "timestamp": "<time>",
@@ -322,7 +326,7 @@
       "event_key": "sdk-stream:v1:chunk:27",
       "kind": "chunk",
       "payload_json": {
-        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+        "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
         "messageId": "<id-4>",
         "role": "tool",
         "timestamp": "<time>",
@@ -486,7 +490,7 @@
             },
             {
               "function": {
-                "arguments": "{}",
+                "arguments": "{\"glob\":\"notes*\"}",
                 "name": "list_files"
               },
               "id": "goal-list@<session>",
@@ -509,7 +513,7 @@
           "toolCallId": "goal-read@<session>"
         },
         {
-          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
           "id": "stored:<session>:3",
           "role": "tool",
           "toolCallId": "goal-list@<session>"
@@ -967,7 +971,15 @@
             "args",
             [
               "object",
-              []
+              [
+                [
+                  "glob",
+                  [
+                    "string",
+                    "notes*"
+                  ]
+                ]
+              ]
             ]
           ]
         ]
@@ -1121,7 +1133,15 @@
             "args",
             [
               "object",
-              []
+              [
+                [
+                  "glob",
+                  [
+                    "string",
+                    "notes*"
+                  ]
+                ]
+              ]
             ]
           ],
           [
@@ -1635,7 +1655,7 @@
       },
       "kind": "tool_call",
       "run_id": "<id-3>",
-      "text": "list_files {}"
+      "text": "list_files {\"glob\":\"notes*\"}"
     },
     {
       "detail": {
@@ -1648,23 +1668,14 @@
       "text": {
         "directory": ".",
         "excludedCredentialFiles": 0,
-        "glob": null,
+        "glob": "notes*",
         "nextOffset": null,
         "paths": [
-          ".agents/skills/approval/SKILL.md",
-          ".agents/skills/approval/scripts/run.sh",
-          ".agents/skills/hand-written/SKILL.md",
-          ".agents/skills/hand-written/scripts/run.sh",
-          ".agents/skills/mixed-skill/SKILL.md",
-          ".agents/skills/mixed-skill/scripts/run.sh",
-          ".agents/skills/review/SKILL.md",
-          ".agents/skills/review/scripts/run.sh",
-          "notes.txt",
-          "out.txt"
+          "notes.txt"
         ],
         "snapshot": "<id-2>",
         "source": "walk",
-        "total": 10,
+        "total": 1,
         "truncated": false
       }
     },
@@ -1737,7 +1748,7 @@
             },
             {
               "function": {
-                "arguments": "{}",
+                "arguments": "{\"glob\":\"notes*\"}",
                 "name": "list_files"
               },
               "id": "goal-list@<session>",
@@ -1759,7 +1770,7 @@
           "toolCallId": "goal-read@<session>"
         },
         {
-          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":null,\"source\":\"walk\",\"total\":10,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\".agents/skills/approval/SKILL.md\",\".agents/skills/approval/scripts/run.sh\",\".agents/skills/hand-written/SKILL.md\",\".agents/skills/hand-written/scripts/run.sh\",\".agents/skills/mixed-skill/SKILL.md\",\".agents/skills/mixed-skill/scripts/run.sh\",\".agents/skills/review/SKILL.md\",\".agents/skills/review/scripts/run.sh\",\"notes.txt\",\"out.txt\"],\"nextOffset\":null}",
+          "content": "{\"snapshot\":\"<id-2>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
           "role": "tool",
           "toolCallId": "goal-list@<session>"
         },

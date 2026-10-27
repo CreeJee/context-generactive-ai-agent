@@ -5,6 +5,7 @@ import { testAgent, type TestEnvOptions } from "../support/test-env.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { conversation, expectGolden, matchGolden } from "./driver.ts";
 import { migratedRows } from "./rows.ts";
+import { sqlGet } from "../support/sql.ts";
 import { waitUntil } from "../support/wait-until.ts";
 import { childrenHeld, goldenResponder, releaseChildren, releaseTurns } from "./responder.ts";
 
@@ -194,3 +195,57 @@ export const chatScenarios: {
     }),
   );
 });
+
+/** The scenarios of Goal runs, compared with the golden files in `goldens`. */
+export const goalScenarios: {
+  (goldens: Goldens): (it: It) => void;
+  (it: It, goldens: Goldens): void;
+} = EffectFunction.dual(2, (it: It, goldens: Goldens) => {
+  const scenario = scenarioIn(it, goldens);
+  scenario("a Goal run reads and writes in one step", "goal-tools", "ask", (chat) =>
+    Effect.andThen(chat.goal, chat.send("golden:goal-tools")),
+  );
+  scenario("a Goal run waits for approval and resumes", "goal-approval", "ask", (chat) =>
+    Effect.gen(function* () {
+      yield* chat.goal;
+      yield* chat.send("golden:goal-approval");
+      yield* chat.approve(true);
+    }),
+  );
+});
+
+/**
+ * A Goal run a restart cuts, which the user confirms, then `next`. A restart replaces the agent, so
+ * this scenario needs an agent of its own.
+ */
+export const goalRestartScenario: {
+  (goldens: Goldens, next: (chat: Chat) => Step): (it: It) => void;
+  (it: It, goldens: Goldens, next: (chat: Chat) => Step): void;
+} = EffectFunction.dual(3, (it: It, goldens: Goldens, next: (chat: Chat) => Step) =>
+  scenarioIn(it, goldens)(
+    "a Goal run cut by a restart is confirmed by the user",
+    "goal-restart",
+    "full",
+    (chat) =>
+      Effect.gen(function* () {
+        yield* chat.goal;
+        // run_skill runs a sh skill as a background shell; restart once that shell is running.
+        yield* chat.restartDuring(
+          "golden:goal-restart",
+          Effect.map(
+            sqlGet(
+              `SELECT count(*) AS shells FROM agent_run_attempts a
+               JOIN work_tasks t ON t.id = a.task_id
+               WHERE t.origin_session_id = ? AND t.parent_tool_call_id LIKE 'goal-run@%'
+                 AND a.status = 'running'`,
+              chat.sessionId,
+            ),
+            (row) => Number(row?.["shells"] ?? 0) > 0,
+          ),
+          "the background shell to run",
+        );
+        yield* chat.continuePastUncertain;
+        yield* next(chat);
+      }),
+  ),
+);
