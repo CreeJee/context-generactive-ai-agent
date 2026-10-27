@@ -188,6 +188,9 @@ catalogs:
     '@effect/ai-openai-compat':
       specifier: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
       version: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
+    '@effect/atom-react':
+      specifier: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7
+      version: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7
     '@effect/tsgo':
       specifier: 0.53.3
       version: 0.53.3
@@ -471,6 +474,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: 'catalog:'
         version: 3.2.2(react@19.3.1)
+      '@effect/atom-react':
+        specifier: 'catalog:'
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(react@19.3.1)(scheduler@0.28.0)
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
         version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
@@ -985,6 +991,14 @@ packages:
     version: 4.0.3
     peerDependencies:
       effect: ^4.0.3
+
+  '@effect/atom-react@https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7':
+    resolution: {integrity: sha512-EKpSJLh0pKXjcfzvT3NIIBGT3D/CoEV+5lsoGiOOejS50cSoeo79VIWWzSIbOpXl2BmHkUiv6ylDhiXrV2hU1Q==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7}
+    version: 4.0.3
+    peerDependencies:
+      effect: ^4.0.3
+      react: '>=19.0.0 <20.0.0'
+      scheduler: '>=0.25.0 <0.29.0'
 
   '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7':
     resolution: {integrity: sha512-so2qmRvmS9+9CRG4t2tEXTcjxu/zaUa9FNfbuUoK8gu9mEycWD/kt7iiT/d0rTfy6DsyVxn19lx3d5eWMEAZww==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7}
@@ -5950,6 +5964,12 @@ snapshots:
   '@effect/ai-openai-compat@https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))':
     dependencies:
       effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
+
+  '@effect/atom-react@https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(react@19.3.1)(scheduler@0.28.0)':
+    dependencies:
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
+      react: 19.3.1
+      scheduler: 0.28.0
 
   '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))':
     dependencies:
