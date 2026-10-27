@@ -550,6 +550,15 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 
 `useChat`을 대체하는 hook을 `@effect/atom-react`로 만든다. atom-react는 상태를 담는 틀이고, 채팅 규칙은 직접 쓴다.
 
+- 서버 endpoint(먼저 만들었다, decisions.md "채팅 run과 join을 Effect HttpApi로 연다 (2026-10-27)"):
+  - 계약: `memory-agent/chat-api`(`src/api/chat-api.ts`)의 `ChatApi`. browser에서도 import한다. client는 이 계약에서 `HttpApiClient`나 `AtomHttpApi`를 만든다. 서버에서 정의한 atom을 client가 쓰는 길은 없다.
+  - `run`: `POST /api/sessions/:session/runs`. 응답은 run 로그를 따라가는 SSE다.
+  - `join`: `GET /api/sessions/:session/runs/:run/events?after=<offset>`. 새로고침 뒤 다시 붙기와 끊긴 연결 이어 받기가 이것이다.
+  - SSE 이벤트의 `id`는 run 로그 offset이고 `data`는 4단계의 AG-UI 이벤트다. 첫 이벤트는 `CUSTOM` `run.accepted`다.
+  - 거절은 status별 code Schema(`Refusal`)라 client가 타입으로 받는다.
+  - handler: `src/api/chat-api-live.ts`의 `ChatApiHandlers`. 앱은 React Router resource route에서 `apps/agent/app/.server/chat-api.ts`의 web handler로 넘긴다.
+  - 테스트: `tests/chat/api.test.ts`(`HttpApiTest` client로 run, join, 거절 code)
+  - 아직 없는 것: BTW endpoint, 처음 화면용 snapshot·history endpoint, SSE keepalive, 외부 에이전트 세션(409 `external_agent_unsupported`), 이미지 provider 도구(409 `image_tool_unavailable`)
 - atom 대응:
   - 세션별 상태: `Atom.family`
   - 보내기: `Atom.fn`. 결과가 `AsyncResult`라 로딩과 오류가 함께 나온다.
@@ -557,7 +566,6 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 이전 기록 20개씩: `Atom.pull`
   - 보낸 메시지를 바로 보이기: `Atom.optimistic`, `optimisticFn`
   - run 뒤 다시 읽기: `withReactivity`, `refresh`
-  - SSR이 필요하면 `Atom.serializable`과 `HydrationBoundary`
 - 직접 쓰는 채팅 규칙(`chat-panel.tsx`의 `useChat` 호출 기준):
   - SSE를 읽고 4단계의 AG-UI chunk Schema로 decode한다.
   - AG-UI 이벤트를 화면 메시지 parts로 쌓는 reducer. 지금의 UIMessage parts 모양을 유지한다.
@@ -576,6 +584,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   1. 모든 진입점을 새 runtime으로 바꾸고, client를 6단계 hook으로 바꾸고, migration을 등록한다.
      - 진입점: 본 채팅, BTW, 서브에이전트, Goal, ACP, MCP, 단발 호출. Goal은 5단계에서 owner loop로 옮겼으므로 본 채팅과 같이 바뀐다.
      - API payload가 바뀌어 기존 `useChat`으로는 확인할 수 없으므로, backend와 client를 함께 바꾼다.
+     - 페이지는 6단계의 `ChatApi` endpoint로 보내고 다시 붙는다. `/api/chat`과 `AgentChat.handle`·`hydrate`를 지운다. `ChatApi`를 server(`apps/agent/server/serve.ts`)에 직접 붙이고 React Router route를 지울지 이때 정한다.
   2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목, `tools/parallel-reads.ts`(5단계 "결과").
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
@@ -640,6 +649,7 @@ worker를 없애면 owner와 worker 사이의 검사(`agent/full-loop-execution.
 ### SSE와 재접속
 
 - `hydrate`의 검증 사슬을 새 SSE endpoint 사양에 넣는다(`agent/chat.ts`): run 미존재 404, binding 세션 불일치 404, Last-Event-ID가 query의 runId와 다른 로그를 고르지 못하게 하는 offset 규칙, `X-Run-Id` 불일치 400, `memory:v1:` 접두어와 safe-integer offset 검사.
+  - `ChatApi`의 `join`과 `hydrate`는 같은 `followRun`을 거친다. `join`은 runId를 path로, offset을 `after`로 받으므로 Last-Event-ID와 `X-Run-Id` 규칙은 `hydrate`에만 있다.
 - 옛 `workflow_run_events` 행은 "내용을 해석하지 않는다"가 전환 후에도 전제다. 새 client가 strict AG-UI decode로 옛 행을 재생하려 하지 않게 한다.
 
 ### MCP 교체

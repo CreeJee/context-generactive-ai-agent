@@ -2823,3 +2823,25 @@
 - provider 요청 전 transport 실패의 재시도("Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)")는 새 loop에서 모델을 감싸 한다. 조건은 같다: `RequestNotSent`이고 모델 part가 하나도 오지 않았다.
 - 완료 근거는 dispatch 세대(`workflow_worker_dispatches`)를 더 요구하지 않는다. "Configurable dev and Goal settlement boundaries (2026-10-10)"의 "dispatch identity" 검사를 대체한다. binding·revision, durable 실행 완료, 장부의 미해결 쓰기 검사는 그대로다.
 - 아직 도는 run이 적은 criterion mapping은 Goal 종류와 관계없이 제안으로 보관하고(`completionRequest`), run이 끝난 뒤 `finishRun`에서 장부까지 다시 검사해 완료 근거로 적는다. 전에는 worker 세대나 native 등록이 있는 Goal만 이렇게 했다. 새 loop는 기록하는 호출 자신을 실행이 끝날 때까지 장부에 `pending`으로 두므로, 바로 검사하면 모든 mapping이 거절된다. "Configurable dev and Goal settlement boundaries (2026-10-10)"의 "proposals, not completion snapshots" 규칙을 모든 Goal에 넓힌 것이다.
+
+## 채팅 run과 join을 Effect HttpApi로 연다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 6단계 앞부분이다. 6단계 client가 쓸 endpoint를 먼저 만든다. 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 6단계 "서버 endpoint"다.
+- 사용자 결정: 채팅 endpoint를 React Router route가 아니라 Effect `HttpApi`로 선언한다. 이 앱에서 React Router가 맡는 일이 적다. 범위는 채팅 run과 join 두 endpoint와 그 SSE다. 다른 API는 지금 route에 남는다.
+- 계약은 `memory-agent/chat-api`의 `ChatApi`(group `chat`)다. browser에서도 import한다. 서버에서 정의한 atom은 client가 쓸 수 없으므로, client와 나누는 것은 이 계약이다.
+  - `run`: `POST /api/sessions/:session/runs`. payload는 AG-UI `RunAgentInput` 중 쓰는 필드다: `runId`, `parentRunId`, 사용자 메시지, `resume`, `forwardedProps`의 `queuedNext`·`imageIntent`. 응답은 run 로그를 따라가는 SSE다.
+  - `join`: `GET /api/sessions/:session/runs/:run/events?after=<offset>`. 같은 SSE를 그 offset 뒤부터 준다.
+  - SSE 이벤트의 `id`는 run 로그 offset이다. client는 받은 마지막 `id`를 `after`로 보내 다시 붙는다.
+  - 거절은 `/api/chat`과 같은 `{ error, ...details }` JSON과 status다. status마다 code 목록을 Schema로 선언해 client가 타입으로 받는다.
+  - 다른 사이트의 `run`은 `SameSite` middleware가 403(`cross_site_request`, `invalid_origin`)으로 막는다. 검사 함수는 page route의 `rejectCrossSite`와 같다. `join`은 읽기라 걸지 않는다.
+- `AgentChat.start`가 거절을 응답 대신 값(`ChatStart`)으로 돌려준다. `/api/chat`(`AgentChat.handle`)은 그 값을 전과 같은 응답으로 바꾼다. 페이지가 받는 응답은 바뀌지 않는다.
+- API run은 `ChatLoop`와 관계없이 새 loop로 돈다.
+  - core가 run 이벤트를 로그에 채운다. 채우는 fiber는 AgentChat 서비스 scope에 fork하고, 응답은 로그를 읽기만 한다. 그래서 client가 끊어도 run은 멈추지 않는다. 끝 이벤트 없이 실패하면 `RUN_ERROR`를 적고 로그를 닫는다. TanStack `toServerSentEventsResponse`의 durability 동작과 같다.
+  - 로그는 Goal run이면 sqlite(`streamDurability`), 아니면 memory다. `join`은 `hydrate`와 같은 검사(`followRun`)를 거친다.
+  - 외부 에이전트 세션은 409 `external_agent_unsupported`로 받지 않는다. 외부 에이전트 경로는 TanStack 응답을 그대로 돌려주기 때문이다.
+  - 이미지 provider 도구를 쓰는 run은 409 `image_tool_unavailable`로 받지 않는다. 새 loop에 그 도구가 아직 없다.
+- 앱 연결: React Router resource route 두 개가 요청을 `HttpRouter.toWebHandler`로 만든 handler에 넘긴다. handler는 첫 요청 때 agent runtime의 context로 만든다. server가 runtime을 설정하기 전에 module이 load되기 때문이다. server에 직접 붙일지는 7단계에서 정한다.
+- 미룬 것:
+  - SSE keepalive. 연결이 loopback이고 지금 run SSE에도 없다. Effect의 AG-UI PR(#9842)이 들어오면 다시 본다.
+  - BTW endpoint, 처음 화면용 snapshot·history endpoint
+  - web handler의 `dispose`를 `disposeAgent`에 잇기. handler가 가진 자원은 router뿐이고, run fiber는 agent runtime의 scope에 있다.
