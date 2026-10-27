@@ -23,14 +23,9 @@ import type { RunTool } from "../tools/run-tool.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { workflowActions } from "../workflow/actions.ts";
 import { Scope } from "effect";
-import {
-  RUN_ACCEPTED_EVENT,
-  EventType,
-  memoryStream,
-  type ChatMiddleware,
-  type StreamChunk,
-  type StreamDurability,
-} from "@tanstack/ai";
+import type { ChatMiddleware } from "@tanstack/ai";
+import type { AgUiEvent } from "../loop/chunks.ts";
+import { memoryRunLogs, runAcceptedEvent, type RunLog } from "../loop/run-log.ts";
 import type { Refusal, RunInput } from "../api/chat-api.ts";
 import { ImagePart, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
 import { optionalProperty } from "../optional-property.ts";
@@ -38,6 +33,7 @@ import { optionalProperty } from "../optional-property.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import dayjs from "dayjs";
 import {
+  Clock,
   Context,
   Crypto,
   Data,
@@ -144,7 +140,7 @@ import {
   uncertainRuns,
   type UncertainContinueRequest,
 } from "../workflow/uncertain-runs.ts";
-import { sqliteStreamDurability } from "../workflow/durable-stream.ts";
+import { sqliteRunLog } from "../workflow/durable-stream.ts";
 import {
   serverRestartedCode,
   serverRestartedMessage,
@@ -421,7 +417,7 @@ export interface ChatRequest {
 export type ChatStart = Data.TaggedEnum<{
   Refused: { readonly refusal: Refusal };
   /** The run's events, read from its log after `after`; `-1` is from the start. */
-  Following: { readonly log: StreamDurability; readonly after: string };
+  Following: { readonly log: RunLog; readonly after: string };
 }>;
 export const ChatStart = Data.taggedEnum<ChatStart>();
 const refused = (refusal: Refusal) => ChatStart.Refused({ refusal });
@@ -507,8 +503,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
   const withSql = Effect.provideService(SqlClient.SqlClient, sql);
-  const streamDurability = (input: Parameters<typeof sqliteStreamDurability>[0]) =>
-    withSql(sqliteStreamDurability(input));
+  const committedLog = (input: Parameters<typeof sqliteRunLog>[0]) => withSql(sqliteRunLog(input));
+  const runLogs = yield* memoryRunLogs;
   const persistedRunStatus = SqlSchema.findOneOption({
     Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),
     Result: Schema.Struct({
@@ -835,55 +831,48 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       if (Option.isNone(yield* sessionRun(sessionId, runId)))
         return refused({ error: "run_not_found" });
       const binding = Option.getOrUndefined(yield* runBinding(runId));
-      if (isTruthy(binding)) {
-        if (binding.session_id !== sessionId) return refused({ error: "run_not_found" });
-        // The adapter checks its namespace, the immutable run/session binding and that the offset
-        // is a committed chunk before anything is read.
-        return yield* streamDurability({ sessionId, runId, resumeOffset: offset }).pipe(
-          Effect.map((log) => ChatStart.Following({ log, after: offset })),
-          Effect.catchTag("StreamDurabilityError", () =>
-            Effect.succeed(refused({ error: "invalid_stream_offset" })),
-          ),
-        );
-      }
-      const prefix = `memory:v1:${encodeURIComponent(runId)}:`;
-      if (
-        offset !== "-1" &&
-        offset !== "now" &&
-        (!offset.startsWith(prefix) ||
-          !Number.isSafeInteger(Number(offset.slice(prefix.length))) ||
-          Number(offset.slice(prefix.length)) < 1)
-      )
-        return refused({ error: "invalid_stream_offset" });
-      return ChatStart.Following({ log: memoryStream({ runId, offset }), after: offset });
+      if (isTruthy(binding) && binding.session_id !== sessionId)
+        return refused({ error: "run_not_found" });
+      // The committed log checks its namespace, the immutable run/session binding and that the
+      // offset is a committed chunk before anything is read.
+      return yield* (
+        isTruthy(binding)
+          ? committedLog({ sessionId, runId, resumeOffset: offset })
+          : runLogs.follow(runId, offset)
+      ).pipe(
+        Effect.map((log) => ChatStart.Following({ log, after: offset })),
+        Effect.catchTag("RunLogFailed", () =>
+          Effect.succeed(refused({ error: "invalid_stream_offset" })),
+        ),
+      );
     });
 
   /**
    * Fills a run's log with its events whether or not anyone reads them, as TanStack's delivery
-   * does: a reload or a closed tab must not stop the run (R10). TanStack's accepted marker opens
-   * the log, so a join from the start finds an entry at once. When the events fail, or the owner's
+   * did: a reload or a closed tab must not stop the run (R10). The accepted marker opens the log,
+   * so a join from the start finds an entry at once. When the events fail, or the owner's
    * shutdown cuts them, before the run's own end, a RUN_ERROR ends the log; it is closed either way.
    */
   const filledLog = <E>(
-    events: Stream.Stream<StreamChunk, E>,
-    log: StreamDurability,
+    events: Stream.Stream<AgUiEvent, E>,
+    log: RunLog,
     run: { readonly sessionId: string; readonly runId: string },
   ) =>
     Effect.gen(function* () {
       const ended = yield* Ref.make(false);
-      const append = (chunk: StreamChunk) =>
-        Effect.tryPromise(() => log.append([chunk])).pipe(
-          Effect.andThen(
-            Ref.set(ended, chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR"),
-          ),
-        );
+      const append = (event: AgUiEvent) =>
+        log
+          .append(event)
+          .pipe(
+            Effect.andThen(
+              Ref.set(ended, event.type === "RUN_FINISHED" || event.type === "RUN_ERROR"),
+            ),
+          );
       const endedBy = (cut: boolean) =>
-        Effect.flatMap(DateTime.now, (now) =>
+        Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
           append({
-            type: EventType.RUN_ERROR,
-            runId: run.runId,
-            threadId: run.sessionId,
-            timestamp: DateTime.toEpochMillis(now),
+            type: "RUN_ERROR",
+            timestamp,
             ...(cut
               ? { code: serverRestartedCode, message: serverRestartedMessage }
               : {
@@ -892,17 +881,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 }),
           }),
         );
-      yield* Effect.flatMap(DateTime.now, (now) =>
-        Effect.tryPromise(() =>
-          log.append([
-            {
-              type: EventType.CUSTOM,
-              name: RUN_ACCEPTED_EVENT,
-              value: {},
-              timestamp: DateTime.toEpochMillis(now),
-            },
-          ]),
-        ),
+      yield* Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
+        log.append({ type: "CUSTOM", name: runAcceptedEvent, value: {}, timestamp }),
       ).pipe(
         Effect.andThen(Stream.runForEach(events, append)),
         Effect.onExit((exit) =>
@@ -911,7 +891,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               yield* Effect.logError("Run log delivery failed", { runId: run.runId });
               yield* endedBy(Cause.hasInterruptsOnly(exit.cause));
             }
-            yield* Effect.tryPromise(() => log.close());
+            yield* log.close;
           }).pipe(Effect.catch(logFailure("Run log was not closed"))),
         ),
         Effect.ignore,
@@ -1516,7 +1496,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         let goalExecutionPayload: GoalExecutionPayload | null = null;
         // The run already ended aborted: its stream is replayed, not run again.
         if (previousRun?.status === "aborted")
-          return ChatStart.Following({ log: memoryStream({ runId, offset: "-1" }), after: "-1" });
+          return ChatStart.Following({ log: runLogs.of(runId), after: "-1" });
         // Internal completion turns carry operational context only, never a synthetic user turn.
         // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
         // placeholder turn altogether, including its text and attachments.
@@ -1688,13 +1668,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 .markDelivered(id, "next_turn", runId)
                 .pipe(Effect.andThen(events.publishSession(sessionId, "queue"))),
           });
-          // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types
-          // leave `undefined` out of optional fields, where the SDK's types allow it.
           const chunks = yield* cancellation.publish(
-            yield* Stream.toAsyncIterableEffect(loopEvents as Stream.Stream<StreamChunk>),
+            yield* Stream.toAsyncIterableEffect(loopEvents),
           );
           const delivered = claim.track(chunks);
-          const log = memoryStream({ runId });
+          const log = yield* runLogs.open(runId);
           yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
             startImmediately: true,
           });
@@ -1992,7 +1970,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
          * A bound run's output, each chunk committed before it is delivered. A failure ends the
          * delivery with a coded RUN_ERROR: thrown, the SDK words it "Unknown error occurred".
          */
-        const boundRunRecorded = (chunks: Stream.Stream<StreamChunk, Cause.UnknownError>) =>
+        const boundRunRecorded = (chunks: Stream.Stream<AgUiEvent, Cause.UnknownError>) =>
           Stream.unwrap(
             Effect.map(Ref.make(0), (recorded) => {
               const ended = (
@@ -2010,13 +1988,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                       chunks: yield* Ref.get(recorded),
                     });
                     return {
-                      type: EventType.RUN_ERROR,
-                      runId,
-                      threadId: sessionId,
-                      timestamp: DateTime.toEpochMillis(yield* DateTime.now),
+                      type: "RUN_ERROR",
+                      timestamp: yield* Clock.currentTimeMillis,
                       code,
                       message,
-                    } satisfies StreamChunk;
+                    } satisfies AgUiEvent;
                   }),
                 );
               const notRecorded = (error: Error, reason: string | null) =>
@@ -2388,11 +2364,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
         yield* runStarted;
-        // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types leave
-        // `undefined` out of optional fields, where the SDK's types allow it.
-        const loopChunks = loopEvents as Stream.Stream<StreamChunk>;
         const chunks = yield* cancellation.publish(
-          yield* Stream.toAsyncIterableEffect(goalRun ? boundRunRecorded(loopChunks) : loopChunks),
+          yield* Stream.toAsyncIterableEffect(goalRun ? boundRunRecorded(loopEvents) : loopEvents),
         );
         const delivered = claim
           .track(chunks)
@@ -2403,8 +2376,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           );
         // A Goal run's page reads its committed output, as on the TanStack path.
         const log = goalRun
-          ? yield* streamDurability({ sessionId, runId })
-          : memoryStream({ runId });
+          ? yield* committedLog({ sessionId, runId })
+          : yield* runLogs.open(runId);
         yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
           startImmediately: true,
         });
@@ -2844,15 +2817,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     // session's next follow-up waiting until this run ends.
     const drain = Result.match({
       onFailure: () => Effect.void,
-      onSuccess: ({ log, after }: { readonly log: StreamDurability; readonly after: string }) =>
+      onSuccess: ({ log, after }: { readonly log: RunLog; readonly after: string }) =>
         Stream.runDrain(
-          Stream.unwrap(
-            Effect.map(Effect.abortSignal, (signal) =>
-              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              Stream.fromAsyncIterable(log.read(after, signal), (cause) =>
-                AgentOperationFailed.make({ operation: "drain-followup", cause }),
-              ),
-            ),
+          Stream.mapError(log.read(after), (cause) =>
+            AgentOperationFailed.make({ operation: "drain-followup", cause }),
           ),
         ),
     });

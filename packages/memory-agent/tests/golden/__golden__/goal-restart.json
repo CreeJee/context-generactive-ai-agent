@@ -322,8 +322,6 @@
       "payload_json": {
         "code": "server_restarted",
         "message": "The server stopped before this answer finished.",
-        "runId": "<id-8>",
-        "threadId": "<session>",
         "timestamp": "<time>",
         "type": "RUN_ERROR"
       },

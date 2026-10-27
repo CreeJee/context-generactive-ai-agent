@@ -1,6 +1,6 @@
-import type { StreamChunk } from "@tanstack/ai";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
+import type { AgUiEvent } from "../loop/chunks.ts";
 
 export type RunEventKind = "chunk" | "run_error" | "run_completed";
 export type RunEvent = {
@@ -69,7 +69,7 @@ export const workflowRunEvents = Effect.gen(function* () {
       runId: string,
       eventKey: string,
       kind: RunEventKind,
-      payload: StreamChunk | Schema.Json,
+      payload: AgUiEvent | Schema.Json,
     ) =>
       Effect.gen(function* () {
         const json = yield* Schema.encodeUnknownEffect(PayloadText)(payload);

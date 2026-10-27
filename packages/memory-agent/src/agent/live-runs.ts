@@ -1,4 +1,3 @@
-import type { StreamChunk } from "@tanstack/ai";
 import { MutableHashMap, Option, Deferred, Effect, Stream } from "effect";
 
 /** A run whose model stream is still being produced in this process. */
@@ -28,9 +27,7 @@ export const createLiveRuns = Effect.sync(() => {
       cancelExecution: Effect.Effect<void> = Effect.sync(() => controller.abort()),
       settle: Effect.Effect<void> = Effect.void,
     ): Effect.Effect<{
-      readonly track: <E, R>(
-        stream: Stream.Stream<StreamChunk, E, R>,
-      ) => Stream.Stream<StreamChunk, E, R>;
+      readonly track: <A, E, R>(stream: Stream.Stream<A, E, R>) => Stream.Stream<A, E, R>;
       readonly release: Effect.Effect<void>;
     } | null> =>
       Effect.flatMap(Deferred.make<void>(), (done) =>
@@ -61,7 +58,7 @@ export const createLiveRuns = Effect.sync(() => {
           }).pipe(Effect.uninterruptible);
           return {
             release,
-            track: <E, R>(stream: Stream.Stream<StreamChunk, E, R>) =>
+            track: <A, E, R>(stream: Stream.Stream<A, E, R>) =>
               stream.pipe(Stream.ensuring(release)),
           };
         }),

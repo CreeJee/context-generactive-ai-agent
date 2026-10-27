@@ -1,37 +1,19 @@
-import type { StreamDurability } from "@tanstack/ai";
-import { Cause, Effect, Result, Schema, Stream } from "effect";
+import { Cause, Effect, Result, Stream } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { AgentChat, ChatStart } from "../agent/chat.ts";
 import { BtwChat } from "../btw/chat.ts";
-import { AgUiEvent } from "../loop/chunks.ts";
+import type { RunLog } from "../loop/run-log.ts";
 import { logDefect } from "../runtime/logged-failures.ts";
 import { ChatApi, type Refusal, type RunEvent } from "./chat-api.ts";
 
-const decodeEvent = Schema.decodeUnknownResult(AgUiEvent);
 const lost = { error: "run_events_unavailable" } as const;
 
-/**
- * A run's events as the API streams them, read from its log after `after`. The log also holds what
- * the TanStack loop wrote for the page; entries that are not AG-UI 1.0 events are left out.
- */
-const runEvents = ({ log, after }: { readonly log: StreamDurability; readonly after: string }) =>
-  Stream.unwrap(
-    Effect.map(Effect.abortSignal, (signal) => {
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      const reader = log.read(after, signal)[Symbol.asyncIterator]();
-      // A closed stream aborts the read, which ends the reader. The stream does not ask the reader
-      // to return: a generator answers that only after its pending read, which waits for the log's
-      // next entry, so a page that leaves a quiet run would hold its stream open until then.
-      return Stream.fromAsyncIterable(
-        { [Symbol.asyncIterator]: () => ({ next: () => reader.next() }) },
-        () => lost,
-      );
-    }),
-  ).pipe(
-    Stream.tapError(() => Effect.logWarning("Run log unreadable")),
-    Stream.filterMap(({ offset, chunk }) =>
-      Result.map(decodeEvent(chunk), (data): RunEvent => ({ id: offset, event: "message", data })),
-    ),
+/** A run's events as the API streams them, read from its log after `after`. */
+const runEvents = ({ log, after }: { readonly log: RunLog; readonly after: string }) =>
+  log.read(after).pipe(
+    Stream.tapError((error) => Effect.logWarning("Run log unreadable", { reason: error.reason })),
+    Stream.mapError(() => lost),
+    Stream.map(({ offset, event }): RunEvent => ({ id: offset, event: "message", data: event })),
   );
 
 /** A failure no refusal names is a defect, answered 500 as the page's route answers it. */

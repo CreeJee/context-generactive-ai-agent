@@ -616,6 +616,11 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - run 기록, interrupt, chat metadata를 `RunStore`로 읽는다. 턴 요약, 백그라운드 결과, 서브에이전트 transcript도 `RunStore`를 쓴다. `ChatState`에는 시작 때 하는 일(옛 세션의 thread, history page 준비, 이전 프로세스의 run 정리)과 `prepare`만 남았다. 쓰는 곳이 없어진 `middleware`(TanStack `withPersistence`와 부분 답 저장), `run`, `lastRun`, `discardPendingInterrupts`, `persistence`를 지웠다.
   - eval: `eval/prompt-overhead.ts`는 loop가 model에 보내는 Effect AI 요청(`LanguageModel.ProviderOptions`)을 `subscriptionBody`로 직렬화해 잰다. `eval/live-compaction.ts`·`eval/live-delegation.ts`의 예산 guard(`eval/pilot-guard.ts`)는 TanStack adapter 대신 run의 model을 감싸므로 요약 같은 단발 호출도 막는다. `aa056aa2`부터는 guard가 걸리지 않았다. 새 loop에는 `maxIterations` 같은 단계 상한이 없어 호출 수 예산만 남는다.
   - 1번은 끝났다.
+- 2번 진행 (2026-10-27): 커밋마다 build와 테스트가 통과한다.
+  - run 로그: TanStack `StreamDurability`·`memoryStream`을 우리 `RunLog`(`src/loop/run-log.ts`)로 바꿨다. Goal의 bound run은 `sqliteRunLog`(`workflow/durable-stream.ts`), 다른 run은 `memoryRunLogs`의 메모리 로그에 쓴다. 저장 key namespace(`sdk-stream:v1:`)와 offset 모양(`memory:v1:`)은 그대로다.
+    - 로그에는 AG-UI 1.0 이벤트만 쓴다. 읽을 때 decode되지 않는 옛 항목은 뺀다. 서버가 쓰는 `RUN_ERROR`에서 TanStack 필드 `runId`·`threadId`가 빠졌고, golden 차이는 이것뿐이다.
+    - 메모리 로그는 프로세스 전역이 아니라 `AgentChat`마다 있다. 끝난 로그는 5분 뒤, 1024개를 넘으면 오래된 것부터 지운다(TanStack과 같다).
+    - 취소 전달(`SdkCancellation.publish`)은 그대로 둔다.
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 
