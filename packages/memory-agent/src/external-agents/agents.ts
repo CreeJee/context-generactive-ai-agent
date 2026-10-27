@@ -15,6 +15,7 @@ import {
   Array as EffectArray,
   Cause,
   Function as EffectFunction,
+  HashMap,
   HashSet,
   Match,
   MutableHashMap,
@@ -27,15 +28,17 @@ import {
   FiberMap,
   FileSystem,
   Path,
+  Ref,
   Scope,
   Exit,
   Layer,
   Option,
   Result,
   Schema,
+  SynchronizedRef,
 } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { isPlatformError } from "effect/PlatformError";
+import { isPlatformError, type PlatformError } from "effect/PlatformError";
 import { MissingVariable, expandVariablesResult } from "../mcp/config.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import type {
@@ -54,11 +57,6 @@ import {
 
 /** After this many failed connection attempts in a row, reconnecting waits for the user (R17). */
 export const maxConsecutiveFailures = 2;
-
-export class ExternalAgentOperationFailed extends Schema.TaggedError<ExternalAgentOperationFailed>()(
-  "ExternalAgentOperationFailed",
-  { operation: Schema.Literal("reconnect"), cause: Schema.Defect() },
-) {}
 
 /** The agent process started but did not answer `initialize` in time. */
 export class ExternalAgentInitializeTimedOut extends Schema.TaggedError<ExternalAgentInitializeTimedOut>()(
@@ -167,22 +165,37 @@ interface SessionHandlers {
 }
 
 interface Live {
-  readonly dispose: () => void;
+  /** Ends the process and its streams. */
+  readonly dispose: Effect.Effect<void>;
   readonly connection: acp.ClientConnection;
   readonly agentName: string | null;
   readonly loadSession: boolean;
   /** Our session key → the agent's session id, valid only for this process. */
-  readonly sessions: MutableHashMap.MutableHashMap<string, string>;
+  readonly sessions: Ref.Ref<HashMap.HashMap<string, string>>;
   readonly handlers: MutableHashMap.MutableHashMap<string, SessionHandlers>;
+}
+
+/** What a connection attempt fails with. */
+type AttemptFailure =
+  | MissingVariable
+  | PlatformError
+  | ExternalAgentInitializeTimedOut
+  | Cause.UnknownError;
+
+/** A link's state, replaced as a whole under its lock. */
+interface LinkState {
+  readonly retired: boolean;
+  /** What settings show. */
+  readonly shown: AgentLinkState;
+  readonly live: Live | null;
+  /** The connection attempt in flight, which callers meanwhile share. */
+  readonly attempt: Fiber.Fiber<Live, AttemptFailure> | null;
+  readonly failures: number;
 }
 
 interface Link {
   readonly fingerprint: string;
-  retired: boolean;
-  state: AgentLinkState;
-  live: Live | null;
-  attempt: Promise<Live> | null;
-  failures: number;
+  readonly state: SynchronizedRef.SynchronizedRef<LinkState>;
 }
 
 const TrustRow = Schema.Struct({
@@ -208,6 +221,10 @@ const rejectionText = (error: Error) =>
 /** Promise rejections can be any value; what the agent did not throw as an error has no class. */
 const rejectionError = (rejection: Cause.UnknownError) =>
   rejection.cause instanceof Error ? rejection.cause : new Error(String(rejection.cause));
+
+/** What an attempt failed with: the agent's own rejection, or the typed failure itself. */
+const attemptError = (failure: AttemptFailure): Error =>
+  Cause.isUnknownError(failure) ? rejectionError(failure) : failure;
 
 const isMissingVariable = Schema.is(MissingVariable);
 const isInitializeTimedOut = Schema.is(ExternalAgentInitializeTimedOut);
@@ -347,10 +364,8 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
   const redactor = yield* SecretRedactor;
-  const links = MutableHashMap.empty<string, Link>();
+  const links = yield* SynchronizedRef.make(HashMap.empty<string, Link>());
   const retries = yield* FiberMap.make<string, void, never>();
-  const context = yield* Effect.context<never>();
-  const runCallback = Effect.runForkWith(context);
 
   const selectTrust = SqlSchema.findAll({
     Request: Schema.String,
@@ -384,8 +399,8 @@ const make = Effect.gen(function* () {
         .filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
         .map((entry) => [linkKey(project, entry.agent), entry.agent.fingerprint]),
     );
-    retireLinks(
-      (key, link) =>
+    yield* retireLinks(
+      (link, key) =>
         key.startsWith(`${project.id}/`) &&
         !Option.contains(MutableHashMap.get(usableFingerprints, key), link.fingerprint),
     );
@@ -403,236 +418,289 @@ const make = Effect.gen(function* () {
     return { files, agents };
   });
 
-  const close = (live: Live) => {
-    live.connection.close();
-    live.dispose();
-  };
+  const close = (live: Live) =>
+    Effect.andThen(
+      Effect.sync(() => live.connection.close()),
+      live.dispose,
+    );
 
-  const shutdown = (link: Link) => {
-    const live = link.live;
-    link.live = null;
-    Option.match(Option.fromNullishOr(live), { onNone: EffectFunction.constVoid, onSome: close });
-  };
+  /** Closes the process a link's state gave up, if it had one. */
+  const closeTaken = (live: Live | null) =>
+    Option.match(Option.fromNullishOr(live), { onNone: () => Effect.void, onSome: close });
 
-  const retire = (link: Link) => {
-    link.retired = true;
-    shutdown(link);
-  };
+  const shutdown = (link: Link) =>
+    SynchronizedRef.modify(
+      link.state,
+      (state) => [state.live, { ...state, live: null }] as const,
+    ).pipe(Effect.flatMap(closeTaken));
+
+  const retire = (link: Link) =>
+    SynchronizedRef.modify(
+      link.state,
+      (state) => [state.live, { ...state, retired: true, live: null }] as const,
+    ).pipe(Effect.flatMap(closeTaken));
 
   /** Stops and forgets the links `stale` picks. */
-  const retireLinks = (stale: (key: string, link: Link) => boolean) =>
-    Array.from(links)
-      .filter(([key, link]) => stale(key, link))
-      .forEach(([key, link]) => {
-        retire(link);
-        MutableHashMap.remove(links, key);
-      });
+  const retireLinks = (stale: (link: Link, key: string) => boolean) =>
+    SynchronizedRef.modify(
+      links,
+      (current) =>
+        [
+          HashMap.values(HashMap.filter(current, stale)),
+          HashMap.filter(current, (link, key) => !stale(link, key)),
+        ] as const,
+    ).pipe(Effect.flatMap((removed) => Effect.forEach(removed, retire, { discard: true })));
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const startProcess = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> =>
-    runNativeEffect(
-      Effect.gen(function* () {
-        const expand = (value: string) =>
-          Effect.fromResult(expandVariablesResult(value, process.env));
-        const env = {
-          // The agent logs in its own official way; the app's ChatGPT and Kagi secrets are not passed.
-          ...getDefaultEnvironment(),
-          ...Object.fromEntries(
-            yield* Effect.forEach(Object.entries(agent.command.env), ([name, value]) =>
-              Effect.map(expand(value), (expanded) => [name, expanded] as const),
-            ),
+  const startProcess = (
+    project: Project,
+    agent: ConfiguredAgent,
+    link: Link,
+  ): Effect.Effect<Live, AttemptFailure> =>
+    Effect.gen(function* () {
+      const expand = (value: string) =>
+        Effect.fromResult(expandVariablesResult(value, process.env));
+      const env = {
+        // The agent logs in its own official way; the app's ChatGPT and Kagi secrets are not passed.
+        ...getDefaultEnvironment(),
+        ...Object.fromEntries(
+          yield* Effect.forEach(Object.entries(agent.command.env), ([name, value]) =>
+            Effect.map(expand(value), (expanded) => [name, expanded] as const),
           ),
-        };
-        const owner = yield* Scope.fork(serviceScope, "parallel");
-        const { command, args, shell } = yield* agentCommandInvocation({
-          command: yield* expand(agent.command.command),
-          args: yield* Effect.forEach(agent.command.args, expand),
-          cwd: project.root,
-          env,
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fs),
-          Effect.provideService(Path.Path, path),
-        );
-        const child = yield* spawner
-          .spawn(
-            ChildProcess.make(command, args, {
-              cwd: project.root,
-              env,
-              extendEnv: false,
-              stderr: "ignore",
-              windowsHide: true,
-              stdin: { stream: "pipe", endOnDone: false },
-              shell,
-              forceKillAfter: "3 seconds",
-            }),
-          )
-          .pipe(
-            Effect.provideService(Scope.Scope, owner),
-            Effect.onError(() => Scope.close(owner, Exit.void)),
-          );
-        const dispose = () => {
-          runCallback(Scope.close(owner, Exit.void));
-        };
-        const streamContext = yield* Layer.build(
-          SdkStreams.layer({
-            input: child.stdout,
-            output: child.stdin,
-            closeOutput: Scope.close(owner, Exit.void),
+        ),
+      };
+      const owner = yield* Scope.fork(serviceScope, "parallel");
+      const { command, args, shell } = yield* agentCommandInvocation({
+        command: yield* expand(agent.command.command),
+        args: yield* Effect.forEach(agent.command.args, expand),
+        cwd: project.root,
+        env,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      );
+      const child = yield* spawner
+        .spawn(
+          ChildProcess.make(command, args, {
+            cwd: project.root,
+            env,
+            extendEnv: false,
+            stderr: "ignore",
+            windowsHide: true,
+            stdin: { stream: "pipe", endOnDone: false },
+            shell,
+            forceKillAfter: "3 seconds",
           }),
-        ).pipe(Effect.provideService(Scope.Scope, owner));
-        const streams = Context.get(streamContext, SdkStreams);
-
-        const handlers = MutableHashMap.empty<string, SessionHandlers>();
-        const connection = acp
-          .client({ name: "context-generactive-agent" })
-          .onNotification(acp.methods.client.session.update, (ctx) => {
-            Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId))?.onUpdate(
-              ctx.params.update,
-            );
-          })
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          .onRequest(acp.methods.client.session.requestPermission, (ctx) =>
-            Option.match(MutableHashMap.get(handlers, ctx.params.sessionId), {
-              onNone: () => Promise.resolve({ outcome: { outcome: "cancelled" } as const }),
-              onSome: (handler) => handler.askPermission(ctx.params),
-            }),
-          )
-          .connect(acp.ndJsonStream(streams.writable, streams.readable));
-
-        return yield* Effect.gen(function* () {
-          const initialized = yield* nativePromise(() =>
-            connection.agent.request(acp.methods.agent.initialize, {
-              protocolVersion: acp.PROTOCOL_VERSION,
-              clientCapabilities: {
-                fs: { readTextFile: false, writeTextFile: false },
-                terminal: false,
-              },
-              clientInfo: { name: "context-generactive-agent", version: "0.0.0" },
-            }),
-          ).pipe(
-            Effect.timeoutOrElse({
-              duration: connectTimeoutMs,
-              orElse: () => Effect.fail(ExternalAgentInitializeTimedOut.make()),
-            }),
-          );
-          const live: Live = {
-            dispose,
-            connection,
-            agentName: initialized.agentInfo?.name ?? null,
-            loadSession: initialized.agentCapabilities?.loadSession === true,
-            sessions: MutableHashMap.empty(),
-            handlers,
-          };
-          yield* child.exitCode.pipe(
-            Effect.onExit(() => Effect.sync(() => onLost(project, agent, link, live))),
-            // Any end of the process is the lost connection handled above.
-            Effect.catchTag("PlatformError", () => Effect.void),
-            Effect.forkIn(owner),
-          );
-          void connection.closed.finally(() => onLost(project, agent, link, live));
-          return live;
-        }).pipe(
-          Effect.onError(() =>
-            Effect.sync(() => {
-              connection.close();
-              dispose();
-            }),
-          ),
+        )
+        .pipe(
+          Effect.provideService(Scope.Scope, owner),
+          Effect.onError(() => Scope.close(owner, Exit.void)),
         );
+      const dispose = Scope.close(owner, Exit.void);
+      const streamContext = yield* Layer.build(
+        SdkStreams.layer({
+          input: child.stdout,
+          output: child.stdin,
+          closeOutput: Scope.close(owner, Exit.void),
+        }),
+      ).pipe(Effect.provideService(Scope.Scope, owner));
+      const streams = Context.get(streamContext, SdkStreams);
+
+      const handlers = MutableHashMap.empty<string, SessionHandlers>();
+      const connection = acp
+        .client({ name: "context-generactive-agent" })
+        .onNotification(acp.methods.client.session.update, (ctx) => {
+          Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId))?.onUpdate(
+            ctx.params.update,
+          );
+        })
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        .onRequest(acp.methods.client.session.requestPermission, (ctx) =>
+          Option.match(MutableHashMap.get(handlers, ctx.params.sessionId), {
+            onNone: () => Promise.resolve({ outcome: { outcome: "cancelled" } as const }),
+            onSome: (handler) => handler.askPermission(ctx.params),
+          }),
+        )
+        .connect(acp.ndJsonStream(streams.writable, streams.readable));
+
+      return yield* Effect.gen(function* () {
+        const initialized = yield* nativePromise(() =>
+          connection.agent.request(acp.methods.agent.initialize, {
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
+            },
+            clientInfo: { name: "context-generactive-agent", version: "0.0.0" },
+          }),
+        ).pipe(
+          Effect.timeoutOrElse({
+            duration: connectTimeoutMs,
+            orElse: () => Effect.fail(ExternalAgentInitializeTimedOut.make()),
+          }),
+        );
+        const live: Live = {
+          dispose,
+          connection,
+          agentName: initialized.agentInfo?.name ?? null,
+          loadSession: initialized.agentCapabilities?.loadSession === true,
+          sessions: yield* Ref.make(HashMap.empty<string, string>()),
+          handlers,
+        };
+        // Handled in its own fiber: handling it closes the process's scope these watchers run in.
+        const lost = Effect.asVoid(Effect.forkIn(onLost(project, agent, link, live), serviceScope));
+        yield* child.exitCode.pipe(
+          Effect.onExit(() => lost),
+          // Any end of the process is the lost connection handled above.
+          Effect.catchTag("PlatformError", () => Effect.void),
+          Effect.forkIn(owner),
+        );
+        yield* nativePromise(() => connection.closed).pipe(
+          Effect.ignore,
+          Effect.andThen(lost),
+          Effect.forkIn(owner),
+        );
+        return live;
+      }).pipe(
+        Effect.onError(() =>
+          Effect.andThen(
+            Effect.sync(() => connection.close()),
+            dispose,
+          ),
+        ),
+      );
+    });
+
+  /** One connection attempt. Success clears the failure count; failure adds to it. */
+  const connectOnce = (project: Project, agent: ConfiguredAgent, link: Link) =>
+    startProcess(project, agent, link).pipe(
+      Effect.matchEffect({
+        onSuccess: (live) =>
+          SynchronizedRef.modify(link.state, (state): readonly [boolean, LinkState] =>
+            state.retired
+              ? [true, { ...state, attempt: null }]
+              : [
+                  false,
+                  {
+                    ...state,
+                    attempt: null,
+                    live,
+                    failures: 0,
+                    shown: AgentLinkState.connected({
+                      agent: live.agentName,
+                      loadSession: live.loadSession,
+                    }),
+                  },
+                ],
+          ).pipe(
+            Effect.flatMap((retired) => Effect.when(close(live), Effect.succeed(retired))),
+            Effect.as(live),
+          ),
+        onFailure: (error) =>
+          Effect.gen(function* () {
+            const failures = yield* SynchronizedRef.modify(
+              link.state,
+              (state) =>
+                [
+                  state.failures + 1,
+                  { ...state, attempt: null, failures: state.failures + 1 },
+                ] as const,
+            );
+            const failure = yield* error.pipe(attemptError, connectFailure, redactor.hideDetail);
+            // A newer attempt owns the state now.
+            yield* SynchronizedRef.update(link.state, (state) =>
+              state.attempt !== null
+                ? state
+                : {
+                    ...state,
+                    shown:
+                      failures >= maxConsecutiveFailures
+                        ? AgentLinkState.stopped({ failures, failure })
+                        : AgentLinkState.retrying({ failures, failure }),
+                  },
+            );
+            return yield* error;
+          }),
       }),
     );
 
-  /** One connection attempt. Success clears the failure count; failure adds to it. */
-  const attempt = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> => {
-    if (isTruthy(link.attempt)) return link.attempt;
-    link.state = AgentLinkState.connecting({ failures: link.failures });
-    const pending = startProcess(project, agent, link).then(
-      (live) => {
-        link.attempt = null;
-        if (link.retired) {
-          close(live);
-          return live;
-        }
-        link.live = live;
-        link.failures = 0;
-        link.state = AgentLinkState.connected({
-          agent: live.agentName,
-          loadSession: live.loadSession,
-        });
-        return live;
-      },
-      (error) => {
-        link.attempt = null;
-        link.failures += 1;
-        const failures = link.failures;
-        return runNativeEffect(
-          redactor.hideDetail(
-            connectFailure(error instanceof Error ? error : new Error(String(error))),
+  /** The link's connection attempt, joining the one in flight. */
+  const attempt = (project: Project, agent: ConfiguredAgent, link: Link) =>
+    SynchronizedRef.modifyEffect(link.state, (state) =>
+      state.attempt !== null
+        ? Effect.succeed([state.attempt, state] as const)
+        : Effect.map(
+            // A caller that stops waiting does not stop the attempt the others share.
+            Effect.forkIn(connectOnce(project, agent, link), serviceScope),
+            (running) =>
+              [
+                running,
+                {
+                  ...state,
+                  attempt: running,
+                  shown: AgentLinkState.connecting({ failures: state.failures }),
+                },
+              ] as const,
           ),
-        ).then((failure) => {
-          // A newer attempt owns the state now.
-          if (link.attempt === null)
-            link.state =
-              failures >= maxConsecutiveFailures
-                ? AgentLinkState.stopped({ failures, failure })
-                : AgentLinkState.retrying({ failures, failure });
-          throw error;
-        });
-      },
-    );
-    link.attempt = pending;
-    return pending;
-  };
+    ).pipe(Effect.flatMap(Fiber.join));
 
   /**
    * A dropped connection is reconnected on its own until it fails twice in a row. Reconnecting
    * restores the connection only: nothing that was being asked is sent again.
    */
   const onLost = (project: Project, agent: ConfiguredAgent, link: Link, live: Live) => {
-    if (link.retired || link.live !== live) return;
-    link.live = null;
-    live.dispose();
-    const wanted = () =>
-      !link.retired && link.live === null && link.failures < maxConsecutiveFailures;
+    const wanted = Effect.map(
+      SynchronizedRef.get(link.state),
+      (state) => !state.retired && state.live === null && state.failures < maxConsecutiveFailures,
+    );
     // Each failed attempt counts, so `wanted` ends the retries; the link state reports the last one.
     const retry = Effect.sleep(retryDelayMs).pipe(
-      Effect.andThen(
-        Effect.when(
-          nativePromise(() => attempt(project, agent, link)),
-          Effect.sync(wanted),
-        ),
-      ),
-      Effect.retry({ while: wanted }),
+      Effect.andThen(Effect.when(attempt(project, agent, link), wanted)),
+      Effect.retry({ while: () => wanted }),
       Effect.ignore,
     );
-    runCallback(
-      FiberMap.run(retries, linkKey(project, agent), Effect.when(retry, Effect.sync(wanted)), {
+    const reconnect = Effect.andThen(
+      live.dispose,
+      FiberMap.run(retries, linkKey(project, agent), Effect.when(retry, wanted), {
         onlyIfMissing: true,
       }),
     );
+    return SynchronizedRef.modify(link.state, (state) =>
+      state.retired || state.live !== live
+        ? ([false, state] as const)
+        : ([true, { ...state, live: null }] as const),
+    ).pipe(Effect.flatMap((current) => Effect.when(reconnect, Effect.succeed(current))));
   };
 
-  const linkFor = (project: Project, agent: ConfiguredAgent) => {
+  const linkFor = Effect.fnUntraced(function* (project: Project, agent: ConfiguredAgent) {
     const key = linkKey(project, agent);
-    const existing = MutableHashMap.get(links, key);
-    return Option.getOrElse(
-      Option.filter(existing, (link) => link.fingerprint === agent.fingerprint),
-      () => {
-        // A changed configuration replaces the link the old one used.
-        Option.match(existing, { onNone: EffectFunction.constVoid, onSome: retire });
-        const link: Link = {
-          fingerprint: agent.fingerprint,
-          retired: false,
-          state: AgentLinkState.idle(),
-          live: null,
-          attempt: null,
-          failures: 0,
-        };
-        MutableHashMap.set(links, key, link);
-        return link;
-      },
-    );
-  };
+    const { link, replaced } = yield* SynchronizedRef.modifyEffect(links, (current) => {
+      const existing = HashMap.get(current, key);
+      return Option.match(
+        Option.filter(existing, (link) => link.fingerprint === agent.fingerprint),
+        {
+          onSome: (link) =>
+            Effect.succeed([{ link, replaced: Option.none<Link>() }, current] as const),
+          onNone: () =>
+            Effect.map(
+              SynchronizedRef.make<LinkState>({
+                retired: false,
+                shown: AgentLinkState.idle(),
+                live: null,
+                attempt: null,
+                failures: 0,
+              }),
+              (state) => {
+                const link: Link = { fingerprint: agent.fingerprint, state };
+                return [{ link, replaced: existing }, HashMap.set(current, key, link)] as const;
+              },
+            ),
+        },
+      );
+    });
+    // A changed configuration replaces the link the old one used.
+    yield* Effect.transposeOption(Option.map(replaced, retire));
+    return link;
+  });
 
   /** The trusted, unchanged configuration of a named agent usable in this project. */
   const usable = Effect.fn("ExternalAgents.usable")(function* (project: Project, name: string) {
@@ -648,11 +716,20 @@ const make = Effect.gen(function* () {
     project: Project,
   ): Effect.fn.Return<ExternalAgentsOverview, SqlError.SqlError | Schema.SchemaError> {
     const { files, agents } = yield* configured(project);
+    const current = yield* SynchronizedRef.get(links);
     const views = yield* Effect.forEach(agents, (entry) =>
       Effect.map(
-        // A command line can carry a key (`--api-key=…`); the page gets it hidden.
-        redactor.shownDetail([entry.agent.command.command, ...entry.agent.command.args].join(" ")),
-        (target): ExternalAgentView => ({
+        Effect.all({
+          // A command line can carry a key (`--api-key=…`); the page gets it hidden.
+          target: redactor.shownDetail(
+            [entry.agent.command.command, ...entry.agent.command.args].join(" "),
+          ),
+          link: Option.match(HashMap.get(current, linkKey(project, entry.agent)), {
+            onNone: () => Effect.succeed<AgentLinkState>(AgentLinkState.idle()),
+            onSome: (link) => Effect.map(SynchronizedRef.get(link.state), (state) => state.shown),
+          }),
+        }),
+        ({ target, link }): ExternalAgentView => ({
           scope: entry.agent.scope,
           name: entry.agent.name,
           target,
@@ -663,13 +740,7 @@ const make = Effect.gen(function* () {
             Match.when(Match.null, () => AgentTrustState.untrusted()),
             Match.when(
               (fingerprint) => fingerprint === entry.agent.fingerprint,
-              () =>
-                AgentTrustState.trusted({
-                  link: Option.match(MutableHashMap.get(links, linkKey(project, entry.agent)), {
-                    onNone: () => AgentLinkState.idle(),
-                    onSome: (link) => link.state,
-                  }),
-                }),
+              () => AgentTrustState.trusted({ link }),
             ),
             Match.orElse(() => AgentTrustState.changed()),
           ),
@@ -680,7 +751,9 @@ const make = Effect.gen(function* () {
   });
 
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => Array.from(MutableHashMap.values(links)).forEach(retire)),
+    Effect.flatMap(SynchronizedRef.get(links), (current) =>
+      Effect.forEach(HashMap.values(current), retire, { discard: true }),
+    ),
   );
 
   return {
@@ -714,9 +787,7 @@ const make = Effect.gen(function* () {
         const forget = sql`
           DELETE FROM agent_trust
           WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`.pipe(
-          Effect.andThen(
-            Effect.sync(() => retireLinks((key) => key.endsWith(`/${scope}/${name}`))),
-          ),
+          Effect.andThen(retireLinks((_, key) => key.endsWith(`/${scope}/${name}`))),
         );
         yield* trusted
           ? Option.match(entry, {
@@ -734,15 +805,12 @@ const make = Effect.gen(function* () {
           Option.match(Option.fromNullishOr(agent), {
             onNone: () => Effect.void,
             onSome: (found) =>
-              Effect.suspend(() => {
-                const link = linkFor(project, found);
-                shutdown(link);
-                link.failures = 0;
-                return Effect.tryPromise({
-                  try: () => attempt(project, found, link),
-                  catch: (cause) =>
-                    ExternalAgentOperationFailed.make({ operation: "reconnect", cause }),
-                }).pipe(Effect.catchTag("ExternalAgentOperationFailed", () => Effect.void));
+              Effect.gen(function* () {
+                const link = yield* linkFor(project, found);
+                yield* shutdown(link);
+                yield* SynchronizedRef.update(link.state, (state) => ({ ...state, failures: 0 }));
+                // The attempt's failure is shown by the link state the overview reports.
+                yield* Effect.ignore(attempt(project, found, link));
               }),
           }),
         ),
@@ -769,31 +837,32 @@ const make = Effect.gen(function* () {
           return ExternalPromptOutcome.unavailable({
             failure: { code: "not_trusted", detail: null },
           });
-        const link = linkFor(project, agent);
+        const link = yield* linkFor(project, agent);
+        const state = yield* SynchronizedRef.get(link.state);
         if (
-          link.failures >= maxConsecutiveFailures &&
-          !isTruthy(link.live) &&
-          !isTruthy(link.attempt)
+          state.failures >= maxConsecutiveFailures &&
+          !isTruthy(state.live) &&
+          !isTruthy(state.attempt)
         )
           return ExternalPromptOutcome.unavailable({
             failure: { code: "stopped_after_failures", detail: null },
           });
         const connected = yield* Effect.result(
-          nativePromise(() =>
-            link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
-          ),
+          state.live === null ? attempt(project, agent, link) : Effect.succeed(state.live),
         );
         if (Result.isFailure(connected))
           return ExternalPromptOutcome.unavailable({
             failure: yield* connected.failure.pipe(
-              rejectionError,
+              attemptError,
               connectFailure,
               redactor.hideDetail,
             ),
           });
         const live = connected.success;
 
-        let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
+        let sessionId = Option.getOrUndefined(
+          HashMap.get(yield* Ref.get(live.sessions), sessionKey),
+        );
         if (!isTruthy(sessionId)) {
           const created = yield* Effect.result(
             nativePromise(() =>
@@ -813,7 +882,7 @@ const make = Effect.gen(function* () {
             });
           }
           sessionId = created.success.sessionId;
-          MutableHashMap.set(live.sessions, sessionKey, sessionId);
+          yield* Ref.update(live.sessions, HashMap.set(sessionKey, sessionId));
         }
 
         let answer = "";
@@ -890,25 +959,29 @@ const make = Effect.gen(function* () {
               );
             },
             onFailure: (failure): Effect.Effect<ExternalPromptOutcome> =>
-              live.connection.signal.aborted || link.live !== live
-                ? Effect.succeed(
-                    ExternalPromptOutcome.disconnected({
-                      answer,
-                      toolCalls: [...MutableHashMap.values(toolCalls)],
-                    }),
-                  )
-                : Effect.map(
-                    redactor.hideDetail({
-                      code: "agent_error" as const,
-                      detail: failure.pipe(rejectionError, rejectionText),
-                    }),
-                    (shown) =>
-                      ExternalPromptOutcome.failed({
-                        failure: shown,
-                        answer,
-                        toolCalls: [...MutableHashMap.values(toolCalls)],
-                      }),
-                  ),
+              Effect.flatMap(
+                SynchronizedRef.get(link.state),
+                (current): Effect.Effect<ExternalPromptOutcome> =>
+                  live.connection.signal.aborted || current.live !== live
+                    ? Effect.succeed(
+                        ExternalPromptOutcome.disconnected({
+                          answer,
+                          toolCalls: [...MutableHashMap.values(toolCalls)],
+                        }),
+                      )
+                    : Effect.map(
+                        redactor.hideDetail({
+                          code: "agent_error" as const,
+                          detail: failure.pipe(rejectionError, rejectionText),
+                        }),
+                        (shown) =>
+                          ExternalPromptOutcome.failed({
+                            failure: shown,
+                            answer,
+                            toolCalls: [...MutableHashMap.values(toolCalls)],
+                          }),
+                      ),
+              ),
           }),
           Effect.ensuring(Effect.sync(() => MutableHashMap.remove(live.handlers, agentSession))),
         );
