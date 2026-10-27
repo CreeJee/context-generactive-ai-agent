@@ -1,17 +1,12 @@
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
-import type { SqlError } from "effect/sql";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgents, ExternalPromptOutcome } from "../external-agents/agents.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
-import { onRun, runTrace, type RunTrace } from "../runtime/run-trace.ts";
 import { BackgroundTasks, backgroundOperation } from "./background.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 export const delegateToolName = "delegate_to_agent";
 
@@ -96,8 +91,8 @@ export function delegateInstructions(agents: readonly string[]) {
 }
 
 /** What delegation adds to a run. */
-export interface DelegateToolset<Tool = AnyServerTool> {
-  readonly tools: Tool[];
+export interface DelegateToolset {
+  readonly tools: RunTool[];
   readonly instructions: string | null;
 }
 
@@ -114,7 +109,6 @@ const make = Effect.gen(function* () {
   const agents = yield* ExternalAgents;
   const relayed = yield* RelayedApprovals;
   const background = yield* BackgroundTasks;
-  const services = yield* Effect.context<never>();
 
   /** A delegation from the run `runId`, which `signal` stops. */
   const delegateCall =
@@ -167,48 +161,25 @@ const make = Effect.gen(function* () {
         });
       });
 
-  /** The run's toolset when an external agent is trusted in the project, with `tool` making it. */
-  const toolsetOf = <Tool>(
-    project: Project,
-    tool: () => Tool,
-  ): Effect.Effect<DelegateToolset<Tool>, SqlError.SqlError | Schema.SchemaError> =>
-    Effect.map(agents.available(project), (available) =>
-      available.length === 0
-        ? { tools: [], instructions: null }
-        : { tools: [tool()], instructions: delegateInstructions(available) },
-    );
-
-  const toolsFor = Effect.fn("DelegateTools.forRun")(function* (
-    caller: RunTrace,
-    binding: DelegateBinding,
-  ) {
-    const run = Effect.runPromiseWith(onRun(services, caller));
-    const call = delegateCall(binding);
-    return yield* toolsetOf(binding.project, (): AnyServerTool =>
-      toolDefinition(definitionOf(delegate)).server((input, context) =>
-        run(call(input, context?.toolCallId ?? randomUUID())),
-      ),
-    );
-  });
-
   return {
     /**
      * delegate_to_agent for a run, or nothing when no external agent is trusted in the project.
-     * The tool runs on the run's context, so its spans join the run's trace.
+     * The tool runs on the loop's fiber, so its spans join the run's trace.
      */
-    forRun: (
-      project: Project,
-      sessionId: string,
-      signal: AbortSignal,
-      runId: string = randomUUID(),
-    ) =>
-      Effect.flatMap(runTrace, (caller) => toolsFor(caller, { project, sessionId, signal, runId })),
-
-    /** {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
     runToolsFor: Effect.fn("DelegateTools.runToolsFor")((binding: DelegateBinding) => {
       const call = delegateCall(binding);
-      return toolsetOf(binding.project, (): RunTool =>
-        runTool({ ...delegate, handler: (input, { toolCallId }) => call(input, toolCallId) }),
+      return Effect.map(agents.available(binding.project), (available): DelegateToolset =>
+        available.length === 0
+          ? { tools: [], instructions: null }
+          : {
+              tools: [
+                runTool({
+                  ...delegate,
+                  handler: (input, { toolCallId }) => call(input, toolCallId),
+                }),
+              ],
+              instructions: delegateInstructions(available),
+            },
       );
     }),
   };

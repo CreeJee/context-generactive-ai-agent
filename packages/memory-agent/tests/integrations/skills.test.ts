@@ -1,4 +1,4 @@
-import { Cause, Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path } from "effect";
 import { expect } from "vite-plus/test";
 import { FileReadPlatform } from "../../src/files/text.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -12,15 +12,8 @@ import { SkillTools } from "../../src/tools/skills.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { runTurn, toolResults } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-
-const sdk = <A>(operation: () => A | PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(operation()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 const writeSkill = Effect.fnUntraced(function* (
   root: string,
@@ -118,32 +111,20 @@ testAgent()("global and project skills", (it) => {
         expect(catalog.problems).toEqual([
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
-        const tools = yield* inRun((yield* SkillTools).forProject(project));
+        const tools = yield* (yield* SkillTools).runToolsFor(project);
         expect(tools.instructions).toContain("- review (project): Project review.");
-        const read = tools.tools[0]?.execute;
         // How to treat a skill comes with the skill read, not with the list.
-        expect(yield* sdk(() => read?.({ name: "review" }))).toMatchObject({
+        expect(yield* callTool(tools.tools, "read_skill", { name: "review" })).toMatchObject({
           scope: "project",
           directory: path.join(local, "review"),
           files: ["checklist.md"],
           instructions: "Project rules.",
           note: expect.stringMatching(/guidance, not permission.*with read_file\.$/),
         });
-        expect(yield* sdk(() => read?.({ name: "linked" }))).toEqual({
+        expect(yield* callTool(tools.tools, "read_skill", { name: "linked" })).toEqual({
           error: "skill_not_found",
           name: "linked",
         });
-
-        const runTools = yield* (yield* SkillTools).runToolsFor(project);
-        expect(
-          yield* runToolRequestDifferences({ chatTools: tools.tools, runTools: runTools.tools }),
-        ).toEqual([undefined, undefined, undefined]);
-        expect(runTools.instructions).toBe(tools.instructions);
-        const readRun = yield* Effect.fromNullishOr(runTools.tools[0]);
-        for (const name of ["review", "linked"]) {
-          const call = yield* readRun.prepare({ name });
-          expect(yield* call({ toolCallId: "call-1" })).toEqual(yield* sdk(() => read?.({ name })));
-        }
       }),
   );
 });

@@ -1,8 +1,7 @@
-import { Cause, Effect, FileSystem, Path, Result, Schema } from "effect";
+import { Effect, FileSystem, Path, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { isTruthy } from "../../src/truthy.ts";
 import { GoalExecution, GoalExecutions } from "../../src/workflow/goal-execution.ts";
 import { GoalExecutionPayload } from "../../src/workflow/goal-execution-contracts.ts";
 import { OwnerWorkflowAdmissionResult } from "../../src/workflow/owner-workflow-storage.ts";
@@ -14,7 +13,7 @@ import {
   WorkflowState,
 } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
@@ -348,15 +347,11 @@ testAgent()("criterion-linked Goal completion", (it) => {
   it.effect("WorkflowTools binds the recorder separately from untrusted input", () =>
     Effect.gen(function* () {
       const fx = yield* fixture("native");
-      const tool = (yield* inRun(
-        (yield* WorkflowTools).forSession(fx.sessionId, "execute", fx.run),
-      )).find((item) => item.name === "update_workflow_progress");
-      if (!isTruthy(tool?.execute)) return yield* Effect.die("Missing progress tool");
-      const execute = tool.execute;
-      const result = yield* Effect.tryPromise({
-        try: () => Promise.resolve(execute({ ...fx.complete, recorderRunId: "spoofed" })),
-        catch: (cause) => new Cause.UnknownError(cause),
-      });
+      const result = yield* callTool(
+        (yield* WorkflowTools).runToolsFor(fx.sessionId, "execute", fx.run),
+        "update_workflow_progress",
+        { ...fx.complete, recorderRunId: "spoofed" },
+      );
       expect(result).toMatchObject({ goal: { completion: { recorderRunId: fx.run } } });
     }),
   );

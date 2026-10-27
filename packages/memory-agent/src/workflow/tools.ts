@@ -1,5 +1,4 @@
 import { isTruthy } from "../truthy.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Function as EffectFunction, Layer, Match, Schema } from "effect";
 import { AppEvents } from "../events/app-events.ts";
 import {
@@ -14,9 +13,7 @@ import {
   type WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
-import { definitionOf } from "../tools/schema.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
@@ -219,46 +216,7 @@ const make = Effect.gen(function* () {
   };
 
   return {
-    /** The tools run on the run's context, so their spans join the run's trace. */
-    forSession: (sessionId: string, phase: WorkflowPhase, runId = "") =>
-      Effect.map(runTrace, (caller): AnyServerTool[] => {
-        const run = Effect.runPromiseWith(onRun(runtime, caller));
-        const calls = callsFor(sessionId, runId);
-        const tools = {
-          recordBlocker: toolDefinition(definitionOf(recordBlocker)).server((input) =>
-            run(calls.recordBlocker(input)),
-          ),
-          startNewGoal: toolDefinition(definitionOf(startNewGoal)).server((input) =>
-            run(calls.startNewGoal(input)),
-          ),
-          updateGoal: toolDefinition(definitionOf(updateGoal)).server((input) =>
-            run(calls.updateGoal(input)),
-          ),
-          updatePlan: toolDefinition(definitionOf(updatePlan)).server((input) =>
-            run(calls.updatePlan(input)),
-          ),
-          // TanStack types the input as sent; its defaults are filled in here.
-          updateProgress: toolDefinition(definitionOf(updateProgress)).server((input) =>
-            run(
-              calls.updateProgress({
-                ...input,
-                steps: (input.steps ?? []).map((step) => ({
-                  ...step,
-                  evidence: step.evidence ?? [],
-                })),
-                goalEvidence: input.goalEvidence ?? [],
-                planEvidence: input.planEvidence ?? [],
-              }),
-            ),
-          ),
-          closePlan: toolDefinition(definitionOf(closePlan)).server((input) =>
-            run(calls.closePlan(input)),
-          ),
-        } satisfies Record<WorkflowTool, AnyServerTool>;
-        return phaseTools[phase].map((tool) => tools[tool]);
-      }),
-
-    /** {@link forSession} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+    /** The tools run on the loop's fiber, so their spans join the run's trace. */
     runToolsFor: (sessionId: string, phase: WorkflowPhase, runId = ""): RunTool[] => {
       const calls = callsFor(sessionId, runId);
       const tools = {

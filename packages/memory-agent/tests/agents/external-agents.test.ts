@@ -19,10 +19,9 @@ import { DelegateTools } from "../../src/tools/delegate.ts";
 import { chatApi } from "../support/chat-api.ts";
 import { openPage } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { current, encodeJson, freshProject, sdk, until } from "./agent-env.ts";
+import { current, encodeJson, freshProject, until } from "./agent-env.ts";
 
 const isTextContent = AgUiEvent.guards.TEXT_MESSAGE_CONTENT;
 
@@ -220,11 +219,18 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const { project, sessionId, agents, log, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
-      const signal = yield* Effect.abortSignal;
-      const delegate = (yield* inRun((yield* DelegateTools).forRun(project, sessionId, signal)))
-        .tools[0]!;
+      const { tools } = yield* (yield* DelegateTools).runToolsFor({
+        project,
+        sessionId,
+        signal: yield* Effect.abortSignal,
+        runId: `${sessionId}:run`,
+      });
       expect(
-        yield* sdk(() => delegate.execute!({ agent: "fake", task: "slow task", yieldMs: 0 })),
+        yield* callTool(tools, "delegate_to_agent", {
+          agent: "fake",
+          task: "slow task",
+          yieldMs: 0,
+        }),
       ).toMatchObject({ status: "running" });
       yield* eventually(fs.exists(`${log}.slow`), "the background ACP prompt to arrive");
       const tasks = yield* BackgroundTasks;
@@ -237,23 +243,19 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
     }),
   );
 
-  it.effect("the Effect AI delegate asks as the TanStack one and returns the inline report", () =>
+  it.effect("a quick delegation returns the agent's report inline", () =>
     Effect.gen(function* () {
       const { project, sessionId, trust } = yield* fakeAgentProject();
       yield* trust;
-      const delegateTools = yield* DelegateTools;
-      const binding = { project, sessionId, signal: yield* Effect.abortSignal, runId: "run-1" };
-      const chat = yield* inRun(
-        delegateTools.forRun(project, sessionId, binding.signal, binding.runId),
-      );
-      const runTools = yield* delegateTools.runToolsFor(binding);
+      const { tools } = yield* (yield* DelegateTools).runToolsFor({
+        project,
+        sessionId,
+        signal: yield* Effect.abortSignal,
+        runId: `${sessionId}:run`,
+      });
       expect(
-        yield* runToolRequestDifferences({ chatTools: chat.tools, runTools: runTools.tools }),
-      ).toEqual([undefined, undefined, undefined]);
-      expect(runTools.instructions).toBe(chat.instructions);
-      const delegate = yield* Effect.fromNullishOr(runTools.tools[0]);
-      const run = yield* delegate.prepare({ agent: "fake", task: "hi", yieldMs: 5000 });
-      expect(yield* run({ toolCallId: "call-1" })).toMatchObject({
+        yield* callTool(tools, "delegate_to_agent", { agent: "fake", task: "hi", yieldMs: 5000 }),
+      ).toMatchObject({
         agent: "fake",
         status: "completed",
         answer: "external: hi (turn 1)",

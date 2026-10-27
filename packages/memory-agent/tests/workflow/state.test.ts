@@ -1,10 +1,9 @@
-import { Cause, Effect, Result, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
 import { AppEvents } from "../../src/events/app-events.ts";
-import { isTruthy } from "../../src/truthy.ts";
 import {
   evaluateWorkflowAction,
   WorkflowActionRequest,
@@ -19,8 +18,7 @@ import {
 } from "../../src/workflow/workflow.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
 const goal = {
@@ -72,21 +70,14 @@ const verifying = Effect.fnUntraced(function* (sessionId: string) {
   return yield* workflows.finishRun(sessionId, "execute");
 });
 
-const serverTool = Effect.fnUntraced(function* (
+/** The workflow tool `name` of `phase`, called as the model would. */
+const workflowTool = Effect.fnUntraced(function* (
   sessionId: string,
   phase: WorkflowState["phase"],
   name: string,
 ) {
-  const tool = (yield* inRun((yield* WorkflowTools).forSession(sessionId, phase))).find(
-    (t) => t.name === name,
-  );
-  if (!isTruthy(tool?.execute)) throw new Error(`Missing server tool: ${name}`);
-  const execute = tool.execute;
-  return (input: Parameters<typeof execute>[0]) =>
-    Effect.tryPromise({
-      try: () => Promise.resolve(execute(input)),
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
+  const tools = (yield* WorkflowTools).runToolsFor(sessionId, phase);
+  return (input: JsonValue) => callTool(tools, name, input);
 });
 
 testAgent()("Workflows", (it) => {
@@ -173,7 +164,7 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      const progressTool = yield* serverTool(id, "execute", "update_workflow_progress");
+      const progressTool = yield* workflowTool(id, "execute", "update_workflow_progress");
       yield* workflows.updatePlan(id, { ...plan, summary: "Revised execution scope" });
       const stale = {
         ...noProgress,
@@ -193,45 +184,6 @@ testAgent()("Workflows", (it) => {
         error: "workflow_progress_refused",
         reason: "phase_not_executable",
       });
-    }),
-  );
-
-  it.effect("the Effect AI tools ask as the TanStack ones in every phase and answer the same", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflowTools = yield* WorkflowTools;
-      for (const phase of ["goal", "plan", "execute", "verify", "completed", "chat"] as const)
-        expect(
-          yield* runToolRequestDifferences({
-            chatTools: yield* inRun(workflowTools.forSession(id, phase)),
-            runTools: workflowTools.runToolsFor(id, phase),
-          }),
-        ).toEqual([undefined, undefined, undefined]);
-
-      // The same calls on two sessions in the same state, one through each tool set.
-      const runCall = Effect.fnUntraced(function* (
-        sessionId: string,
-        name: string,
-        input: JsonValue,
-      ) {
-        const tool = yield* Effect.fromNullishOr(
-          workflowTools.runToolsFor(sessionId, "execute").find(({ tool }) => tool.name === name),
-        );
-        return yield* (yield* tool.prepare(input))({ toolCallId: "call-1" });
-      });
-      const sessions = [yield* freshSession, yield* freshSession];
-      yield* Effect.forEach(sessions, executing);
-      const stale = { planStatus: "completed", detail: "Plan done without its steps" };
-      expect(yield* runCall(sessions[0]!, "update_workflow_progress", stale)).toEqual(
-        yield* (yield* serverTool(sessions[1]!, "execute", "update_workflow_progress"))(stale),
-      );
-      const dependent = {
-        ...plan,
-        steps: plan.steps.map((step) => ({ ...step, dependsOn: ["missing"] })),
-      };
-      expect(yield* runCall(sessions[0]!, "update_plan", dependent)).toEqual(
-        yield* (yield* serverTool(sessions[1]!, "execute", "update_plan"))(dependent),
-      );
     }),
   );
 
@@ -632,8 +584,8 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const before = yield* workflows.get(id);
         expect(before.phase).toBe(phase);
         const identity = yield* workflows.goalInstanceId(id);
-        const updateGoal = yield* serverTool(id, phase, "update_goal");
-        const progress = yield* serverTool(id, phase, "update_workflow_progress");
+        const updateGoal = yield* workflowTool(id, phase, "update_goal");
+        const progress = yield* workflowTool(id, phase, "update_workflow_progress");
         expect(yield* updateGoal({ ...goal, nonGoals: [] })).toMatchObject({
           phase: "plan",
           goal: { version: 2, nonGoals: [] },
@@ -682,7 +634,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
           ),
         );
         yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
-        const tool = yield* serverTool(id, name === "update_goal" ? "goal" : "execute", name);
+        const tool = yield* workflowTool(id, name === "update_goal" ? "goal" : "execute", name);
         const input =
           name === "update_goal"
             ? { ...goal, statement: "Revised goal" }
@@ -727,7 +679,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
       const beforeRevision = events.revision();
       const publish = vi.spyOn(events, "publishSession");
       yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
-      const progress = yield* serverTool(id, "execute", "update_workflow_progress");
+      const progress = yield* workflowTool(id, "execute", "update_workflow_progress");
       expect(
         yield* progress({ ...noProgress, planStatus: "executing", detail: "Stale progress" }),
       ).toEqual({ error: "workflow_progress_refused", reason: "phase_not_executable" });

@@ -1,13 +1,13 @@
 import { layer } from "@effect/vitest";
-import { Cause, Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { isTruthy } from "../../src/truthy.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { NewGoalSettlement, Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
@@ -231,17 +231,10 @@ const transitionCases: ReadonlyArray<{
   })),
 ];
 
+/** The session's start_new_goal, called as the model would. */
 const goalTool = Effect.fnUntraced(function* (session: string) {
-  const tool = (yield* inRun((yield* WorkflowTools).forSession(session, "goal"))).find(
-    (t) => t.name === "start_new_goal",
-  );
-  if (!isTruthy(tool?.execute)) throw new Error("owner action missing");
-  const execute = tool.execute;
-  return (input: Parameters<typeof execute>[0]) =>
-    Effect.tryPromise({
-      try: () => Promise.resolve(execute(input)),
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
+  const tools = (yield* WorkflowTools).runToolsFor(session, "goal");
+  return (input: JsonValue) => callTool(tools, "start_new_goal", input);
 });
 
 testAgent()("explicit new Goal transition", (it) => {
@@ -307,12 +300,10 @@ testAgent()("explicit new Goal transition", (it) => {
       const { workflows, session, old } = yield* withHistory();
       const tools = yield* WorkflowTools;
       const exposed = (phase: WorkflowState["phase"]) =>
-        Effect.map(inRun(tools.forSession(session, phase)), (list) =>
-          list.some((tool) => tool.name === "start_new_goal"),
-        );
-      for (const phase of ["chat", "execute"] as const) expect(yield* exposed(phase)).toBe(false);
+        tools.runToolsFor(session, phase).some(({ tool }) => tool.name === "start_new_goal");
+      for (const phase of ["chat", "execute"] as const) expect(exposed(phase)).toBe(false);
       for (const phase of ["goal", "plan", "verify", "completed"] as const)
-        expect(yield* exposed(phase)).toBe(true);
+        expect(exposed(phase)).toBe(true);
       const execute = yield* goalTool(session);
       yield* workflows.setPhase(session, "execute");
       expect(yield* execute(transition(old))).toMatchObject({

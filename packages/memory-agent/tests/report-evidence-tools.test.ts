@@ -1,17 +1,16 @@
 import { it } from "@effect/vitest";
-import { isTruthy } from "../src/truthy.ts";
-import { Cause, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect } from "vite-plus/test";
 import { connectionContext } from "../src/db/database.ts";
 import { SqlClient } from "effect/sql";
+import type { JsonValue } from "../src/json.ts";
 import {
   initialReportEvidence,
   reportBinding,
   reportRunToolsForSession,
-  reportToolsForSession,
 } from "../src/tools/report-evidence.ts";
-import { runToolRequestDifferences } from "./support/requests.ts";
+import { callTool } from "./support/run-tools.ts";
 
 const redactSecret = (text: string) => Effect.succeed(text.replaceAll("SECRET", "[redacted]"));
 const keep = (text: string) => Effect.succeed(text);
@@ -43,7 +42,7 @@ const fixture = Effect.gen(function* () {
       ('foreign-node',5,'source','q','tool_result','2026-01-05','private','{}');
     ALTER TABLE nodes ADD COLUMN run_id TEXT;`);
   const tools = yield* over(db)(
-    reportToolsForSession(
+    reportRunToolsForSession(
       "report",
       "p",
       redactSecret,
@@ -71,16 +70,7 @@ const fixture = Effect.gen(function* () {
       ]),
     ),
   );
-  const invoke = (name: string, input: Schema.Json) =>
-    Effect.tryPromise({
-      try: () => {
-        const tool = tools.find((entry) => entry.name === name);
-        if (!isTruthy(tool?.execute)) throw new Error(`Missing tool ${name}`);
-        // SAFETY: each tool server decodes its own input schema, including invalid-input test cases.
-        return Promise.resolve(tool.execute(input as never));
-      },
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
+  const invoke = (name: string, input: JsonValue) => callTool(tools, name, input);
   return { db, tools, invoke };
 });
 
@@ -88,7 +78,10 @@ describe("report evidence tools", () => {
   it.effect("exposes only two bound read tools, without mutation or arbitrary search", () =>
     Effect.gen(function* () {
       const { tools } = yield* fixture;
-      expect(tools.map((tool) => tool.name)).toEqual(["list_report_evidence", "read_report_item"]);
+      expect(tools.map(({ tool }) => tool.name)).toEqual([
+        "list_report_evidence",
+        "read_report_item",
+      ]);
     }),
   );
 
@@ -102,7 +95,7 @@ describe("report evidence tools", () => {
       expect(yield* read(reportBinding("report", "q"))).toEqual(Option.none());
       expect(yield* read(reportBinding("bad-report", "p"))).toEqual(Option.none());
       expect(
-        yield* read(reportToolsForSession("bad-report", "p", keep, Effect.succeed([]))),
+        yield* read(reportRunToolsForSession("bad-report", "p", keep, Effect.succeed([]))),
       ).toEqual([]);
     }),
   );
@@ -122,10 +115,8 @@ describe("report evidence tools", () => {
         expect(yield* invoke("read_report_item", { section, id })).toEqual({ error: "not_found" });
       }
       expect(
-        (yield* Effect.flip(
-          Effect.asVoid(invoke("list_report_evidence", { section: "calls", offset: 201 })),
-        )).cause,
-      ).toBeInstanceOf(Error);
+        yield* Effect.flip(invoke("list_report_evidence", { section: "calls", offset: 201 })),
+      ).toBeInstanceOf(Schema.SchemaError);
     }),
   );
 
@@ -219,41 +210,26 @@ describe("report evidence tools", () => {
         text: "[redacted] result",
         truncated: false,
       });
-      const approval = yield* invoke("read_report_item", { section: "approval", id: "1" });
-      expect(approval.text).toContain("[redacted]");
-      expect(approval.toolCallId).toBe("call-1");
+      expect(yield* invoke("read_report_item", { section: "approval", id: "1" })).toMatchObject({
+        text: expect.stringContaining("[redacted]"),
+        toolCallId: "call-1",
+      });
       const run = yield* invoke("read_report_item", { section: "run", id: "run" });
       expect(run).toMatchObject({ status: "failed", time: 10, text: "[redacted] failure" });
-      const long = yield* invoke("read_report_item", { section: "node", id: "long" });
-      expect(long.text).toHaveLength(8000);
-      expect(long.truncated).toBe(true);
-      const calls = yield* invoke("list_report_evidence", { section: "calls" });
-      expect(calls.items.map((item: { id: string }) => item.id)).toEqual(["result", "call"]);
-      expect(calls.items[0].toolCallId).toBe("call-1");
-      const trace = yield* invoke("read_report_item", { section: "trace", id: "task" });
-      expect(trace.text).toContain("[redacted] request");
-      expect(trace.toolCallId).toBe("call-1");
-      expect((yield* invoke("list_report_evidence", { section: "trace" })).items).toHaveLength(1);
-    }),
-  );
-
-  it.effect("the Effect AI tools ask and answer as the TanStack ones", () =>
-    Effect.gen(function* () {
-      const { db, tools, invoke } = yield* fixture;
-      const runTools = yield* over(db)(
-        reportRunToolsForSession("report", "p", redactSecret, Effect.succeed([])),
-      );
-      expect(yield* runToolRequestDifferences({ chatTools: tools, runTools })).toEqual([
-        undefined,
-        undefined,
-        undefined,
-      ]);
-      const read = runTools.find((tool) => tool.tool.name === "read_report_item");
-      if (read === undefined) return expect.unreachable("Expected read_report_item");
-      const input = { section: "node", id: "result" };
-      expect(
-        yield* Effect.flatMap(read.prepare(input), (run) => run({ toolCallId: "call" })),
-      ).toEqual(yield* invoke("read_report_item", input));
+      expect(yield* invoke("read_report_item", { section: "node", id: "long" })).toMatchObject({
+        text: expect.stringMatching(/^[\s\S]{8000}$/),
+        truncated: true,
+      });
+      expect(yield* invoke("list_report_evidence", { section: "calls" })).toMatchObject({
+        items: [{ id: "result", toolCallId: "call-1" }, { id: "call" }],
+      });
+      expect(yield* invoke("read_report_item", { section: "trace", id: "task" })).toMatchObject({
+        text: expect.stringContaining("[redacted] request"),
+        toolCallId: "call-1",
+      });
+      expect(yield* invoke("list_report_evidence", { section: "trace" })).toMatchObject({
+        items: [expect.anything()],
+      });
     }),
   );
 });

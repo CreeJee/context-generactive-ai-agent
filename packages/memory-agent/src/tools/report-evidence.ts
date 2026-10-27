@@ -1,10 +1,7 @@
-import { runNativeEffect } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Array as Arr, Effect, Match, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { runTool, type RunTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 const ReportBinding = Schema.Struct({
   sourceSessionId: Schema.String,
@@ -398,28 +395,6 @@ const boundReportCalls = <E, TraceE>({
 };
 
 /** The trace callback must already be scoped to the source session; no session id is passed to it. */
-export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
-  reportSessionId: string,
-  projectId: string,
-  redact: Redact<E>,
-  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
-) {
-  const calls = yield* reportCalls(reportSessionId, projectId, redact, taskTree);
-  return Option.match(calls, {
-    onNone: (): AnyServerTool[] => [],
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onSome: ({ list, read }): AnyServerTool[] => [
-      toolDefinition(definitionOf(listReportEvidence)).server((input) =>
-        runNativeEffect(Effect.flatMap(Schema.decodeEffect(ListInput)(input), list)),
-      ),
-      toolDefinition(definitionOf(readReportItem)).server((input) =>
-        runNativeEffect(Effect.flatMap(Schema.decodeEffect(ReadInput)(input), read)),
-      ),
-    ],
-  });
-});
-
-/** {@link reportToolsForSession} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
 export const reportRunToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
   reportSessionId: string,
   projectId: string,

@@ -1,11 +1,7 @@
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, runTrace, type RunTrace } from "../runtime/run-trace.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
 import { Skills, maxListedSkills, type Skill, type SkillScope } from "../skills/skills.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 /** The tool that reads a skill's other files; builtin skills are complete in themselves. */
 const skillFileReader: Record<SkillScope, string | null> = {
@@ -38,16 +34,15 @@ ${listed}`;
 }
 
 /** What skills add to a run. */
-export interface SkillToolset<Tool = AnyServerTool> {
+export interface SkillToolset {
   readonly skills: readonly Skill[];
-  readonly tools: Tool[];
+  readonly tools: RunTool[];
   /** The skill list for the system prompt; null when there are no skills. */
   readonly instructions: string | null;
 }
 
 const make = Effect.gen(function* () {
   const skills = yield* Skills;
-  const services = yield* Effect.context<never>();
 
   const read = (project: Project, { name }: typeof ReadSkillInput.Type) =>
     Effect.map(skills.read(project, name), (document) =>
@@ -68,36 +63,20 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  /** The run's toolset over `project`'s skills, with `tool` making read_skill. */
-  const toolsetOf = <Tool>(project: Project, tool: () => Tool) =>
-    Effect.map(skills.catalog(project), ({ skills: listed }): SkillToolset<Tool> =>
-      listed.length === 0
-        ? { skills: [], tools: [], instructions: null }
-        : { skills: listed, tools: [tool()], instructions: skillsInstructions(listed) },
-    );
-
-  const toolsFor = Effect.fn("SkillTools.forProject")(function* (
-    project: Project,
-    caller: RunTrace,
-  ) {
-    const run = runNativeEffectWith(onRun(services, caller));
-    return yield* toolsetOf(project, (): AnyServerTool =>
-      toolDefinition(definitionOf(readSkill)).server((input) => run(read(project, input))),
-    );
-  });
-
   return {
     /**
      * read_skill and the skill list for a run, or nothing when the project has no skills. The tool
-     * runs on the run's context, so its spans join the run's trace.
+     * runs on the loop's fiber, so its spans join the run's trace.
      */
-    forProject: (project: Project) =>
-      Effect.flatMap(runTrace, (caller) => toolsFor(project, caller)),
-
-    /** {@link forProject} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
     runToolsFor: Effect.fn("SkillTools.runToolsFor")((project: Project) =>
-      toolsetOf(project, (): RunTool =>
-        runTool({ ...readSkill, handler: (input) => read(project, input) }),
+      Effect.map(skills.catalog(project), ({ skills: listed }): SkillToolset =>
+        listed.length === 0
+          ? { skills: [], tools: [], instructions: null }
+          : {
+              skills: listed,
+              tools: [runTool({ ...readSkill, handler: (input) => read(project, input) })],
+              instructions: skillsInstructions(listed),
+            },
       ),
     ),
   };
