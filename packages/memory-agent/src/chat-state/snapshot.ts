@@ -85,10 +85,16 @@ const partsAfter = (parts: ReadonlyArray<MessagePart>, message: StoredMessage) =
   );
 
 /** One group as the page shows it; a result without its call is the assistant's. */
-const shown = (id: string, group: Arr.NonEmptyReadonlyArray<StoredMessage>): ChatMessage => ({
+export const shownMessage = ({
   id,
-  role: group[0].role === "user" ? "user" : "assistant",
-  parts: group.reduce(partsAfter, []),
+  messages,
+}: {
+  readonly id: string;
+  readonly messages: Arr.NonEmptyReadonlyArray<StoredMessage>;
+}): ChatMessage => ({
+  id,
+  role: messages[0].role === "user" ? "user" : "assistant",
+  parts: messages.reduce(partsAfter, []),
 });
 
 const noMessages: Pick<ChatSnapshot, "messages" | "older"> = { messages: [], older: null };
@@ -119,7 +125,7 @@ export const chatSnapshot = Effect.fn("chatSnapshot")(function* (
     page: ({ groups, nextCursor }) =>
       Effect.map(
         Effect.forEach(groups, ({ uiId, messages }) =>
-          Effect.map(decodeGroup(messages), (group) => shown(uiId, group)),
+          Effect.map(decodeGroup(messages), (group) => shownMessage({ id: uiId, messages: group })),
         ),
         (messages) => ({ messages, older: nextCursor }),
       ),

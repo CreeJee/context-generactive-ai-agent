@@ -1,15 +1,18 @@
-import type { ModelMessage } from "@tanstack/ai";
 import {
-  defineAIPersistence,
-  defineMessageStore,
-  type MessagePage,
-} from "@tanstack/ai-persistence";
-import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema } from "effect";
+  Array as Arr,
+  Clock,
+  Context,
+  Crypto,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Attachments } from "../attachments/attachments.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
+import { StoredMessage, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
-import { messageText } from "../messages/text.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
 import {
@@ -20,25 +23,41 @@ import {
   type BtwThread,
 } from "./contracts.ts";
 
+/** `btw_threads.messages`: the thread's messages as the run loop stores a conversation. */
+const Messages = Schema.fromJsonString(Schema.Array(StoredMessage));
+
 const ThreadRow = Schema.Struct({
   id: Schema.String,
   parent_session_id: Schema.String,
   project_id: Schema.String,
-  messages: Schema.String,
+  messages: Messages,
   created_at: Schema.String,
   updated_at: Schema.Finite,
 });
 
-// Stored JSON was written by this store from the same TanStack types, so parsing restores them.
-const parseMessages = (text: string): ModelMessage[] => JSON.parse(text);
+const isQuestion = Schema.is(StoredUserMessage);
+const isText = Schema.is(Schema.String);
+const isTextPart = Schema.is(TextPart);
+
+/** A question's text; its images are left out. */
+const questionText = ({ content }: typeof StoredUserMessage.Type) =>
+  isText(content)
+    ? content
+    : content
+        .filter(isTextPart)
+        .map((part) => part.content)
+        .join("");
 
 function toThread(decoded: typeof ThreadRow.Type): BtwThread {
-  const firstQuestion = parseMessages(decoded.messages).find((message) => message.role === "user");
   return {
     id: decoded.id,
     parentSessionId: decoded.parent_session_id,
     projectId: decoded.project_id,
-    title: firstQuestion !== undefined ? firstMessageTitle(messageText(firstQuestion)) : null,
+    title: Option.getOrNull(
+      Option.map(Arr.findFirst(decoded.messages, isQuestion), (question) =>
+        firstMessageTitle(questionText(question)),
+      ),
+    ),
     createdAt: decoded.created_at,
     updatedAt: decoded.updated_at,
   };
@@ -52,7 +71,6 @@ const make = Effect.gen(function* () {
   const sessions = yield* Sessions;
   const attachments = yield* Attachments;
   const crypto = yield* Crypto.Crypto;
-  const run = runNativeEffectWith(yield* Effect.context());
 
   const selectThread = sql.literal(`SELECT t.*, s.project_id FROM btw_threads t
     JOIN sessions s ON s.id = t.parent_session_id`);
@@ -70,60 +88,8 @@ const make = Effect.gen(function* () {
   });
   const selectMessages = SqlSchema.findOneOption({
     Request: Schema.String,
-    Result: Schema.Struct({ messages: Schema.String }),
+    Result: Schema.Struct({ messages: Messages }),
     execute: (threadId) => sql`SELECT messages FROM btw_threads WHERE id = ${threadId}`,
-  });
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  function loadThread(threadId: string): Promise<ModelMessage[]>;
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  function loadThread(
-    threadId: string,
-    options: { limit?: number; before?: string },
-  ): Promise<ModelMessage[] | MessagePage>;
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
-    return run(
-      Effect.map(selectMessages(threadId), (row) => {
-        const stored = Option.match(row, {
-          onNone: (): ModelMessage[] => [],
-          onSome: ({ messages }) => parseMessages(messages),
-        });
-        if (options?.limit === undefined) return stored;
-        const messages = stored.map((message, index) =>
-          message.id === undefined ? { ...message, id: `btw:${threadId}:${index}` } : message,
-        );
-        const end =
-          options.before === undefined
-            ? messages.length
-            : messages.findIndex((message) => message.id === options.before);
-        return { messages: end < 0 ? [] : messages.slice(0, end), truncated: false };
-      }),
-    );
-  }
-
-  /**
-   * Transcript-only TanStack persistence. No run, interrupt or metadata store: a BTW run has no
-   * approvals to resume and leaves no row outside `btw_threads`.
-   */
-  const persistence = defineAIPersistence({
-    stores: {
-      messages: defineMessageStore({
-        loadThread,
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        saveThread(threadId, next) {
-          const messages = JSON.stringify(next.filter((message) => !isEmptyUserText(message)));
-          // An UPDATE, never an upsert: a run still finishing cannot bring a deleted thread back.
-          return run(
-            Effect.flatMap(Clock.currentTimeMillis, (updatedAt) =>
-              Effect.asVoid(sql`
-                UPDATE btw_threads SET messages = ${messages}, updated_at = ${updatedAt}
-                WHERE id = ${threadId}`),
-            ),
-          );
-        },
-      }),
-    },
   });
 
   const get = (threadId: string) =>
@@ -136,8 +102,28 @@ const make = Effect.gen(function* () {
     );
 
   return {
-    persistence,
     get,
+
+    /** The thread's messages; a deleted thread has none. */
+    messages: (threadId: string) =>
+      Effect.map(
+        selectMessages(threadId),
+        Option.match({ onNone: () => [], onSome: (row) => row.messages }),
+      ),
+
+    /** Saves the thread's messages. An answer still finishing never brings a deleted thread back. */
+    saveMessages: Effect.fn("BtwThreads.saveMessages")(function* (
+      threadId: string,
+      messages: ReadonlyArray<StoredMessage>,
+    ) {
+      const text = yield* Schema.encodeEffect(Messages)(
+        messages.filter((message) => !isEmptyUserText(message)),
+      );
+      const updatedAt = yield* Clock.currentTimeMillis;
+      yield* sql`
+        UPDATE btw_threads SET messages = ${text}, updated_at = ${updatedAt}
+        WHERE id = ${threadId}`;
+    }),
 
     /** Opens a BTW thread under an existing main conversation. Its binding never changes. */
     create: (parentSessionId: string) =>

@@ -37,6 +37,7 @@
     "./chat-api": "./src/api/chat-api.ts",
     "./chat-session": "./src/api/chat-session.ts",
     "./chat-view": "./src/api/chat-view.ts",
+    "./btw-thread": "./src/api/btw-thread.ts",
     "./provider-contracts": "./src/providers/contracts.ts",
     "./compatible-config": "./src/providers/openai-compatible-config.ts",
     "./package.json": "./package.json",

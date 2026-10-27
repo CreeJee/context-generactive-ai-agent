@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
-import { ChatApiHandlers } from "memory-agent";
+import { BtwApiHandlers, ChatApiHandlers } from "memory-agent";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
 import { crossSiteRefusal } from "./http.ts";
@@ -19,7 +19,7 @@ const SameSiteLive = Layer.succeed(SameSite, (httpEffect) =>
 );
 
 const routes = HttpApiBuilder.layer(ChatApi).pipe(
-  Layer.provide(ChatApiHandlers),
+  Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
   Layer.provide(SameSiteLive),
   Layer.provide(Layer.effectContext(agent.contextEffect)),
   Layer.provide(HttpServer.layerServices),

@@ -42,7 +42,8 @@ export interface OpenSession {
 /** An app event a run sent, such as the context meter or a queued message it took in. */
 export type CustomEvent = (typeof AgUiEvent.cases)["CUSTOM"]["Type"];
 
-type UserContent = RunInput["messages"][number]["content"];
+/** What a user message the page sends holds. */
+export type UserContent = RunInput["messages"][number]["content"];
 
 /** A user turn the page sends. */
 export interface Send {
@@ -62,7 +63,8 @@ export interface Answer {
 const isCustom = AgUiEvent.guards.CUSTOM;
 const isText = Schema.is(Schema.String);
 
-const partsOf = (content: UserContent): ReadonlyArray<MessagePart> =>
+/** A user message's content as the page shows it. */
+export const partsOf = (content: UserContent): ReadonlyArray<MessagePart> =>
   isText(content) ? [{ type: "text", content }] : content;
 
 /** The atoms of each session a page opens, keyed by session id. */

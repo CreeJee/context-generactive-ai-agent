@@ -1,4 +1,4 @@
-import type { AnyServerTool, ChatMiddleware } from "@tanstack/ai";
+import type { AnyServerTool } from "@tanstack/ai";
 import { Effect, Function as EffectFunction, Option, Schema } from "effect";
 import type { RunHook } from "../loop/run.ts";
 import { CallOutcome } from "../loop/scheduler.ts";
@@ -32,25 +32,8 @@ export const btwEvidenceRunTools = ({
 }) => memoryReadRunTools({ env, projectId, scope: "project" });
 
 /**
- * Server-side allowlist. Drops any other tool from every model request and refuses a call to one
- * without running it, so neither a changed request nor a model naming another tool can write.
- */
-export const btwToolGuard: ChatMiddleware = {
-  name: "memory-agent/btw-tool-guard",
-  onConfig(_ctx, config) {
-    const tools = config.tools.filter((tool) => allowed(tool.name));
-    return tools.length === config.tools.length ? undefined : { tools };
-  },
-  onBeforeToolCall(_ctx, call) {
-    return allowed(call.toolName)
-      ? undefined
-      : { type: "skip", result: { error: "btw_tool_not_allowed", tool: call.toolName } };
-  },
-};
-
-/**
- * The same allowlist for the Effect AI loop, whose run lists only {@link btwEvidenceRunTools}: a
- * call to any other tool is refused without running it.
+ * Server-side allowlist. A BTW run lists only {@link btwEvidenceRunTools}, and a call to any other
+ * tool is refused without running it, so a model naming another tool cannot write.
  */
 export const btwToolGuardHook: RunHook = {
   admit: (_scope, call) =>

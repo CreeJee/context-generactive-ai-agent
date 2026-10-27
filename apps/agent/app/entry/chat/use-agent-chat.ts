@@ -1,29 +1,13 @@
 import { useAtomSet, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
-import { Crypto, Layer, Option } from "effect";
-import { FetchHttpClient } from "effect/http";
+import { Option } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 import type { ChatMessage, ResumeEntry } from "memory-agent/chat-api";
-import {
-  ChatApiClient,
-  chatSessions,
-  type CustomEvent,
-  type Send,
-} from "memory-agent/chat-session";
+import { chatSessions, type CustomEvent, type Send } from "memory-agent/chat-session";
 import { useEffect } from "react";
-import { browserCrypto } from "../shared/browser-crypto";
+import { chatRuntime } from "./chat-runtime";
 
-/**
- * The page's sessions on the chat API (docs/effect-ai-migration.md step 6), one registry for the
- * whole page. Requests go to the page's own origin.
- */
-const sessions = chatSessions(
-  Atom.runtime(
-    Layer.merge(
-      ChatApiClient.layer.pipe(Layer.provide(FetchHttpClient.layer)),
-      Layer.succeed(Crypto.Crypto, browserCrypto),
-    ),
-  ),
-);
+/** The page's sessions on the chat API (docs/effect-ai-migration.md step 6). */
+const sessions = chatSessions(chatRuntime);
 
 const noMessages: ReadonlyArray<ChatMessage> = [];
 

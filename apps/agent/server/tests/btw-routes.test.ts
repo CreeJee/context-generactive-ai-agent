@@ -1,7 +1,9 @@
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Stream } from "effect";
 import { Nodes } from "memory-agent";
+import { AgUiEvent } from "../../../../packages/memory-agent/src/loop/chunks.ts";
 import { expect } from "vite-plus/test";
 import { randomUUID } from "../../../../packages/memory-agent/src/runtime/synchronous-crypto.ts";
+import { btwApi } from "../../../../packages/memory-agent/tests/support/chat-api.ts";
 import { selectTestModel } from "../../../../packages/memory-agent/tests/support/provider.ts";
 import {
   TestEnv,
@@ -21,14 +23,10 @@ const local = (url: string, init: RequestInit = {}) =>
     ...init,
     headers: { "Content-Type": "application/json", Origin: "http://localhost" },
   });
-const question = (text: string) =>
-  JSON.stringify({
-    threadId: "page",
-    runId: `run-${randomUUID()}`,
-    messages: [{ id: randomUUID(), role: "user", content: text }],
-    tools: [],
-    context: [],
-  });
+const question = (text: string) => ({
+  runId: `run-${randomUUID()}`,
+  message: { id: randomUUID(), role: "user" as const, content: text },
+});
 
 testAgent({
   testProvider: {
@@ -71,15 +69,17 @@ testAgent({
       expect(created.status).toBe(201);
       const { id: thread } = yield* sdk(() => created.json());
 
-      const ask = (text: string) =>
-        call(() =>
-          routes.chat({
-            request: local(`/api/btw/${thread}/chat`, { method: "POST", body: question(text) }),
-            params: { thread },
-          }),
-        );
+      const btw = yield* btwApi;
+      const ask = (text: string) => btw.ask({ params: { thread }, payload: question(text) });
       const answer = (text: string) =>
-        Effect.flatMap(ask(text), (response) => sdk(() => response.text()));
+        Effect.flatMap(ask(text), (events) =>
+          Stream.runFold(
+            events,
+            () => "",
+            (text, { data }) =>
+              AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? text + data.delta : text,
+          ),
+        );
       expect(yield* answer("side question one")).toContain("BTW answer");
       yield* mainNode("second main message, written after the BTW opened");
       expect(yield* answer("side question two")).toContain("BTW answer");
@@ -94,13 +94,7 @@ testAgent({
       expect(yield* sdk(() => listed.json())).toMatchObject([
         { id: thread, title: "side question one" },
       ]);
-      const reopened = yield* call(() =>
-        routes.hydrate({
-          request: local(`/api/btw/${thread}/chat?threadId=${thread}`),
-          params: { thread },
-        }),
-      );
-      const transcript = yield* sdk(() => reopened.text());
+      const transcript = JSON.stringify(yield* btw.messages({ params: { thread } }));
       expect(transcript).toContain("side question two");
       expect(transcript).toContain("find_memory");
 
@@ -124,7 +118,7 @@ testAgent({
         n: 0,
       });
       expect((yield* remove()).status).toBe(404);
-      expect((yield* ask("after delete")).status).toBe(404);
+      expect(yield* Effect.flip(ask("after delete"))).toEqual({ error: "btw_not_found" });
     }),
   );
 });
