@@ -218,10 +218,9 @@ const make = Effect.gen(function* () {
         .pipe(Effect.catchTag("PlatformError", () => Effect.void));
       if (original !== undefined) return upload;
       const encoded = yield* Effect.gen(function* () {
-        const sharp = yield* Effect.try({
-          try: () => requireRuntime("sharp"),
-          catch: (cause) => AttachmentStorageFailed.make({ operation: "convert", cause }),
-        });
+        const sharp = yield* requireRuntime("sharp").pipe(
+          Effect.mapError((cause) => AttachmentStorageFailed.make({ operation: "convert", cause })),
+        );
         const [first, ...smaller] = [
           { edge: modelImageEdge, quality: 86 },
           { edge: 1600, quality: 78 },
@@ -358,9 +357,12 @@ const make = Effect.gen(function* () {
         Effect.fail(AttachmentRejected.make({ reason: "too_large" })),
         Effect.succeed(svg.length > maxDrawingBytes),
       );
+      const sharp = yield* requireRuntime("sharp").pipe(
+        Effect.mapError(() => AttachmentRejected.make({ reason: "unsupported_type" })),
+      );
       const png = yield* Effect.tryPromise({
         try: () =>
-          requireRuntime("sharp")(Buffer.from(svg), { density: 144 })
+          sharp(Buffer.from(svg), { density: 144 })
             .resize({
               width: modelImageEdge,
               height: modelImageEdge,

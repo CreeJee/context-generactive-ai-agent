@@ -71,8 +71,10 @@ const owner = Effect.gen(function* () {
     ),
   );
   yield* files(fs.makeDirectory(setup.cacheDirectory, { recursive: true, mode: 0o700 }));
+  const addon = yield* requireRuntime("turbovec").pipe(
+    Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "native-incompatible", cause })),
+  );
   const binding = yield* native(() => {
-    const addon = requireRuntime("turbovec");
     const binding = addon.loadTurbovec();
     initializeNodeSqlite(addon.addonPath);
     return binding;

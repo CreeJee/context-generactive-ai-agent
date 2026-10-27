@@ -31,6 +31,7 @@ it.live(
             `
 import * as build from "virtual:react-router/server-build";
 import { createRequestHandler } from "react-router";
+import { Effect } from "effect";
 import { runtimeRoot, runtimeWorkerOptions } from "memory-agent/runtime-resources";
 build.entry.module.configureAgentBackend({ storageRoot: ${encodedStorage}, runtimeRoot: null, buildConfig: {}, release: "0.0.0-dev" });
 const exportResult = { status: 0, html: "", root: null, workerRoot: null, marker: "" };
@@ -40,9 +41,10 @@ try {
   );
   exportResult.status = response.status;
   exportResult.html = await response.text();
-  exportResult.root = runtimeRoot();
-  exportResult.workerRoot = runtimeWorkerOptions({ marker: "kept" }).workerData.contextAgentRuntime.root;
-  exportResult.marker = runtimeWorkerOptions({ marker: "kept" }).workerData.marker;
+  exportResult.root = await Effect.runPromise(runtimeRoot);
+  const { workerData } = await Effect.runPromise(runtimeWorkerOptions({ marker: "kept" }));
+  exportResult.workerRoot = workerData.contextAgentRuntime.root;
+  exportResult.marker = workerData.marker;
 } finally { await build.entry.module.disposeAgent(); }
 export const result = exportResult;
 `,

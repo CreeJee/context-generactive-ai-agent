@@ -30,10 +30,9 @@ const prepare = Effect.gen(function* () {
   const { sandbox } = yield* Schema.decodeUnknownEffect(Schema.Struct({ sandbox: SandboxSetup }))(
     workerData,
   ).pipe(Effect.mapError(setupFailed("invalid_setup")));
-  const { SandboxManager } = yield* Effect.try({
-    try: () => requireRuntime("@anthropic-ai/sandbox-runtime"),
-    catch: setupFailed("runtime_unavailable"),
-  });
+  const { SandboxManager } = yield* requireRuntime("@anthropic-ai/sandbox-runtime").pipe(
+    Effect.mapError(setupFailed("runtime_unavailable")),
+  );
   yield* Effect.sync(() => SandboxManager.isSupportedPlatform()).pipe(
     Effect.filterOrFail(
       (supported) => supported,

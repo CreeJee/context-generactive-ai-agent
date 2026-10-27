@@ -29,7 +29,7 @@ layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
         // Seed a saved-file fixture BEFORE the scoped owner exists; no host lease/index service.
         if (kind !== "missing") {
           yield* fs.makeDirectory(cache, { recursive: true, mode: 0o700 });
-          const { VectorIndex: FixtureIndex } = requireRuntime("turbovec").loadTurbovec();
+          const { VectorIndex: FixtureIndex } = (yield* requireRuntime("turbovec")).loadTurbovec();
           const dimensions = kind === "layout-mismatch" ? 64 : 384;
           const saved = new FixtureIndex(dimensions, 4);
           const value = new Float32Array(dimensions);

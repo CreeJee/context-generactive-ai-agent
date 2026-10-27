@@ -111,8 +111,9 @@ export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
   function* ({ setup, workerFile }: OwnerWorker) {
     const spawned = yield* Deferred.make<Worker>();
     const exited = yield* Deferred.make<void>();
+    const options = yield* runtimeWorkerOptions(setup);
     const workers = NodeWorker.layer(() => {
-      const worker = new Worker(workerFile, runtimeWorkerOptions(setup));
+      const worker = new Worker(workerFile, options);
       worker.once("exit", () => Deferred.doneUnsafe(exited, Exit.void));
       Deferred.doneUnsafe(spawned, Exit.succeed(worker));
       return worker;
@@ -449,49 +450,53 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     const token = yield* crypto
       .randomUUIDv4()
       .pipe(Effect.mapError(() => NativeOwnerFailed.make({ reason: "worker-error" })));
+    const controlled = (budget: number) =>
+      requireRuntime("turbovec").pipe(
+        Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
+        Effect.flatMap((turbovec) =>
+          Effect.try({
+            try: () => {
+              const binding = turbovec.loadTurbovec();
+              if (!Predicate.isFunction(binding.SearchControl))
+                throw NativeOwnerFailed.make({ reason: "native-incompatible" });
+              // eslint-disable-next-line typescript/unbound-method -- ABI capability inspection only; the method is never invoked without its receiver.
+              if (
+                admission !== undefined &&
+                // eslint-disable-next-line typescript/unbound-method -- Inspection only, not an unbound invocation.
+                !Predicate.isFunction(binding.SearchControl.prototype.snapshotWasPinned)
+              )
+                throw NativeOwnerFailed.make({ reason: "native-incompatible" });
+              const control = new binding.SearchControl(
+                token,
+                ownerKey,
+                validated.epoch,
+                command.requestId,
+                budget,
+              );
+              return Option.some<RequestControl>({
+                token: control.token(),
+                snapshotWasPinned: () => control.snapshotWasPinned(),
+                cancel: () => control.cancel(),
+                close: () => control.close(),
+              });
+            },
+            catch: (error) =>
+              Schema.is(NativeOwnerFailed)(error)
+                ? error
+                : NativeOwnerFailed.make({ reason: "invalid-input" }),
+          }),
+        ),
+      );
     return yield* Effect.acquireUseRelease(
-      Effect.try({
-        try: (): Option.Option<RequestControl> => {
-          const controlled = (budget: number) => {
-            const binding = requireRuntime("turbovec").loadTurbovec();
-            if (!Predicate.isFunction(binding.SearchControl))
-              throw NativeOwnerFailed.make({ reason: "native-incompatible" });
-            // eslint-disable-next-line typescript/unbound-method -- ABI capability inspection only; the method is never invoked without its receiver.
-            if (
-              admission !== undefined &&
-              // eslint-disable-next-line typescript/unbound-method -- Inspection only, not an unbound invocation.
-              !Predicate.isFunction(binding.SearchControl.prototype.snapshotWasPinned)
-            )
-              throw NativeOwnerFailed.make({ reason: "native-incompatible" });
-            const control = new binding.SearchControl(
-              token,
-              ownerKey,
-              validated.epoch,
-              command.requestId,
-              budget,
-            );
-            return Option.some<RequestControl>({
-              token: control.token(),
-              snapshotWasPinned: () => control.snapshotWasPinned(),
-              cancel: () => control.cancel(),
-              close: () => control.close(),
-            });
-          };
-          return OwnerCommand.match<Option.Option<RequestControl>>(command, {
-            "memory-search": (command) => controlled(command.input.remainingMs),
-            "vector-search-controlled": (command) => controlled(command.budgetMs),
-            add: () => Option.none(),
-            remove: () => Option.none(),
-            reset: () => Option.none(),
-            save: () => Option.none(),
-            validate: () => Option.none(),
-            "vector-search": () => Option.none(),
-          });
-        },
-        catch: (error) =>
-          Schema.is(NativeOwnerFailed)(error)
-            ? error
-            : NativeOwnerFailed.make({ reason: "invalid-input" }),
+      OwnerCommand.match<Effect.Effect<Option.Option<RequestControl>, NativeOwnerFailed>>(command, {
+        "memory-search": (command) => controlled(command.input.remainingMs),
+        "vector-search-controlled": (command) => controlled(command.budgetMs),
+        add: () => Effect.succeedNone,
+        remove: () => Effect.succeedNone,
+        reset: () => Effect.succeedNone,
+        save: () => Effect.succeedNone,
+        validate: () => Effect.succeedNone,
+        "vector-search": () => Effect.succeedNone,
       }),
       (control) => executeRegistered(command, control, admission),
       (control) =>

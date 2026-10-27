@@ -50,10 +50,10 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     Effect.map((rows) => rows[0]?.file ?? ""),
     Effect.mapError(failure("open")),
   );
-  const opened = yield* io("open", () => ({
-    worker: runtimeWorker("native-search-worker"),
+  const opened = {
+    worker: yield* runtimeWorker("native-search-worker").pipe(Effect.mapError(failure("open"))),
     databasePath,
-  }));
+  };
   yield* Effect.when(
     Effect.fail(
       VectorIndexError.make({

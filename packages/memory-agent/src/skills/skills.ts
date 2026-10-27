@@ -36,14 +36,17 @@ export type SkillScope = typeof SkillScope.Type;
  * other runtime files. Resolved from the package rather than this module, because the app bundles
  * this module into its server build.
  */
-export function builtinSkillsDirectory() {
-  return join(
-    Option.getOrElse(Option.fromNullishOr(runtimeRoot()), () =>
-      dirname(runtimeRequire().resolve("memory-agent/package.json")),
-    ),
-    "skills",
-  );
-}
+export const builtinSkillsDirectory = Effect.gen(function* () {
+  const root = Option.fromNullishOr(yield* runtimeRoot);
+  const packageRoot = yield* Option.match(root, {
+    onSome: Effect.succeed,
+    onNone: () =>
+      Effect.map(runtimeRequire, (packageRequire) =>
+        dirname(packageRequire.resolve("memory-agent/package.json")),
+      ),
+  });
+  return join(packageRoot, "skills");
+});
 
 /** Shared with other agents: `npx skills add -g` installs here. */
 export const globalSkillsDirectory = (home: string) => join(home, ".agents", "skills");
@@ -147,7 +150,7 @@ const make = (options: SkillsOptions) =>
     const fs = yield* FileSystem.FileSystem;
     const crypto = yield* Crypto.Crypto;
     const home = options.home ?? (yield* homeDirectory);
-    const builtinRoot = options.builtin ?? builtinSkillsDirectory();
+    const builtinRoot = options.builtin ?? (yield* builtinSkillsDirectory);
 
     const readSkill = Effect.fn("Skills.readSkill")(function* (
       scope: SkillScope,

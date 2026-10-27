@@ -33,45 +33,43 @@ export function configureRuntimeRoot(root: string | null): void {
   configuredRuntime = { root };
 }
 
-export const runtimeRoot = () =>
+export const runtimeRoot: Effect.Effect<string | null> = Effect.suspend(() =>
   configuredRuntime !== undefined
-    ? configuredRuntime.root
-    : Effect.runSync(
-        Config.String("CONTEXT_AGENT_RUNTIME").pipe(
-          Config.withDefault(null),
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnv({ preserveEmptyStrings: true }),
-          ),
+    ? Effect.succeed(configuredRuntime.root)
+    : Config.String("CONTEXT_AGENT_RUNTIME").pipe(
+        Config.withDefault(null),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ preserveEmptyStrings: true }),
         ),
-      );
+        Effect.orDie,
+      ),
+);
 
 /** Preserve worker setup and inherited SDK environment without mutating process.env. */
-export function runtimeWorkerOptions<A extends object>(setup: A) {
-  return { workerData: { ...setup, contextAgentRuntime: { root: runtimeRoot() } } };
-}
+export const runtimeWorkerOptions = <A extends object>(setup: A) =>
+  Effect.map(runtimeRoot, (root) => ({ workerData: { ...setup, contextAgentRuntime: { root } } }));
 
 /**
  * `require` rooted where runtime packages live: the unpacked runtime folder, or this package in a
  * checkout. Resolved from the memory-agent package rather than this module because the app bundles
  * this module into its server build.
  */
-export function runtimeRequire() {
-  return createRequire(
-    Option.match(Option.fromNullishOr(runtimeRoot()), {
+const requireAt = (root: string | null) =>
+  createRequire(
+    Option.match(Option.fromNullishOr(root), {
       onNone: () => createRequire(import.meta.url).resolve("memory-agent/package.json"),
       onSome: (root) => path.join(root, "package.json"),
     }),
   );
-}
+export const runtimeRequire = Effect.map(runtimeRoot, requireAt);
 
 /** Loads a runtime package with `require` (its CommonJS build, or require(esm) for turbovec). */
-export function requireRuntime<Name extends keyof RuntimePackages>(
-  name: Name,
-): RuntimePackages[Name] {
-  // SAFETY: each name maps to the package's own published types; `require` returns that module.
-  return runtimeRequire()(name) as RuntimePackages[Name];
-}
+export const requireRuntime = <Name extends keyof RuntimePackages>(name: Name) =>
+  Effect.flatMap(runtimeRoot, (root) =>
+    // SAFETY: each name maps to the package's own published types; `require` returns that module.
+    Effect.try(() => requireAt(root)(name) as RuntimePackages[Name]),
+  );
 
 /**
  * Worker scripts. Kiwi and the embedder are plain `.mjs` files that load their runtime package; the
@@ -93,9 +91,9 @@ export type RuntimeWorker =
  * worker file stays in the package. The executable unpacks it into its runtime folder, next to
  * `node_modules`.
  */
-export function runtimeWorker(name: RuntimeWorker) {
-  const root = runtimeRoot();
-  return root === null
-    ? runtimeRequire().resolve(`memory-agent/${name}`)
-    : path.join(root, `${name}.mjs`);
-}
+export const runtimeWorker = (name: RuntimeWorker) =>
+  Effect.flatMap(runtimeRoot, (root) =>
+    root === null
+      ? Effect.try(() => requireAt(root).resolve(`memory-agent/${name}`))
+      : Effect.succeed(path.join(root, `${name}.mjs`)),
+  );

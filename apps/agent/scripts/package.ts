@@ -404,7 +404,7 @@ const program = Effect.gen(function* () {
         logLevel: "warn",
       }),
     );
-  // The app's own skills; `builtinSkillsDirectory()` looks for them next to the runtime files.
+  // The app's own skills; `builtinSkillsDirectory` looks for them next to the runtime files.
   yield* fs.copy(join(memoryAgent, "skills"), join(stage, "skills"));
   yield* collectPackages();
   yield* verifyNativeFiles();

@@ -55,9 +55,11 @@ const run = Effect.fn("CodeSandbox.run")(function* (
   functions: Readonly<Record<string, ProgramFunction>>,
   timeout: Duration.Duration,
 ) {
-  const workers = NodeWorker.layer(
-    () => new Worker(runtimeWorker("code-worker"), runtimeWorkerOptions({})),
+  const file = yield* runtimeWorker("code-worker").pipe(
+    Effect.mapError(() => CodeSandboxFailed.make({ reason: "start" })),
   );
+  const options = yield* runtimeWorkerOptions({});
+  const workers = NodeWorker.layer(() => new Worker(file, options));
   const protocol = yield* Layer.build(
     // `Run` streams for the whole program; the replies to its calls each take a slot beside it.
     RpcClient.layerProtocolWorker({ size: 1, concurrency: callConcurrency + 1 }).pipe(

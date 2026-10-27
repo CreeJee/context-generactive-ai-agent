@@ -204,8 +204,12 @@ export interface ModelSession {
 const rpcSession = (data: EmbeddingWorkerData) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker>();
+    const lost = (cause: unknown) =>
+      EmbeddingWorkerFailed.make({ stage: "lost", reason: String(cause) });
+    const file = yield* runtimeWorker("embed-worker").pipe(Effect.mapError(lost));
+    const options = yield* runtimeWorkerOptions(data);
     const workers = NodeWorker.layer(() => {
-      const worker = new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(data));
+      const worker = new Worker(file, options);
       worker.unref();
       Deferred.doneUnsafe(spawned, Exit.succeed(worker));
       return worker;
@@ -214,8 +218,6 @@ const rpcSession = (data: EmbeddingWorkerData) =>
       RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
     );
     const client = yield* RpcClient.make(EmbeddingRpcs).pipe(Effect.provide(protocol));
-    const lost = (cause: unknown) =>
-      EmbeddingWorkerFailed.make({ stage: "lost", reason: String(cause) });
     const call = <A>(
       effect: Effect.Effect<A, EmbeddingWorkerFailed | RpcClientError.RpcClientError>,
     ) => effect.pipe(Effect.catchTag("RpcClientError", (error) => Effect.fail(lost(error))));

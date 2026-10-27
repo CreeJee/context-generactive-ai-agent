@@ -57,7 +57,7 @@ const kiwi = Effect.fn("eval.kiwi")(function* (options: {
   loadTypoDict: boolean;
 }) {
   const directory = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory);
-  const wasm = join(dirname(runtimeRequire().resolve("kiwi-nlp")), "kiwi-wasm.wasm");
+  const wasm = join(dirname((yield* runtimeRequire).resolve("kiwi-nlp")), "kiwi-wasm.wasm");
   const builder = yield* nativePromise(() => KiwiBuilder.create(wasm));
   const fs = yield* FileSystem.FileSystem;
   const modelFiles = Object.fromEntries(

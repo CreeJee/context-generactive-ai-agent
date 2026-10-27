@@ -82,11 +82,13 @@ describe("runtime packages", () => {
           path.join(runtime, "node_modules", "turbovec", "index.js"),
           'export const loadTurbovec = () => "from the runtime folder";',
         );
-        const real = requireRuntime("turbovec").loadTurbovec();
+        const real = (yield* requireRuntime("turbovec")).loadTurbovec();
         expect(real.VectorIndex).toBeTypeOf("function");
         vi.stubEnv("CONTEXT_AGENT_RUNTIME", runtime);
         // The stand-in returns a marker string where the real addon returns its classes.
-        expect(requireRuntime("turbovec").loadTurbovec()).toEqual("from the runtime folder");
+        expect((yield* requireRuntime("turbovec")).loadTurbovec()).toEqual(
+          "from the runtime folder",
+        );
       }).pipe(withCrypto, withTestPlatform),
   );
 });

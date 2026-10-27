@@ -127,10 +127,14 @@ interface WorkerSession {
 const rpcSession = (setup: ImportWorkerSetup) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker, ImportWorkerFailed>();
+    const file = yield* runtimeWorker("import-worker").pipe(
+      Effect.mapError(() => ImportWorkerFailed.make({ reason: "start" })),
+    );
+    const options = yield* runtimeWorkerOptions(setup);
     const workers = NodeWorker.layer(() => {
       // A spawn that throws is only retried by the protocol; settle the wait below with it.
       try {
-        const worker = new Worker(runtimeWorker("import-worker"), runtimeWorkerOptions(setup));
+        const worker = new Worker(file, options);
         worker.unref();
         Deferred.doneUnsafe(spawned, Exit.succeed(worker));
         return worker;

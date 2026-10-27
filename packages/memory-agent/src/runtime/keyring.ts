@@ -177,7 +177,7 @@ const fileEntry = Effect.fnUntraced(function* (
 
 /** The OS keychain entry. Opening it loads the native addon, so a failure to load fails the open. */
 const keychainEntry = (service: string, account: string) =>
-  Effect.try(() => requireRuntime("@napi-rs/keyring")).pipe(
+  requireRuntime("@napi-rs/keyring").pipe(
     Effect.flatMap(({ AsyncEntry }) => Effect.try(() => new AsyncEntry(service, account))),
     Effect.map((entry): KeyringEntry => ({
       // Native Windows keyring returns null for an absent entry, despite its undefined-only typings.

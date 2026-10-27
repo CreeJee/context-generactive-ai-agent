@@ -112,9 +112,11 @@ type Redact = (
  * the checks it needs stay loaded only while it runs.
  */
 const redactionWorker = Effect.gen(function* () {
-  const workers = NodeWorker.layer(
-    () => new Worker(runtimeWorker("redact-worker"), runtimeWorkerOptions({})),
+  const file = yield* runtimeWorker("redact-worker").pipe(
+    Effect.mapError(() => RedactionFailed.make({ reason: "worker-lost" })),
   );
+  const options = yield* runtimeWorkerOptions({});
+  const workers = NodeWorker.layer(() => new Worker(file, options));
   const protocol = yield* Layer.build(
     RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
   );

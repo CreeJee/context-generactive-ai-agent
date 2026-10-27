@@ -18,7 +18,7 @@ if (!isMainThread) {
   const handlers = Reader.toLayer({
     ReadRepeatedly: ({ path }) =>
       Effect.gen(function* () {
-        const addon = requireRuntime("turbovec");
+        const addon = yield* Effect.orDie(requireRuntime("turbovec"));
         const binding = addon.loadTurbovec();
         // Initialization is required before any native SQLite call and may be repeated safely.
         const refusedBeforeInitialization = yield* Effect.try(

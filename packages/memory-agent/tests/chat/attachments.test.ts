@@ -30,8 +30,9 @@ const square = (fill: string) => svg(`<rect width="64" height="64" fill="${fill}
 
 /** The colour at the centre of a stored picture. */
 const centre = Effect.fnUntraced(function* (path: string) {
+  const sharp = yield* requireRuntime("sharp");
   const { data, info } = yield* sdk(() =>
-    requireRuntime("sharp")(path).removeAlpha().raw().toBuffer({ resolveWithObject: true }),
+    sharp(path).removeAlpha().raw().toBuffer({ resolveWithObject: true }),
   );
   const at = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * 3;
   return [data[at], data[at + 1], data[at + 2]];
@@ -126,7 +127,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const sharp = requireRuntime("sharp");
+        const sharp = yield* requireRuntime("sharp");
         // A wide screenshot of text, where a lossless WebP is smaller than the PNG upload.
         const lines = Array.from(
           { length: 28 },
@@ -179,8 +180,9 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         // A repeating pattern PNG compresses better than lossless WebP does.
         const pixels = Buffer.alloc(3000 * 1000 * 3);
         for (let index = 0; index < pixels.length; index++) pixels[index] = (index * 7919) % 251;
+        const sharp = yield* requireRuntime("sharp");
         const pattern = yield* sdk(() =>
-          requireRuntime("sharp")(pixels, { raw: { width: 3000, height: 1000, channels: 3 } })
+          sharp(pixels, { raw: { width: 3000, height: 1000, channels: 3 } })
             .png()
             .toBuffer(),
         );
@@ -236,8 +238,9 @@ testAgent({ testProvider: {} })("attachments", (it) => {
       const attachments = yield* Attachments;
       // A green square on disk; an SVG written by a prompt-injected model tries to embed it.
       const secret = (yield* Path.Path).join(base, "secret.png");
+      const sharp = yield* requireRuntime("sharp");
       yield* sdk(() =>
-        requireRuntime("sharp")({
+        sharp({
           create: { width: 64, height: 64, channels: 3, background: "#00ff00" },
         })
           .png()
@@ -379,8 +382,9 @@ testAgent()("attachments across closing the agent", (it) => {
       const env = yield* TestEnv;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const sharp = yield* requireRuntime("sharp");
       const png = yield* sdk(() =>
-        requireRuntime("sharp")({
+        sharp({
           create: { width: 512, height: 512, channels: 3, background: "#00ff00" },
         })
           .png()

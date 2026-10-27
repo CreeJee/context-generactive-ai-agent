@@ -143,12 +143,12 @@ function runSandboxedBody<E, R>(
       const scratch = yield* fileSystem
         .makeTempDirectoryScoped({ prefix: "context-agent-sandbox-" })
         .pipe(Effect.mapError(() => unavailable("could not create the sandbox's scratch folder")));
+      const file = yield* runtimeWorker("sandbox-worker").pipe(
+        Effect.mapError(() => unavailable("could not start the sandbox worker")),
+      );
+      const options = yield* runtimeWorkerOptions({ sandbox: setup });
       const workers = NodeWorker.layer(
-        () =>
-          new Worker(runtimeWorker("sandbox-worker"), {
-            ...runtimeWorkerOptions({ sandbox: setup }),
-            env: { ...process.env, TMPDIR: scratch },
-          }),
+        () => new Worker(file, { ...options, env: { ...process.env, TMPDIR: scratch } }),
       );
       const protocol = yield* Layer.build(
         RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),

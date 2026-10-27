@@ -165,20 +165,23 @@ testAgent()("built-in skills", (it) => {
   );
 });
 
-testAgent({ skillsBuiltin: builtinSkillsDirectory() })("the skills this app ships", (it) => {
-  it.effect("are readable and within limits", () =>
-    Effect.gen(function* () {
-      const catalog = yield* (yield* Skills).catalog((yield* TestEnv).project);
-      expect(catalog.problems).toEqual([]);
-      const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
-      expect(shipped.map((skill) => skill.name)).toContain("draw");
-      for (const skill of shipped) {
-        expect(skill.description.length).toBeGreaterThan(0);
-        expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
-      }
-    }),
-  );
-});
+testAgent({ skillsBuiltin: await Effect.runPromise(builtinSkillsDirectory) })(
+  "the skills this app ships",
+  (it) => {
+    it.effect("are readable and within limits", () =>
+      Effect.gen(function* () {
+        const catalog = yield* (yield* Skills).catalog((yield* TestEnv).project);
+        expect(catalog.problems).toEqual([]);
+        const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
+        expect(shipped.map((skill) => skill.name)).toContain("draw");
+        for (const skill of shipped) {
+          expect(skill.description.length).toBeGreaterThan(0);
+          expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
+        }
+      }),
+    );
+  },
+);
 
 /** Sends one user turn: its run's tool results, and the model's first invocation in it. */
 const send = Effect.fnUntraced(function* (session: string, runId: string, text: string) {
