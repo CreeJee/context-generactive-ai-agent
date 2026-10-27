@@ -2904,3 +2904,35 @@
 - provider tool descriptor에는 TanStack factory가 없다. `ProviderToolRuntime.compose`는 Effect AI 도구만 만들고, factory 실패(`ProviderToolFactoryFailure`)도 없어졌다.
 - TanStack과 비교하던 테스트를 지웠다: 모델 목록, provider tool factory, SSE 응답의 durability, Standard Schema 변환, MCP 도구의 TanStack 대비 결과. 요청이 같은지는 `0e0e7f0d`에서 고정한 golden 파일로 확인한다.
 - `vp run typecheck`의 exit code는 경고에도 1이다. 이 묶음은 새 경고를 더하지 않았다.
+
+## 전환 뒤 백엔드를 Effect의 상태와 실행 모델로 맞춘다 (2026-10-28)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 7단계 뒤 후속 정리다. 사용자가 고른 범위: SDK가 남긴 Promise 경계, Effect Crypto id, `runSyncWith`와 `runSync`, `MutableRef`·`let` 상태, 이름 정리, lint 끄기 주석, `Effect.sync`. 커밋은 `5503f878`부터 `56ebc032`까지다.
+- `vp run typecheck`가 0으로 끝난다. Effect LS 경고를 끄지 않고 코드를 고쳤다(`5503f878`).
+- 동기 실행: 서비스와 모듈은 `Effect.runSync`·`runSyncWith`로 Effect를 꺼내지 않고 Effect를 돌려준다. 남긴 동기 경계는 넷이다.
+  - `runtime/synchronous-path.ts`, `runtime/synchronous-crypto.ts`, `runtime/node-platform.ts`: 동기 API만 받는 호출자(모듈 load, 앱 서버 설정)를 위한 경계다.
+  - 브라우저의 `browserCrypto`(`session-lease.ts`, `draft-images.ts`)
+  - 스크립트는 `NodeRuntime.runMain`이나 top-level await로 한 Effect 프로그램을 돈다. eval은 `ManagedRuntime`을 쓴다.
+- Promise 경계는 Promise를 요구하는 SDK와 host 쪽에만 둔다(`nativePromise`, `runNativeEffect`). 우리 서비스끼리는 Effect로 잇는다.
+  - OAuth: `CredentialStore`, `PasswordEntry`, `SubscriptionOAuthClient`, 계정 로그인이 Effect와 Stream을 돌려준다. 키체인은 `OAuthKeychain` 서비스이고 테스트는 메모리 키체인을 쓴다. 로그인 취소는 상태만 바꾸고 바로 돌아오며, 콜백 서버 종료와 결과 통지는 그 뒤에 이어진다. run의 계정 고정은 Scope로 잡고 푼다(`releaseRun`을 지웠다).
+  - MCP와 외부 에이전트: 연결 표와 연결마다의 상태를 `SynchronizedRef`로 두고, 연결 시도와 도구 탐색은 서비스 Scope의 Fiber로 둔다. 같은 시도를 기다리는 호출자들은 그 Fiber를 같이 기다리고, 기다림을 멈춰도 시도는 멈추지 않는다. 쓰이지 않게 된 `McpOperationFailed`, `ExternalAgentOperationFailed`를 지웠다.
+  - `NativeSearchClient`(native-search의 worker 계약)는 그대로 둔다. 네이티브 읽기 계층을 다시 설계할 때 함께 본다.
+- id는 Effect `Crypto`의 `randomUUIDv7`·`randomUUIDv4`로 만든다(`bb80beeb`).
+- 상태: 바꿔 쓰는 변수, `MutableRef`, `MutableHashMap`, `EventTarget`, 상태를 바꾸는 `Effect.sync` 대신 `Ref`, `SynchronizedRef`, `SubscriptionRef`, `PubSub`, `Deferred`, `Latch.make`를 쓴다.
+  - 확인하고 바꾸는 일은 `Ref.modify` 하나로 한다. DB 읽기를 잠금 안에 두지 않는다. sqlite 연결 하나를 쓰는 transaction과 서로 기다릴 수 있기 때문이다. 큐 예약은 읽은 뒤 `Ref.modify`에서 다시 확인한다.
+  - 같은 일을 여러 호출자가 기다리면 `SynchronizedRef`에 Fiber를 두고, Fiber가 끝나며 표에서 지우는 일은 같은 잠금을 기다린다. 그래서 표에 넣기 전에 지우지 않는다.
+  - 앱 변경 알림(`AppEvents`)은 `PubSub`와 `SynchronizedRef`다. 번호 매기기와 발행을 잠금 하나 안에서 해서 구독자는 번호 순서대로 받는다. SSE 스트림은 같은 잠금 안에서 구독하고 시작 번호를 읽는다. `publish` 계열과 `revision`은 Effect다.
+  - 작업 기록의 변경 알림은 콜백 집합 대신 `PubSub`다. `waitForChange`는 구독해서 받는다.
+  - `liveRuns.claim`은 객체 하나를 받고, 쓰이지 않던 `onEnded`를 지웠다. `SteerCut.cut`은 Effect다.
+- `Effect.sync`는 네이티브 동기 부수 효과를 감쌀 때만 쓴다. 값만 만드는 곳은 `Effect.succeed`다. 남긴 것:
+  - Node·OS와 SDK 호출: `host-system`, sqlite 열기·닫기·migration, native-search와 worker의 `close`·`cancel`·`ref`·`unref`, `AbortController.abort`, `removeEventListener`, `SandboxManager`, secretlint redactor 만들기, ACP SDK의 `notify`, QuickJS에 답 넣기, `URL.revokeObjectURL`
+  - 앱의 React `setState`와 콜백, `window.location`
+  - 네이티브 콜백이 동기로 읽는 상태는 네이티브 자료구조로 둔다: 셸의 실행 중 명령 집합(프로세스 종료 hook), 외부 에이전트의 `handlers` 표(SDK 콜백), 코드 워커의 console 기록(QuickJS console 콜백), 앱의 backend 재시작 표시(`useSyncExternalStore`)와 work trace의 EventSource 상태
+  - 채팅 세션·BTW atom의 쓰기는 호출의 `get.set`이다. registry의 `Atom.set`과 달리 새 호출이 이전 호출을 대신하면 늦은 쓰기를 버린다. 읽기는 `Atom.get`이다.
+  - `chat.ts`의 `windowTokens`·`windowKnown`: 모델 runtime의 동기 API다.
+  - 테스트 fake의 호출 수 세기
+- 미룬 것:
+  - 워크플로 엔진의 `executions` 표. 값이 effect/workflow의 바꿔 쓰는 `WorkflowInstance`를 따라가므로 엔진을 다시 설계할 때 본다. 등록 표만 `Ref`로 옮겼다.
+  - `Clock`의 `currentTimeMillisUnsafe`로 시각을 읽는 곳(`workflow.ts`의 `nowIso`, 영속 큐의 `now`). 동기 helper 여러 곳이 써서 따로 옮긴다.
+  - native-search의 eslint 끄기 주석(`native-vector-index.ts`, `vector-index.ts`). 네이티브 읽기 계층을 다시 설계할 때 본다. 다른 oxlint 끄기 주석은 코드를 고쳐 지웠다(`3d0f4baf`).
+- 결과(2026-10-28): memory-agent 전체 테스트(206 파일, 1220개), 앱 테스트(40 파일, 145개), `vp run test:browser`(5 파일, 12개), `vp check`, `vp run typecheck`가 통과한다. 로컬 DB 검사 도구는 실패 없이 끝난다.
