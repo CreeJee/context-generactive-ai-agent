@@ -2845,3 +2845,13 @@
   - SSE keepalive. 연결이 loopback이고 지금 run SSE에도 없다. Effect의 AG-UI PR(#9842)이 들어오면 다시 본다.
   - BTW endpoint, 처음 화면용 snapshot·history endpoint
   - web handler의 `dispose`를 `disposeAgent`에 잇기. handler가 가진 자원은 router뿐이고, run fiber는 agent runtime의 scope에 있다.
+
+## 채팅 client는 memory-agent의 atom이고, 처음 화면은 snapshot endpoint로 읽는다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 6단계다. 파일과 확인은 [effect-ai-migration.md](effect-ai-migration.md)의 6단계 "진행"에 있다.
+- `ChatApi`에 `snapshot`(`GET /api/sessions/:session/messages?limit=&before=`)을 더한다. 메시지 한 페이지, 더 오래된 페이지의 `before`, 진행 중 run, 승인 대기를 준다. 메시지와 part는 페이지가 보여 주는 모양(text, thinking, image, tool-call, tool-result)의 Schema이고, 보여 주지 않는 part(subagent 카드 등)는 뺀다. 지금은 `hydrate`(`reconstructChat`)의 응답을 decode하고, 7단계에서 TanStack 없이 만든다.
+- 채팅 client의 규칙(reducer와 세션 atom)은 앱이 아니라 memory-agent(`memory-agent/chat-view`, `memory-agent/chat-session`)에 둔다. 서버에서 정의한 atom을 페이지가 쓰는 것이 아니라, 같은 module을 페이지의 registry에서 만든다. ACP bridge도 같은 client를 쓰기 때문이다. 앱의 hook(`useAgentChat`)은 `@effect/atom-react`로 읽기만 한다.
+- 화면 메시지는 run 뒤 `snapshot`과 같은 모양이다. 한 model step이 assistant 메시지 하나이고, 결과가 온 호출은 `complete`다. 처음부터 다시 붙은 stream은 메시지를 비우고 다시 쓴다.
+- run이 끝나면 최신 페이지를 다시 읽는다. run 이벤트에 없는 것(run이 받아들인 대기 메시지, 저장된 결과 상태)은 저장본이 맞기 때문이다.
+- TanStack client의 interrupt 오류 코드 5종 검사는 옮기지 않는다. 같은 경우를 서버가 거절 code로 막는다.
+- 계획 변경: ACP bridge의 `ChatClient` 교체는 6단계가 아니라 7단계에서 한다. 진입점을 새 loop로 바꾸는 일이라, Goal 말고는 7단계 전에 연결하지 않는다는 규칙을 따른다.

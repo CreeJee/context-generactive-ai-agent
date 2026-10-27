@@ -557,8 +557,19 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - SSE 이벤트의 `id`는 run 로그 offset이고 `data`는 4단계의 AG-UI 이벤트다. 첫 이벤트는 `CUSTOM` `run.accepted`다.
   - 거절은 status별 code Schema(`Refusal`)라 client가 타입으로 받는다.
   - handler: `src/api/chat-api-live.ts`의 `ChatApiHandlers`. 앱은 React Router resource route에서 `apps/agent/app/.server/chat-api.ts`의 web handler로 넘긴다.
-  - 테스트: `tests/chat/api.test.ts`(`HttpApiTest` client로 run, join, 거절 code)
-  - 아직 없는 것: BTW endpoint, 처음 화면용 snapshot·history endpoint, SSE keepalive, 외부 에이전트 세션(409 `external_agent_unsupported`), 이미지 provider 도구(409 `image_tool_unavailable`)
+  - `snapshot`: `GET /api/sessions/:session/messages?limit=&before=`. 메시지 한 페이지, 더 오래된 페이지의 `before`, 진행 중 run, 승인 대기. 지금은 `hydrate`(`reconstructChat`)의 응답을 decode한다(`src/chat-state/snapshot.ts`). 7단계에서 TanStack 없이 만든다.
+  - 테스트: `tests/chat/api.test.ts`(`HttpApiTest` client로 run, join, snapshot 페이지, 거절 code)
+  - 아직 없는 것: BTW endpoint, SSE keepalive, 외부 에이전트 세션(409 `external_agent_unsupported`), 이미지 provider 도구(409 `image_tool_unavailable`)
+- 진행 (2026-10-27):
+  - 화면 메시지 reducer: `src/api/chat-view.ts`의 `applyEvent`. 한 model step이 assistant 메시지 하나이고, reasoning id는 그 메시지 id를 앞에 둔다(`reasoningMessageId`). 결과가 온 호출은 `state: "complete"`다. 처음부터 다시 붙은 stream이 처음 보는 메시지는 비우고 다시 쓰고, 같은 호출의 결과는 하나만 둔다.
+    - 확인: run과 승인 뒤 run의 이벤트로 쌓은 메시지와 승인 대기가 그 뒤 `snapshot`과 같고, rejoin도 같다(`tests/chat/api.test.ts`).
+  - 세션 atom: `src/api/chat-session.ts`의 `chatSessions`(`memory-agent/chat-session`). client core를 앱이 아니라 memory-agent에 두어 ACP bridge도 같은 것을 쓴다. 세션마다 `state`, `custom`, `open`, `send`, `answer`, `loadOlder`가 있다.
+    - `open`은 최신 20개를 읽고 진행 중 run에 `join`으로 붙는다. run이 끝나면 최신 페이지를 다시 읽고(`caughtUp`), 앞서 읽은 이전 기록은 남긴다. 그래서 `Atom.pull`, `optimistic`, `withReactivity`는 쓰지 않았다.
+    - 보낸 메시지는 바로 보이고, 거절되면 뺀다. 거절은 `send`·`answer`의 `AsyncResult` 오류(`Refusal`)다.
+    - 확인: `tests/chat/session.test.ts`
+  - hook: `apps/agent/app/entry/chat/use-agent-chat.ts`의 `useAgentChat`(`@effect/atom-react`). 페이지는 아직 `useChat`이고, 7단계에서 바꾼다.
+  - TanStack 오류 코드 5종(`incomplete-batch` 등)은 client 검사였다. 새 client는 검사하지 않고 서버 거절(`run_id_conflict`, `run_outcome_uncertain`, `workflow_changed`, `invalid_chat_request`)을 받는다. 화면 문구는 7단계에서 거절 code에 맞춘다.
+  - 남은 것: 끊긴 연결에 자동으로 다시 붙기(`join`의 `after`), BTW, ACP bridge(진입점 전환이라 7단계로 옮겼다)
 - atom 대응:
   - 세션별 상태: `Atom.family`
   - 보내기: `Atom.fn`. 결과가 `AsyncResult`라 로딩과 오류가 함께 나온다.
