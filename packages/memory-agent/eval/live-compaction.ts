@@ -1,5 +1,9 @@
 import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
-import { AuthConnectionState } from "../src/providers/contracts.ts";
+import {
+  AuthConnectionState,
+  type ModelRun,
+  type ModelSelection,
+} from "../src/providers/contracts.ts";
 import { Config, Console, Result, Function as EffectFunction, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
@@ -9,7 +13,6 @@ import { Context, FileSystem } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { maxIterations } from "@tanstack/ai";
 import { DateTime, Effect, Layer, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
@@ -22,11 +25,11 @@ import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { AgUiEvent } from "../src/loop/chunks.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { TurnSummaries } from "../src/agent/turn-summaries.ts";
-import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
+import { pilotGuarded, pilotStopped, type PilotRequest } from "./pilot-guard.ts";
+import { exceedsRequestTokenBudget } from "./request-token-budget.ts";
 
 // Explicit, paid, serial pilot only. The adapter guard stops before a provider request, including
 // a summary request. It does not turn token estimates into reported usage.
@@ -43,6 +46,13 @@ const model = "gpt-5.6-sol";
 const effort = "low";
 const phrase = "violet-copper-maple-17";
 let calls = 0;
+const withinBudget = ({ prompt, estimate }: PilotRequest) =>
+  Effect.gen(function* () {
+    if (calls >= maxCalls || exceedsRequestTokenBudget(estimate, maxEstimatedInputTokens))
+      return yield* pilotStopped("pilot_provider_budget_exceeded");
+    calls += 1;
+    return prompt;
+  });
 const guardedRegistry = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
@@ -53,41 +63,8 @@ const guardedRegistry = Layer.effect(
       runtime: (provider: "openai" | "anthropic" | "openai-compatible") =>
         Effect.map(upstream.runtime(provider), (runtime) => ({
           ...runtime,
-          agentLoop: maxIterations(2),
-          adapter: (selection: Parameters<typeof runtime.adapter>[0]) => {
-            const adapter = runtime.adapter(selection);
-            return new Proxy(adapter, {
-              get(target, key) {
-                if (key !== "chatStream") {
-                  // The installed SDK adapter is a class with private fields; transparent proxy
-                  // forwarding must bind its dynamic methods to the original instance.
-                  // oxlint-disable-next-line anti-slop/no-reflect-get
-                  const value = Reflect.get(target, key, target);
-                  // oxlint-disable-next-line anti-slop/no-runtime-typeof
-                  return typeof value === "function" ? value.bind(target) : value;
-                }
-                return (options: Parameters<typeof adapter.chatStream>[0]) => {
-                  // Estimate the entire serialized request including tool schemas. This local
-                  // BPE count is only a preflight guard; billed/cached usage comes from provider.
-                  if (selection.provider === "openai-compatible")
-                    throw new Error("subscription_pilot_only");
-                  const serialized = subscriptionRequest({
-                    provider: selection.provider,
-                    selection: selection,
-                    options: options,
-                  });
-                  const estimated = estimateRequestTokens(serialized, selection.model);
-                  if (
-                    calls >= maxCalls ||
-                    exceedsRequestTokenBudget(estimated, maxEstimatedInputTokens)
-                  )
-                    throw new Error("pilot_provider_budget_exceeded");
-                  calls += 1;
-                  return target.chatStream(options);
-                };
-              },
-            });
-          },
+          model: (selection: ModelSelection, run: ModelRun) =>
+            Effect.map(runtime.model(selection, run), pilotGuarded(selection, withinBudget)),
         })),
     };
   }),

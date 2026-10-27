@@ -614,8 +614,8 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - `migrateTanStackRows`는 시작 migration의 마지막 단계로 돈다(`btw_threads` 포함). decisions.md "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)"의 "등록"에 있다.
   - 취소는 우리 abort reason(`cancel_requested`)만 쓴다. `requestRunCancel`과 쓰지 않게 된 `SdkCancellation.delivery`를 지웠다. golden 차이는 취소 run의 `chat_runs.cancel_requested`가 비는 것뿐이다.
   - run 기록, interrupt, chat metadata를 `RunStore`로 읽는다. 턴 요약, 백그라운드 결과, 서브에이전트 transcript도 `RunStore`를 쓴다. `ChatState`에는 시작 때 하는 일(옛 세션의 thread, history page 준비, 이전 프로세스의 run 정리)과 `prepare`만 남았다. 쓰는 곳이 없어진 `middleware`(TanStack `withPersistence`와 부분 답 저장), `run`, `lastRun`, `discardPendingInterrupts`, `persistence`를 지웠다.
-  - 1번에 남은 것:
-    - `eval/prompt-overhead.ts`: TanStack adapter의 요청을 재므로 `aa056aa2`부터 돌지 않는다. Effect AI 요청을 재도록 다시 쓴다. `eval/live-compaction.ts`·`eval/live-delegation.ts`의 provider guard도 TanStack adapter를 감싼다.
+  - eval: `eval/prompt-overhead.ts`는 loop가 model에 보내는 Effect AI 요청(`LanguageModel.ProviderOptions`)을 `subscriptionBody`로 직렬화해 잰다. `eval/live-compaction.ts`·`eval/live-delegation.ts`의 예산 guard(`eval/pilot-guard.ts`)는 TanStack adapter 대신 run의 model을 감싸므로 요약 같은 단발 호출도 막는다. `aa056aa2`부터는 guard가 걸리지 않았다. 새 loop에는 `maxIterations` 같은 단계 상한이 없어 호출 수 예산만 남는다.
+  - 1번은 끝났다.
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 
