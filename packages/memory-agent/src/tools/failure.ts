@@ -5,6 +5,7 @@ import { Cause, Context, Effect, Exit, HashMap, Result, Option, Predicate, Schem
 import { type RunTrace } from "../runtime/run-trace.ts";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected, TextFileIoFailed, textFileRejectedReasonName } from "../files/text.ts";
+import { optionalProperty } from "../optional-property.ts";
 
 const refusalHints = HashMap.fromIterable<string, string>([
   [
@@ -55,6 +56,8 @@ export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
   code: Schema.String,
   tag: Schema.String,
   detail: Schema.String,
+  /** The tool refused before it changed anything, so the call had no effect. */
+  refused: Schema.optionalKey(Schema.Literal(true)),
 }) {
   override get message() {
     return `${this.code}: ${this.detail}`;
@@ -64,6 +67,19 @@ export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
     return { error: this.code, cause: this.tag, detail: this.detail };
   }
 }
+
+/** The same failure with `detail` in place of its text. */
+export const withDetail: {
+  (detail: string): (failed: ToolFailed) => ToolFailed;
+  (failed: ToolFailed, detail: string): ToolFailed;
+} = EffectFunction.dual(2, (failed: ToolFailed, detail: string) =>
+  ToolFailed.make({
+    code: failed.code,
+    tag: failed.tag,
+    detail,
+    ...optionalProperty("refused", failed.refused),
+  }),
+);
 
 /** The failure's tag, or its class name when it has none (a plain `Error`, an SDK's error). */
 export const errorTag = (error: Error) => Option.getOrElse(tagOfUnknown(error), () => error.name);
@@ -189,16 +205,57 @@ export const guardedEffect: {
   ): (path: string) => ReturnType<typeof guardedEffectBody<A, E, R>>;
 } & typeof guardedEffectBody = EffectFunction.dual(2, guardedEffectBody);
 function guardedEffectBody<A, E, R>(path: string, program: Effect.Effect<A, E, R>) {
+  return caught(path, program, () => false);
+}
+
+const isFileIoFailure = Schema.is(TextFileIoFailed);
+
+/**
+ * A failure of a file change that only reads and checks before its file operations. Those report
+ * their failures as {@link TextFileIoFailed}; anything else, such as a rejected path, a changed
+ * file or text that does not occur, came from a check, so nothing was changed. A defect may have
+ * come from anywhere.
+ */
+const isRefusal = (error: Error, cause: Cause.Cause<unknown>) =>
+  !isFileIoFailure(error) && !Cause.hasDies(cause);
+
+/**
+ * {@link guardedEffect} for a file change whose only writes are file operations (the file tools'
+ * create, replace and delete). Its refusals are marked as changing nothing.
+ */
+export const guardedChange: {
+  <A, E, R>(
+    program: Effect.Effect<A, E, R>,
+  ): (path: string) => ReturnType<typeof guardedChangeBody<A, E, R>>;
+} & typeof guardedChangeBody = EffectFunction.dual(2, guardedChangeBody);
+function guardedChangeBody<A, E, R>(path: string, program: Effect.Effect<A, E, R>) {
+  return caught(path, program, isRefusal);
+}
+
+function caught<A, E, R>(
+  path: string,
+  program: Effect.Effect<A, E, R>,
+  changedNothing: (error: Error, cause: Cause.Cause<unknown>) => boolean,
+) {
   return program.pipe(
     Effect.catchCause((cause): Effect.Effect<never, E | Cause.UnknownError> => {
       const failure = Cause.squash(cause);
-      const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
+      const found = failure instanceof Cause.UnknownError ? failure.cause : failure;
+      // A thrown non-Error carries nothing the model may see.
+      const error = Predicate.isError(found) ? found : new Error("unknown");
+      const failed = toolFailure(error, path);
       return Cause.hasInterrupts(cause)
         ? Effect.failCause(cause)
         : Effect.fail(
             new Cause.UnknownError(
-              // A thrown non-Error carries nothing the model may see.
-              toolFailure(Predicate.isError(error) ? error : new Error("unknown"), path),
+              changedNothing(error, cause)
+                ? ToolFailed.make({
+                    code: failed.code,
+                    tag: failed.tag,
+                    detail: failed.detail,
+                    refused: true,
+                  })
+                : failed,
             ),
           );
     }),

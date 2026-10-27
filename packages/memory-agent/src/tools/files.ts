@@ -34,7 +34,7 @@ import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { HiddenReplaceFailure, mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
 import { runTrace } from "../runtime/run-trace.ts";
-import { guardedEffect } from "./failure.ts";
+import { guardedChange, guardedEffect } from "./failure.ts";
 import { lazily } from "./lazy.ts";
 import { runTool } from "./run-tool.ts";
 import { definitionOf } from "./schema.ts";
@@ -475,7 +475,7 @@ const make = Effect.gen(function* () {
       ),
 
     writeFile: ({ path, content, expectedSha256 }: typeof writeFileInput.Type) =>
-      guardedEffect(
+      guardedChange(
         path,
         Effect.gen(function* () {
           const resolved = yield* resolveProjectPath(root, path, "new-or-file");
@@ -532,7 +532,7 @@ const make = Effect.gen(function* () {
       replaceAll = false,
       expectedSha256,
     }: typeof editFileInput.Type) =>
-      guardedEffect(
+      guardedChange(
         path,
         Effect.gen(function* () {
           const resolved = yield* resolveProjectPath(root, path, "file");
@@ -562,7 +562,7 @@ const make = Effect.gen(function* () {
       ),
 
     deleteFile: ({ path, expectedSha256 }: typeof deleteFileInput.Type) =>
-      guardedEffect(
+      guardedChange(
         path,
         Effect.gen(function* () {
           const resolved = yield* resolveProjectPath(root, path, "file");

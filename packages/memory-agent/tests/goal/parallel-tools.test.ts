@@ -9,7 +9,7 @@ import { TestEnv } from "../support/test-env.ts";
 /**
  * The calls of a Goal run's step run at once, each kept in the ledger on its own
  * (docs/effect-ai-migration.md step 5). A call that ends after the others does not fail the run,
- * and a failed write leaves the other results recorded for the model's next step. Which call ends
+ * and a refused write leaves the other results recorded for the model's next step. Which call ends
  * last is timing, which no type checks.
  */
 
@@ -29,19 +29,20 @@ goldenAgent({ chatLoop: "effect-ai" })("parallel tools in a Goal run", (it) => {
           yield* sqlAll("SELECT status FROM chat_runs WHERE thread_id = ?", chat.sessionId),
         ).toEqual([{ status: "completed" }]);
         const ledger = yield* sqlAll(
-          `SELECT ${invocationFieldSql("o", "toolCallId")} AS call, o.status
+          `SELECT ${invocationFieldSql("o", "toolCallId")} AS call,
+             o.status || ' ' || json_extract(o.reply_json, '$.output') AS outcome
            FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
            WHERE b.session_id = ?`,
           chat.sessionId,
         );
-        // A write that failed may have changed something, so its outcome stays unknown.
+        // The refused write changed nothing, so it does not leave the run's outcome unknown.
         expect(
-          Object.fromEntries(ledger.map((row) => [scripted(String(row["call"])), row["status"]])),
+          Object.fromEntries(ledger.map((row) => [scripted(String(row["call"])), row["outcome"]])),
         ).toEqual({
-          "goal-slow": "succeeded",
-          "goal-slow-run": "succeeded",
-          "goal-stale": "uncertain",
-          "goal-new": "succeeded",
+          "goal-slow": "succeeded returned",
+          "goal-slow-run": "succeeded returned",
+          "goal-stale": "succeeded refused",
+          "goal-new": "succeeded returned",
         });
 
         const { provider } = yield* TestEnv;

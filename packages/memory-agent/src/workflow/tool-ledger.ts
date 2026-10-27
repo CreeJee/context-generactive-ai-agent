@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, HashSet, Match, Schema } from "effect";
+import { Cause, Effect, Exit, HashSet, Match, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { ownerRpcCanonicalJson, ownerRpcFingerprint } from "../agent/owner-rpc-fingerprint.ts";
 import { JsonValue } from "../json.ts";
@@ -60,7 +60,19 @@ const notRecorded = ToolFailed.make({
 });
 
 /**
- * How a call ended, as the ledger keeps it. A read changes nothing, so it always succeeded. A write
+ * How a failed call that changed nothing ended: a read, which changes nothing, or a write its tool
+ * refused before changing anything. None for any other write.
+ */
+const unchangedOutput = (name: string, cause: Cause.Cause<ToolFailed>): Option.Option<string> =>
+  HashSet.has(readOnlyToolNames, name)
+    ? Option.some(Cause.hasInterruptsOnly(cause) ? "cancelled" : "failed")
+    : Cause.findErrorOption(cause).pipe(
+        Option.filter((failed) => failed.refused === true),
+        Option.as("refused"),
+      );
+
+/**
+ * How a call ended, as the ledger keeps it. A call that changed nothing succeeded. Any other write
  * that failed or was cancelled may have changed something; it stays uncertain, and the run's Goal
  * waits for the user before its next run.
  */
@@ -68,12 +80,10 @@ const settledOf = (name: string, operationId: number, exit: Exit.Exit<JsonValue,
   Exit.match(exit, {
     onSuccess: (): Settled => Settled.cases.succeeded.make({ operationId, output: "returned" }),
     onFailure: (cause): Settled =>
-      HashSet.has(readOnlyToolNames, name)
-        ? Settled.cases.succeeded.make({
-            operationId,
-            output: Cause.hasInterruptsOnly(cause) ? "cancelled" : "failed",
-          })
-        : Settled.cases.uncertain.make({ operationId }),
+      Option.match(unchangedOutput(name, cause), {
+        onNone: () => Settled.cases.uncertain.make({ operationId }),
+        onSome: (output) => Settled.cases.succeeded.make({ operationId, output }),
+      }),
   });
 
 export const toolLedger = Effect.gen(function* () {

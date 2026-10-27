@@ -17,7 +17,7 @@ import {
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import type { ShownFailure } from "../runtime/shown-failure.ts";
-import { ToolFailed, toolFailedOf } from "../tools/failure.ts";
+import { ToolFailed, toolFailedOf, withDetail } from "../tools/failure.ts";
 import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
@@ -272,11 +272,7 @@ const make = Effect.sync(() => {
         Effect.flatMap(redactJson),
         Effect.catchTag("ToolFailed", (failed) =>
           Effect.flatMap(redactText(failed.detail), ({ text }) =>
-            Effect.fail(
-              text === failed.detail
-                ? failed
-                : ToolFailed.make({ code: failed.code, tag: failed.tag, detail: text }),
-            ),
+            Effect.fail(text === failed.detail ? failed : withDetail(failed, text)),
           ),
         ),
         Effect.catchTag("SecretRedactionFailed", () => Effect.fail(withheld)),
@@ -323,13 +319,7 @@ const make = Effect.sync(() => {
                             Effect.flatMap(({ text }) =>
                               Effect.fail(
                                 new Cause.UnknownError(
-                                  text === failed.detail
-                                    ? failed
-                                    : ToolFailed.make({
-                                        code: failed.code,
-                                        tag: failed.tag,
-                                        detail: text,
-                                      }),
+                                  text === failed.detail ? failed : withDetail(failed, text),
                                 ),
                               ),
                             ),

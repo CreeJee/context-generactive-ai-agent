@@ -48,7 +48,7 @@ import {
 } from "./definitions.ts";
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { runTrace } from "../runtime/run-trace.ts";
-import { guardedEffect } from "./failure.ts";
+import { guardedChange, guardedEffect } from "./failure.ts";
 import { lazily } from "./lazy.ts";
 import { runTool } from "./run-tool.ts";
 import { definitionOf } from "./schema.ts";
@@ -261,7 +261,7 @@ const make = Effect.gen(function* () {
       ),
 
     writeOutsideFile: ({ path, content, expectedSha256 }: typeof WriteOutsideFileInput.Type) =>
-      guardedEffect(
+      guardedChange(
         path,
         Effect.gen(function* () {
           const target = yield* resolveFencedOutsidePath(
@@ -299,7 +299,7 @@ const make = Effect.gen(function* () {
       ),
 
     deleteOutsideFile: ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
-      guardedEffect(
+      guardedChange(
         path,
         Effect.gen(function* () {
           const target = yield* resolveFencedOutsidePath(
