@@ -19,7 +19,7 @@ import { RelayedApprovals, type RelayedRequest } from "../src/approvals/relayed.
 import { ApprovalRequester } from "../src/approvals/relayed-state.ts";
 import { Database } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
-import { sdkCancellation } from "./support/sdk-cancellation.ts";
+import { runCancellation } from "./support/run-cancellation.ts";
 import { sqlGet, sqlRun } from "./support/sql.ts";
 
 const request: RelayedRequest = {
@@ -101,7 +101,7 @@ describe("durable relayed approvals", () => {
     () =>
       withRelay((relay) =>
         Effect.gen(function* () {
-          const { controller } = yield* sdkCancellation;
+          const { controller } = yield* runCancellation;
           const first = relay.ask("s", "run-1", request, controller.signal);
           const second = relay.ask("s", "run-2", request, controller.signal);
           const [a, b] = yield* pending(relay, "s", 2);
@@ -122,7 +122,7 @@ describe("durable relayed approvals", () => {
   it.live("interrupts a cancelled owner's durable wait and rejects a late answer", () =>
     withRelay((relay) =>
       Effect.gen(function* () {
-        const { controller } = yield* sdkCancellation;
+        const { controller } = yield* runCancellation;
         const waiting = relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(relay, "s", 1);
         controller.abort();
@@ -151,7 +151,7 @@ describe("durable relayed approvals", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-approval-" });
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
-        const { controller } = yield* sdkCancellation;
+        const { controller } = yield* runCancellation;
         const waiting = first.relay.ask("s", "run-1", request, controller.signal);
         void waiting.catch(() => false);
         const [approval] = yield* pending(first.relay, "s", 1);
@@ -181,7 +181,7 @@ describe("durable relayed approvals", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-requester-" });
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
-        const { controller } = yield* sdkCancellation;
+        const { controller } = yield* runCancellation;
         const waiting = first.relay.ask("s", "run-1", request, controller.signal);
         void waiting.catch(() => false);
         const [approval] = yield* pending(first.relay, "s", 1);
@@ -228,7 +228,7 @@ describe("durable relayed approvals", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-timeout-" });
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
-        const { controller } = yield* sdkCancellation;
+        const { controller } = yield* runCancellation;
         const waiting = first.relay.ask("s", "run-1", request, controller.signal);
         void waiting.catch(() => false);
         const [approval] = yield* pending(first.relay, "s", 1);

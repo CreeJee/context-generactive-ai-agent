@@ -126,7 +126,7 @@ import { TurnSummaries } from "./turn-summaries.ts";
 import { fallbackLogged, logDefect, logFailure } from "../runtime/logged-failures.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
-import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
+import { RunCancellations } from "../runtime/run-cancellation.ts";
 import { shownRunErrors } from "./run-errors.ts";
 import {
   acknowledgedRunSql,
@@ -655,7 +655,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   yield* attachments.purgeOrphans;
   const places: SettingsPlaces = { storageRoot: (yield* StorageRoot).path };
   const liveRuns = yield* createLiveRuns;
-  const cancellations = yield* SdkCancellations;
+  const cancellations = yield* RunCancellations;
   const runStore = yield* RunStore;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
@@ -1633,9 +1633,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 .markDelivered(id, "next_turn", runId)
                 .pipe(Effect.andThen(events.publishSession(sessionId, "queue"))),
           });
-          const chunks = yield* cancellation.publish(
-            yield* Stream.toAsyncIterableEffect(loopEvents),
-          );
+          const chunks = yield* cancellation.publish(loopEvents);
           const delivered = claim.track(chunks);
           const log = yield* runLogs.open(runId);
           yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
@@ -2330,7 +2328,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
         yield* runStarted;
         const chunks = yield* cancellation.publish(
-          yield* Stream.toAsyncIterableEffect(goalRun ? boundRunRecorded(loopEvents) : loopEvents),
+          goalRun ? boundRunRecorded(loopEvents) : loopEvents,
         );
         const delivered = claim
           .track(chunks)
@@ -2962,7 +2960,7 @@ export class AgentChat extends Context.Service<AgentChat, Effect.Success<typeof 
   "memory-agent/agent/chat/AgentChat",
 ) {
   static readonly layer = Layer.effect(AgentChat, make).pipe(
-    Layer.provideMerge(SdkCancellations.layer),
+    Layer.provideMerge(RunCancellations.layer),
     Layer.provide(NodeCrypto.layer),
   );
 }

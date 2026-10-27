@@ -1,14 +1,14 @@
 import { expect, it } from "@effect/vitest";
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
-import { SdkCancellations } from "../src/runtime/sdk-cancellation.ts";
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, Stream } from "effect";
+import { RunCancellations } from "../src/runtime/run-cancellation.ts";
 import { createLiveRuns } from "../src/agent/live-runs.ts";
 
 const fixture = Effect.gen(function* () {
   const owner = yield* Scope.fork(yield* Effect.scope);
-  const context = yield* Layer.build(SdkCancellations.layer).pipe(
+  const context = yield* Layer.build(RunCancellations.layer).pipe(
     Effect.provideService(Scope.Scope, owner),
   );
-  return { owner, cancellations: Context.get(context, SdkCancellations) };
+  return { owner, cancellations: Context.get(context, RunCancellations) };
 });
 
 it.effect(
@@ -52,9 +52,7 @@ it.effect("producer survives the request scope and delivers committed terminal f
     const { owner, cancellations } = yield* fixture;
     const run = yield* cancellations.allocate("service_shutdown");
     run.controller.abort("worker_teardown");
-    const output = yield* Effect.scoped(
-      run.publish(Stream.toAsyncIterable(Stream.fromIterable(["partial", "RUN_ERROR"]))),
-    );
+    const output = yield* Effect.scoped(run.publish(Stream.fromIterable(["partial", "RUN_ERROR"])));
     const frames = yield* Stream.runCollect(output);
     expect(frames).toEqual(["partial", "RUN_ERROR"]);
     yield* Scope.close(owner, Exit.void);
@@ -62,7 +60,7 @@ it.effect("producer survives the request scope and delivers committed terminal f
 );
 
 it.effect.each(["manual", "shutdown"] as const)(
-  "%s waits for pending SDK reads and iterator cleanup",
+  "%s waits for the run's events to stop and clean up",
   (mode) =>
     Effect.gen(function* () {
       const { owner, cancellations } = yield* fixture;
@@ -70,43 +68,32 @@ it.effect.each(["manual", "shutdown"] as const)(
       const started = yield* Deferred.make<void>();
       const closing = yield* Deferred.make<void>();
       const allowClose = yield* Deferred.make<void>();
-      let closed = false;
-      const runEffect = Effect.runPromiseWith(yield* Effect.context());
-      // This mock implements the SDK's Promise/AbortSignal boundary.
-      const sdk: AsyncIterable<string> = {
-        [Symbol.asyncIterator]: () => ({
-          next: () =>
-            runEffect(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)), {
-              signal: run.controller.signal,
-            }),
-          return: () =>
-            runEffect(
-              Deferred.succeed(closing, undefined).pipe(
-                Effect.andThen(Deferred.await(allowClose)),
-                Effect.andThen(
-                  Effect.sync(() => {
-                    closed = true;
-                    return { done: true as const, value: undefined };
-                  }),
-                ),
-              ),
-            ),
-        }),
-      };
-      const output = yield* run.publish(sdk);
+      const closed = yield* Ref.make(false);
+      // Events that never come, and a cleanup that waits until the test lets it finish.
+      const events = Stream.fromEffect(
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(
+        Stream.ensuring(
+          Deferred.succeed(closing, undefined).pipe(
+            Effect.andThen(Deferred.await(allowClose)),
+            Effect.andThen(Ref.set(closed, true)),
+          ),
+        ),
+      );
+      const output = yield* run.publish(events);
       const consuming = yield* Effect.forkScoped(Stream.runDrain(output).pipe(Effect.exit));
       yield* Deferred.await(started);
       const cancelling = yield* Effect.forkScoped(
         mode === "manual" ? run.cancel : Scope.close(owner, Exit.void),
       );
       yield* Deferred.await(closing);
-      expect(closed).toBe(false);
+      expect(yield* Ref.get(closed)).toBe(false);
       yield* Deferred.succeed(allowClose, undefined);
       yield* Fiber.join(cancelling);
       yield* Fiber.join(consuming);
       expect(run.controller.signal.aborted).toBe(true);
       if (mode === "shutdown") expect(run.controller.signal.reason).toBe("service_shutdown");
-      expect(closed).toBe(true);
+      expect(yield* Ref.get(closed)).toBe(true);
     }),
 );
 

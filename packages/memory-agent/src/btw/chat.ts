@@ -39,7 +39,7 @@ import { isEmptyUserText } from "../messages/empty-user.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { compatibleToolCalling } from "../providers/openai-compatible-config.ts";
 import { aborted } from "../runtime/aborted.ts";
-import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
+import { RunCancellations } from "../runtime/run-cancellation.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { btwInstructions, parentConversationPrompt } from "./context.ts";
 import { BtwError, BtwRunInProgress } from "./contracts.ts";
@@ -131,7 +131,7 @@ const make = Effect.gen(function* () {
     knowledge: KnowledgePromotions,
   });
   const liveRuns = yield* createLiveRuns;
-  const cancellations = yield* SdkCancellations;
+  const cancellations = yield* RunCancellations;
   // A BTW answer outlives the request that asked it, but not this service.
   const scope = yield* Effect.scope;
 
@@ -299,7 +299,7 @@ export class BtwChat extends Context.Service<BtwChat, Effect.Success<typeof make
   "memory-agent/btw/chat/BtwChat",
 ) {
   static readonly layer = Layer.effect(BtwChat, make).pipe(
-    Layer.provide(SdkCancellations.layer),
+    Layer.provide(RunCancellations.layer),
     Layer.provideMerge(BtwThreads.layer),
   );
 }

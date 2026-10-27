@@ -1,11 +1,11 @@
 import { Context, Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "@effect/vitest";
 import { createLiveRuns } from "../src/agent/live-runs.ts";
-import { SdkCancellations } from "../src/runtime/sdk-cancellation.ts";
-import { SdkRequestFailed } from "../src/runtime/sdk-promise.ts";
+import { RunCancellations } from "../src/runtime/run-cancellation.ts";
+import { RunFailed } from "../src/loop/run.ts";
 
 const fixture = Effect.gen(function* () {
-  const cancellations = Context.get(yield* Layer.build(SdkCancellations.layer), SdkCancellations);
+  const cancellations = Context.get(yield* Layer.build(RunCancellations.layer), RunCancellations);
   const first = yield* cancellations.allocate("service_shutdown");
   const second = yield* cancellations.allocate("service_shutdown");
   return { runs: yield* createLiveRuns, first: first.controller, second: second.controller };
@@ -60,7 +60,7 @@ describe("createLiveRuns", () => {
       expect(claim).not.toBeNull();
       expect(active).not.toBeNull();
       if (claim === null || active === null) return;
-      const failure = SdkRequestFailed.make({ cause: "stream failed" });
+      const failure = RunFailed.make({ message: "stream failed" });
       expect(yield* Stream.runDrain(claim.track(Stream.fail(failure))).pipe(Effect.flip)).toBe(
         failure,
       );

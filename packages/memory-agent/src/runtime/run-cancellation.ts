@@ -1,12 +1,11 @@
 import { Cause, Context, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from "effect";
-import { SdkRequestFailed, sdkPromiseWithController } from "./sdk-promise.ts";
 
 interface ControllerLink {
   readonly controller: AbortController;
   readonly detach: () => void;
 }
 
-/** The SDK requires a controller, while Effect owns the lifetime of its signal. */
+/** Live runs and the loop's cancel read a controller, while Effect owns the lifetime of its signal. */
 function linkController(signal: AbortSignal, shutdownReason: string): ControllerLink {
   const controller = new AbortController();
   const abort = () => controller.abort(shutdownReason);
@@ -15,22 +14,21 @@ function linkController(signal: AbortSignal, shutdownReason: string): Controller
   return { controller, detach: () => signal.removeEventListener("abort", abort) };
 }
 
-export interface SdkCancellation {
+export interface RunCancellation {
   readonly controller: AbortController;
   readonly release: Effect.Effect<void>;
   readonly cancel: Effect.Effect<void>;
   /** Wait for execution cleanup while its output is still being drained and persisted. */
   readonly settled: Effect.Effect<void>;
-  readonly publish: <A>(
-    input: AsyncIterable<A>,
-  ) => Effect.Effect<Stream.Stream<A, SdkRequestFailed>>;
+  /** The run's events, read by a fiber the owning service keeps, so they outlive the request. */
+  readonly publish: <A, E>(input: Stream.Stream<A, E>) => Effect.Effect<Stream.Stream<A, E>>;
 }
 
 /** A run outlives request handlers, but never its owning service. */
-const allocate = Effect.fn("SdkCancellations.allocate")(function* (options: {
+const allocate = Effect.fn("RunCancellations.allocate")(function* (options: {
   readonly owner: Scope.Scope;
   readonly shutdownReason: string;
-}): Effect.fn.Return<SdkCancellation> {
+}): Effect.fn.Return<RunCancellation> {
   const scope = yield* Scope.fork(options.owner);
   const links: ControllerLink[] = [];
   const detach = () => {
@@ -70,31 +68,10 @@ const allocate = Effect.fn("SdkCancellations.allocate")(function* (options: {
     // A completed stream detaches before closing, preserving its committed finish.
     release,
     settled: Effect.suspend(() => settled),
-    publish: Effect.fnUntraced(function* <A>(input: AsyncIterable<A>) {
-      const queue = yield* Queue.bounded<A, SdkRequestFailed | Cause.Done>(1);
+    publish: Effect.fnUntraced(function* <A, E>(input: Stream.Stream<A, E>) {
+      const queue = yield* Queue.bounded<A, E | Cause.Done>(1);
       yield* Scope.addFinalizer(scope, Queue.shutdown(queue));
-      const producer = Effect.acquireUseRelease(
-        Effect.try({
-          try: () => input[Symbol.asyncIterator](),
-          catch: (cause) => SdkRequestFailed.make({ cause }),
-        }),
-        (iterator) =>
-          Effect.gen(function* () {
-            while (true) {
-              const next = yield* sdkPromiseWithController(
-                () => iterator.next(),
-                controller.controller,
-              );
-              if (next.done === true) return;
-              yield* Queue.offer(queue, next.value);
-            }
-          }),
-        (iterator) =>
-          sdkPromiseWithController(
-            () => Promise.resolve(iterator.return?.()),
-            controller.controller,
-          ).pipe(Effect.asVoid),
-      ).pipe(
+      const producer = Stream.runForEach(input, (value) => Queue.offer(queue, value)).pipe(
         Effect.onExit((exit) =>
           Exit.isSuccess(exit) ? Queue.end(queue) : Queue.failCause(queue, exit.cause),
         ),
@@ -108,14 +85,14 @@ const allocate = Effect.fn("SdkCancellations.allocate")(function* (options: {
   };
 }, Effect.uninterruptible);
 
-export class SdkCancellations extends Context.Service<
-  SdkCancellations,
+export class RunCancellations extends Context.Service<
+  RunCancellations,
   {
-    readonly allocate: (shutdownReason: string) => Effect.Effect<SdkCancellation>;
+    readonly allocate: (shutdownReason: string) => Effect.Effect<RunCancellation>;
   }
->()("memory-agent/runtime/sdk-cancellation/SdkCancellations") {
+>()("memory-agent/runtime/run-cancellation/RunCancellations") {
   static readonly layer = Layer.effect(
-    SdkCancellations,
+    RunCancellations,
     Effect.gen(function* () {
       const owner = yield* Effect.scope;
       return { allocate: (shutdownReason) => allocate({ owner, shutdownReason }) };
