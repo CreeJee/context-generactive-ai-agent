@@ -18,6 +18,8 @@ export const btwThreads = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto.C
   Atom.family((thread: string) => {
     const view = Atom.make<Option.Option<ChatView>>(Option.none()).pipe(Atom.keepAlive);
 
+    // Written through the call's own `get`, not the registry: once a newer call replaces this one,
+    // its late writes are dropped instead of overwriting the newer question's view.
     const changed = (get: Atom.FnContext, change: (current: ChatView) => ChatView) =>
       Effect.sync(() => get.set(view, Option.map(get(view), change)));
     const saved = Effect.flatMap(ChatApiClient, ({ btw }) => btw.messages({ params: { thread } }));

@@ -74,6 +74,8 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
     /** The last app event a run sent; the page subscribes to it. */
     const custom = Atom.make<Option.Option<CustomEvent>>(Option.none());
 
+    // Written through the call's own `get`, not the registry: once a newer call replaces this one,
+    // its late writes are dropped instead of overwriting the newer run's view.
     const changed = (get: Atom.FnContext, change: (current: OpenSession) => OpenSession) =>
       Effect.sync(() => get.set(state, Option.map(get(state), change)));
 
@@ -145,12 +147,10 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
         };
         const shown = (messages: ReadonlyArray<ChatMessage>) =>
           changed(get, (current) => ({ ...current, view: { ...current.view, messages } }));
-        yield* Effect.flatMap(
-          Effect.sync(() => get(state)),
-          (current) =>
-            Effect.transposeOption(
-              Option.map(current, ({ view }) => shown([...view.messages, message])),
-            ),
+        yield* Effect.flatMap(Atom.get(state), (current) =>
+          Effect.transposeOption(
+            Option.map(current, ({ view }) => shown([...view.messages, message])),
+          ),
         );
         const events = yield* chat
           .run({
@@ -200,7 +200,7 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
     const loadOlder = runtime.fn((_: void, get) =>
       Effect.gen(function* () {
         const { chat } = yield* ChatApiClient;
-        const before = Option.flatMapNullishOr(get(state), ({ view }) => view.older);
+        const before = Option.flatMapNullishOr(yield* Atom.get(state), ({ view }) => view.older);
         yield* Effect.transposeOption(
           Option.map(before, (before) =>
             Effect.flatMap(

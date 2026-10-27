@@ -68,7 +68,7 @@ function findExecutableBody(
         extensions.map((extension) => path.join(directory, `${name}${extension.toLowerCase()}`)),
       );
     const found = yield* Effect.findFirst(candidates, (candidate) =>
-      isFile === undefined ? fileExists(candidate) : Effect.sync(() => isFile(candidate)),
+      isFile === undefined ? fileExists(candidate) : Effect.succeed(isFile(candidate)),
     );
     return Option.getOrNull(found);
   });
@@ -221,7 +221,7 @@ function shellInvocationBody(
 ) {
   return Effect.gen(function* (): Effect.fn.Return<ShellInvocation, never, FileSystem.FileSystem> {
     const check = (file: string) =>
-      exists === undefined ? fileExists(file) : Effect.sync(() => exists(file));
+      exists === undefined ? fileExists(file) : Effect.succeed(exists(file));
     if (platform === "win32") {
       const comSpec = env.ComSpec ?? env.COMSPEC;
       const file =

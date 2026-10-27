@@ -6,10 +6,11 @@ import {
   Duration,
   Effect,
   Exit,
+  HashMap,
   Latch,
   Layer,
   Match,
-  MutableHashMap,
+  SynchronizedRef,
 } from "effect";
 import { Crypto, Option, Predicate, Schema, Scope } from "effect";
 import { PersistedQueue } from "effect/persistence";
@@ -157,19 +158,22 @@ const make = Effect.fnUntraced(function* (options?: {
 
   // Single-threaded owner: every statement below is one synchronous SQLite step, so a claim cannot
   // interleave with another claim. The latch only shortens waits for work offered in this process.
-  const latches = MutableHashMap.empty<string, Latch.Latch>();
+  const latches = yield* SynchronizedRef.make(HashMap.empty<string, Latch.Latch>());
   const latchFor = (name: string) =>
-    Option.getOrElse(MutableHashMap.get(latches, name), () => {
-      const latch = Latch.makeUnsafe(false);
-      MutableHashMap.set(latches, name, latch);
-      return latch;
-    });
-  const nudge = (name: string) =>
-    Effect.asVoid(
-      Effect.sync(() =>
-        Option.map(MutableHashMap.get(latches, name), (latch) => latch.openUnsafe()),
-      ),
+    SynchronizedRef.modifyEffect(latches, (current) =>
+      Option.match(HashMap.get(current, name), {
+        onSome: (latch) => Effect.succeed([latch, current] as const),
+        onNone: () =>
+          Effect.map(
+            Latch.make(false),
+            (latch) => [latch, HashMap.set(current, name, latch)] as const,
+          ),
+      }),
     );
+  const nudge = (name: string) =>
+    Effect.flatMap(SynchronizedRef.get(latches), (current) =>
+      Effect.transposeOption(Option.map(HashMap.get(current, name), (latch) => latch.open)),
+    ).pipe(Effect.asVoid);
 
   yield* sql`UPDATE persisted_queue_items SET acquired_by = NULL WHERE acquired_by IS NOT NULL`.pipe(
     Effect.mapError(queueError("Failed to release persisted queue items of an earlier owner")),
@@ -276,47 +280,48 @@ const make = Effect.fnUntraced(function* (options?: {
       ),
 
     take: (options) =>
-      Effect.uninterruptibleMask((restore) => {
-        const latch = latchFor(options.name);
-        const loop: Effect.Effect<
-          { readonly id: string; readonly attempts: number; readonly element: unknown },
-          PersistedQueue.PersistedQueueError | SqlError.SqlError | Schema.SchemaError,
-          Scope.Scope
-        > = Effect.gen(function* () {
-          // Close before looking, so an offer after the look reopens it.
-          latch.closeUnsafe();
-          const claimed = yield* takeOne(options);
-          return yield* Option.match(claimed, {
-            onSome: (row) =>
-              Schema.decodeEffect(JsonElement)(row.element_json).pipe(
-                Effect.map((element) => ({ id: row.id, attempts: row.attempts, element })),
-                // A payload that is not JSON can never succeed: dead-letter it and take the next one.
-                Effect.catchTag("SchemaError", (cause) =>
-                  markFailed(row.sequence, Cause.fail(cause)).pipe(Effect.andThen(loop)),
+      Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(latchFor(options.name), (latch) => {
+          const loop: Effect.Effect<
+            { readonly id: string; readonly attempts: number; readonly element: unknown },
+            PersistedQueue.PersistedQueueError | SqlError.SqlError | Schema.SchemaError,
+            Scope.Scope
+          > = Effect.gen(function* () {
+            // Close before looking, so an offer after the look reopens it.
+            yield* latch.close;
+            const claimed = yield* takeOne(options);
+            return yield* Option.match(claimed, {
+              onSome: (row) =>
+                Schema.decodeEffect(JsonElement)(row.element_json).pipe(
+                  Effect.map((element) => ({ id: row.id, attempts: row.attempts, element })),
+                  // A payload that is not JSON can never succeed: dead-letter it and take the next one.
+                  Effect.catchTag("SchemaError", (cause) =>
+                    markFailed(row.sequence, Cause.fail(cause)).pipe(Effect.andThen(loop)),
+                  ),
                 ),
-              ),
-            onNone: () =>
-              nextVisible(options.name, options.maxAttempts).pipe(
-                Effect.flatMap((next) =>
-                  restore(
-                    Effect.race(
-                      latch.await,
-                      Effect.sleep(
-                        Duration.millis(
-                          next === null
-                            ? pollMillis
-                            : Math.min(pollMillis, Math.max(0, next - now())),
+              onNone: () =>
+                nextVisible(options.name, options.maxAttempts).pipe(
+                  Effect.flatMap((next) =>
+                    restore(
+                      Effect.race(
+                        latch.await,
+                        Effect.sleep(
+                          Duration.millis(
+                            next === null
+                              ? pollMillis
+                              : Math.min(pollMillis, Math.max(0, next - now())),
+                          ),
                         ),
                       ),
                     ),
                   ),
+                  Effect.andThen(loop),
                 ),
-                Effect.andThen(loop),
-              ),
+            });
           });
-        });
-        return loop;
-      }).pipe(
+          return loop;
+        }),
+      ).pipe(
         Effect.catchTag(["SqlError", "SchemaError"], (cause) =>
           Effect.fail(queueError("Failed to take element from persisted queue")(cause)),
         ),

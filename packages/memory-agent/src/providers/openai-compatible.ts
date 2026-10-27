@@ -173,7 +173,7 @@ export const validateCompatibleModel = Effect.fnUntraced(function* (
 export const validateCompatibleLabel = (
   label: string,
 ): Effect.Effect<string, OpenAICompatibleFailed> =>
-  Effect.sync(() => label.trim()).pipe(
+  Effect.succeed(label.trim()).pipe(
     Effect.filterOrFail((value) => value !== "" && value.length <= 80, invalidSettings),
   );
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.

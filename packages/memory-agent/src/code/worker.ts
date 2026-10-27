@@ -21,10 +21,11 @@ import {
   Deferred,
   Duration,
   Effect,
+  HashMap,
   Layer,
-  MutableHashMap,
   Option,
   Queue,
+  Ref,
   Result,
   Schema,
   Stream,
@@ -237,8 +238,8 @@ type RunQueue = Queue.Queue<RunEvent, CodeEngineFailed | Cause.Done>;
 const handlers = CodeRpcs.toLayer(
   Effect.gen(function* () {
     // A worker runs one program; the replies its calls wait for arrive through `Reply`.
-    const waiting = MutableHashMap.empty<number, Deferred.Deferred<CallReply>>();
-    let nextCall = 0;
+    const waiting = yield* Ref.make(HashMap.empty<number, Deferred.Deferred<CallReply>>());
+    const nextCall = yield* Ref.make(0);
     const engine = yield* Effect.cached(
       nativePromise(() => newQuickJSWASMModuleFromVariant(variant)).pipe(
         Effect.tapCause((cause) => Effect.logError("Code engine failed to load", cause)),
@@ -249,9 +250,9 @@ const handlers = CodeRpcs.toLayer(
     /** One call of the program: announced on the stream, answered through `Reply`. */
     const callOut = (queue: RunQueue, name: string, args: string) =>
       Effect.gen(function* () {
-        const id = nextCall++;
+        const id = yield* Ref.getAndUpdate(nextCall, (count) => count + 1);
         const reply = yield* Deferred.make<CallReply>();
-        MutableHashMap.set(waiting, id, reply);
+        yield* Ref.update(waiting, HashMap.set(id, reply));
         yield* Queue.offer(queue, RunEvent.cases.Call.make({ id, name, args }));
         return yield* Deferred.await(reply);
       });
@@ -269,7 +270,7 @@ const handlers = CodeRpcs.toLayer(
 
         // Nothing is disposed: the worker is stopped after the program, which frees the engine
         // with it, and freeing a runtime while a call still waits aborts the engine.
-        let ended = false;
+        const ended = yield* Ref.make(false);
         /** Runs the program's continuations once a call it waits on is answered. */
         const pump = () => {
           runtime.executePendingJobs().error?.dispose();
@@ -278,11 +279,16 @@ const handlers = CodeRpcs.toLayer(
         const call = vm.newFunction("__call", (name: QuickJSHandle, args: QuickJSHandle) => {
           const pending = vm.newPromise();
           // Promise boundary for QuickJS: the guest awaits a promise the host settles.
-          void runPromise(callOut(queue, vm.getString(name), vm.getString(args))).then((reply) => {
-            if (ended) return;
-            settleCall(vm, pending, reply);
-            pump();
-          });
+          void runPromise(
+            callOut(queue, vm.getString(name), vm.getString(args)).pipe(
+              Effect.flatMap((reply) =>
+                Effect.sync(() => {
+                  settleCall(vm, pending, reply);
+                  pump();
+                }).pipe(Effect.when(Effect.map(Ref.get(ended), (over) => !over))),
+              ),
+            ),
+          );
           return pending.handle;
         });
         vm.setProp(vm.global, "__call", call);
@@ -306,13 +312,7 @@ const handlers = CodeRpcs.toLayer(
                   onFailure: (error) => threwOutcome(vm, error, logs),
                 }),
             });
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                ended = true;
-              }),
-            ),
-          );
+          }).pipe(Effect.ensuring(Ref.set(ended, true)));
         return yield* Result.match(settledOf(vm.evalCode(script, programFile)), {
           onSuccess: awaitProgram,
           onFailure: (error) => Effect.succeed(threwOutcome(vm, error, logs)),
@@ -343,13 +343,15 @@ const handlers = CodeRpcs.toLayer(
           ),
         ),
       Reply: ({ id, reply }) =>
-        Option.match(MutableHashMap.get(waiting, id), {
-          onNone: () => Effect.void,
-          onSome: (deferred) => {
-            MutableHashMap.remove(waiting, id);
-            return Effect.asVoid(Deferred.succeed(deferred, reply));
-          },
-        }),
+        Ref.modify(waiting, (current) => [
+          HashMap.get(current, id),
+          HashMap.remove(current, id),
+        ]).pipe(
+          Effect.flatMap((deferred) =>
+            Effect.transposeOption(Option.map(deferred, Deferred.succeed(reply))),
+          ),
+          Effect.asVoid,
+        ),
     });
   }),
 );

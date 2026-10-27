@@ -1066,47 +1066,45 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.andThen(() =>
             change(
               sessionId,
-              (current) =>
-                Effect.sync(() => {
-                  const previous = new Map(
-                    current.plan?.steps.map((step) => [step.id, step]) ?? [],
-                  );
-                  const plan: PlanArtifact = {
-                    ...input,
-                    steps: cardStatuses(
-                      input.steps.map((step) => {
-                        const replanned = { ...step, status: "pending" as const, evidence: [] };
-                        const prior = previous.get(step.id);
-                        return prior === undefined
-                          ? replanned
-                          : {
-                              ...cardContract(prior),
-                              ...optionalProperty("hold", prior.hold),
-                              ...replanned,
-                            };
-                      }),
-                    ),
-                    evidence: [],
-                    verification: verificationDefault,
-                    version: (current.plan?.version ?? 0) + 1,
-                    goalVersion: current.goal?.version ?? 0,
-                    updatedAt: nowIso(),
-                  };
-                  const kind = current.plan === null ? "plan_updated" : "plan_replanned";
-                  const phase =
-                    current.phase === "execute" || current.phase === "verify"
-                      ? "plan"
-                      : current.phase;
-                  const planned = {
-                    ...current,
-                    phase,
-                    plan,
-                    ledger: [
-                      ...current.ledger,
-                      event(current, kind, `plan v${plan.version} (${plan.status})`),
-                    ],
-                  };
-                  return phase === current.phase
+              (current) => {
+                const previous = new Map(current.plan?.steps.map((step) => [step.id, step]) ?? []);
+                const plan: PlanArtifact = {
+                  ...input,
+                  steps: cardStatuses(
+                    input.steps.map((step) => {
+                      const replanned = { ...step, status: "pending" as const, evidence: [] };
+                      const prior = previous.get(step.id);
+                      return prior === undefined
+                        ? replanned
+                        : {
+                            ...cardContract(prior),
+                            ...optionalProperty("hold", prior.hold),
+                            ...replanned,
+                          };
+                    }),
+                  ),
+                  evidence: [],
+                  verification: verificationDefault,
+                  version: (current.plan?.version ?? 0) + 1,
+                  goalVersion: current.goal?.version ?? 0,
+                  updatedAt: nowIso(),
+                };
+                const kind = current.plan === null ? "plan_updated" : "plan_replanned";
+                const phase =
+                  current.phase === "execute" || current.phase === "verify"
+                    ? "plan"
+                    : current.phase;
+                const planned = {
+                  ...current,
+                  phase,
+                  plan,
+                  ledger: [
+                    ...current.ledger,
+                    event(current, kind, `plan v${plan.version} (${plan.status})`),
+                  ],
+                };
+                return Effect.succeed(
+                  phase === current.phase
                     ? planned
                     : {
                         ...planned,
@@ -1118,8 +1116,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                             `${current.phase} -> plan (plan revised)`,
                           ),
                         ],
-                      };
-                }),
+                      },
+                );
+              },
               author,
             ),
           ),
