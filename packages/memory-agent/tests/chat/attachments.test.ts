@@ -1,7 +1,6 @@
 import { Effect, FileSystem, Match, Path, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
 import {
   type AttachmentRejected,
@@ -16,6 +15,7 @@ import type { JsonValue } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { requireRuntime } from "../../src/runtime/resources.ts";
 import { FileTools } from "../../src/tools/files.ts";
+import { runTurn, toolResults } from "../support/chat-client.ts";
 import { tinyPng } from "../support/images.ts";
 import { inRun } from "../support/run-span.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -364,22 +364,8 @@ testAgent({ testProvider: {} })("attachments", (it) => {
       yield* selectTestModel();
       const sessionId = yield* freshSession;
       const args = yield* encodeJson({ path: "arch.svg", content: square("#00aa00") });
-      const body = yield* encodeJson({
-        threadId: sessionId,
-        runId: `${sessionId}-draw`,
-        messages: [{ id: "m1", role: "user", content: `call write_file ${args}` }],
-        tools: [],
-        context: [],
-      });
-      const response = yield* (yield* AgentChat).handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        sessionId,
-      );
-      expect(yield* sdk(() => response.text())).toContain("attachmentId");
+      const events = yield* runTurn(sessionId, `${sessionId}-draw`, `call write_file ${args}`);
+      expect(toolResults(events).join("\n")).toContain("attachmentId");
       const nodes = yield* (yield* Nodes).session(sessionId);
       const stored = nodes.find((node) => node.kind === "tool_result");
       const preview = (yield* Schema.decodeEffect(Schema.fromJsonString(Written))(

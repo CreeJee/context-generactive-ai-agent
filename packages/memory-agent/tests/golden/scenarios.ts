@@ -150,13 +150,11 @@ export const chatScenarios = (it: It) => {
             runId: pending.run_id,
             messages: [{ id: "hand-written", role: "user", content: "not my run" }],
           }),
-          otherSessionReconnect: yield* other.reconnect(`runId=${pending.run_id}&offset=-1`),
-          otherRunIdHeader: yield* chat.reconnect(`runId=${pending.run_id}&offset=-1`, {
-            "X-Run-Id": `${other.sessionId}:run`,
-          }),
-          otherRunLastEventId: yield* chat.reconnect(`runId=${pending.run_id}`, {
-            "Last-Event-ID": `memory:v1:${encodeURIComponent(`${other.sessionId}:run`)}:1`,
-          }),
+          otherSessionReconnect: yield* other.reconnect(pending.run_id),
+          otherRunOffset: yield* chat.reconnect(
+            pending.run_id,
+            `memory:v1:${encodeURIComponent(`${other.sessionId}:run`)}:1`,
+          ),
         };
         // The approval still waits and the page can answer it.
         yield* chat.approve(true);

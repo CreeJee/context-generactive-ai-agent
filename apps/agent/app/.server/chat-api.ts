@@ -1,7 +1,7 @@
-import { Effect, Layer } from "effect";
+import { type Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
-import { BtwApiHandlers, ChatApiHandlers } from "memory-agent";
+import { type AgentChat, BtwApiHandlers, type BtwChat, ChatApiHandlers } from "memory-agent";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
 import { crossSiteRefusal } from "./http.ts";
@@ -18,12 +18,16 @@ const SameSiteLive = Layer.succeed(SameSite, (httpEffect) =>
   }),
 );
 
-const routes = HttpApiBuilder.layer(ChatApi).pipe(
-  Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
-  Layer.provide(SameSiteLive),
-  Layer.provide(Layer.effectContext(agent.contextEffect)),
-  Layer.provide(HttpServer.layerServices),
-);
+/** The chat API's routes, answered by the agent whose services `services` gives. */
+export const chatApiRoutes = <E>(
+  services: Effect.Effect<Context.Context<AgentChat | BtwChat>, E>,
+) =>
+  HttpApiBuilder.layer(ChatApi).pipe(
+    Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+    Layer.provide(SameSiteLive),
+    Layer.provide(Layer.effectContext(services)),
+    Layer.provide(HttpServer.layerServices),
+  );
 
 let built: { readonly handler: (request: Request) => Promise<Response> } | null = null;
 
@@ -33,4 +37,6 @@ let built: { readonly handler: (request: Request) => Promise<Response> } | null 
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const serveChatApi = (request: Request) =>
-  (built ??= HttpRouter.toWebHandler(routes, { disableLogger: true })).handler(request);
+  (built ??= HttpRouter.toWebHandler(chatApiRoutes(agent.contextEffect), {
+    disableLogger: true,
+  })).handler(request);

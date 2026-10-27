@@ -1,5 +1,13 @@
 import { convertMessagesToModelMessages, type ModelMessage, type UIMessage } from "@tanstack/ai";
-import { Array as Arr, Effect, Function as EffectFunction, HashSet, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  DateTime,
+  Effect,
+  Function as EffectFunction,
+  HashSet,
+  Option,
+  Schema,
+} from "effect";
 import { type StoredMessage, StoredUserMessage } from "../chat-store/schema.ts";
 import { optionalProperty } from "../optional-property.ts";
 
@@ -10,19 +18,21 @@ import { optionalProperty } from "../optional-property.ts";
  */
 
 /**
- * The user messages of a request as the thread keeps them, with the time the page gave each. A
- * message the thread cannot keep, such as one with an audio part, fails.
+ * The user messages of a request as the thread keeps them, each with the time the server received
+ * it. A message the thread cannot keep, such as one with an audio part, fails.
  */
 export const pageTurns = (messages: ReadonlyArray<UIMessage | ModelMessage>) =>
-  Effect.forEach(
-    convertMessagesToModelMessages([...messages]).filter((message) => message.role === "user"),
-    (message) =>
-      Schema.decodeUnknownEffect(StoredUserMessage)({
-        role: "user",
-        ...optionalProperty("id", message.id),
-        ...optionalProperty("createdAt", message.createdAt?.toISOString()),
-        content: message.content,
-      }),
+  Effect.flatMap(DateTime.now, (now) =>
+    Effect.forEach(
+      convertMessagesToModelMessages([...messages]).filter((message) => message.role === "user"),
+      (message) =>
+        Schema.decodeUnknownEffect(StoredUserMessage)({
+          role: "user",
+          ...optionalProperty("id", message.id),
+          createdAt: DateTime.formatIso(now),
+          content: message.content,
+        }),
+    ),
   );
 
 /** The stored thread with the turns it does not hold yet. Stored messages stay as they were saved. */

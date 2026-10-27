@@ -26,6 +26,7 @@ import {
   Workflows,
   WorkflowState,
 } from "../../src/workflow/workflow.ts";
+import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet } from "../support/sql.ts";
@@ -143,12 +144,6 @@ const citeProof = Effect.fnUntraced(function* (sessionId: string, toolCall: Scri
   };
 });
 
-const responseText = (response: Response) =>
-  Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
-
 const waitFor = <A, E>(read: Effect.Effect<A, E>, expected: A) =>
   read.pipe(
     Effect.repeat({ until: (value) => value === expected, schedule: Schedule.spaced(10) }),
@@ -201,28 +196,7 @@ const executing = Effect.fnUntraced(function* (
   return {
     id,
     invocations: () => env.provider!.adapter.invocations.filter((turn) => turn.threadId === id),
-    run: Effect.fnUntraced(function* (runId = "initial") {
-      const response = yield* Effect.flatMap(agent, (chat) =>
-        chat.handle(
-          new Request("http://local/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              threadId: id,
-              runId: `${id}-${runId}`,
-              tools: [],
-              context: [],
-              messages: [
-                { id: `${id}-${runId}-user`, role: "user", content: "Execute the approved Plan" },
-              ],
-            }),
-          }),
-          id,
-        ),
-      );
-      expect(response.status).toBe(200);
-      return yield* responseText(response);
-    }),
+    run: (runId = "initial") => runTurn(id, `${id}-${runId}`, "Execute the approved Plan"),
     cancel: Effect.flatMap(agent, (chat) => chat.cancel(id, null)),
     status,
     execution: env.use(Effect.flatMap(WorkflowExecution, (execution) => execution.get(id))),

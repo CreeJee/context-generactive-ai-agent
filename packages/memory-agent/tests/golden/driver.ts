@@ -1,19 +1,19 @@
-import { Crypto, Effect, Fiber, FileSystem, Option, Path, Schema } from "effect";
+import { Crypto, Effect, Fiber, FileSystem, Path, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
+import { Refusal, refusalStatus, type RunEvent } from "../../src/api/chat-api.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { chatClient, json, sdk } from "../support/chat-client.ts";
+import { chatApi } from "../support/chat-api.ts";
+import { eventsOf, json, openPage, sdk, wireOf } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { sqlAll, sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { JsonValue } from "../../src/json.ts";
-import { convertSchemaToJsonSchema, uiMessagesToWire } from "@tanstack/ai";
-import { approvalToolDefinitions } from "../../src/tools/definitions.ts";
-import { chatRoute } from "../support/chat-route.ts";
+import { optionalProperty } from "../../src/optional-property.ts";
 import { migratedRows, normalized, withoutChunkMetadata } from "./rows.ts";
 
 /**
@@ -33,13 +33,10 @@ const decodeRunState = Schema.decodeUnknownEffect(
 const PendingInterrupt = Schema.Struct({ run_id: Schema.String, interrupt_id: Schema.String });
 const decodePending = Schema.decodeUnknownEffect(PendingInterrupt);
 const decodeAllPending = Schema.decodeUnknownEffect(Schema.NonEmptyArray(PendingInterrupt));
-const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(JsonValue));
-const encodeJsonText = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeEffect(Schema.fromJsonString(JsonValue));
+const encodeRefusal = Schema.encodeEffect(Schema.fromJsonString(Refusal));
 
-/**
- * A chat request written by hand, for what the page never sends. It is an empty turn of the
- * conversation with these fields on top.
- */
+/** A run request written by hand, for what the page never sends. */
 export interface HandWrittenTurn {
   readonly runId?: string;
   readonly parentRunId?: string;
@@ -55,20 +52,23 @@ export interface HandWrittenTurn {
   }>;
 }
 
-/** What the agent answered: its status and body, or the events of an event stream. */
-const answerOf = Effect.fnUntraced(function* (response: Response) {
-  const text = yield* sdk(() => response.text());
-  const parsed = (body: string): JsonValue => Option.getOrElse(decodeJsonText(body), () => body);
-  const stream = response.headers.get("content-type")?.startsWith("text/event-stream") ?? false;
-  const body = stream
-    ? text
-        .split("\n")
-        .flatMap((line) =>
-          line.startsWith("data: ") ? [withoutChunkMetadata(parsed(line.slice(6)))] : [],
-        )
-    : parsed(text);
-  return { status: response.status, body };
-});
+/** What the chat API answered: the run's events, or the refusal with the status it is sent with. */
+const answerOf = <E, E2>(started: Effect.Effect<Stream.Stream<RunEvent, E2>, E>) =>
+  started.pipe(
+    Effect.flatMap(eventsOf),
+    Effect.flatMap(wireOf),
+    Effect.flatMap(decodeJson),
+    Effect.map((events) => ({
+      status: 200,
+      body: Array.isArray(events) ? events.map(withoutChunkMetadata) : events,
+    })),
+    Effect.catchIf(Schema.is(Refusal), (refusal) =>
+      Effect.map(Effect.flatMap(encodeRefusal(refusal), decodeJson), (body) => ({
+        status: refusalStatus(refusal),
+        body,
+      })),
+    ),
+  );
 
 /** A fresh conversation in the shared project, which is set to `mode` first. */
 export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = "ask") {
@@ -79,18 +79,12 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   yield* (yield* Projects).setPermissionMode(project.id, mode);
   yield* selectTestModel();
   const sessionId = (yield* (yield* Sessions).create(project.id)).id;
-  // Like the page: the server owns the transcript and a turn sends only what it has not stored.
-  // A restart replaces the agent, and the page reconnects with a new client.
-  const page = { tab: yield* chatClient(sessionId, "page") };
+  // Like the page: the server owns the transcript and a turn sends only its new message. A
+  // restart replaces the agent, and the page opens the session again. A send reads its run to the
+  // end, so the next one finds the page idle, as the user would.
+  const page = { tab: yield* openPage(sessionId) };
   let handWrittenTurns = 0;
-  /**
-   * Send once the page has finished its last answer. A page that is still busy queues the message
-   * instead of sending it, and the user would see it waiting.
-   */
-  const deliver = Effect.fnUntraced(function* (text: string) {
-    yield* page.tab.until(() => !page.tab.client.getIsLoading(), "the page to be idle");
-    yield* page.tab.send(text);
-  });
+  const deliver = (text: string) => page.tab.send(text);
   /** The agent's own view: it holds no live run or background turn for the conversation. */
   const idle = Effect.flatMap(TestEnv, (env) =>
     env.use(
@@ -156,34 +150,26 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       });
       yield* Effect.sync(() => expect(response.status).toBe(201));
     });
-  /** Post a chat request the page never sends; the run id is fresh unless `turn` names one. */
+  /** Starts a run the page never sends; the run id is fresh unless `turn` names one. */
   const handWritten = Effect.fnUntraced(function* (turn: HandWrittenTurn) {
-    const agent = yield* AgentChat;
-    // As the page's client builds it: the messages it holds and the tools it can approve.
-    const body = yield* encodeJsonText({
-      threadId: sessionId,
-      runId: `${sessionId}:hand-written-${(handWrittenTurns += 1)}`,
-      state: {},
-      messages: uiMessagesToWire(page.tab.client.getMessages()),
-      tools: approvalToolDefinitions.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parameters: convertSchemaToJsonSchema(tool.inputSchema) ?? { type: "object" },
-      })),
-      context: [],
-      forwardedProps: {},
-      ...turn,
-    });
-    const request = new Request(`http://127.0.0.1/api/chat?session=${sessionId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
-    return yield* answerOf(yield* chatRoute(agent, request, sessionId));
+    const api = yield* chatApi;
+    return yield* answerOf(
+      api.run({
+        params: { session: sessionId },
+        headers: {},
+        payload: {
+          runId: turn.runId ?? `${sessionId}:hand-written-${(handWrittenTurns += 1)}`,
+          messages: turn.messages ?? [],
+          ...optionalProperty("parentRunId", turn.parentRunId),
+          ...optionalProperty("resume", turn.resume),
+        },
+      }),
+    );
   });
   /**
-   * The loop's interrupts carry no TanStack binding, so the page's client cannot answer them.
-   * Answer them as the page does: a new run whose parent is the interrupted one.
+   * Answer the conversation's pending interrupts as the page does: a new run whose parent is the
+   * interrupted one. A run the server started itself may have asked them, so they are read from
+   * the database rather than from the page.
    */
   const answerByHand = Effect.fnUntraced(function* (approved: boolean) {
     const pending = yield* Effect.flatMap(
@@ -217,16 +203,12 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       decodePending,
     ),
     handWritten,
-    /** Reconnect to a run's stream as a reloaded page does, with `query` and `headers`. */
-    reconnect: Effect.fnUntraced(function* (
-      query: string,
-      headers: { readonly "X-Run-Id"?: string; readonly "Last-Event-ID"?: string } = {},
-    ) {
-      const agent = yield* AgentChat;
-      const request = new Request(`http://127.0.0.1/api/chat?session=${sessionId}&${query}`, {
-        headers,
-      });
-      return yield* answerOf(yield* chatRoute(agent, request, sessionId));
+    /** Follow a run's stream as a reloaded page does, after `after` or from the start. */
+    reconnect: Effect.fnUntraced(function* (run: string, after?: string) {
+      const api = yield* chatApi;
+      return yield* answerOf(
+        api.join({ params: { session: sessionId, run }, query: optionalProperty("after", after) }),
+      );
     }),
     /** Send a user message and wait for its run alone, leaving the children it started going. */
     post: Effect.fnUntraced(function* (text: string) {
@@ -303,7 +285,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       yield* waitUntil(running, what, 6_000);
       yield* env.reopen;
       yield* Fiber.interrupt(sending);
-      page.tab = yield* env.use(chatClient(sessionId, "page"));
+      page.tab = yield* openPage(sessionId);
     }),
     /** Continue past the runs whose outcome is unknown, as the page's notice lets the user do. */
     continuePastUncertain: Effect.gen(function* () {

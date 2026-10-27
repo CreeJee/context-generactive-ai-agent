@@ -1,12 +1,6 @@
 {
   "answers": {
-    "otherRunIdHeader": {
-      "body": {
-        "error": "invalid_stream_offset"
-      },
-      "status": 400
-    },
-    "otherRunLastEventId": {
+    "otherRunOffset": {
       "body": {
         "error": "invalid_stream_offset"
       },

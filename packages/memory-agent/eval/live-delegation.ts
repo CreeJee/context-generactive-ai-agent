@@ -10,10 +10,10 @@ import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { DateTime, Clock, Effect, Layer, Schedule, Schema } from "effect";
+import { DateTime, Clock, Effect, Layer, Schedule, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
 import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
-import { AgentChat } from "../src/agent/chat.ts";
+import { AgUiEvent } from "../src/loop/chunks.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
 import { messageText } from "../src/messages/text.ts";
@@ -37,6 +37,7 @@ import { Sessions } from "../src/sessions/sessions.ts";
 import { Subagents } from "../src/subagents/subagents.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
+import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
 import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 
@@ -95,13 +96,6 @@ const settled = (sessionId: string) =>
       Effect.repeat({ schedule: Schedule.spaced("1 second"), while: ({ busy }) => busy > 0 }),
     ),
   );
-const frames = Schema.fromJsonString(
-  Schema.Struct({
-    type: Schema.String,
-    delta: Schema.optionalKey(Schema.String),
-    message: Schema.optionalKey(Schema.String),
-  }),
-);
 let totalCalls = 0;
 let estimatedInputTokens = 0;
 
@@ -232,7 +226,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
       const project = yield* projects.setPermissionMode(initial.id, "full");
       const session = yield* (yield* Sessions).create(project.id);
       return {
-        agent: yield* AgentChat,
+        chat: yield* inProcessChatApi,
         state: yield* ChatState,
         children: yield* Subagents,
         usage: yield* ApiUsage,
@@ -243,32 +237,20 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
   );
   const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
   const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>Effect.runSync(Console.log("ready")),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
-  const response = yield* Effect.provideContext(
-    services.agent.handle(
-      new Request("http://local/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: stringifyJson({
-          threadId: services.session.id,
+  const events = yield* Effect.provideContext(
+    services.chat
+      .run({
+        params: { session: services.session.id },
+        headers: {},
+        payload: {
           runId: randomUUID(),
           messages: [{ id: randomUUID(), role: "user", content: prompt }],
-          tools: [],
-          context: [],
-        }),
-      }),
-      services.session.id,
-    ),
+        },
+      })
+      .pipe(Effect.flatMap(Stream.runCollect)),
     servicesContext,
   );
-  const sse = yield* nativePromise(() => response.text());
-  if (!response.ok) throw new Error(`pilot_http_${response.status}: ${sse}`);
-  const events = sse.split("\n").flatMap((line) =>
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    line.startsWith("data: ")
-      ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
-      : [],
-  );
-  const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
+  const errors = events.flatMap(({ data }) => (AgUiEvent.guards.RUN_ERROR(data) ? [data] : []));
   if (errors.length > 0) throw new Error(`pilot_run_failed: ${stringifyJson(errors)}`);
   yield* Effect.provideContext(settled(services.session.id), servicesContext);
   const messages: ModelMessage[] = yield* nativePromise(() =>

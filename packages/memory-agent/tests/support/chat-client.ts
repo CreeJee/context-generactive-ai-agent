@@ -1,7 +1,13 @@
-import { chatRoute } from "./chat-route.ts";
-import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Crypto, Effect, Function as EffectFunction, MutableRef, Stream } from "effect";
-import { AgentChat } from "../../src/agent/chat.ts";
+import {
+  Cause,
+  Crypto,
+  Effect,
+  Function as EffectFunction,
+  MutableRef,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import {
   type ChatMessage,
   maxPageSize,
@@ -18,13 +24,11 @@ import {
   streamStarted,
   viewOf,
 } from "../../src/api/chat-view.ts";
+import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { optionalProperty } from "../../src/optional-property.ts";
 import { chatApi } from "./chat-api.ts";
-import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import { defaultTestResponder } from "./provider.ts";
-import type { AgentServices } from "./test-env.ts";
-import { type WaitCondition, waitUntil } from "./wait-until.ts";
 
 /**
  * Interrupt IDs come from tool-call IDs and are unique across the database, as provider call IDs
@@ -58,87 +62,6 @@ export const sessionScopedResponder: ScriptedResponder = (invocation) => {
   );
 };
 
-/**
- * How the page talks to the agent: `send` is a fresh tab posting a message, `restore` is a
- * reloaded tab that hydrates the session from the server before answering it. `page` is the
- * page's own client: it hydrates too, and a turn sends only the messages the server has not stored.
- */
-export type Connection = "send" | "restore" | "page";
-
-/** A real TanStack chat client talking to the open agent in-process, like the browser UI does. */
-export const chatClient = Effect.fnUntraced(function* (sessionId: string, connection: Connection) {
-  const agent = yield* AgentChat;
-  const runPromise = Effect.runPromiseWith(yield* Effect.context<AgentServices>());
-  const tools = approvalToolDefinitions;
-  const interrupts = [permissionReviewInterrupt];
-  const sessionConnection = () =>
-    fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
-      fetchClient: (input, init) => {
-        const request = new Request(input, init);
-        return runPromise(chatRoute(agent, request, sessionId));
-      },
-    });
-  const make = () => {
-    switch (connection) {
-      case "send":
-        return new ChatClient({
-          threadId: sessionId,
-          tools,
-          interrupts,
-          connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {
-            fetchClient: (input, init) =>
-              runPromise(agent.handle(new Request(input, init), sessionId)),
-          }),
-        });
-      case "restore":
-        return new ChatClient({
-          threadId: sessionId,
-          persistence: true,
-          tools,
-          interrupts,
-          connection: sessionConnection(),
-        });
-      case "page":
-        return new ChatClient({
-          threadId: sessionId,
-          persistence: true,
-          // As in the page's chat panel.
-          history: { pageSize: 20 },
-          tools,
-          interrupts,
-          connection: sessionConnection(),
-        });
-    }
-  };
-  const client = yield* Effect.acquireRelease(Effect.sync(make), (client) =>
-    Effect.sync(() => client.dispose()),
-  );
-  if (connection !== "send") client.attach();
-  const text = () =>
-    client
-      .getMessages()
-      .flatMap((message) =>
-        message.role === "assistant"
-          ? message.parts.flatMap((part) => (part.type === "text" ? [part.content] : []))
-          : [],
-      )
-      .join("");
-  const until = <E = never, R = never>(condition: WaitCondition<E, R>, what: string) =>
-    waitUntil(condition, what, 6_000);
-  return {
-    client,
-    text,
-    until,
-    send: (message: string) => sdk(() => client.sendMessage(message)),
-    /** Wait for the scripted model's answer after the shell call, then for the run to end. */
-    answered: Effect.fnUntraced(function* (prefix: string, what: string) {
-      yield* until(() => text().startsWith(prefix), what);
-      yield* until(() => !client.getIsLoading(), "the run to finish");
-    }),
-    pendingInterrupt: until(() => client.getInterrupts().length === 1, "the pending interrupt"),
-  };
-});
-
 /** An approval a session waits for, as the page lists it. */
 export type PendingApproval = PendingInterrupts["pending"][number];
 
@@ -155,7 +78,8 @@ export const openPage = Effect.fnUntraced(function* (
   const crypto = yield* Crypto.Crypto;
   const headers = holder === null ? {} : { "x-session-holder": holder };
   const newest = api.snapshot({ params: { session }, query: { limit: maxPageSize } });
-  const view = MutableRef.make(viewOf(yield* newest));
+  const opened = yield* newest;
+  const view = MutableRef.make(viewOf(opened));
   const changed = (change: (current: ChatView) => ChatView) =>
     Effect.sync(() => MutableRef.update(view, change));
   /** Reads a run's events into the view until its stream ends, then the newest messages again. */
@@ -174,8 +98,16 @@ export const openPage = Effect.fnUntraced(function* (
           .join(""),
       );
   return {
+    /** The session as the page opened it. */
+    opened,
     view: () => MutableRef.get(view),
     texts,
+    /** Rejoins the run still going when the page opened, as a reload does, and reads it to its end. */
+    rejoin: Effect.transposeOption(
+      Option.map(Option.fromNullishOr(opened.activeRun), ({ runId }) =>
+        Effect.flatMap(api.join({ params: { session, run: runId }, query: {} }), following),
+      ),
+    ),
     /** Every assistant message's text, in order. */
     answer: () => texts("assistant").join(""),
     pending: (): ReadonlyArray<PendingApproval> => MutableRef.get(view).interrupts?.pending ?? [],
@@ -230,6 +162,43 @@ export const openPage = Effect.fnUntraced(function* (
     }),
   };
 });
+
+export type ChatPage = Effect.Success<ReturnType<typeof openPage>>;
+
+/** Reads a run's stream to its end: the events, without their places in the log. */
+export const eventsOf = <E>(events: Stream.Stream<RunEvent, E>) =>
+  Effect.map(Stream.runCollect(events), (all) => all.map(({ data }) => data));
+
+/** Sends one user turn on the chat API, as the page does, and collects its run's events. */
+export const runTurn = Effect.fnUntraced(function* (
+  session: string,
+  runId: string,
+  content: UserContent,
+) {
+  const api = yield* chatApi;
+  return yield* eventsOf(
+    yield* api.run({
+      params: { session },
+      headers: {},
+      payload: { runId, messages: [{ id: runId, role: "user", content }] },
+    }),
+  );
+});
+
+const encodeEvents = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(AgUiEvent)));
+
+/** A run's events as the page reads them off the wire. */
+export const wireOf = (events: ReadonlyArray<AgUiEvent>) => encodeEvents(events);
+
+/** The text a run's events stream, in order. */
+export const streamedText = (events: ReadonlyArray<AgUiEvent>) =>
+  events
+    .flatMap((event) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(event) ? [event.delta] : []))
+    .join("");
+
+/** The tool results a run's events carry, in order. */
+export const toolResults = (events: ReadonlyArray<AgUiEvent>) =>
+  events.flatMap((event) => (AgUiEvent.guards.TOOL_CALL_RESULT(event) ? [event.content] : []));
 
 /** Await an SDK Promise, keeping its rejection as a typed failure. */
 export const sdk = <A>(operation: () => PromiseLike<A>) =>

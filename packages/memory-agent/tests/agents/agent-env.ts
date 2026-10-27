@@ -13,7 +13,7 @@ import { messageText } from "../../src/messages/text.ts";
 import { type PermissionMode, Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { AdapterInvocation } from "../../src/testing/scripted-adapter.ts";
-import { isTruthy } from "../../src/truthy.ts";
+import { runTurn, streamedText } from "../support/chat-client.ts";
 import { defaultTestResponder } from "../support/provider.ts";
 import { sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
@@ -67,50 +67,13 @@ export const freshProject = Effect.fnUntraced(function* (mode: PermissionMode = 
   return { project, sessionId: session.id };
 });
 
-const Chunk = Schema.fromJsonString(
-  Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
-);
-
-/** The assistant text streamed in a chat response. */
-export const answerOf = Effect.fnUntraced(function* (response: Response) {
-  const lines = (yield* sdk(() => response.text()))
-    .split("\n")
-    .filter((line) => line.startsWith("data: "));
-  const chunks = yield* Effect.forEach(lines, (line) => Schema.decodeEffect(Chunk)(line.slice(6)));
-  return chunks
-    .flatMap((chunk) =>
-      chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
-    )
-    .join("");
-});
-
-/** Post one user message to the open agent. Run IDs are global, so they carry the session. */
-export const post = Effect.fnUntraced(function* (sessionId: string, text: string) {
-  const runId = `${sessionId}:${(yield* Random.nextInt).toString(36)}`;
-  const body = yield* encodeJson({
-    threadId: sessionId,
-    runId,
-    messages: [{ id: `${runId}:user`, role: "user", content: text }],
-    tools: [],
-    context: [],
-  });
-  return yield* current(
-    Effect.flatMap(AgentChat, (agent) =>
-      agent.handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        sessionId,
-      ),
-    ),
-  );
-});
-
-/** Post one user message and read the answer once the run ends. */
+/**
+ * Post one user message to the open agent and read the answer once the run ends. Run IDs are
+ * global, so they carry the session.
+ */
 export const send = Effect.fnUntraced(function* (sessionId: string, text: string) {
-  return yield* answerOf(yield* post(sessionId, text));
+  const runId = `${sessionId}:${(yield* Random.nextInt).toString(36)}`;
+  return streamedText(yield* runTurn(sessionId, runId, text));
 });
 
 const Busy = Schema.Struct({ busy: Schema.Finite });

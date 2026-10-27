@@ -1,6 +1,5 @@
-import { Cause, Effect, FileSystem, Path, Schema } from "effect";
+import { Cause, Effect, FileSystem, Path } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { FileReadPlatform } from "../../src/files/text.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -11,6 +10,7 @@ import {
 } from "../../src/skills/skills.ts";
 import { SkillTools } from "../../src/tools/skills.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
+import { runTurn, toolResults } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
@@ -199,29 +199,15 @@ testAgent({ skillsBuiltin: builtinSkillsDirectory() })("the skills this app ship
   );
 });
 
-const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-
-/** Post one user message to AgentChat and read the run's whole event stream. */
+/** Sends one user turn: its run's tool results, and the model's first invocation in it. */
 const send = Effect.fnUntraced(function* (session: string, runId: string, text: string) {
   const { provider } = yield* TestEnv;
   const invocationIndex = provider?.adapter.invocations.length ?? 0;
-  const body = yield* encodeJson({
-    threadId: session,
-    runId,
-    messages: [{ id: runId, role: "user", content: text }],
-    tools: [],
-    context: [],
-  });
-  const response = yield* (yield* AgentChat).handle(
-    new Request("http://127.0.0.1/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }),
-    session,
-  );
-  const events = yield* sdk(() => response.text());
-  return { events, invocation: provider?.adapter.invocations[invocationIndex] };
+  const events = yield* runTurn(session, runId, text);
+  return {
+    results: toolResults(events),
+    invocation: provider?.adapter.invocations[invocationIndex],
+  };
 });
 
 testAgent({ testProvider: {} })("skills in a run", (it) => {
@@ -267,7 +253,7 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
         expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
           "- greet (project): Greet warmly.",
         );
-        expect(withSkill.events).toContain("Say hello in Korean.");
+        expect(withSkill.results.join("\n")).toContain("Say hello in Korean.");
       }),
   );
 });

@@ -1,12 +1,12 @@
 import { layer } from "@effect/vitest";
 import { Cause, Context, Effect, Layer, Ref, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { Kagi, KagiKeyMissing } from "../../src/kagi/kagi.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { KagiTools, maxPageCharacters } from "../../src/tools/kagi.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
+import { runTurn, wireOf } from "../support/chat-client.ts";
 import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { runToolRequestDifferences } from "../support/requests.ts";
@@ -272,21 +272,7 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
       const session = (yield* (yield* Sessions).create(project.id)).id;
       const send = Effect.fnUntraced(function* (runId: string, text: string) {
         const invocationIndex = provider?.adapter.invocations.length ?? 0;
-        const response = yield* (yield* AgentChat).handle(
-          new Request("http://127.0.0.1/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-              threadId: session,
-              runId,
-              messages: [{ id: runId, role: "user", content: text }],
-              tools: [],
-              context: [],
-            }),
-          }),
-          session,
-        );
-        const events = yield* sdk(() => response.text());
+        const events = yield* wireOf(yield* runTurn(session, runId, text));
         return { events, invocation: provider?.adapter.invocations[invocationIndex] };
       });
       const off = yield* send(`${session}:off`, "hello");

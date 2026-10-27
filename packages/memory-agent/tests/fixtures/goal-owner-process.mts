@@ -1,4 +1,3 @@
-import { chatRoute } from "../support/chat-route.ts";
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "../support/http.ts";
 import { withTestPlatform } from "../support/platform.ts";
 import { optionalProperty } from "../../src/optional-property.ts";
@@ -10,13 +9,22 @@ import {
   Deferred,
   Effect,
   FileSystem,
+  Layer,
   ManagedRuntime,
   Path,
   Schema,
   Stream,
 } from "effect";
-import { memoryAgentLayer, Projects, Sessions } from "../../src/index.ts";
-import { AgentChat } from "../../src/agent/chat.ts";
+import { HttpRouter, HttpServer } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
+import {
+  BtwApiHandlers,
+  ChatApiHandlers,
+  memoryAgentLayer,
+  Projects,
+  Sessions,
+} from "../../src/index.ts";
+import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { SqlClient } from "effect/sql";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
@@ -93,9 +101,24 @@ await Effect.runPromise(
       yield* sdkCall(() => provider.select(runtime));
       const services = yield* runtime.contextEffect;
       const runNative = Effect.runPromiseWith(services);
-      const { chat, sql, workflows } = yield* Effect.provideContext(
-        Effect.all({ chat: AgentChat, sql: SqlClient.SqlClient, workflows: Workflows }),
+      const { sql, workflows } = yield* Effect.provideContext(
+        Effect.all({ sql: SqlClient.SqlClient, workflows: Workflows }),
         services,
+      );
+      // The chat API as the app serves it; these requests come from the test itself.
+      const chatApi = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          HttpRouter.toWebHandler(
+            HttpApiBuilder.layer(ChatApi).pipe(
+              Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+              Layer.provide(Layer.succeed(SameSite, (httpEffect) => httpEffect)),
+              Layer.provide(Layer.succeedContext(services)),
+              Layer.provide(HttpServer.layerServices),
+            ),
+            { disableLogger: true },
+          ),
+        ),
+        (web) => sdkCall(() => web.dispose()).pipe(Effect.orDie),
       );
       let sessionId: string;
       if (mode === "reopen") sessionId = yield* fs.readFileString(path.join(base, "session"));
@@ -140,11 +163,7 @@ await Effect.runPromise(
               Effect.flatMap(HttpServerResponse.json),
             );
           const request = yield* HttpServerRequest.toWeb(incoming);
-          const response = yield* Effect.provideContext(
-            chatRoute(chat, request, sessionId),
-            services,
-          );
-          return HttpServerResponse.fromWeb(response);
+          return HttpServerResponse.fromWeb(yield* sdkCall(() => chatApi.handler(request)));
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.succeed(HttpServerResponse.text(Cause.pretty(cause), { status: 500 })),

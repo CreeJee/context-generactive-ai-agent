@@ -1,9 +1,9 @@
 import { DISCOVERY_TOOL_NAME, type ModelMessage } from "@tanstack/ai";
-import { Cause, Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../src/agent/chat.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import type { ScriptedResponder } from "../src/testing/scripted-adapter.ts";
+import { runTurn, toolResults } from "./support/chat-client.ts";
 import { selectTestModel } from "./support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "./support/test-env.ts";
 
@@ -51,32 +51,14 @@ testAgent({ testProvider: { responder } })("lazy tools", (it) => {
       yield* fs.writeFileString(file, "OUTSIDE CONTENT\n");
       yield* selectTestModel();
       const session = yield* freshSession;
-      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        threadId: session,
-        runId: `${session}:read`,
-        messages: [{ id: `${session}:read`, role: "user", content: `read ${file}` }],
-        tools: [],
-        context: [],
-      });
-      const response = yield* (yield* AgentChat).handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        session,
-      );
-      const events = yield* Effect.tryPromise({
-        try: () => response.text(),
-        catch: (cause) => new Cause.UnknownError(cause),
-      });
+      const events = yield* runTurn(session, `${session}:read`, `read ${file}`);
       const invocations = (provider?.adapter.invocations ?? []).filter(
         (invocation) => invocation.threadId === session,
       );
       expect(invocations[0]?.toolNames).toContain(DISCOVERY_TOOL_NAME);
       expect(invocations[0]?.toolNames).not.toContain("read_outside_file");
       expect(invocations[1]?.toolNames).toContain("read_outside_file");
-      expect(events).toContain("OUTSIDE CONTENT");
+      expect(toolResults(events).join("\n")).toContain("OUTSIDE CONTENT");
       // Asking for a tool is not work the memory keeps.
       const calls = (yield* (yield* Nodes).session(session)).filter(
         (node) => node.kind === "tool_call",

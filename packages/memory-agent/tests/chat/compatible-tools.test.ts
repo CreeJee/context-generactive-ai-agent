@@ -1,13 +1,12 @@
 import { Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import {
   CompatibleFetch,
   CompatibleKeyring,
   OpenAICompatibleSettings,
 } from "../../src/providers/openai-compatible.ts";
-import { testAgent } from "../support/test-env.ts";
-import { freshSession, sdk } from "./tab.ts";
+import { runTurn, streamedText } from "../support/chat-client.ts";
+import { freshSession, testAgent } from "../support/test-env.ts";
 
 const ChatRequest = Schema.fromJsonString(
   Schema.Struct({
@@ -93,28 +92,12 @@ testAgent({
       });
       yield* compatible.services.models.select("manual");
       const sessionId = yield* freshSession;
-      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        threadId: "thread-ui",
-        runId: `${sessionId}-run`,
-        messages: [{ id: "m1", role: "user", content: "가져온다고 하고 멈췄는데?" }],
-        tools: [],
-        context: [],
-      });
-      const response = yield* (yield* AgentChat).handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        sessionId,
-      );
-      expect(response.status).toBe(200);
-      const stream = yield* sdk(() => response.text());
+      const events = yield* runTurn(sessionId, `${sessionId}-run`, "가져온다고 하고 멈췄는데?");
 
       expect(requests[0]?.tools?.map((tool) => tool.function.name)).toContain("find_memory");
       expect(requests).toHaveLength(2);
       expect(requests[1]?.messages.map((message) => message.role)).toContain("tool");
-      expect(stream).toContain("done");
+      expect(streamedText(events)).toContain("done");
     }),
   );
 });

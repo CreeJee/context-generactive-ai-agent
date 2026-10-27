@@ -117,9 +117,9 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트, 외부 에이전트)                           |
 | `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                                               |
 | `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                                            |
-| `GET /api/chat?session=&threadId=`           | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인                                   |
-| `GET /api/chat?session=&runId=&offset=`      | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기                                   |
-| `POST /api/chat?session=`                    | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                            |
+| `GET /api/sessions/:session/messages?limit=` | 최근 메시지 한 쪽(`before`로 이전 쪽), 진행 중인 run, 대기 중인 승인                 |
+| `POST /api/sessions/:session/runs`           | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                            |
+| `GET .../runs/:run/events?after=`            | 진행 중이거나 끝난 run의 답변을 로그에서 `after` 다음부터 다시 읽기                  |
 | `GET/POST /api/settings/kagi`                | Kagi 상태, `register`, `enable`, `disable`, `remove`                                 |
 | `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)                            |
 | `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                                                 |

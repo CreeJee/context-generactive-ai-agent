@@ -1,7 +1,6 @@
 import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
 import { AuthConnectionState } from "../src/providers/contracts.ts";
-import { Config, Console, Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../src/truthy.ts";
+import { Config, Console, Result, Function as EffectFunction, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -19,6 +18,8 @@ import { ChatState } from "../src/chat-state/chat-state.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
+import { inProcessChatApi } from "../src/testing/chat-api.ts";
+import { AgUiEvent } from "../src/loop/chunks.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
@@ -104,28 +105,6 @@ const prompts = [
 const fixture =
   "export function checksum(values: readonly number[]) { return values.reduce((sum, value, index) => sum + value * (index + 1), 0); }\n";
 
-const Delta = Schema.fromJsonString(
-  Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
-);
-function answerFromSse(sse: string) {
-  return sse
-    .split("\n")
-    .flatMap((line) => {
-      if (!line.startsWith("data: ")) return [];
-      try {
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const chunk = EffectFunction.flow(
-          Schema.decodeResult(Delta),
-          Result.getOrThrow,
-        )(line.slice(6));
-        return chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [];
-      } catch {
-        return [];
-      }
-    })
-    .join("");
-}
-
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-manual") {
   const platform = yield* Layer.build(NodeServices.layer);
@@ -160,6 +139,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
       const session = yield* (yield* Sessions).create(project.id);
       return {
         agent: yield* AgentChat,
+        chat: yield* inProcessChatApi,
         usage: yield* ApiUsage,
         summaries: yield* TurnSummaries,
         metadata: (yield* ChatState).persistence.stores.metadata,
@@ -207,26 +187,24 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
           throw new Error("pilot_manual_compact_changed_nothing");
       }
     }
-    const response = yield* Effect.provideContext(
-      services.agent.handle(
-        new Request("http://localhost/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(45_000),
-          body: stringifyJson({
-            threadId: services.sessionId,
+    const events = yield* Effect.provideContext(
+      services.chat
+        .run({
+          params: { session: services.sessionId },
+          headers: {},
+          payload: {
             runId: randomUUID(),
             messages: [{ id: randomUUID(), role: "user", content: text }],
-            tools: [],
-            context: [],
-          }),
-        }),
-        services.sessionId,
-      ),
+          },
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.timeout("45 seconds")),
       servicesContext,
     );
-    if (response.status !== 200) throw new Error(`chat_status_${response.status}`);
-    answers.push(answerFromSse(yield* nativePromise(() => response.text())));
+    answers.push(
+      events
+        .flatMap(({ data }) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? [data.delta] : []))
+        .join(""),
+    );
     const statusResponse = yield* Effect.provideContext(
       services.agent.status(services.sessionId, null),
       servicesContext,

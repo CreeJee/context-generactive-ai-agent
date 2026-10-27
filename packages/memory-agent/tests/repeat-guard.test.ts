@@ -1,7 +1,9 @@
 import { Cause, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
+import { AgUiEvent } from "../src/loop/chunks.ts";
 import type { ScriptedResponder } from "../src/testing/scripted-adapter.ts";
+import { runTurn } from "./support/chat-client.ts";
 import { selectTestModel } from "./support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "./support/test-env.ts";
 
@@ -30,24 +32,7 @@ testAgent({ testProvider: { responder } })("repeat guard", (it) => {
       const { provider } = yield* TestEnv;
       yield* selectTestModel();
       const session = yield* freshSession;
-      const agent = yield* AgentChat;
-      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        threadId: session,
-        runId: `${session}:loop`,
-        messages: [{ id: `${session}:loop`, role: "user", content: "list the files" }],
-        tools: [],
-        context: [],
-      });
-      const events = yield* text(
-        yield* agent.handle(
-          new Request("http://127.0.0.1/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body,
-          }),
-          session,
-        ),
-      );
+      const events = yield* runTurn(session, `${session}:loop`, "list the files");
       const invocations = (provider?.adapter.invocations ?? []).filter(
         (invocation) => invocation.threadId === session,
       );
@@ -58,9 +43,9 @@ testAgent({ testProvider: { responder } })("repeat guard", (it) => {
       );
       expect(results).toHaveLength(4);
       expect(results.at(-1)?.content).toEqual(expect.stringContaining("repeated_tool_call"));
-      expect(events).toContain('"code":"repeated_tool_call"');
+      expect(events.find(AgUiEvent.guards.RUN_ERROR)?.code).toBe("repeated_tool_call");
       const status = yield* Schema.decodeEffect(Schema.fromJsonString(LastRun))(
-        yield* text(yield* agent.status(session, null)),
+        yield* text(yield* (yield* AgentChat).status(session, null)),
       );
       expect(status.lastRun).toMatchObject({
         status: "failed",

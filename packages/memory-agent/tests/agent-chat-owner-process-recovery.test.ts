@@ -105,20 +105,25 @@ const start = Effect.fn("startOwner")(function* (base: string, mode: string) {
   ).pipe(Effect.timeout("15 seconds"));
   return { child, url: `http://127.0.0.1:${message.port}`, sessionId: message.sessionId };
 });
+/** Starts a run on the owner's chat API, as the page does. */
 const post = Effect.fn("postOwner")(function* (owner: Owner, runId: string) {
   const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-    threadId: owner.sessionId,
     runId,
-    messages: [{ id: "user-1", role: "user", content: "OS owner recovery" }],
-    tools: [],
-    context: [],
+    messages: [{ id: `${runId}:user`, role: "user", content: "OS owner recovery" }],
   });
   return yield* (yield* testHttpClient())
     .execute(
-      HttpClientRequest.post(`${owner.url}/api/chat`).pipe(
+      HttpClientRequest.post(`${owner.url}/api/sessions/${owner.sessionId}/runs`).pipe(
         HttpClientRequest.bodyText(body, "application/json"),
       ),
     )
+    .pipe(Effect.timeout("10 seconds"));
+});
+/** Follows a run's events on the owner's chat API, after `after` or from the start. */
+const join = Effect.fn("joinOwner")(function* (owner: Owner, runId: string, after?: string) {
+  const query = after === undefined ? "" : `?after=${encodeURIComponent(after)}`;
+  return yield* (yield* testHttpClient())
+    .get(`${owner.url}/api/sessions/${owner.sessionId}/runs/${runId}/events${query}`)
     .pipe(Effect.timeout("10 seconds"));
 });
 const waitForModel = Effect.fn("waitForOwnerModel")(function* (base: string) {
@@ -166,11 +171,7 @@ it.live(
 
             const runId = "partial-killed-run";
             const delivered = yield* textPrefix(yield* post(first, runId));
-            const replay = Effect.fn("replayOwner")(function* (owner: Owner) {
-              return yield* (yield* testHttpClient())
-                .get(`${owner.url}/api/chat?runId=${runId}&offset=-1`)
-                .pipe(Effect.timeout("10 seconds"));
-            });
+            const replay = (owner: Owner) => join(owner, runId);
             // A second HTTP reader proves the text is journaled before OS termination.
             expect(yield* textPrefix(yield* replay(first))).toBe(delivered);
             const old = yield* inspect(first);
@@ -235,9 +236,7 @@ for (const interrupted of [false, true]) {
               const state = yield* inspect(second);
               expect(state.bindings).toEqual(old.bindings);
               expect(state.runs[0].status).toBe(interrupted ? "failed" : "completed");
-              const replayResponse = yield* (yield* testHttpClient())
-                .get(`${second.url}/api/chat?runId=${runId}&offset=-1`)
-                .pipe(Effect.timeout("10 seconds"));
+              const replayResponse = yield* join(second, runId);
               expect(replayResponse.status).toBe(200);
               // A killed SDK log has no terminal chunk: reconnect can deliver its durable
               // prefix but must not be mistaken for a completed stream or awaited to EOF.
@@ -263,11 +262,7 @@ for (const interrupted of [false, true]) {
               const firstOffset = /^id: (.+)$/m.exec(replay)?.[1];
               expect(firstOffset).toBeDefined();
               if (!interrupted) {
-                const suffix = yield* (yield* testHttpClient())
-                  .get(`${second.url}/api/chat?runId=${runId}`, {
-                    headers: { "Last-Event-ID": firstOffset! },
-                  })
-                  .pipe(Effect.timeout("10 seconds"));
+                const suffix = yield* join(second, runId, firstOffset);
                 expect(yield* suffix.text).toBe(replay.slice(replay.indexOf("\n\n") + 2));
               }
               if (interrupted) {

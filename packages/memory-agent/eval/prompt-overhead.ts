@@ -1,7 +1,6 @@
 import { NodeServices } from "@effect/platform-node";
 import type { TextOptions, Tool } from "@tanstack/ai";
-import { Console, Context, Effect, FileSystem, Layer, Result, Schema } from "effect";
-import { AgentChat } from "../src/agent/chat.ts";
+import { Console, Context, Effect, FileSystem, Layer, Schema, Stream } from "effect";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { Projects } from "../src/projects/projects.ts";
@@ -9,7 +8,7 @@ import { AuthConnectionState, type ModelSelection } from "../src/providers/contr
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 import { subscriptionAgentLoop } from "../src/providers/subscription-runtime.ts";
-import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { runNativeEffect } from "../src/runtime/native-effect.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -17,14 +16,13 @@ import { path } from "../src/runtime/synchronous-path.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
+import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { estimateRequestTokens } from "./request-token-budget.ts";
 const { join } = path;
 
 // Local, provider-free: one first turn in a throwaway project, the request the model would get
 // split into system prompts, tools and messages, each counted in o200k_base BPE tokens.
-const stringifyJson = <A>(value: A) =>
-  Result.getOrThrow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown))(value));
 
 const selection: ModelSelection = {
   provider: "openai",
@@ -137,22 +135,17 @@ const firstRequest = Effect.fn("eval.promptOverhead")(function* () {
       yield* (yield* GlobalConfig).update(selection);
       const project = yield* (yield* Projects).add(projectRoot);
       const session = yield* (yield* Sessions).create(project.id);
-      const response = yield* (yield* AgentChat).handle(
-        new Request("http://localhost/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: stringifyJson({
-            threadId: session.id,
+      const chat = yield* inProcessChatApi;
+      yield* Stream.runDrain(
+        yield* chat.run({
+          params: { session: session.id },
+          headers: {},
+          payload: {
             runId: randomUUID(),
             messages: [{ id: randomUUID(), role: "user", content: "hi" }],
-            tools: [],
-            context: [],
-          }),
+          },
         }),
-        session.id,
       );
-      if (response.status !== 200) throw new Error(`chat_status_${response.status}`);
-      yield* nativePromise(() => response.text());
     }),
     services,
   );

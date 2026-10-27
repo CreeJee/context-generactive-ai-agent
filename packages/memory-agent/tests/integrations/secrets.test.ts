@@ -1,12 +1,12 @@
-import { Cause, Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { Importer } from "../../src/imports/importer.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { embeddedKindFilter, Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { SecretSweep } from "../../src/secrets/sweep.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { runTurn, toolResults, wireOf } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
@@ -19,39 +19,11 @@ const githubToken = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
 
 const decodeCount = Schema.decodeUnknownEffect(Schema.Struct({ count: Schema.Finite }));
 const decodeValue = Schema.decodeUnknownEffect(Schema.Struct({ value: Schema.String }));
-const decodeResultChunk = Schema.decodeEffect(
-  Schema.fromJsonString(
-    Schema.Struct({ type: Schema.String, content: Schema.optional(Schema.String) }),
-  ),
-);
 const decodeRefs = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ ref: Schema.String })));
 
 /** One string column of the single row a query returns. */
 const value = Effect.fnUntraced(function* (sql: string, ...values: Array<string | number>) {
   return (yield* decodeValue(yield* sqlGet(sql, ...values))).value;
-});
-
-/** Post one user message to AgentChat and read the run's whole event stream. */
-const send = Effect.fnUntraced(function* (sessionId: string, runId: string, content: string) {
-  const body = yield* stringifyJson({
-    threadId: sessionId,
-    runId,
-    messages: [{ id: runId, role: "user", content }],
-    tools: [],
-    context: [],
-  });
-  const response = yield* (yield* AgentChat).handle(
-    new Request("http://127.0.0.1/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }),
-    sessionId,
-  );
-  return yield* Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 });
 
 const sessionText = (sessionId: string) =>
@@ -75,10 +47,8 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       );
       // The fake model repeats the result it got; the stream itself is never filtered, so what it
       // repeats is what it was given.
-      const stream = yield* send(
-        session,
-        `${session}:read`,
-        'call read_file {"path":"deploy.txt"}',
+      const stream = yield* wireOf(
+        yield* runTurn(session, `${session}:read`, 'call read_file {"path":"deploy.txt"}'),
       );
       expect(stream).not.toContain(githubToken);
       expect(stream).toContain("[redacted:github]");
@@ -92,17 +62,12 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
     Effect.gen(function* () {
       const session = yield* freshSession;
       yield* selectTestModel();
-      const stream = yield* send(
+      const events = yield* runTurn(
         session,
         `${session}:missing`,
         `call read_file {"path":"missing/${githubToken}.txt"}`,
       );
-      const results = yield* Effect.forEach(
-        stream.split("\n").flatMap((line) => (line.startsWith("data: ") ? [line.slice(6)] : [])),
-        (line) => decodeResultChunk(line),
-      );
-      const content = results.find((chunk) => chunk.type === "TOOL_CALL_RESULT")?.content;
-      expect(yield* parseJson(content ?? "")).toEqual({
+      expect(yield* parseJson(toolResults(events)[0] ?? "")).toEqual({
         error: "not_found",
         cause: expect.any(String),
         detail: "missing/[redacted:github].txt. Nothing exists at that path.",
@@ -114,7 +79,7 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
     Effect.gen(function* () {
       const session = yield* freshSession;
       yield* selectTestModel();
-      yield* send(session, `${session}:paste`, `이 토큰으로 배포해줘 ${githubToken}`);
+      yield* runTurn(session, `${session}:paste`, `이 토큰으로 배포해줘 ${githubToken}`);
       expect((yield* (yield* Nodes).latestOfKind(session, "user"))?.text).toBe(
         "이 토큰으로 배포해줘 [redacted:github]",
       );

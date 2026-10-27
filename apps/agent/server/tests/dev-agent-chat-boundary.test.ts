@@ -1,7 +1,7 @@
 import { selectTestModel } from "../../../../packages/memory-agent/tests/support/provider.ts";
 import { isTruthy } from "../../app/truthy.ts";
-import { Cause, Effect, Schema } from "effect";
-import { RouterContextProvider } from "react-router";
+import { Cause, type Context, Effect, Schema } from "effect";
+import { HttpRouter } from "effect/http";
 import { SessionLeases, Sessions, Workflows } from "memory-agent";
 import { expect } from "vite-plus/test";
 import {
@@ -18,15 +18,22 @@ const sdkCall = Effect.fn("devChatBoundaryTest.sdkCall")(function* <A>(
     catch: (cause) => new Cause.UnknownError(cause),
   });
 });
-const callRoute = Effect.fn("devChatBoundaryTest.callRoute")(function* (
-  handler: (args: { request: Request }) => Promise<Response>,
-  args: { request: Request },
-) {
-  return yield* sdkCall(() => handler(args));
-});
 
-import { makeChatHandlers } from "../../app/.server/chat-handlers";
+import { chatApiRoutes } from "../../app/.server/chat-api";
 import { sqlAll, sqlGet } from "../../../../packages/memory-agent/tests/support/sql.ts";
+
+/** The app's chat API, as its routes serve it, answered by this test's agent. */
+const chatApi = Effect.fn("devChatBoundaryTest.chatApi")(function* (
+  services: Context.Context<AgentServices>,
+) {
+  const web = yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      HttpRouter.toWebHandler(chatApiRoutes(Effect.succeed(services)), { disableLogger: true }),
+    ),
+    (web) => sdkCall(() => web.dispose()).pipe(Effect.orDie),
+  );
+  return (request: Request) => sdkCall(() => web.handler(request));
+});
 
 const request = Effect.fn("devChatBoundaryTest.request")(function* (
   sessionId: string,
@@ -36,24 +43,14 @@ const request = Effect.fn("devChatBoundaryTest.request")(function* (
 ) {
   const headers = new Headers({ "Content-Type": "application/json", Origin: origin });
   if (isTruthy(holder)) headers.set("X-Session-Holder", holder);
-  return new Request(`http://localhost/api/chat?session=${sessionId}`, {
+  return new Request(`http://localhost/api/sessions/${sessionId}/runs`, {
     method: "POST",
     headers,
     body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-      threadId: sessionId,
       runId,
-      messages: [{ id: "m1", role: "user", content: "dev session lease boundary" }],
-      tools: [],
-      context: [],
+      messages: [{ id: `${runId}:user`, role: "user", content: "dev session lease boundary" }],
     }),
   });
-});
-const routeArgs = (request: Request) => ({
-  request,
-  params: {},
-  context: new RouterContextProvider(),
-  url: new URL(request.url),
-  pattern: "/api/chat",
 });
 
 testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
@@ -63,9 +60,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
       Effect.gen(function* () {
         const context = yield* TestEnv;
         const services = yield* Effect.context<AgentServices>();
-        const { action, loader } = makeChatHandlers({
-          runPromise: Effect.runPromiseWith(services),
-        });
+        const serve = yield* chatApi(services);
         yield* Effect.provideContext(selectTestModel(), services);
         const { leases, workflows } = yield* Effect.provideContext(
           Effect.all({ leases: SessionLeases, workflows: Workflows }),
@@ -84,38 +79,23 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           services,
         );
         expect(leases.claim(context.session.id, "owning-page")).toEqual({ claimed: true });
-        const foreign = yield* callRoute(
-          action,
-          routeArgs(
-            yield* request(context.session.id, "foreign", "owning-page", "http://evil.example"),
-          ),
+        const foreign = yield* serve(
+          yield* request(context.session.id, "foreign", "owning-page", "http://evil.example"),
         );
         expect(foreign.status).toBe(403);
-        const nonHolder = yield* callRoute(
-          action,
-          routeArgs(
-            yield* request(context.session.id, "non-holder", "other-page", "http://localhost"),
-          ),
+        const nonHolder = yield* serve(
+          yield* request(context.session.id, "non-holder", "other-page", "http://localhost"),
         );
         expect(nonHolder.status).toBe(423);
-        const missingHolder = yield* callRoute(
-          action,
-          routeArgs(yield* request(context.session.id, "missing-holder", null, "http://localhost")),
+        const missingHolder = yield* serve(
+          yield* request(context.session.id, "missing-holder", null, "http://localhost"),
         );
         expect(missingHolder.status).toBe(423);
         expect(context.provider!.adapter.invocations).toHaveLength(0);
         for (const table of ["workflow_run_bindings", "chat_runs", "nodes"])
           expect(yield* sqlGet(`SELECT count(*) AS n FROM ${table}`)).toEqual({ n: 0 });
-        const valid = yield* callRoute(
-          action,
-          routeArgs(
-            yield* request(
-              context.session.id,
-              "owned-local-run",
-              "owning-page",
-              "http://localhost",
-            ),
-          ),
+        const valid = yield* serve(
+          yield* request(context.session.id, "owned-local-run", "owning-page", "http://localhost"),
         );
         expect(valid.status).toBe(200);
         expect(yield* sdkCall(() => valid.text())).toContain("Hello from fast-1");
@@ -127,24 +107,16 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
             "owned-local-run",
           ),
         ).toEqual({ session_id: context.session.id, current_goal: 1 });
-        const hydrate = yield* callRoute(
-          loader,
-          routeArgs(
-            new Request(
-              `http://localhost/api/chat?session=${context.session.id}&threadId=${context.session.id}`,
-            ),
-          ),
+        const snapshot = yield* serve(
+          new Request(`http://localhost/api/sessions/${context.session.id}/messages?limit=50`),
         );
-        expect(hydrate.status).toBe(200);
-        expect(yield* sdkCall(() => hydrate.text())).toContain("Hello from fast-1");
+        expect(snapshot.status).toBe(200);
+        expect(yield* sdkCall(() => snapshot.text())).toContain("Hello from fast-1");
         // Leases enforce local page ownership, not login identity. The route currently
         // still permits a same-origin script when a session has no live page lease.
         leases.release(context.session.id, "owning-page");
-        const unleased = yield* callRoute(
-          action,
-          routeArgs(
-            yield* request(context.session.id, "unleased-local-run", null, "http://localhost"),
-          ),
+        const unleased = yield* serve(
+          yield* request(context.session.id, "unleased-local-run", null, "http://localhost"),
         );
         expect(unleased.status).toBe(200);
         yield* sdkCall(() => unleased.text());
@@ -160,9 +132,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
       Effect.gen(function* () {
         const context = yield* TestEnv;
         const services = yield* Effect.context<AgentServices>();
-        const { action } = makeChatHandlers({
-          runPromise: Effect.runPromiseWith(services),
-        });
+        const serve = yield* chatApi(services);
         yield* Effect.provideContext(selectTestModel(), services);
         const { leases, workflows } = yield* Effect.provideContext(
           Effect.all({ leases: SessionLeases, workflows: Workflows }),
@@ -209,7 +179,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
             headers.origin,
           );
           value.headers.set("Sec-Fetch-Site", headers.site);
-          expect((yield* callRoute(action, routeArgs(value))).status).toBe(403);
+          expect((yield* serve(value)).status).toBe(403);
         }
         expect(context.provider!.adapter.invocations).toHaveLength(0);
         expect(yield* snapshot).toEqual(before);
@@ -225,9 +195,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
       Effect.gen(function* () {
         const context = yield* TestEnv;
         const services = yield* Effect.context<AgentServices>();
-        const { action } = makeChatHandlers({
-          runPromise: Effect.runPromiseWith(services),
-        });
+        const serve = yield* chatApi(services);
         yield* Effect.provideContext(selectTestModel(), services);
         const { leases, workflows, sessions } = yield* Effect.provideContext(
           Effect.all({ leases: SessionLeases, workflows: Workflows, sessions: Sessions }),
@@ -254,12 +222,9 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         ) {
           const value = yield* request(sessionId, runId, holder, "http://localhost");
           value.headers.delete("Origin");
-          return routeArgs(value);
+          return value;
         });
-        const original = yield* callRoute(
-          action,
-          yield* native(context.session.id, "session-a-run", null),
-        );
+        const original = yield* serve(yield* native(context.session.id, "session-a-run", null));
         expect(original.status).toBe(200);
         expect(yield* sdkCall(() => original.text())).toContain("Hello from fast-1");
         expect(leases.claim(second.id, "page-b")).toEqual({ claimed: true });
@@ -275,19 +240,15 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         );
         const before = yield* snapshot;
         const calls = context.provider!.adapter.invocations.length;
-        expect(
-          (yield* callRoute(action, yield* native(second.id, "missing-holder", null))).status,
-        ).toBe(423);
-        expect(
-          (yield* callRoute(action, yield* native(second.id, "wrong-holder", "page-a"))).status,
-        ).toBe(423);
-        expect(
-          (yield* callRoute(action, yield* native(second.id, "session-a-run", "page-b"))).status,
-        ).toBe(409);
+        expect((yield* serve(yield* native(second.id, "missing-holder", null))).status).toBe(423);
+        expect((yield* serve(yield* native(second.id, "wrong-holder", "page-a"))).status).toBe(423);
+        expect((yield* serve(yield* native(second.id, "session-a-run", "page-b"))).status).toBe(
+          409,
+        );
         expect(context.provider!.adapter.invocations).toHaveLength(calls);
         expect(yield* snapshot).toEqual(before);
         leases.release(second.id, "page-b");
-        const allowed = yield* callRoute(action, yield* native(second.id, "session-b-run", null));
+        const allowed = yield* serve(yield* native(second.id, "session-b-run", null));
         expect(
           allowed.status,
           allowed.status === 200 ? "" : yield* sdkCall(() => allowed.text()),

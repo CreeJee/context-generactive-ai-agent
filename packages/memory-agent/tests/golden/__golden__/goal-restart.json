@@ -320,10 +320,10 @@
       "event_key": "sdk-stream:v1:chunk:26",
       "kind": "chunk",
       "payload_json": {
-        "error": {
-          "message": "All fibers interrupted without error"
-        },
-        "message": "All fibers interrupted without error",
+        "code": "server_restarted",
+        "message": "The server stopped before this answer finished.",
+        "runId": "<id-8>",
+        "threadId": "<session>",
         "timestamp": "<time>",
         "type": "RUN_ERROR"
       },

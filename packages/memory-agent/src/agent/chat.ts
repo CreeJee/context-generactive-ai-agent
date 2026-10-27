@@ -33,15 +33,13 @@ import {
   EventType,
   memoryStream,
   requestRunCancel,
-  resumeServerSentEventsResponse,
-  toServerSentEventsResponse,
   type ChatMiddleware,
   type ModelMessage,
   type StreamChunk,
   type StreamDurability,
   type UIMessage,
 } from "@tanstack/ai";
-import { refusalStatus, type Refusal } from "../api/chat-api.ts";
+import type { Refusal } from "../api/chat-api.ts";
 import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -162,7 +160,6 @@ import {
   type CompactResult,
   type SessionRunState,
 } from "./run-state.ts";
-import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
 import {
   NewGoalSettlement,
@@ -263,7 +260,6 @@ const AgentOperation = Schema.Literals([
   "load-messages",
   "load-run",
   "load-resume-interrupts",
-  "hydrate-chat",
   "stop-session",
   "cancel-run",
   "discard-interrupts",
@@ -525,10 +521,6 @@ type InternalFollowup = Data.TaggedEnum<{
 }>;
 const InternalFollowup = Data.taggedEnum<InternalFollowup>();
 
-/** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
-const isStreamJoin = (request: Request) =>
-  request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
-
 /** A request to start a run: who sent it, and its AG-UI `RunAgentInput` body. */
 export interface ChatRequest {
   /** The page holding the session, from `X-Session-Holder`. */
@@ -536,34 +528,31 @@ export interface ChatRequest {
   readonly body: Effect.Effect<JsonValue, Cause.UnknownError | Schema.SchemaError>;
 }
 
-const decodeJsonBody = Schema.decodeEffect(Schema.fromJsonString(JsonValue));
-
-/** Who reads a started run: the page's route, or the chat API (`api/chat-api.ts`). */
-export type ChatDelivery = "page" | "api";
-
 /** How a chat request starts. */
 export type ChatStart = Data.TaggedEnum<{
   Refused: { readonly refusal: Refusal };
-  /** A response only the page's route sends: the TanStack loop's, or an external agent's. */
-  Answered: { readonly response: Response };
   /** The run's events, read from its log after `after`; `-1` is from the start. */
   Following: { readonly log: StreamDurability; readonly after: string };
 }>;
 export const ChatStart = Data.taggedEnum<ChatStart>();
 const refused = (refusal: Refusal) => ChatStart.Refused({ refusal });
 
-/** The page route's answer: the refusal as JSON with its status, or the run's SSE response. */
-const pageResponse = ChatStart.$match({
-  Refused: ({ refusal }) => json(refusalStatus(refusal), refusal),
-  Answered: ({ response }) => response,
-  // The adapter carries the offset it continues after.
-  Following: ({ log }) => resumeServerSentEventsResponse({ adapter: log }),
-});
-
 export { modelBoundMessages };
 
 /** The reason the owner aborts a run's controller with when it shuts down; a cancel has another. */
 const serviceShutdown = "service_shutdown";
+
+/**
+ * Ends when the user cancels the run, or archives or deletes its session; the loop then ends it as
+ * cancelled. The controller aborts for other reasons too: the owner's shutdown, or the end of the
+ * fill that reads the run, which shutdown interrupts first. Such a run ends as cut by a restart.
+ */
+const cancelledByUser = (controller: AbortController) =>
+  aborted(controller.signal).pipe(
+    Effect.andThen(() =>
+      controller.signal.reason === RUN_CANCEL_REASON ? Effect.void : Effect.never,
+    ),
+  );
 
 /** Native implementation seam; central services are acquired anew for each construction. */
 export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
@@ -941,17 +930,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
   /**
    * A run's log, to follow after `offset` (docs/effect-ai-migration.md "SSE와 재접속"). A bound
-   * run's offsets are its committed chunks; another run's are the in-process log's. A null offset is
-   * one the request cannot use.
+   * run's offsets are its committed chunks; another run's are the in-process log's.
    */
-  const followRun = (sessionId: string, runId: string, offset: string | null) =>
+  const followRun = (sessionId: string, runId: string, offset: string) =>
     Effect.gen(function* () {
       const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
       if (!isTruthy(run)) return refused({ error: "run_not_found" });
       const binding = Option.getOrUndefined(yield* runBinding(runId));
       if (isTruthy(binding)) {
         if (binding.session_id !== sessionId) return refused({ error: "run_not_found" });
-        if (offset === null) return refused({ error: "invalid_stream_offset" });
         // The adapter checks its namespace, the immutable run/session binding and that the offset
         // is a committed chunk before anything is read.
         return yield* streamDurability({ sessionId, runId, resumeOffset: offset }).pipe(
@@ -963,12 +950,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       }
       const prefix = `memory:v1:${encodeURIComponent(runId)}:`;
       if (
-        offset === null ||
-        (offset !== "-1" &&
-          offset !== "now" &&
-          (!offset.startsWith(prefix) ||
-            !Number.isSafeInteger(Number(offset.slice(prefix.length))) ||
-            Number(offset.slice(prefix.length)) < 1))
+        offset !== "-1" &&
+        offset !== "now" &&
+        (!offset.startsWith(prefix) ||
+          !Number.isSafeInteger(Number(offset.slice(prefix.length))) ||
+          Number(offset.slice(prefix.length)) < 1)
       )
         return refused({ error: "invalid_stream_offset" });
       return ChatStart.Following({ log: memoryStream({ runId, offset }), after: offset });
@@ -1008,8 +994,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 }),
           }),
         );
-      yield* Effect.tryPromise(() =>
-        log.append([{ type: EventType.CUSTOM, name: RUN_ACCEPTED_EVENT, value: {} }]),
+      yield* Effect.flatMap(DateTime.now, (now) =>
+        Effect.tryPromise(() =>
+          log.append([
+            {
+              type: EventType.CUSTOM,
+              name: RUN_ACCEPTED_EVENT,
+              value: {},
+              timestamp: DateTime.toEpochMillis(now),
+            },
+          ]),
+        ),
       ).pipe(
         Effect.andThen(Stream.runForEach(events, append)),
         Effect.onExit((exit) =>
@@ -1287,7 +1282,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       yield* background.stopSession(sessionId);
       const parent = liveRuns.get(sessionId);
       if (isTruthy(parent)) {
-        parent.controller.abort(new Error("session_lifecycle_requested"));
+        // Archiving or deleting the session cancels its run, as the user's cancel does.
         yield* parent.cancel;
         yield* parent.ended;
       }
@@ -1497,16 +1492,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
     /**
      * Starts one chat run in a session. Stores the user turn, runs the model with memory tools,
-     * records every message, then indexes it. The page's route sends the answer as a Response
-     * (`handle`); the chat API follows the run's log (`api/chat-api.ts`), and only the Effect AI
-     * loop runs for it.
+     * records every message, then indexes it. The chat API follows the run's log
+     * (`api/chat-api.ts`).
      */
-    start: (
-      request: ChatRequest,
-      sessionId: string,
-      internalFollowup: InternalFollowup | null,
-      deliveredTo: ChatDelivery,
-    ) => {
+    start: (request: ChatRequest, sessionId: string, internalFollowup: InternalFollowup | null) => {
       const notificationFollowup = InternalFollowup.$is("notification")(internalFollowup);
       const kanbanFollowup = InternalFollowup.$is("kanban")(internalFollowup)
         ? internalFollowup
@@ -1783,11 +1772,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               runId,
               conversation,
               resume: [],
-              cancel: aborted(abortController.signal).pipe(
-                Effect.andThen(() =>
-                  abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
-                ),
-              ),
+              cancel: cancelledByUser(abortController),
             },
           ).pipe(
             shownRunErrors(redactor),
@@ -1824,22 +1809,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           );
           const delivered = claim.track(chunks);
           const log = memoryStream({ runId });
-          const started =
-            deliveredTo === "page"
-              ? ChatStart.Answered({
-                  response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
-                    abortController: yield* cancellation.delivery,
-                    durability: { adapter: log, batch: 1 },
-                  }),
-                })
-              : yield* Effect.as(
-                  Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
-                    startImmediately: true,
-                  }),
-                  ChatStart.Following({ log, after: "-1" }),
-                );
+          yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
+            startImmediately: true,
+          });
           cancellationToRelease = Effect.void;
-          return started;
+          return ChatStart.Following({ log, after: "-1" });
         }
         if (!isTruthy(selection)) return refused({ error: "model_selection_required" });
         // Every Goal runs on today's code, whichever code ran it before (docs/effect-ai-migration.md
@@ -2504,12 +2478,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             runId,
             conversation,
             resume: resumed.value,
-            // The owner's shutdown aborts the controller too; that run ends as cut by a restart.
-            cancel: aborted(abortController.signal).pipe(
-              Effect.andThen(() =>
-                abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
-              ),
-            ),
+            cancel: cancelledByUser(abortController),
           },
         ).pipe(
           shownRunErrors(redactor),
@@ -2556,24 +2525,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const log = goalRun
           ? yield* streamDurability({ sessionId, runId })
           : memoryStream({ runId });
-        const started =
-          deliveredTo === "page"
-            ? ChatStart.Answered({
-                response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
-                  // Only the execution aborts on a cancel, so the run's last events reach the page.
-                  abortController: yield* cancellation.delivery,
-                  durability: { adapter: log, batch: 1 },
-                }),
-              })
-            : yield* Effect.as(
-                Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
-                  startImmediately: true,
-                }),
-                ChatStart.Following({ log, after: "-1" }),
-              );
+        yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
+          startImmediately: true,
+        });
         cancellationToRelease = Effect.void;
         stopSteeringOnExit = Effect.void;
-        return started;
+        return ChatStart.Following({ log, after: "-1" });
       }).pipe(
         Effect.ensuring(Effect.suspend(() => cancellationToRelease)),
         Effect.ensuring(Effect.suspend(() => stopSteeringOnExit)),
@@ -2586,32 +2543,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.withSpan("AgentChat.start"),
       );
     },
-
-    /**
-     * GET handler for a reloaded page. With `?threadId=` it hydrates: the stored transcript, a run
-     * still generating, and pending approvals, so an unanswered approval card comes back. With
-     * `?runId=&offset=` (or `Last-Event-ID`) it replays that run's durable log and follows it live.
-     */
-    hydrate: (request: Request, sessionId: string) =>
-      Effect.gen(function* () {
-        yield* sessions.get(sessionId);
-        if (!isStreamJoin(request)) return yield* chatState.hydrate(request, sessionId);
-
-        const url = new URL(request.url);
-        const runId = url.searchParams.get("runId");
-        if (!isTruthy(runId)) return json(404, { error: "run_not_found" });
-        // The SDK's Request constructor chooses a run from Last-Event-ID before ?runId.
-        // Never authenticate the query run and then let an offset select a different log.
-        const offset = request.headers.get("Last-Event-ID") || url.searchParams.get("offset");
-        const presented = request.headers.get("X-Run-Id");
-        return pageResponse(
-          yield* followRun(
-            sessionId,
-            runId,
-            isTruthy(offset) && !(isTruthy(presented) && presented !== runId) ? offset : null,
-          ),
-        );
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** Follows a run's log after `after` for the chat API; `-1` is from the start. */
     follow: (sessionId: string, runId: string, after: string) =>
@@ -3015,36 +2946,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       }),
   };
 
-  /** POST handler for one chat run of the page's route; `start` runs it. */
-  const handle = (
-    request: Request,
-    sessionId: string,
-    internalFollowup: InternalFollowup | null = null,
-  ) =>
-    api
-      .start(
-        {
-          holder: request.headers.get(sessionHolderHeader),
-          body: Effect.flatMap(
-            Effect.tryPromise(() => request.text()),
-            decodeJsonBody,
-          ),
-        },
-        sessionId,
-        internalFollowup,
-        "page",
-      )
-      .pipe(
-        Effect.map(pageResponse),
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          ProjectNotFound: () => Effect.succeed(json(404, { error: "project_not_found" })),
-          ProviderUnavailable: providerUnavailable,
-          ModelUnavailable: providerUnavailable,
-        }),
-        Effect.withSpan("AgentChat.handle"),
-      );
-
   // Completion delivery is service-scoped and coalesced per session. The same live-run claim
   // used by HTTP admission prevents an internal follow-up racing a user turn or another child.
   const followup = (sessionId: string) => {
@@ -3066,13 +2967,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           },
           sessionId,
           kind,
-          "api",
         )
         .pipe(
           Effect.flatMap(
             ChatStart.$match({
               Refused: ({ refusal }) => Effect.succeed(Result.fail(refusal.error)),
-              Answered: () => Effect.die("A follow-up got a response only the page's route sends"),
               Following: (following) => Effect.succeed(Result.succeed(following)),
             }),
           ),
@@ -3264,7 +3163,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.catch(logFailure("Restarted Goal continuation deferred")),
       ),
     );
-  return { ...api, handle };
+  return api;
 });
 
 /** The chat endpoint behind `POST /api/chat`: memory, tools and the ChatGPT model together. */

@@ -16,10 +16,17 @@ const lost = { error: "run_events_unavailable" } as const;
  */
 const runEvents = ({ log, after }: { readonly log: StreamDurability; readonly after: string }) =>
   Stream.unwrap(
-    Effect.map(Effect.abortSignal, (signal) =>
+    Effect.map(Effect.abortSignal, (signal) => {
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Stream.fromAsyncIterable(log.read(after, signal), () => lost),
-    ),
+      const reader = log.read(after, signal)[Symbol.asyncIterator]();
+      // A closed stream aborts the read, which ends the reader. The stream does not ask the reader
+      // to return: a generator answers that only after its pending read, which waits for the log's
+      // next entry, so a page that leaves a quiet run would hold its stream open until then.
+      return Stream.fromAsyncIterable(
+        { [Symbol.asyncIterator]: () => ({ next: () => reader.next() }) },
+        () => lost,
+      );
+    }),
   ).pipe(
     Stream.tapError(() => Effect.logWarning("Run log unreadable")),
     Stream.filterMap(({ offset, chunk }) =>
@@ -39,8 +46,6 @@ const answered = <E>(start: Effect.Effect<ChatStart, E>) =>
     Effect.flatMap(
       ChatStart.$match({
         Refused: ({ refusal }) => Effect.fail(refusal),
-        // The API runs only the Effect AI loop, so it never gets one of the page's own responses.
-        Answered: () => Effect.die("The chat API got a response only the page's route sends"),
         Following: (following) => Effect.succeed(runEvents(following)),
       }),
     ),
@@ -124,7 +129,6 @@ export const ChatApiHandlers = HttpApiBuilder.group(
             },
             params.session,
             null,
-            "api",
           )
           .pipe(
             Effect.catchTags({
