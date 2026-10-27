@@ -1,6 +1,4 @@
 import { Function as EffectFunction } from "effect";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { toolDefinition } from "@tanstack/ai";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
 import { Cause, Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
@@ -36,9 +34,7 @@ import {
   skillCommand,
 } from "../skills/code-skills.ts";
 import {
-  approvalToolDefinitions,
   deleteOutsideFileSpec,
-  reviewedToolDefinitions,
   RunSkillInput,
   saveCodeSkillSpec,
   writeOutsideFileSpec,
@@ -46,22 +42,16 @@ import {
   type SaveCodeSkillInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { runTrace } from "../runtime/run-trace.ts";
 import { guardedChange, guardedEffect } from "./failure.ts";
-import { lazily } from "./lazy.ts";
 import { runTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
+/** Not gated per call: the program it runs was approved when it was saved. */
 const runSkill = {
   name: "run_skill",
   description:
     "Run a project code skill. A skill runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_code_skill. A ts skill takes input, checked against its schema, and returns what its program returned, as run_code does. A sh skill takes args and runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host the job needs, save the skill again with that host in network. It returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.",
   parameters: RunSkillInput,
 } as const;
-
-/** Not gated per call: the program it runs was approved when it was saved. */
-export const runSkillDefinition = toolDefinition(definitionOf(runSkill));
 
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
@@ -142,14 +132,10 @@ const make = Effect.gen(function* () {
     saveCodeSkill: ({ name, description, program, usage }: typeof SaveCodeSkillInput.Type) =>
       guardedEffect(name, codeSkills.save(project, { name, description, usage, program })),
 
-    /**
-     * `signal` stops the command when the caller is cancelled; without one, interrupting the call
-     * stops it.
-     */
+    /** Interrupting the call stops the command. */
     runSkill: (
       { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
-      toolCallId: string | undefined,
-      signal: AbortSignal | undefined,
+      toolCallId: string,
     ) =>
       guardedEffect(
         name,
@@ -188,7 +174,7 @@ const make = Effect.gen(function* () {
             );
           const setup = {
             command,
-            commandId: toolCallId ?? randomUUID(),
+            commandId: toolCallId,
             ...(yield* sandboxPolicy({
               projectRoot: project.root,
               storageRoot: storage.path,
@@ -217,7 +203,7 @@ const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const receipt = yield* background.start(
                 bound,
-                toolCallId ?? randomUUID(),
+                toolCallId,
                 "shell",
                 label,
                 backgroundOperation(execute).pipe(
@@ -249,10 +235,11 @@ const make = Effect.gen(function* () {
                   ),
               });
             });
-          const inline = Effect.map(
-            Effect.tryPromise((interrupted) => execute(signal ?? interrupted)),
-            (result) => ({ workdir: directory.relative, ...result, command: label }),
-          );
+          const inline = Effect.map(Effect.tryPromise(execute), (result) => ({
+            workdir: directory.relative,
+            ...result,
+            command: label,
+          }));
           return yield* Option.match(Option.fromNullishOr(binding), {
             onNone: () => inline,
             onSome: inBackground,
@@ -321,44 +308,11 @@ const make = Effect.gen(function* () {
 
   return {
     /**
-     * Server side of the approval-gated tools. With `static` approval (`ask` mode) TanStack waits
-     * for the user; with `gate` (`auto`/`full` modes, subagents) middleware either reviews the call
-     * or full mode lets it proceed. Permission mode never lifts path, credential or `.git` rules.
-     * They run on the run's context, so their spans join the run's trace.
-     */
-    forProject: (
-      project: Fenced<Project>,
-      approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
-      binding?: BackgroundBinding,
-    ) =>
-      Effect.map(runTrace, (caller) => {
-        const calls = callsFor(project, binding);
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const run = runNativeEffectWith(caller);
-        const saveCodeSkill = (input: typeof SaveCodeSkillInput.Type) =>
-          run(calls.saveCodeSkill(input));
-        const runSkill = runSkillDefinition.server((input, context) =>
-          run(calls.runSkill(input, context?.toolCallId, context?.abortSignal)),
-        );
-        const writeOutsideFile = (input: typeof WriteOutsideFileInput.Type) =>
-          run(calls.writeOutsideFile(input));
-        const deleteOutsideFile = (input: typeof DeleteOutsideFileInput.Type) =>
-          run(calls.deleteOutsideFile(input));
-
-        const [save, write, remove] =
-          approval === "gate" ? reviewedToolDefinitions : approvalToolDefinitions;
-        return [
-          lazily(save.server(saveCodeSkill)),
-          runSkill,
-          lazily(write.server(writeOutsideFile)),
-          lazily(remove.server(deleteOutsideFile)),
-        ] as const;
-      }),
-
-    /**
-     * {@link forProject} for the Effect AI loop (docs/effect-ai-migration.md step 3). With `static`
-     * approval the gated tools carry `needsApproval`, which the loop asks the user about; with
-     * `gate` the loop's review decides each call.
+     * The approval-gated tools. With `static` approval (`ask` mode) the gated tools carry
+     * `needsApproval`, which the loop asks the user about; with `gate` (`auto`/`full` modes,
+     * subagents) the loop's review decides each call, or full mode lets it proceed. Permission mode
+     * never lifts path, credential or `.git` rules. They run on the loop's fiber, so their spans
+     * join the run's trace.
      */
     runToolsFor: (
       project: Fenced<Project>,
@@ -376,7 +330,7 @@ const make = Effect.gen(function* () {
         }),
         runTool({
           ...runSkill,
-          handler: (input, call) => calls.runSkill(input, call.toolCallId, undefined),
+          handler: (input, call) => calls.runSkill(input, call.toolCallId),
         }),
         runTool({
           ...writeOutsideFileSpec,

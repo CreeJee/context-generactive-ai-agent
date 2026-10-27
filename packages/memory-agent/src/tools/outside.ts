@@ -1,6 +1,5 @@
 import { Cause } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { toolDefinition } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFilesEffect, createSnapshots, type Snapshot } from "../files/listing.ts";
@@ -8,13 +7,9 @@ import { resolveFencedOutsidePath, type Fenced } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import { createTextPageReader, readFileBytesEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { runTrace } from "../runtime/run-trace.ts";
 import { guardedEffect } from "./failure.ts";
 import { listPageSize } from "./files.ts";
-import { lazily } from "./lazy.ts";
 import { runTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 export const outsideReadToolNames = [
   "list_outside_files",
@@ -263,33 +258,8 @@ const make = Effect.gen(function* () {
      * Read-only tools for files outside the project (R04, Q8). They run without approval because
      * reading is allowed everywhere except credentials; results are ordinary tool results, not
      * version-tracked project files. Writing outside the project is a separate, approved tool.
-     * They run on the run's context, so their spans join the run's trace.
+     * They run on the loop's fiber, so their spans join the run's trace.
      */
-    forProject: (project: Fenced<Project>) =>
-      Effect.map(runTrace, (caller) => {
-        const calls = callsFor(project);
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const run = runNativeEffectWith(caller);
-        return [
-          lazily(
-            toolDefinition(definitionOf(listOutside)).server((input, context) =>
-              run(calls.listOutside(input), { signal: context?.abortSignal }),
-            ),
-          ),
-          lazily(
-            toolDefinition(definitionOf(readOutsideFile)).server((input, context) =>
-              run(calls.readOutsideFile(input), { signal: context?.abortSignal }),
-            ),
-          ),
-          lazily(
-            toolDefinition(definitionOf(searchOutsideFile)).server((input, context) =>
-              run(calls.searchOutsideFile(input), { signal: context?.abortSignal }),
-            ),
-          ),
-        ] as const;
-      }),
-
-    /** {@link forProject} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
     runToolsFor: (project: Fenced<Project>) => {
       const calls = callsFor(project);
       return [

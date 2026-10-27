@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, FileSystem, Option, Path, Ref, Schema } from "effect";
+import { Deferred, Effect, FileSystem, Option, Path, Ref, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { RunStore } from "../../src/loop/store.ts";
@@ -10,11 +10,9 @@ import {
 } from "../../src/tools/background.ts";
 import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
 import { LifecycleOutcome, LifecycleRequest, WorkTraceStore } from "../../src/work-trace/store.ts";
-import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
-import { inRun } from "../support/run-span.ts";
-import { freshSession, sdk } from "./agent-env.ts";
+import { callTool } from "../support/run-tools.ts";
+import { freshSession } from "./agent-env.ts";
 import { sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
 
 const Receipt = Schema.Struct({
@@ -46,17 +44,8 @@ const readResult = Effect.fnUntraced(function* (
   input: { readonly taskId: string; readonly offset?: number },
 ) {
   const tasks = yield* BackgroundTasks;
-  const [get] = yield* inRun(tasks.forSession(sessionId));
-  return yield* sdk(() => get!.execute!(input));
+  return yield* callTool(tasks.runToolsFor(sessionId), "get_background_result", input);
 });
-
-/** The rejection of a tool call that must fail; a call that succeeds fails the test as a defect. */
-const rejection = <A, R>(operation: Effect.Effect<A, Cause.UnknownError, R>) =>
-  operation.pipe(
-    Effect.flip,
-    Effect.orDie,
-    Effect.map((error) => error.cause),
-  );
 
 testAgent()("background task lifecycle", (it) => {
   it.effect("replayed calls, simultaneous or after completion, run the operation once", () =>
@@ -231,40 +220,7 @@ testAgent()("background task lifecycle", (it) => {
           ),
         ).toBe(true);
       expect(yield* metadata.get("background-task-result", receipt.taskId)).toEqual(Option.none());
-      expect(yield* rejection(readResult(sessionId, { taskId: receipt.taskId }))).toMatchObject({
-        message: expect.stringContaining("not found"),
-      });
-    }),
-  );
-
-  it.effect("the Effect AI tools ask as the TanStack ones and page the same result", () =>
-    Effect.gen(function* () {
-      const sessionId = yield* freshSession;
-      const tasks = yield* BackgroundTasks;
-      const receipt = yield* tasks.start(
-        yield* runOf(sessionId),
-        `${sessionId}:call`,
-        "external_agent",
-        "task",
-        Effect.succeed(reported("x".repeat(6000))),
-      );
-      yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
-      const runTools = tasks.runToolsFor(sessionId);
-      expect(
-        yield* runToolRequestDifferences({
-          chatTools: yield* inRun(tasks.forSession(sessionId)),
-          runTools,
-        }),
-      ).toEqual([undefined, undefined, undefined]);
-      const [get] = runTools;
-      const call = (params: JsonValue) =>
-        Effect.fromNullishOr(get).pipe(
-          Effect.flatMap((found) => found.prepare(params)),
-          Effect.flatMap((run) => run({ toolCallId: "call-1" })),
-        );
-      for (const params of [{ taskId: receipt.taskId }, { taskId: receipt.taskId, offset: 4000 }])
-        expect(yield* call(params)).toEqual(yield* readResult(sessionId, params));
-      expect(yield* Effect.flip(call({ taskId: "missing-task" }))).toMatchObject({
+      expect(yield* Effect.flip(readResult(sessionId, { taskId: receipt.taskId }))).toMatchObject({
         message: expect.stringContaining("not found"),
       });
     }),
@@ -340,16 +296,13 @@ testAgent()("read-only background results", (it) => {
       yield* tasks.waitResult(session.id, receipt.taskId, 2000);
       expect((yield* trace.taskDetail(session.id, receipt.taskId))?.task.status).toBe("completed");
       const changes = yield* sqlGet("SELECT total_changes() AS n");
-      const get = (yield* inRun(tasks.forSession(session.id))).find(
-        (tool) => tool.name === "get_background_result",
-      )!;
       yield* Effect.acquireRelease(sqlExec("PRAGMA query_only = ON"), () =>
         Effect.orDie(sqlExec("PRAGMA query_only = OFF")),
       );
-      const first = yield* sdk(() => get.execute!({ taskId: receipt.taskId }));
+      const first = yield* readResult(session.id, { taskId: receipt.taskId });
       expect(first).toMatchObject({ status: "completed", result: "saved result" });
-      expect(yield* sdk(() => get.execute!({ taskId: receipt.taskId }))).toEqual(first);
-      expect(yield* rejection(sdk(() => get.execute!({ taskId: "missing-task" })))).toMatchObject({
+      expect(yield* readResult(session.id, { taskId: receipt.taskId })).toEqual(first);
+      expect(yield* Effect.flip(readResult(session.id, { taskId: "missing-task" }))).toMatchObject({
         message: expect.stringContaining("not found"),
       });
       expect(yield* sqlGet("SELECT total_changes() AS n")).toEqual(changes);
@@ -368,26 +321,19 @@ testAgent()("background shell across restart", (it) => {
         const { project, session } = env;
         const background = yield* BackgroundTasks;
         const run = yield* runOf(session.id);
-        const [save, shell] = yield* inRun((yield* ApprovedTools).forProject(project, "gate", run));
+        const tools = (yield* ApprovedTools).runToolsFor(project, "gate", run);
         const script = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
-        yield* sdk(() =>
-          save.execute!({
-            name: "wait-release",
-            description: "Wait for release",
-            program: { runtime: "sh", script },
-          }),
-        );
+        yield* callTool(tools, "save_code_skill", {
+          name: "wait-release",
+          description: "Wait for release",
+          program: { runtime: "sh", script },
+        });
         const receipt = yield* Schema.decodeUnknownEffect(Receipt)(
-          yield* sdk(() =>
-            shell.execute!(
-              { name: "wait-release", yieldMs: 0, timeoutSeconds: 5 },
-              {
-                toolCallId: `${session.id}:shell`,
-                abortSignal: run.abortSignal,
-                emitCustomEvent: () => undefined,
-              },
-            ),
-          ),
+          yield* callTool(tools, "run_skill", {
+            name: "wait-release",
+            yieldMs: 0,
+            timeoutSeconds: 5,
+          }),
         );
         expect(background.hasSession(session.id)).toBe(true);
         expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
@@ -405,7 +351,7 @@ testAgent()("background shell across restart", (it) => {
         );
         expect(page.status).toBe("completed");
         const other = yield* freshSession;
-        expect(yield* rejection(readResult(other, { taskId: receipt.taskId }))).toMatchObject({
+        expect(yield* Effect.flip(readResult(other, { taskId: receipt.taskId }))).toMatchObject({
           message: expect.stringContaining("not found"),
         });
         yield* env.reopen;

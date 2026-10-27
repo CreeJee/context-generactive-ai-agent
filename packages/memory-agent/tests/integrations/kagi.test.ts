@@ -1,15 +1,14 @@
 import { layer } from "@effect/vitest";
-import { Cause, Context, Effect, Layer, Ref, Result, Schema } from "effect";
+import { Context, Effect, Layer, Ref, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
 import { Kagi, KagiKeyMissing } from "../../src/kagi/kagi.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { KagiTools, maxPageCharacters } from "../../src/tools/kagi.ts";
-import type { RunTool } from "../../src/tools/run-tool.ts";
 import { runTurn, wireOf } from "../support/chat-client.ts";
 import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 interface Received {
@@ -34,26 +33,17 @@ const searchReply: Reply = {
   },
 };
 
-const sdk = <A>(operation: () => A | PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(operation()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
-
-/** The SDK call fails, and its error names `reason`. */
-const rejects = Effect.fnUntraced(function* <A>(operation: () => PromiseLike<A>, reason: string) {
-  const error = yield* Effect.flip(Effect.asVoid(sdk(operation)));
-  expect(error.cause).toMatchObject({ message: expect.stringContaining(reason) });
+/** The call fails, and the failure the model reads names `reason`. */
+const rejects = Effect.fnUntraced(function* <A, E>(call: Effect.Effect<A, E>, reason: string) {
+  expect(yield* Effect.flip(call)).toMatchObject({ message: expect.stringContaining(reason) });
 });
 
-const tools = Effect.flatMap(KagiTools, (kagiTools) => kagiTools.tools).pipe(
-  Effect.withSpan("test"),
-);
+const tools = Effect.flatMap(KagiTools, (kagiTools) => kagiTools.runTools);
 
+/** Calls of the tool as Kagi was when they were handed out. */
 const toolNamed = Effect.fnUntraced(function* (name: "kagi_search" | "kagi_extract") {
-  const execute = (yield* tools).find((candidate) => candidate.name === name)?.execute;
-  if (execute === undefined) return expect.unreachable(`no ${name}`);
-  return execute;
+  const handedOut = yield* tools;
+  return (params: JsonValue) => callTool(handedOut, name, params);
 });
 
 const enable = Effect.gen(function* () {
@@ -75,7 +65,7 @@ testAgent()("Kagi settings", (it) => {
         expect(yield* kagi.status).toEqual({ keyRegistered: true, enabled: false });
         expect(yield* tools).toEqual([]);
         expect(yield* kagi.setEnabled(true)).toEqual({ keyRegistered: true, enabled: true });
-        expect((yield* tools).map((candidate) => candidate.name)).toEqual([
+        expect((yield* tools).map(({ tool }) => tool.name)).toEqual([
           "kagi_search",
           "kagi_extract",
         ]);
@@ -135,7 +125,7 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
         const { received } = yield* serve();
         yield* enable;
         const search = yield* toolNamed("kagi_search");
-        const result = yield* sdk(() => search({ query: "effect schema", limit: 50 }));
+        const result = yield* search({ query: "effect schema", limit: 50 });
         expect(yield* received).toEqual([
           {
             path: "/api/v1/search",
@@ -173,7 +163,7 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
         "https://example.com/broken",
         "https://example.com/dropped",
       ];
-      const result = yield* sdk(() => extract({ urls }));
+      const result = yield* extract({ urls });
       expect((yield* received)[0]?.body).toEqual({
         pages: urls.map((url) => ({ url })),
         format: "markdown",
@@ -191,7 +181,7 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
           { url: "https://example.com/dropped", code: "missing", message: null },
         ],
       });
-      yield* rejects(() => extract({ urls: ["file:///etc/hosts"] }), "invalid_urls");
+      yield* rejects(extract({ urls: ["file:///etc/hosts"] }), "invalid_urls");
       expect(yield* received).toHaveLength(1);
     }),
   );
@@ -213,40 +203,9 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
       const search = yield* toolNamed("kagi_search");
       for (const { reply, reason } of replies) {
         yield* Ref.set(fake.reply, () => reply);
-        yield* rejects(() => search({ query: reason }), reason);
+        yield* rejects(search({ query: reason }), reason);
       }
       expect(yield* received).toHaveLength(replies.length);
-    }),
-  );
-
-  it.effect("the Effect AI tools ask as the TanStack ones and send the same requests", () =>
-    Effect.gen(function* () {
-      const { received } = yield* serve();
-      yield* enable;
-      const runTools = yield* Effect.flatMap(KagiTools, (kagiTools) => kagiTools.runTools);
-      expect(yield* runToolRequestDifferences({ chatTools: yield* tools, runTools })).toEqual([
-        undefined,
-        undefined,
-        undefined,
-      ]);
-      const [search, extract] = runTools;
-      const call = (tool: RunTool | undefined, params: JsonValue) =>
-        Effect.fromNullishOr(tool).pipe(
-          Effect.flatMap((found) => found.prepare(params)),
-          Effect.flatMap((run) => run({ toolCallId: "call-1" })),
-        );
-      const searched = yield* call(search, { query: "effect schema", limit: 50 });
-      const tanstackSearch = yield* toolNamed("kagi_search");
-      expect(searched).toEqual(
-        yield* sdk(() => tanstackSearch({ query: "effect schema", limit: 50 })),
-      );
-      expect((yield* received).map(({ body }) => body)).toEqual([
-        { query: "effect schema", limit: 20 },
-        { query: "effect schema", limit: 20 },
-      ]);
-      expect(yield* Effect.flip(call(extract, { urls: ["file:///etc/hosts"] }))).toMatchObject({
-        message: expect.stringContaining("invalid_urls"),
-      });
     }),
   );
 
@@ -258,7 +217,7 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
         yield* enable;
         const search = yield* toolNamed("kagi_search");
         yield* (yield* Kagi).removeKey;
-        yield* rejects(() => search({ query: "after removal" }), "kagi_not_enabled");
+        yield* rejects(search({ query: "after removal" }), "kagi_not_enabled");
         expect(yield* received).toEqual([]);
       }),
   );

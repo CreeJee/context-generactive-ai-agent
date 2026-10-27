@@ -8,8 +8,7 @@ import { optionalProperty } from "../src/optional-property.ts";
 
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import type { AnyServerTool } from "@tanstack/ai";
-import { Cause, Effect, FileSystem, Stream, ManagedRuntime } from "effect";
+import { Cause, Effect, FileSystem, Stream, ManagedRuntime, Schema } from "effect";
 import { test, describe, afterAll } from "vite-plus/test";
 import { SecretStore } from "../src/config/secrets.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -18,6 +17,9 @@ import { Projects } from "../src/projects/projects.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { FileTools } from "../src/tools/files.ts";
+import type { JsonValue } from "../src/json.ts";
+import type { RunTool } from "../src/tools/run-tool.ts";
+import { callTool } from "../tests/support/run-tools.ts";
 
 const directories = 40;
 const filesPerDirectory = 75;
@@ -101,13 +103,16 @@ const tools = await runNative(
     const approved = yield* ApprovedTools;
     const plain = yield* projects.add(join(base, "plain"));
     const git = yield* projects.add(join(base, "git"));
-    const pick = (list: readonly AnyServerTool[], name: string) => {
-      const execute = list.find((tool) => tool.name === name)?.execute;
-      if (!isTruthy(execute)) throw new Error(name);
-      return execute;
-    };
-    const plainFiles = yield* files.forProject(plain);
-    const gitFiles = yield* files.forProject(git);
+    const pick = (list: ReadonlyArray<RunTool>, name: string) => (input: JsonValue) =>
+      callTool(list, name, input);
+    const plainFiles = files.runToolsFor(plain);
+    const gitFiles = files.runToolsFor(git);
+    const skills = approved.runToolsFor(plain, "gate");
+    yield* callTool(skills, "save_code_skill", {
+      name: "print-ok",
+      description: "Print ok",
+      program: { runtime: "sh", script: "printf ok" },
+    });
     return {
       plain: {
         list: pick(plainFiles, "list_files"),
@@ -118,60 +123,55 @@ const tools = await runNative(
         list: pick(gitFiles, "list_files"),
         search: pick(gitFiles, "search_files"),
       },
-      shell: pick(yield* approved.forProject(plain, "gate"), "run_shell"),
+      skill: pick(skills, "run_skill"),
     };
   }).pipe(Effect.withSpan("bench")),
 );
 
-type Page = { nextOffset?: number | null; snapshot?: string; nextCursor?: string | null };
-interface ListInput {
-  readonly snapshot?: string;
-  readonly offset?: number;
-}
-interface SearchInput {
-  readonly query: string;
-  readonly cursor?: string;
-}
-interface ReadInput {
-  readonly path: string;
-  readonly startLine?: number;
-  readonly maxLines: number;
-}
+const Page = Schema.Struct({
+  snapshot: Schema.optional(Schema.String),
+  nextOffset: Schema.optional(Schema.NullOr(Schema.Finite)),
+  nextCursor: Schema.optional(Schema.NullOr(Schema.String)),
+  nextStartLine: Schema.optional(Schema.NullOr(Schema.Finite)),
+});
+
+/** A tool called with its input as the model would. */
+type Call<E> = (input: JsonValue) => Effect.Effect<JsonValue, E>;
+
+/** The page a call returned. */
+const pageOf = <E>(call: Call<E>, input: JsonValue) =>
+  Effect.flatMap(call(input), Schema.decodeUnknownEffect(Page));
 
 /** Every page of a listing, as a model paging through it would. */
-const listAll = Effect.fn("ToolBench.listAll")(function* (
-  list: (input: ListInput) => Promise<Page>,
-) {
-  let page = yield* sdkCall(() => list({}));
+const listAll = Effect.fn("ToolBench.listAll")(function* <E>(list: Call<E>) {
+  let page = yield* pageOf(list, {});
   while (isTruthy(page.nextOffset)) {
     const input = {
       ...optionalProperty("snapshot", page.snapshot),
       offset: page.nextOffset,
     };
-    page = yield* sdkCall(() => list(input));
+    page = yield* pageOf(list, input);
   }
 });
 
 /** Every page of a search. */
-const searchAll = Effect.fn("ToolBench.searchAll")(function* (
-  search: (input: SearchInput) => Promise<Page>,
-  query: string,
+const searchAll = Effect.fn("ToolBench.searchAll")(function* <E>(
+  search: Call<E>,
+  query: { readonly query: string; readonly directory?: string },
 ) {
-  let page = yield* sdkCall(() => search({ query }));
+  let page = yield* pageOf(search, query);
   while (isTruthy(page.nextCursor)) {
-    const input = { query, cursor: page.nextCursor };
-    page = yield* sdkCall(() => search(input));
+    const input = { ...query, cursor: page.nextCursor };
+    page = yield* pageOf(search, input);
   }
 });
 
-const readAll = Effect.fn("ToolBench.readAll")(function* (
-  read: (input: ReadInput) => Promise<{ nextStartLine?: number | null }>,
-) {
-  let page = yield* sdkCall(() => read({ path: "big.txt", maxLines: 2000 }));
+const readAll = Effect.fn("ToolBench.readAll")(function* <E>(read: Call<E>) {
+  let page = yield* pageOf(read, { path: "big.txt", maxLines: 2000 });
   let pages = 1;
   while (isTruthy(page.nextStartLine)) {
     const input = { path: "big.txt", startLine: page.nextStartLine, maxLines: 2000 };
-    page = yield* sdkCall(() => read(input));
+    page = yield* pageOf(read, input);
     pages++;
   }
   if (pages < 10) throw new Error(`expected many pages, got ${pages}`);
@@ -184,33 +184,26 @@ describe("file tools (3,000 files)", () => {
     bench("list_files, Git work tree", () => runNative(listAll(tools.git.list))).run());
   test("search_files all pages, plain (600 matches)", ({ bench }) =>
     bench("search_files all pages, plain (600 matches)", () =>
-      runNative(searchAll(tools.plain.search, "needle"))).run());
+      runNative(searchAll(tools.plain.search, { query: "needle" }))).run());
   test("search_files all pages, Git (600 matches)", ({ bench }) =>
     bench("search_files all pages, Git (600 matches)", () =>
-      runNative(searchAll(tools.git.search, "needle"))).run());
+      runNative(searchAll(tools.git.search, { query: "needle" }))).run());
   test("search_files no match, plain", ({ bench }) =>
     bench("search_files no match, plain", () =>
-      runNative(searchAll(tools.plain.search, "absent-text-xyz"))).run());
+      runNative(searchAll(tools.plain.search, { query: "absent-text-xyz" }))).run());
   test("search_files no match, Git", ({ bench }) =>
     bench("search_files no match, Git", () =>
-      runNative(searchAll(tools.git.search, "absent-text-xyz"))).run());
+      runNative(searchAll(tools.git.search, { query: "absent-text-xyz" }))).run());
   test("search_files one directory, plain", ({ bench }) =>
     bench("search_files one directory, plain", () =>
       runNative(
-        searchAll((input) => tools.plain.search({ ...input, directory: "src/module-3" }), "needle"),
+        searchAll(tools.plain.search, { query: "needle", directory: "src/module-3" }),
       )).run());
   test("read_file 6,000 lines, all pages", ({ bench }) =>
     bench("read_file 6,000 lines, all pages", () => runNative(readAll(tools.plain.read))).run());
 });
 
-describe("shell", () => {
-  test("run_shell printf", ({ bench }) =>
-    bench("run_shell printf", () => tools.shell({ command: "printf ok" })).run());
+describe("code skills", () => {
+  test("run_skill printf", ({ bench }) =>
+    bench("run_skill printf", () => runNative(tools.skill({ name: "print-ok" }))).run());
 });
-
-const sdkCall = Effect.fn("ToolBench.sdkCall")(<A>(call: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(call()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  }),
-);

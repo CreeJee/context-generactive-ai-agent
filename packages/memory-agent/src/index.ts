@@ -552,7 +552,7 @@ export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embeddin
 
 export { FileTools, fileToolNames } from "./tools/files.ts";
 export { OutsideTools, outsideReadToolNames } from "./tools/outside.ts";
-export { ApprovedTools, runSkillDefinition } from "./tools/approved.ts";
+export { ApprovedTools } from "./tools/approved.ts";
 export { CodeSkillRejected, CodeSkills, builtinOverlap } from "./skills/code-skills.ts";
 export { CodeTools } from "./tools/code.ts";
 export {

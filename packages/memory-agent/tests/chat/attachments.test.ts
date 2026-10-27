@@ -17,7 +17,7 @@ import { requireRuntime } from "../../src/runtime/resources.ts";
 import { FileTools } from "../../src/tools/files.ts";
 import { runTurn, toolResults } from "../support/chat-client.ts";
 import { tinyPng } from "../support/images.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { current, freshSession, sdk } from "./tab.ts";
@@ -73,26 +73,8 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /** The project's file tools wrapped with drawing previews, called as the model would. */
 const fileTool = Effect.fnUntraced(function* (name: string, args: Record<string, JsonValue>) {
   const { project } = yield* TestEnv;
-  const files = yield* inRun((yield* FileTools).forProject(project));
-  const tool = (yield* inRun((yield* DrawingPreviews).withPreviews(project, files))).find(
-    (candidate) => candidate.name === name,
-  );
-  return yield* sdk(() =>
-    tool?.execute?.(args, { toolCallId: name, emitCustomEvent: () => undefined }),
-  );
-});
-
-/** {@link fileTool} through the Effect AI loop's tools (docs/effect-ai-migration.md step 3). */
-const fileRunTool = Effect.fnUntraced(function* (name: string, args: Record<string, JsonValue>) {
-  const { project } = yield* TestEnv;
   const files = (yield* FileTools).runToolsFor(project);
-  const tool = (yield* DrawingPreviews)
-    .withRunPreviews(project, files)
-    .find((candidate) => candidate.tool.name === name);
-  const run = yield* Effect.fromNullishOr(tool).pipe(
-    Effect.flatMap((found) => found.prepare(args)),
-  );
-  return yield* run({ toolCallId: name });
+  return yield* callTool((yield* DrawingPreviews).withRunPreviews(project, files), name, args);
 });
 
 /** Replace the attachment directory with a file until the test ends. */
@@ -296,25 +278,6 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         expect(picture).not.toBeNull();
         expect(yield* centre(attachments.pathOf(picture!))).toEqual([0, 0, 255]);
       }),
-  );
-
-  it.effect("the Effect AI file tools add the same picture, and only to a written SVG", () =>
-    Effect.gen(function* () {
-      const result = yield* decodeWritten(
-        yield* fileRunTool("write_file", { path: "run/figure.svg", content: square("#0000ff") }),
-      );
-      const attachments = yield* Attachments;
-      const picture = yield* attachments.get(result.preview?.attachmentId ?? "");
-      expect(yield* centre(attachments.pathOf(picture!))).toEqual([0, 0, 255]);
-      expect(
-        (yield* decodeWritten(
-          yield* fileRunTool("write_file", { path: "run/notes.md", content: "# hi" }),
-        )).preview,
-      ).toBeUndefined();
-      expect(
-        yield* encodeJson(yield* fileRunTool("read_file", { path: "run/figure.svg" })),
-      ).not.toContain("preview");
-    }),
   );
 
   it.effect("an edit takes a new picture; the first one stays as it was", () =>

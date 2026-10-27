@@ -3,7 +3,6 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { path as platformPath, posix } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
-import { toolDefinition } from "@tanstack/ai";
 import {
   Array as Arr,
   MutableHashMap,
@@ -30,14 +29,10 @@ import {
   TextFileRejectedReason,
 } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { HiddenReplaceFailure, mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
-import { runTrace } from "../runtime/run-trace.ts";
 import { guardedChange, guardedEffect } from "./failure.ts";
-import { lazily } from "./lazy.ts";
 import { runTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 export const fileToolNames = [
   "list_files",
@@ -580,35 +575,8 @@ const make = Effect.gen(function* () {
     /**
      * File tools for one project (R04). Reads, searches, creation, edits and deletion inside the
      * project run without approval; `.git`, links and credential files are refused. They run on
-     * the run's context, so their spans join the run's trace.
+     * the loop's fiber, so their spans join the run's trace.
      */
-    forProject: (project: Project) =>
-      Effect.map(runTrace, (caller) => {
-        const calls = callsFor(project.root);
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const run = runNativeEffectWith(caller);
-        return [
-          toolDefinition(definitionOf(listFiles)).server((input, context) =>
-            run(calls.listFiles(input), { signal: context?.abortSignal }),
-          ),
-          toolDefinition(definitionOf(searchFiles)).server((input, context) =>
-            run(calls.searchFiles(input), { signal: context?.abortSignal }),
-          ),
-          toolDefinition(definitionOf(readFile)).server((input, context) =>
-            run(calls.readFile(input), { signal: context?.abortSignal }),
-          ),
-          // A change runs to the end once started, so it never stops halfway.
-          toolDefinition(definitionOf(writeFile)).server((input) => run(calls.writeFile(input))),
-          toolDefinition(definitionOf(editFile)).server((input) => run(calls.editFile(input))),
-          lazily(
-            toolDefinition(definitionOf(deleteFile)).server((input) =>
-              run(calls.deleteFile(input)),
-            ),
-          ),
-        ] as const;
-      }),
-
-    /** {@link forProject} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
     runToolsFor: (project: Project) => {
       const calls = callsFor(project.root);
       return [

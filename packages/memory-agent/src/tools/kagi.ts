@@ -1,14 +1,8 @@
 import { Cause } from "effect";
 import { logFailure } from "../runtime/logged-failures.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
-
-type NativeRunner = ReturnType<typeof runNativeEffectWith<never>>;
-import { toolDefinition, type AnyServerTool, type ToolExecutionContext } from "@tanstack/ai";
 import { HashSet, Context, Effect, Layer, Option, Schema } from "effect";
 import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 export const kagiToolNames = ["kagi_search", "kagi_extract"] as const;
 
@@ -57,15 +51,14 @@ const isWebUrl = (value: string) => {
 
 const make = Effect.gen(function* () {
   const kagi = yield* Kagi;
-  const services = yield* Effect.context<never>();
 
   // The calls fail with the `kagi_<reason>: ...` message, which is what the model sees. Without a
   // signal, interrupting the call stops its request.
-  const search = ({ query, limit }: typeof KagiSearchInput.Type, signal: AbortSignal | undefined) =>
+  const search = ({ query, limit }: typeof KagiSearchInput.Type) =>
     Effect.gen(function* () {
       const response = yield* kagi.search(
         { query, limit: Math.min(Math.max(limit ?? 10, 1), 20) },
-        signal,
+        undefined,
       );
       return {
         results: response.data?.search ?? [],
@@ -75,7 +68,7 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const extract = ({ urls }: typeof KagiExtractInput.Type, signal: AbortSignal | undefined) =>
+  const extract = ({ urls }: typeof KagiExtractInput.Type) =>
     Effect.succeed(urls).pipe(
       Effect.filterOrFail(
         (given) => given.length > 0 && given.length <= maxExtractUrls,
@@ -90,7 +83,7 @@ const make = Effect.gen(function* () {
             ),
           ),
       ),
-      Effect.flatMap((given) => kagi.extract(given, signal)),
+      Effect.flatMap((given) => kagi.extract(given, undefined)),
       Effect.map((response) => {
         const pages = response.data.map((page) =>
           Option.match(Option.fromNullishOr(page.markdown), {
@@ -128,16 +121,6 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const serverTools = (run: NativeRunner): AnyServerTool[] => [
-    toolDefinition(definitionOf(kagiSearch)).server((input, context?: ToolExecutionContext) =>
-      run(search(input, context?.abortSignal)),
-    ),
-    toolDefinition(definitionOf(kagiExtract)).server((input, context?: ToolExecutionContext) =>
-      run(extract(input, context?.abortSignal)),
-    ),
-  ];
-
   // An unreadable Kagi setting hides the tools, as a disabled one does.
   const enabled = Effect.catch(kagi.status, (error) =>
     Effect.as(logFailure("kagi_status_unavailable")(error), {
@@ -149,19 +132,13 @@ const make = Effect.gen(function* () {
   return {
     /**
      * Both tools while Kagi is enabled with a key; none otherwise, so the model never sees them.
-     * They run on the run's context, so their spans join the run's trace.
+     * They run on the loop's fiber, so their spans join the run's trace.
      */
-    tools: Effect.map(Effect.all([enabled, runTrace]), ([on, caller]): AnyServerTool[] => {
-      const run = runNativeEffectWith(onRun(services, caller));
-      return on ? serverTools(run) : [];
-    }),
-
-    /** {@link tools} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
     runTools: Effect.map(enabled, (on): RunTool[] =>
       on
         ? [
-            runTool({ ...kagiSearch, handler: (input) => search(input, undefined) }),
-            runTool({ ...kagiExtract, handler: (input) => extract(input, undefined) }),
+            runTool({ ...kagiSearch, handler: search }),
+            runTool({ ...kagiExtract, handler: extract }),
           ]
         : [],
     ),

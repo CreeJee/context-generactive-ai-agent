@@ -14,7 +14,7 @@ import {
 } from "../src/files/text.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
 import { FileTools } from "../src/tools/files.ts";
-import { inRun } from "./support/run-span.ts";
+import { callTool } from "./support/run-tools.ts";
 import { listOutsideFilesEffect } from "../src/files/listing.ts";
 
 const resultStore = Effect.acquireRelease(
@@ -186,52 +186,31 @@ layer(NodeServices.layer)((it) => {
       expect(complete.paths).toEqual([...complete.paths].sort());
     }),
   );
-  it.effect(
-    "SDK cancellation waits for close and keeps interruption distinct from I/O failure",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
-        const absolute = path.join(directory, "text");
-        yield* fs.writeFileString(absolute, "x\n".repeat(maxTextBytes / 2));
-        const files = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
-        const execute = (yield* inRun(
-          files.forProject({
-            id: "p",
-            root: directory,
-            name: "fixture",
-            crossRecallExcluded: false,
-            permissionMode: "ask",
-            createdAt: "2026-10-10T00:00:00Z",
-            hiddenAt: null,
-          }),
-        ))[2].execute!;
-        let rejection: Cause.UnknownError | undefined;
-        const reading = yield* Effect.forkChild(
-          Effect.callback<void, Cause.UnknownError>((resume, signal) => {
-            const settled = Promise.resolve(
-              execute(
-                { path: "text", maxLines: 1 },
-                { toolCallId: "range", abortSignal: signal, emitCustomEvent: () => undefined },
-              ),
-            ).then(
-              () => Exit.succeed(undefined),
-              (cause) => {
-                rejection = new Cause.UnknownError(cause);
-                return Exit.fail(rejection);
-              },
-            );
-            void settled.then((exit) => resume(exit));
-            // The SDK Promise owns cleanup; the test waits for that cleanup after aborting it.
-            return Effect.promise(() => settled).pipe(Effect.asVoid);
-          }),
-        );
-        while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
-        yield* Fiber.interrupt(reading);
-        expect(yield* handlesFor(absolute)).toBe(0);
-        expect(String(rejection?.cause).toLowerCase()).toContain("interrupt");
-        expect(String(rejection?.cause)).not.toContain("io_error");
-      }),
+  it.effect("cancellation waits for close and keeps interruption distinct from I/O failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const absolute = path.join(directory, "text");
+      yield* fs.writeFileString(absolute, "x\n".repeat(maxTextBytes / 2));
+      const files = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
+      const tools = files.runToolsFor({
+        id: "p",
+        root: directory,
+        name: "fixture",
+        crossRecallExcluded: false,
+        permissionMode: "ask",
+        createdAt: "2026-10-10T00:00:00Z",
+        hiddenAt: null,
+      });
+      const reading = yield* Effect.forkChild(
+        callTool(tools, "read_file", { path: "text", maxLines: 1 }),
+      );
+      while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
+      yield* Fiber.interrupt(reading);
+      expect(yield* handlesFor(absolute)).toBe(0);
+      const exit = yield* Fiber.await(reading);
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    }),
   );
 });

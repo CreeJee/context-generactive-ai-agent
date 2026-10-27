@@ -1,9 +1,5 @@
-import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
-import { HashSet } from "effect";
 import { errorTag } from "../tools/failure.ts";
-import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, HashSet, Layer, Option, Predicate, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import { readFileBytesEffect } from "../files/text.ts";
 import type { JsonValue } from "../json.ts";
@@ -32,7 +28,6 @@ export interface DrawingPreview {
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
-  const services = yield* Effect.context<never>();
   const attachments = yield* Attachments;
 
   /**
@@ -63,47 +58,8 @@ const make = Effect.gen(function* () {
     /**
      * The same tools; `write_file` and `edit_file` add a `preview` to their result when the file is
      * an SVG. The model gets the result too, and the preview only tells it a picture was made.
-     * The preview runs on the run's context, so its spans join the run's trace.
+     * The preview runs on the loop's fiber, so its spans join the run's trace.
      */
-    withPreviews: (project: Project, tools: readonly AnyServerTool[]) =>
-      Effect.map(runTrace, (caller): AnyServerTool[] => {
-        const run = runNativeEffectWith(onRun(services, caller));
-        return tools.map((tool): AnyServerTool =>
-          Option.fromNullishOr(tool.execute).pipe(
-            Option.filter(() => HashSet.has(writingToolNames, tool.name)),
-            Option.match({
-              onNone: () => tool,
-              onSome: (execute) => ({
-                ...tool,
-                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                execute: (...call: Parameters<typeof execute>) =>
-                  run(
-                    Effect.flatMap(
-                      nativePromise(() => Promise.resolve(execute(...call))),
-                      (result) =>
-                        decodeWritten(result).pipe(
-                          Option.filter((written) => isDrawing(written.path)),
-                          Option.match({
-                            onNone: () => Effect.succeed(result),
-                            onSome: (written) =>
-                              Effect.map(
-                                previewOf(project, written.path),
-                                Option.match({
-                                  onNone: () => result,
-                                  onSome: (picture) => ({ ...result, preview: picture }),
-                                }),
-                              ),
-                          }),
-                        ),
-                    ),
-                  ),
-              }),
-            }),
-          ),
-        );
-      }),
-
-    /** {@link withPreviews} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
     withRunPreviews: (project: Project, tools: ReadonlyArray<RunTool>): Array<RunTool> =>
       tools.map((tool) =>
         HashSet.has(writingToolNames, tool.tool.name)

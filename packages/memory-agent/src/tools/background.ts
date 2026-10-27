@@ -1,5 +1,4 @@
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import {
   MutableHashMap,
   Cause,
@@ -17,11 +16,8 @@ import { RunStore } from "../loop/store.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
-import { lazily } from "./lazy.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
@@ -143,7 +139,6 @@ const make = Effect.gen(function* () {
   });
   const runStore = yield* RunStore;
   const redactor = yield* SecretRedactor;
-  const context = yield* Effect.context<never>();
   const fibers = yield* FiberMap.make<string>();
   const dispatch = Semaphore.makeUnsafe(1);
   const sessions = MutableHashMap.empty<string, string>();
@@ -452,24 +447,7 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded", discard: true },
       );
     }),
-    /** The tools run on the run's context, so their spans join the run's trace. */
-    forSession: (sessionId: string) =>
-      Effect.map(runTrace, (caller): AnyServerTool[] => {
-        const run = Effect.runPromiseWith(onRun(context, caller));
-        const calls = callsFor(sessionId);
-        return [
-          toolDefinition(definitionOf(getBackgroundResult)).server((input) =>
-            run(calls.getResult(input)),
-          ),
-          lazily(
-            toolDefinition(definitionOf(cancelBackgroundTask)).server((input) =>
-              run(calls.cancel(input)),
-            ),
-          ),
-        ];
-      }),
-
-    /** {@link forSession} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+    /** The tools run on the loop's fiber, so their spans join the run's trace. */
     runToolsFor: (sessionId: string): RunTool[] => {
       const calls = callsFor(sessionId);
       return [
