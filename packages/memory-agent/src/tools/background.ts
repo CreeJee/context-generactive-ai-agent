@@ -13,7 +13,7 @@ import {
   Schema,
   Semaphore,
 } from "effect";
-import { ChatState } from "../chat-state/chat-state.ts";
+import { RunStore } from "../loop/store.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
@@ -141,7 +141,7 @@ const make = Effect.gen(function* () {
       WHERE i.idempotency_key = ${request.idempotencyKey}
         AND t.origin_session_id = ${request.sessionId} AND t.agent_name = ${request.agentName}`,
   });
-  const state = yield* ChatState;
+  const runStore = yield* RunStore;
   const redactor = yield* SecretRedactor;
   const context = yield* Effect.context<never>();
   const fibers = yield* FiberMap.make<string>();
@@ -149,17 +149,19 @@ const make = Effect.gen(function* () {
   const sessions = MutableHashMap.empty<string, string>();
   let onCompletion: ((sessionId: string) => void) | undefined;
   const loadResult = Effect.fn("BackgroundTasks.loadResult")(function* (taskId: string) {
-    const saved = yield* Effect.tryPromise({
-      try: () => state.persistence.stores.metadata.get(namespace, taskId),
-      catch: (cause) => BackgroundResultStoreFailed.make({ operation: "read", cause }),
-    });
-    return saved === null
-      ? null
-      : yield* Schema.decodeUnknownEffect(SavedResult)(saved).pipe(
+    const saved = yield* Effect.mapError(runStore.metadata.get(namespace, taskId), (cause) =>
+      BackgroundResultStoreFailed.make({ operation: "read", cause }),
+    );
+    return yield* Option.match(saved, {
+      onNone: () => Effect.succeedNone,
+      onSome: (value) =>
+        Schema.decodeUnknownEffect(SavedResult)(value).pipe(
+          Effect.asSome,
           Effect.mapError((cause) =>
             BackgroundResultStoreFailed.make({ operation: "decode", cause }),
           ),
-        );
+        ),
+    });
   });
   const traceEffect = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.mapError(effect, (cause) => BackgroundTraceFailed.make({ cause }));
@@ -192,7 +194,7 @@ const make = Effect.gen(function* () {
     const detail = yield* owned(sessionId, taskId);
     const saved = yield* loadResult(taskId);
     return Option.getOrNull(
-      Option.orElse(Option.fromNullishOr(saved), () =>
+      Option.orElse(saved, () =>
         Option.liftPredicate(storageFailed, () => detail.attempts.at(-1)?.status === "failed"),
       ),
     );
@@ -227,14 +229,10 @@ const make = Effect.gen(function* () {
         result: string,
       ) {
         const hidden = yield* redactor.redactText(result);
-        yield* Effect.tryPromise({
-          try: () =>
-            state.persistence.stores.metadata.set(namespace, handle.taskId, {
-              status,
-              result: hidden.text,
-            }),
-          catch: (cause) => BackgroundResultStoreFailed.make({ operation: "write", cause }),
-        });
+        yield* Effect.mapError(
+          runStore.metadata.set(namespace, handle.taskId, { status, result: hidden.text }),
+          (cause) => BackgroundResultStoreFailed.make({ operation: "write", cause }),
+        );
       });
       const finalize = Effect.fn("BackgroundTasks.finalize")(function* (
         exit: Exit.Exit<BackgroundOutcome, BackgroundOperationFailed | BackgroundTraceFailed>,

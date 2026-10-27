@@ -96,6 +96,15 @@ export type StoredMessage = typeof StoredMessage.Type;
 /** `chat_history_groups.messages`: the thread's messages one screen message shows, in order. */
 export const StoredHistoryGroup = Schema.NonEmptyArray(StoredMessage);
 
+/** `chat_runs.status`. `interrupted` waits for the user; the rest but `running` are terminal. */
+export const StoredRunStatus = Schema.Literals([
+  "running",
+  "interrupted",
+  "completed",
+  "failed",
+  "aborted",
+]);
+
 const TokenCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /**

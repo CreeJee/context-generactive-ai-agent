@@ -22,7 +22,6 @@ import {
   Ref,
   Schema,
 } from "effect";
-import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import { type ConversationMessage, messageText } from "../agent/compaction.ts";
@@ -469,7 +468,6 @@ const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
-  const chatState = yield* ChatState;
   const classifier = yield* PermissionClassifier;
   const reviews = yield* PermissionReviews;
   const relayed = yield* RelayedApprovals;
@@ -868,9 +866,7 @@ const make = Effect.gen(function* () {
         );
 
         const ran = yield* Ref.get(progress);
-        const persisted = yield* nativePromise(() =>
-          chatState.persistence.stores.messages.loadThread(threadId),
-        );
+        const persisted = yield* runStore.thread(threadId);
         // Where the report's answer is in the child's transcript.
         const answerMessageId = Option.filter(ran.lastMessageId, (id) =>
           persisted.some((message) => message.id === id),
@@ -1288,7 +1284,7 @@ const make = Effect.gen(function* () {
         );
         const base = { subagentId, agent: row.name, taskId, attemptId };
         const settled = Effect.map(
-          nativePromise(() => chatState.persistence.stores.messages.loadThread(attempt.threadId)),
+          runStore.thread(attempt.threadId),
           (messages): SubagentReport => {
             // The attempt's terminal event names its last assistant message.
             const answerId = detail.events.findLast(
@@ -1667,12 +1663,10 @@ const make = Effect.gen(function* () {
           return yield* Option.match(row, {
             onNone: () => Effect.succeed(null),
             onSome: (found) =>
-              Effect.map(
-                nativePromise(() =>
-                  chatState.persistence.stores.messages.loadThread(subagentThreadId(subagentId)),
-                ),
-                (messages) => ({ subagent: toView(found), messages }),
-              ),
+              Effect.map(runStore.thread(subagentThreadId(subagentId)), (messages) => ({
+                subagent: toView(found),
+                messages,
+              })),
           });
         }),
       ),

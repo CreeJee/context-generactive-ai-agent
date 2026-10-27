@@ -8,8 +8,8 @@ import {
   Schema,
 } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
-import { messageText } from "../../src/messages/text.ts";
+import { messageText } from "../../src/agent/compaction.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { type PermissionMode, Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { AdapterInvocation } from "../../src/testing/scripted-adapter.ts";
@@ -118,11 +118,7 @@ export const settled = (sessionId: string) =>
 export const delegate = Effect.fnUntraced(function* (sessionId: string, text: string) {
   yield* send(sessionId, text);
   yield* settled(sessionId);
-  const messages = yield* current(
-    Effect.flatMap(ChatState, ({ persistence }) =>
-      sdk(() => persistence.stores.messages.loadThread(sessionId)),
-    ),
-  );
+  const messages = yield* current(Effect.flatMap(RunStore, (store) => store.thread(sessionId)));
   const last = messages.findLast((message) => message.role === "assistant");
   return last === undefined ? "" : messageText(last);
 });

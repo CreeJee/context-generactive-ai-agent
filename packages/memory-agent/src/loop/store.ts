@@ -1,16 +1,19 @@
 import { Clock, Context, Data, Effect, HashSet, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { type ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
+import { interruptContinuationLostCode, type RunStatus } from "../agent/run-state.ts";
 import {
   StoredInterruptPayload,
   StoredInterruptResponse,
   StoredMessage,
+  StoredRunStatus,
   StoredUsage,
 } from "../chat-store/schema.ts";
 import { historyProjection } from "../chat-state/history-projection-native.ts";
 import { HistoryProjectionReader } from "../chat-state/history-projection-reader.ts";
 import { JsonValue } from "../json.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
+import { optionalProperty } from "../optional-property.ts";
 
 /**
  * A run's chat rows on the app's SqlClient (docs/effect-ai-migration.md step 4): the thread, the
@@ -63,6 +66,31 @@ export class InterruptCommitRejected extends Schema.TaggedError<InterruptCommitR
     interruptId: Schema.String,
   },
 ) {}
+
+/** A run's record: its thread, how it stands, and why it failed. */
+export interface StoredRun {
+  readonly runId: string;
+  readonly threadId: string;
+  readonly status: RunStatus;
+  readonly error: { readonly message: string; readonly code?: string } | null;
+}
+
+const RunRow = Schema.Struct({
+  run_id: Schema.String,
+  thread_id: Schema.String,
+  status: StoredRunStatus,
+  error: Schema.NullOr(Schema.String),
+  error_code: Schema.NullOr(Schema.String),
+});
+const storedRun = (row: typeof RunRow.Type): StoredRun => ({
+  runId: row.run_id,
+  threadId: row.thread_id,
+  status: row.status,
+  error:
+    row.error === null
+      ? null
+      : { message: row.error, ...optionalProperty("code", row.error_code ?? undefined) },
+});
 
 const RunUsage = Schema.Struct({ usage: Schema.NullOr(Usage) });
 const InterruptRow = Schema.Struct({
@@ -191,6 +219,27 @@ const make = Effect.gen(function* () {
     })} WHERE run_id = ${runId}`;
   });
 
+  const runRow = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: RunRow,
+    execute: (runId) => sql`
+      SELECT run_id, thread_id, status, error, error_code FROM chat_runs WHERE run_id = ${runId}`,
+  });
+
+  /** The run's record. Run ids are unique across threads. */
+  const run = (runId: string) => Effect.map(runRow(runId), Option.map(storedRun));
+
+  const lastRunRow = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: RunRow,
+    execute: (threadId) => sql`
+      SELECT run_id, thread_id, status, error, error_code FROM chat_runs
+      WHERE thread_id = ${threadId} ORDER BY started_at DESC, run_id DESC LIMIT 1`,
+  });
+
+  /** The thread's newest run. */
+  const lastRun = (threadId: string) => Effect.map(lastRunRow(threadId), Option.map(storedRun));
+
   const pendingRows = SqlSchema.findAll({
     Request: Schema.String,
     Result: InterruptRow,
@@ -287,6 +336,35 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Retires the approvals a page can still show after their continuation was lost. The gated tool
+   * never runs: the interrupts are cancelled and their run fails, so the thread can take a new turn.
+   * Gives how many interrupts it cancelled.
+   */
+  const discardPendingInterrupts = Effect.fn("RunStore.discardPendingInterrupts")(function* (
+    threadId: string,
+  ) {
+    const discardedAt = yield* Clock.currentTimeMillis;
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const discarded = yield* sql`
+          UPDATE chat_interrupts SET status = 'cancelled', resolved_at = ${discardedAt}
+          WHERE thread_id = ${threadId} AND status = 'pending'
+          RETURNING interrupt_id`;
+        yield* Effect.when(
+          sql`
+            UPDATE chat_runs
+            SET status = 'failed', finished_at = ${discardedAt},
+                error = 'The approval continuation was no longer available, so the request was discarded.',
+                error_code = ${interruptContinuationLostCode}
+            WHERE thread_id = ${threadId} AND status IN ('running', 'interrupted')`,
+          Effect.succeed(discarded.length > 0),
+        );
+        return discarded.length;
+      }),
+    );
+  });
+
   const metadataRow = SqlSchema.findOneOption({
     Request: Schema.Struct({ namespace: Schema.String, key: Schema.String }),
     Result: Schema.Struct({ value: Value }),
@@ -335,15 +413,18 @@ const make = Effect.gen(function* () {
     saveThread,
     startRun,
     endRun,
+    run,
+    lastRun,
     pendingInterrupts,
     createInterrupts,
     commitInterrupts,
+    discardPendingInterrupts,
     metadata,
     chatMetadata,
   };
 });
 
-/** Chat rows of the Effect AI loop. Not connected to the app before step 7. */
+/** Chat rows of the Effect AI loop, which the app reads too. */
 export class RunStore extends Context.Service<RunStore, Effect.Success<typeof make>>()(
   "memory-agent/loop/store/RunStore",
 ) {

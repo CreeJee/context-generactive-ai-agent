@@ -84,6 +84,7 @@ const metadataFailed =
       cause,
     });
 
+/** The latest provider-reported prompt/cache usage in a session, if it has made a request. */
 export const lastContextUsageEffect = (input: {
   readonly metadata: ChatMetadata;
   readonly threadId: string;
@@ -92,14 +93,6 @@ export const lastContextUsageEffect = (input: {
     Effect.mapError(metadataFailed("read-usage")),
     Effect.map((stored) => Option.getOrNull(decodeContextUsage(stored))),
   );
-
-/** The latest provider-reported prompt/cache usage in a session, if it has made a request. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const lastContextUsageBody = (metadata: MetadataStore, threadId: string) =>
-  Effect.runPromise(lastContextUsageEffect({ metadata: tanstackMetadata(metadata), threadId }));
-export const lastContextUsage: {
-  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof lastContextUsageBody>;
-} & typeof lastContextUsageBody = EffectFunction.dual(2, lastContextUsageBody);
 
 /** A provider-reported zero is distinct from no report; each observation may trigger only once. */
 const coldObservationIdBody = (

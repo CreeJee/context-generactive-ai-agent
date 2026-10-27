@@ -14,7 +14,6 @@ import {
   Predicate,
 } from "effect";
 import { modelFailureOf, runChat, type RunHook } from "../loop/run.ts";
-import { tanstackMetadata } from "../chat-store/metadata.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { chatSnapshot } from "../chat-state/snapshot.ts";
 import { projectInstructionsHook } from "./project-instructions.ts";
@@ -126,7 +125,7 @@ import {
   messageText,
   type CompactionSources,
 } from "./compaction.ts";
-import { contextUsageHook, contextView, lastContextUsage } from "./context-usage.ts";
+import { contextUsageHook, contextView, lastContextUsageEffect } from "./context-usage.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import { fallbackLogged, logDefect, logFailure } from "../runtime/logged-failures.ts";
@@ -716,7 +715,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ),
   );
   background.onCompletion(wakeNotifications);
-  const { metadata } = chatState.persistence.stores;
+  /** The run's record, when it belongs to the session. */
+  const sessionRun = (sessionId: string, runId: string) =>
+    Effect.map(
+      runStore.run(runId),
+      Option.filter((run) => run.threadId === sessionId),
+    );
+  /** The session's newest run, or null before its first. */
+  const lastRun = (sessionId: string) => Effect.map(runStore.lastRun(sessionId), Option.getOrNull);
   const inUse = () => json(423, { error: "session_in_use" });
   const workTraceUnavailable = () => json(404, { error: "work_trace_disabled" });
   const windowFor = (selection: ModelSelection | null) =>
@@ -826,8 +832,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
    */
   const followRun = (sessionId: string, runId: string, offset: string) =>
     Effect.gen(function* () {
-      const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
-      if (!isTruthy(run)) return refused({ error: "run_not_found" });
+      if (Option.isNone(yield* sessionRun(sessionId, runId)))
+        return refused({ error: "run_not_found" });
       const binding = Option.getOrUndefined(yield* runBinding(runId));
       if (isTruthy(binding)) {
         if (binding.session_id !== sessionId) return refused({ error: "run_not_found" });
@@ -935,7 +941,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
   /** What the queue does once a run's stream ended, by how the run ended. */
   const settleQueueAfter = Effect.fnUntraced(function* (sessionId: string, runId: string) {
-    const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
+    const run = Option.getOrUndefined(yield* sessionRun(sessionId, runId));
     switch (run?.status) {
       case "completed":
         yield* settleNewGoal(sessionId, runId);
@@ -1443,17 +1449,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           resume,
           forwardedProps,
         } = request.input;
-        // Match the submitted IDs to an owner-persisted interrupt batch. The SDK still validates
+        // Match the submitted IDs to an owner-persisted interrupt batch. The loop still validates
         // response schemas and approval arguments before executing any tool.
         const pendingResume =
           parentRunId !== undefined && (resume?.length ?? 0) > 0
-            ? yield* agentPromise("load-resume-interrupts", () =>
-                chatState.persistence.stores.interrupts.listPendingByRun(parentRunId),
+            ? (yield* runStore.pendingInterrupts(sessionId)).filter(
+                (entry) => entry.runId === parentRunId,
               )
             : [];
         const resumeRunId =
           pendingResume.length > 0 &&
-          pendingResume.every((entry) => entry.threadId === sessionId) &&
           pendingResume.length === resume?.length &&
           pendingResume.every((entry) =>
             resume.some((item) => item.interruptId === entry.interruptId),
@@ -1473,12 +1478,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           return refused({ error: "run_outcome_uncertain" });
         // Run IDs are globally unique in chat_runs. Reject another session's ID before
         // appending its user node or passing the collision to createOrResume.
-        const storedRun = yield* agentPromise("load-run", () =>
-          chatState.persistence.stores.runs.get(runId),
-        );
-        if (isTruthy(storedRun) && storedRun.threadId !== sessionId)
+        const previousRun = Option.getOrUndefined(yield* runStore.run(runId));
+        if (isTruthy(previousRun) && previousRun.threadId !== sessionId)
           return refused({ error: "run_id_conflict" });
-        const previousRun = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
         if (
           isTruthy(boundRun) &&
           isTruthy(previousRun) &&
@@ -1769,7 +1771,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const abortController = cancellation.controller;
         if (notificationFollowup || kanbanFollowup !== null) {
           const current = yield* sessions.get(sessionId);
-          const last = yield* chatState.lastRun(sessionId);
+          const last = yield* lastRun(sessionId);
           if (
             current.archivedAt !== null ||
             (yield* workTrace.parentNotificationsHeld(sessionId)) ||
@@ -1779,7 +1781,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         }
         if (InternalFollowup.$is("workflow")(internalFollowup)) {
           const current = yield* sessions.get(sessionId);
-          const last = yield* chatState.lastRun(sessionId);
+          const last = yield* lastRun(sessionId);
           const state = yield* workflows.get(sessionId);
           if (
             current.archivedAt !== null ||
@@ -2466,7 +2468,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Effect.timeoutOption(cancelWaitMs),
             Effect.map(Option.isSome),
           );
-          const last = yield* chatState.lastRun(sessionId);
+          const last = yield* lastRun(sessionId);
           return json(200, {
             runId: last?.runId ?? "",
             stopped,
@@ -2483,7 +2485,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ],
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
-        const run = yield* agentPromise("load-run", () => chatState.run(sessionId, live.runId));
+        const run = Option.getOrUndefined(yield* sessionRun(sessionId, live.runId));
         const result: CancelResult = { runId: live.runId, stopped, status: run?.status ?? null };
         return json(200, result);
       }),
@@ -2519,9 +2521,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
         if (isTruthy(liveRuns.get(sessionId))) return json(409, { error: "run_in_progress" });
-        const discarded = yield* agentPromise("discard-interrupts", () =>
-          chatState.discardPendingInterrupts(sessionId),
-        );
+        const discarded = yield* runStore.discardPendingInterrupts(sessionId);
         const workflow = yield* workflows.get(sessionId);
         yield* workflows.finishRun(sessionId, workflow.phase);
         yield* queue.holdWaiting(sessionId, "stopped");
@@ -2538,12 +2538,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(liveRuns.get(sessionId))) return json(409, { error: "run_in_progress" });
         const budget = budgetFor((yield* windowFor(yield* active.selected)).tokens);
-        const { messages } = chatState.persistence.stores;
-        const stored = yield* agentPromise("load-messages", () => messages.loadThread(sessionId));
         const result: CompactResult = yield* compactByHand(
-          tanstackMetadata(metadata),
+          runStore.chatMetadata,
           sessionId,
-          stored,
+          yield* runStore.thread(sessionId),
           compactionSources(sessionId),
           budget,
           () => summaries.catchUp(sessionId, true),
@@ -2564,10 +2562,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = liveRuns.get(sessionId);
-        const last = yield* chatState.lastRun(sessionId);
-        const usage = yield* agentPromise("load-usage", () =>
-          lastContextUsage(metadata, sessionId),
-        );
+        const last = yield* lastRun(sessionId);
+        const usage = yield* lastContextUsageEffect({
+          metadata: runStore.chatMetadata,
+          threadId: sessionId,
+        });
         const workflow = isTruthy(live)
           ? yield* workflows.get(sessionId)
           : yield* workflows.reconcile(sessionId);
@@ -2729,7 +2728,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     queued: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        const last = yield* chatState.lastRun(sessionId);
+        const last = yield* lastRun(sessionId);
         return json(200, yield* queue.snapshot(sessionId, last?.runId ?? null));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -2862,7 +2861,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       if (isTruthy(liveRuns.get(sessionId))) return;
       const session = yield* sessions.get(sessionId);
       if (session.archivedAt !== null) return;
-      const last = yield* chatState.lastRun(sessionId);
+      const last = yield* lastRun(sessionId);
       if (!isTruthy(last)) return;
       // A steered message reaches the model whether or not a page is open: after a normal finish
       // the server sends it as the next turn. If that cannot start, the user confirms it instead.
@@ -2916,9 +2915,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             (yield* relayed.pending(sessionId)).length > 0)
         )
           return;
-        const pendingApprovals = yield* agentPromise("list-approvals", () =>
-          chatState.persistence.stores.interrupts.listPending(sessionId),
-        );
+        const pendingApprovals = yield* runStore.pendingInterrupts(sessionId);
         if (pendingApprovals.length > 0) return;
         const started = yield* send(
           continuing

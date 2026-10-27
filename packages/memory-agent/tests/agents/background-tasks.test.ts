@@ -1,6 +1,7 @@
-import { Cause, Deferred, Effect, FileSystem, Path, Ref, Schema } from "effect";
+import { Cause, Deferred, Effect, FileSystem, Option, Path, Ref, Schema } from "effect";
+import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
 import {
   BackgroundOperationFailed,
@@ -90,7 +91,7 @@ testAgent()("background task lifecycle", (it) => {
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const tasks = yield* BackgroundTasks;
-      const { persistence } = yield* ChatState;
+      const { metadata } = yield* RunStore;
       const receipt = yield* tasks.start(
         yield* runOf(sessionId),
         `${sessionId}:call`,
@@ -99,11 +100,7 @@ testAgent()("background task lifecycle", (it) => {
         Effect.succeed(reported("done")),
       );
       yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
-      yield* sdk(() =>
-        persistence.stores.metadata.set("background-task-result", receipt.taskId, {
-          status: "completed",
-        }),
-      );
+      yield* metadata.set("background-task-result", receipt.taskId, { status: "completed" });
       expect(yield* Effect.flip(tasks.waitResult(sessionId, receipt.taskId, 0))).toBeInstanceOf(
         BackgroundResultStoreFailed,
       );
@@ -203,7 +200,7 @@ testAgent()("background task lifecycle", (it) => {
       const sessionId = yield* freshSession;
       const tasks = yield* BackgroundTasks;
       const trace = yield* WorkTraceStore;
-      const { persistence } = yield* ChatState;
+      const { metadata } = yield* RunStore;
       const receipt = yield* tasks.start(
         yield* runOf(sessionId),
         `${sessionId}:call`,
@@ -233,9 +230,7 @@ testAgent()("background task lifecycle", (it) => {
             yield* trace.finalizeTaskLifecycle(requested.operationId),
           ),
         ).toBe(true);
-      expect(
-        yield* sdk(() => persistence.stores.metadata.get("background-task-result", receipt.taskId)),
-      ).toBeNull();
+      expect(yield* metadata.get("background-task-result", receipt.taskId)).toEqual(Option.none());
       expect(yield* rejection(readResult(sessionId, { taskId: receipt.taskId }))).toMatchObject({
         message: expect.stringContaining("not found"),
       });
@@ -284,15 +279,19 @@ testAgent()("background result storage failure", (it) => {
       Effect.gen(function* () {
         const { session } = yield* TestEnv;
         const tasks = yield* BackgroundTasks;
-        const { metadata } = (yield* ChatState).persistence.stores;
-        const original = metadata.set.bind(metadata);
+        const { metadata } = yield* RunStore;
+        const original = metadata.set;
         let resultWrites = 0;
         yield* Effect.acquireRelease(
           Effect.sync(() =>
             vi.spyOn(metadata, "set").mockImplementation((namespace, key, value) => {
               if (namespace !== "background-task-result") return original(namespace, key, value);
               resultWrites++;
-              return Promise.reject(new Error("storage offline"));
+              return Effect.fail(
+                SqlError.SqlError.make({
+                  reason: SqlError.classifySqliteError(new Error("storage offline")),
+                }),
+              );
             }),
           ),
           (spy) => Effect.sync(() => spy.mockRestore()),
@@ -442,10 +441,7 @@ testAgent()("background cancellation across restart", (it) => {
         status: "cancelled",
       });
       // Simulate a process dying after dispatch with no durable result.
-      const { persistence } = yield* ChatState;
-      yield* sdk(() =>
-        persistence.stores.metadata.delete("background-task-result", receipt.taskId),
-      );
+      yield* (yield* RunStore).metadata.delete("background-task-result", receipt.taskId);
       yield* sqlRun("UPDATE agent_run_attempts SET status='running' WHERE id=?", receipt.attemptId);
       yield* sqlRun(
         "UPDATE work_tasks SET active_attempt_id=?,status='running' WHERE id=?",

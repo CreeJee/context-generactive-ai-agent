@@ -1,4 +1,4 @@
-import type { RunStatus } from "@tanstack/ai-persistence";
+import type { StoredRunStatus } from "../chat-store/schema.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowActions } from "../workflow/actions.ts";
 import type { WorkflowState } from "../workflow/workflow.ts";
@@ -7,6 +7,9 @@ import type { ProviderRetryView } from "../workflow/provider-retry.ts";
 import type { UncertainRun } from "../workflow/uncertain-runs.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
+
+/** How a run stands, as `chat_runs.status` keeps it. */
+export type RunStatus = typeof StoredRunStatus.Type;
 
 /** Error code on runs that were still producing when the previous server process ended. */
 export const serverRestartedCode = "server_restarted";

@@ -15,7 +15,7 @@ import {
   pendingColdObservationEffect,
   type StoredContextUsage,
 } from "../../src/agent/context-usage.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { chatPersistence } from "../../src/chat-state/persistence.ts";
 import { tanstackMetadata } from "../../src/chat-store/metadata.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -38,7 +38,7 @@ const freshSession = Effect.gen(function* () {
 /** Usage as any release stored it: older ones lack the observation and compaction fields. */
 type LegacyUsage = Partial<StoredContextUsage>;
 
-const metadataStore = Effect.map(ChatState, (state) => state.persistence.stores.metadata);
+const metadataStore = Effect.map(chatPersistence, (persistence) => persistence.stores.metadata);
 
 testAgent()("compaction over recorded history", (it) => {
   it.effect(

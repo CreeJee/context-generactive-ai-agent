@@ -1,11 +1,11 @@
 import { Cause, Effect, Fiber, HashSet, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { StepEnded } from "../../src/loop/run.ts";
 import { RunEnd } from "../../src/loop/store.ts";
-import { messageText } from "../../src/messages/text.ts";
+import { messageText } from "../../src/agent/compaction.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import type { AdapterInvocation, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
@@ -267,8 +267,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         expect(yield* deliveredCompletions(sessionId)).toBe(1);
         expect(yield* userNodes(sessionId)).toBe(2);
         expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
-        const { persistence } = yield* ChatState;
-        const messages = yield* sdk(() => persistence.stores.messages.loadThread(sessionId));
+        const messages = yield* (yield* RunStore).thread(sessionId);
         expect(
           messages.some(
             (message) =>

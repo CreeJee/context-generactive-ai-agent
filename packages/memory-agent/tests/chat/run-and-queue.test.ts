@@ -1,7 +1,8 @@
 import { Effect, Fiber, Option, Schedule, Schema } from "effect";
+import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { ChatMessage } from "../../src/api/chat-api.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { MessageQueue } from "../../src/queue/queue.ts";
 import { NextDelivery, QueueEdit, QueueItemState } from "../../src/queue/queue-state.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
@@ -553,19 +554,23 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      const chatState = yield* ChatState;
+      const runStore = yield* RunStore;
       // The page holds the session, so a settled finish would leave the message waiting for it.
       yield* agent.lease(session.id, "tab", "claim");
       const sending = yield* sendInBackground(yield* openPage(session.id, "tab"), "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
       yield* enqueue(session.id, "and the tests", "queue", "tab");
       const runId = (yield* statusOf(session.id)).running!.runId;
-      const original = chatState.run;
-      const lookup = vi
-        .spyOn(chatState, "run")
-        .mockImplementation((sessionId, id) =>
-          id === runId ? Promise.reject(new Error("store unavailable")) : original(sessionId, id),
-        );
+      const original = runStore.run;
+      const lookup = vi.spyOn(runStore, "run").mockImplementation((id) =>
+        id === runId
+          ? Effect.fail(
+              SqlError.SqlError.make({
+                reason: SqlError.classifySqliteError(new Error("store unavailable")),
+              }),
+            )
+          : original(id),
+      );
       yield* Effect.addFinalizer(() => Effect.sync(() => lookup.mockRestore()));
       yield* session.release;
       yield* Fiber.join(sending);

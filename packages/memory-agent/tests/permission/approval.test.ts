@@ -1,13 +1,13 @@
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { json, openPage, sdk, sessionScopedResponder } from "../support/chat-client.ts";
+import { json, openPage, sessionScopedResponder } from "../support/chat-client.ts";
 
 /** A fresh session in the shared `ask`-mode agent, with the test model selected. */
 const freshSession = Effect.gen(function* () {
@@ -164,8 +164,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       expect(yield* json(yield* agent.discardInterrupts(sessionId, null))).toEqual({
         discarded: 1,
       });
-      const { interrupts } = (yield* ChatState).persistence.stores;
-      expect(yield* sdk(() => interrupts.listPending(sessionId))).toEqual([]);
+      expect(yield* (yield* RunStore).pendingInterrupts(sessionId)).toEqual([]);
       expect(yield* json(yield* agent.status(sessionId, null))).toMatchObject({
         running: null,
         lastRun: { status: "failed", error: { code: "interrupt_continuation_lost" } },

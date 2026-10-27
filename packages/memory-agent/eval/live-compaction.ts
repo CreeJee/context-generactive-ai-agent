@@ -13,8 +13,8 @@ import { maxIterations } from "@tanstack/ai";
 import { DateTime, Effect, Layer, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
-import { compactionState } from "../src/agent/compaction.ts";
-import { ChatState } from "../src/chat-state/chat-state.ts";
+import { compactionStateEffect } from "../src/agent/compaction.ts";
+import { RunStore } from "../src/loop/store.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
@@ -142,7 +142,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
         chat: yield* inProcessChatApi,
         usage: yield* ApiUsage,
         summaries: yield* TurnSummaries,
-        metadata: (yield* ChatState).persistence.stores.metadata,
+        metadata: (yield* RunStore).chatMetadata,
         sessionId: session.id,
       };
     }),
@@ -223,9 +223,10 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     if (calls >= maxCalls && index < prompts.length - 1)
       throw new Error("pilot_provider_budget_exceeded");
   }
-  const blocks = (yield* nativePromise(() =>
-    compactionState(services.metadata, services.sessionId),
-  )).blocks.length;
+  const blocks = (yield* compactionStateEffect({
+    metadata: services.metadata,
+    threadId: services.sessionId,
+  })).blocks.length;
   const final = answers.at(-1) ?? "";
   return {
     variant,

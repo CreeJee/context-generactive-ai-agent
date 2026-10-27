@@ -613,8 +613,8 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 서브에이전트(`a5370287`): kanban card agent와 verifier도 `RunTool`로 새 loop에서 돈다. 자식 run의 TanStack 경로와, 아무도 쓰지 않게 된 TanStack middleware(`parallelReads`, `repeatGuard`, `collectApiUsage`, `projectInstructions`, `childTools`)를 지웠다.
   - `migrateTanStackRows`는 시작 migration의 마지막 단계로 돈다(`btw_threads` 포함). decisions.md "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)"의 "등록"에 있다.
   - 취소는 우리 abort reason(`cancel_requested`)만 쓴다. `requestRunCancel`과 쓰지 않게 된 `SdkCancellation.delivery`를 지웠다. golden 차이는 취소 run의 `chat_runs.cancel_requested`가 비는 것뿐이다.
+  - run 기록, interrupt, chat metadata를 `RunStore`로 읽는다. 턴 요약, 백그라운드 결과, 서브에이전트 transcript도 `RunStore`를 쓴다. `ChatState`에는 시작 때 하는 일(옛 세션의 thread, history page 준비, 이전 프로세스의 run 정리)과 `prepare`만 남았다. 쓰는 곳이 없어진 `middleware`(TanStack `withPersistence`와 부분 답 저장), `run`, `lastRun`, `discardPendingInterrupts`, `persistence`를 지웠다.
   - 1번에 남은 것:
-    - `start`·`followup`·`compact`의 `chatState.persistence` 사용
     - `eval/prompt-overhead.ts`: TanStack adapter의 요청을 재므로 `aa056aa2`부터 돌지 않는다. Effect AI 요청을 재도록 다시 쓴다. `eval/live-compaction.ts`·`eval/live-delegation.ts`의 provider guard도 TanStack adapter를 감싼다.
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.

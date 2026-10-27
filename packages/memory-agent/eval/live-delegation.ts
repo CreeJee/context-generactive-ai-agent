@@ -1,4 +1,4 @@
-import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -12,11 +12,11 @@ import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
 import { DateTime, Clock, Effect, Layer, Schedule, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
-import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
+import { maxIterations, normalizeSystemPrompts } from "@tanstack/ai";
 import { AgUiEvent } from "../src/loop/chunks.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
-import { ChatState } from "../src/chat-state/chat-state.ts";
-import { messageText } from "../src/messages/text.ts";
+import { RunStore } from "../src/loop/store.ts";
+import { messageText } from "../src/agent/compaction.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { defaultStorageRoot } from "../src/config/storage-root.ts";
 import { optionalProperty } from "../src/optional-property.ts";
@@ -227,7 +227,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
       const session = yield* (yield* Sessions).create(project.id);
       return {
         chat: yield* inProcessChatApi,
-        state: yield* ChatState,
+        runStore: yield* RunStore,
         children: yield* Subagents,
         usage: yield* ApiUsage,
         session,
@@ -253,9 +253,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
   const errors = events.flatMap(({ data }) => (AgUiEvent.guards.RUN_ERROR(data) ? [data] : []));
   if (errors.length > 0) throw new Error(`pilot_run_failed: ${stringifyJson(errors)}`);
   yield* Effect.provideContext(settled(services.session.id), servicesContext);
-  const messages: ModelMessage[] = yield* nativePromise(() =>
-    services.state.persistence.stores.messages.loadThread(services.session.id),
-  );
+  const messages = yield* services.runStore.thread(services.session.id);
   const last = messages.findLast((message) => message.role === "assistant");
   const answer = last === undefined ? "" : messageText(last);
   const calls = messages.flatMap((message) =>

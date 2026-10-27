@@ -287,16 +287,6 @@ export interface CompactionState {
   readonly blocks: readonly SummaryBlock[];
 }
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const compactionState: {
-  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof compactionStateBody>;
-} & typeof compactionStateBody = EffectFunction.dual(2, compactionStateBody);
-function compactionStateBody(metadata: MetadataStore, threadId: string): Promise<CompactionState> {
-  return Effect.runPromise(
-    compactionStateEffect({ metadata: tanstackMetadata(metadata), threadId }),
-  );
-}
-
 const metadataFailed =
   (operation: CompactionFailed["operation"]) =>
   ({ cause }: ChatMetadataFailed | ContextUsageFailed) =>
@@ -1009,7 +999,7 @@ export type SummaryOutcome = "done" | "failed" | "unavailable";
 const compactByHandBody = <E>(
   metadata: ChatMetadata,
   threadId: string,
-  messages: readonly ModelMessage[],
+  messages: ReadonlyArray<ConversationMessage>,
   sources: CompactionSources,
   budget: Budget,
   summarize: () => Effect.Effect<SummaryOutcome, E>,
@@ -1055,7 +1045,7 @@ const compactByHandBody = <E>(
 export const compactByHand: {
   <E>(
     threadId: string,
-    messages: readonly ModelMessage[],
+    messages: ReadonlyArray<ConversationMessage>,
     sources: CompactionSources,
     budget: Budget,
     summarize: () => Effect.Effect<SummaryOutcome, E>,

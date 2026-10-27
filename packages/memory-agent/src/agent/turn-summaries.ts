@@ -1,9 +1,7 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import type { ChatMiddleware } from "@tanstack/ai";
 import { Cause, Context, Crypto, Effect, Layer, Schema } from "effect";
-import { ChatState } from "../chat-state/chat-state.ts";
 import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
@@ -17,10 +15,10 @@ import {
 import { ApiUsage, recordUsage } from "./api-usage.ts";
 import { fallbackLogged, logDefect } from "../runtime/logged-failures.ts";
 import type { RunHook } from "../loop/run.ts";
-import { finishedRun } from "../loop/store.ts";
+import { finishedRun, RunStore } from "../loop/store.ts";
 import {
   compactEffect,
-  compactionState,
+  compactionStateEffect,
   estimateConversation,
   linedUp,
   memoryLookups,
@@ -53,14 +51,10 @@ export class TurnSummaryFailed extends Schema.TaggedError<TurnSummaryFailed>()(
   },
 ) {}
 
-const summaryPromise = <A>(
-  operation: TurnSummaryFailed["operation"],
-  evaluate: () => PromiseLike<A>,
-) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => TurnSummaryFailed.make({ operation, cause }),
-  });
+const summaryFailed =
+  (operation: TurnSummaryFailed["operation"]) =>
+  <E>(cause: E) =>
+    TurnSummaryFailed.make({ operation, cause });
 const inputCharacters = 60_000;
 const summaryCharacters = 6_000;
 /** How much of each node the summarizer reads. */
@@ -80,10 +74,9 @@ const nodeLine = (node: Node) =>
   `[${node.kind} ${node.id}${node.detail.ok === false ? " failed" : ""}]\n${shorten(node.text, nodeCharacters[node.kind])}`;
 
 const make = Effect.fnUntraced(function* (automatic: boolean) {
-  const run = Effect.runPromiseWith(yield* Effect.context());
   const scope = yield* Effect.scope;
   const nodes = yield* Nodes;
-  const chatState = yield* ChatState;
+  const runStore = yield* RunStore;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const crypto = yield* Crypto.Crypto;
@@ -93,7 +86,6 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     config.read,
     (settings) => settings.summaryStartPercent ?? defaultSummaryStartPercent,
   );
-  const { messages: messageStore, metadata } = chatState.persistence.stores;
 
   const summarize = Effect.fn("TurnSummaries.summarize")(function* (
     sessionId: string,
@@ -150,10 +142,14 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       const auth = yield* active.auth(selection);
       if (!AuthConnectionState.$is("signed-in")(auth)) return "unavailable" as const;
 
-      const messages = yield* summaryPromise("load-messages", () =>
-        messageStore.loadThread(sessionId),
+      const messages = yield* Effect.mapError(
+        runStore.thread(sessionId),
+        summaryFailed("load-messages"),
       );
-      const state = yield* summaryPromise("load-state", () => compactionState(metadata, sessionId));
+      const state = yield* Effect.mapError(
+        compactionStateEffect({ metadata: runStore.chatMetadata, threadId: sessionId }),
+        summaryFailed("load-state"),
+      );
       const sources: CompactionSources = {
         toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
         nodeTexts: nodes.texts,
@@ -190,8 +186,9 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
         const text = yield* summarize(sessionId, part, selection);
         blocks.push({ end, nextTurnNodeId: next.id, text });
-        yield* summaryPromise("persist", () =>
-          metadata.set(turnSummariesNamespace, sessionId, { blocks }),
+        yield* Effect.mapError(
+          runStore.chatMetadata.set(turnSummariesNamespace, sessionId, { blocks }),
+          summaryFailed("persist"),
         );
       }
       return "done" as const;
@@ -215,12 +212,10 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     setStartPercent: (percent: number) =>
       Effect.as(config.update({ summaryStartPercent: percent }), percent),
 
-    /** Summarizes in the background once a run has finished, so compaction never waits for it. */
-    afterRun: (sessionId: string): ChatMiddleware => ({
-      name: "memory-agent/turn-summaries",
-      onFinish: () => void run(inBackground(sessionId)),
-    }),
-    /** {@link afterRun} for the Effect AI loop; a run that failed or was cancelled starts none. */
+    /**
+     * Summarizes in the background once a run has finished, so compaction never waits for it. A
+     * run that failed or was cancelled starts none.
+     */
     hookForRun: (sessionId: string): RunHook => ({
       ended: (_scope, end) =>
         Effect.when(inBackground(sessionId), Effect.succeed(finishedRun(end))).pipe(Effect.asVoid),

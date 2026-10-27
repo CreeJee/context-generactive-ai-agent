@@ -184,19 +184,6 @@ function toInterrupt(interrupt: typeof InterruptRow.Type): InterruptRecord {
   return record;
 }
 
-/** Session status needs the newest run, not the complete run history. */
-export const latestChatRun = Effect.fn("ChatPersistence.latestChatRun")(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const latest = SqlSchema.findOneOption({
-    Request: Schema.String,
-    Result: RunRow,
-    execute: (threadId) =>
-      sql`SELECT * FROM chat_runs WHERE thread_id = ${threadId} ORDER BY started_at DESC, run_id DESC LIMIT 1`,
-  });
-  return (threadId: string) =>
-    Effect.map(latest(threadId), Option.match({ onNone: () => null, onSome: toRun }));
-});
-
 /**
  * TanStack AI chat persistence on the app's SqlClient: the four state stores with the contract's
  * invariants (full-replace threads, insert-if-absent runs and interrupts, NULL clears for
