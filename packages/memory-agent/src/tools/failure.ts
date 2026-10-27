@@ -32,12 +32,6 @@ const refusalHints = HashMap.fromIterable<string, string>([
 ]);
 
 /**
- * Where the patched SDK (`patches/@tanstack__ai@1.0.0.patch`) finds the result a failed tool
- * gives the model, in place of `{ error: message }`.
- */
-export const toolResultKey = Symbol.for("tanstack-ai.toolResult");
-
-/**
  * What the model reads for a failed tool call: a code, the failure's own tag, and the tool's
  * text, redacted, so the model can correct a path or an argument and try again.
  */
@@ -62,11 +56,14 @@ export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
   override get message() {
     return `${this.code}: ${this.detail}`;
   }
-
-  get [toolResultKey](): ToolFailureResult {
-    return { error: this.code, cause: this.tag, detail: this.detail };
-  }
 }
+
+/** The result a failed tool gives the model, in place of `{ error: message }`. */
+export const failureResult = (failed: ToolFailed): ToolFailureResult => ({
+  error: failed.code,
+  cause: failed.tag,
+  detail: failed.detail,
+});
 
 /** The same failure with `detail` in place of its text. */
 export const withDetail: {

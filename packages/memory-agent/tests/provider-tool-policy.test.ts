@@ -8,7 +8,6 @@ import {
   ProviderToolCapabilityRegistry,
   makeProviderToolCapabilityRegistry,
   providerToolDescriptors,
-  type ProviderToolCapabilityRegistryApi,
   type ProviderToolMetadataFailure,
 } from "../src/providers/tool-capabilities.ts";
 import {
@@ -16,7 +15,6 @@ import {
   ProviderToolApprovalDenied,
   ProviderToolApprovalRequired,
   ProviderToolCapabilityDenied,
-  ProviderToolFactoryFailure,
   ProviderToolFactoryOptionsFailure,
   ProviderToolLeaseFailure,
   ProviderToolNotExposed,
@@ -28,7 +26,6 @@ import {
   ProviderToolRuntime,
   ProviderToolSandboxViolation,
   makeProviderToolPolicy,
-  makeProviderToolRuntime,
   normalizeProviderToolUsage,
   type ProviderToolExecutionRevalidationInput,
   type ProviderToolRequest,
@@ -614,56 +611,6 @@ describe("ProviderToolRuntime", () => {
         expect(result[0]).toEqual([]);
         expect(result[1]).toBeInstanceOf(ProviderToolNotExposed);
       }).pipe(withTestPlatform),
-  );
-
-  effectTest.effect(
-    "turns synchronous factory throws into typed failures without changing arguments",
-    () =>
-      Effect.gen(function* () {
-        const original = providerToolDescriptors.find((entry) => entry.id === "openai:web_search");
-        if (original === undefined) throw new Error("missing fixture descriptor");
-        const expected = { type: "web_search" };
-        let received: unknown;
-        const throwing: typeof original = {
-          ...original,
-          extension: {
-            factory: (value) => {
-              received = value;
-              throw new Error("factory failed");
-            },
-          },
-        };
-        const registry: ProviderToolCapabilityRegistryApi = {
-          descriptors: [throwing],
-          get: () => Effect.succeed(throwing),
-          filter: () => [throwing],
-          resolve: () => Effect.succeed([throwing]),
-        };
-        const policy: ProviderToolPolicyApi = {
-          expose: () =>
-            Effect.succeed({
-              tools: [
-                {
-                  id: throwing.id,
-                  provider: throwing.provider,
-                  kind: throwing.kind,
-                  category: throwing.category,
-                  risk: "read_only",
-                  requiresApproval: false,
-                  sandbox: throwing.sandbox,
-                },
-              ],
-            }),
-          revalidateExecution: () => Effect.die("unused"),
-        };
-        const error = yield* errorOf(
-          makeProviderToolRuntime(registry, policy).compose(basePolicy(), [
-            { id: "openai:web_search", config: expected },
-          ]),
-        );
-        expect(received).toBe(expected);
-        expect(error).toBeInstanceOf(ProviderToolFactoryFailure);
-      }),
   );
 
   effectTest.live(

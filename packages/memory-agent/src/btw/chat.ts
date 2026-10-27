@@ -233,7 +233,7 @@ const make = Effect.gen(function* () {
         source: runModel.source,
         system,
         tools: toolCalling
-          ? redactor.withHiddenRunResults(
+          ? redactor.withHiddenResults(
               btwEvidenceRunTools({ env: memory, projectId: thread.projectId }),
             )
           : [],

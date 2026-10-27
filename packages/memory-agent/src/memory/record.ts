@@ -17,7 +17,7 @@ import { type AnsweredCall, asRunFailed, type RunHook, StepEnded } from "../loop
 import { RunEnd } from "../loop/store.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
-import { isDiscoveryCall } from "../tools/lazy.ts";
+import { isDiscoveryCall } from "../tools/discovery.ts";
 import { Nodes, type NodeDetail } from "./nodes.ts";
 import { refsInArguments } from "./refs.ts";
 

@@ -1,7 +1,7 @@
 import { Data, Deferred, Effect, Fiber, HashSet, Match, Ref, type Scope } from "effect";
 import type { JsonValue } from "../json.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
-import { ToolFailed, toolResultKey } from "../tools/failure.ts";
+import { failureResult, ToolFailed } from "../tools/failure.ts";
 
 /**
  * Runs the tool calls of one model step (docs/effect-ai-migration.md "도구 실행 방식"). The calls of a
@@ -61,13 +61,13 @@ const responseIncomplete = ToolFailed.make({
 
 const failedWith = (failure: ToolFailed): CallAnswer =>
   CallOutcome.Failed({
-    result: failure[toolResultKey],
+    result: failureResult(failure),
     error: failure.code,
     message: failure.message,
   });
 
 const notStarted = CallOutcome.Refused({
-  result: responseIncomplete[toolResultKey],
+  result: failureResult(responseIncomplete),
   error: responseIncomplete.code,
 });
 

@@ -230,16 +230,6 @@ export const acceptsConfig = ({
   );
 };
 
-/** The configuration as TanStack's factory took it, which had no argument for none. */
-export const factoryArguments = ({
-  id,
-  config,
-}: {
-  readonly id: ProviderToolId;
-  readonly config: ProviderToolConfig;
-}): ReadonlyArray<ProviderToolConfig> =>
-  definitions[id].config.optional && Object.keys(config).length === 0 ? [] : [config];
-
 /** The Effect AI id of a provider tool, the kind TanStack branded it with: `openai.web_search`. */
 const effectId = (id: ProviderToolId) => {
   const at = id.indexOf(":");

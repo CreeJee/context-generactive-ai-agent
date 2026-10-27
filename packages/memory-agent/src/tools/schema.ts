@@ -1,9 +1,7 @@
-import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec";
 import {
   Array as EffectArray,
   Function as EffectFunction,
   JsonSchema,
-  Match,
   Option,
   Predicate,
   Record as EffectRecord,
@@ -12,9 +10,6 @@ import {
 } from "effect";
 import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
-
-/** An Effect Schema exposed as the Standard JSON Schema that TanStack tool definitions consume. */
-export type ToolSchema<A, I> = StandardSchemaV1<I, A> & StandardJSONSchemaV1<I, A>;
 
 /**
  * The bounds Effect moves into `allOf` when a check repeats a keyword its base already set (every
@@ -53,7 +48,7 @@ const isDataKeyword = Schema.is(Schema.Literals(["const", "enum", "default", "ex
 type JsonObject = Extract<JsonValue, { readonly [key: string]: JsonValue }>;
 const isJsonArray = (value: JsonValue): value is readonly JsonValue[] => Array.isArray(value);
 const isJsonObject = (value: JsonValue): value is JsonObject => Predicate.isObject(value);
-// Synchronous codec at the Standard JSON Schema boundary; Effect's document is JSON by construction.
+// Synchronous codec where requests read tool parameters; Effect's document is JSON by construction.
 const toJsonObject = EffectFunction.flow(
   Schema.decodeUnknownResult(Schema.Record(Schema.String, JsonValue)),
   Result.getOrThrow,
@@ -125,70 +120,21 @@ const foldNode = (node: JsonObject): JsonObject => {
 };
 
 /**
- * The tool's JSON Schema with closed objects, which OpenAI strict tools require (an open one sends
- * the tool non-strict). Decoding still drops unmodeled properties instead of rejecting them.
+ * A tool's parameters in the draft-07 form TanStack sent providers, with closed objects, which
+ * OpenAI strict tools require (an open one sends the tool non-strict). Decoding still drops
+ * unmodeled properties instead of rejecting them.
  */
-const toolJsonSchema = (
-  schema: Schema.Constraint,
-  target: StandardJSONSchemaV1.Target,
-): JsonObject => {
-  const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" });
-  const shared = (definitions: JsonSchema.Definitions) =>
-    Object.keys(definitions).length > 0 ? definitions : undefined;
-  return Match.value(target).pipe(
-    Match.when("draft-2020-12", () =>
-      foldNode(
-        toJsonObject({
-          ...document.schema,
-          ...optionalProperty("$defs", shared(document.definitions)),
-        }),
+export const toolParametersJsonSchema = (schema: Schema.Constraint): JsonObject => {
+  const draft07 = JsonSchema.toDocumentDraft07(
+    Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" }),
+  );
+  return foldNode(
+    toJsonObject({
+      ...draft07.schema,
+      ...optionalProperty(
+        "definitions",
+        Object.keys(draft07.definitions).length > 0 ? draft07.definitions : undefined,
       ),
-    ),
-    Match.when("draft-07", () => {
-      const draft07 = JsonSchema.toDocumentDraft07(document);
-      return foldNode(
-        toJsonObject({
-          ...draft07.schema,
-          ...optionalProperty("definitions", shared(draft07.definitions)),
-        }),
-      );
-    }),
-    Match.orElse(() => {
-      // The Standard Schema caller reads JSON Schema synchronously; this is its thrown error.
-      throw new Error(`Unsupported target: ${target}`);
     }),
   );
 };
-
-/**
- * TanStack's definition of a tool whose name, description and parameters its Effect AI tool
- * (`run-tool.ts`) shares until the switch (docs/effect-ai-migration.md step 3).
- */
-export const definitionOf = <
-  const Name extends string,
-  S extends Schema.ConstraintDecoder<unknown, never>,
->(spec: {
-  readonly name: Name;
-  readonly description: string;
-  readonly parameters: S;
-}) => ({
-  name: spec.name,
-  description: spec.description,
-  inputSchema: toToolSchema(spec.parameters),
-});
-
-/** A tool's parameters in the draft-07 form TanStack sends providers. */
-export const toolParametersJsonSchema = (schema: Schema.Constraint) =>
-  toolJsonSchema(schema, "draft-07");
-
-export const toToolSchema = <S extends Schema.ConstraintDecoder<unknown, never>>(
-  schema: S,
-): ToolSchema<S["Type"], S["Encoded"]> => ({
-  "~standard": {
-    ...Schema.toStandardSchemaV1(schema)["~standard"],
-    jsonSchema: {
-      input: ({ target }) => toolJsonSchema(schema, target),
-      output: ({ target }) => toolJsonSchema(Schema.toType(schema), target),
-    },
-  },
-});

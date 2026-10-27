@@ -1,6 +1,4 @@
 import { Array as EffectArray } from "effect";
-import { OPENAI_IMAGE_MODELS, createOpenaiImage } from "@tanstack/ai-openai";
-import { imageGenerationTool } from "@tanstack/ai-openai/tools";
 import {
   anthropicImageProviderContract,
   ImageExecutorModel,
@@ -10,27 +8,6 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 describe("image route contracts", () => {
-  it("tracks the installed OpenAI Provider Tool and every direct image model", () => {
-    const providerTool = imageGenerationTool({});
-    const directAdapter = createOpenaiImage("gpt-image-2", "test-key");
-    expect(providerTool).toMatchObject({
-      name: "image_generation",
-      metadata: { __kind: "openai.image_generation" },
-    });
-    expect(directAdapter).toMatchObject({ kind: "image", name: "openai", model: "gpt-image-2" });
-    expect(imageRouteContracts).toHaveLength(1 + OPENAI_IMAGE_MODELS.length);
-    expect(
-      imageRouteContracts
-        .filter((route) => route.executionMode === "direct_adapter")
-        .map((route) =>
-          ImageExecutorModel.$match(route.executorModel, {
-            explicit: ({ model }) => model,
-            provider_managed: () => "managed",
-          }),
-        ),
-    ).toEqual([...OPENAI_IMAGE_MODELS]);
-  });
-
   it("does not invent the Provider Tool executor model", () => {
     const route = imageRouteContracts.find(
       (candidate) => candidate.id === "openai:provider_tool:image_generation",

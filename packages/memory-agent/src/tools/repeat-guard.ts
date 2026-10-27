@@ -2,7 +2,7 @@ import { Effect, HashMap, HashSet, Match, Option, Ref, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 import { RunFailed, type RunHook } from "../loop/run.ts";
 import { type CallAnswer, CallOutcome } from "../loop/scheduler.ts";
-import { ToolFailed, type ToolFailureResult, toolResultKey } from "./failure.ts";
+import { failureResult, ToolFailed, type ToolFailureResult } from "./failure.ts";
 
 /** Tools that wait on work in progress: the same answer again is what waiting looks like. */
 const waitingToolNames = HashSet.fromIterable(["get_background_result"]);
@@ -45,11 +45,13 @@ export class RepeatedToolCall extends Schema.TaggedError<RepeatedToolCall>()("Re
 }
 
 const refusal = (toolName: string): ToolFailureResult =>
-  ToolFailed.make({
-    code: repeatedToolCallCode,
-    tag: "RepeatedToolCall",
-    detail: `${toolName} returned the same result ${sameResultLimit} times in a row for these arguments, so it was not run again. Use that result, change the arguments, or answer. Another refused repeat stops this run.`,
-  })[toolResultKey];
+  failureResult(
+    ToolFailed.make({
+      code: repeatedToolCallCode,
+      tag: "RepeatedToolCall",
+      detail: `${toolName} returned the same result ${sameResultLimit} times in a row for these arguments, so it was not run again. Use that result, change the arguments, or answer. Another refused repeat stops this run.`,
+    }),
+  );
 
 /** One call, the outcome it returned, and how many times in a row it did. */
 interface Streak {

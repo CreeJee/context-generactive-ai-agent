@@ -1,5 +1,4 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { runTrace, type RunTrace } from "../runtime/run-trace.ts";
 import { Cause, Function as EffectFunction, type JsonSchema, Predicate } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
@@ -9,7 +8,6 @@ import {
   type Tool as McpTool,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import type { AnyServerTool } from "@tanstack/ai";
 import {
   Array as EffectArray,
   HashSet,
@@ -26,7 +24,6 @@ import {
   Schema,
 } from "effect";
 import { JsonValue } from "../json.ts";
-import { optionalProperty } from "../optional-property.ts";
 import { jsonSchemaIssues } from "../tools/input-repair.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import {
@@ -135,8 +132,8 @@ export interface McpServerGuide {
 }
 
 /** The tools of a run's servers, with the guide of each server that offers any. */
-export interface McpRunTools<Tool = AnyServerTool> {
-  readonly tools: Tool[];
+export interface McpRunTools {
+  readonly tools: RunTool[];
   readonly guides: readonly McpServerGuide[];
 }
 
@@ -275,34 +272,9 @@ const limited = <A>(result: A) =>
     Effect.map((text) => truncated(text) ?? result),
   );
 
-const decodeArguments = Schema.decodeUnknownOption(Schema.Record(Schema.String, JsonValue));
-
-/** MCP arguments are an object; TanStack sent `{}` for anything else. */
-const argumentsOf = <A>(args: A): JsonObject => Option.getOrElse(decodeArguments(args), () => ({}));
-
-/** The tool for TanStack's loop, whose calls are spans in the run's trace. */
-const chatToolOf =
-  (caller: RunTrace) =>
-  (tool: ServerTool): AnyServerTool => ({
-    __toolSide: "server",
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-    ...optionalProperty("outputSchema", tool.outputSchema),
-    needsApproval: false,
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    execute: (args, context) =>
-      runNativeEffect(
-        tool
-          .call(argumentsOf(args))
-          .pipe(Effect.withSpan("McpServers.call"), Effect.provideContext(caller)),
-        { signal: context?.abortSignal },
-      ),
-  });
-
 /**
- * The tool for the Effect AI loop. The SDK does not check arguments against a JSON Schema, so its
- * parameters check them as TanStack did (`jsonSchemaIssues`).
+ * A server's tool for a run. The SDK does not check arguments against a JSON Schema, so its
+ * parameters check them against the server's (`jsonSchemaIssues`).
  */
 const runToolOf = (tool: ServerTool): RunTool =>
   runTool({
@@ -670,27 +642,17 @@ const make = Effect.gen(function* () {
     /**
      * Tools of every trusted, unchanged server for a run in this project, with the guide of each
      * server that offers tools. Servers that fail to start are skipped (and shown as failed in
-     * settings); the run goes on without them. Each call is a span in the run's trace.
+     * settings); the run goes on without them. Each call is a span where the loop runs it.
      */
-    tools: (project: Project) =>
-      Effect.gen(function* () {
-        const caller = yield* runTrace;
-        // Discovered tools are shared by concurrent runs, so each run wraps its own calls.
-        return runToolsOf(yield* discoveredFor(project), chatToolOf(caller));
-      }),
-
-    /** {@link tools} for the Effect AI loop, whose calls are spans where the loop runs them. */
-    runTools: (project: Project) =>
-      Effect.map(discoveredFor(project), (found) => runToolsOf(found, runToolOf)),
+    runTools: (project: Project) => Effect.map(discoveredFor(project), runToolsOf),
   };
 });
 
 /** A run's tools from what its servers offer, with the guide of each server that offers any. */
-const runToolsOf = <Tool>(
+const runToolsOf = (
   found: ReadonlyArray<Discovered & { readonly server: string }>,
-  toolOf: (tool: ServerTool) => Tool,
-): McpRunTools<Tool> => ({
-  tools: found.flatMap((server) => server.tools).map(toolOf),
+): McpRunTools => ({
+  tools: found.flatMap((server) => server.tools).map(runToolOf),
   guides: found.flatMap(({ server, tools: offered, guide }): McpServerGuide[] =>
     guide === null || offered.length === 0 ? [] : [{ server, text: guide }],
   ),

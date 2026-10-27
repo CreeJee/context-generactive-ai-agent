@@ -1,8 +1,6 @@
 import { expect, it } from "@effect/vitest";
-import { EventType, memoryStream, toServerSentEventsResponse } from "@tanstack/ai";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
 import { SdkCancellations } from "../src/runtime/sdk-cancellation.ts";
-import { SdkRequestFailed } from "../src/runtime/sdk-promise.ts";
 import { createLiveRuns } from "../src/agent/live-runs.ts";
 
 const fixture = Effect.gen(function* () {
@@ -110,73 +108,6 @@ it.effect.each(["manual", "shutdown"] as const)(
       if (mode === "shutdown") expect(run.controller.signal.reason).toBe("service_shutdown");
       expect(closed).toBe(true);
     }),
-);
-
-it.effect("HTTP disconnection keeps producing and persists the final frame for replay", () =>
-  Effect.gen(function* () {
-    const { cancellations } = yield* fixture;
-    const run = yield* cancellations.allocate("service_shutdown");
-    const finish = yield* Deferred.make<void>();
-    const closed = yield* Deferred.make<void>();
-    const runEffect = Effect.runPromiseWith(yield* Effect.context());
-    const request = <A>(execute: () => Promise<A>) =>
-      Effect.tryPromise({
-        try: execute,
-        catch: (cause) => SdkRequestFailed.make({ cause }),
-      });
-    const source = Stream.make({
-      type: EventType.RUN_STARTED,
-      threadId: "fiber-thread",
-      runId: "fiber-run",
-      timestamp: 0,
-    }).pipe(
-      Stream.concat(
-        Stream.fromEffect(
-          Deferred.await(finish).pipe(
-            Effect.as({
-              type: EventType.RUN_FINISHED as const,
-              threadId: "fiber-thread",
-              runId: "fiber-run",
-              timestamp: 1,
-            }),
-          ),
-        ),
-      ),
-    );
-    const published = yield* run.publish(Stream.toAsyncIterable(source));
-    const durable = memoryStream({ runId: "fiber-run" });
-    const response = toServerSentEventsResponse(Stream.toAsyncIterable(published), {
-      abortController: run.controller,
-      durability: {
-        batch: 1,
-        adapter: {
-          ...durable,
-          close: () =>
-            runEffect(
-              request(() => durable.close()).pipe(
-                Effect.andThen(Deferred.succeed(closed, undefined)),
-                Effect.asVoid,
-              ),
-            ),
-        },
-      },
-    });
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-    if (reader === undefined) return;
-    yield* request(() => reader.read());
-    yield* request(() => reader.cancel());
-    expect(run.controller.signal.aborted).toBe(false);
-    yield* Deferred.succeed(finish, undefined);
-    yield* Deferred.await(closed);
-    const saved = yield* request(() => durable.snapshot());
-    expect(saved.map((entry) => entry.chunk.type)).toEqual([
-      "CUSTOM",
-      "RUN_STARTED",
-      "RUN_FINISHED",
-    ]);
-    expect(run.controller.signal.aborted).toBe(false);
-  }),
 );
 
 it.effect("request completion keeps the run alive, owner shutdown cancels it", () =>

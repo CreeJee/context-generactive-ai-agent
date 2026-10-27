@@ -181,7 +181,6 @@ export {
   type ProviderToolDataAccess,
   type ProviderToolDescriptor,
   type ProviderToolExecution,
-  type ProviderToolFactoryExtension,
   type ProviderToolFilter,
   type ProviderToolModelMetadata,
   type ProviderToolVendor,
@@ -205,7 +204,6 @@ export {
   ProviderToolPolicy,
   ProviderToolPolicyDenied,
   ProviderToolRuntime,
-  ProviderToolFactoryFailure,
   ProviderToolFactoryOptionsFailure,
   ProviderToolLeaseFailure,
   ProviderToolLifecycleFailure,
@@ -742,4 +740,3 @@ export {
 export { RelayedApprovals, type RelayedRequest } from "./approvals/relayed.ts";
 export { ApprovalRequester, type RelayedApprovalView } from "./approvals/relayed-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
-export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

@@ -1,5 +1,3 @@
-import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
-import * as OpenAITools from "@tanstack/ai-openai/tools";
 import {
   Array as EffectArray,
   Function as EffectFunction,
@@ -72,9 +70,6 @@ export type ProviderToolSandbox =
   | "isolated_desktop_required"
   | "workspace_required"
   | "principal_storage_required";
-export interface ProviderToolFactoryExtension<TFactory extends (...args: never[]) => object> {
-  readonly factory: TFactory;
-}
 export interface ProviderToolResultNormalizerMetadata {
   readonly strategy: "provider_native_preserve";
   readonly preservesUnknownParts: true;
@@ -83,7 +78,6 @@ export interface ProviderToolResultNormalizerMetadata {
 export interface ProviderToolDescriptor<
   TProvider extends ProviderToolVendor = ProviderToolVendor,
   TKind extends ProviderToolKind = ProviderToolKind,
-  TFactory extends (...args: never[]) => object = (...args: never[]) => object,
 > {
   readonly id: `${TProvider}:${TKind}`;
   readonly provider: TProvider;
@@ -97,12 +91,11 @@ export interface ProviderToolDescriptor<
   readonly sideEffect: ProviderToolSideEffect;
   readonly approval: ProviderToolApproval;
   readonly sandbox: readonly ProviderToolSandbox[];
-  readonly extension: ProviderToolFactoryExtension<TFactory>;
   readonly resultNormalizer: ProviderToolResultNormalizerMetadata;
 }
 export type AnyProviderToolDescriptor =
-  | ProviderToolDescriptor<"openai", OpenAIProviderToolKind, (...args: never[]) => object>
-  | ProviderToolDescriptor<"anthropic", AnthropicProviderToolKind, (...args: never[]) => object>;
+  | ProviderToolDescriptor<"openai", OpenAIProviderToolKind>
+  | ProviderToolDescriptor<"anthropic", AnthropicProviderToolKind>;
 
 const normalizer = Object.freeze({
   strategy: "provider_native_preserve",
@@ -112,13 +105,9 @@ const normalizer = Object.freeze({
 function descriptor<
   const TProvider extends ProviderToolVendor,
   const TKind extends ProviderToolKind,
-  TFactory extends (...args: never[]) => object,
 >(
-  value: Omit<
-    ProviderToolDescriptor<TProvider, TKind, TFactory>,
-    "id" | "modelSupport" | "resultNormalizer"
-  >,
-): ProviderToolDescriptor<TProvider, TKind, TFactory> {
+  value: Omit<ProviderToolDescriptor<TProvider, TKind>, "id" | "modelSupport" | "resultNormalizer">,
+): ProviderToolDescriptor<TProvider, TKind> {
   return Object.freeze({
     ...value,
     id: `${value.provider}:${value.kind}`,
@@ -126,7 +115,6 @@ function descriptor<
     auth: Object.freeze([...value.auth]),
     dataAccess: Object.freeze([...value.dataAccess]),
     sandbox: Object.freeze([...value.sandbox]),
-    extension: Object.freeze(value.extension),
     resultNormalizer: normalizer,
   });
 }
@@ -147,7 +135,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.webSearchTool },
   }),
   descriptor({
     provider: "openai",
@@ -160,7 +147,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.webSearchPreviewTool },
   }),
   descriptor({
     provider: "openai",
@@ -173,7 +159,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.fileSearchTool },
   }),
   descriptor({
     provider: "openai",
@@ -186,7 +171,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "stateful_execution",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.imageGenerationTool },
   }),
   descriptor({
     provider: "openai",
@@ -199,7 +183,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "stateful_execution",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.codeInterpreterTool },
   }),
   descriptor({
     provider: "openai",
@@ -212,7 +195,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "provider_interrupt",
     sandbox: ["remote_trust_boundary"],
-    extension: { factory: OpenAITools.mcpTool },
   }),
   descriptor({
     provider: "openai",
@@ -225,7 +207,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: ["isolated_desktop_required"],
-    extension: { factory: OpenAITools.computerUseTool },
   }),
   descriptor({
     provider: "openai",
@@ -238,7 +219,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: OpenAITools.localShellTool },
   }),
   descriptor({
     provider: "openai",
@@ -251,7 +231,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: OpenAITools.shellTool },
   }),
   descriptor({
     provider: "openai",
@@ -264,7 +243,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: workspace,
-    extension: { factory: OpenAITools.applyPatchTool },
   }),
   descriptor({
     provider: "openai",
@@ -277,7 +255,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: OpenAITools.customTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -290,7 +267,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: AnthropicTools.webSearchTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -303,7 +279,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: AnthropicTools.webFetchTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -316,7 +291,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "stateful_execution",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: AnthropicTools.codeExecutionTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -329,7 +303,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: ["isolated_desktop_required"],
-    extension: { factory: AnthropicTools.computerUseTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -342,7 +315,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: AnthropicTools.bashTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -355,7 +327,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: workspace,
-    extension: { factory: AnthropicTools.textEditorTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -368,7 +339,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: ["principal_storage_required"],
-    extension: { factory: AnthropicTools.memoryTool },
   }),
 ] as const);
 

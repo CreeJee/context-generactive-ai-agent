@@ -3,9 +3,8 @@ import { JsonValue } from "../json.ts";
 import { PermissionReviewPayload } from "../tools/definitions.ts";
 
 /**
- * Chat rows as the app stores them once TanStack is gone: today's shapes without TanStack's
- * metadata. `tanstack-migration.ts` moves the stored rows to these shapes. Nothing writes them
- * before the switch (step 7 of docs/effect-ai-migration.md).
+ * Chat rows as the app stores them: TanStack's shapes without its metadata.
+ * `tanstack-migration.ts` moves the rows TanStack stored to these shapes.
  */
 
 /** An ISO 8601 time, as `JSON.stringify` writes a `Date`. */

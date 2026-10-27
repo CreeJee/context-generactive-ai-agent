@@ -114,8 +114,8 @@ export class HistoryProjectionReader extends Context.Service<
           return snapshot["not-ready"].make({ reason: "unsupported-format" });
         if (state.ready === 0) return snapshot["not-ready"].make({ reason: "stale" });
         if (state.cursor_valid === 0) return snapshot["unknown-cursor"].make({});
-        // Do not parse arbitrary model-message JSON here. The SDK codec/adapter must
-        // validate and decode these selected groups, never the authoritative transcript.
+        // Do not parse arbitrary model-message JSON here. The chat snapshot (`snapshot.ts`)
+        // validates and decodes these selected groups, never the authoritative transcript.
         const groups = rows
           .flatMap((row): Array<typeof Group.Type> =>
             row.ordinal === null

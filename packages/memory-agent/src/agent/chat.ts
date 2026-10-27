@@ -2093,7 +2093,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           abortSignal: abortController.signal,
         });
         const memory = memoryTools.runToolsFor(answers, memoryScope);
-        const allSharedTools = redactor.withHiddenRunResults([
+        const allSharedTools = redactor.withHiddenResults([
           ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
           // An SVG the model writes comes back with a picture of it, for the page to show.
           ...drawingPreviews.withRunPreviews(project, fileTools.runToolsFor(project)),
@@ -2144,7 +2144,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...childSharedTools,
             ...(readOnly
               ? []
-              : redactor.withHiddenRunResults(approvedTools.runToolsFor(project, "gate"))),
+              : redactor.withHiddenResults(approvedTools.runToolsFor(project, "gate"))),
           ],
           systemPrompts: promptLayout(
             standingPromptsFor(childSharedTools),
@@ -2167,7 +2167,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           [
             ...sharedTools,
             ...boardTools,
-            ...redactor.withHiddenRunResults([
+            ...redactor.withHiddenResults([
               ...phaseApprovedTools.filter(({ tool }) => tool.name !== "run_skill"),
               ...phaseApproved().filter(({ tool }) => tool.name === "run_skill"),
             ]),
@@ -2177,7 +2177,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const offered = [
           ...sharedTools,
           ...boardTools,
-          ...redactor.withHiddenRunResults([
+          ...redactor.withHiddenResults([
             ...phaseApprovedTools.map((tool) => programs.codeSkills(project, tool)),
             ...(readOnly ? [] : children.tools),
             ...(reportSource !== null ? [] : [programs.runCode]),

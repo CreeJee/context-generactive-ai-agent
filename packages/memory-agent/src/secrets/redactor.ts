@@ -1,23 +1,12 @@
-import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
-import type { AnyServerTool } from "@tanstack/ai";
+import { nativePromise } from "../runtime/native-effect.ts";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import {
-  Array as Arr,
-  Cause,
-  Context,
-  Effect,
-  Layer,
-  Match,
-  Option,
-  Predicate,
-  Schema,
-} from "effect";
+import { Array as Arr, Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import type { ShownFailure } from "../runtime/shown-failure.ts";
-import { ToolFailed, toolFailedOf, withDetail } from "../tools/failure.ts";
+import { ToolFailed, withDetail } from "../tools/failure.ts";
 import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
 import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
@@ -295,49 +284,11 @@ const make = Effect.sync(() => {
     hideDetail,
 
     /**
-     * The same tools, with secrets hidden in what they return and in the errors they throw, before
-     * either reaches the model, the page or memory. Every tool is covered — the shell, file reads,
-     * web pages, MCP servers, other agents — because any of them can print a key.
+     * The same tools, with secrets hidden in what they return and in the errors they fail with,
+     * before either reaches the model, the page or memory. Every tool is covered — the shell, file
+     * reads, web pages, MCP servers, other agents — because any of them can print a key.
      */
-    withHiddenResults(tools: readonly AnyServerTool[]): AnyServerTool[] {
-      return tools.map((tool): AnyServerTool =>
-        Option.match(Option.fromNullishOr(tool.execute), {
-          onNone: () => tool,
-          onSome: (execute) => ({
-            ...tool,
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            execute: (...call: Parameters<typeof execute>) =>
-              runNativeEffect(
-                nativePromise(() => Promise.resolve(execute(...call))).pipe(
-                  Effect.catchCause(
-                    (cause): Effect.Effect<never, Cause.UnknownError | SecretRedactionFailed> =>
-                      Match.value(nativeFailure(cause).cause).pipe(
-                        // The model reads the failure's code, tag and redacted text (ToolFailed).
-                        Match.when(Predicate.isError, (error) => {
-                          const failed = toolFailedOf(error);
-                          return redactText(failed.detail).pipe(
-                            Effect.flatMap(({ text }) =>
-                              Effect.fail(
-                                new Cause.UnknownError(
-                                  text === failed.detail ? failed : withDetail(failed, text),
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-                        Match.orElse((error) => Effect.fail(new Cause.UnknownError(error))),
-                      ),
-                  ),
-                  Effect.flatMap(redactResult),
-                ),
-              ),
-          }),
-        }),
-      );
-    },
-
-    /** {@link withHiddenResults} for the Effect AI loop's tools (docs/effect-ai-migration.md). */
-    withHiddenRunResults: (tools: ReadonlyArray<RunTool>): Array<RunTool> =>
+    withHiddenResults: (tools: ReadonlyArray<RunTool>): Array<RunTool> =>
       tools.map((tool) => ({
         ...tool,
         prepare: (params) => Effect.map(tool.prepare(params), hiddenCall),

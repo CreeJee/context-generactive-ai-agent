@@ -138,7 +138,7 @@ describe("SecretRedactor", () => {
   effectTest.effect("hides secrets in a run tool's result and in its failure's text", () =>
     Effect.gen(function* () {
       const redactor = yield* SecretRedactor;
-      const [shell] = redactor.withHiddenRunResults([
+      const [shell] = redactor.withHiddenResults([
         runTool({
           name: "run_skill",
           description: "Run a skill.",

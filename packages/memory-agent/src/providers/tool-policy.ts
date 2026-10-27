@@ -38,12 +38,7 @@ import {
   type ProviderToolVendor,
 } from "./tool-capabilities.ts";
 import { ProviderToolId, type ProviderToolKind } from "./provider-tool-id.ts";
-import {
-  ProviderToolConfig,
-  acceptsConfig,
-  factoryArguments,
-  providerTools,
-} from "./provider-tools.ts";
+import { ProviderToolConfig, acceptsConfig, providerTools } from "./provider-tools.ts";
 import type { Tool } from "effect/ai";
 
 export type ProviderToolRisk = "read_only" | "elevated" | "high";
@@ -750,7 +745,6 @@ export class ProviderToolPolicy extends Context.Service<
 
 type InstalledDescriptor = (typeof providerToolDescriptors)[number];
 type DescriptorFor<Id extends ProviderToolId> = Extract<InstalledDescriptor, { readonly id: Id }>;
-type FactoryFor<Id extends ProviderToolId> = DescriptorFor<Id>["extension"]["factory"];
 
 /** A provider tool asked for, with its configuration (`acceptsConfig` checks it). */
 export const ProviderToolRequest = Schema.Struct({
@@ -762,18 +756,12 @@ export type ProviderToolRequest = typeof ProviderToolRequest.Type;
 export interface ComposedProviderTool<Id extends ProviderToolId = ProviderToolId> {
   readonly id: Id;
   readonly descriptor: DescriptorFor<Id>;
-  /** The tool for TanStack's loop, which goes in docs/effect-ai-migration.md step 7. */
-  readonly tool: Awaited<ReturnType<FactoryFor<Id>>>;
-  /** The same tool for the Effect AI loop. */
+  /** The tool for the model. */
   readonly modelTool: Tool.Any;
 }
 export class ProviderToolNotExposed extends Schema.TaggedError<ProviderToolNotExposed>()(
   "ProviderToolNotExposed",
   { toolId: Schema.String, provider: ProviderVendor, model: Schema.String },
-) {}
-export class ProviderToolFactoryFailure extends Schema.TaggedError<ProviderToolFactoryFailure>()(
-  "ProviderToolFactoryFailure",
-  { toolId: ProviderToolId, cause: Schema.Defect() },
 ) {}
 export class ProviderToolFactoryOptionsFailure extends Schema.TaggedError<ProviderToolFactoryOptionsFailure>()(
   "ProviderToolFactoryOptionsFailure",
@@ -916,7 +904,6 @@ export interface ProviderToolExecutionRequest<Raw = unknown> {
 export type ProviderToolRuntimeFailure =
   | ProviderToolPolicyFailure
   | ProviderToolNotExposed
-  | ProviderToolFactoryFailure
   | ProviderToolFactoryOptionsFailure
   | ProviderToolOperationFailure
   | ProviderToolLeaseFailure
@@ -1073,10 +1060,7 @@ export interface ProviderToolRuntimeApi {
     requests?: readonly ProviderToolRequest[],
   ) => Effect.Effect<
     readonly ComposedProviderTool[],
-    | ProviderToolPolicyFailure
-    | ProviderToolNotExposed
-    | ProviderToolFactoryFailure
-    | ProviderToolFactoryOptionsFailure
+    ProviderToolPolicyFailure | ProviderToolNotExposed | ProviderToolFactoryOptionsFailure
   >;
   readonly execute: <Raw>(
     request: ProviderToolExecutionRequest<Raw>,
@@ -1084,19 +1068,6 @@ export interface ProviderToolRuntimeApi {
 }
 const isProviderToolRequest = Schema.is(ProviderToolRequest);
 const requestKeys = HashSet.fromIterable(["id", "config"]);
-
-/** TanStack's factory for the tool, until its loop goes (docs/effect-ai-migration.md step 7). */
-const invokeProviderFactory = (
-  descriptor: AnyProviderToolDescriptor,
-  args: ReadonlyArray<ProviderToolConfig>,
-): object | Promise<object> => {
-  // SAFETY: compose gets the descriptor by the request's id, and `acceptsConfig` checked the
-  // configuration that id's factory takes.
-  const factory = descriptor.extension.factory as (
-    ...values: ReadonlyArray<ProviderToolConfig>
-  ) => object | Promise<object>;
-  return factory(...args);
-};
 export const makeProviderToolRuntime: {
   (
     policyService: ProviderToolPolicy["Service"],
@@ -1142,23 +1113,14 @@ function makeProviderToolRuntimeBody(
             Effect.andThen(
               registry.get(request.id).pipe(Effect.mapError(() => notExposed(request.id))),
             ),
-            Effect.flatMap((descriptor) =>
-              Effect.tryPromise({
-                try: () =>
-                  Promise.resolve(invokeProviderFactory(descriptor, factoryArguments(request))),
-                catch: (cause) => ProviderToolFactoryFailure.make({ toolId: request.id, cause }),
-              }).pipe(
-                // SAFETY: registry.get returned the same provider-qualified id carried by the request.
-                Effect.map(
-                  (tool) =>
-                    ({
-                      id: request.id,
-                      descriptor,
-                      tool,
-                      modelTool: providerTools[request.id](request.config),
-                    }) as ComposedProviderTool,
-                ),
-              ),
+            // SAFETY: registry.get returned the same provider-qualified id carried by the request.
+            Effect.map(
+              (descriptor) =>
+                ({
+                  id: request.id,
+                  descriptor,
+                  modelTool: providerTools[request.id](request.config),
+                }) as ComposedProviderTool,
             ),
           );
         return Object.freeze(

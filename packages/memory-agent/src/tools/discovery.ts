@@ -22,6 +22,9 @@ import { runTool, type RunTool } from "./run-tool.ts";
 /** The discovery tool's name, which stored conversations call it by. */
 export const discoveryToolName = "__lazy__tool__discovery__";
 
+/** The discovery call is how the model asks for a lazy tool; it is not part of the work. */
+export const isDiscoveryCall = (name: string) => name === discoveryToolName;
+
 const DiscoveryInput = Schema.Struct({ toolNames: Schema.Array(Schema.String) });
 
 /** The parameters as TanStack sent them, written in JSON Schema rather than built from one. */
