@@ -597,6 +597,24 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
      - API payload가 바뀌어 기존 `useChat`으로는 확인할 수 없으므로, backend와 client를 함께 바꾼다.
      - 페이지는 6단계의 `ChatApi` endpoint로 보내고 다시 붙는다. `/api/chat`과 `AgentChat.handle`·`hydrate`를 지운다. `ChatApi`를 server(`apps/agent/server/serve.ts`)에 직접 붙이고 React Router route를 지울지 이때 정한다.
   2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목, `tools/parallel-reads.ts`(5단계 "결과").
+- 진행 (2026-10-27): 1번을 진입점별 커밋으로 나눴다. 커밋마다 build와 테스트가 통과한다. 결정은 decisions.md "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)"에 있다.
+  - 외부 에이전트 직접 대화(`764a4ebd`)와 이미지 provider 도구(`66cad735`)가 새 loop로 돈다. 채팅 API의 `external_agent_unsupported`, `image_tool_unavailable` 거절과 Goal의 `goal_image_tool_unavailable` 거절을 지웠다.
+  - `snapshot`(`890901e4`)은 `reconstructChat`을 decode하지 않고 history projection에서 만든다.
+  - BTW(`a65fe98b`): `ChatApi`의 `btw` 그룹(`messages`, `ask`). BTW 전용 `RunStore`는 `btw_threads.messages`만 쓴다.
+  - 단발 호출(`eef9b4fd`): 권한 분류, 턴 요약, 리포트 진단, 메모리 해석, 개선 해석이 `generateText`·`streamText`를 쓴다.
+  - 본 채팅 페이지(`5f1fef08`)가 `useAgentChat`으로 snapshot을 읽고 `run`·`join`을 쓴다.
+  - ACP bridge(`9b5068e5`)가 `HttpApiClient`로 run과 승인을 보낸다. 세션을 다시 열면 snapshot 한 페이지(500개)를 보여 준다.
+  - 내부 follow-up(`dc84cb11`)이 채팅 API와 같이 run 로그를 채우고 끝까지 읽는다.
+  - 모든 run(`aa056aa2`): `ChatLoop` 스위치와 TanStack 실행 경로를 지웠다. 부모 run의 서브에이전트는 `RunTools`로만 돈다. golden은 새 loop 하나다.
+  - `/api/chat`(`a93dcda4`): `AgentChat.handle`·`hydrate`와 page delivery를 지웠다. 테스트는 `tests/support/chat-client.ts`의 `openPage`·`runTurn`으로, eval은 `src/testing/chat-api.ts`의 in-process client로 채팅 API를 쓴다.
+    - 옮기며 고친 것: SSE reader를 abort로 닫는다(조용한 run을 떠난 stream이 다음 로그 항목까지 열려 있었다). 재시작에 잘린 run이 사용자 취소(`aborted`)로 기록되던 것을 `server_restarted`로 고쳤다. 사용자 턴에 서버가 받은 시각을 적는다(`5f1fef08`부터 빠져 있었다).
+  - `ChatApi`는 server에 직접 붙이지 않는다. React Router resource route가 web handler(`apps/agent/app/.server/chat-api.ts`의 `chatApiRoutes`)로 넘기는 지금 방식을 둔다.
+  - 1번에 남은 것:
+    - `chatParamsFromRequestBody`를 `RunInput` decode로 바꾸기
+    - `start`·`followup`·`compact`의 `chatState.persistence` 사용
+    - `migrateTanStackRows` 등록(`btw_threads` 포함)
+    - `RUN_CANCEL_REASON`을 우리 값으로 두기, 쓰지 않게 된 `SdkCancellation.delivery` 지우기
+    - `eval/prompt-overhead.ts`: TanStack adapter의 요청을 재므로 `aa056aa2`부터 돌지 않는다. Effect AI 요청을 재도록 다시 쓴다. `eval/live-compaction.ts`·`eval/live-delegation.ts`의 provider guard도 TanStack adapter를 감싼다.
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 
@@ -661,6 +679,7 @@ worker를 없애면 owner와 worker 사이의 검사(`agent/full-loop-execution.
 
 - `hydrate`의 검증 사슬을 새 SSE endpoint 사양에 넣는다(`agent/chat.ts`): run 미존재 404, binding 세션 불일치 404, Last-Event-ID가 query의 runId와 다른 로그를 고르지 못하게 하는 offset 규칙, `X-Run-Id` 불일치 400, `memory:v1:` 접두어와 safe-integer offset 검사.
   - `ChatApi`의 `join`과 `hydrate`는 같은 `followRun`을 거친다. `join`은 runId를 path로, offset을 `after`로 받으므로 Last-Event-ID와 `X-Run-Id` 규칙은 `hydrate`에만 있다.
+  - (2026-10-27) `hydrate`를 지웠다. 다시 붙기는 `join`뿐이고, Last-Event-ID와 `X-Run-Id` 규칙도 함께 없어졌다. 다른 run의 offset은 `invalid_stream_offset`이다(`tests/goal/run-binding.test.ts`, golden `rejections`).
 - 옛 `workflow_run_events` 행은 "내용을 해석하지 않는다"가 전환 후에도 전제다. 새 client가 strict AG-UI decode로 옛 행을 재생하려 하지 않게 한다.
 
 ### MCP 교체

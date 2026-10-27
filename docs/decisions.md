@@ -2801,7 +2801,7 @@
 ## AgentChat은 ChatLoop 스위치로 새 loop를 고른다 (2026-10-27)
 
 - 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 4단계다. 파일과 TanStack과 달라진 점은 계획의 4단계 "결과"에 있다.
-- `ChatLoop`(`"tanstack"` | `"effect-ai"`)를 `MemoryAgentLayerOptions.chatLoop`로 고른다. 기본값은 `"tanstack"`이다. 스위치는 6단계 client 전까지 테스트와 개발 확인용이다. 새 loop의 interrupt에는 TanStack binding이 없어서 지금 페이지는 승인을 풀지 못한다. 7단계에서 스위치와 TanStack 경로를 함께 지운다.
+- `ChatLoop`(`"tanstack"` | `"effect-ai"`)를 `MemoryAgentLayerOptions.chatLoop`로 고른다. 기본값은 `"tanstack"`이다. 스위치는 6단계 client 전까지 테스트와 개발 확인용이다. 새 loop의 interrupt에는 TanStack binding이 없어서 지금 페이지는 승인을 풀지 못한다. 7단계에서 스위치와 TanStack 경로를 함께 지운다. (2026-10-27 대체: 아래 "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)". 스위치를 지웠고 모든 run이 새 loop로 돈다.)
 - Goal worker run, 구현 Goal run, bound run, 이미지 provider 도구를 쓰는 run은 스위치와 관계없이 지금 경로로 돈다. 앞의 셋은 5단계에서 옮긴다. (2026-10-27 대체: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)". Goal run은 스위치와 관계없이 새 loop로 돈다.)
 - 새 loop의 대화는 저장된 thread에 아직 저장되지 않은 사용자 메시지(id로 비교)를 더한 것이다. 페이지가 보낸 assistant·tool 메시지는 쓰지 않는다. 서버가 쓴 답과 도구 결과는 서버 저장본이 맞기 때문이다. 페이지에 편집과 재생성이 없으므로 잘라 낼 지점은 두지 않는다.
 - 취소는 실행만 끊는다. run이 어떻게 끝났는지는 loop가 정하고, 그 마지막 이벤트까지 페이지에 보낸다.
@@ -2834,13 +2834,13 @@
   - SSE 이벤트의 `id`는 run 로그 offset이다. client는 받은 마지막 `id`를 `after`로 보내 다시 붙는다.
   - 거절은 `/api/chat`과 같은 `{ error, ...details }` JSON과 status다. status마다 code 목록을 Schema로 선언해 client가 타입으로 받는다.
   - 다른 사이트의 `run`은 `SameSite` middleware가 403(`cross_site_request`, `invalid_origin`)으로 막는다. 검사 함수는 page route의 `rejectCrossSite`와 같다. `join`은 읽기라 걸지 않는다.
-- `AgentChat.start`가 거절을 응답 대신 값(`ChatStart`)으로 돌려준다. `/api/chat`(`AgentChat.handle`)은 그 값을 전과 같은 응답으로 바꾼다. 페이지가 받는 응답은 바뀌지 않는다.
+- `AgentChat.start`가 거절을 응답 대신 값(`ChatStart`)으로 돌려준다. `/api/chat`(`AgentChat.handle`)은 그 값을 전과 같은 응답으로 바꾼다. 페이지가 받는 응답은 바뀌지 않는다. (2026-10-27 대체: 아래 "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)". `/api/chat`과 `handle`·`hydrate`를 지웠다.)
 - API run은 `ChatLoop`와 관계없이 새 loop로 돈다.
   - core가 run 이벤트를 로그에 채운다. 채우는 fiber는 AgentChat 서비스 scope에 fork하고, 응답은 로그를 읽기만 한다. 그래서 client가 끊어도 run은 멈추지 않는다. 끝 이벤트 없이 실패하면 `RUN_ERROR`를 적고 로그를 닫는다. TanStack `toServerSentEventsResponse`의 durability 동작과 같다.
   - 로그는 Goal run이면 sqlite(`streamDurability`), 아니면 memory다. `join`은 `hydrate`와 같은 검사(`followRun`)를 거친다.
   - 외부 에이전트 세션은 409 `external_agent_unsupported`로 받지 않는다. 외부 에이전트 경로는 TanStack 응답을 그대로 돌려주기 때문이다.
   - 이미지 provider 도구를 쓰는 run은 409 `image_tool_unavailable`로 받지 않는다. 새 loop에 그 도구가 아직 없다.
-- 앱 연결: React Router resource route 두 개가 요청을 `HttpRouter.toWebHandler`로 만든 handler에 넘긴다. handler는 첫 요청 때 agent runtime의 context로 만든다. server가 runtime을 설정하기 전에 module이 load되기 때문이다. server에 직접 붙일지는 7단계에서 정한다.
+- 앱 연결: React Router resource route 두 개가 요청을 `HttpRouter.toWebHandler`로 만든 handler에 넘긴다. handler는 첫 요청 때 agent runtime의 context로 만든다. server가 runtime을 설정하기 전에 module이 load되기 때문이다. server에 직접 붙일지는 7단계에서 정한다. (2026-10-27: 직접 붙이지 않고 route가 넘기는 방식을 둔다. 아래 "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)".)
 - 미룬 것:
   - SSE keepalive. 연결이 loopback이고 지금 run SSE에도 없다. Effect의 AG-UI PR(#9842)이 들어오면 다시 본다.
   - BTW endpoint, 처음 화면용 snapshot·history endpoint
@@ -2855,3 +2855,18 @@
 - run이 끝나면 최신 페이지를 다시 읽는다. run 이벤트에 없는 것(run이 받아들인 대기 메시지, 저장된 결과 상태)은 저장본이 맞기 때문이다.
 - TanStack client의 interrupt 오류 코드 5종 검사는 옮기지 않는다. 같은 경우를 서버가 거절 code로 막는다.
 - 계획 변경: ACP bridge의 `ChatClient` 교체는 6단계가 아니라 7단계에서 한다. 진입점을 새 loop로 바꾸는 일이라, Goal 말고는 7단계 전에 연결하지 않는다는 규칙을 따른다.
+
+## 채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 7단계 첫 커밋 묶음이다. 커밋과 남은 일은 [effect-ai-migration.md](effect-ai-migration.md)의 7단계 "진행"에 있다.
+- 모든 채팅 run이 새 loop로 돈다: 본 채팅, 외부 에이전트 직접 대화, 승인 재개, 내부 follow-up(알림, kanban, steered, workflow 이어가기), Goal. 부모 run이 만드는 서브에이전트는 `RunTools`로 돈다. `ChatLoop` 스위치와 TanStack 실행 경로를 지운다.
+- run을 시작하면 core가 run 로그를 채우는 fiber를 AgentChat 서비스 scope에 fork한다. 페이지, ACP bridge, 내부 follow-up은 모두 그 로그를 읽기만 한다. `/api/chat`, `AgentChat.handle`·`hydrate`, run을 응답으로 바로 보내던 page delivery를 지운다.
+- 다시 붙기는 `join`(path의 runId, `after` offset)뿐이다. `Last-Event-ID`, `?offset=`, `X-Run-Id` 규칙은 `hydrate`와 함께 없어졌다. 그 run의 로그가 아닌 offset은 `invalid_stream_offset`이다.
+- 앱 연결: `ChatApi`를 server에 직접 붙이지 않는다. React Router resource route가 web handler로 넘기는 방식을 둔다. 다른 API가 아직 route에 있고, route는 요청을 넘기기만 해서 옮겨 얻는 것이 적다. 앱 테스트는 같은 handler(`chatApiRoutes`)를 테스트 agent로 만든다.
+- 취소와 재시작: 사용자의 취소와 세션 보관·삭제만 run을 `aborted`로 끝낸다. owner 종료로, 또는 종료 순서상 먼저 끊긴 로그 fiber로 controller가 abort된 run은 `failed/server_restarted`다. "테스트의 Fiber와 네이티브 SDK 게이트 (2026-10-07)"의 규칙을 새 loop에서도 지킨다.
+- 사용자 턴의 `createdAt`은 서버가 요청을 받은 시각이다. 페이지는 시각을 보내지 않는다.
+- client가 끊은 SSE는 로그 읽기를 abort해서 바로 닫는다. 로그 reader에 `return`을 묻지 않는다. async generator는 대기 중인 읽기가 끝나야 답하므로, 조용한 run에서는 다음 로그 항목까지 stream이 열려 있게 된다.
+- ACP bridge는 `ChatApi`의 `HttpApiClient`로 run을 보내고 SSE를 editor의 session update로 넘긴다. run이 승인을 기다리며 끝나면 editor에 하나씩 묻고 resume run으로 답한다. 세션을 다시 열면 snapshot 한 페이지(500개)를 보여 준다. 화면 상태가 필요 없어 atom은 쓰지 않는다.
+- BTW는 `ChatApi`의 `btw` 그룹(`messages`, `ask`)이다. 답은 요청과 떨어져 돌아서 패널을 닫아도 저장된다. BTW run은 `btw_threads.messages`만 쓰고 run·interrupt 행을 남기지 않는다.
+- 단발 모델 호출(권한 분류, 턴 요약, 리포트 진단, 메모리 해석, 개선 해석)은 `generateText`·`streamText`다. 사용량 수치를 보내지 않은 응답은 사용량 행을 남기지 않는다.
+- release 전에 `migrateTanStackRows`를 등록해야 한다. 등록 전에는 옛 행의 TanStack metadata를 새 loop가 읽지 않으므로, 새 loop가 다시 쓴 thread에서 `finishReason`·`model`·`source`가 빠질 수 있다.
