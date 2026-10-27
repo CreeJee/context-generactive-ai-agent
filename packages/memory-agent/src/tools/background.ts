@@ -9,8 +9,10 @@ import {
   FiberMap,
   Layer,
   Option,
+  PubSub,
   Schema,
   Semaphore,
+  Stream,
 } from "effect";
 import { RunStore } from "../loop/store.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -129,7 +131,7 @@ const make = Effect.gen(function* () {
   const fibers = yield* FiberMap.make<string>();
   const dispatch = Semaphore.makeUnsafe(1);
   const sessions = MutableHashMap.empty<string, string>();
-  let onCompletion: ((sessionId: string) => void) | undefined;
+  const completions = yield* PubSub.unbounded<string>();
   const loadResult = Effect.fn("BackgroundTasks.loadResult")(function* (taskId: string) {
     const saved = yield* Effect.mapError(runStore.metadata.get(namespace, taskId), (cause) =>
       BackgroundResultStoreFailed.make({ operation: "read", cause }),
@@ -278,7 +280,7 @@ const make = Effect.gen(function* () {
             binding.runId,
           ),
         );
-        yield* Effect.sync(() => onCompletion?.(binding.sessionId));
+        yield* PubSub.publish(completions, binding.sessionId);
       });
       const job = Effect.gen(function* () {
         yield* traceEffect(
@@ -415,9 +417,8 @@ const make = Effect.gen(function* () {
       });
       return yield* milliseconds === 0 ? readResult(sessionId, taskId) : waited;
     }),
-    onCompletion(listener: (sessionId: string) => void) {
-      onCompletion = listener;
-    },
+    /** The session of each task as it settles. */
+    completions: Stream.fromPubSub(completions),
     hasSession(sessionId: string) {
       return [...MutableHashMap.values(sessions)].includes(sessionId);
     },

@@ -84,7 +84,7 @@ import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
 import { Projects, type Project } from "../projects/projects.ts";
-import { PermissionGate } from "../permissions/gate.ts";
+import { type GateBinding, PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
@@ -420,7 +420,6 @@ const cancelledByUser = (controller: AbortController) =>
 export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const context = yield* Effect.context();
   const ownerSignal = yield* Effect.abortSignal;
-  const runEffectSync = Effect.runSyncWith(context);
   const active = yield* ActiveProvider;
   const registry = Option.getOrUndefined(yield* Effect.serviceOption(ProviderRegistry));
   // Retain native code only, never a first-run account, capability or runtime.
@@ -652,10 +651,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
   const notificationWakeups = yield* Queue.unbounded<string>();
   const serializeNotification = yield* keyedSerialLimit();
-  const wakeNotifications = (sessionId: string) => {
-    runEffectSync(Queue.offer(notificationWakeups, sessionId));
-  };
-  subagents.onCompletion(wakeNotifications);
+  const wakeNotifications = (sessionId: string) => Queue.offer(notificationWakeups, sessionId);
+  yield* Stream.merge(subagents.completions, background.completions).pipe(
+    Stream.runForEach(wakeNotifications),
+    Effect.forkScoped({ startImmediately: true }),
+  );
   // What each board's loop last asked the model about, until a follow-up run takes it.
   const kanbanAttention = yield* Ref.make<
     Readonly<Record<string, readonly KanbanAttentionReason[]>>
@@ -667,7 +667,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...pending,
           [needed.sessionId]: needed.reasons,
         })),
-        Effect.sync(() => wakeNotifications(needed.sessionId)),
+        wakeNotifications(needed.sessionId),
       ),
     ),
     Effect.forkScoped,
@@ -684,7 +684,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.catch(logFailure("Queued messages were not held")),
     ),
   );
-  background.onCompletion(wakeNotifications);
   /** The run's record, when it belongs to the session. */
   const sessionRun = (sessionId: string, runId: string) =>
     Effect.map(
@@ -937,7 +936,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.gen(function* () {
           yield* events.publishSession(sessionId, "queue");
           yield* events.publishSession(sessionId, "run-state");
-          wakeNotifications(sessionId);
+          yield* wakeNotifications(sessionId);
         }),
       ),
     );
@@ -1565,7 +1564,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               source: { provider: "external-acp", api: "text", model: answeredBy },
               system: [],
               tools: [],
-              hooks: [recorder.hookForRun(binding), indexInBackground],
+              hooks: [yield* recorder.hookForRun(binding), indexInBackground],
               modelFailure: modelFailureOf(shownExternalFailure),
             },
             {
@@ -2019,32 +2018,33 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // In `auto` mode the gate reviews every gated call; in `ask` mode the built-in tools ask
         // through their own approval, and the gate asks about the calls the page has no
         // definitions for (MCP tools, delegations).
-        const gate = Match.value(project.permissionMode).pipe(
+        const gateBindings = Match.value(project.permissionMode).pipe(
           Match.when("auto", () => [
-            permissionGate.hookForRun({
+            {
               project,
               sessionId,
               selection,
               gated,
               decider: "classifier",
-            }),
+            } satisfies GateBinding,
           ]),
           Match.when("ask", () =>
             askEveryCall.length > 0
               ? [
-                  permissionGate.hookForRun({
+                  {
                     project,
                     sessionId,
                     selection,
                     gated: HashSet.fromIterable(askEveryCall),
                     decider: "user",
-                  }),
+                  } satisfies GateBinding,
                 ]
               : [],
           ),
           Match.when("full", () => []),
           Match.exhaustive,
         );
+        const gate = yield* Effect.forEach(gateBindings, permissionGate.hookForRun);
         // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code
         // skill tools from the approved tool set, so it can build and test without editing source.
         const phaseApproved = (binding?: BackgroundBinding) =>
@@ -2216,7 +2216,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...gate,
           yield* children.hook,
           ...(reportSource !== null ? [] : [yield* memory.hook]),
-          recorder.hookForRun(answers),
+          yield* recorder.hookForRun(answers),
           workflowLifecycle.hook,
           indexInBackground,
           summaries.hookForRun(sessionId),
@@ -2914,7 +2914,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     { discard: true },
   );
   // Only a persisted clean finish is eligible. Interrupted or failed runs are never replayed.
-  for (const sessionId of yield* execution.readySessions()) wakeNotifications(sessionId);
+  yield* Effect.forEach(yield* execution.readySessions(), wakeNotifications, { discard: true });
   // A run a restart cut off before any tool continues in a new run once its provider retry wait
   // fires, at once without one. The wait survives another restart; the ended run is not replayed.
   for (const { sessionId, runId } of yield* execution.retryingSessions())
@@ -2923,7 +2923,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.flatMap(
           Match.valueTags({
             Cancelled: () => Effect.void,
-            Retry: () => Effect.sync(() => wakeNotifications(sessionId)),
+            Retry: () => Effect.asVoid(wakeNotifications(sessionId)),
           }),
         ),
         Effect.catch(logFailure("Restarted Goal continuation deferred")),

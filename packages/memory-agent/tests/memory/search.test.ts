@@ -298,7 +298,7 @@ testAgent()("MemorySearch.find", (it) => {
         runId,
         conversation: [{ role: "user", content: question.text }],
         tools: (yield* MemoryTools).runToolsFor(binding).tools,
-        hooks: [(yield* Recorder).hookForRun(binding)],
+        hooks: [yield* (yield* Recorder).hookForRun(binding)],
       });
       const results = MutableHashMap.fromIterable(
         (yield* nodes.session(newSession.id))

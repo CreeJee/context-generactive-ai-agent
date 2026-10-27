@@ -228,12 +228,11 @@ export const makePermissionGateHook = Effect.fnUntraced(function* (
 });
 
 const make = Effect.gen(function* () {
-  const run = Effect.runSyncWith(yield* Effect.context<PermissionClassifier | PermissionReviews>());
+  const context = yield* Effect.context<PermissionClassifier | PermissionReviews>();
   return {
     /** The gate of one Effect AI run. */
-    hookForRun(binding: GateBinding): RunHook<Crypto.Crypto> {
-      return run(makePermissionGateHook(binding));
-    },
+    hookForRun: (binding: GateBinding) =>
+      Effect.provideContext(makePermissionGateHook(binding), context),
   };
 });
 

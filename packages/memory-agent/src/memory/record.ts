@@ -302,14 +302,12 @@ export const makeRecordingHook = Effect.fnUntraced(function* (
 });
 
 const make = Effect.gen(function* () {
-  const run = Effect.runSyncWith(
-    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient>(),
-  );
+  const context = yield* Effect.context<
+    Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
+  >();
   return {
     /** The recording of one Effect AI run. */
-    hookForRun(binding: RunBinding): RunHook {
-      return run(makeRecordingHook(binding));
-    },
+    hookForRun: (binding: RunBinding) => Effect.provideContext(makeRecordingHook(binding), context),
   };
 });
 

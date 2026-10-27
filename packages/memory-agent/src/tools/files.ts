@@ -294,7 +294,7 @@ const make = Effect.gen(function* () {
     glob: string | undefined,
   ) {
     const resolved = yield* resolveProjectPath(root, directory ?? ".", "directory");
-    return snapshots.add(
+    return yield* snapshots.add(
       root,
       resolved.relative,
       glob,
@@ -311,7 +311,7 @@ const make = Effect.gen(function* () {
           const view = yield* unexpired(
             Option.match(Option.liftPredicate(snapshot, isTruthy), {
               onNone: () => snapshotFor(root, directory, glob),
-              onSome: (id) => Effect.sync(() => snapshots.get(id, root)),
+              onSome: (id) => snapshots.get(id, root),
             }),
             "snapshot_expired: start again without snapshot and offset.",
           );
@@ -382,7 +382,7 @@ const make = Effect.gen(function* () {
           });
           const view = yield* unexpired(
             Option.match(position, {
-              onSome: (at) => Effect.sync(() => snapshots.get(at.snapshot, root)),
+              onSome: (at) => snapshots.get(at.snapshot, root),
               onNone: () => snapshotFor(root, directory, glob),
             }),
             "snapshot_expired: start the search again without cursor.",

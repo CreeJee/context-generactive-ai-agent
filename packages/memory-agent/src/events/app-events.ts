@@ -52,10 +52,10 @@ export interface AppEventsApi {
   readonly publishProject: (projectId: string, topic: ProjectEventTopic) => AppChangedEvent;
   readonly publishGlobal: (topic: GlobalEventTopic) => AppChangedEvent;
   readonly revision: () => number;
-  readonly sessionStream: (request: Request, sessionId: string) => Response;
-  readonly projectStream: (request: Request, projectId: string) => Response;
-  readonly globalStream: (request: Request) => Response;
-  readonly allStream: (request: Request) => Response;
+  readonly sessionStream: (request: Request, sessionId: string) => Effect.Effect<Response>;
+  readonly projectStream: (request: Request, projectId: string) => Effect.Effect<Response>;
+  readonly globalStream: (request: Request) => Effect.Effect<Response>;
+  readonly allStream: (request: Request) => Effect.Effect<Response>;
 }
 
 type SsePayload = AppChangedEvent | { readonly revision: number } | { readonly at: number };
@@ -68,7 +68,6 @@ const frame = (event: string, payload: SsePayload, id?: number) =>
 
 const make = (options: {
   readonly projectForSession: (sessionId: string) => Effect.Effect<string | null>;
-  readonly context: Context.Context<never>;
   readonly ownerSignal: AbortSignal | undefined;
 }): AppEventsApi => {
   const target = new EventTarget();
@@ -86,10 +85,13 @@ const make = (options: {
     return event;
   };
 
-  const stream = (request: Request, accepts: (event: AppChangedEvent) => boolean) => {
+  const stream = Effect.fnUntraced(function* (
+    request: Request,
+    accepts: (event: AppChangedEvent) => boolean,
+  ) {
     // Native publication is synchronous: register before returning the response so an event
     // published immediately after subscription cannot fall between registration and a fiber start.
-    const queue = Effect.runSyncWith(options.context)(Queue.make<string, Cause.Done>());
+    const queue = yield* Queue.make<string, Cause.Done>();
     const onChanged = (raw: Event) => {
       // SAFETY: only publish above dispatches this CustomEvent.
       const event = (raw as CustomEvent<AppChangedEvent>).detail;
@@ -123,9 +125,8 @@ const make = (options: {
         return Stream.fromQueue(queue);
       }),
     );
-    const body = Stream.toReadableStreamWith(
+    const body = yield* Stream.toReadableStreamEffect(
       frames.pipe(Stream.map((value) => encoder.encode(value))),
-      options.context,
     );
     return new Response(body, {
       headers: {
@@ -135,7 +136,7 @@ const make = (options: {
         "X-Accel-Buffering": "no",
       },
     });
-  };
+  });
 
   return {
     publish,
@@ -159,12 +160,11 @@ const make = (options: {
 const create = Effect.fnUntraced(function* (
   projectForSession: (sessionId: string) => Effect.Effect<string | null>,
 ) {
-  const context = yield* Effect.context<never>();
   const ownerScope = yield* Effect.serviceOption(Scope.Scope);
   const ownerSignal = Option.isSome(ownerScope)
     ? yield* Effect.provideService(Effect.abortSignal, Scope.Scope, ownerScope.value)
     : undefined;
-  return make({ projectForSession, context, ownerSignal });
+  return make({ projectForSession, ownerSignal });
 });
 
 export const makeAppEvents: Effect.Effect<AppEventsApi> = create(() => Effect.succeed(null));

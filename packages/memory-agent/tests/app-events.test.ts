@@ -28,7 +28,7 @@ describe("AppEvents", () => {
       const events = yield* makeAppEvents;
       const requestScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
       const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, requestScope);
-      const response = events.globalStream(new Request("http://local", { signal }));
+      const response = yield* events.globalStream(new Request("http://local", { signal }));
       const reader = response.body!.getReader();
       expect((yield* Effect.promise(() => reader.read())).done).toBe(false);
       yield* Scope.close(requestScope, Exit.void);
@@ -39,8 +39,8 @@ describe("AppEvents", () => {
   it.effect("isolates subscribers and preserves immediately published events", () =>
     Effect.gen(function* () {
       const events = yield* makeAppEvents;
-      const session = events.sessionStream(new Request("http://local"), "s1");
-      const project = events.projectStream(new Request("http://local"), "p1");
+      const session = yield* events.sessionStream(new Request("http://local"), "s1");
+      const project = yield* events.projectStream(new Request("http://local"), "p1");
       events.publish({ scope: "session", projectId: "p1", sessionId: "s2", topic: "queue" });
       events.publish({ scope: "session", projectId: "p1", sessionId: "s1", topic: "queue" });
       events.publish({ scope: "project", projectId: "p1", topic: "sessions" });
@@ -59,7 +59,7 @@ describe("AppEvents", () => {
     () =>
       Effect.gen(function* () {
         const events = yield* makeAppEvents;
-        const reader = events.globalStream(new Request("http://local")).body!.getReader();
+        const reader = (yield* events.globalStream(new Request("http://local"))).body!.getReader();
         yield* Effect.promise(() => reader.read());
         yield* TestClock.adjust(15_000);
         const heartbeat = yield* Effect.promise(() => reader.read());
@@ -68,7 +68,7 @@ describe("AppEvents", () => {
         );
         yield* Effect.promise(() => reader.cancel());
         events.publishGlobal("auth");
-        const next = events.globalStream(new Request("http://local"));
+        const next = yield* events.globalStream(new Request("http://local"));
         expect(yield* readFrames({ response: next, count: 1 })).toContain('"revision":1');
       }),
   );
@@ -77,7 +77,7 @@ describe("AppEvents", () => {
     Effect.gen(function* () {
       const owner = yield* Scope.fork(yield* Scope.Scope, "sequential");
       const events = yield* Effect.provideService(makeAppEvents, Scope.Scope, owner);
-      const reader = events.globalStream(new Request("http://local")).body!.getReader();
+      const reader = (yield* events.globalStream(new Request("http://local"))).body!.getReader();
       yield* Effect.promise(() => reader.read());
       yield* Scope.close(owner, Exit.void);
       expect((yield* Effect.promise(() => reader.read())).done).toBe(true);

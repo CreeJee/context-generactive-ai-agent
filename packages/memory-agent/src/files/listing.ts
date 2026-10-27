@@ -14,9 +14,9 @@ import {
   Layer,
   Cause,
   Stream,
-  MutableHashMap,
   Option,
   Effect,
+  Ref,
   HashSet,
   Array as EffectArray,
 } from "effect";
@@ -255,29 +255,30 @@ export const createSnapshots = (capacity = 32) =>
   Effect.gen(function* () {
     const services = yield* Effect.scoped(Layer.build(NodeCrypto.layer));
     const crypto = Context.get(services, Crypto.Crypto);
-    const runSync = Effect.runSyncWith(services);
-    const entries = MutableHashMap.empty<string, Snapshot>();
+    /** Oldest first; the snapshot just added is the newest. */
+    const entries = yield* Ref.make<ReadonlyArray<Snapshot>>([]);
     return {
-      add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
+      add: Effect.fnUntraced(function* (
+        root: string,
+        directory: string,
+        glob: string | undefined,
+        listing: FileListing,
+      ) {
         const snapshot: Snapshot = {
-          id: runSync(crypto.randomUUIDv4()),
+          id: yield* crypto.randomUUIDv4(),
           root,
           directory,
           glob,
           ...listing,
         };
-        MutableHashMap.set(entries, snapshot.id, snapshot);
-        // Keys come out oldest first; the snapshot just added is the newest.
-        Array.from(MutableHashMap.keys(entries))
-          .slice(0, Math.max(0, MutableHashMap.size(entries) - capacity))
-          .forEach((id) => MutableHashMap.remove(entries, id));
+        yield* Ref.update(entries, (kept) => [...kept, snapshot].slice(-capacity));
         return snapshot;
-      },
+      }),
 
       /** A snapshot taken for this project root, or undefined when unknown or evicted. */
-      get(id: string, root: string) {
-        const snapshot = Option.getOrUndefined(MutableHashMap.get(entries, id));
-        return snapshot?.root === root ? snapshot : undefined;
-      },
+      get: (id: string, root: string) =>
+        Effect.map(Ref.get(entries), (kept) =>
+          kept.find((snapshot) => snapshot.id === id && snapshot.root === root),
+        ),
     };
   });

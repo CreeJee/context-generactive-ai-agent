@@ -17,6 +17,7 @@ import {
   Layer,
   Match,
   Option,
+  PubSub,
   Ref,
   Schema,
 } from "effect";
@@ -542,7 +543,7 @@ const make = Effect.gen(function* () {
   });
 
   const serializeNamed = yield* keyedSerialLimit();
-  let completionListener: ((sessionId: string) => void) | undefined;
+  const completions = yield* PubSub.unbounded<string>();
   /** Controllers indexed independently so archive/delete stops one child, not its parent or peers. */
   type ActiveChild = {
     readonly taskId: string;
@@ -1030,7 +1031,7 @@ const make = Effect.gen(function* () {
               }).pipe(
                 Effect.ensuring(Deferred.succeed(done, undefined)),
                 Effect.andThen(events.publishSession(binding.sessionId, "subagents")),
-                Effect.andThen(Effect.sync(() => completionListener?.(binding.sessionId))),
+                Effect.andThen(PubSub.publish(completions, binding.sessionId)),
               ),
             ),
             Effect.catch((error) =>
@@ -1589,9 +1590,8 @@ const make = Effect.gen(function* () {
         );
       }),
 
-    onCompletion(listener: (sessionId: string) => void) {
-      completionListener = listener;
-    },
+    /** The session of each child as it settles. */
+    completions: Stream.fromPubSub(completions),
 
     /** Stop all session children, including those whose parent finished normally. */
     stopSession: (sessionId: string) =>

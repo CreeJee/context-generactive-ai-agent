@@ -1,4 +1,4 @@
-import { Deferred, Effect, FileSystem, Option, Path, Ref, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
 import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { RunStore } from "../../src/loop/store.ts";
@@ -252,10 +252,10 @@ testAgent()("background result storage failure", (it) => {
           ),
           (spy) => Effect.sync(() => spy.mockRestore()),
         );
-        let notifications = 0;
-        tasks.onCompletion(() => {
-          notifications++;
-        });
+        const notified = yield* Stream.take(tasks.completions, 1).pipe(
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        );
         const receipt = yield* tasks.start(
           yield* runOf(session.id),
           `${session.id}:call`,
@@ -273,7 +273,7 @@ testAgent()("background result storage failure", (it) => {
           status: "failed",
         });
         expect(resultWrites).toBe(1);
-        expect(notifications).toBe(1);
+        expect(yield* Fiber.join(notified)).toEqual([session.id]);
         expect(tasks.hasSession(session.id)).toBe(false);
       }),
   );

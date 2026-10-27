@@ -114,11 +114,11 @@ const make = Effect.gen(function* () {
               Option.match(Option.fromNullishOr(snapshot), {
                 onNone: () =>
                   Effect.flatMap(resolve(directory, "directory"), ({ absolute }) =>
-                    Effect.map(listOutsideFilesEffect(absolute, glob), (listing) =>
+                    Effect.flatMap(listOutsideFilesEffect(absolute, glob), (listing) =>
                       snapshots.add(snapshotKey, absolute, glob, listing),
                     ),
                   ),
-                onSome: (id) => Effect.sync(() => snapshots.get(id, snapshotKey)),
+                onSome: (id) => snapshots.get(id, snapshotKey),
               }),
               "snapshot_expired: start again without snapshot and offset.",
             );
@@ -197,12 +197,12 @@ const make = Effect.gen(function* () {
             ).pipe(
               Effect.flatMap(({ absolute }) =>
                 listOutsideFilesEffect(absolute, glob).pipe(
-                  Effect.map((listing) => snapshots.add(snapshotKey, absolute, glob, listing)),
+                  Effect.flatMap((listing) => snapshots.add(snapshotKey, absolute, glob, listing)),
                 ),
               ),
               Effect.catchTag("PathRejected", (rejection) =>
                 rejection.reason === "not_directory"
-                  ? Effect.map(resolve(path, "file"), (file) =>
+                  ? Effect.flatMap(resolve(path, "file"), (file) =>
                       snapshots.add(snapshotKey, file.absolute, undefined, {
                         paths: [file.absolute],
                         source: "walk",
@@ -216,7 +216,7 @@ const make = Effect.gen(function* () {
             const view = yield* unexpired(
               Option.match(position, {
                 onNone: () => listed,
-                onSome: (at) => Effect.sync(() => snapshots.get(at.snapshot, snapshotKey)),
+                onSome: (at) => snapshots.get(at.snapshot, snapshotKey),
               }),
               "snapshot_expired: start the search again without cursor.",
             );
