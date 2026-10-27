@@ -406,10 +406,9 @@ export function startAcpAgent(options: {
       },
     );
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const open = Effect.fn("AcpAgent.open")(function* (sessionId: string, project: ProjectSummary) {
     const holder = `acp-${yield* oauthProtocolCrypto.randomUUIDv4()}`;
-    const lease = yield* nativePromise(() => api.lease(sessionId, holder, "claim"));
+    const lease = yield* api.lease(sessionId, holder, "claim");
     if (lease.state !== "mine")
       return yield* AppRequestFailed.make({
         status: 423,
@@ -419,7 +418,7 @@ export function startAcpAgent(options: {
       });
     // A failed renewal is retried with backoff. When the retries run out, or on a defect, renewal
     // stops: the app drops the lease and shows the session read-only (decided 2026-10-18).
-    const renew = yield* nativePromise(() => api.lease(sessionId, holder, "claim")).pipe(
+    const renew = yield* api.lease(sessionId, holder, "claim").pipe(
       superviseLoopStep({ message: "acp_lease_renewal_stopped", setHealth: () => Effect.void }),
       Effect.repeat({
         schedule: Schedule.spaced(leaseRenewMs),
@@ -434,7 +433,6 @@ export function startAcpAgent(options: {
     return session;
   });
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const projectFor = Effect.fn("AcpAgent.projectFor")(function* (cwd: string) {
     const root = yield* oauthProtocolFileSystem
       .realPath(cwd)
@@ -443,9 +441,7 @@ export function startAcpAgent(options: {
           EditorRequestRefused.make({ reason: EditorRefusal.cases.FolderNotFound.make({ cwd }) }),
         ),
       );
-    const project = (yield* nativePromise(() => api.projects())).find(
-      (candidate) => candidate.root === root,
-    );
+    const project = (yield* api.projects).find((candidate) => candidate.root === root);
     // Registering a project widens what the file tools may touch, so only the app's page does it.
     if (!isTruthy(project))
       return yield* EditorRequestRefused.make({
@@ -486,7 +482,7 @@ export function startAcpAgent(options: {
     const asked = MutableHashSet.empty<string>();
     const timer = Effect.runFork(
       Effect.gen(function* () {
-        const approvals = yield* nativePromise(() => api.approvals(session.id));
+        const approvals = yield* api.approvals(session.id);
         yield* Effect.forEach(
           approvals,
           (approval) => {
@@ -499,12 +495,10 @@ export function startAcpAgent(options: {
               requester: requesterLabel(approval.requester),
             }).pipe(
               Effect.flatMap((approved) =>
-                nativePromise(() =>
-                  api.answerApproval(session.id, session.holder, approval.id, approved),
-                ),
+                api.answerApproval(session.id, session.holder, approval.id, approved),
               ),
               // An unanswered approval stays pending in the app, where the page can answer it.
-              Effect.catchTag("UnknownError", () => Effect.void),
+              Effect.catchTag(["UnknownError", "AppRequestFailed"], () => Effect.void),
             );
           },
           { concurrency: "unbounded", discard: true },
@@ -545,7 +539,7 @@ export function startAcpAgent(options: {
     .onRequest(acp.methods.agent.session.new, (ctx) =>
       runNativeEffect(
         Effect.gen(function* () {
-          const auth = yield* nativePromise(() => api.auth());
+          const auth = yield* api.auth;
           if (!AuthSummary.guards["signed-in"](auth))
             return yield* AppRequestFailed.make({
               status: 401,
@@ -555,7 +549,7 @@ export function startAcpAgent(options: {
             });
           const project = yield* projectFor(ctx.params.cwd);
           // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
-          const created = yield* nativePromise(() => api.createSession(project.id, "ACP"));
+          const created = yield* api.createSession(project.id, "ACP");
           yield* open(created.id, project);
           return { sessionId: created.id };
         }).pipe(Effect.catch(editorError)),
@@ -649,10 +643,10 @@ export function startAcpAgent(options: {
           if (!isTruthy(session?.turn)) return;
           session.turn.cancelled = true;
           // The app's cancel stops the run for good; closing the stream alone would not (R10).
-          yield* nativePromise(() => api.cancel(session.id, session.holder)).pipe(
+          yield* api.cancel(session.id, session.holder).pipe(
             // The turn is already marked cancelled; a failed app cancel is only logged.
-            Effect.catchTag("UnknownError", () =>
-              Effect.logWarning("ACP cancel request failed", { error: "UnknownError" }),
+            Effect.catchTag("AppRequestFailed", () =>
+              Effect.logWarning("ACP cancel request failed", { error: "AppRequestFailed" }),
             ),
           );
         }),
@@ -663,7 +657,7 @@ export function startAcpAgent(options: {
   void connection.closed.finally(() => {
     for (const session of MutableHashMap.values(sessions)) {
       void runNativeEffect(Fiber.interrupt(session.renew));
-      void api.lease(session.id, session.holder, "release").catch(() => undefined);
+      void runNativeEffect(Effect.ignore(api.lease(session.id, session.holder, "release")));
     }
     MutableHashMap.clear(sessions);
   });

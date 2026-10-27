@@ -74,7 +74,7 @@ export const createAppApi: {
   (fetcher: typeof fetch): (baseUrl: string) => ReturnType<typeof createAppApiBody>;
 } = EffectFunction.dual((args) => Schema.is(Schema.String)(args[0]), createAppApiBody);
 function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
-  const requestEffect = <A, I>(schema: Schema.Codec<A, I>, path: string, init: RequestInit = {}) =>
+  const request = <A, I>(schema: Schema.Codec<A, I>, path: string, init: RequestInit = {}) =>
     Effect.gen(function* () {
       const ownerSignal = yield* Effect.abortSignal;
       const signal =
@@ -115,13 +115,6 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
       );
     }).pipe(Effect.scoped);
 
-  // The ACP SDK consumes native Promises; request composition and failures remain Effect values.
-  const call = <A, I>(
-    schema: Schema.Codec<A, I>,
-    path: string,
-    init: RequestInit = {},
-  ): Promise<A> => Effect.runPromise(requestEffect(schema, path, init));
-
   const post = (body: JsonBody, holder?: string): RequestInit => {
     const headers = new Headers({ "Content-Type": "application/json" });
     if (isTruthy(holder)) headers.set(sessionHolderHeader, holder);
@@ -131,30 +124,30 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
   return {
     baseUrl,
     fetcher,
-    requestEffect,
+    request,
 
-    auth: () => call(AuthSummary, "/api/auth"),
+    auth: request(AuthSummary, "/api/auth"),
 
-    projects: () => call(Schema.Array(ProjectSummary), "/api/projects"),
+    projects: request(Schema.Array(ProjectSummary), "/api/projects"),
 
     createSession: (projectId: string, title: string) =>
-      call(SessionSummary, "/api/sessions", post({ projectId, title })),
+      request(SessionSummary, "/api/sessions", post({ projectId, title })),
 
     sessionState: (sessionId: string, holder: string) =>
-      call(
+      request(
         RunSummary,
         `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
       ),
 
     lease: (sessionId: string, holder: string, action: "claim" | "release") =>
-      call(
+      request(
         LeaseSummary,
         `/api/sessions/${encodeURIComponent(sessionId)}/lease`,
         post({ holder, action }),
       ),
 
     cancel: (sessionId: string, holder: string) =>
-      call(
+      request(
         Schema.Unknown,
         `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
         post({}, holder),
@@ -162,7 +155,7 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
 
     /** Calls of subagents and external agents waiting for the user. */
     approvals: (sessionId: string) =>
-      call(
+      request(
         Schema.Array(
           Schema.Struct({
             id: Schema.String,
@@ -175,7 +168,7 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
       ),
 
     answerApproval: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
-      call(
+      request(
         Schema.Unknown,
         `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
         post({ approved }, holder),
