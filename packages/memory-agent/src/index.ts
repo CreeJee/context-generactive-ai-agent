@@ -36,6 +36,7 @@ export {
   type SessionRunState,
 } from "./agent/run-state.ts";
 export { ChatState } from "./chat-state/chat-state.ts";
+export type { StoredMessage } from "./chat-store/schema.ts";
 export {
   OAuthProfileRejected,
   OAuthProfileStoreFailed,

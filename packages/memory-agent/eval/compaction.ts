@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { isTruthy } from "../src/truthy.ts";
-import type { ModelMessage } from "@tanstack/ai";
+import type { StoredMessage } from "../src/chat-store/schema.ts";
 import {
   recentRawUserTurns,
   retrievalTokenLimit,
@@ -59,8 +59,8 @@ const userText = (turn: number) => {
 const answerText = (turn: number) =>
   `장기 대화 답변 ${turn}. ${"확인한 파일과 테스트 결과를 설명한다. ".repeat(28)}`;
 
-function conversation(turns: number): ModelMessage[] {
-  const messages: ModelMessage[] = [];
+function conversation(turns: number): StoredMessage[] {
+  const messages: StoredMessage[] = [];
   for (let turn = 1; turn <= turns; turn++) {
     messages.push({ role: "user", content: userText(turn) });
     if (turn === turns) continue;
@@ -89,10 +89,10 @@ function conversation(turns: number): ModelMessage[] {
   return messages;
 }
 
-const userIndexes = (messages: readonly ModelMessage[]) =>
+const userIndexes = (messages: readonly StoredMessage[]) =>
   messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
 
-function legacyRequest(messages: readonly ModelMessage[]): ModelMessage[] {
+function legacyRequest(messages: readonly StoredMessage[]): StoredMessage[] {
   const turns = userIndexes(messages);
   const eligible = Math.max(0, turns.length - legacyRecentTurns);
   const summarized = Math.floor(eligible / legacyBlockTurns) * legacyBlockTurns;
@@ -136,7 +136,7 @@ const retrieval = {
 };
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMessage[]) {
+const currentRequest = Effect.fnUntraced(function* (messages: readonly StoredMessage[]) {
   const state: CompactionState = {
     manual: { clearedThrough: 0, summarizedTurns: 0 },
     blocks: summaryBlocks(userIndexes(messages).length),
@@ -156,10 +156,10 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMess
   return [...result.messages];
 });
 
-const sameMessage = (left: ModelMessage, right: ModelMessage) =>
+const sameMessage = (left: StoredMessage, right: StoredMessage) =>
   JSON.stringify(left) === JSON.stringify(right);
 
-function commonPrefixTokens(previous: readonly ModelMessage[], current: readonly ModelMessage[]) {
+function commonPrefixTokens(previous: readonly StoredMessage[], current: readonly StoredMessage[]) {
   let count = 0;
   while (
     count < previous.length &&
@@ -172,7 +172,7 @@ function commonPrefixTokens(previous: readonly ModelMessage[], current: readonly
 
 function profile(
   name: string,
-  requests: readonly (readonly ModelMessage[])[],
+  requests: readonly (readonly StoredMessage[])[],
   summaryCalls: number,
 ): ProfileResult {
   const input = requests.map((request) => fixedPrefixTokens + estimateConversation(request));

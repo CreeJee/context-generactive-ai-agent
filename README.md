@@ -63,7 +63,7 @@ flowchart TB
     Routes["API 라우트 /api/*"] --> Chat
 
     subgraph Run["대화 실행"]
-      Chat["AgentChat<br/>TanStack AI chat()"]
+      Chat["AgentChat<br/>Effect AI run loop"]
       MW["middleware<br/>ChatState · 대기열 · 권한 게이트<br/>서브에이전트 · Recorder"]
       Tools["도구<br/>기억 · 파일 · 셸 · 웹 검색 · MCP · skill · 위임"]
       Chat --- MW

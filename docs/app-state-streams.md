@@ -6,7 +6,7 @@ The browser uses three different streaming paths. They solve different problems 
 
 | Stream           | Transport                                                          | Source of truth                         | Purpose                                                                                       |
 | ---------------- | ------------------------------------------------------------------ | --------------------------------------- | --------------------------------------------------------------------------------------------- |
-| TanStack AI chat | fetch-based SSE (`/api/chat`)                                      | persisted chat/run state                | Model output, tool interrupts, and chat custom events for one active run.                     |
+| Chat run         | fetch-based SSE (`/api/sessions/:session/runs`)                    | persisted chat/run state                | Model output, tool interrupts, and chat custom events for one active run.                     |
 | Work Trace       | durable cursor SSE (`/api/sessions/:session/trace/stream`)         | durable Work Trace events               | Ordered, replayable task/attempt/evidence activity. Reconnect resumes from its cursor.        |
 | App invalidation | native `EventSource` (`/api/events`, project and session variants) | REST snapshots cached by TanStack Query | Lightweight `scope` + `topic` + `revision` wake-ups. Payloads do not carry application state. |
 

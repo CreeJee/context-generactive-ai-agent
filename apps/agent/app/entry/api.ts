@@ -52,9 +52,9 @@ import type {
   AccountLoginState as AccountLoginStateCase,
   OAuthProfile,
   SubscriptionAccountProvider,
+  StoredMessage,
   SubscriptionQuotaReport,
 } from "memory-agent";
-import type { ModelMessage } from "@tanstack/ai";
 import { Option, Schema } from "effect";
 import { appFetch } from "./shared/backend-restart";
 import {
@@ -1066,7 +1066,7 @@ export const api = {
   relayedApprovals: (sessionId: string) =>
     call<RelayedApprovalView[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/approvals`),
   subagentTranscript: (sessionId: string, subagentId: string) =>
-    call<{ subagent: SubagentView; messages: ModelMessage[] }>(
+    call<{ subagent: SubagentView; messages: StoredMessage[] }>(
       "GET",
       `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}`,
     ),

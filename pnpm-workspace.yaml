@@ -10,15 +10,8 @@ catalog:
   "@huggingface/transformers": 4.3.1
   "@oxlint/plugins": 1.87.0
   "@react-router/fs-routes": ^8.4.0
-  "@standard-schema/spec": ^1.1.0
   "@streamdown/cjk": ^1.0.4
   "@streamdown/code": ^2.0.0
-  "@tanstack/ai": ^1.0.0
-  "@tanstack/ai-anthropic": 1.0.0
-  "@tanstack/ai-client": ^1.0.0
-  "@tanstack/ai-persistence": ^1.0.0
-  "@tanstack/ai-openai": ^1.0.0
-  "@tanstack/ai-react": 1.0.0
   "@types/node": ^26.6.5
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
@@ -53,7 +46,6 @@ catalog:
   "@shadcn/lint": ^0.2.1
   motion: ^14.3.0
   dayjs: ^1.11.23
-  "@tanstack/ai-compaction": ^1.0.0
   jotai: ^3.0.1
   nuqs: ^2.10.2
   "@tanstack/react-query": ^5.104.5
@@ -131,7 +123,5 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   "@effect/platform-node-shared@4.0.3": patches/@effect__platform-node-shared@4.0.3.patch
   "@effect/platform-node@4.0.3": patches/@effect__platform-node@4.0.3.patch
-  "@tanstack/ai@1.0.0": patches/@tanstack__ai@1.0.0.patch
-  "@tanstack/openai-base@1.0.0": patches/@tanstack__openai-base@1.0.0.patch
   effect@4.0.3: patches/effect@4.0.3.patch
   react-simplikit@0.3.3: patches/react-simplikit@0.3.3.patch

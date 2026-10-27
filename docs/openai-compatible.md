@@ -9,7 +9,7 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 | API base URL     | `/v1`을 포함한 URL. LM Studio 예: `http://localhost:1234/v1`, vLLM 예: `http://localhost:8000/v1` (실제 서버 포트·경로에 맞게 설정) |
 | 모델 조회        | `GET {baseUrl}/models`의 `data[].id`. 모델 ID 수동 입력도 가능                                                                      |
 | 연결 테스트      | 비스트리밍 `POST {baseUrl}/chat/completions`. 응답 choices가 있는지만 확인                                                          |
-| 채팅             | TanStack AI의 OpenAI compatible Chat Completions 어댑터로 SSE 스트리밍                                                              |
+| 채팅             | `@effect/ai-openai-compat`의 Chat Completions 클라이언트로 SSE 스트리밍(`model/compatible.ts`)                                      |
 | 인증             | 키가 있으면 Bearer 헤더, 없으면 Authorization 헤더를 생략. 키는 endpoint에 묶어 keychain에 저장                                     |
 | 일반 도구        | 설정의 `toolCalling`을 켰을 때 function tool schema 전달 및 tool-call 스트림 처리                                                   |
 | 제공자 전용 도구 | OpenAI·Anthropic의 native tool registry만 지원. 프로토콜 호환으로 web search·file search·hosted execution 권한을 추론하지 않음      |
