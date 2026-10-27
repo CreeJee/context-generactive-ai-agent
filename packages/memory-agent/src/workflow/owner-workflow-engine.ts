@@ -5,10 +5,12 @@ import {
   Exit,
   Fiber,
   FiberMap,
+  HashMap,
   Layer,
   Match,
   Option,
   Predicate,
+  Ref,
   Result,
   Schema,
   Scope,
@@ -144,7 +146,7 @@ const defect = <A, E>(operation: string, evaluate: () => Effect.Effect<A, E>): E
 const makeEngine = Effect.gen(function* () {
   const ownerScope = yield* Effect.scope;
   const storage = yield* OwnerWorkflowStorage;
-  const workflows = new Map<string, RegisteredWorkflow>();
+  const workflows = yield* Ref.make(HashMap.empty<string, RegisteredWorkflow>());
   const executions = new Map<string, LiveExecution>();
   const runs = yield* FiberMap.make<string, Workflow.Result<unknown, unknown>>();
   const clocks = yield* FiberMap.make<string>();
@@ -153,12 +155,15 @@ const makeEngine = Effect.gen(function* () {
   let engine: WorkflowEngine.WorkflowEngine["Service"];
 
   const registered = (workflowName: string): Effect.Effect<RegisteredWorkflow> =>
-    Effect.suspend(() => {
-      const entry = workflows.get(workflowName);
-      return entry === undefined
-        ? Effect.die(engineFailure("workflow.lookup", "not_registered", workflowName))
-        : Effect.succeed(entry);
-    });
+    Effect.map(Ref.get(workflows), HashMap.get(workflowName)).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.die(engineFailure("workflow.lookup", "not_registered", workflowName)),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
 
   const cancelClocks = Effect.fnUntraced(function* (executionId: string) {
     const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
@@ -262,8 +267,10 @@ const makeEngine = Effect.gen(function* () {
     deferredName: string,
   ): Effect.fn.Return<void> {
     yield* deferredState.deferredDone(executionId, deferredName);
-    const entry = workflows.get(workflowName);
-    if (entry !== undefined) yield* resumeExecution(entry.workflow, executionId);
+    const entry = HashMap.get(yield* Ref.get(workflows), workflowName);
+    yield* Effect.transposeOption(
+      Option.map(entry, (registered) => resumeExecution(registered.workflow, executionId)),
+    );
   });
 
   const interruptExecution = Effect.fnUntraced(function* (operation: string, executionId: string) {
@@ -317,11 +324,14 @@ const makeEngine = Effect.gen(function* () {
         scope,
       };
       const name = workflowName(workflow);
-      workflows.set(name, entry);
+      yield* Ref.update(workflows, HashMap.set(name, entry));
+      // A later registration of the same name keeps its entry.
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          if (workflows.get(name) === entry) workflows.delete(name);
-        }),
+        Ref.update(workflows, (current) =>
+          Option.exists(HashMap.get(current, name), (registered) => registered === entry)
+            ? HashMap.remove(current, name)
+            : current,
+        ),
       );
       const pending = yield* defect("execution.pending", () => storage.pendingExecutions(name));
       yield* Effect.forEach(

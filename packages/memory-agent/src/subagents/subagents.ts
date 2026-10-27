@@ -8,7 +8,6 @@ import { projectInstructionsHook } from "../agent/project-instructions.ts";
 import {
   Cause,
   Stream,
-  MutableHashMap,
   Clock,
   Context,
   Deferred,
@@ -556,27 +555,21 @@ const make = Effect.gen(function* () {
     readonly handle: AttemptHandle;
     readonly controller: AbortController;
     readonly settled: Effect.Effect<void>;
-    started: boolean;
   };
   const activeChildren = yield* FiberMap.make<string>();
-  const childMetadata = MutableHashMap.empty<string, ActiveChild>();
-  const liveChildren = () =>
-    [...activeChildren].flatMap(([attemptId]) =>
-      Option.toArray(MutableHashMap.get(childMetadata, attemptId)),
-    );
-  /** The latest live attempt of `subagentId`. */
-  const activeFor = (
-    subagentId: string,
-    startedOnly = false,
-    exceptAttemptId?: string,
-  ): ActiveChild | undefined =>
-    Option.getOrUndefined(
+  const childMetadata = yield* Ref.make(HashMap.empty<string, ActiveChild>());
+  /** The live children, oldest first. */
+  const liveChildren = Effect.map(Ref.get(childMetadata), (children) =>
+    Array.from(activeChildren).flatMap(([attemptId]) =>
+      Option.toArray(HashMap.get(children, attemptId)),
+    ),
+  );
+  /** The latest live attempt of `subagentId` other than `exceptAttemptId`. */
+  const activeFor = (subagentId: string, exceptAttemptId: string) =>
+    Effect.map(liveChildren, (children) =>
       Arr.findLast(
-        liveChildren(),
-        (child) =>
-          child.handle.id !== exceptAttemptId &&
-          child.receipt.subagentId === subagentId &&
-          (!startedOnly || child.started),
+        children,
+        (child) => child.handle.id !== exceptAttemptId && child.receipt.subagentId === subagentId,
       ),
     );
 
@@ -945,14 +938,12 @@ const make = Effect.gen(function* () {
         handle,
         controller,
         settled: Deferred.await(done),
-        started: false,
       };
       // The child's run once it started. Interrupting `work` aborts `controller` instead of the
       // run, which records its outcome before it ends.
       const running = yield* Ref.make(Option.none<Fiber.Fiber<ChildOutcome, ChildRunFailure>>());
       const work = Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          child.started = true;
           const run = yield* Effect.forkScoped(runChild(binding, row, task, handle, controller));
           yield* Ref.set(running, Option.some(run));
           return yield* restore(Fiber.join(run)).pipe(
@@ -984,12 +975,6 @@ const make = Effect.gen(function* () {
           Effect.flatMap(
             Ref.get(running),
             Option.match({ onNone: () => Effect.void, onSome: Fiber.await }),
-          ).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                child.started = false;
-              }),
-            ),
           ),
         ),
       );
@@ -1028,7 +1013,7 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 binding.abortSignal.removeEventListener("abort", stop);
                 const started = Option.isSome(yield* Ref.get(running));
-                if (!(activeFor(row.id, false, handle.id) !== undefined) && !started)
+                if (!started && Option.isNone(yield* activeFor(row.id, handle.id)))
                   // A finalizer cannot fail: a store failure is logged by tag, and the waiters
                   // and the page still learn the child settled.
                   yield* finish("cancelled", "", null, row.id).pipe(
@@ -1052,7 +1037,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
-      MutableHashMap.set(childMetadata, handle.id, child);
+      yield* Ref.update(childMetadata, HashMap.set(handle.id, child));
       // The attempt beats while its fiber lives, queued or running. If the fiber ends without
       // settling the attempt, the beats stop and the store's watchdog fails it as lost.
       yield* FiberMap.run(
@@ -1061,7 +1046,7 @@ const make = Effect.gen(function* () {
         Effect.forkScoped(trace.keepAlive(handle)).pipe(
           Effect.andThen(job),
           Effect.scoped,
-          Effect.ensuring(Effect.sync(() => MutableHashMap.remove(childMetadata, handle.id))),
+          Effect.ensuring(Ref.update(childMetadata, HashMap.remove(handle.id))),
         ),
       );
       return receipt;
@@ -1612,7 +1597,7 @@ const make = Effect.gen(function* () {
     /** Stop all session children, including those whose parent finished normally. */
     stopSession: (sessionId: string) =>
       Effect.gen(function* () {
-        const entries = liveChildren().filter((child) => child.sessionId === sessionId);
+        const entries = (yield* liveChildren).filter((child) => child.sessionId === sessionId);
         yield* Effect.sync(() =>
           entries.forEach((entry) => entry.controller.abort(new Error("session_cancel_requested"))),
         );
@@ -1624,9 +1609,9 @@ const make = Effect.gen(function* () {
 
     /** Stop exactly one live child and wait until its terminal transition settles. */
     stopTask: (taskId: string) =>
-      Effect.suspend(() =>
+      Effect.flatMap(liveChildren, (children) =>
         Option.match(
-          Arr.findFirst(liveChildren(), (child) => child.taskId === taskId),
+          Arr.findFirst(children, (child) => child.taskId === taskId),
           {
             onNone: () => Effect.succeed("not_running" as const),
             onSome: (entry) =>

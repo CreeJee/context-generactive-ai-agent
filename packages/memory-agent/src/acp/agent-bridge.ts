@@ -3,15 +3,15 @@ import {
   Cause,
   Function,
   Result,
-  MutableHashSet,
   HashMap,
-  MutableHashMap,
+  HashSet,
   Crypto,
   Effect,
   Fiber,
   FileSystem,
   Layer,
   Match,
+  Ref,
   Stream,
 } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -70,9 +70,9 @@ const maxToolOutput = 4_000;
 
 interface PromptTurn {
   readonly client: AgentContext;
-  readonly args: MutableHashMap.MutableHashMap<string, string>;
-  cancelled: boolean;
-  failure: ShownFailure<RunFailureCode> | null;
+  readonly args: Ref.Ref<HashMap.HashMap<string, string>>;
+  readonly cancelled: Ref.Ref<boolean>;
+  readonly failure: Ref.Ref<Option.Option<ShownFailure<RunFailureCode>>>;
 }
 
 interface BridgeSession {
@@ -81,7 +81,7 @@ interface BridgeSession {
   readonly holder: string;
   readonly project: ProjectSummary;
   readonly renew: Fiber.Fiber<void>;
-  turn: PromptTurn | null;
+  readonly turn: Ref.Ref<Option.Option<PromptTurn>>;
 }
 
 const stringifyJson = Function.flow(
@@ -282,10 +282,18 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const editorError = toEditorError(redactor);
-  const sessions = MutableHashMap.empty<string, BridgeSession>();
+  const sessions = yield* Ref.make(HashMap.empty<string, BridgeSession>());
+  const sessionOf = (sessionId: string) => Effect.map(Ref.get(sessions), HashMap.get(sessionId));
 
+  // The SDK sends the notification on its own; the run does not wait for it.
   const notify = (turn: PromptTurn, sessionId: string, update: SessionUpdate) =>
-    void turn.client.notify(acp.methods.client.session.update, { sessionId, update });
+    Effect.sync(
+      () => void turn.client.notify(acp.methods.client.session.update, { sessionId, update }),
+    );
+  const argsOf = (turn: PromptTurn, toolCallId: string) =>
+    Effect.map(Ref.get(turn.args), (args) =>
+      Option.getOrElse(HashMap.get(args, toolCallId), () => ""),
+    );
 
   /** Streams the app's run events to the editor as session updates. */
   const forward = (session: BridgeSession, turn: PromptTurn) =>
@@ -299,36 +307,40 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           }),
         TOOL_CALL_START: ({ toolCallId, toolCallName }) => {
           const view = toolView(toolCallName);
-          MutableHashMap.set(turn.args, toolCallId, "");
-          notify(turn, session.id, {
-            sessionUpdate: "tool_call",
-            toolCallId,
-            title: view.title,
-            kind: view.kind,
-            status: "pending",
-          });
-        },
-        TOOL_CALL_ARGS: ({ toolCallId, delta }) => {
-          MutableHashMap.set(
-            turn.args,
-            toolCallId,
-            (Option.getOrUndefined(MutableHashMap.get(turn.args, toolCallId)) ?? "") + delta,
+          return Ref.update(turn.args, HashMap.set(toolCallId, "")).pipe(
+            Effect.andThen(
+              notify(turn, session.id, {
+                sessionUpdate: "tool_call",
+                toolCallId,
+                title: view.title,
+                kind: view.kind,
+                status: "pending",
+              }),
+            ),
           );
         },
-        TOOL_CALL_END: ({ toolCallId }) => {
-          const args = Option.getOrUndefined(MutableHashMap.get(turn.args, toolCallId)) ?? "";
-          const update: SessionUpdate = {
-            sessionUpdate: "tool_call_update",
-            toolCallId,
-            status: "in_progress",
-            locations: toolLocations(args, session.project.root),
-            rawInput: args,
-          };
-          // The path, command or query makes a better title than the tool name alone.
-          const detail = toolDetail(args);
-          if (isTruthy(detail)) update.title = detail;
-          notify(turn, session.id, update);
-        },
+        TOOL_CALL_ARGS: ({ toolCallId, delta }) =>
+          Ref.update(turn.args, (args) =>
+            HashMap.set(
+              args,
+              toolCallId,
+              Option.getOrElse(HashMap.get(args, toolCallId), () => "") + delta,
+            ),
+          ),
+        TOOL_CALL_END: ({ toolCallId }) =>
+          Effect.flatMap(argsOf(turn, toolCallId), (args) => {
+            const update: SessionUpdate = {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              status: "in_progress",
+              locations: toolLocations(args, session.project.root),
+              rawInput: args,
+            };
+            // The path, command or query makes a better title than the tool name alone.
+            const detail = toolDetail(args);
+            if (isTruthy(detail)) update.title = detail;
+            return notify(turn, session.id, update);
+          }),
         TOOL_CALL_RESULT: ({ toolCallId, content }) =>
           notify(turn, session.id, {
             sessionUpdate: "tool_call_update",
@@ -337,11 +349,10 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
             content: [{ type: "content", content: { type: "text", text: cut(content) } }],
           }),
         // The app hid secrets in the message before sending it.
-        RUN_ERROR: ({ code, message }) => {
-          turn.failure = { code: runFailureCodeOf(code), detail: message };
-        },
+        RUN_ERROR: ({ code, message }) =>
+          Ref.set(turn.failure, Option.some({ code: runFailureCodeOf(code), detail: message })),
       },
-      () => undefined,
+      () => Effect.void,
     );
 
   /** The app's chat API. Its calls go through the bridge's fetch (`withAppFetch`). */
@@ -358,7 +369,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
       });
       return yield* events.pipe(
         Stream.map(({ data }) => data),
-        Stream.tap((event) => Effect.sync(() => forward(session, turn)(event))),
+        Stream.tap(forward(session, turn)),
         Stream.filterMap(waitingFor),
         Stream.runLast,
       );
@@ -376,27 +387,29 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     turn: PromptTurn,
     waiting: Option.Option<PendingInterrupts>,
   ): Effect.Effect<void, AppRequestFailed | Cause.UnknownError> =>
-    Option.match(
-      Option.filter(waiting, () => !turn.cancelled),
-      {
-        onNone: () => Effect.void,
-        onSome: ({ runId, pending }) =>
-          Effect.forEach(pending, (interrupt) =>
-            Effect.map(
-              askEditor(turn, session.id, askedCall(interrupt)),
-              (approved): ResumeEntry => ({
-                interruptId: interrupt.id,
-                status: "resolved",
-                payload: { approved },
-              }),
+    Effect.flatMap(Ref.get(turn.cancelled), (cancelled) =>
+      Option.match(
+        Option.filter(waiting, () => !cancelled),
+        {
+          onNone: () => Effect.void,
+          onSome: ({ runId, pending }) =>
+            Effect.forEach(pending, (interrupt) =>
+              Effect.map(
+                askEditor(turn, session.id, askedCall(interrupt)),
+                (approved): ResumeEntry => ({
+                  interruptId: interrupt.id,
+                  status: "resolved",
+                  payload: { approved },
+                }),
+              ),
+            ).pipe(
+              Effect.flatMap((resume) =>
+                runOnce(session, turn, { parentRunId: runId, messages: [], resume }),
+              ),
+              Effect.flatMap((next) => answered(session, turn, next)),
             ),
-          ).pipe(
-            Effect.flatMap((resume) =>
-              runOnce(session, turn, { parentRunId: runId, messages: [], resume }),
-            ),
-            Effect.flatMap((next) => answered(session, turn, next)),
-          ),
-      },
+        },
+      ),
     );
 
   const open = Effect.fn("AcpAgent.open")(function* (sessionId: string, project: ProjectSummary) {
@@ -421,8 +434,14 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
       Effect.asVoid,
       Effect.forkDetach,
     );
-    const session: BridgeSession = { id: sessionId, holder, project, renew, turn: null };
-    MutableHashMap.set(sessions, sessionId, session);
+    const session: BridgeSession = {
+      id: sessionId,
+      holder,
+      project,
+      renew,
+      turn: yield* Ref.make(Option.none<PromptTurn>()),
+    };
+    yield* Ref.update(sessions, HashMap.set(sessionId, session));
     return session;
   });
 
@@ -471,16 +490,14 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
   });
 
   /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
-  const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
-    const asked = MutableHashSet.empty<string>();
-    return Effect.gen(function* () {
+  const relayApprovals = Effect.fnUntraced(function* (session: BridgeSession, turn: PromptTurn) {
+    const asked = yield* Ref.make(HashSet.empty<string>());
+    return yield* Effect.gen(function* () {
       const approvals = yield* api.approvals(session.id);
       yield* Effect.forEach(
         approvals,
-        (approval) => {
-          if (MutableHashSet.has(asked, approval.id)) return Effect.void;
-          MutableHashSet.add(asked, approval.id);
-          return askEditor(turn, session.id, {
+        (approval) =>
+          askEditor(turn, session.id, {
             toolCallId: approval.id,
             toolName: approval.toolName,
             argumentsJson: approval.argumentsJson,
@@ -491,8 +508,13 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
             ),
             // An unanswered approval stays pending in the app, where the page can answer it.
             Effect.catchTag(["UnknownError", "AppRequestFailed"], () => Effect.void),
-          );
-        },
+            Effect.when(
+              Ref.modify(asked, (seen) => [
+                !HashSet.has(seen, approval.id),
+                HashSet.add(seen, approval.id),
+              ]),
+            ),
+          ),
         { concurrency: "unbounded", discard: true },
       );
     }).pipe(
@@ -505,7 +527,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
       }),
       Effect.delay(relayPollMs),
     );
-  };
+  });
 
   const app = acp
     .agent({ name: "context-generactive-agent" })
@@ -551,9 +573,13 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           const { messages } = yield* chat
             .snapshot({ params: { session: ctx.params.sessionId }, query: { limit: maxPageSize } })
             .pipe(withAppFetch, Effect.mapError(appFailure));
-          const session =
-            Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId)) ??
-            (yield* open(ctx.params.sessionId, project));
+          const session = yield* Effect.flatMap(
+            sessionOf(ctx.params.sessionId),
+            Option.match({
+              onNone: () => open(ctx.params.sessionId, project),
+              onSome: Effect.succeed,
+            }),
+          );
           // Replays the saved conversation, so the editor shows what the page shows.
           yield* Effect.forEach(
             messages.flatMap((message) => message.parts.flatMap(replayed(message))),
@@ -574,22 +600,25 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     .onRequest(acp.methods.agent.session.prompt, (ctx) =>
       runNativeEffect(
         Effect.gen(function* () {
-          const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
+          const session = Option.getOrUndefined(yield* sessionOf(ctx.params.sessionId));
           if (!isTruthy(session))
             return yield* EditorRequestRefused.make({
               reason: EditorRefusal.cases.SessionNotOpen.make({}),
             });
-          if (isTruthy(session.turn))
+          const turn: PromptTurn = {
+            client: ctx.client,
+            args: yield* Ref.make(HashMap.empty<string, string>()),
+            cancelled: yield* Ref.make(false),
+            failure: yield* Ref.make(Option.none<ShownFailure<RunFailureCode>>()),
+          };
+          // Checked and taken in one Ref.modify, so two prompts never share a session's turn.
+          const claimed = yield* Ref.modify(session.turn, (current) =>
+            Option.isSome(current) ? [false, current] : [true, Option.some(turn)],
+          );
+          if (!claimed)
             return yield* EditorRequestRefused.make({
               reason: EditorRefusal.cases.TurnInProgress.make({}),
             });
-          const turn: PromptTurn = {
-            client: ctx.client,
-            args: MutableHashMap.empty(),
-            cancelled: false,
-            failure: null,
-          };
-          session.turn = turn;
           const relay = yield* Effect.forkChild(relayApprovals(session, turn));
           return yield* Effect.gen(function* () {
             yield* runOnce(session, turn, {
@@ -604,23 +633,23 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
               // Approvals: the run pauses; the editor answers each, and the run continues.
               Effect.flatMap((waiting) => answered(session, turn, waiting)),
               // A cancelled run's stream may end any way; the turn ends as cancelled.
-              Effect.catch((error) => (turn.cancelled ? Effect.void : Effect.fail(error))),
+              Effect.catch((error) =>
+                Effect.fail(error).pipe(
+                  Effect.when(Effect.map(Ref.get(turn.cancelled), (cancelled) => !cancelled)),
+                ),
+              ),
             );
-            if (turn.cancelled) return { stopReason: "cancelled" as const satisfies StopReason };
-            if (isTruthy(turn.failure))
+            if (yield* Ref.get(turn.cancelled))
+              return { stopReason: "cancelled" as const satisfies StopReason };
+            const failure = yield* Ref.get(turn.failure);
+            if (Option.isSome(failure))
               return yield* EditorRequestRefused.make({
-                reason: EditorRefusal.cases.RunFailed.make(turn.failure),
+                reason: EditorRefusal.cases.RunFailed.make(failure.value),
               });
             return { stopReason: "end_turn" as const satisfies StopReason };
           }).pipe(
             Effect.ensuring(
-              Fiber.interrupt(relay).pipe(
-                Effect.andThen(
-                  Effect.sync(() => {
-                    session.turn = null;
-                  }),
-                ),
-              ),
+              Fiber.interrupt(relay).pipe(Effect.andThen(Ref.set(session.turn, Option.none()))),
             ),
           );
         }).pipe(Effect.catch(editorError)),
@@ -630,9 +659,11 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     .onNotification(acp.methods.agent.session.cancel, (ctx) =>
       runNativeEffect(
         Effect.gen(function* () {
-          const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
-          if (!isTruthy(session?.turn)) return;
-          session.turn.cancelled = true;
+          const session = Option.getOrUndefined(yield* sessionOf(ctx.params.sessionId));
+          if (!isTruthy(session)) return;
+          const turn = Option.getOrUndefined(yield* Ref.get(session.turn));
+          if (!isTruthy(turn)) return;
+          yield* Ref.set(turn.cancelled, true);
           // The app's cancel stops the run for good; closing the stream alone would not (R10).
           yield* api.cancel(session.id, session.holder).pipe(
             // The turn is already marked cancelled; a failed app cancel is only logged.
@@ -645,13 +676,24 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     );
 
   const connection = app.connect(options.stream);
-  void connection.closed.finally(() => {
-    for (const session of MutableHashMap.values(sessions)) {
-      void runNativeEffect(Fiber.interrupt(session.renew));
-      void runNativeEffect(Effect.ignore(api.lease(session.id, session.holder, "release")));
-    }
-    MutableHashMap.clear(sessions);
-  });
+  void connection.closed.finally(() =>
+    runNativeEffect(
+      Effect.flatMap(Ref.getAndSet(sessions, HashMap.empty()), (closed) =>
+        Effect.forEach(
+          HashMap.values(closed),
+          (session) =>
+            Effect.all(
+              [
+                Fiber.interrupt(session.renew),
+                Effect.ignore(api.lease(session.id, session.holder, "release")),
+              ],
+              { concurrency: "unbounded", discard: true },
+            ),
+          { concurrency: "unbounded", discard: true },
+        ),
+      ),
+    ),
+  );
   return connection;
 });
 
