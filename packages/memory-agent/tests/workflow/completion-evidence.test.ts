@@ -209,7 +209,6 @@ const refusals = [
   "missing execution",
   "suspended execution",
   "failed execution",
-  "missing dispatch",
   "pending operation",
   "uncertain effect",
 ] as const;
@@ -299,9 +298,6 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
         fx.sessionId,
       );
       return unchanged;
-    case "missing dispatch":
-      yield* sqlRun("DELETE FROM workflow_worker_dispatches WHERE run_id = ?", fx.run);
-      return unchanged;
     case "pending operation":
       yield* operation(0, '{"type":"pending","operationId":1}', "pending");
       return unchanged;
@@ -370,6 +366,23 @@ testAgent()("criterion-linked Goal completion", (it) => {
       const fx = yield* fixture("native");
       const { input, recorder } = yield* breakProof(fx, failure);
       yield* refused(fx, input, recorder);
+    }),
+  );
+
+  it.effect("a run on the owner loop completes a Goal a worker ran before", () =>
+    Effect.gen(function* () {
+      const fx = yield* fixture("native");
+      yield* sqlRun("DELETE FROM workflow_worker_dispatches WHERE run_id = ?", fx.run);
+      const state = yield* (yield* Workflows).updateProgress(fx.sessionId, fx.complete, fx.run);
+      expect(state.goal?.status).toBe("completed");
+      expect(state.goal?.completion?.runs).toEqual([
+        {
+          runId: fx.run,
+          workflowRevisionId: expect.any(Number),
+          dispatchGeneration: null,
+          durableExecutionId: expect.any(String),
+        },
+      ]);
     }),
   );
 

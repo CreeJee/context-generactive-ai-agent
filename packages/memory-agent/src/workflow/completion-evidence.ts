@@ -214,16 +214,12 @@ export const completionEvidence = Effect.gen(function* () {
         ? bound
         : null;
     });
+    // A Goal worker's run names its dispatch; a run on the owner loop has none, even in a Goal a
+    // worker ran before (decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)").
     const provenance = Effect.fnUntraced(function* (runId: string, bound: typeof Binding.Type) {
-      if (pendingRecorder && runId === recorderRunId) {
-        const dispatch = yield* dispatchGenerationOf(runId);
-        if (sourceGeneration !== undefined && dispatch === undefined) return null;
-        return {
-          runId,
-          workflowRevisionId: bound.workflow_revision_id,
-          dispatchGeneration: dispatch ?? null,
-        };
-      }
+      const dispatchGeneration = (yield* dispatchGenerationOf(runId)) ?? null;
+      if (pendingRecorder && runId === recorderRunId)
+        return { runId, workflowRevisionId: bound.workflow_revision_id, dispatchGeneration };
       if (
         yield* exists(
           sql`SELECT 1 FROM owner_rpc_operations WHERE run_id = ${runId}
@@ -231,14 +227,8 @@ export const completionEvidence = Effect.gen(function* () {
         )
       )
         return null;
-      const dispatchGeneration = yield* dispatchGenerationOf(runId);
-      if (sourceGeneration !== undefined && dispatchGeneration === undefined) return null;
       if (sourceGeneration === undefined)
-        return {
-          runId,
-          workflowRevisionId: bound.workflow_revision_id,
-          dispatchGeneration: dispatchGeneration ?? null,
-        };
+        return { runId, workflowRevisionId: bound.workflow_revision_id, dispatchGeneration };
       const durable = yield* durableExecutionOf({
         sessionId,
         runId,
@@ -250,7 +240,7 @@ export const completionEvidence = Effect.gen(function* () {
         : {
             runId,
             workflowRevisionId: bound.workflow_revision_id,
-            dispatchGeneration: dispatchGeneration ?? null,
+            dispatchGeneration,
             durableExecutionId: durable.value.execution_id,
           };
     });
