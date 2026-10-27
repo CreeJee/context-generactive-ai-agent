@@ -77,7 +77,10 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
     const changed = (get: Atom.FnContext, change: (current: OpenSession) => OpenSession) =>
       Effect.sync(() => get.set(state, Option.map(get(state), change)));
 
-    /** Reads a run's events into the view until its stream ends, then the newest page again. */
+    /**
+     * Reads a run's events into the view until its stream ends, then the newest page again. The page
+     * reads the run until that page is in, so the run's messages do not blink out in between.
+     */
     const following = <E2>(
       get: Atom.FnContext,
       runId: string,
@@ -102,15 +105,15 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
             ),
           ),
         ),
-        Effect.ensuring(changed(get, (current) => ({ ...current, reading: null }))),
         Effect.andThen(
           Effect.flatMap(ChatApiClient, ({ chat }) =>
             chat.snapshot({ params: { session }, query: { limit: pageSize } }),
           ),
         ),
         Effect.flatMap((snapshot) =>
-          changed(get, (current) => ({ ...current, view: caughtUp(current.view, snapshot) })),
+          changed(get, (current) => ({ view: caughtUp(current.view, snapshot), reading: null })),
         ),
+        Effect.ensuring(changed(get, (current) => ({ ...current, reading: null }))),
       );
 
     /** Reads the newest page, and rejoins the run still going. */

@@ -1,6 +1,5 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect } from "effect";
-import type { UIMessage } from "@tanstack/ai-react";
 import { MessageSquareIcon } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -13,6 +12,7 @@ import {
 } from "~/components/ui/empty";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { cn } from "cn";
+import type { ChatMessage } from "memory-agent/chat-api";
 
 /** Owns history paging and scroll position; the caller owns the content of each message. */
 export function ChatHistory({
@@ -22,10 +22,10 @@ export function ChatHistory({
   renderMessage,
   children,
 }: {
-  messages: readonly UIMessage[];
+  messages: readonly ChatMessage[];
   hasOlderMessages: boolean;
   loadOlderMessages: () => Promise<void>;
-  renderMessage: (message: UIMessage, index: number) => ReactNode;
+  renderMessage: (message: ChatMessage, index: number) => ReactNode;
   children: ReactNode;
 }) {
   const viewport = useRef<HTMLDivElement>(null);

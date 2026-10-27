@@ -9,38 +9,40 @@ import { cn } from "cn";
 import { api, isApiError } from "../api";
 import { ApprovalCard } from "./approval";
 import type { PendingApproval } from "./pending-approval";
+import type { AnswerProblem } from "./use-agent-chat";
 
-/** Answers one interrupt batch atomically and owns only that batch's pending decisions. */
+/** What the alert says for each problem, and what its button does. */
+const problems = {
+  unsent: { text: "승인 응답을 전송하지 못했어요.", action: "응답 다시 보내기" },
+  refused: {
+    text: "연결이 끊긴 사이 승인 목록이 바뀌었어요. 서버의 최신 요청을 다시 불러와야 해요.",
+    action: "최신 요청 불러오기",
+  },
+  lost: {
+    text: "승인한 뒤 실행을 이어가지 못했어요. 요청을 폐기해도 셸 명령은 실행되지 않으며, 대화와 작업 evidence는 유지돼요.",
+    action: "끊어진 요청 폐기하고 계속",
+  },
+} satisfies Record<AnswerProblem, { readonly text: string; readonly action: string }>;
+
+/** Answers the approvals a run waits for together, once every one has a decision. */
 export function ChatApprovals({
   sessionId,
   holder,
   approvals,
-  incomplete,
-  stale,
-  retryable,
-  continuationLost,
-  errorCount,
-  errorMessage,
+  problem,
   readOnly,
   resuming,
   onResolve,
-  onRetry,
   onResync,
   onProblem,
 }: {
   sessionId: string;
   holder: string;
   approvals: readonly PendingApproval[];
-  incomplete: boolean;
-  stale: boolean;
-  retryable: boolean;
-  continuationLost: boolean;
-  errorCount: number;
-  errorMessage: string | null;
+  problem: AnswerProblem | null;
   readOnly: boolean;
   resuming: boolean;
   onResolve: (decisions: Readonly<Record<string, boolean>>) => void;
-  onRetry: () => void;
   onResync: () => void;
   onProblem: (message: string) => void;
 }) {
@@ -50,13 +52,7 @@ export function ChatApprovals({
   const answer = (id: string, approved: boolean) => {
     const next = { ...decisions, [id]: approved };
     setDecisions(next);
-    if (incomplete || stale || approvals.some((approval) => next[approval.id] === undefined))
-      return;
-    try {
-      onResolve(next);
-    } catch {
-      onProblem("승인 응답을 준비하지 못했어요. 서버 상태를 다시 불러와 주세요.");
-    }
+    if (approvals.every((approval) => next[approval.id] !== undefined)) onResolve(next);
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -75,38 +71,31 @@ export function ChatApprovals({
         ),
       ),
     );
+  const actions = {
+    unsent: () => onResolve(decisions),
+    refused: onResync,
+    lost: () => void discard(),
+  } satisfies Record<AnswerProblem, () => void>;
 
   return (
     <>
-      {(incomplete || errorCount > 0 || continuationLost) && (
+      {problem !== null && (
         <Alert variant="destructive">
           <AlertTitle>승인 요청을 이어가지 못했어요</AlertTitle>
           <AlertDescription>
             <div className="flex flex-col items-start gap-3">
-              <p>
-                {continuationLost
-                  ? "서버에 이 승인 요청을 이어갈 실행 상태가 남아 있지 않아요. 요청을 폐기해도 셸 명령은 실행되지 않으며, 대화와 작업 evidence는 유지돼요."
-                  : stale || incomplete
-                    ? "연결이 끊긴 사이 승인 목록이 바뀌었어요. 서버의 최신 요청을 다시 불러와야 해요."
-                    : (errorMessage ?? "승인 응답을 전송하지 못했어요.")}
-              </p>
+              <p>{problems[problem].text}</p>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 disabled={readOnly || resuming || discarding}
-                onClick={
-                  continuationLost ? () => void discard() : retryable && !stale ? onRetry : onResync
-                }
+                onClick={actions[problem]}
               >
                 <RefreshCwIcon
                   className={cn("size-3.5", (resuming || discarding) && "animate-spin")}
                 />
-                {continuationLost
-                  ? "끊어진 요청 폐기하고 계속"
-                  : retryable && !stale
-                    ? "응답 다시 보내기"
-                    : "최신 요청 불러오기"}
+                {problems[problem].action}
               </Button>
             </div>
           </AlertDescription>
@@ -117,7 +106,7 @@ export function ChatApprovals({
           key={approval.id}
           approval={approval}
           decision={decisions[approval.id]}
-          disabled={readOnly || resuming || incomplete || stale || retryable || continuationLost}
+          disabled={readOnly || resuming || problem !== null}
           onAnswer={(approved) => answer(approval.id, approved)}
         />
       ))}

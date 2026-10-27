@@ -1,7 +1,7 @@
 import { browserCrypto } from "./shared/browser-crypto";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
-import { Data, Effect, Function as EffectFunction } from "effect";
+import { Data, Effect } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   AgentLinkState as AgentLinkStateCase,
@@ -55,7 +55,6 @@ import type {
   SubscriptionQuotaReport,
 } from "memory-agent";
 import type { ModelMessage } from "@tanstack/ai";
-import type { UIMessage } from "@tanstack/ai-react";
 import { Option, Schema } from "effect";
 import { appFetch } from "./shared/backend-restart";
 import {
@@ -598,35 +597,6 @@ function apiError(
   });
 }
 
-/** Preserve the server's typed error code through the chat transport. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const chatFetch: {
-  (init?: RequestInit): (input: RequestInfo | URL) => Promise<Response>;
-} & typeof fetch = EffectFunction.dual(
-  (args) =>
-    args[0] instanceof URL || args[0] instanceof Request || Schema.is(Schema.String)(args[0]),
-  chatFetchBody,
-);
-function chatFetchBody(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const arguments_: Parameters<typeof fetch> = [input, init];
-  return runUiEffect(
-    Effect.gen(function* () {
-      const response = yield* uiPromise(() => appFetch(...arguments_));
-      if (!response.ok) {
-        const body: unknown = yield* uiPromise(() =>
-          response
-            .clone()
-            .json()
-            .catch(() => null),
-        );
-        return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-      }
-      return response;
-    }),
-  );
-}
-
 type JsonValue =
   | string
   | number
@@ -856,13 +826,6 @@ export const api = {
       edit,
       { [sessionHolderHeader]: holder },
     ),
-  /** The saved conversation, as the page hydrates it (used to catch up after queued deliveries). */
-  transcript: (sessionId: string) =>
-    call<{ messages: UIMessage[] }>(
-      "GET",
-      `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
-    ),
-
   imageSettings: () => call<ImageSettingsView>("GET", "/api/settings/image"),
   setImageGenerationEnabled: (enabled: boolean) =>
     call<ImageSettingsView>(
