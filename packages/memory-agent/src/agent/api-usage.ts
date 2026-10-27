@@ -2,6 +2,7 @@ import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import { Clock, Context, Effect, Function as EffectFunction, Layer, Option, Schema } from "effect";
+import type { Response } from "effect/ai";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import type { ProviderId } from "../providers/contracts.ts";
@@ -188,30 +189,54 @@ export const collectApiUsage: {
   ): (ledger: UsageLedger) => ReturnType<typeof collectApiUsageBody>;
 } & typeof collectApiUsageBody = EffectFunction.dual(2, collectApiUsageBody);
 
+/** An Effect AI response: who it counts for, and the provider's counts. */
+type UsageResponse = Omit<
+  ApiUsageResponse,
+  "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens"
+> & { readonly usage: Response.Usage };
+
+/** An Effect AI response's counts as the ledger keeps them. */
+const usageRecord = ({
+  usage: { inputTokens, outputTokens },
+  ...response
+}: UsageResponse): ApiUsageResponse => ({
+  ...response,
+  // `total` is the whole input; an Anthropic row keeps only its uncached part.
+  inputTokens: Option.getOrNull(
+    Option.map(Option.fromNullishOr(inputTokens.total), (total) =>
+      response.provider === "anthropic"
+        ? total - (inputTokens.cacheRead ?? 0) - (inputTokens.cacheWrite ?? 0)
+        : total,
+    ),
+  ),
+  outputTokens: outputTokens.total ?? null,
+  ...optionalProperty("cacheReadTokens", inputTokens.cacheRead),
+  ...optionalProperty("cacheWriteTokens", inputTokens.cacheWrite),
+});
+
+/** Records an Effect AI response; one whose provider reported no counts leaves no row. */
+const recordUsageBody = (ledger: UsageLedger, response: UsageResponse) =>
+  Effect.when(
+    ledger.record(usageRecord(response)),
+    Effect.succeed(
+      response.usage.inputTokens.total !== undefined ||
+        response.usage.outputTokens.total !== undefined,
+    ),
+  );
+export const recordUsage: {
+  (response: UsageResponse): (ledger: UsageLedger) => ReturnType<typeof recordUsageBody>;
+} & typeof recordUsageBody = EffectFunction.dual(2, recordUsageBody);
+
 /** The same capture for the Effect AI loop. */
 const apiUsageHookBody = (
   ledger: UsageLedger,
   source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
 ): RunHook => ({
-  usage: ({ runId, threadId }, { inputTokens, outputTokens }) =>
-    ledger
-      .record({
-        ...source,
-        runId,
-        threadId,
-        // `total` is the whole input; an Anthropic row keeps only its uncached part.
-        inputTokens: Option.getOrNull(
-          Option.map(Option.fromNullishOr(inputTokens.total), (total) =>
-            source.provider === "anthropic"
-              ? total - (inputTokens.cacheRead ?? 0) - (inputTokens.cacheWrite ?? 0)
-              : total,
-          ),
-        ),
-        outputTokens: outputTokens.total ?? null,
-        ...optionalProperty("cacheReadTokens", inputTokens.cacheRead),
-        ...optionalProperty("cacheWriteTokens", inputTokens.cacheWrite),
-      })
-      .pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
+  usage: ({ runId, threadId }, usage) =>
+    recordUsage(ledger, { ...source, runId, threadId, usage }).pipe(
+      Effect.asVoid,
+      Effect.mapError(asRunFailed),
+    ),
 });
 export const apiUsageHook: {
   (

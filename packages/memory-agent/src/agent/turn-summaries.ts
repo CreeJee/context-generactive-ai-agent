@@ -1,10 +1,10 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { chat, type ChatMiddleware } from "@tanstack/ai";
+import type { ChatMiddleware } from "@tanstack/ai";
 import { Cause, Context, Crypto, Effect, Layer, Schema } from "effect";
-import { sdkPromise } from "../runtime/sdk-promise.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
+import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { Nodes, type Node, type NodeKind } from "../memory/nodes.ts";
@@ -14,7 +14,7 @@ import {
   recentRawUserTurns,
   summaryBlockTurns,
 } from "./compaction-policy.ts";
-import { ApiUsage, collectApiUsage } from "./api-usage.ts";
+import { ApiUsage, recordUsage } from "./api-usage.ts";
 import { fallbackLogged, logDefect } from "../runtime/logged-failures.ts";
 import type { RunHook } from "../loop/run.ts";
 import { finishedRun } from "../loop/store.ts";
@@ -108,24 +108,23 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       .join("\n\n")
       .slice(0, inputCharacters);
     const threadId = yield* crypto.randomUUIDv4();
-    const answer = yield* sdkPromise((abortController) =>
-      chat({
-        adapter: services.runtime.adapter(cheap),
-        messages: [{ role: "user", content: `Nodes:\n\n${input}` }],
-        systemPrompts: [summaryInstructions],
-        threadId,
-        middleware: [
-          collectApiUsage(usageLedger, {
-            rootSessionId: sessionId,
-            purpose: "summary",
-            provider: cheap.provider,
-            model: cheap.model,
-          }),
-        ],
-        abortController,
-        stream: false,
-      }),
-    ).pipe(
+    const answer = yield* singleAnswer({
+      runtime: services.runtime,
+      selection: cheap,
+      threadId,
+      system: summaryInstructions,
+      prompt: `Nodes:\n\n${input}`,
+    }).pipe(
+      Effect.tap(({ usage }) =>
+        recordUsage(usageLedger, {
+          rootSessionId: sessionId,
+          purpose: "summary",
+          provider: cheap.provider,
+          model: cheap.model,
+          threadId,
+          usage,
+        }),
+      ),
       Effect.timeout(summaryTimeoutMs),
       Effect.mapError((cause) => TurnSummaryFailed.make({ operation: "model", cause })),
     );

@@ -3,11 +3,11 @@ import { isTruthy } from "../truthy.ts";
 import { HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { chat } from "@tanstack/ai";
 import { Cause, Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
-import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
+import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
+import { singleAnswer } from "../model/single-call.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Interpretations } from "./interpretations.ts";
@@ -244,36 +244,30 @@ const make = Effect.gen(function* () {
 
       const { services } = yield* active.resolve(selection);
       const cheap = yield* services.models.cheapestEffort(selection);
-      const answer = yield* Effect.gen(function* () {
-        // TanStack requires a controller; this scope aborts it on completion/interruption.
-        const abortController = yield* Effect.acquireRelease(
-          Effect.sync(() => new AbortController()),
-          (controller) => Effect.sync(() => controller.abort()),
-        );
-        return yield* Effect.tryPromise({
-          try: () =>
-            chat({
-              adapter: services.runtime.adapter(cheap),
-              messages: [{ role: "user", content: `Input (JSON): ${stringifyJson(input)}` }],
-              systemPrompts: [interpretInstructions],
-              threadId: randomUUID(),
-              middleware: isTruthy(batch[0]?.sessionId)
-                ? [
-                    collectApiUsage(usageLedger, {
-                      rootSessionId: batch[0].sessionId,
-                      purpose: "memory-interpretation",
-                      provider: cheap.provider,
-                      model: cheap.model,
-                    }),
-                  ]
-                : [],
-              abortController,
-              stream: false,
-            }),
-          catch: () => InterpretationFailed.make({ reason: "model_call_failed" }),
-        });
+      const threadId = randomUUID();
+      const answer = yield* singleAnswer({
+        runtime: services.runtime,
+        selection: cheap,
+        threadId,
+        system: interpretInstructions,
+        prompt: `Input (JSON): ${stringifyJson(input)}`,
       }).pipe(
-        Effect.scoped,
+        // Counted only for statements of a session.
+        Effect.tap(({ usage }) =>
+          Effect.transposeOption(
+            Option.map(Option.liftPredicate(batch[0]?.sessionId, isTruthy), (rootSessionId) =>
+              recordUsage(usageLedger, {
+                rootSessionId,
+                purpose: "memory-interpretation",
+                provider: cheap.provider,
+                model: cheap.model,
+                threadId,
+                usage,
+              }),
+            ),
+          ),
+        ),
+        Effect.mapError(() => InterpretationFailed.make({ reason: "model_call_failed" })),
         Effect.timeoutOrElse({
           duration: interpretTimeoutMs,
           orElse: () => Effect.fail(InterpretationFailed.make({ reason: "model_call_failed" })),
