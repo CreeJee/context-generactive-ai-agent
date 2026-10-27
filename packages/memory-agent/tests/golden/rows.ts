@@ -1,11 +1,8 @@
 import type { ModelMessage } from "@tanstack/ai";
 import { Effect, Function as EffectFunction, MutableHashMap, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import {
-  HandoffState,
-  handoffHistory,
-  modelHandoffNamespace,
-} from "../../src/agent/model-handoff.ts";
+import { HandoffState, modelHandoffNamespace } from "../../src/agent/handoff-state.ts";
+import { handoffHistory } from "../../src/agent/model-handoff.ts";
 import {
   migrateInterruptPayload,
   migrateMessage,

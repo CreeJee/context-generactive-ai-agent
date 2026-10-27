@@ -8,11 +8,11 @@ import {
 } from "@tanstack/ai";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
+import { modelHandoffNamespace } from "../src/agent/handoff-state.ts";
 import {
   handoffNotice,
   ModelHandoffFailed,
   modelHandoffHistoryEffect,
-  modelHandoffNamespace,
   ModelHandoffReason,
 } from "../src/agent/model-handoff.ts";
 import { lookupSources } from "../src/agent/compaction.ts";
@@ -58,15 +58,17 @@ const oldCall = {
   type: "function" as const,
   function: { name: "run_shell", arguments: '{"command":"build"}' },
 };
+/** The old model's answer as the store keeps it, with the model that wrote it. */
+const oldAnswer = {
+  role: "assistant" as const,
+  content: null,
+  thinking: [{ content: "private reasoning" }],
+  toolCalls: [oldCall],
+  model: "old-model",
+};
 const past: ModelMessage[] = [
   { role: "user", content: "프로젝트를 빌드해 줘" },
-  {
-    role: "assistant",
-    content: null,
-    thinking: [{ content: "private reasoning" }],
-    toolCalls: [oldCall],
-    metadata: { tanstack: { model: "old-model" } },
-  },
+  oldAnswer,
   { role: "tool", toolCallId: "old-call", content: "build completed" },
 ];
 const notice: ModelMessage = { role: "assistant", content: handoffNotice };

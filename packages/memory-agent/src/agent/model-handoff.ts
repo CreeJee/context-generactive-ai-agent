@@ -1,9 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
-import { Array as Arr, Effect, HashSet, Match, Option, Predicate, Schema, Struct } from "effect";
+import { Array as Arr, Effect, HashSet, Match, Option, Schema, Struct } from "effect";
 import {
   type ChatMetadata,
   type ChatMetadataFailed,
@@ -16,9 +14,15 @@ import {
   messageText,
   replayableToolHistory,
 } from "./compaction.ts";
+import {
+  fingerprint,
+  HandoffState,
+  legacyFingerprint,
+  modelHandoffNamespace,
+  type SavedHandoff,
+} from "./handoff-state.ts";
 import type { ProviderId } from "../providers/contracts.ts";
 import type { NodeStoreFailed } from "../memory/nodes.ts";
-import type { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
 
 export const ModelHandoffReason = Schema.TaggedUnion({
@@ -75,49 +79,12 @@ const callPointer = (name: string, resultNodeId: string | null | undefined) =>
     ),
   );
 
-export const modelHandoffNamespace = "memory-agent/model-handoff";
-export const HandoffState = Schema.TaggedUnion({
-  baseline: { target: Schema.String },
-  handoff: {
-    target: Schema.String,
-    through: Schema.Int.check(Schema.isGreaterThan(0)),
-    anchor: Schema.String,
-    anchorId: Schema.optionalKey(Schema.String),
-    /** Bounded context earlier versions stored for the cut; no longer sent. */
-    context: Schema.optionalKey(Schema.String),
-  },
-});
-type HandoffState = typeof HandoffState.Type;
-export type SavedHandoff = typeof HandoffState.cases.handoff.Type;
 const decodeState = Schema.decodeUnknownOption(HandoffState);
 
 const storedModel = Schema.decodeUnknownOption(Schema.Struct({ model: Schema.String }));
-const tanstackModel = Schema.decodeUnknownOption(
-  Schema.Struct({ metadata: Schema.Struct({ tanstack: Schema.Struct({ model: Schema.String }) }) }),
-);
-/** The model an assistant message was written with. TanStack's messages keep it in metadata. */
+/** The model an assistant message was written with. */
 const modelOf = (message: ConversationMessage) =>
-  Option.orElse(
-    Option.map(storedModel(message), ({ model }) => model),
-    () => Option.map(tanstackModel(message), ({ metadata }) => metadata.tanstack.model),
-  );
-
-export const legacyFingerprint = (message: ConversationMessage | JsonValue | undefined) =>
-  sha256(JSON.stringify(message) ?? "missing");
-
-// UI hydration can reorder object fields and fan out tool messages. Hash JSON values
-// canonically and locate identified boundaries independently of their array position.
-export const fingerprint = (message: ConversationMessage | JsonValue | undefined) =>
-  "v2:" +
-  sha256(
-    JSON.stringify(message, (_key, value) =>
-      Predicate.isObject(value) && !Array.isArray(value)
-        ? Object.fromEntries(
-            Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
-          )
-        : value,
-    ) ?? "missing",
-  );
+  Option.map(storedModel(message), ({ model }) => model);
 
 /**
  * A new model reads the earlier turns as text, never the old model's reasoning/tool protocol. The

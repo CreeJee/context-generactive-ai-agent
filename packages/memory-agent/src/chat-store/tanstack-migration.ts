@@ -15,7 +15,7 @@ import {
   legacyFingerprint,
   modelHandoffNamespace,
   type SavedHandoff,
-} from "../agent/model-handoff.ts";
+} from "../agent/handoff-state.ts";
 import { historyProjectionSchema } from "../chat-state/history-projection-sql.ts";
 import type { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
@@ -94,6 +94,10 @@ const migrateMessageObject = (message: JsonObject): JsonObject => {
     ),
   );
 };
+
+/** Stored messages, each migrated; anything else is left as it is. */
+const migrateMessages = (messages: JsonValue): JsonValue =>
+  isJsonArray(messages) ? messages.map(migrateMessage) : messages;
 
 /**
  * A TanStack `TokenUsage` as AG-UI 1.0's. `inputExcludesCache`: the Anthropic adapter before
@@ -216,6 +220,7 @@ const ThreadRow = Schema.Struct({
   messages: Schema.String,
   ready: Schema.NullOr(Schema.Literals([0, 1])),
 });
+const BtwThreadRow = Schema.Struct({ id: Schema.String, messages: Schema.String });
 const GroupRow = Schema.Struct({ ordinal: Schema.Int, messages: Schema.String });
 const ValueRow = Schema.Struct({ value: Schema.String });
 const InterruptRow = Schema.Struct({ seq: Schema.Int, payload: Schema.String });
@@ -225,13 +230,21 @@ const UsageRow = Schema.Struct({
   input_excludes_cache: Schema.Literals([0, 1]),
 });
 
-/** Migrates every chat row TanStack wrote: threads, history groups, handoffs, interrupts, usage. */
+/**
+ * Migrates every chat row TanStack wrote: threads, BTW threads, history groups, handoffs,
+ * interrupts, usage.
+ */
 export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const threadIds = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ThreadId,
     execute: () => sql`SELECT thread_id FROM chat_threads ORDER BY thread_id`,
+  });
+  const btwThreads = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: BtwThreadRow,
+    execute: () => sql`SELECT id, messages FROM btw_threads`,
   });
   const thread = SqlSchema.findOne({
     Request: Schema.String,
@@ -268,33 +281,45 @@ export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(fu
           AS input_excludes_cache
       FROM chat_runs WHERE usage IS NOT NULL`,
   });
-  /** Writes `next` through `write` when it differs from the stored `text`. */
+  /**
+   * Writes `next` through `write` when it differs from `before`, the value the row held. A row
+   * whose text only differs in layout keeps its text.
+   */
   const rewrite = <A, E, R>(
-    text: string,
+    before: JsonValue,
     next: JsonValue,
     write: (text: string) => Effect.Effect<A, E, R>,
   ) =>
-    encodeJson(next).pipe(
-      Effect.flatMap((encoded) =>
-        write(encoded).pipe(Effect.when(Effect.succeed(encoded !== text))),
+    Effect.all([encodeJson(before), encodeJson(next)]).pipe(
+      Effect.flatMap(([held, encoded]) =>
+        write(encoded).pipe(Effect.when(Effect.succeed(encoded !== held))),
       ),
     );
+  /** {@link rewrite} of the JSON `text` a row holds, as `migrate` makes it. */
+  const rewriteText = <A, E, R>(
+    text: string,
+    migrate: (value: JsonValue) => JsonValue,
+    write: (text: string) => Effect.Effect<A, E, R>,
+  ) => {
+    const before = parseJson(text);
+    return rewrite(before, migrate(before), write);
+  };
 
   const migrateThread = Effect.fnUntraced(function* (id: string) {
     const row = yield* thread(id);
     const before = parseMessages(row.messages);
     const after = before.map(migrateMessage);
     yield* rewrite(
-      row.messages,
+      before,
       after,
       (text) => sql`UPDATE chat_threads SET messages = ${text} WHERE thread_id = ${id}`,
     );
     yield* Effect.forEach(
       yield* groups(id),
       (group) =>
-        rewrite(
+        rewriteText(
           group.messages,
-          parseMessages(group.messages).map(migrateMessage),
+          migrateMessages,
           (text) => sql`
             UPDATE chat_history_groups SET messages = ${text}
             WHERE thread_id = ${id} AND ordinal = ${group.ordinal}`,
@@ -338,12 +363,23 @@ export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(fu
       yield* Effect.forEach(yield* threadIds(), ({ thread_id }) => migrateThread(thread_id), {
         discard: true,
       });
+      // A BTW thread has no history groups or handoff, only its messages.
+      yield* Effect.forEach(
+        yield* btwThreads(),
+        (row) =>
+          rewriteText(
+            row.messages,
+            migrateMessages,
+            (text) => sql`UPDATE btw_threads SET messages = ${text} WHERE id = ${row.id}`,
+          ),
+        { discard: true },
+      );
       yield* Effect.forEach(
         yield* interrupts(),
         ({ seq, payload }) =>
-          rewrite(
+          rewriteText(
             payload,
-            migrateInterruptPayload(parseJson(payload)),
+            migrateInterruptPayload,
             (text) => sql`UPDATE chat_interrupts SET payload = ${text} WHERE seq = ${seq}`,
           ),
         { discard: true },
@@ -351,9 +387,9 @@ export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(fu
       yield* Effect.forEach(
         yield* usages(),
         (run) =>
-          rewrite(
+          rewriteText(
             run.usage,
-            migrateUsage(parseJson(run.usage), run.input_excludes_cache === 1),
+            migrateUsage(run.input_excludes_cache === 1),
             (text) => sql`UPDATE chat_runs SET usage = ${text} WHERE run_id = ${run.run_id}`,
           ),
         { discard: true },

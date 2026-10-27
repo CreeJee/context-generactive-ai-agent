@@ -2760,6 +2760,12 @@
 - model handoff의 anchor는 메시지 전체의 해시라 migration이 바꾼다. migration 전 메시지에서 경계를 찾고, migration 뒤의 같은 메시지로 anchor를 다시 계산한다. legacy anchor는 실행 중 upgrade와 같은 규칙으로 v2가 된다. 이미 맞지 않던 anchor는 그대로 둔다. 다른 `chat_metadata` namespace는 메시지 순번과 글자를 저장하므로 바꾸지 않는다.
 - Goal의 옛 chunk(`workflow_run_events`)는 바꾸지 않는다. 계획의 "DB 저장 형식과 migration"대로다.
 - 확인: golden 시나리오마다 DB에서 migration을 돌린 행이 변환 결과와 같고 handoff가 replay된다. 로컬 DB 사본은 `tools/chat-store-check`로 확인했다. 모든 행이 새 Schema로 decode되고, 정의 밖 key도 없다. 메시지 내용과 anchor도 원본과 같다. 결과는 계획의 1단계 "결과"에 있다.
+- 등록(2026-10-27): 시작 migration의 마지막 단계(`tanStackRowsMigration`, `packages/memory-agent/src/db/migrations.ts`)에서 돈다. 행이 JSON이라 SQL만으로는 바꿀 수 없다. 그래서 이 단계의 SQL은 주석뿐이고, 시작 코드(`db/database.ts`)가 같은 transaction 안에서 `migrateTanStackRows`를 부른다. SQL 단계만 실행하는 fixture에는 옮길 TanStack 행이 없다.
+  - `btw_threads.messages`도 같은 변환으로 옮긴다. BTW도 `RunStore`로 저장한다.
+  - 변환해도 값이 같은 행은 쓰지 않는다. 저장된 글자가 아니라 읽은 값끼리 비교하므로, 들여쓰기만 다른 행도 그대로 둔다.
+  - handoff 상태와 fingerprint는 `agent/handoff-state.ts`로 옮겼다. 시작 migration과 native search worker가 loop 전체를 읽지 않게 하기 위해서다. model handoff는 이제 메시지의 `model` 필드만 읽는다.
+  - `aa056aa2`부터 이 등록 전까지는 새 loop가 thread를 저장할 때 옛 메시지의 `metadata.tanstack`을 버렸다. `StoredMessage` decode가 모르는 key를 빼기 때문이다. 로컬 DB에는 그 사이에 저장한 thread가 없었다. 릴리즈에는 해당하지 않는다.
+  - 로컬 DB 사본에서 migration은 14초 걸렸다. 다시 돌리면 바뀌는 행이 없다.
 
 ## Effect AI 모델은 TanStack adapter와 같은 요청을 보낸다 (2026-10-26)
 

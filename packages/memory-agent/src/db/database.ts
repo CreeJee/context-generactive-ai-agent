@@ -4,7 +4,8 @@ import * as NodePath from "@effect/platform-node/NodePath";
 import { DatabaseSync } from "node:sqlite";
 import { Context, Effect, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
 import { Migrator, SqlClient } from "effect/sql";
-import { goalHistoryMigration, migrations } from "./migrations.ts";
+import { migrateTanStackRows } from "../chat-store/tanstack-migration.ts";
+import { goalHistoryMigration, migrations, tanStackRowsMigration } from "./migrations.ts";
 import { migrationClient } from "./migration-client.ts";
 import { sqlClientOver } from "./sql-client.ts";
 
@@ -117,8 +118,17 @@ export function migrateDatabase(sqlite: DatabaseSync) {
                   if (sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0)
                     throw rejected(schemaRejection.InvalidForeignKeys.make({}));
                 }
-                sqlite.exec(`PRAGMA user_version = ${index + 1}`);
-              }),
+              }).pipe(
+                Effect.andThen(
+                  migrateTanStackRows().pipe(
+                    Effect.orDie,
+                    Effect.when(Effect.succeed(step === tanStackRowsMigration)),
+                  ),
+                ),
+                Effect.andThen(
+                  Effect.sync(() => sqlite.exec(`PRAGMA user_version = ${index + 1}`)),
+                ),
+              ),
             ),
           ] as const,
       ),

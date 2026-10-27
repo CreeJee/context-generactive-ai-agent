@@ -609,10 +609,11 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - `/api/chat`(`a93dcda4`): `AgentChat.handle`·`hydrate`와 page delivery를 지웠다. 테스트는 `tests/support/chat-client.ts`의 `openPage`·`runTurn`으로, eval은 `src/testing/chat-api.ts`의 in-process client로 채팅 API를 쓴다.
     - 옮기며 고친 것: SSE reader를 abort로 닫는다(조용한 run을 떠난 stream이 다음 로그 항목까지 열려 있었다). 재시작에 잘린 run이 사용자 취소(`aborted`)로 기록되던 것을 `server_restarted`로 고쳤다. 사용자 턴에 서버가 받은 시각을 적는다(`5f1fef08`부터 빠져 있었다).
   - `ChatApi`는 server에 직접 붙이지 않는다. React Router resource route가 web handler(`apps/agent/app/.server/chat-api.ts`의 `chatApiRoutes`)로 넘기는 지금 방식을 둔다.
+  - run 입력(`b5a05e08`)은 `RunInput`을 그대로 받는다. TanStack 메시지로 바꾸던 `chatParamsFromRequestBody`를 지웠다.
+  - 서브에이전트(`a5370287`): kanban card agent와 verifier도 `RunTool`로 새 loop에서 돈다. 자식 run의 TanStack 경로와, 아무도 쓰지 않게 된 TanStack middleware(`parallelReads`, `repeatGuard`, `collectApiUsage`, `projectInstructions`, `childTools`)를 지웠다.
+  - `migrateTanStackRows`는 시작 migration의 마지막 단계로 돈다(`btw_threads` 포함). decisions.md "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)"의 "등록"에 있다.
   - 1번에 남은 것:
-    - `chatParamsFromRequestBody`를 `RunInput` decode로 바꾸기
     - `start`·`followup`·`compact`의 `chatState.persistence` 사용
-    - `migrateTanStackRows` 등록(`btw_threads` 포함)
     - `RUN_CANCEL_REASON`을 우리 값으로 두기, 쓰지 않게 된 `SdkCancellation.delivery` 지우기
     - `eval/prompt-overhead.ts`: TanStack adapter의 요청을 재므로 `aa056aa2`부터 돌지 않는다. Effect AI 요청을 재도록 다시 쓴다. `eval/live-compaction.ts`·`eval/live-delegation.ts`의 provider guard도 TanStack adapter를 감싼다.
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`

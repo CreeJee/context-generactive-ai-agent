@@ -27,7 +27,7 @@ import {
   legacyFingerprint,
   modelHandoffNamespace,
   type SavedHandoff,
-} from "../../packages/memory-agent/src/agent/model-handoff.ts";
+} from "../../packages/memory-agent/src/agent/handoff-state.ts";
 import {
   StoredHistoryGroup,
   StoredInterruptPayload,
