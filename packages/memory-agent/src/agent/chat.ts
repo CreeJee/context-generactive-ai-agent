@@ -25,6 +25,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { workflowActions } from "../workflow/actions.ts";
 import { Scope } from "effect";
 import {
+  RUN_ACCEPTED_EVENT,
   RUN_CANCEL_REASON,
   chatParamsFromRequestBody,
   EventType,
@@ -36,8 +37,12 @@ import {
   type ChatMiddleware,
   type ModelMessage,
   type StreamChunk,
+  type StreamDurability,
   type UIMessage,
 } from "@tanstack/ai";
+import { refusalStatus, type Refusal } from "../api/chat-api.ts";
+import { JsonValue } from "../json.ts";
+import { optionalProperty } from "../optional-property.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import dayjs from "dayjs";
@@ -165,6 +170,7 @@ import {
 import { sqliteStreamDurability } from "../workflow/durable-stream.ts";
 import {
   serverRestartedCode,
+  serverRestartedMessage,
   type CancelResult,
   type CompactResult,
   type CompactionStage,
@@ -536,6 +542,37 @@ const InternalFollowup = Data.taggedEnum<InternalFollowup>();
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
+
+/** A request to start a run: who sent it, and its AG-UI `RunAgentInput` body. */
+export interface ChatRequest {
+  /** The page holding the session, from `X-Session-Holder`. */
+  readonly holder: string | null;
+  readonly body: Effect.Effect<JsonValue, Cause.UnknownError | Schema.SchemaError>;
+}
+
+const decodeJsonBody = Schema.decodeEffect(Schema.fromJsonString(JsonValue));
+
+/** Who reads a started run: the page's route, or the chat API (`api/chat-api.ts`). */
+export type ChatDelivery = "page" | "api";
+
+/** How a chat request starts. */
+export type ChatStart = Data.TaggedEnum<{
+  Refused: { readonly refusal: Refusal };
+  /** A response only the page's route sends: the TanStack loop's, or an external agent's. */
+  Answered: { readonly response: Response };
+  /** The run's events, read from its log after `after`; `-1` is from the start. */
+  Following: { readonly log: StreamDurability; readonly after: string };
+}>;
+export const ChatStart = Data.taggedEnum<ChatStart>();
+const refused = (refusal: Refusal) => ChatStart.Refused({ refusal });
+
+/** The page route's answer: the refusal as JSON with its status, or the run's SSE response. */
+const pageResponse = ChatStart.$match({
+  Refused: ({ refusal }) => json(refusalStatus(refusal), refusal),
+  Answered: ({ response }) => response,
+  // The adapter carries the offset it continues after.
+  Following: ({ log }) => resumeServerSentEventsResponse({ adapter: log }),
+});
 
 export { modelBoundMessages };
 
@@ -926,6 +963,92 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
   const providerUnavailable = (failure: { readonly provider: string }) =>
     Effect.succeed(json(503, { error: "provider_unavailable", provider: failure.provider }));
+
+  /**
+   * A run's log, to follow after `offset` (docs/effect-ai-migration.md "SSE와 재접속"). A bound
+   * run's offsets are its committed chunks; another run's are the in-process log's. A null offset is
+   * one the request cannot use.
+   */
+  const followRun = (sessionId: string, runId: string, offset: string | null) =>
+    Effect.gen(function* () {
+      const run = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
+      if (!isTruthy(run)) return refused({ error: "run_not_found" });
+      const binding = Option.getOrUndefined(yield* runBinding(runId));
+      if (isTruthy(binding)) {
+        if (binding.session_id !== sessionId) return refused({ error: "run_not_found" });
+        if (offset === null) return refused({ error: "invalid_stream_offset" });
+        // The adapter checks its namespace, the immutable run/session binding and that the offset
+        // is a committed chunk before anything is read.
+        return yield* streamDurability({ sessionId, runId, resumeOffset: offset }).pipe(
+          Effect.map((log) => ChatStart.Following({ log, after: offset })),
+          Effect.catchTag("StreamDurabilityError", () =>
+            Effect.succeed(refused({ error: "invalid_stream_offset" })),
+          ),
+        );
+      }
+      const prefix = `memory:v1:${encodeURIComponent(runId)}:`;
+      if (
+        offset === null ||
+        (offset !== "-1" &&
+          offset !== "now" &&
+          (!offset.startsWith(prefix) ||
+            !Number.isSafeInteger(Number(offset.slice(prefix.length))) ||
+            Number(offset.slice(prefix.length)) < 1))
+      )
+        return refused({ error: "invalid_stream_offset" });
+      return ChatStart.Following({ log: memoryStream({ runId, offset }), after: offset });
+    });
+
+  /**
+   * Fills a run's log with its events whether or not anyone reads them, as TanStack's delivery
+   * does: a reload or a closed tab must not stop the run (R10). TanStack's accepted marker opens
+   * the log, so a join from the start finds an entry at once. When the events fail, or the owner's
+   * shutdown cuts them, before the run's own end, a RUN_ERROR ends the log; it is closed either way.
+   */
+  const filledLog = <E>(
+    events: Stream.Stream<StreamChunk, E>,
+    log: StreamDurability,
+    run: { readonly sessionId: string; readonly runId: string },
+  ) =>
+    Effect.gen(function* () {
+      const ended = yield* Ref.make(false);
+      const append = (chunk: StreamChunk) =>
+        Effect.tryPromise(() => log.append([chunk])).pipe(
+          Effect.andThen(
+            Ref.set(ended, chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR"),
+          ),
+        );
+      const endedBy = (cut: boolean) =>
+        Effect.flatMap(DateTime.now, (now) =>
+          append({
+            type: EventType.RUN_ERROR,
+            runId: run.runId,
+            threadId: run.sessionId,
+            timestamp: DateTime.toEpochMillis(now),
+            ...(cut
+              ? { code: serverRestartedCode, message: serverRestartedMessage }
+              : {
+                  code: "run_failed",
+                  message: "The run's output stream failed before the run ended.",
+                }),
+          }),
+        );
+      yield* Effect.tryPromise(() =>
+        log.append([{ type: EventType.CUSTOM, name: RUN_ACCEPTED_EVENT, value: {} }]),
+      ).pipe(
+        Effect.andThen(Stream.runForEach(events, append)),
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            if (Exit.isFailure(exit) && !(yield* Ref.get(ended))) {
+              yield* Effect.logError("Run log delivery failed", { runId: run.runId });
+              yield* endedBy(Cause.hasInterruptsOnly(exit.cause));
+            }
+            yield* Effect.tryPromise(() => log.close());
+          }).pipe(Effect.catch(logFailure("Run log was not closed"))),
+        ),
+        Effect.ignore,
+      );
+    });
 
   /**
    * What happens to queued messages when a run ends. After a normal finish the page holding the
@@ -1398,13 +1521,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /**
-     * POST handler for one chat run in a session. Stores the user turn, runs the model through
-     * the ChatGPT account with memory tools, records every message, then indexes it.
+     * Starts one chat run in a session. Stores the user turn, runs the model with memory tools,
+     * records every message, then indexes it. The page's route sends the answer as a Response
+     * (`handle`); the chat API follows the run's log (`api/chat-api.ts`), and only the Effect AI
+     * loop runs for it.
      */
-    handle: (
-      request: Request,
+    start: (
+      request: ChatRequest,
       sessionId: string,
-      internalFollowup: InternalFollowup | null = null,
+      internalFollowup: InternalFollowup | null,
+      deliveredTo: ChatDelivery,
     ) => {
       const notificationFollowup = InternalFollowup.$is("notification")(internalFollowup);
       const kanbanFollowup = InternalFollowup.$is("kanban")(internalFollowup)
@@ -1417,11 +1543,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       return Effect.gen(function* () {
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
-        if (
-          internalFollowup === null &&
-          !leases.permits(sessionId, request.headers.get(sessionHolderHeader))
-        )
-          return inUse();
+        if (internalFollowup === null && !leases.permits(sessionId, request.holder))
+          return refused({ error: "session_in_use" });
+        if (deliveredTo === "api" && external !== null)
+          return refused({ error: "external_agent_unsupported" });
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
         const reportSource = Option.getOrNull(yield* withSql(reportBinding(sessionId, projectId)));
@@ -1432,10 +1557,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A reporting conversation is always local, using the user's selected model. An external
         // agent or its full project toolset must never be used to inspect the source session.
         if (reportSource !== null && external !== null)
-          return json(409, { error: "report_requires_local_model" });
+          return refused({ error: "report_requires_local_model" });
         // One run at a time per session: a second would race the first for persisted chat state.
         const live = liveRuns.get(sessionId);
-        if (isTruthy(live)) return json(409, { error: "run_in_progress", runId: live.runId });
+        if (isTruthy(live)) return refused({ error: "run_in_progress", runId: live.runId });
         // A process may exit after persistence commits a completed run but before its
         // asynchronous end callback applies a queued Goal. Recover only terminal runs;
         // running/interrupted ones remain pending and can never prove completion.
@@ -1446,25 +1571,25 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const workflow = yield* workflows.reconcile(sessionId);
         // A direct conversation with an external agent needs that agent, not the ChatGPT model.
         if (external !== null && !(yield* externalAgents.available(project)).includes(external))
-          return json(409, { error: "external_agent_unavailable", agent: external });
+          return refused({ error: "external_agent_unavailable", agent: external });
         const selection = external === null ? yield* active.selected : null;
         if (external === null) {
           const auth = yield* active.authFor(selection?.provider ?? (yield* active.provider));
           if (AuthConnectionState.$is("error")(auth))
-            return json(503, { error: "provider_auth_unavailable", provider: auth.provider });
+            return refused({ error: "provider_auth_unavailable", provider: auth.provider });
           if (!AuthConnectionState.$is("signed-in")(auth))
-            return json(401, { error: "login_required" });
-          if (!isTruthy(selection)) return json(412, { error: "model_selection_required" });
+            return refused({ error: "login_required" });
+          if (!isTruthy(selection)) return refused({ error: "model_selection_required" });
         }
 
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const params = yield* Effect.tryPromise(() => request.json()).pipe(
+        const params = yield* request.body.pipe(
           Effect.flatMap((body) => nativePromise(() => chatParamsFromRequestBody(body))),
           Effect.asSome,
           // An unreadable body or one the SDK refuses is the client's error.
-          Effect.catchTag("UnknownError", () => Effect.succeedNone),
+          Effect.catchTag(["UnknownError", "SchemaError"], () => Effect.succeedNone),
         );
-        if (Option.isNone(params)) return json(400, { error: "invalid_chat_request" });
+        if (Option.isNone(params)) return refused({ error: "invalid_chat_request" });
         // The session is the thread: persistence, provider requests and hydration all key on it.
         const {
           messages: incomingMessages,
@@ -1493,21 +1618,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A pre-bound run belongs to one owner session, even before the SDK creates chat_runs.
         const boundRun = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(boundRun) && boundRun.session_id !== sessionId)
-          return json(409, { error: "run_id_conflict" });
+          return refused({ error: "run_id_conflict" });
         // Until automatic owner admission is atomic with execution, a reserved run with an
         // uncertain outcome must not be bypassed by presenting a different, unbound ID.
         const unresolvedBinding = Option.getOrUndefined(
           yield* unresolvedSessionBinding({ sessionId, resumeRunId: resumeRunId ?? "" }),
         );
         if (isTruthy(unresolvedBinding) && unresolvedBinding.run_id !== runId)
-          return json(409, { error: "run_outcome_uncertain" });
+          return refused({ error: "run_outcome_uncertain" });
         // Run IDs are globally unique in chat_runs. Reject another session's ID before
         // appending its user node or passing the collision to createOrResume.
         const storedRun = yield* agentPromise("load-run", () =>
           chatState.persistence.stores.runs.get(runId),
         );
         if (isTruthy(storedRun) && storedRun.threadId !== sessionId)
-          return json(409, { error: "run_id_conflict" });
+          return refused({ error: "run_id_conflict" });
         const previousRun = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
         if (
           isTruthy(boundRun) &&
@@ -1515,7 +1640,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           previousRun.status !== "interrupted" &&
           previousRun.status !== "aborted"
         )
-          return json(409, {
+          return refused({
             error:
               previousRun.status === "completed"
                 ? "run_already_completed"
@@ -1530,20 +1655,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             latest.id !== boundRun.workflow_revision_id ||
             latest.goal_instance_id !== boundRun.goal_instance_id
           )
-            return json(409, { error: "workflow_changed" });
+            return refused({ error: "workflow_changed" });
         }
         // A new turn of a session with a Goal is a Goal run, admitted once it is ready to start.
         const latest = isTruthy(previousRun)
           ? undefined
           : Option.getOrUndefined(yield* latestRevision(sessionId));
         if (isTruthy(latest?.goal_instance_id) && (!isTruthy(selection) || isTruthy(boundRun)))
-          return json(409, { error: "automatic_goal_admission_unavailable" });
+          return refused({ error: "automatic_goal_admission_unavailable" });
         const newGoalRun = isTruthy(latest?.goal_instance_id)
           ? { goalInstanceId: latest.goal_instance_id, revisionId: latest.id }
           : null;
         let goalExecutionPayload: GoalExecutionPayload | null = null;
+        // The run already ended aborted: its stream is replayed, not run again.
         if (previousRun?.status === "aborted")
-          return resumeServerSentEventsResponse({ adapter: memoryStream({ runId, offset: "-1" }) });
+          return ChatStart.Following({ log: memoryStream({ runId, offset: "-1" }), after: "-1" });
         // Internal completion turns carry operational context only, never a synthetic user turn.
         // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
         // placeholder turn altogether, including its text and attachments.
@@ -1551,9 +1677,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           InternalFollowup.$is("steered")(internalFollowup) ||
           Option.isSome(decodeQueuedNext(forwardedProps));
         if (Option.isSome(decodeUnsupportedQueuedId(forwardedProps)))
-          return json(400, { error: "invalid_chat_request" });
+          return refused({ error: "invalid_chat_request" });
         const next = queuedNext ? yield* queue.claimNext(sessionId) : null;
-        if (queuedNext && !isTruthy(next)) return json(409, { error: "queued_message_not_next" });
+        if (queuedNext && !isTruthy(next)) return refused({ error: "queued_message_not_next" });
         claimedNext = next?.id ?? null;
         const queuedId = next?.id;
         const nextMessage = isTruthy(next) ? [yield* delivery.toUserMessage(next)] : [];
@@ -1577,12 +1703,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
         const lastMessage = messages.at(-1);
         if (turn !== null && isTruthy(lastMessage) && isEmptyUserText(lastMessage))
-          return json(400, { error: "empty_message" });
+          return refused({ error: "empty_message" });
         const images = yield* Effect.forEach(turn?.imageUrls ?? [], (url) => {
           const id = attachmentIdOf(url);
           return isTruthy(id) ? attachments.get(id) : Effect.succeed(null);
         });
-        if (images.includes(null)) return json(400, { error: "unknown_attachment" });
+        if (images.includes(null)) return refused({ error: "unknown_attachment" });
         const attached = images.filter((image) => image !== null);
         // R06: a model that cannot read images must not appear to have read them. External agents
         // get text only.
@@ -1592,7 +1718,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ).pipe(fallbackLogged("Model image support unknown", () => false))
           : false;
         if (attached.length > 0 && !readsImages)
-          return json(422, { error: "images_not_supported", model: selection?.model ?? external });
+          return refused({
+            error: "images_not_supported",
+            ...optionalProperty("model", selection?.model ?? external ?? undefined),
+          });
 
         let userNode = turn !== null ? null : yield* nodes.latestOfKind(sessionId, "user");
         const keptTurn = turn !== null ? (yield* redactor.redactText(turn.text)).text : null;
@@ -1613,7 +1742,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           return userNode.id;
         };
         if (newGoalRun === null) yield* persistUserTurn;
-        if (!isTruthy(userNode) && !(turn !== null)) return json(409, { error: "no_user_turn" });
+        if (!isTruthy(userNode) && !(turn !== null)) return refused({ error: "no_user_turn" });
 
         if (external !== null) {
           const cancellation = yield* cancellations.allocate(serviceShutdown);
@@ -1628,7 +1757,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             cancellation.cancel,
             settleQueue(sessionId, runId),
           );
-          if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
+          if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
           if (turn !== null) yield* workTrace.resumeParentNotifications(sessionId);
           yield* events.publishSession(sessionId, "run-state");
@@ -1704,9 +1833,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             },
           );
           cancellationToRelease = Effect.void;
-          return response;
+          return ChatStart.Answered({ response });
         }
-        if (!isTruthy(selection)) return json(412, { error: "model_selection_required" });
+        if (!isTruthy(selection)) return refused({ error: "model_selection_required" });
         // Every Goal runs on today's code, whichever code ran it before (docs/effect-ai-migration.md
         // "옛 Goal 처리").
         const runtime = yield* runtimeForAdapter(selection);
@@ -1746,15 +1875,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Option.isSome(accountModels) &&
           !accountModels.value.some((model) => model.id === selection.model)
         )
-          return json(409, {
-            error: "model_unavailable_for_account",
-            provider: selection.provider,
-          });
+          return refused({ error: "model_unavailable_for_account", provider: selection.provider });
         const requestedImage = Option.isSome(decodeImageTurnIntent(forwardedProps));
         if (requestedImage && selection.provider === "openai-compatible")
-          return json(422, { error: "provider_image_generation_unavailable" });
+          return refused({ error: "provider_image_generation_unavailable" });
         if (reportSource !== null && requestedImage)
-          return json(422, { error: "report_image_generation_unavailable" });
+          return refused({ error: "report_image_generation_unavailable" });
         const imageStatus = yield* imageFeature.status;
         const imageRoute =
           requestedImage && imageStatus.imageGenerationEnabled
@@ -1782,12 +1908,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const injectImageProviderTool =
           imageContext.injectProviderTool && selection.provider === "openai";
         if (requestedImage && imageStatus.imageGenerationEnabled && imageRoute === null)
-          return json(422, { error: "image_route_unavailable" });
+          return refused({ error: "image_route_unavailable" });
         // A direct adapter is a separate media workflow and never consumes chat tool context.
         if (imageContext.directWorkflowAllowed)
-          return json(409, {
+          return refused({
             error: "image_direct_workflow_required",
-            route: imageRoute?.executorMediaRouteId,
+            ...optionalProperty("route", imageRoute?.executorMediaRouteId),
           });
 
         const workflowReadOnly = HashSet.has(readOnlyWorkflowPhases, workflow.phase);
@@ -1804,7 +1930,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             (yield* workTrace.parentNotificationsHeld(sessionId)) ||
             last?.status !== "completed"
           )
-            return json(409, { error: "notification_followup_deferred" });
+            return refused({ error: "notification_followup_deferred" });
         }
         if (InternalFollowup.$is("workflow")(internalFollowup)) {
           const current = yield* sessions.get(sessionId);
@@ -1821,7 +1947,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
             (yield* relayed.pending(sessionId)).length > 0
           )
-            return json(409, { error: "workflow_followup_deferred" });
+            return refused({ error: "workflow_followup_deferred" });
         }
         // Prepared the same way for either loop.
         const memoryScope: MemoryToolScope = (yield* recallScope).crossProject
@@ -1973,7 +2099,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         /**
          * Binds a Goal's new run and starts its durable execution: the run's binding, or the
-         * response that refuses the run.
+         * refusal of the run.
          */
         const admitGoalRun = (goalInstanceId: string, workflowRevisionId: number) =>
           Effect.gen(function* () {
@@ -1995,7 +2121,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               .pipe(
                 Effect.map((admitted) =>
                   OwnerWorkflowAdmissionResult.$is("existing")(admitted)
-                    ? Result.fail(json(409, { error: "run_outcome_uncertain" }))
+                    ? Result.fail<Refusal>({ error: "run_outcome_uncertain" })
                     : Result.succeed(admitted.value),
                 ),
                 Effect.catch((error) =>
@@ -2003,11 +2129,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     Result.fail(
                       Match.value(error).pipe(
                         Match.tags({
-                          GoalExecutionAdmissionRefused: ({ reason }) =>
-                            json(409, { error: reason }),
-                          ExecutionSaturated: () => json(503, { error: "goal_workflow_saturated" }),
+                          GoalExecutionAdmissionRefused: ({ reason }): Refusal => ({
+                            error: reason,
+                          }),
+                          ExecutionSaturated: (): Refusal => ({ error: "goal_workflow_saturated" }),
                         }),
-                        Match.orElse(() => json(500, { error: "goal_workflow_admission_failed" })),
+                        Match.orElse((): Refusal => ({ error: "goal_workflow_admission_failed" })),
                       ),
                     ),
                   ),
@@ -2079,8 +2206,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Only the Effect AI loop keeps a Goal's ledger, and it has no provider image tool yet.
         const goalRun = newGoalRun !== null || isTruthy(boundRun);
         if (goalRun && injectImageProviderTool)
-          return json(409, { error: "goal_image_tool_unavailable" });
-        if ((chatLoop === "effect-ai" || goalRun) && !injectImageProviderTool) {
+          return refused({ error: "goal_image_tool_unavailable" });
+        if (deliveredTo === "api" && injectImageProviderTool)
+          return refused({ error: "image_tool_unavailable" });
+        if (
+          (chatLoop === "effect-ai" || goalRun || deliveredTo === "api") &&
+          !injectImageProviderTool
+        ) {
           const answers = {
             projectId,
             sessionId,
@@ -2255,12 +2387,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ? []
               : offered;
           const resumed = Schema.decodeOption(Schema.Array(ResumeEntry))(resume ?? []);
-          if (Option.isNone(resumed)) return json(400, { error: "invalid_chat_request" });
+          if (Option.isNone(resumed)) return refused({ error: "invalid_chat_request" });
           // The page sends the conversation it holds; only its user messages are new to the thread.
           const turns = yield* pageTurns(internalFollowup !== null ? nextMessage : messages).pipe(
             Effect.option,
           );
-          if (Option.isNone(turns)) return json(400, { error: "invalid_chat_request" });
+          if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
           const stored = yield* runStore.thread(sessionId);
           const conversation = withPageTurns(stored, turns.value);
 
@@ -2350,7 +2482,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // A Goal's new run is bound now that it is ready to start; only then is its turn recorded.
           if (newGoalRun !== null) {
             const admitted = yield* admitGoalRun(newGoalRun.goalInstanceId, newGoalRun.revisionId);
-            if (Result.isFailure(admitted)) return admitted.failure;
+            if (Result.isFailure(admitted)) return refused(admitted.failure);
             yield* persistUserTurn;
           }
           // A Goal run writes each call in its ledger before the call runs.
@@ -2360,7 +2492,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 Effect.option,
               )
             : Option.some(tools);
-          if (Option.isNone(runTools)) return json(500, { error: "goal_ledger_unavailable" });
+          if (Option.isNone(runTools)) return refused({ error: "goal_ledger_unavailable" });
           const loopEvents = runChat(
             {
               model: cuttable.model,
@@ -2401,7 +2533,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
             settleQueue(sessionId, runId),
           );
-          if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
+          if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(
             Effect.ensuring(claim.release),
             Effect.ensuring(Scope.close(modelScope, Exit.void)),
@@ -2421,31 +2553,35 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               goalRun ? boundRunRecorded(loopChunks) : loopChunks,
             ),
           );
-          const response = toServerSentEventsResponse(
-            Stream.toAsyncIterable(
-              claim
-                .track(chunks)
-                .pipe(
-                  Stream.ensuring(settleWorkflow),
-                  Stream.ensuring(Scope.close(modelScope, Exit.void)),
-                  Stream.ensuring(stopSteering(sessionId, cuttable.steer)),
-                ),
-            ),
-            {
-              // Only the execution aborts on a cancel, so the run's last events reach the page.
-              abortController: yield* cancellation.delivery,
-              // A Goal run's page reads its committed output, as on the TanStack path.
-              durability: {
-                adapter: goalRun
-                  ? yield* streamDurability({ sessionId, runId })
-                  : memoryStream({ runId }),
-                batch: 1,
-              },
-            },
-          );
+          const delivered = claim
+            .track(chunks)
+            .pipe(
+              Stream.ensuring(settleWorkflow),
+              Stream.ensuring(Scope.close(modelScope, Exit.void)),
+              Stream.ensuring(stopSteering(sessionId, cuttable.steer)),
+            );
+          // A Goal run's page reads its committed output, as on the TanStack path.
+          const log = goalRun
+            ? yield* streamDurability({ sessionId, runId })
+            : memoryStream({ runId });
+          const started =
+            deliveredTo === "page"
+              ? ChatStart.Answered({
+                  response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
+                    // Only the execution aborts on a cancel, so the run's last events reach the page.
+                    abortController: yield* cancellation.delivery,
+                    durability: { adapter: log, batch: 1 },
+                  }),
+                })
+              : yield* Effect.as(
+                  Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
+                    startImmediately: true,
+                  }),
+                  ChatStart.Following({ log, after: "-1" }),
+                );
           cancellationToRelease = Effect.void;
           stopSteeringOnExit = Effect.void;
-          return response;
+          return started;
         }
 
         // Present only while the user has Kagi turned on with a key (R19).
@@ -2737,7 +2873,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           cancellation.cancel,
           settleQueue(sessionId, runId),
         );
-        if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
+        if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
         cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
         MutableHashMap.set(steerCuts, sessionId, steering);
         stopSteeringOnExit = stopRunSteering;
@@ -2762,7 +2898,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         cancellationToRelease = Effect.void;
         runAdapterToRelease = null; // ownership transferred to the stream's finally
         stopSteeringOnExit = Effect.void;
-        return response;
+        return ChatStart.Answered({ response });
       }).pipe(
         Effect.ensuring(Effect.suspend(() => cancellationToRelease)),
         Effect.ensuring(Effect.suspend(() => stopSteeringOnExit)),
@@ -2774,14 +2910,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Effect.andThen(Effect.sync(() => releaseSubscriptionRun(runAdapterToRelease))),
           ),
         ),
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          ProjectNotFound: () => Effect.succeed(json(404, { error: "project_not_found" })),
-          ProviderUnavailable: providerUnavailable,
-          ModelUnavailable: providerUnavailable,
-        }),
         // The run's tool calls run under this span; they outlast it while the response streams.
-        Effect.withSpan("AgentChat.handle"),
+        Effect.withSpan("AgentChat.start"),
       );
     },
 
@@ -2797,43 +2927,23 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         const url = new URL(request.url);
         const runId = url.searchParams.get("runId");
-        const run = isTruthy(runId)
-          ? yield* agentPromise("load-run", () => chatState.run(sessionId, runId))
-          : null;
-        if (!isTruthy(runId) || !isTruthy(run)) return json(404, { error: "run_not_found" });
+        if (!isTruthy(runId)) return json(404, { error: "run_not_found" });
         // The SDK's Request constructor chooses a run from Last-Event-ID before ?runId.
         // Never authenticate the query run and then let an offset select a different log.
         const offset = request.headers.get("Last-Event-ID") || url.searchParams.get("offset");
-        const binding = Option.getOrUndefined(yield* runBinding(runId));
-        if (isTruthy(binding)) {
-          if (binding.session_id !== sessionId) return json(404, { error: "run_not_found" });
-          if (
-            !isTruthy(offset) ||
-            isTruthy(request.headers.get("X-Run-Id") && request.headers.get("X-Run-Id") !== runId)
-          )
-            return json(400, { error: "invalid_stream_offset" });
-          // The exported adapter validates its SDK namespace, immutable run/session binding,
-          // and persisted chunk membership synchronously before returning an HTTP stream.
-          return yield* streamDurability({ sessionId, runId, resumeOffset: offset }).pipe(
-            Effect.map((adapter) => resumeServerSentEventsResponse({ adapter })),
-            Effect.catchTag("StreamDurabilityError", () =>
-              Effect.succeed(json(400, { error: "invalid_stream_offset" })),
-            ),
-          );
-        }
-        const prefix = `memory:v1:${encodeURIComponent(runId)}:`;
-        if (
-          isTruthy(request.headers.get("X-Run-Id") && request.headers.get("X-Run-Id") !== runId) ||
-          !isTruthy(offset) ||
-          (offset !== "-1" &&
-            offset !== "now" &&
-            (!offset.startsWith(prefix) ||
-              !Number.isSafeInteger(Number(offset.slice(prefix.length))) ||
-              Number(offset.slice(prefix.length)) < 1))
-        )
-          return json(400, { error: "invalid_stream_offset" });
-        return resumeServerSentEventsResponse({ adapter: memoryStream({ runId, offset }) });
+        const presented = request.headers.get("X-Run-Id");
+        return pageResponse(
+          yield* followRun(
+            sessionId,
+            runId,
+            isTruthy(offset) && !(isTruthy(presented) && presented !== runId) ? offset : null,
+          ),
+        );
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+
+    /** Follows a run's log after `after` for the chat API; `-1` is from the start. */
+    follow: (sessionId: string, runId: string, after: string) =>
+      Effect.andThen(sessions.get(sessionId), followRun(sessionId, runId, after)),
 
     /**
      * Explicit cancel of the session's running run. The intent is recorded on the run first, then
@@ -3216,19 +3326,49 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         return yield* applyEdit(sessionId, id, edit).pipe(
           Effect.map((message) => json(200, message)),
-          Effect.catchTag("QueueChangeRefused", (refused) =>
-            Effect.succeed(json(409, { error: `queue_${refused.reason}` })),
+          Effect.catchTag("QueueChangeRefused", (refusal) =>
+            Effect.succeed(json(409, { error: `queue_${refusal.reason}` })),
           ),
         );
       }),
   };
+
+  /** POST handler for one chat run of the page's route; `start` runs it. */
+  const handle = (
+    request: Request,
+    sessionId: string,
+    internalFollowup: InternalFollowup | null = null,
+  ) =>
+    api
+      .start(
+        {
+          holder: request.headers.get(sessionHolderHeader),
+          body: Effect.flatMap(
+            Effect.tryPromise(() => request.text()),
+            decodeJsonBody,
+          ),
+        },
+        sessionId,
+        internalFollowup,
+        "page",
+      )
+      .pipe(
+        Effect.map(pageResponse),
+        Effect.catchTags({
+          SessionNotFound: sessionNotFound,
+          ProjectNotFound: () => Effect.succeed(json(404, { error: "project_not_found" })),
+          ProviderUnavailable: providerUnavailable,
+          ModelUnavailable: providerUnavailable,
+        }),
+        Effect.withSpan("AgentChat.handle"),
+      );
 
   // Completion delivery is service-scoped and coalesced per session. The same live-run claim
   // used by HTTP admission prevents an internal follow-up racing a user turn or another child.
   const followup = (sessionId: string) => {
     const followupRunId = randomUUID();
     const send = (kind: InternalFollowup) =>
-      api.handle(
+      handle(
         new Request("http://local/internal/subagent-followup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3423,7 +3563,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.catch(logFailure("Restarted Goal continuation deferred")),
       ),
     );
-  return api;
+  return { ...api, handle };
 });
 
 /** The chat endpoint behind `POST /api/chat`: memory, tools and the ChatGPT model together. */

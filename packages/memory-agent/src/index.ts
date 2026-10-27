@@ -24,6 +24,7 @@ export {
   memoryInstructions,
   workspaceInstructions,
 } from "./agent/chat.ts";
+export { ChatApiHandlers } from "./api/chat-api-live.ts";
 export { sessionMessages } from "./agent/history.ts";
 export { UncertainContinueRequest } from "./workflow/uncertain-runs.ts";
 export { createLiveRuns, type LiveRun, type LiveRuns } from "./agent/live-runs.ts";

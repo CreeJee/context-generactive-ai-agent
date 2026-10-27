@@ -34,6 +34,7 @@
       "default": "./src/runtime/resources.ts"
     },
     "./definitions": "./src/tools/definitions.ts",
+    "./chat-api": "./src/api/chat-api.ts",
     "./provider-contracts": "./src/providers/contracts.ts",
     "./compatible-config": "./src/providers/openai-compatible-config.ts",
     "./package.json": "./package.json",
