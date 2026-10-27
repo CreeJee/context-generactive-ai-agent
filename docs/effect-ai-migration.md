@@ -621,6 +621,17 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
     - 로그에는 AG-UI 1.0 이벤트만 쓴다. 읽을 때 decode되지 않는 옛 항목은 뺀다. 서버가 쓰는 `RUN_ERROR`에서 TanStack 필드 `runId`·`threadId`가 빠졌고, golden 차이는 이것뿐이다.
     - 메모리 로그는 프로세스 전역이 아니라 `AgentChat`마다 있다. 끝난 로그는 5분 뒤, 1024개를 넘으면 오래된 것부터 지운다(TanStack과 같다).
     - 취소 전달(`SdkCancellation.publish`)은 그대로 둔다.
+  - 도구(`d3f0fb47`, `06164f57`, `002014e2`, `be7cc9ca`): 파일·바깥·Kagi·백그라운드·승인, 코드·스킬·위임·워크플로·보고, 메모리 도구·기록·압축이 `RunTool`만 낸다. 남은 TanStack middleware를 지웠다.
+  - 요청 golden(`0e0e7f0d`): adapter를 지우기 전에 Effect AI 요청을 golden 파일로 고정했다. 그 뒤로는 TanStack 요청과 비교하지 않고 이 파일과 비교한다.
+  - provider adapter(`f0def6b2`): 모델 runtime의 TanStack adapter를 지웠다. 이 adapter만 감싸던 `tool-comparison.ts`와 `runToolComparison`도 지웠다([tool-selection-comparison.md](tool-selection-comparison.md)).
+  - 테스트 responder(`b9619fa5`): scripted model의 호출 기록(`TestProvider.invocations`)으로 옮겼다.
+  - chat metadata와 model handoff(`451b856b`)의 TanStack 쪽을 지웠다.
+  - history projection과 chat state(`99717376`): 예전 세션의 thread는 `agent/history.ts`의 `sessionMessages`가 노드에서 `StoredMessage`로 만든다. TanStack `convertMessagesToModelMessages`의 규칙을 옮겼다. 무작위 노드 20000 묶음에서 결과가 같고, `blockOrder`가 없는 것과 빈 사용자 턴을 쓰지 않는 것만 다르다. projection은 원본 thread를 `StoredMessage` Schema로 decode하고, 화면 메시지는 group마다 `shownMessage`로 만든다. TanStack store(`chat-state/persistence.ts`)를 지웠다.
+    - `tools/chat-store-check`는 요청을 더 비교하지 않고, 화면을 `shownMessage`로 비교한다. 로컬 DB 사본에서 바꾸기 전후의 결과가 같다. 모든 thread가 `StoredMessage`로 decode된다.
+  - MCP·redactor·provider tool·tool schema(`507f5082`): MCP 서버는 run 도구만 낸다. `withHiddenRunResults`가 `withHiddenResults`가 됐다. provider tool descriptor의 TanStack factory와 `ProviderToolFactoryFailure`를 지웠다. 도구 schema는 draft-07 파라미터만 남기고 Standard Schema 노출(`toToolSchema`)을 지웠다. 실패한 도구의 결과는 `@tanstack/ai` patch가 읽던 symbol 대신 `failureResult`로 만든다. `tools/lazy.ts`를 `tools/discovery.ts`에 합쳤다.
+  - 의존성(`77375928`): `@tanstack/ai`, `-anthropic`, `-client`, `-compaction`, `-openai`, `-persistence`, `-react`와 memory-agent의 `@standard-schema/spec`, patch 2개, catalog·`patchedDependencies`의 항목을 지웠다. `@tanstack/ai-mcp`와 `tools/parallel-reads.ts`는 이미 없었고, `minimumReleaseAgeExclude`에는 TanStack 항목이 없었다. `@tanstack/react-query`·`react-virtual`은 AI와 관계없어 둔다.
+  - 결과(2026-10-27): golden을 포함한 memory-agent 전체 테스트(210 파일, 1230개), 앱 테스트(40 파일, 145개), `vp run test:browser`(5 파일, 12개), `vp check`가 통과한다. 로컬 DB 검사 도구는 실패 없이 끝나고 수치가 바꾸기 전과 같다. `vp run typecheck`는 오류가 없다. 다만 main에서 온 `apps/agent/app/entry/navigation`의 Effect LS 경고와 기존 `mcpInstructionsForMode` 경고로 exit 1이다.
+  - 2번은 끝났다.
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 

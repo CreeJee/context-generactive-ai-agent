@@ -2782,12 +2782,12 @@
 
 - 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 tool 단계다. 파일과 TanStack과 달라진 점은 계획의 3단계 "결과"에 있다.
 - 도구 단위는 `RunTool`(모델에 알리는 `Tool`, lazy 여부, 인자를 decode해 호출을 만드는 `prepare`)이다. `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode 뒤 게이트를 거쳐 실행하므로 두 단계를 나눠야 한다.
-- MCP는 `@tanstack/ai-mcp` 대신 SDK `Client`로 붙는다. TanStack 도구와 Effect AI 도구가 같은 연결을 쓴다.
+- MCP는 `@tanstack/ai-mcp` 대신 SDK `Client`로 붙는다. TanStack 도구와 Effect AI 도구가 같은 연결을 쓴다. (2026-10-27 TanStack 도구를 지웠다. 아래 "TanStack 패키지를 지운다 (2026-10-27)")
   - client는 elicitation·sampling capability를 알리지 않는다. 서버가 그래도 입력을 요청하면 도구 실패다. TanStack은 이를 `mcp_input` interrupt로 바꿨지만 앱은 그 interrupt를 다루지 않았다.
   - 2025 프로토콜 서버의 도구 목록은 `tools/list` 한 번이다. "TanStack 패키지를 1.0으로 올림 (2026-10-24)"의 "`tools/list`를 두 번 받는다"를 대체한다. 프로토콜 협상은 TanStack처럼 `auto`다.
   - 페이지 상한은 SDK 기본값 64다(TanStack 100). 2026 프로토콜의 `tools/list_changed`는 구독하지 않고 run마다 목록을 다시 읽는다.
 - provider tool 요청은 TanStack factory 인자 배열 대신 `{ id, config }`다. 설정은 `providers/provider-tools.ts`의 표가 검사하고, 등록되지 않은 id는 `invalid_request`로 거절한다.
-- `RunTool`의 결과와 실패 상세는 `withHiddenRunResults`가 가린다. 가리기가 실패하면 원문 대신 `redaction_failed` 실패를 돌려준다. TanStack 경로는 `{error: message}`였다.
+- `RunTool`의 결과와 실패 상세는 `withHiddenRunResults`(2026-10-27부터 `withHiddenResults`)가 가린다. 가리기가 실패하면 원문 대신 `redaction_failed` 실패를 돌려준다. TanStack 경로는 `{error: message}`였다.
 - 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 둔다. 런타임 import 그래프에 secrets·permissions·`effect/ai`가 없다.
 
 ## 도구 호출 사이에 순서를 두지 않는다 (2026-10-27)
@@ -2878,3 +2878,29 @@
 - 단발 모델 호출(권한 분류, 턴 요약, 리포트 진단, 메모리 해석, 개선 해석)은 `generateText`·`streamText`다. 사용량 수치를 보내지 않은 응답은 사용량 행을 남기지 않는다.
 - release 전에 `migrateTanStackRows`를 등록해야 한다. 등록 전에는 옛 행의 TanStack metadata를 새 loop가 읽지 않으므로, 새 loop가 다시 쓴 thread에서 `finishReason`·`model`·`source`가 빠질 수 있다.
   - 등록했다(2026-10-27, `1abbb951`). "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)"의 "등록"에 있다.
+
+## TanStack 패키지를 지운다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 7단계 둘째 커밋 묶음이다. 커밋과 검사 결과는 [effect-ai-migration.md](effect-ai-migration.md)의 7단계 "2번 진행"에 있다. 저장소에 TanStack AI 패키지, patch, import가 남지 않는다.
+- 아래 표의 TanStack 부품을 말하는 결정은 같은 역할의 우리 모듈로 읽는다. 계획의 "대체 결정이 필요한 decisions.md 항목"이 이 표로 대체된다. 표에 없는 동작 차이는 이 항목과 앞의 Effect AI 항목들에 따로 적었다.
+
+| TanStack                                                     | 지금                                                                  |
+| ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `chat()` agent loop, middleware                              | `loop/run.ts`의 run loop와 `RunHook`                                  |
+| provider adapter                                             | `model/`의 `LanguageModel.make` 모델과 `@effect/ai-openai-compat`     |
+| `toolDefinition`, Standard JSON Schema(`toToolSchema`)       | `RunTool`(`tools/run-tool.ts`), draft-07 파라미터(`tools/schema.ts`)  |
+| `LazyToolManager`                                            | `tools/discovery.ts`                                                  |
+| `@tanstack/ai-mcp`                                           | `mcp/client.ts`                                                       |
+| `withPersistence`, `@tanstack/ai-persistence` store          | `RunStore`(`loop/store.ts`)                                           |
+| `memoryStream`, `StreamDurability`                           | `RunLog`(`loop/run-log.ts`), Goal은 `sqliteRunLog`                    |
+| `useChat`, `ChatClient`, `/api/chat`, `reconstructChat`      | 채팅 API(`api/chat-api.ts`)의 `snapshot`·`run`·`join`, `useAgentChat` |
+| `convertMessagesToModelMessages`(노드로 만든 예전 thread)    | `agent/history.ts`의 `sessionMessages`                                |
+| `modelMessagesToUIMessages`(화면 메시지)                     | `chat-state/snapshot.ts`의 `shownMessage`                             |
+| `@tanstack/ai` patch(`Symbol.for("tanstack-ai.toolResult")`) | `failureResult`(`tools/failure.ts`)                                   |
+| `@tanstack/openai-base` patch(lifecycle event의 run id)      | 우리 loop가 run id를 직접 싣는다                                      |
+
+- 예전 세션의 thread를 노드에서 만들 때 TanStack의 규칙을 그대로 옮긴다. 다른 점은 둘이다. `blockOrder`를 쓰지 않고, 빈 사용자 턴을 thread에 넣지 않는다. "빈 사용자 텍스트의 재유입 방지 (2026-10-05)"와 같은 방향이다.
+- history projection은 원본 thread를 `StoredMessage` Schema로 decode하고, 맞지 않으면 `invalid-transcript`다. TanStack 때는 역할만 확인했다. 로컬 DB 사본의 모든 thread가 decode된다.
+- provider tool descriptor에는 TanStack factory가 없다. `ProviderToolRuntime.compose`는 Effect AI 도구만 만들고, factory 실패(`ProviderToolFactoryFailure`)도 없어졌다.
+- TanStack과 비교하던 테스트를 지웠다: 모델 목록, provider tool factory, SSE 응답의 durability, Standard Schema 변환, MCP 도구의 TanStack 대비 결과. 요청이 같은지는 `0e0e7f0d`에서 고정한 golden 파일로 확인한다.
+- `vp run typecheck`의 exit code는 경고에도 1이다. 이 묶음은 새 경고를 더하지 않았다.
