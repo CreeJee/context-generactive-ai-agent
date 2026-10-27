@@ -179,7 +179,10 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
             (service) => ({
               ...service,
               model: (selected: ModelSelection, run: ModelRun) =>
-                Effect.map(service.model(selected, run), pilotGuarded(selected, observed)),
+                Effect.map(
+                  service.model(selected, run),
+                  pilotGuarded({ selection: selected, check: observed }),
+                ),
             }),
           ),
       };

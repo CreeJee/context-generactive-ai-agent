@@ -38,10 +38,13 @@ const toolsOf = (toolkit: Options["toolkit"]): ReadonlyArray<Tool.Any> =>
  * to send.
  */
 export const pilotGuarded =
-  (
-    selection: ModelSelection,
-    check: (request: PilotRequest) => Effect.Effect<Prompt.Prompt, AiError.AiError>,
-  ) =>
+  ({
+    selection,
+    check,
+  }: {
+    readonly selection: ModelSelection;
+    readonly check: (request: PilotRequest) => Effect.Effect<Prompt.Prompt, AiError.AiError>;
+  }) =>
   (run: RunModel): RunModel => {
     const checked = <O extends Pick<Options, "prompt" | "toolkit">>(options: O) =>
       Effect.gen(function* () {
@@ -72,6 +75,9 @@ export const pilotGuarded =
           )) as LanguageModel.LanguageModel["streamText"],
         // SAFETY: as `streamText`.
         generateText: ((options: Parameters<LanguageModel.LanguageModel["generateText"]>[0]) =>
+          // The services are the any of the generic toolkit overload; the cast restores the
+          // caller's own, and the guard adds none.
+          // @effect-diagnostics-next-line anyUnknownInErrorContext:off
           Effect.flatMap(
             checked(options),
             run.model.generateText,

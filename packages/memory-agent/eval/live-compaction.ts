@@ -64,7 +64,10 @@ const guardedRegistry = Layer.effect(
         Effect.map(upstream.runtime(provider), (runtime) => ({
           ...runtime,
           model: (selection: ModelSelection, run: ModelRun) =>
-            Effect.map(runtime.model(selection, run), pilotGuarded(selection, withinBudget)),
+            Effect.map(
+              runtime.model(selection, run),
+              pilotGuarded({ selection, check: withinBudget }),
+            ),
         })),
     };
   }),
