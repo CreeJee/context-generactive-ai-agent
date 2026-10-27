@@ -11,7 +11,7 @@ import {
   Stream,
 } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
-import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
   NormalizedStreamEvent,
   ProviderFeatureRejectedError,
@@ -638,13 +638,6 @@ export const subscriptionBody = (request: SubscriptionRequest) =>
     Match.exhaustive,
   );
 
-// A digest of bytes in memory cannot fail; a failure is a defect of the runtime.
-const sha256 = (serialized: string) =>
-  oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(serialized)).pipe(
-    Effect.map((digest) => Buffer.from(digest).toString("hex")),
-    Effect.orDie,
-  );
-
 /** The text the request log hashes: the history, and the tools in their sent order. */
 const fingerprintSources = (prompt: Prompt.Prompt, tools: ReadonlyArray<Tool.Any>) => ({
   messages: JSON.stringify({ system: systemText(prompt), messages: openAiInput(prompt) }),
@@ -654,10 +647,10 @@ const fingerprintSources = (prompt: Prompt.Prompt, tools: ReadonlyArray<Tool.Any
 /** Hashes of the history and of the tools, which the request log carries instead of their text. */
 const requestFingerprints = (request: LanguageModel.ProviderOptions) => {
   const sources = fingerprintSources(request.prompt, request.tools);
-  return Effect.all({
+  return {
     messageFingerprint: sha256(sources.messages),
     toolFingerprint: sha256(sources.tools),
-  });
+  };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1190,7 +1183,7 @@ export const subscriptionModel = Effect.fnUntraced(function* (options: Subscript
           ...replayed,
           promptCache: { retention: "none" },
         });
-        const fingerprints = yield* requestFingerprints(replayed);
+        const fingerprints = requestFingerprints(replayed);
         yield* Effect.logDebug("subscription model request").pipe(
           Effect.annotateLogs({
             provider,

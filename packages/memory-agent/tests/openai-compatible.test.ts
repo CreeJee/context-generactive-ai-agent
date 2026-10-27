@@ -18,6 +18,7 @@ import { TestClock } from "effect/testing";
 import { Result, Function as EffectFunction } from "effect";
 // Native SDK fetch, keyring and AsyncGenerator adapters remain explicit Promise boundaries.
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
+import { webCrypto } from "./support/platform.ts";
 import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
@@ -49,6 +50,7 @@ function singleEndpointSettings(options: {
   const api = makeOpenAICompatibleSettings({
     config: options.config,
     keys: () => options.keys,
+    crypto: webCrypto,
     fetcher: options.fetcher,
   });
   // Read from the config so locating the endpoint never touches a gated keychain.
@@ -1077,6 +1079,7 @@ describe("OpenAI compatible settings", () => {
                 () => void (value === null ? stored.delete(entry) : stored.set(entry, value)),
               ),
           }),
+          crypto: webCrypto,
         });
         const legacy = (yield* api.status).accounts;
         expect(legacy).toMatchObject([

@@ -1,6 +1,15 @@
 import { Result, Function as EffectFunction } from "effect";
-import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import { Config, ConfigProvider, HashSet, Option, Context, Effect, Layer, Schema } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Crypto,
+  HashSet,
+  Option,
+  Context,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
 import { Attachments, type Attachment, type AttachmentsApi } from "../attachments/attachments.ts";
@@ -235,6 +244,7 @@ export function makeImageMediaWorkflow(options: {
   readonly router: ImageRouterApi;
   readonly executor: DirectImageExecutorApi;
   readonly attachments: Pick<AttachmentsApi, "save">;
+  readonly crypto: Crypto.Crypto;
   readonly catalog?: Pick<RouteCatalogApi, "refresh"> | undefined;
   readonly crossProviderConsent?: CrossProviderMediaConsentApi | undefined;
 }) {
@@ -243,6 +253,7 @@ export function makeImageMediaWorkflow(options: {
     options.router,
     options.executor,
     options.attachments,
+    options.crypto,
     options.catalog,
     options.crossProviderConsent,
   );
@@ -252,6 +263,7 @@ function makeImageMediaWorkflowBody(
   router: ImageRouterApi,
   executor: DirectImageExecutorApi,
   attachments: Pick<AttachmentsApi, "save">,
+  crypto: Crypto.Crypto,
   catalog?: Pick<RouteCatalogApi, "refresh">,
   crossProviderConsent?: CrossProviderMediaConsentApi,
 ): ImageMediaWorkflowApi {
@@ -337,7 +349,7 @@ function makeImageMediaWorkflowBody(
           if (consent.mode === "always") return;
           const runId =
             request.runId ??
-            (yield* oauthProtocolCrypto
+            (yield* crypto
               .randomUUIDv4()
               .pipe(
                 Effect.mapError((cause) =>
@@ -442,6 +454,7 @@ export class ImageMediaWorkflow extends Context.Service<
         router: yield* ImageRouter,
         executor: yield* DirectImageExecutor,
         attachments: yield* Attachments,
+        crypto: yield* Crypto.Crypto,
         catalog: yield* RouteCatalog,
         crossProviderConsent: yield* CrossProviderMediaConsent,
       });

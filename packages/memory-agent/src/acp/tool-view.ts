@@ -1,6 +1,6 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { oauthProtocolPath } from "../oauth/node-runtime.ts";
+import { path } from "../runtime/synchronous-path.ts";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { HashMap, Option, Schema } from "effect";
 
@@ -76,9 +76,9 @@ export const toolLocations: {
 function toolLocationsBody(argumentsJson: string, projectRoot: string) {
   return Option.match(decodePathArguments(argumentsJson), {
     onNone: () => [],
-    // oauthProtocolPath.resolve() keeps an absolute path (`/x`, `C:\x`) and joins a relative one to the project,
+    // path.resolve() keeps an absolute path (`/x`, `C:\x`) and joins a relative one to the project,
     // normalizing separators and `..` for this platform.
     onSome: (args) =>
-      args.path === undefined ? [] : [{ path: oauthProtocolPath.resolve(projectRoot, args.path) }],
+      args.path === undefined ? [] : [{ path: path.resolve(projectRoot, args.path) }],
   });
 }

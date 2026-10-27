@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { it as effectTest } from "@effect/vitest";
-import { Effect, Result } from "effect";
+import { Crypto, Effect, Result } from "effect";
+import { withTestPlatform } from "./support/platform.ts";
 import {
   ImageExecutorModel,
   DirectImageExecutionFailed,
@@ -79,11 +80,12 @@ describe("ImageMediaWorkflow", () => {
           },
         },
         attachments: attachmentStore([]),
+        crypto: yield* Crypto.Crypto,
       });
       const result = yield* Effect.result(workflow.generate({ ...request, approved: false }));
       expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ImageMediaApprovalRequired);
       expect(executions).toBe(0);
-    }),
+    }).pipe(withTestPlatform),
   );
 
   effectTest.effect(
@@ -105,6 +107,7 @@ describe("ImageMediaWorkflow", () => {
               }),
           },
           attachments: attachmentStore(saved),
+          crypto: yield* Crypto.Crypto,
         });
         const asset = yield* workflow.generate(request);
         expect(saved).toEqual([bytes]);
@@ -120,7 +123,7 @@ describe("ImageMediaWorkflow", () => {
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(asset),
         ).not.toContain("base64");
-      }),
+      }).pipe(withTestPlatform),
   );
 
   effectTest.effect(
@@ -146,6 +149,7 @@ describe("ImageMediaWorkflow", () => {
             },
           },
           attachments: attachmentStore([]),
+          crypto: yield* Crypto.Crypto,
           catalog: undefined,
           crossProviderConsent: {
             read: Effect.succeed({ version: 1, pairs: {} }),
@@ -190,7 +194,7 @@ describe("ImageMediaWorkflow", () => {
         expect(unavailable).toBeInstanceOf(ImageMediaUnavailable);
         expect(unavailable).toMatchObject({ reason: "consent_disabled" });
         expect(executions).toBe(1);
-      }),
+      }).pipe(withTestPlatform),
   );
 
   effectTest.effect("returns confirmation-required reroute evidence after execution failure", () =>
@@ -203,6 +207,7 @@ describe("ImageMediaWorkflow", () => {
             Effect.fail(DirectImageExecutionFailed.make({ reason: "provider_rejected" })),
         },
         attachments: attachmentStore([]),
+        crypto: yield* Crypto.Crypto,
       });
       const result = yield* Effect.result(workflow.generate(request));
       const failed = Result.isFailure(result) && result.failure;
@@ -210,6 +215,6 @@ describe("ImageMediaWorkflow", () => {
       const reroute = Schema.is(ImageMediaExecutionFailed)(failed) ? failed.reroute : undefined;
       expect(ImageRerouteConfirmation.$is("confirmation_required")(reroute)).toBe(true);
       expect(failed).toMatchObject({ reroute: { alternatives: [] } });
-    }),
+    }).pipe(withTestPlatform),
   );
 });

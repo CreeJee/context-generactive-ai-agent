@@ -1,11 +1,11 @@
 import { ProviderOperationFailed } from "./contracts.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import {
   Array as Arr,
   Config,
   Context,
+  Crypto,
   Effect,
   Equal,
   FileSystem,
@@ -180,9 +180,15 @@ export const validateCompatibleLabel = (
 export function makeOpenAICompatibleSettings(options: {
   readonly config: GlobalConfigApi;
   readonly keys: CompatibleKeychain;
+  readonly crypto: Crypto.Crypto;
   readonly fetcher?: typeof fetch | undefined;
 }) {
-  return makeOpenAICompatibleSettingsBody(options.config, options.keys, options.fetcher);
+  return makeOpenAICompatibleSettingsBody(
+    options.config,
+    options.keys,
+    options.crypto,
+    options.fetcher,
+  );
 }
 const replaceAccount = (
   all: CompatibleAccounts,
@@ -198,6 +204,7 @@ const publishedReasoning = (settings: OpenAICompatibleConfiguration) =>
 function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
   keys: CompatibleKeychain,
+  crypto: Crypto.Crypto,
   fetcher: typeof fetch = fetch,
 ) {
   const updates = Semaphore.makeUnsafe(1);
@@ -316,7 +323,7 @@ function makeOpenAICompatibleSettingsBody(
         const label = isTruthy(input.label)
           ? yield* validateCompatibleLabel(input.label ?? "")
           : compatibleHostLabel(baseUrl);
-        const id = yield* oauthProtocolCrypto
+        const id = yield* crypto
           .randomUUIDv4()
           .pipe(Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "account_id" })));
         const account: CompatibleAccount = {
@@ -730,7 +737,7 @@ function makeOpenAICompatibleSettingsBody(
           Effect.orElseSucceed(Option.none),
         );
         const historyKey = Buffer.from(
-          yield* oauthProtocolCrypto
+          yield* crypto
             .digest("SHA-256", new TextEncoder().encode(settings.baseUrl))
             .pipe(Effect.orDie),
         ).toString("hex");
@@ -796,6 +803,7 @@ export class OpenAICompatibleSettings extends Context.Service<
         return makeOpenAICompatibleSettings({
           config: config,
           keys: yield* CompatibleKeyring,
+          crypto: yield* Crypto.Crypto,
           fetcher: yield* CompatibleFetch,
         });
       }),
@@ -806,6 +814,7 @@ export class OpenAICompatibleSettings extends Context.Service<
       return makeOpenAICompatibleSettings({
         config: yield* GlobalConfig,
         keys: yield* keychain,
+        crypto: yield* Crypto.Crypto,
         fetcher: fetch,
       });
     }),

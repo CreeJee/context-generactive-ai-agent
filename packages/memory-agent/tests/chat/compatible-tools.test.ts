@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
@@ -74,7 +75,7 @@ testAgent({
   compatibleSettings: OpenAICompatibleSettings.layerWith(
     Layer.succeed(CompatibleKeyring, () => ({ get: Effect.succeed(null), set: () => Effect.void })),
     Layer.succeed(CompatibleFetch, endpoint),
-  ),
+  ).pipe(Layer.provide(NodeCrypto.layer)),
 })("compatible chat tools", (it) => {
   it.effect("runs a tool the model calls after text and continues the turn", () =>
     Effect.gen(function* () {

@@ -1,6 +1,6 @@
 import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
-import { oauthProtocolPath } from "../oauth/node-runtime.ts";
+import { path } from "../runtime/synchronous-path.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
   Array as EffectArray,
@@ -439,7 +439,7 @@ function validateSandbox(
       );
       yield* Effect.when(
         Effect.fail(pathViolation("absolute_path")),
-        Effect.succeed(oauthProtocolPath.isAbsolute(request.path)),
+        Effect.succeed(path.isAbsolute(request.path)),
       );
       yield* Effect.when(
         Effect.fail(pathViolation("credential_path")),
@@ -565,7 +565,7 @@ const trustedSandbox = (
     ? undefined
     : Object.freeze({
         ...sandbox,
-        workspaceRoot: oauthProtocolPath.resolve(sandbox.workspaceRoot),
+        workspaceRoot: path.resolve(sandbox.workspaceRoot),
         allowedEnvironmentNames: Object.freeze([...sandbox.allowedEnvironmentNames]),
         limits: Object.freeze({ ...sandbox.limits }),
       });
