@@ -51,8 +51,6 @@ const Conflict = refusal(409, [
   "report_requires_local_model",
   "run_in_progress",
   "external_agent_unavailable",
-  // The API runs only the app's own model; a session with an external agent uses the page route.
-  "external_agent_unsupported",
   "run_id_conflict",
   "run_outcome_uncertain",
   "run_already_completed",

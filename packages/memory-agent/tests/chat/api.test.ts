@@ -1,29 +1,11 @@
-import { Effect, Layer, Stream } from "effect";
-import { HttpServer } from "effect/http";
-import { HttpApiTest } from "effect/http-api";
+import { Effect, Stream } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
-import { ChatApi, type RunEvent, SameSite } from "../../src/api/chat-api.ts";
-import { ChatApiHandlers } from "../../src/api/chat-api-live.ts";
+import type { RunEvent } from "../../src/api/chat-api.ts";
 import { applyEvent, type ChatView, streamStarted, viewOf } from "../../src/api/chat-view.ts";
+import { chatApi } from "../support/chat-api.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { testAgent } from "../support/test-env.ts";
 import { agentChat, freshSession } from "./tab.ts";
-
-// The app checks the request's Origin; these requests come from the test itself.
-const sameSite = Layer.succeed(SameSite, (httpEffect) => httpEffect);
-
-/** A typed client of the chat API, answered in-process by the open agent. */
-const chatApi = Effect.gen(function* () {
-  const handlers = yield* Layer.build(
-    ChatApiHandlers.pipe(
-      Layer.provide(Layer.succeed(AgentChat, yield* agentChat)),
-      Layer.provideMerge(sameSite),
-      Layer.merge(HttpServer.layerServices),
-    ),
-  );
-  return (yield* HttpApiTest.groups(ChatApi, ["chat"]).pipe(Effect.provideContext(handlers))).chat;
-});
 
 const message = (content: string, id = "m-1") => ({ id, role: "user" as const, content });
 

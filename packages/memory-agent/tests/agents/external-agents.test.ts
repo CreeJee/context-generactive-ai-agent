@@ -1,6 +1,6 @@
 // Native ACP processes prove actual OS environment isolation, reconnect and cancellation.
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Effect, Fiber, FiberSet, FileSystem, Path, Schedule, Schema } from "effect";
+import { Cause, Effect, Fiber, FiberSet, FileSystem, Path, Schedule, Schema, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
@@ -13,16 +13,20 @@ import {
   ExternalPromptOutcome,
 } from "../../src/external-agents/agents.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
 import { DelegateTools } from "../../src/tools/delegate.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
+import { chatApi } from "../support/chat-api.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { current, encodeJson, freshProject, post, sdk, until } from "./agent-env.ts";
+import { current, encodeJson, freshProject, sdk, until } from "./agent-env.ts";
+
+const isTextContent = AgUiEvent.guards.TEXT_MESSAGE_CONTENT;
 
 const Start = Schema.fromJsonString(
   Schema.Struct({ pid: Schema.Int, cwd: Schema.String, secret: Schema.NullOr(Schema.String) }),
@@ -389,21 +393,35 @@ testAgent({ testProvider: {} })("direct external agent conversations", (it) => {
         const direct = yield* sessions.create(project.id, null, "fake");
         const untrusted = yield* sessions.create(project.id, null, "fake");
 
+        const api = yield* chatApi;
+        const answer = (session: string, runId: string, text: string) =>
+          api
+            .run({
+              params: { session },
+              headers: {},
+              payload: { runId, messages: [{ id: `${runId}:user`, role: "user", content: text }] },
+            })
+            .pipe(
+              Effect.flatMap(Stream.runCollect),
+              Effect.map((events) =>
+                events.flatMap(({ data }) => (isTextContent(data) ? [data.delta] : [])).join(""),
+              ),
+            );
+
         // Not trusted yet: the conversation cannot start the agent.
-        expect((yield* post(untrusted.id, "hello")).status).toBe(409);
+        expect(yield* Effect.flip(answer(untrusted.id, "untrusted-1", "hello"))).toMatchObject({
+          error: "external_agent_unavailable",
+        });
 
         yield* trust;
         // Memory leaves for the external process only once the user allows it.
-        const withheld = yield* post(untrusted.id, "로그 포맷 뭐였지?");
-        expect(yield* sdk(() => withheld.text())).not.toContain(
+        expect(yield* answer(untrusted.id, "untrusted-2", "로그 포맷 뭐였지?")).not.toContain(
           "Memory from context-generactive-agent",
         );
         yield* (yield* GlobalConfig).update({ externalAgentMemory: true });
-        const response = yield* post(direct.id, "로그 포맷 뭐였지?");
-        expect(response.status).toBe(200);
-        const events = yield* sdk(() => response.text());
-        expect(events).toContain("Memory from context-generactive-agent");
-        expect(events).toContain("logfmt");
+        const answered = yield* answer(direct.id, "direct-1", "로그 포맷 뭐였지?");
+        expect(answered).toContain("Memory from context-generactive-agent");
+        expect(answered).toContain("logfmt");
 
         const recorded = yield* nodes.session(direct.id);
         expect(recorded.map((node) => node.kind)).toEqual(["user", "assistant"]);

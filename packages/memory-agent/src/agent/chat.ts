@@ -1,4 +1,5 @@
 import { SqlClient, SqlSchema } from "effect/sql";
+import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
@@ -192,6 +193,7 @@ import { OwnerWorkflowAdmissionResult } from "../workflow/owner-workflow-storage
 import { ProviderRetries, ProviderRetryOutcome } from "../workflow/provider-retry.ts";
 import { toolLedger } from "../workflow/tool-ledger.ts";
 import { type UnsentRetry, unsentRetried } from "../model/unsent-retry.ts";
+import { externalModel, shownExternalFailure } from "../model/external.ts";
 import {
   GoalExecutionErrorReason,
   GoalExecutionPayload,
@@ -1545,8 +1547,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (internalFollowup === null && !leases.permits(sessionId, request.holder))
           return refused({ error: "session_in_use" });
-        if (deliveredTo === "api" && external !== null)
-          return refused({ error: "external_agent_unsupported" });
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
         const reportSource = Option.getOrNull(yield* withSql(reportBinding(sessionId, projectId)));
@@ -1748,6 +1748,133 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const cancellation = yield* cancellations.allocate(serviceShutdown);
           cancellationToRelease = cancellation.cancel;
           const abortController = cancellation.controller;
+          const answeredBy = external;
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          const askPermission = (permission: RequestPermissionRequest) =>
+            runEffect(
+              Effect.gen(function* () {
+                const decision = relayed.ask(
+                  sessionId,
+                  runId,
+                  {
+                    requester: ApprovalRequester.cases.external_agent.make({
+                      agent: answeredBy,
+                    }),
+                    toolName: permission.toolCall.title ?? "external tool",
+                    argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
+                    reason: "외부 에이전트가 권한을 요청했어요.",
+                    askedBy: "agent",
+                  },
+                  abortController.signal,
+                );
+                yield* events.publishSession(sessionId, "relayed-approvals");
+                const approved = yield* nativePromise(() => decision);
+                yield* events.publishSession(sessionId, "relayed-approvals");
+                return approved;
+              }),
+            );
+          const binding = {
+            projectId,
+            sessionId,
+            runId,
+            get userNodeId() {
+              return userNodeId();
+            },
+            externalAgent: answeredBy,
+          };
+          if (chatLoop === "effect-ai" || deliveredTo === "api") {
+            const turns = yield* pageTurns(internalFollowup !== null ? nextMessage : messages).pipe(
+              Effect.option,
+            );
+            if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
+            const conversation = withPageTurns(yield* runStore.thread(sessionId), turns.value);
+            const model = yield* externalModel({
+              agent: answeredBy,
+              turn: (text, onUpdate) =>
+                Effect.tryPromise({
+                  try: (signal) =>
+                    externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
+                      signal,
+                      onUpdate,
+                      askPermission,
+                    }),
+                  catch: (cause) => new Cause.UnknownError(cause),
+                }),
+              preamble: (text) => nativePromise(() => memoryPreamble(project, text, userNodeId())),
+            });
+            const loopEvents = runChat(
+              {
+                model,
+                // What TanStack wrote for the external agent adapter.
+                source: { provider: "external-acp", api: "text", model: answeredBy },
+                system: [],
+                tools: [],
+                hooks: [recorder.hookForRun(binding), indexInBackground.hook],
+                modelFailure: modelFailureOf(shownExternalFailure),
+              },
+              {
+                threadId: sessionId,
+                runId,
+                conversation,
+                resume: [],
+                cancel: aborted(abortController.signal).pipe(
+                  Effect.andThen(() =>
+                    abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
+                  ),
+                ),
+              },
+            ).pipe(
+              shownRunErrors(redactor),
+              Stream.provideService(RunStore, runStore),
+              Stream.provideService(Crypto.Crypto, crypto),
+            );
+            const claim = yield* liveRuns.claim(
+              sessionId,
+              runId,
+              abortController,
+              undefined,
+              cancellation.release,
+              Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
+              settleQueue(sessionId, runId),
+            );
+            if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
+            cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
+            yield* Effect.when(
+              workTrace.resumeParentNotifications(sessionId),
+              Effect.succeed(turn !== null),
+            );
+            yield* events.publishSession(sessionId, "run-state");
+            yield* Option.match(Option.fromNullishOr(queuedId), {
+              onNone: () => Effect.void,
+              onSome: (id) =>
+                queue
+                  .markDelivered(id, "next_turn", runId)
+                  .pipe(Effect.andThen(events.publishSession(sessionId, "queue"))),
+            });
+            // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types
+            // leave `undefined` out of optional fields, where the SDK's types allow it.
+            const chunks = yield* cancellation.publish(
+              yield* Stream.toAsyncIterableEffect(loopEvents as Stream.Stream<StreamChunk>),
+            );
+            const delivered = claim.track(chunks);
+            const log = memoryStream({ runId });
+            const started =
+              deliveredTo === "page"
+                ? ChatStart.Answered({
+                    response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
+                      abortController: yield* cancellation.delivery,
+                      durability: { adapter: log, batch: 1 },
+                    }),
+                  })
+                : yield* Effect.as(
+                    Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
+                      startImmediately: true,
+                    }),
+                    ChatStart.Following({ log, after: "-1" }),
+                  );
+            cancellationToRelease = Effect.void;
+            return started;
+          }
           const claim = yield* liveRuns.claim(
             sessionId,
             runId,
@@ -1765,51 +1892,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             yield* queue.markDelivered(queuedId, "next_turn", runId);
             yield* events.publishSession(sessionId, "queue");
           }
-          const answeredBy = external;
           const adapter = new ExternalAgentAdapter(
             answeredBy,
             (text, signal, onUpdate) =>
               externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
                 signal,
                 onUpdate,
-                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                askPermission: (permission) =>
-                  runEffect(
-                    Effect.gen(function* () {
-                      const decision = relayed.ask(
-                        sessionId,
-                        runId,
-                        {
-                          requester: ApprovalRequester.cases.external_agent.make({
-                            agent: answeredBy,
-                          }),
-                          toolName: permission.toolCall.title ?? "external tool",
-                          argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
-                          reason: "외부 에이전트가 권한을 요청했어요.",
-                          askedBy: "agent",
-                        },
-                        signal,
-                      );
-                      yield* events.publishSession(sessionId, "relayed-approvals");
-                      const approved = yield* nativePromise(() => decision);
-                      yield* events.publishSession(sessionId, "relayed-approvals");
-                      return approved;
-                    }),
-                  ),
+                askPermission,
               }),
             (text) => memoryPreamble(project, text, userNodeId()),
           );
           const externalMiddleware: ChatMiddleware[] = [
             ...chatState.middleware(abortController.signal),
-            recorder.forRun({
-              projectId,
-              sessionId,
-              runId,
-              get userNodeId() {
-                return userNodeId();
-              },
-              externalAgent: answeredBy,
-            }),
+            recorder.forRun(binding),
             indexInBackground.middleware,
           ];
           const stream = withShownRunErrors(
