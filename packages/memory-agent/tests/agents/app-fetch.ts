@@ -1,6 +1,11 @@
-import { Effect, FiberSet, Schema, Struct } from "effect";
+import { Effect, FiberSet, Layer, Schema, Struct } from "effect";
+import { HttpRouter, HttpServer } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
+import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
+import { BtwApiHandlers, ChatApiHandlers } from "../../src/api/chat-api-live.ts";
+import { BtwChat } from "../../src/btw/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
 import { sessionHolderHeader } from "../../src/sessions/lease-state.ts";
@@ -17,7 +22,35 @@ const LeaseRequest = Schema.Struct({
 });
 const ApprovalRequest = Schema.Struct({ approved: Schema.Boolean });
 
-const route = Effect.fnUntraced(function* (request: Request) {
+/** The chat API's paths: a session's runs, a run's events and the session's messages. */
+const chatApiPath = /^\/api\/sessions\/[^/]+\/(?:runs|messages)(?:\/|$)/;
+
+// The app checks the request's Origin; these requests come from the bridge itself.
+const sameSite = Layer.succeed(SameSite, (httpEffect) => httpEffect);
+
+/** The chat API's web handler on the open agent, as the app's routes serve it. */
+const chatApiHandler = Effect.gen(function* () {
+  const agent = yield* Effect.context<AgentChat | BtwChat>();
+  return yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      HttpRouter.toWebHandler(
+        HttpApiBuilder.layer(ChatApi).pipe(
+          Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+          Layer.provide(sameSite),
+          Layer.provide(Layer.succeedContext(agent)),
+          Layer.provide(HttpServer.layerServices),
+        ),
+        { disableLogger: true },
+      ),
+    ),
+    ({ dispose }) => Effect.promise(dispose),
+  );
+});
+
+const route = Effect.fnUntraced(function* (
+  chatApi: (request: Request) => Promise<Response>,
+  request: Request,
+) {
   const url = new URL(request.url);
   const path = url.pathname;
   const holder = request.headers.get(sessionHolderHeader);
@@ -26,6 +59,7 @@ const route = Effect.fnUntraced(function* (request: Request) {
       Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(text || "{}"),
     ),
   );
+  if (chatApiPath.test(path)) return yield* sdk(() => chatApi(request));
   const chat = yield* AgentChat;
 
   if (path === "/api/auth") {
@@ -44,12 +78,6 @@ const route = Effect.fnUntraced(function* (request: Request) {
   if (path === "/api/sessions" && request.method === "POST") {
     const { projectId, title } = yield* Schema.decodeUnknownEffect(SessionRequest)(yield* body);
     return Response.json(yield* (yield* Sessions).create(projectId, title), { status: 201 });
-  }
-  if (path === "/api/chat") {
-    const sessionId = url.searchParams.get("session") ?? "";
-    return request.method === "POST"
-      ? yield* chat.handle(request, sessionId)
-      : yield* chat.hydrate(request, sessionId);
   }
   const session = /^\/api\/sessions\/([^/]+)(?:\/(lease|cancel|approvals)(?:\/([^/]+))?)?$/.exec(
     path,
@@ -84,6 +112,7 @@ export const appFetch = Effect.gen(function* () {
   const run = yield* FiberSet.makeRuntimePromise<
     AgentChat | Projects | ProviderRegistry | Sessions
   >();
-  const fetcher: typeof fetch = (input, init) => run(route(new Request(input, init)));
+  const { handler } = yield* chatApiHandler;
+  const fetcher: typeof fetch = (input, init) => run(route(handler, new Request(input, init)));
   return fetcher;
 });

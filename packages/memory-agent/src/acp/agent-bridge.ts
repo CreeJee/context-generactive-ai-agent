@@ -10,7 +10,11 @@ import {
   Effect,
   Fiber,
   Layer,
+  Match,
+  Stream,
 } from "effect";
+import { FetchHttpClient } from "effect/http";
+import { HttpApiClient } from "effect/http-api";
 import { isTruthy } from "../truthy.ts";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { oauthProtocolFileSystem } from "../oauth/node-runtime.ts";
@@ -21,22 +25,27 @@ import type {
   RequestPermissionResponse,
   SessionUpdate,
   StopReason,
-  Stream,
+  Stream as AcpStream,
 } from "@agentclientprotocol/sdk";
-import { ChatClient, fetchServerSentEvents, type UIMessage } from "@tanstack/ai-client";
-import type { StreamChunk } from "@tanstack/ai";
-import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { Option, Schema } from "effect";
 import {
-  PermissionReviewPayload,
-  approvalToolDefinitions,
-  permissionReviewInterrupt,
-} from "../tools/definitions.ts";
+  ChatApi,
+  type ChatMessage,
+  maxPageSize,
+  MessagePart,
+  type PendingInterrupts,
+  Refusal,
+  refusalStatus,
+  type ResumeEntry,
+  type RunInput,
+} from "../api/chat-api.ts";
+import { AgUiEvent, RunOutcome } from "../loop/chunks.ts";
 import {
   AppRequestFailed,
   AppRequestReason,
   AuthSummary,
+  requestFailure,
   type AppApi,
   type ProjectSummary,
 } from "./app-api.ts";
@@ -58,8 +67,6 @@ const relayPollMs = 1_500;
 /** Longest tool output passed to the editor. */
 const maxToolOutput = 4_000;
 
-type Chat = ChatClient<typeof approvalToolDefinitions, [typeof permissionReviewInterrupt]>;
-
 interface PromptTurn {
   readonly client: AgentContext;
   readonly args: MutableHashMap.MutableHashMap<string, string>;
@@ -72,7 +79,6 @@ interface BridgeSession {
   /** This editor connection's lease holder, like a browser tab's. */
   readonly holder: string;
   readonly project: ProjectSummary;
-  readonly chat: Chat;
   readonly renew: Fiber.Fiber<void>;
   turn: PromptTurn | null;
 }
@@ -161,16 +167,47 @@ const toEditorError = (redactor: SecretRedactor["Service"]) => (failure: Error) 
   );
 };
 
-const decodeErrorCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
+const isRefusal = Schema.is(Refusal);
+const isCoded = Schema.is(Schema.Struct({ error: Schema.String }));
 
-/** The chat client's own error: its `RUN_ERROR` code, if it kept one, and message. */
-const chatFailure = (error: Error): ShownFailure<RunFailureCode> => ({
-  code: runFailureCodeOf(Option.getOrUndefined(decodeErrorCode(error))?.code),
-  detail: error.message,
-});
+/** A failed chat API call as the app's error: its refusal code, or an app that was not reached. */
+const appFailure = Match.type<unknown>().pipe(
+  Match.when(isRefusal, (refusal) =>
+    requestFailure({
+      status: refusalStatus(refusal),
+      code: refusal.error,
+      reason: "RequestRejected",
+    }),
+  ),
+  // A cross-site refusal, or a run log the app could not read.
+  Match.when(isCoded, ({ error }) =>
+    requestFailure({ status: 0, code: error, reason: "RequestRejected" }),
+  ),
+  Match.orElse(() => requestFailure({ status: 0, code: "unreachable", reason: "TransportFailed" })),
+);
 
-const decodeReview = Schema.decodeUnknownOption(
-  Schema.Struct({ payload: PermissionReviewPayload }),
+/** The approvals a run's last event says it waits for. */
+const waitingFor = (event: AgUiEvent): Result.Result<PendingInterrupts, AgUiEvent> =>
+  AgUiEvent.guards.RUN_FINISHED(event) &&
+  event.outcome !== undefined &&
+  RunOutcome.guards.interrupt(event.outcome)
+    ? Result.succeed({ runId: event.runId, pending: event.outcome.interrupts })
+    : Result.fail(event);
+
+/** The call an approval asks about, as the editor shows it. */
+const askedCall = Match.type<PendingInterrupts["pending"][number]>().pipe(
+  Match.discriminatorsExhaustive("reason")({
+    tool_call: ({ toolCallId, metadata }) => ({
+      toolCallId,
+      toolName: metadata.toolName,
+      argumentsJson: stringifyJson(metadata.input),
+    }),
+    permission_review: ({ metadata: { payload } }) => ({
+      toolCallId: payload.toolCallId,
+      toolName: payload.toolName,
+      argumentsJson: payload.arguments,
+    }),
+  }),
 );
 const decodeTextResource = Schema.decodeUnknownOption(
   Schema.Struct({ uri: Schema.String, text: Schema.String }),
@@ -207,9 +244,37 @@ const requesterLabel = ApprovalRequester.match({
 const cut = (text: string) =>
   text.length > maxToolOutput ? `${text.slice(0, maxToolOutput)}\n…` : text;
 
+/** What the editor shows of a saved message's part; nothing for the parts it does not show. */
+const replayed = (message: ChatMessage) =>
+  MessagePart.matchOrElse(
+    {
+      text: ({ content }): ReadonlyArray<SessionUpdate> => [
+        {
+          sessionUpdate: message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
+          content: { type: "text", text: content },
+          messageId: message.id,
+        },
+      ],
+      "tool-call": (call): ReadonlyArray<SessionUpdate> => {
+        const view = toolView(call.name);
+        return [
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: call.id,
+            title: toolDetail(call.arguments) ?? view.title,
+            kind: view.kind,
+            status: "completed",
+            rawInput: call.arguments,
+          },
+        ];
+      },
+    },
+    (): ReadonlyArray<SessionUpdate> => [],
+  );
+
 /** The agent side of ACP for editors such as Zed, backed by the running app (R17). */
 export function startAcpAgent(options: {
-  readonly stream: Stream;
+  readonly stream: AcpStream;
   readonly api: AppApi;
 }): acp.AgentConnection {
   const { api } = options;
@@ -224,87 +289,125 @@ export function startAcpAgent(options: {
     void turn.client.notify(acp.methods.client.session.update, { sessionId, update });
 
   /** Streams the app's run events to the editor as session updates. */
-  const forward = (session: BridgeSession, chunk: StreamChunk) => {
-    const turn = session.turn;
-    if (!(turn !== null)) return;
-    switch (chunk.type) {
-      case "TEXT_MESSAGE_CONTENT":
-        notify(turn, session.id, {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: chunk.delta },
-          messageId: chunk.messageId,
-        });
-        return;
-      case "TOOL_CALL_START": {
-        const view = toolView(chunk.toolCallName);
-        MutableHashMap.set(turn.args, chunk.toolCallId, "");
-        notify(turn, session.id, {
-          sessionUpdate: "tool_call",
-          toolCallId: chunk.toolCallId,
-          title: view.title,
-          kind: view.kind,
-          status: "pending",
-        });
-        return;
-      }
-      case "TOOL_CALL_ARGS":
-        MutableHashMap.set(
-          turn.args,
-          chunk.toolCallId,
-          (Option.getOrUndefined(MutableHashMap.get(turn.args, chunk.toolCallId)) ?? "") +
-            chunk.delta,
-        );
-        return;
-      case "TOOL_CALL_END": {
-        const args = Option.getOrUndefined(MutableHashMap.get(turn.args, chunk.toolCallId)) ?? "";
-        const update: SessionUpdate = {
-          sessionUpdate: "tool_call_update",
-          toolCallId: chunk.toolCallId,
-          status: "in_progress",
-          locations: toolLocations(args, session.project.root),
-          rawInput: args,
-        };
-        // The path, command or query makes a better title than the tool name alone.
-        const detail = toolDetail(args);
-        if (isTruthy(detail)) update.title = detail;
-        notify(turn, session.id, update);
-        return;
-      }
-      case "TOOL_CALL_RESULT":
-        notify(turn, session.id, {
-          sessionUpdate: "tool_call_update",
-          toolCallId: chunk.toolCallId,
-          status: "completed",
-          content: [
-            {
-              type: "content",
-              content: {
-                type: "text",
-                text: cut(
-                  Schema.is(Schema.String)(chunk.content)
-                    ? chunk.content
-                    : stringifyJson(chunk.content),
-                ),
-              },
-            },
-          ],
-        });
-        return;
-      case "RUN_ERROR":
+  const forward = (session: BridgeSession, turn: PromptTurn) =>
+    AgUiEvent.matchOrElse(
+      {
+        TEXT_MESSAGE_CONTENT: ({ delta, messageId }) =>
+          notify(turn, session.id, {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: delta },
+            messageId,
+          }),
+        TOOL_CALL_START: ({ toolCallId, toolCallName }) => {
+          const view = toolView(toolCallName);
+          MutableHashMap.set(turn.args, toolCallId, "");
+          notify(turn, session.id, {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: view.title,
+            kind: view.kind,
+            status: "pending",
+          });
+        },
+        TOOL_CALL_ARGS: ({ toolCallId, delta }) => {
+          MutableHashMap.set(
+            turn.args,
+            toolCallId,
+            (Option.getOrUndefined(MutableHashMap.get(turn.args, toolCallId)) ?? "") + delta,
+          );
+        },
+        TOOL_CALL_END: ({ toolCallId }) => {
+          const args = Option.getOrUndefined(MutableHashMap.get(turn.args, toolCallId)) ?? "";
+          const update: SessionUpdate = {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            status: "in_progress",
+            locations: toolLocations(args, session.project.root),
+            rawInput: args,
+          };
+          // The path, command or query makes a better title than the tool name alone.
+          const detail = toolDetail(args);
+          if (isTruthy(detail)) update.title = detail;
+          notify(turn, session.id, update);
+        },
+        TOOL_CALL_RESULT: ({ toolCallId, content }) =>
+          notify(turn, session.id, {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: cut(content) } }],
+          }),
         // The app hid secrets in the message before sending it.
-        turn.failure = { code: runFailureCodeOf(chunk.code), detail: chunk.message };
-        return;
-      default:
-        return;
-    }
-  };
+        RUN_ERROR: ({ code, message }) => {
+          turn.failure = { code: runFailureCodeOf(code), detail: message };
+        },
+      },
+      () => undefined,
+    );
+
+  /** The app's chat API. Its calls go through the bridge's fetch (`withAppFetch`). */
+  const { chat } = Effect.runSync(
+    Effect.scoped(
+      Effect.flatMap(Layer.build(FetchHttpClient.layer), (http) =>
+        Effect.provideContext(HttpApiClient.make(ChatApi, { baseUrl: api.baseUrl }), http),
+      ),
+    ),
+  );
+  const withAppFetch = Effect.provideService(FetchHttpClient.Fetch, api.fetcher);
+
+  /** Starts one run of a turn and forwards its events; the approvals it ends waiting for. */
+  const runOnce = Effect.fn("AcpAgent.runOnce")(
+    function* (session: BridgeSession, turn: PromptTurn, input: Omit<RunInput, "runId">) {
+      const events = yield* chat.run({
+        params: { session: session.id },
+        headers: { "x-session-holder": session.holder },
+        payload: { runId: yield* oauthProtocolCrypto.randomUUIDv7(), ...input },
+      });
+      return yield* events.pipe(
+        Stream.map(({ data }) => data),
+        Stream.tap((event) => Effect.sync(() => forward(session, turn)(event))),
+        Stream.filterMap(waitingFor),
+        Stream.runLast,
+      );
+    },
+    withAppFetch,
+    Effect.mapError(appFailure),
+  );
+
+  /**
+   * Asks the editor about every approval the run waits for, one at a time, and answers them with
+   * the run that resumes it, until a run ends without waiting or the turn is cancelled.
+   */
+  const answered = (
+    session: BridgeSession,
+    turn: PromptTurn,
+    waiting: Option.Option<PendingInterrupts>,
+  ): Effect.Effect<void, AppRequestFailed | Cause.UnknownError> =>
+    Option.match(
+      Option.filter(waiting, () => !turn.cancelled),
+      {
+        onNone: () => Effect.void,
+        onSome: ({ runId, pending }) =>
+          Effect.forEach(pending, (interrupt) =>
+            Effect.map(
+              askEditor(turn, session.id, askedCall(interrupt)),
+              (approved): ResumeEntry => ({
+                interruptId: interrupt.id,
+                status: "resolved",
+                payload: { approved },
+              }),
+            ),
+          ).pipe(
+            Effect.flatMap((resume) =>
+              runOnce(session, turn, { parentRunId: runId, messages: [], resume }),
+            ),
+            Effect.flatMap((next) => answered(session, turn, next)),
+          ),
+      },
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const open = Effect.fn("AcpAgent.open")(function* (
-    sessionId: string,
-    project: ProjectSummary,
-    messages: UIMessage[],
-  ) {
+  const open = Effect.fn("AcpAgent.open")(function* (sessionId: string, project: ProjectSummary) {
     const holder = `acp-${yield* oauthProtocolCrypto.randomUUIDv4()}`;
     const lease = yield* nativePromise(() => api.lease(sessionId, holder, "claim"));
     if (lease.state !== "mine")
@@ -326,24 +429,7 @@ export function startAcpAgent(options: {
       Effect.asVoid,
       Effect.forkDetach,
     );
-    const session: BridgeSession = {
-      id: sessionId,
-      holder,
-      project,
-      renew,
-      turn: null,
-      chat: new ChatClient({
-        threadId: sessionId,
-        tools: approvalToolDefinitions,
-        interrupts: [permissionReviewInterrupt],
-        initialMessages: messages,
-        connection: fetchServerSentEvents(api.chatUrl(sessionId), {
-          headers: { [sessionHolderHeader]: holder },
-          fetchClient: api.fetcher,
-        }),
-        onChunk: (chunk) => forward(session, chunk),
-      }),
-    };
+    const session: BridgeSession = { id: sessionId, holder, project, renew, turn: null };
     MutableHashMap.set(sessions, sessionId, session);
     return session;
   });
@@ -366,11 +452,6 @@ export function startAcpAgent(options: {
         reason: EditorRefusal.cases.ProjectNotRegistered.make({ root }),
       });
     return project;
-  });
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const waitIdle = Effect.fn("AcpAgent.waitIdle")(function* (chat: Chat) {
-    while (chat.getIsLoading()) yield* Effect.sleep(50);
   });
 
   /** Asks the editor about one call; anything but an explicit allow is a no. */
@@ -475,7 +556,7 @@ export function startAcpAgent(options: {
           const project = yield* projectFor(ctx.params.cwd);
           // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
           const created = yield* nativePromise(() => api.createSession(project.id, "ACP"));
-          yield* open(created.id, project, []);
+          yield* open(created.id, project);
           return { sessionId: created.id };
         }).pipe(Effect.catch(editorError)),
       ),
@@ -485,47 +566,24 @@ export function startAcpAgent(options: {
       runNativeEffect(
         Effect.gen(function* () {
           const project = yield* projectFor(ctx.params.cwd);
-          const messages = yield* nativePromise(() => api.transcript(ctx.params.sessionId));
+          const { messages } = yield* chat
+            .snapshot({ params: { session: ctx.params.sessionId }, query: { limit: maxPageSize } })
+            .pipe(withAppFetch, Effect.mapError(appFailure));
           const session =
             Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId)) ??
-            (yield* open(ctx.params.sessionId, project, messages));
+            (yield* open(ctx.params.sessionId, project));
           // Replays the saved conversation, so the editor shows what the page shows.
-          for (const message of messages)
-            for (const part of message.parts)
-              switch (part.type) {
-                case "text":
-                  yield* nativePromise(() =>
-                    ctx.client.notify(acp.methods.client.session.update, {
-                      sessionId: session.id,
-                      update: {
-                        sessionUpdate:
-                          message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
-                        content: { type: "text", text: part.content },
-                        messageId: message.id,
-                      },
-                    }),
-                  );
-                  break;
-                case "tool-call": {
-                  const view = toolView(part.name);
-                  yield* nativePromise(() =>
-                    ctx.client.notify(acp.methods.client.session.update, {
-                      sessionId: session.id,
-                      update: {
-                        sessionUpdate: "tool_call",
-                        toolCallId: part.id,
-                        title: toolDetail(part.arguments) ?? view.title,
-                        kind: view.kind,
-                        status: "completed",
-                        rawInput: part.arguments,
-                      },
-                    }),
-                  );
-                  break;
-                }
-                default:
-                  break;
-              }
+          yield* Effect.forEach(
+            messages.flatMap((message) => message.parts.flatMap(replayed(message))),
+            (update) =>
+              nativePromise(() =>
+                ctx.client.notify(acp.methods.client.session.update, {
+                  sessionId: session.id,
+                  update,
+                }),
+              ),
+            { discard: true },
+          );
           return {};
         }).pipe(Effect.catch(editorError)),
       ),
@@ -552,66 +610,24 @@ export function startAcpAgent(options: {
           session.turn = turn;
           const stopRelay = relayApprovals(session, turn);
           return yield* Effect.gen(function* () {
-            yield* nativePromise(() => session.chat.sendMessage(promptText(ctx.params.prompt)));
-            yield* waitIdle(session.chat);
-            // Approvals: the run pauses; the editor answers each, and the run continues.
-            for (;;) {
-              const interrupts = session.chat.getInterrupts();
-              if (interrupts.length === 0 || turn.cancelled) break;
-              const answers = MutableHashMap.empty<string, boolean>();
-              for (const interrupt of interrupts)
-                switch (interrupt.kind) {
-                  case "tool-approval":
-                    MutableHashMap.set(
-                      answers,
-                      interrupt.id,
-                      yield* askEditor(turn, session.id, {
-                        toolCallId: interrupt.toolCallId,
-                        toolName: interrupt.toolName,
-                        argumentsJson: stringifyJson(interrupt.originalArgs),
-                      }),
-                    );
-                    break;
-                  case "generic": {
-                    const review = Option.getOrUndefined(decodeReview(interrupt));
-                    if (!(review !== undefined)) break;
-                    MutableHashMap.set(
-                      answers,
-                      interrupt.id,
-                      yield* askEditor(turn, session.id, {
-                        toolCallId: review.payload.toolCallId,
-                        toolName: review.payload.toolName,
-                        argumentsJson: review.payload.arguments,
-                      }),
-                    );
-                    break;
-                  }
-                  case "unbound":
-                    break;
-                }
-              session.chat.resolveInterrupts((interrupt) => {
-                const approved =
-                  Option.getOrUndefined(MutableHashMap.get(answers, interrupt.id)) ?? false;
-                switch (interrupt.kind) {
-                  case "tool-approval":
-                    interrupt.resolveInterrupt(approved);
-                    break;
-                  case "generic":
-                    if (interrupt.binding.definitionId === permissionReviewInterrupt.id)
-                      interrupt.resolveInterrupt({ approved });
-                    break;
-                }
-                return undefined;
-              });
-              yield* Effect.sleep(50);
-              yield* waitIdle(session.chat);
-            }
+            yield* runOnce(session, turn, {
+              messages: [
+                {
+                  id: yield* oauthProtocolCrypto.randomUUIDv7(),
+                  role: "user",
+                  content: promptText(ctx.params.prompt),
+                },
+              ],
+            }).pipe(
+              // Approvals: the run pauses; the editor answers each, and the run continues.
+              Effect.flatMap((waiting) => answered(session, turn, waiting)),
+              // A cancelled run's stream may end any way; the turn ends as cancelled.
+              Effect.catch((error) => (turn.cancelled ? Effect.void : Effect.fail(error))),
+            );
             if (turn.cancelled) return { stopReason: "cancelled" as const satisfies StopReason };
-            const error = session.chat.getError();
-            const failure = turn.failure ?? (isTruthy(error) ? chatFailure(error) : null);
-            if (isTruthy(failure))
+            if (isTruthy(turn.failure))
               return yield* EditorRequestRefused.make({
-                reason: EditorRefusal.cases.RunFailed.make(failure),
+                reason: EditorRefusal.cases.RunFailed.make(turn.failure),
               });
             return { stopReason: "end_turn" as const satisfies StopReason };
           }).pipe(
