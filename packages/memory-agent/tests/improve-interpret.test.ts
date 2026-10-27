@@ -55,18 +55,9 @@ const provider = (model: LanguageModel.LanguageModel): ProviderServices => ({
   },
   runtime: {
     provider: "openai",
-    adapter: () => {
-      throw new Error("not used");
-    },
     model: () =>
       Effect.succeed({ model, source: scriptedSource, shownFailure: shownScriptedFailure }),
     contextWindow: () => 0,
-    agentLoop: () => {
-      throw new Error("not used");
-    },
-    runMiddleware: () => {
-      throw new Error("not used");
-    },
   },
 });
 

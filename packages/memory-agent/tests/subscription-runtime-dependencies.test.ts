@@ -1,9 +1,10 @@
-import { Cause } from "effect";
-import { ProviderUnavailable, SubscriptionAccountProvider } from "../src/providers/contracts.ts";
-import { Clock, Context, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import {
+  ProviderUnavailable,
+  SubscriptionAccountProvider,
+  type AgentModelRuntime,
+} from "../src/providers/contracts.ts";
+import { Clock, Context, Effect, Exit, FileSystem, Layer, Result, Schema, Scope } from "effect";
 import { SqlClient } from "effect/sql";
-import { EventType } from "@tanstack/ai";
-import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
@@ -22,28 +23,25 @@ import {
 } from "../src/providers/subscription-runtime.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
-const logger = new InternalLogger(
-  { debug() {}, info() {}, warn() {}, error() {} },
-  {
-    request: false,
-    provider: false,
-    output: false,
-    middleware: false,
-    tools: false,
-    agentLoop: false,
-    config: false,
-    errors: false,
-    sandbox: false,
-  },
-);
 const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" } as const;
+/** A run's model, pinned until `release` or the test's scope ends. */
+const pinned = Effect.fnUntraced(function* (runtime: AgentModelRuntime, runId: string) {
+  const scope = yield* Scope.make();
+  const release = Scope.close(scope, Exit.void);
+  yield* Effect.addFinalizer(() => release);
+  const { model } = yield* Scope.provide(
+    runtime.model(selection, { threadId: "thread", runId, cacheRetention: "none" }),
+    scope,
+  );
+  return { model, release };
+});
 const temporary = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.makeTempDirectoryScoped({ prefix: "subscription-dependencies-" });
 }).pipe(withTestPlatform);
 
 it.live(
-  "native registry exports fresh account dependencies without selecting until adapter creation",
+  "native registry exports fresh account dependencies without selecting until a run's model is made",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -126,8 +124,7 @@ it.live(
             yield* provider.models.list;
             const oldRuntime = implementation.bind(dependencies);
             expect(oldRuntime.contextWindow("gpt-5")).toBe(111);
-            const first = oldRuntime.adapter(selection);
-            yield* Effect.addFinalizer(() => Effect.sync(() => first.releaseRun?.()));
+            const first = yield* pinned(oldRuntime, "run-0");
             yield* profiles.select("openai", "second", {
               read: () =>
                 Promise.resolve({ accessToken: "second", refreshToken: "fixture", expiresAt: 0 }),
@@ -138,39 +135,20 @@ it.live(
             yield* provider.models.list;
             const fresh = implementation.bind(yield* registry.subscriptionDependencies!("openai"));
             expect(fresh.contextWindow("gpt-5")).toBe(222);
-            const second = fresh.adapter(selection);
-            const legacy = compatibility.adapter(selection);
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                second.releaseRun?.();
-                legacy.releaseRun?.();
-              }),
-            );
+            const second = yield* pinned(fresh, "run-1");
+            const legacy = yield* pinned(compatibility, "run-2");
             requests.length = 0;
-            for (const [index, adapter] of [first, second, legacy].entries()) {
-              const chunks = yield* Stream.runCollect(
-                Stream.fromAsyncIterable(
-                  adapter.chatStream({
-                    messages: [{ role: "user", content: "hello" }],
-                    model: selection.model,
-                    logger,
-                    runId: `run-${index}`,
-                    threadId: "thread",
-                  }),
-                  (cause) => new Cause.UnknownError(cause),
-                ),
-              );
-              expect(chunks.some((chunk) => chunk.type === EventType.RUN_FINISHED)).toBe(true);
-            }
+            for (const { model } of [first, second, legacy])
+              expect((yield* model.generateText({ prompt: "hello" })).text).toBe("reply");
             expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
             expect(created).toEqual(["first", "second"]);
             expect(profiles.inUse("openai", "first")).toBe(true);
             expect(profiles.inUse("openai", "second")).toBe(true);
-            first.releaseRun?.();
-            second.releaseRun?.();
+            yield* first.release;
+            yield* second.release;
             expect(profiles.inUse("openai", "first")).toBe(false);
             expect(profiles.inUse("openai", "second")).toBe(true);
-            legacy.releaseRun?.();
+            yield* legacy.release;
             expect(profiles.inUse("openai", "second")).toBe(false);
             const missing = yield* Effect.result(registry.subscriptionDependencies!("anthropic"));
             expect(Result.isFailure(missing) && missing.failure).toEqual(

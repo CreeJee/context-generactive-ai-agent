@@ -41,17 +41,8 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
   },
   runtime: {
     provider,
-    adapter: () => {
-      throw new Error("not used");
-    },
     model: () => Effect.die(new Error("not used")),
     contextWindow: () => 0,
-    agentLoop: () => {
-      throw new Error("not used");
-    },
-    runMiddleware: () => {
-      throw new Error("not used");
-    },
   },
 });
 

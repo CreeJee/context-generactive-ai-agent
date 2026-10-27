@@ -1,42 +1,24 @@
-import { Cause } from "effect";
 import { it } from "@effect/vitest";
-import { MutableHashMap, DateTime, Effect, Stream } from "effect";
-import { EventType, type TextOptions } from "@tanstack/ai";
-import { InternalLogger } from "@tanstack/ai/adapter-internals";
+import { MutableHashMap, DateTime, Effect, Exit, Scope } from "effect";
 import { expect } from "vite-plus/test";
-import { sdkCancellation } from "./support/sdk-cancellation.ts";
 import { createSubscriptionOAuthClient } from "../src/oauth/subscription-oauth.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
-import { SubscriptionTextAdapter } from "../src/providers/subscription-adapter.ts";
+import { ModelUnavailable, type ModelRun } from "../src/providers/contracts.ts";
 import { createSubscriptionRuntimeImplementation } from "../src/providers/subscription-runtime.ts";
 
-const logger = new InternalLogger(
-  { debug() {}, info() {}, warn() {}, error() {} },
-  {
-    request: false,
-    provider: false,
-    output: false,
-    middleware: false,
-    tools: false,
-    agentLoop: false,
-    config: false,
-    errors: false,
-    sandbox: false,
-  },
-);
-
 const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" } as const;
+const runOf = (index: number): ModelRun => ({
+  threadId: `thread-${index}`,
+  runId: `run-${index}`,
+  cacheRetention: "none",
+});
 
 it.effect("retained native implementation binds fresh central clients and pins each run", () =>
   Effect.gen(function* () {
     const run = Effect.runPromiseWith(yield* Effect.context());
     const implementation = createSubscriptionRuntimeImplementation("openai");
     const routes = MutableHashMap.empty<string, string>();
-    const requests: {
-      auth: string | null;
-      body: string;
-      signal: AbortSignal | null | undefined;
-    }[] = [];
+    const requests: { auth: string | null; body: string }[] = [];
     const released: string[] = [];
     let credentialReads = 0;
     const nativeClient = (account: string) =>
@@ -65,7 +47,6 @@ it.effect("retained native implementation binds fresh central clients and pins e
               requests.push({
                 auth: new Headers(init?.headers).get("authorization"),
                 body: yield* Effect.promise(() => new Response(init?.body).text()),
-                signal: init?.signal,
               });
               return new Response(
                 'data: {"type":"response.output_text.delta","delta":"native reply"}\n\ndata: {"type":"response.completed"}\n\n',
@@ -94,7 +75,8 @@ it.effect("retained native implementation binds fresh central clients and pins e
       },
       catalogWindow: () => 111,
     });
-    const firstAdapter = firstRuntime.adapter(selection);
+    const firstScope = yield* Scope.make();
+    const first = yield* Scope.provide(firstRuntime.model(selection, runOf(0)), firstScope);
     selected = "second";
     const secondRuntime = implementation.bind({
       client: () => {
@@ -110,50 +92,29 @@ it.effect("retained native implementation binds fresh central clients and pins e
       },
       catalogWindow: () => 222,
     });
-    const secondAdapter = secondRuntime.adapter({ ...selection, reasoningEffort: "high" });
-    expect(firstAdapter).toBeInstanceOf(SubscriptionTextAdapter);
-    expect(secondAdapter).toBeInstanceOf(SubscriptionTextAdapter);
+    const secondScope = yield* Scope.make();
+    const second = yield* Scope.provide(
+      secondRuntime.model({ ...selection, reasoningEffort: "high" }, runOf(1)),
+      secondScope,
+    );
     expect(firstRuntime.contextWindow(selection.model)).toBe(111);
     expect(secondRuntime.contextWindow(selection.model)).toBe(222);
-    const controllers = [(yield* sdkCancellation).controller, (yield* sdkCancellation).controller];
-    for (const [index, adapter] of [firstAdapter, secondAdapter].entries()) {
-      const options: TextOptions<Record<string, never>> = {
-        messages: [{ role: "user", content: `fresh-${index}` }],
-        model: selection.model,
-        logger,
-        abortController: controllers[index],
-        runId: `sdk-run-${index}`,
-        threadId: `thread-${index}`,
-      };
-      const chunks = yield* Stream.runCollect(
-        Stream.fromAsyncIterable(
-          adapter.chatStream(options),
-          (cause) => new Cause.UnknownError(cause),
-        ),
-      );
-      expect(
-        chunks.some(
-          (chunk) => chunk.type === EventType.RUN_FINISHED && chunk.runId === `sdk-run-${index}`,
-        ),
-      ).toBe(true);
-    }
+    for (const [index, { model }] of [first, second].entries())
+      expect((yield* model.generateText({ prompt: `fresh-${index}` })).text).toBe("native reply");
     expect(requests.map((request) => request.auth)).toEqual(["Bearer first", "Bearer second"]);
     expect(requests[0]?.body).toContain("fresh-0");
     expect(requests[1]?.body).toContain("fresh-1");
-    expect(requests[0]?.signal).toBe(controllers[0]?.signal);
-    expect(requests[1]?.signal).toBe(controllers[1]?.signal);
     expect(credentialReads).toBe(2);
     expect(acquisitions).toBe(2);
     expect(MutableHashMap.size(routes)).toBe(2);
-    firstAdapter.releaseRun?.();
+    yield* Scope.close(firstScope, Exit.void);
     expect([...routes]).toEqual([["fresh-run", "second"]]);
-    secondAdapter.releaseRun?.();
+    yield* Scope.close(secondScope, Exit.void);
     expect(MutableHashMap.size(routes)).toBe(0);
     expect(released).toEqual(["run-1", "fresh-run"]);
-    expect(firstRuntime.runMiddleware()).toEqual(secondRuntime.runMiddleware());
-    expect(firstRuntime.runMiddleware()).not.toBe(secondRuntime.runMiddleware());
-    expect(() => secondRuntime.adapter({ ...selection, provider: "anthropic" })).toThrow(
-      "Provider mismatch",
+    const anthropic = { ...selection, provider: "anthropic" } as const;
+    expect(yield* Effect.flip(Effect.scoped(secondRuntime.model(anthropic, runOf(2))))).toEqual(
+      ModelUnavailable.make(anthropic),
     );
     expect(acquisitions).toBe(2);
   }),

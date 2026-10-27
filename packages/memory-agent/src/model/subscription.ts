@@ -38,8 +38,9 @@ import { toolParameters } from "./tool-schema.ts";
 
 /**
  * The ChatGPT and Claude subscription models as an Effect `LanguageModel`. The request body is the
- * one the TanStack adapter (`providers/subscription-adapter.ts`) sent for the same history, and the
- * stream fails with the same typed reasons, carried in the `AiError` (`subscriptionFailure`).
+ * one the removed TanStack adapter sent for the same history, as the golden requests under
+ * `tests/model/__golden__` keep it, and the stream fails with the same typed reasons, carried in
+ * the `AiError` (`subscriptionFailure`).
  */
 
 export interface StreamingOAuthClient {

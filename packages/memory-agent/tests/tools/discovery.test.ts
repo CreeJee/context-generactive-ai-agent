@@ -1,19 +1,11 @@
 import { it } from "@effect/vitest";
-import { toolDefinition } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import { assert, describe, expect } from "vite-plus/test";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import { toolParameters } from "../../src/model/tool-schema.ts";
 import { discoveryToolName, lazyToolsFor, ToolLookup } from "../../src/tools/discovery.ts";
-import { lazily } from "../../src/tools/lazy.ts";
 import { runTool, type RunTool } from "../../src/tools/run-tool.ts";
-import { toToolSchema } from "../../src/tools/schema.ts";
-import {
-  compatibleToolRequestDifference,
-  matchGolden,
-  runToolRequestBodies,
-  toolRequestDifferences,
-} from "../support/requests.ts";
+import { matchGolden, runToolRequestBodies } from "../support/requests.ts";
 
 /**
  * Lazy tools are offered, discovered and refused as TanStack's lazy tool manager did
@@ -29,11 +21,6 @@ const definitions = [
 const tools: ReadonlyArray<RunTool> = definitions.map((definition) =>
   runTool({ ...definition, handler: () => Effect.void }),
 );
-const chatTools = () =>
-  definitions.map(({ name, description, parameters, lazy }) => {
-    const tool = toolDefinition({ name, description, inputSchema: toToolSchema(parameters) });
-    return lazy ? lazily(tool) : tool;
-  });
 
 const discover = (lazyTools: Effect.Success<ReturnType<typeof lazyToolsFor>>, names: string[]) =>
   Effect.gen(function* () {
@@ -48,20 +35,6 @@ const offeredNames = (lazyTools: Effect.Success<ReturnType<typeof lazyToolsFor>>
 
 describe("lazy tools", () => {
   it.effect("offer what TanStack offered before anything is discovered", () =>
-    Effect.gen(function* () {
-      const lazyTools = yield* lazyToolsFor(tools, []);
-      const modelTools = (yield* lazyTools.offered).map((tool) => tool.tool);
-      expect(yield* toolRequestDifferences({ chatTools: chatTools(), modelTools })).toEqual([
-        { provider: "anthropic", difference: undefined },
-        { provider: "openai", difference: undefined },
-      ]);
-      expect(
-        yield* compatibleToolRequestDifference({ chatTools: chatTools(), modelTools }),
-      ).toBeUndefined();
-    }),
-  );
-
-  it.effect("offer the golden requests before anything is discovered", () =>
     Effect.flatMap(runToolRequestBodies(tools), matchGolden("./__golden__/discovery.json")),
   );
 

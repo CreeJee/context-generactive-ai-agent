@@ -1,5 +1,4 @@
 import type { GlobalConfigFailed } from "../config/global-config.ts";
-import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware } from "@tanstack/ai";
 import { Data, Effect, Schema, type Scope } from "effect";
 import type { AiError, LanguageModel } from "effect/ai";
 import type { MessageSource } from "../chat-store/schema.ts";
@@ -146,13 +145,6 @@ export interface ModelCatalog {
   ) => Effect.Effect<ModelSelection, ModelUnavailable | ProviderOperationFailed>;
 }
 
-/** Provider-native transport behind the provider-neutral orchestration boundary. */
-export type RunTextAdapter = AnyTextAdapter & {
-  readonly releaseRun?: () => void;
-  /** Pinned connection identity for detecting a server change without retaining credentials. */
-  readonly historyKey?: string;
-};
-
 /** How long the provider keeps a run's request prefix cached. */
 export const CacheRetention = Schema.Literals(["none", "short", "long"]);
 export type CacheRetention = typeof CacheRetention.Type;
@@ -188,7 +180,6 @@ export interface RunModel {
 
 export interface AgentModelRuntime {
   readonly provider: ProviderId;
-  readonly adapter: (selection: ModelSelection) => RunTextAdapter;
   /**
    * The run's model on Effect AI. What it pins for the run, such as an account, is let go when
    * the scope closes.
@@ -200,8 +191,6 @@ export interface AgentModelRuntime {
   readonly contextWindow: (model: string) => number;
   /** False when contextWindow is only a conservative fallback, not model metadata. */
   readonly contextWindowKnown?: (model: string) => boolean;
-  readonly agentLoop: AgentLoopStrategy;
-  readonly runMiddleware: () => ChatMiddleware;
 }
 
 export interface ProviderConfiguration {

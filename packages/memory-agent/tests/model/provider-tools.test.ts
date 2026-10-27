@@ -1,15 +1,8 @@
 import { it } from "@effect/vitest";
-import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
-import * as OpenAITools from "@tanstack/ai-openai/tools";
-import { Effect } from "effect";
 import { describe, expect } from "vite-plus/test";
 import type { ProviderToolConfig } from "../../src/providers/provider-tools.ts";
 import { providerTools } from "../../src/providers/provider-tools.ts";
-import {
-  matchGolden,
-  subscriptionToolRequestBodies,
-  toolRequestDifferences,
-} from "../support/requests.ts";
+import { matchGolden, subscriptionToolRequestBodies } from "../support/requests.ts";
 
 /**
  * The subscription endpoints get each provider tool as the function tool TanStack sent for it
@@ -40,81 +33,46 @@ const bash = { type: "bash_20250124", name: "bash" } as const;
 const textEditor = { type: "text_editor_20250728", name: "str_replace_based_edit_tool" } as const;
 
 /**
- * Each provider tool as TanStack's factory made it and with the configuration it was given, one
- * list per vendor: their tool names overlap.
+ * Each provider tool with the configuration TanStack's factory was given for it, one list per
+ * vendor: their tool names overlap.
  */
 const openAICases = [
-  [OpenAITools.webSearchTool(webSearch), providerTools["openai:web_search"](webSearch)],
-  [
-    OpenAITools.webSearchPreviewTool({ type: "web_search_preview" }),
-    providerTools["openai:web_search_preview"]({ type: "web_search_preview" }),
-  ],
-  [OpenAITools.fileSearchTool(fileSearch), providerTools["openai:file_search"](fileSearch)],
-  [OpenAITools.imageGenerationTool({}), providerTools["openai:image_generation"]({})],
-  [
-    OpenAITools.codeInterpreterTool(interpreter),
-    providerTools["openai:code_interpreter"](interpreter),
-  ],
-  [OpenAITools.mcpTool(mcp), providerTools["openai:mcp"](mcp)],
-  [OpenAITools.computerUseTool(computer), providerTools["openai:computer_use"](computer)],
-  [OpenAITools.localShellTool(), providerTools["openai:local_shell"]({})],
-  [OpenAITools.shellTool(), providerTools["openai:shell"]({})],
-  [OpenAITools.applyPatchTool(), providerTools["openai:apply_patch"]({})],
-  [OpenAITools.customTool(custom), providerTools["openai:custom"](custom)],
+  providerTools["openai:web_search"](webSearch),
+  providerTools["openai:web_search_preview"]({ type: "web_search_preview" }),
+  providerTools["openai:file_search"](fileSearch),
+  providerTools["openai:image_generation"]({}),
+  providerTools["openai:code_interpreter"](interpreter),
+  providerTools["openai:mcp"](mcp),
+  providerTools["openai:computer_use"](computer),
+  providerTools["openai:local_shell"]({}),
+  providerTools["openai:shell"]({}),
+  providerTools["openai:apply_patch"]({}),
+  providerTools["openai:custom"](custom),
 ] as const;
 const anthropicCases = [
-  [
-    AnthropicTools.webSearchTool(anthropicSearch),
-    providerTools["anthropic:web_search"](anthropicSearch),
-  ],
-  [AnthropicTools.webFetchTool(), providerTools["anthropic:web_fetch"]({})],
-  [
-    AnthropicTools.codeExecutionTool(codeExecution),
-    providerTools["anthropic:code_execution"](codeExecution),
-  ],
-  [
-    AnthropicTools.computerUseTool(anthropicComputer),
-    providerTools["anthropic:computer_use"](anthropicComputer),
-  ],
-  [AnthropicTools.bashTool(bash), providerTools["anthropic:bash"](bash)],
-  [AnthropicTools.textEditorTool(textEditor), providerTools["anthropic:text_editor"](textEditor)],
-  [AnthropicTools.memoryTool(), providerTools["anthropic:memory"]({})],
+  providerTools["anthropic:web_search"](anthropicSearch),
+  providerTools["anthropic:web_fetch"]({}),
+  providerTools["anthropic:code_execution"](codeExecution),
+  providerTools["anthropic:computer_use"](anthropicComputer),
+  providerTools["anthropic:bash"](bash),
+  providerTools["anthropic:text_editor"](textEditor),
+  providerTools["anthropic:memory"]({}),
 ] as const;
 
 // A description taken from the configuration falls back without it.
 const bare = { type: "mcp", server_label: "docs", server_url: mcp.server_url } as const;
 const unnamed: ProviderToolConfig = { type: "custom", name: "grammar" };
 const fallbackCases = [
-  [OpenAITools.mcpTool(bare), providerTools["openai:mcp"](bare)],
-  [
-    OpenAITools.customTool({ type: "custom", name: "grammar" }),
-    providerTools["openai:custom"](unnamed),
-  ],
+  providerTools["openai:mcp"](bare),
+  providerTools["openai:custom"](unnamed),
 ] as const;
 
 describe("provider tools", () => {
-  it.effect("reach the subscription endpoints as TanStack sent them", () =>
-    Effect.gen(function* () {
-      expect(openAICases.length + anthropicCases.length).toBe(Object.keys(providerTools).length);
-      // A vendor's tools at once, so their order is compared too.
-      for (const cases of [openAICases, anthropicCases, fallbackCases])
-        expect(
-          yield* toolRequestDifferences({
-            chatTools: cases.map(([tanstack]) => tanstack),
-            modelTools: cases.map(([, tool]) => tool),
-          }),
-        ).toStrictEqual([
-          { provider: "anthropic", difference: undefined },
-          { provider: "openai", difference: undefined },
-        ]);
-    }),
-  );
-
-  it.effect("are in the golden requests", () =>
-    matchGolden("./__golden__/provider-tools.json")(
-      [openAICases, anthropicCases, fallbackCases].map((cases) =>
-        subscriptionToolRequestBodies(cases.map(([, tool]) => tool)),
-      ),
-    ),
-  );
+  it.effect("reach the subscription endpoints as TanStack sent them", () => {
+    expect(openAICases.length + anthropicCases.length).toBe(Object.keys(providerTools).length);
+    // A vendor's tools at once, so their order is kept too.
+    return matchGolden("./__golden__/provider-tools.json")(
+      [openAICases, anthropicCases, fallbackCases].map(subscriptionToolRequestBodies),
+    );
+  });
 });

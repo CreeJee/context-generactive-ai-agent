@@ -43,7 +43,6 @@ import {
   type ScriptedResponder,
   type ScriptedTurn,
 } from "memory-agent/testing";
-import { subscriptionAgentLoop } from "../../src/providers/subscription-runtime.ts";
 
 const models: readonly ProviderModel[] = [
   {
@@ -490,7 +489,6 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
         runtime: () =>
           Effect.succeed({
             provider: "openai" as const,
-            adapter: () => adapter,
             model:
               options.runModel ??
               ((_selection: ModelSelection, run: ModelRun) =>
@@ -500,8 +498,6 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
                   shownFailure: shownScriptedFailure,
                 }))),
             contextWindow: () => 200_000,
-            agentLoop: subscriptionAgentLoop,
-            runMiddleware: () => ({ name: "memory-agent/test-provider" }),
           }),
       };
     }),

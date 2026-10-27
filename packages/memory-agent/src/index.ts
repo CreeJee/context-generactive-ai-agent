@@ -333,20 +333,13 @@ export {
   type ImageMediaRequest,
   type ImageMediaWorkflowApi,
 } from "./providers/image-media.ts";
-export {
-  SubscriptionTextAdapter,
-  subscriptionRequest,
-  type StreamingOAuthClient,
-} from "./providers/subscription-adapter.ts";
+export type { StreamingOAuthClient } from "./model/subscription.ts";
 export {
   createSubscriptionProvider,
   parseSubscriptionCatalog,
   type SubscriptionProviderOptions,
 } from "./providers/subscription-provider.ts";
-export {
-  createSubscriptionRuntime,
-  subscriptionAgentLoop,
-} from "./providers/subscription-runtime.ts";
+export { createSubscriptionRuntime } from "./providers/subscription-runtime.ts";
 export { Database, DatabaseOpenError, DatabaseSchemaRejected } from "./db/database.ts";
 export {
   Attachment,

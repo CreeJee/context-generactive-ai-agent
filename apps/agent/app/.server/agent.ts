@@ -1,17 +1,7 @@
-import { Config, Effect, Layer, ManagedRuntime, Function as EffectFunction } from "effect";
+import { Config, Effect, Layer, ManagedRuntime } from "effect";
 import { nodePlatformLayer, type NodePlatform } from "memory-agent/node-platform";
-import {
-  defaultStorageRoot,
-  memoryAgentLayer,
-  stopAllCommands,
-  type ModelSelection,
-} from "memory-agent";
+import { defaultStorageRoot, memoryAgentLayer, stopAllCommands } from "memory-agent";
 import { configureRuntimeRoot } from "memory-agent/runtime-resources";
-import {
-  withServerToolComparison,
-  type ComparisonProviderLayer,
-  type ComparisonRequestGuard,
-} from "./tool-comparison.ts";
 import { buildConfigLayer, type BuildServerConfig } from "./build-config.ts";
 import { observabilityLayer } from "./observability.ts";
 
@@ -76,19 +66,4 @@ export const agent = createAgentRuntime();
 export function disposeAgent(): Promise<void> {
   stopAllCommands();
   return agent.dispose();
-}
-
-/** Internal evaluation capability; borrowing providers never exposes a DB or credentials to HTTP. */
-export const runToolComparison: {
-  <A, E>(
-    guard: ComparisonRequestGuard,
-    use: (providers: ComparisonProviderLayer) => Effect.Effect<A, E>,
-  ): (selection: ModelSelection) => Promise<A>;
-} & typeof runToolComparisonBody = EffectFunction.dual(3, runToolComparisonBody);
-function runToolComparisonBody<A, E>(
-  selection: ModelSelection,
-  guard: ComparisonRequestGuard,
-  use: (providers: ComparisonProviderLayer) => Effect.Effect<A, E>,
-) {
-  return agent.runPromise(withServerToolComparison(selection, guard, use));
 }

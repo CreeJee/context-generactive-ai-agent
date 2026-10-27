@@ -1,5 +1,5 @@
 // Checks the TanStack chat-row migration on copies of the local database before it ships
-// (docs/effect-ai-migration.md, steps 1 and 2): the rows, and the requests the Effect AI model
+// (docs/effect-ai-migration.md, steps 1 and 2): the rows, and the prompts the Effect AI model
 // builds from them. The copies hold the user's conversations: they stay outside the repository,
 // and the report holds counts, ids, Schema paths and JSON paths, never row content.
 // Submodules only: the package entry also loads NodeRedis and its client.
@@ -10,7 +10,6 @@ import {
   Clock,
   Console,
   Effect,
-  Exit,
   FileSystem,
   MutableHashMap,
   Option,
@@ -40,13 +39,7 @@ import { migrationClient } from "../../packages/memory-agent/src/db/migration-cl
 import type { JsonValue } from "../../packages/memory-agent/src/json.ts";
 import { fromPrompt, toPrompt } from "../../packages/memory-agent/src/model/prompt.ts";
 import { historyScreen } from "../../packages/memory-agent/tests/support/history-screen.ts";
-import {
-  asTanStack,
-  next,
-  parseTanStackMessages,
-  requestDifferences,
-  system,
-} from "../../packages/memory-agent/tests/support/requests.ts";
+import { system } from "../../packages/memory-agent/tests/support/requests.ts";
 
 class CheckFailed extends Schema.TaggedError<CheckFailed>()("CheckFailed", {
   message: Schema.String,
@@ -308,15 +301,10 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
         );
 
   /**
-   * Whether the prompt keeps the migrated history, and the Effect AI model sends for it the
-   * request TanStack sent for the original. A history that does not decode is reported above.
+   * Whether the prompt keeps the migrated history. A history that does not decode is reported
+   * above. The requests the model sends for it are the golden files' (tests/model/requests.test.ts).
    */
-  const checkReplay = Effect.fnUntraced(function* (
-    name: string,
-    where: string,
-    before: ReturnType<typeof parseTanStackMessages>,
-    after: readonly JsonValue[],
-  ) {
+  const checkReplay = (name: string, where: string, after: readonly JsonValue[]) => {
     const decoded = decodeHistory(after);
     if (Option.isNone(decoded)) return;
     const history = decoded.value;
@@ -326,18 +314,7 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
     )
       report.count(`${name} prompt round trip`);
     else report.fail(`${name} prompt round trip`, where);
-    const differences = yield* Effect.exit(
-      requestDifferences({
-        threadId: where,
-        tanstack: [...before, asTanStack(next)],
-        stored: [...history, next],
-      }),
-    );
-    if (Exit.isFailure(differences)) return report.fail(`${name} request failed`, where);
-    for (const { provider, difference } of differences.value)
-      if (difference === undefined) report.count(`${name} request same ${provider}`);
-      else report.fail(`${name} request differs ${provider}`, `${where}: ${difference}`);
-  });
+  };
 
   yield* Effect.forEach(
     yield* threadIds(),
@@ -351,7 +328,7 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
           report.decoded("message decode", `${id}#${index}`, decodeMessage(message, exact)),
         { discard: true },
       );
-      yield* checkReplay("thread", id, parseTanStackMessages(pair.before), after);
+      checkReplay("thread", id, after);
       const groups = yield* groupPairs(id);
       yield* Effect.forEach(
         groups,
@@ -366,10 +343,9 @@ const check = Effect.fn("chat-store-check")(function* (sql: SqlClient.SqlClient)
       );
       // The screen history, group after group, is the longest history the thread had.
       if (groups.length > 0 && groups.every((group) => group.before !== null)) {
-        yield* checkReplay(
+        checkReplay(
           "history",
           id,
-          groups.flatMap((group) => parseTanStackMessages(group.before ?? "[]")),
           groups.flatMap((group) => parseArray(group.after)),
         );
         compareScreen(

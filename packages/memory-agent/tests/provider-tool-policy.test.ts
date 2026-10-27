@@ -3,11 +3,7 @@ import { it as effectTest } from "@effect/vitest";
 import { Deferred, Effect, Result, Fiber, FileSystem, Layer, Path } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
-import {
-  matchGolden,
-  subscriptionToolRequestBodies,
-  toolRequestDifferences,
-} from "./support/requests.ts";
+import { matchGolden, subscriptionToolRequestBodies } from "./support/requests.ts";
 import {
   ProviderToolCapabilityRegistry,
   makeProviderToolCapabilityRegistry,
@@ -542,15 +538,6 @@ describe("ProviderToolRuntime", () => {
         expect(openai.map((entry) => entry.id)).toEqual(["openai:web_search"]);
         expect(anthropic.map((entry) => entry.id)).toEqual(["anthropic:web_fetch"]);
         // The Effect AI tool reaches the provider as the TanStack one made from the same request.
-        expect(
-          yield* toolRequestDifferences({
-            chatTools: [...openai, ...anthropic].map((entry) => entry.tool),
-            modelTools: [...openai, ...anthropic].map((entry) => entry.modelTool),
-          }),
-        ).toStrictEqual([
-          { provider: "anthropic", difference: undefined },
-          { provider: "openai", difference: undefined },
-        ]);
         yield* matchGolden("./__golden__/provider-tool-policy.json")(
           subscriptionToolRequestBodies([...openai, ...anthropic].map((entry) => entry.modelTool)),
         );

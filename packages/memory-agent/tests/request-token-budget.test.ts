@@ -1,7 +1,9 @@
+import { Tool } from "effect/ai";
 import { getEncoding } from "js-tiktoken";
 import { describe, expect, test } from "vite-plus/test";
 import { estimateRequestTokens, exceedsRequestTokenBudget } from "../eval/request-token-budget.ts";
-import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
+import { toPrompt } from "../src/model/prompt.ts";
+import { subscriptionBody } from "../src/model/subscription.ts";
 
 describe("paid pilot OpenAI token preflight", () => {
   test("counts serialized ASCII and Korean with the selected fallback BPE", () => {
@@ -27,31 +29,34 @@ describe("paid pilot OpenAI token preflight", () => {
   });
 
   test("the request includes tool schemas and the budget stops before a provider call", () => {
-    const options = {
-      systemPrompts: ["Keep evidence pointers."],
-      messages: [{ role: "user" as const, content: "Read the fixture" }],
-      tools: [
-        {
-          name: "lookup",
-          description: "Find evidence",
-          inputSchema: { type: "object", properties: { path: { type: "string" } } },
-        },
-      ],
-    };
+    const prompt = toPrompt(
+      [{ role: "user", content: "Read the fixture" }],
+      ["Keep evidence pointers."],
+    );
+    const tools = [
+      Tool.dynamic("lookup", {
+        description: "Find evidence",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      }),
+    ];
     const selection = {
       provider: "openai" as const,
       model: "gpt-5.6-sol",
       reasoningEffort: "low" as const,
     };
-    const withTools = subscriptionRequest({
+    const withTools = subscriptionBody({
       provider: "openai",
-      selection: selection,
-      options: options,
+      selection,
+      prompt,
+      tools,
+      promptCache: undefined,
     });
-    const withoutTools = subscriptionRequest({
+    const withoutTools = subscriptionBody({
       provider: "openai",
-      selection: selection,
-      options: { ...options, tools: [] },
+      selection,
+      prompt,
+      tools: [],
+      promptCache: undefined,
     });
     expect(withTools).toContain('"parameters":');
     const large = estimateRequestTokens(withTools, selection.model);

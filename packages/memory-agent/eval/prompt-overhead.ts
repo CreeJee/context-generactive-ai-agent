@@ -19,7 +19,6 @@ import { subscriptionBody } from "../src/model/subscription.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { AuthConnectionState, type ModelSelection } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import { subscriptionAgentLoop } from "../src/providers/subscription-runtime.ts";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
@@ -29,7 +28,6 @@ import { Sessions } from "../src/sessions/sessions.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { inProcessChatApi } from "../src/testing/chat-api.ts";
-import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { estimateRequestTokens } from "./request-token-budget.ts";
 const { join } = path;
 
@@ -106,8 +104,6 @@ const registry = (model: LanguageModel.LanguageModel) =>
         runtime: () =>
           Effect.succeed({
             provider: "openai",
-            // The TanStack fields stay until the runtime contract drops them; runs never use them.
-            adapter: () => new ScriptedTextAdapter([{ text: "ok" }]),
             model: () =>
               Effect.succeed({
                 model,
@@ -115,8 +111,6 @@ const registry = (model: LanguageModel.LanguageModel) =>
                 shownFailure: shownReason,
               }),
             contextWindow: () => 400_000,
-            agentLoop: subscriptionAgentLoop,
-            runMiddleware: () => ({ name: "memory-agent/eval-prompt-overhead" }),
           }),
       }),
     ),

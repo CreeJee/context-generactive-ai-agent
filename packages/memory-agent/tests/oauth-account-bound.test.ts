@@ -12,6 +12,7 @@ import {
   MutableHashMap,
   Option,
   Effect,
+  Exit,
   Result,
   Schedule,
   Scope,
@@ -31,10 +32,7 @@ import {
 import type { SubscriptionOAuthClient } from "../src/oauth/validation-harness.ts";
 import { providerProtocols, type OAuthProvider } from "../src/oauth/protocol.ts";
 import { createSubscriptionProvider } from "../src/providers/subscription-provider.ts";
-import {
-  createSubscriptionRuntime,
-  releaseSubscriptionRun,
-} from "../src/providers/subscription-runtime.ts";
+import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 
 const sdkCall = Effect.fn("oauthBound.sdkCall")(function* <A>(operation: () => A | PromiseLike<A>) {
   return yield* Effect.tryPromise({
@@ -482,12 +480,14 @@ describe("account-bound subscription provider", () => {
           model: "gpt-test",
           reasoningEffort: "low",
         } as const;
-        const firstAdapter = runtime.adapter(selection);
+        const run = { threadId: "thread", runId: "run", cacheRetention: "none" } as const;
+        const firstModel = yield* Scope.make();
+        yield* Scope.provide(runtime.model(selection, run), firstModel);
         const aRun = bound.forRun();
         expect(bound.catalogKey()).toBe(ids[0]);
         yield* select(ids[1]);
-        const secondAdapter = runtime.adapter(selection);
-        expect(firstAdapter).not.toBe(secondAdapter);
+        const secondModel = yield* Scope.make();
+        yield* Scope.provide(runtime.model(selection, run), secondModel);
         const bRun = bound.forRun();
         yield* sdkCall(() => bound.client.status());
         yield* sdkCall(() => bound.client.modelCatalog());
@@ -508,8 +508,8 @@ describe("account-bound subscription provider", () => {
           `refresh:${ids[0]}`,
           `refresh:${ids[1]}`,
         ]);
-        releaseSubscriptionRun(firstAdapter);
-        releaseSubscriptionRun(secondAdapter);
+        yield* Scope.close(firstModel, Exit.void);
+        yield* Scope.close(secondModel, Exit.void);
         aRun.releaseRun();
         bRun.releaseRun();
       }),

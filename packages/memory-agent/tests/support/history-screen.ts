@@ -1,7 +1,9 @@
 // Native SDK boundary: the history page's messages are TanStack's UI messages until step 7.
-import { modelMessagesToUIMessages } from "@tanstack/ai";
+import { modelMessagesToUIMessages, type ModelMessage } from "@tanstack/ai";
 import type { JsonValue } from "../../src/json.ts";
-import { parseTanStackMessages } from "./requests.ts";
+
+/** The messages of a thread row TanStack wrote. */
+const parseTanStackMessages = (text: string): ReadonlyArray<ModelMessage> => JSON.parse(text);
 
 /**
  * The messages the history page shows for a thread's history groups, as JSON: the page reads the

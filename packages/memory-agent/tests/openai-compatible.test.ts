@@ -18,20 +18,14 @@ import { TestClock } from "effect/testing";
 import { Result, Function as EffectFunction } from "effect";
 // Native SDK fetch, keyring and AsyncGenerator adapters remain explicit Promise boundaries.
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
-import { DatabaseSync } from "node:sqlite";
-import { chat } from "@tanstack/ai";
-import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
-import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
 import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import { ModelUnavailable } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { describe, expect } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
-import { chatPersistence } from "../src/chat-state/persistence.ts";
-import { connectionContext } from "../src/db/database.ts";
-import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
   type CompatibleKeyStore,
@@ -119,8 +113,6 @@ const stalledFetch =
     return Effect.runPromise(Effect.never, { signal });
   };
 
-const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
-  Effect.tryPromise(() => Promise.resolve(call()));
 const nativeEffect = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
   Effect.runPromise(Effect.result(program)).then(
     Result.match({
@@ -137,6 +129,9 @@ const nativeFetch =
   ): typeof fetch =>
   (input, init) =>
     nativeEffect(reply(input, init));
+/** The body a fetch fixture was given; the model's client sends bytes, not a string. */
+const requestText = (init: RequestInit | undefined) =>
+  Effect.tryPromise(() => new Response(init?.body).text());
 const nativeWrite =
   (write: (value: string | null) => Effect.Effect<void, Cause.UnknownError>) =>
   (value: string | null) =>
@@ -146,6 +141,9 @@ const jsonStringify = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
+
+/** The run every model here is made for. */
+const run = { threadId: "thread", runId: "run", cacheRetention: "none" } as const;
 
 const configuration = {
   baseUrl: "http://127.0.0.1:1234/v1",
@@ -182,69 +180,6 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
-  effectTest.live.each([
-    ["private question", "text:16:plain"],
-    ["<tool_response>private result</tool_response>", "text:45:tool-response"],
-  ])("reports wire query shapes without exposing content (%s)", ([content, diagnostic]) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = fixture(
-          nativeFetch(() =>
-            Effect.sync(() =>
-              Response.json(
-                {
-                  error: {
-                    message: "No user query found in messages.",
-                    type: "invalid_request_error",
-                  },
-                },
-                { status: 400 },
-              ),
-            ),
-          ),
-        );
-        yield* f.api.update(configuration);
-        const adapter = (yield* f.api.runtime).adapter({
-          provider: "openai-compatible",
-          model: configuration.model,
-          reasoningEffort: "default",
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        try {
-          const errors: string[] = [];
-          yield* Stream.runForEach(
-            Stream.fromAsyncIterable(
-              adapter.chatStream({
-                threadId: "thread",
-                logger: resolveDebugOption(false),
-                model: configuration.model,
-                messages: [{ role: "user", content }],
-              }),
-              (cause) => new Cause.UnknownError(cause),
-            ),
-            (chunk) =>
-              Effect.sync(() => {
-                switch (chunk.type) {
-                  case "RUN_ERROR":
-                    errors.push(chunk.message);
-                    break;
-                }
-              }),
-          );
-          expect(errors).toHaveLength(1);
-          expect(errors[0]).toContain(
-            "Compatible request messages: total=1, user=1, assistant=0, tool=0, first=user, last=user",
-          );
-          expect(errors[0]).toContain(
-            `model=manual-model, toolDefinitions=0, userContent=[${diagnostic}]`,
-          );
-          expect(errors[0]).not.toContain(content);
-        } finally {
-          adapter.releaseRun?.();
-        }
-      }),
-    ),
-  );
   effectTest.effect(
     "uses the provider-normalized effort for chat when the stored effort is unsupported",
     () =>
@@ -271,9 +206,7 @@ describe("OpenAI compatible settings", () => {
           reasoningEffort: "default",
         });
         expect(f.saved().reasoningEffort).toBe("low");
-        const adapter = (yield* f.api.runtime).adapter(selection!);
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        adapter.releaseRun?.();
+        yield* Effect.scoped((yield* f.api.runtime).model(selection!, run));
       }),
   );
   effectTest.live("ignores and clears cached capabilities from the removed LM Studio probe", () =>
@@ -527,7 +460,7 @@ describe("OpenAI compatible settings", () => {
           const bodies: (typeof Body.Type)[] = [];
           const f = fixture(
             nativeFetch((url, init) =>
-              Effect.sync(() => {
+              Effect.map(requestText(init), (body) => {
                 const address =
                   url instanceof Request ? url.url : url instanceof URL ? url.href : url;
                 if (address.endsWith("/models"))
@@ -545,10 +478,7 @@ describe("OpenAI compatible settings", () => {
                     ],
                   });
                 bodies.push(
-                  EffectFunction.flow(
-                    Schema.decodeUnknownResult(Body),
-                    Result.getOrThrow,
-                  )(init?.body),
+                  EffectFunction.flow(Schema.decodeUnknownResult(Body), Result.getOrThrow)(body),
                 );
                 return new Response(
                   'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
@@ -570,27 +500,11 @@ describe("OpenAI compatible settings", () => {
           for (const effort of ["xhigh", "default"]) {
             const selection = yield* f.api.services.models.select(configuration.model, effort);
             expect(yield* f.restore().services.models.selected).toEqual(selection);
-            const adapter = (yield* f.api.runtime).adapter(selection);
-            yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-            try {
-              yield* Stream.runForEach(
-                Stream.fromAsyncIterable(
-                  adapter.chatStream({
-                    threadId: "thread",
-                    logger: resolveDebugOption(false),
-                    model: configuration.model,
-                    messages: [{ role: "user", content: "hi" }],
-                  }),
-                  (cause) => new Cause.UnknownError(cause),
-                ),
-                (_chunk) =>
-                  Effect.sync(() => {
-                    /* consume */
-                  }),
-              );
-            } finally {
-              adapter.releaseRun?.();
-            }
+            yield* Effect.scoped(
+              Effect.flatMap((yield* f.api.runtime).model(selection, run), ({ model }) =>
+                model.generateText({ prompt: "hi" }),
+              ),
+            );
           }
           expect(bodies[0]?.reasoning_effort).toBe("xhigh");
           expect(bodies[1]).not.toHaveProperty("reasoning_effort");
@@ -599,104 +513,6 @@ describe("OpenAI compatible settings", () => {
           expect((yield* f.restore().services.models.selected)?.reasoningEffort).toBe("xhigh");
           yield* f.api.update({ ...configuration, model: "other-model" });
           expect((yield* f.restore().services.models.selected)?.reasoningEffort).toBe("default");
-        }),
-      ),
-  );
-  effectTest.live.each(["reasoning_content", "reasoning"])(
-    "streams and restores %s separately from the final answer",
-    (field) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const sqlite = yield* Effect.acquireRelease(
-            Effect.sync(() => new DatabaseSync(":memory:")),
-            (sqlite) =>
-              Effect.sync(() => {
-                if (sqlite.isOpen) sqlite.close();
-              }),
-          );
-          for (const step of migrations) sqlite.exec(step);
-          const persistence = yield* Effect.flatMap(connectionContext(sqlite), (context) =>
-            Effect.provideContext(chatPersistence, context),
-          );
-          const f = fixture(
-            nativeFetch(() =>
-              Effect.sync(() => {
-                const chunks = [
-                  ...[{ [field]: "Compare the values." }, { content: "The answer is 42." }].map(
-                    (delta) => ({
-                      id: "reasoning-test",
-                      object: "chat.completion.chunk",
-                      created: 1,
-                      model: configuration.model,
-                      choices: [{ index: 0, delta, finish_reason: null }],
-                    }),
-                  ),
-                  {
-                    id: "reasoning-test",
-                    object: "chat.completion.chunk",
-                    created: 1,
-                    model: configuration.model,
-                    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-                  },
-                ];
-                return new Response(
-                  chunks.map((chunk) => `data: ${jsonStringify(chunk)}\n\n`).join("") +
-                    "data: [DONE]\n\n",
-                  { headers: { "Content-Type": "text/event-stream" } },
-                );
-              }),
-            ),
-          );
-          yield* f.api.update(configuration);
-          const adapter = (yield* f.api.runtime).adapter({
-            provider: "openai-compatible",
-            model: configuration.model,
-            reasoningEffort: "default",
-          });
-          yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-          try {
-            const events = yield* Stream.runCollect(
-              Stream.fromAsyncIterable(
-                chat({
-                  adapter,
-                  messages: [{ role: "user", content: "Answer the question." }],
-                  threadId: "reasoning",
-                  runId: "reasoning-run",
-                  middleware: [withPersistence(persistence)],
-                }),
-                (cause) => new Cause.UnknownError(cause),
-              ),
-            );
-            expect(events).toContainEqual(
-              expect.objectContaining({
-                type: "REASONING_MESSAGE_CONTENT",
-                delta: "Compare the values.",
-              }),
-            );
-            expect(events).toContainEqual(
-              expect.objectContaining({ type: "TEXT_MESSAGE_CONTENT", delta: "The answer is 42." }),
-            );
-            // A bound run's durable log refuses lifecycle events named after another run.
-            expect(
-              new Set(
-                events.flatMap((event) =>
-                  event.type === "RUN_STARTED" || event.type === "RUN_FINISHED"
-                    ? [event.runId]
-                    : [],
-                ),
-              ),
-            ).toEqual(new Set(["reasoning-run"]));
-            const response = yield* sdkCall(() =>
-              reconstructChat(persistence, new Request("http://localhost/chat?threadId=reasoning")),
-            );
-            const restored = yield* sdkCall(() => response.json());
-            expect(jsonStringify(restored)).toContain('"type":"thinking"');
-            expect(jsonStringify(restored)).toContain("Compare the values.");
-            expect(jsonStringify(restored)).toContain("The answer is 42.");
-          } finally {
-            adapter.releaseRun?.();
-            sqlite.close();
-          }
         }),
       ),
   );
@@ -1033,72 +849,26 @@ describe("OpenAI compatible settings", () => {
             Effect.fail(new Cause.UnknownError(new Error("must not reach network"))),
           ),
         });
-        const adapter = (yield* api.runtime).adapter({
-          provider: "openai-compatible",
-          model: configuration.model,
-          reasoningEffort: "default",
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        const consumed = yield* Effect.forkChild(
-          Stream.runForEach(
-            Stream.fromAsyncIterable(
-              adapter.chatStream({
-                threadId: "thread",
-                logger: resolveDebugOption(false),
+        const runtime = yield* api.runtime;
+        const making = yield* Effect.forkChild(
+          Effect.scoped(
+            runtime.model(
+              {
+                provider: "openai-compatible",
                 model: configuration.model,
-                messages: [{ role: "user", content: "hi" }],
-              }),
-              (cause) => new Cause.UnknownError(cause),
+                reasoningEffort: "default",
+              },
+              run,
             ),
-            (_chunk) =>
-              Effect.sync(() => {
-                /* drain */
-              }),
           ),
           { startImmediately: true },
         );
-        adapter.releaseRun?.();
-        expect(yield* Fiber.join(consumed).pipe(Effect.timeout("1 second"))).toBeUndefined();
-      }),
-    ),
-  );
-  effectTest.live("releaseRun aborts an in-flight compatible SDK request", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const requested = yield* Deferred.make<void>();
-        let signal: AbortSignal | undefined;
-        const f = fixture(
-          stalledFetch((observed) => {
-            signal = observed;
-            void nativeEffect(Deferred.succeed(requested, undefined));
-          }),
-        );
-        yield* f.api.update(configuration);
-        const adapter = (yield* f.api.runtime).adapter({
-          provider: "openai-compatible",
-          model: configuration.model,
-          reasoningEffort: "default",
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        const iterator = adapter
-          .chatStream({
-            threadId: "thread",
-            logger: resolveDebugOption(false),
-            model: configuration.model,
-            messages: [{ role: "user", content: "hi" }],
-          })
-          [Symbol.asyncIterator]();
-        const result = iterator.next();
-        yield* Deferred.await(requested);
-        adapter.releaseRun?.();
-        expect(signal?.aborted).toBe(true);
-        yield* sdkCall(() => result);
-        yield* sdkCall(() => iterator.return?.());
+        yield* Fiber.interrupt(making).pipe(Effect.timeout("1 second"));
       }),
     ),
   );
   effectTest.live(
-    "pins endpoint, model, key, and budget to an adapter across later settings edits",
+    "pins endpoint, model, key, and budget to a run's model across later settings edits",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1120,14 +890,11 @@ describe("OpenAI compatible settings", () => {
               ),
             },
             fetcher: nativeFetch((url, init) =>
-              Effect.sync(() => {
+              Effect.map(requestText(init), (body) => {
                 observed.push({
                   url: url instanceof Request ? url.url : url instanceof URL ? url.href : url,
                   authorization: new Headers(init?.headers).get("authorization"),
-                  body: EffectFunction.flow(
-                    Schema.decodeUnknownResult(Schema.String),
-                    Result.getOrThrow,
-                  )(init?.body ?? "{}"),
+                  body,
                 });
                 return new Response(
                   'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
@@ -1137,34 +904,21 @@ describe("OpenAI compatible settings", () => {
             ),
           });
           yield* api.update({ ...configuration, apiKey: "first" });
-          const adapter = (yield* api.runtime).adapter({
-            provider: "openai-compatible",
-            model: configuration.model,
-            reasoningEffort: "default",
-          });
-          yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
+          const { model } = yield* (yield* api.runtime).model(
+            {
+              provider: "openai-compatible",
+              model: configuration.model,
+              reasoningEffort: "default",
+            },
+            run,
+          );
           yield* api.update({
             ...configuration,
             baseUrl: "http://127.0.0.1:9876/v1",
             outputBudget: 128,
             apiKey: "second",
           });
-          yield* Stream.runForEach(
-            Stream.fromAsyncIterable(
-              adapter.chatStream({
-                threadId: "thread",
-                logger: resolveDebugOption(false),
-                model: configuration.model,
-                messages: [{ role: "user", content: "hi" }],
-              }),
-              (cause) => new Cause.UnknownError(cause),
-            ),
-            (_chunk) =>
-              Effect.sync(() => {
-                /* consume */
-              }),
-          );
-          adapter.releaseRun?.();
+          yield* model.generateText({ prompt: "hi" });
           expect(observed).toHaveLength(1);
           expect(observed[0]?.url).toContain("127.0.0.1:1234/v1/chat/completions");
           expect(observed[0]?.authorization).toBe("Bearer first");
@@ -1245,44 +999,37 @@ describe("OpenAI compatible settings", () => {
             yield* f.api.update(settings);
             expect(yield* f.api.listModels).toEqual(["discovered"]);
             const selection = yield* f.api.services.models.select(configuration.model);
-            const tool = {
-              name: "lookup",
-              description: "Lookup",
-              inputSchema: {
-                type: "object",
-                properties: { glob: { type: "string" } },
-                additionalProperties: false,
-              },
-            };
-            const consume = () =>
-              Effect.gen(function* () {
-                const chunks = yield* Stream.runCollect(
-                  Stream.fromAsyncIterable(
-                    (yield* f.api.runtime).adapter(selection).chatStream({
-                      threadId: "thread",
-                      logger: resolveDebugOption(false),
-                      model: configuration.model,
-                      messages: [{ role: "user", content: "hello" }],
-                      tools: [tool],
-                    }),
-                    (cause) => new Cause.UnknownError(cause),
-                  ),
-                );
-                return chunks;
-              });
-            const toolChunks = yield* consume();
-            expect(toolChunks).toContainEqual(
-              expect.objectContaining({
-                type: "TOOL_CALL_START",
-                toolCallId: "call_lookup",
-                toolCallName: "lookup",
+            const toolkit = Toolkit.make(
+              Tool.dynamic("lookup", {
+                description: "Lookup",
+                parameters: {
+                  type: "object",
+                  properties: { glob: { type: "string" } },
+                  additionalProperties: false,
+                },
               }),
             );
-            expect(toolChunks).toContainEqual(
-              expect.objectContaining({ type: "TOOL_CALL_END", toolCallId: "call_lookup" }),
+            // The parts of a run's model, with tool calls left for the caller as the loop leaves them.
+            const consume = (prompt: string) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const { model } = yield* (yield* f.api.runtime).model(selection, run);
+                  return yield* Stream.runCollect(
+                    model.streamText({
+                      prompt,
+                      toolkit,
+                      disableToolCallResolution: true,
+                      toolCallValidation: "deferred",
+                    }),
+                  );
+                }),
+              );
+            const toolParts = yield* consume("hello");
+            expect(toolParts).toContainEqual(
+              expect.objectContaining({ type: "tool-call", id: "call_lookup", name: "lookup" }),
             );
-            expect(toolChunks).toContainEqual(
-              expect.objectContaining({ type: "RUN_FINISHED", finishReason: "tool_calls" }),
+            expect(toolParts).toContainEqual(
+              expect.objectContaining({ type: "finish", reason: "tool-calls" }),
             );
             expect(requests.at(-1)?.path).toBe("/v1/chat/completions");
             expect(requests.at(-1)?.body.max_tokens).toBe(512);
@@ -1302,31 +1049,17 @@ describe("OpenAI compatible settings", () => {
             ]);
             expect(requests.at(-1)?.authorization).toBeUndefined();
             yield* f.api.update({ ...settings, toolCalling: false });
-            yield* consume();
+            yield* consume("hello");
             expect(requests.at(-1)?.body.tools).toBeUndefined();
             // No output limit: the server's own limit applies and no input room is reserved.
             yield* f.api.update({ ...settings, toolCalling: false, outputBudget: null });
-            yield* consume();
+            yield* consume("hello");
             expect(requests.at(-1)?.body.max_tokens).toBeUndefined();
             expect((yield* f.api.runtime).contextWindow(configuration.model)).toBe(
               configuration.contextWindow,
             );
-            const adapter = (yield* f.api.runtime).adapter(selection);
-            yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
             const before = requests.length;
-
-            const chunks = yield* Stream.runCollect(
-              Stream.fromAsyncIterable(
-                adapter.chatStream({
-                  threadId: "thread",
-                  logger: resolveDebugOption(false),
-                  model: configuration.model,
-                  messages: [{ role: "user", content: "x".repeat(100_000) }],
-                }),
-                (cause) => new Cause.UnknownError(cause),
-              ),
-            );
-            expect(chunks.some((chunk) => chunk.type === "RUN_ERROR")).toBe(true);
+            yield* Effect.flip(consume("x".repeat(100_000)));
             expect(requests.length).toBe(before);
           }
         }),

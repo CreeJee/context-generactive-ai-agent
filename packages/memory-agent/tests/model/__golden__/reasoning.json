@@ -1,0 +1,69 @@
+[
+  {
+    "name": "an OpenAI summary and its encrypted reasoning",
+    "history": [
+      {
+        "role": "assistant",
+        "content": "Answer.",
+        "thinking": [
+          {
+            "content": "Checking details",
+            "signature": "openai-reasoning:eyJpZCI6InJzLTEiLCJlbmNyeXB0ZWRDb250ZW50Ijoib3BhcXVlLWRvLW5vdC1kaXNwbGF5In0"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "OpenAI summaries in parts",
+    "history": [
+      {
+        "role": "assistant",
+        "content": "Answer.",
+        "thinking": [
+          {
+            "content": "First."
+          },
+          {
+            "content": "Second.",
+            "signature": "openai-reasoning:eyJpZCI6InJzLTEiLCJlbmNyeXB0ZWRDb250ZW50Ijoib3BhcXVlIn0"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "OpenAI encrypted reasoning without a summary",
+    "history": [
+      {
+        "role": "assistant",
+        "content": "Answer.",
+        "thinking": [
+          {
+            "content": "",
+            "signature": "openai-reasoning:eyJpZCI6InJzLTEiLCJlbmNyeXB0ZWRDb250ZW50Ijoib3BhcXVlIn0"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Anthropic thinking blocks and their signatures",
+    "history": [
+      {
+        "role": "assistant",
+        "content": "Answer.",
+        "thinking": [
+          {
+            "content": "Thinking.",
+            "signature": "signed-1"
+          },
+          {
+            "content": "More.",
+            "signature": "signed-2"
+          }
+        ]
+      }
+    ]
+  }
+]

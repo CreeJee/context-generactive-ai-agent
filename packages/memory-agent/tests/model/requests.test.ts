@@ -5,19 +5,13 @@ import { describe, expect } from "vite-plus/test";
 import { StoredMessage } from "../../src/chat-store/schema.ts";
 import { JsonValue } from "../../src/json.ts";
 import { fromPrompt, toPrompt } from "../../src/model/prompt.ts";
-import {
-  asTanStack,
-  matchGolden,
-  next,
-  requestBodies,
-  requestDifferences,
-  system,
-} from "../support/requests.ts";
+import { matchGolden, next, requestBodies, system } from "../support/requests.ts";
 
 /**
- * The Effect AI model sends what the TanStack adapter sent for every stored conversation, and its
- * prompt holds the stored messages without loss (docs/effect-ai-migration.md step 2). The golden
- * conversations give the shapes the app writes; the cases below give the ones replay rewrites.
+ * The Effect AI model sends what the TanStack adapter sent for every stored conversation, as the
+ * golden requests keep it, and its prompt holds the stored messages without loss
+ * (docs/effect-ai-migration.md step 2). The golden conversations give the shapes the app writes;
+ * the cases below give the ones replay rewrites.
  */
 
 const Thread = Schema.Struct({ thread_id: Schema.String, messages: Schema.Array(StoredMessage) });
@@ -246,24 +240,6 @@ describe("Effect AI subscription and compatible models", () => {
           system: [system],
           history,
         });
-    }),
-  );
-
-  it.effect("sends the request the TanStack adapter sent", () =>
-    Effect.gen(function* () {
-      for (const { name, history } of yield* allHistories) {
-        const continued = [...history, next];
-        const differences = yield* requestDifferences({
-          threadId: "thread-1",
-          tanstack: continued.map(asTanStack),
-          stored: continued,
-        });
-        expect(differences, name).toStrictEqual([
-          { provider: "anthropic", difference: undefined },
-          { provider: "openai", difference: undefined },
-          { provider: "openai-compatible", difference: undefined },
-        ]);
-      }
     }),
   );
 

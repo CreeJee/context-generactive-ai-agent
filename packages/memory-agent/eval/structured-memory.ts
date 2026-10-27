@@ -22,7 +22,8 @@ import {
   createSubscriptionOAuthClient,
 } from "../src/oauth/validation-harness.ts";
 import { ModelSelection } from "../src/providers/contracts.ts";
-import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
+import { toPrompt } from "../src/model/prompt.ts";
+import { subscriptionBody } from "../src/model/subscription.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
@@ -193,14 +194,12 @@ const program = Effect.gen(function* () {
               : "";
           const content = `${questionTime}Question: ${fixture.question}\nMemory tool results:\n${contextText}`;
           const request = yield* Schema.decodeEffect(wire)(
-            subscriptionRequest({
+            subscriptionBody({
               provider: "anthropic",
               selection,
-              options: {
-                messages: [{ role: "user", content }],
-                systemPrompts: [system],
-                promptCache: { retention: "none" },
-              },
+              prompt: toPrompt([{ role: "user", content }], [system]),
+              tools: [],
+              promptCache: { retention: "none" },
             }),
           );
           const body = yield* Schema.encodeEffect(wire)({ ...request, max_tokens: outputLimit });

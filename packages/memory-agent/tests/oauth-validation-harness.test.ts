@@ -42,7 +42,8 @@ import {
   type OAuthProvider,
   type ProviderProtocol,
 } from "../src/oauth/protocol.ts";
-import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
+import { toPrompt } from "../src/model/prompt.ts";
+import { subscriptionBody } from "../src/model/subscription.ts";
 
 class MemoryCredentialStore implements CredentialStore {
   readonly values = MutableHashMap.empty<OAuthProvider, StoredCredential>();
@@ -841,10 +842,12 @@ for (const provider of ["openai", "anthropic"] as const) {
               yield* Stream.runDrain(
                 Stream.fromAsyncIterable(
                   harness.stream(
-                    subscriptionRequest({
+                    subscriptionBody({
                       provider,
                       selection: { provider, model, reasoningEffort: "high" },
-                      options: { messages: [{ role: "user", content: "hi" }] },
+                      prompt: toPrompt([{ role: "user", content: "hi" }], []),
+                      tools: [],
+                      promptCache: undefined,
                     }),
                   ),
                   (cause) => new Cause.UnknownError(cause),
