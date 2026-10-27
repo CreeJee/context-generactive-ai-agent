@@ -4,7 +4,7 @@ import { asRunFailed, type RunHook } from "../loop/run.ts";
 import type { Attachment, AttachmentsApi } from "./attachments.ts";
 import { attachmentIdOf } from "./urls.ts";
 
-type ImageAttachments = Pick<AttachmentsApi, "get" | "forModelEffect" | "dataUrlEffect">;
+type ImageAttachments = Pick<AttachmentsApi, "get" | "forModel" | "dataUrl">;
 
 interface Part {
   readonly type: string;
@@ -40,9 +40,9 @@ const inlineImage = Effect.fn("modelImages.inlineImage")(function* (
   attachments: ImageAttachments,
   attachment: Attachment,
 ) {
-  const image = yield* attachments.forModelEffect(attachment);
+  const image = yield* attachments.forModel(attachment);
   const prefix = `data:${image.mimeType};base64,`;
-  const dataUrl = yield* attachments.dataUrlEffect(image);
+  const dataUrl = yield* attachments.dataUrl(image);
   return {
     type: "image" as const,
     source: {

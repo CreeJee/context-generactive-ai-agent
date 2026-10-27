@@ -113,9 +113,9 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         (yield* attachments.forNode(node.id)).map((attachment) => attachment.mimeType),
       ).toEqual(["image/png", "image/gif"]);
       const stored = attachments.pathOf(first);
-      expect(
-        yield* sdk(() => attachments.dataUrl({ path: stored, mimeType: first.mimeType })),
-      ).toBe(`data:image/png;base64,${tinyPng.toString("base64")}`);
+      expect(yield* attachments.dataUrl({ path: stored, mimeType: first.mimeType })).toBe(
+        `data:image/png;base64,${tinyPng.toString("base64")}`,
+      );
       expect(stored.startsWith(path.join(storage, "attachments"))).toBe(true);
       expect(Buffer.from(yield* fs.readFile(stored))).toEqual(tinyPng);
     }),
@@ -148,10 +148,10 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         const attachments = yield* Attachments;
         const png = yield* attachments.save(screenshot);
         const animated = yield* attachments.save(gif);
-        const image = yield* sdk(() => attachments.forModel(png));
+        const image = yield* attachments.forModel(png);
         expect(image.mimeType).toBe("image/webp");
         expect(image.path.endsWith(`${png.id}.model.webp`)).toBe(true);
-        expect(yield* sdk(() => attachments.forModel(png))).toEqual(image);
+        expect(yield* attachments.forModel(png)).toEqual(image);
         const size = yield* sdk(() => sharp(image.path).metadata());
         expect([size.width, size.height]).toEqual([
           modelImageEdge,
@@ -160,10 +160,10 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         const bytes = Number((yield* fs.stat(image.path)).size);
         expect(bytes).toBeLessThanOrEqual(maxModelImageBytes);
         expect(bytes).toBeLessThan(png.bytes);
-        expect(
-          (yield* sdk(() => attachments.dataUrl(image))).startsWith("data:image/webp;base64,"),
-        ).toBe(true);
-        expect(yield* sdk(() => attachments.forModel(animated))).toEqual({
+        expect((yield* attachments.dataUrl(image)).startsWith("data:image/webp;base64,")).toBe(
+          true,
+        );
+        expect(yield* attachments.forModel(animated)).toEqual({
           path: attachments.pathOf(animated),
           mimeType: "image/gif",
         });
@@ -186,7 +186,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         );
         const attachments = yield* Attachments;
         const png = yield* attachments.save(pattern);
-        expect(yield* sdk(() => attachments.forModel(png))).toEqual({
+        expect(yield* attachments.forModel(png)).toEqual({
           path: attachments.pathOf(png),
           mimeType: "image/png",
         });

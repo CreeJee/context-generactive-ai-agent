@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import { DateTime, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -244,20 +244,6 @@ describe("Work Trace durable stream source", () => {
         yield* Fiber.interrupt(waiting);
         const exit = yield* Fiber.await(waiting);
         expect(Exit.hasInterrupts(exit)).toBe(true);
-      }),
-    ),
-  );
-
-  it.live("preserves the native aborted-wait contract", () =>
-    run(
-      Effect.gen(function* () {
-        yield* seed();
-        const trace = yield* WorkTraceStore;
-        const signalScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-        const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, signalScope);
-        const waiting = trace.waitForChange("s1", 0, signal, 1_000);
-        yield* Scope.close(signalScope, Exit.void);
-        expect(yield* Effect.promise(() => waiting)).toBe("aborted");
       }),
     ),
   );

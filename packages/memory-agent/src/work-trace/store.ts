@@ -4,9 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
-  Cause,
   Deferred,
-  Exit,
   MutableHashMap,
   MutableHashSet,
   DateTime,
@@ -652,7 +650,6 @@ const notificationForAttempt = {
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
-  const runPromiseExit = Effect.runPromiseExitWith(yield* Effect.context());
 
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
@@ -2290,21 +2287,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /** Native stream/SDK compatibility boundary; interruption alone means an aborted wait. */
-  const waitForChange = (
-    sessionId: string,
-    afterCursor: number,
-    signal: AbortSignal,
-    heartbeatMs = 15_000,
-  ): Promise<"event" | "progress" | "heartbeat" | "aborted"> =>
-    runPromiseExit(waitForChangeEffect({ sessionId, afterCursor, heartbeatMs }), { signal }).then(
-      (exit) => {
-        if (Exit.isSuccess(exit)) return exit.value;
-        if (Cause.hasInterruptsOnly(exit.cause)) return "aborted";
-        throw Cause.squash(exit.cause);
-      },
-    );
-
   const attemptHandle = (taskId: string, attemptId: string) =>
     Effect.gen(function* () {
       const row = yield* first(sql`SELECT * FROM agent_run_attempts
@@ -2414,7 +2396,6 @@ const make = Effect.gen(function* () {
     snapshot,
     latestCursor,
     projectLatestCursor,
-    waitForChange,
     waitForChangeEffect,
     snapshotEffect,
     attemptHandle,

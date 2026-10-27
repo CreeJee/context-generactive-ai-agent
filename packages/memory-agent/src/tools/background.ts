@@ -403,10 +403,7 @@ const make = Effect.gen(function* () {
         const cursor = yield* traceEffect(trace.latestCursor(sessionId));
         const result = Option.fromNullishOr(yield* readResult(sessionId, taskId));
         yield* Effect.when(
-          Effect.tryPromise({
-            try: (signal) => trace.waitForChange(sessionId, cursor, signal),
-            catch: (cause) => BackgroundOperationFailed.make({ cause }),
-          }),
+          traceEffect(trace.waitForChangeEffect({ sessionId, afterCursor: cursor })),
           Effect.succeed(Option.isNone(result)),
         );
         return result;

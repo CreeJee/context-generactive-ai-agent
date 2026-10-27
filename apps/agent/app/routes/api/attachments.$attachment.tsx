@@ -23,16 +23,14 @@ export function loader({ request, params }: Route.LoaderArgs) {
         return Response.json({ error: "cross_site_request" }, { status: 403 });
 
       const found = yield* Effect.flatMap(Attachments, (attachments) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         Effect.gen(function* () {
           const attachment = yield* attachments.get(params.attachment);
           return isTruthy(attachment)
             ? {
                 attachment,
-                bytes: yield* Effect.tryPromise({
-                  try: () => attachments.read(attachment),
-                  catch: () => AttachmentUnreadable.make({}),
-                }),
+                bytes: yield* attachments
+                  .read(attachment)
+                  .pipe(Effect.mapError(() => AttachmentUnreadable.make({}))),
               }
             : null;
         }),

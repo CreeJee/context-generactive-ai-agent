@@ -116,7 +116,6 @@ const extensions = {
 
 const make = Effect.gen(function* () {
   const conversionScope = yield* Scope.Scope;
-  const run = Effect.runPromiseWith(yield* Effect.context());
   const sql = yield* SqlClient.SqlClient;
   const storage = yield* StorageRoot;
   const fs = yield* FileSystem.FileSystem;
@@ -290,10 +289,9 @@ const make = Effect.gen(function* () {
         ),
     });
   }, conversionLock.withPermits(1));
-  const forModelEffect = (attachment: Attachment) =>
+  const forModel = (attachment: Attachment) =>
     Effect.flatMap(conversionFor(attachment), Fiber.join);
-  const forModel = (attachment: Attachment): Promise<ModelImage> => run(forModelEffect(attachment));
-  const dataUrlEffect = (image: ModelImage) =>
+  const dataUrl = (image: ModelImage) =>
     fileIo("convert", fs.readFile(image.path)).pipe(
       Effect.map(
         (bytes) => `data:${image.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
@@ -385,16 +383,13 @@ const make = Effect.gen(function* () {
     pathOf: fileOf,
 
     read: (attachment: Attachment) =>
-      run(fs.readFile(fileOf(attachment)).pipe(Effect.map((bytes) => Buffer.from(bytes)))),
+      fs.readFile(fileOf(attachment)).pipe(Effect.map((bytes) => Buffer.from(bytes))),
 
     /** Model derivative, eagerly made on upload with a lazy fallback for pre-existing files. */
     forModel,
-    forModelEffect,
-    dataUrlEffect,
 
     /** `data:` URL of an image file, for replaying earlier turns to the model. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    dataUrl: (image: ModelImage) => run(dataUrlEffect(image)),
+    dataUrl,
 
     /** Records the images a message carried, in order. */
     link: (nodeId: string, attachments: readonly Attachment[]) =>
