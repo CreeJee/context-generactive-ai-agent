@@ -47,10 +47,8 @@ const Link = Schema.Struct({
 });
 const Labelled = Schema.Struct({
   id: Schema.String,
-  topics: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
-  ),
-  links: Schema.Array(Link).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => []))),
+  topics: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
+  links: Schema.Array(Link).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
 });
 const decodeAnswer = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ statements: Schema.Array(Labelled) })),

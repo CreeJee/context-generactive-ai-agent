@@ -19,9 +19,9 @@ export const projectAgentsFile = (projectRoot: string) =>
 /** An ACP agent the app starts and talks to over stdin/stdout, like Zed's `agent_servers`. */
 export const AgentCommand = Schema.Struct({
   command: Schema.NonEmptyString,
-  args: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => []))),
+  args: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
   env: Schema.Record(Schema.String, Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => ({}))),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed({})),
   ),
 });
 export type AgentCommand = typeof AgentCommand.Type;

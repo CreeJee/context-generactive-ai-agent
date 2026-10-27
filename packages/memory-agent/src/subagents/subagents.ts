@@ -237,7 +237,7 @@ const AdoptSubagentReportsInput = Schema.Struct({
     }),
   ),
   reflectedNotificationIds: Schema.Array(Schema.String)
-    .pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])))
+    .pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([])))
     .annotate({
       description: "Delivered status notification ids.",
     }),

@@ -1,14 +1,16 @@
 import {
+  Array as Arr,
+  Chunk,
   Clock,
   Duration,
   Effect,
+  HashMap,
   Match,
-  MutableHashMap,
-  MutableRef,
   Option,
   Schema,
   Stream,
   SubscriptionRef,
+  SynchronizedRef,
 } from "effect";
 import type { AgUiEvent } from "./chunks.ts";
 
@@ -55,16 +57,13 @@ const finishedLogTtl = Duration.minutes(5);
 const maxLogs = 1024;
 
 interface LogState {
-  readonly count: number;
-  readonly closed: boolean;
+  /** Appended only, so a reader slices what its last count left out. */
+  readonly events: Chunk.Chunk<AgUiEvent>;
+  /** When the log closed. A closed log refuses appends. */
+  readonly closedAt: Option.Option<number>;
 }
 
-interface MemoryLog {
-  /** Appended only, so a reader slices what its last count left out. */
-  readonly events: Array<AgUiEvent>;
-  readonly state: SubscriptionRef.SubscriptionRef<LogState>;
-  readonly closedAt: MutableRef.MutableRef<Option.Option<number>>;
-}
+type MemoryLog = SubscriptionRef.SubscriptionRef<LogState>;
 
 const memoryOffset = (runId: string, seq: number) =>
   `memory:v1:${encodeURIComponent(runId)}:${seq}`;
@@ -82,16 +81,18 @@ const memorySeq = (runId: string, offset: string): Option.Option<number> => {
  * The logs of the runs this process produces, in memory. A run's log is gone with the process; a
  * page that rejoins after a restart reads the run's saved transcript instead.
  */
-export const memoryRunLogs = Effect.sync(() => {
-  const logs = MutableHashMap.empty<string, MemoryLog>();
+export const memoryRunLogs = Effect.gen(function* () {
+  const logs = yield* SynchronizedRef.make(HashMap.empty<string, MemoryLog>());
 
   /** Drops finished logs past their time, then the oldest finished ones over the limit. */
-  const sweep = (now: number) => {
-    const finished = Array.from(logs).flatMap(([runId, log]) =>
-      Option.match(MutableRef.get(log.closedAt), {
-        onNone: () => [],
-        onSome: (closedAt) => [{ runId, closedAt }],
-      }),
+  const sweep = Effect.fnUntraced(function* (all: HashMap.HashMap<string, MemoryLog>) {
+    const now = yield* Clock.currentTimeMillis;
+    const finished = Arr.getSomes(
+      yield* Effect.forEach(all, ([runId, log]) =>
+        Effect.map(SubscriptionRef.get(log), ({ closedAt }) =>
+          Option.map(closedAt, (at) => ({ runId, closedAt: at })),
+        ),
+      ),
     );
     const expired = finished.filter(
       ({ closedAt }) => now - closedAt > Duration.toMillis(finishedLogTtl),
@@ -99,25 +100,25 @@ export const memoryRunLogs = Effect.sync(() => {
     const kept = finished
       .filter((entry) => !expired.includes(entry))
       .toSorted((left, right) => left.closedAt - right.closedAt);
-    const over = Math.max(0, MutableHashMap.size(logs) - expired.length - maxLogs);
-    [...expired, ...kept.slice(0, over)].forEach(({ runId }) => MutableHashMap.remove(logs, runId));
-  };
+    const over = Math.max(0, HashMap.size(all) - expired.length - maxLogs);
+    return HashMap.removeMany(
+      all,
+      [...expired, ...kept.slice(0, over)].map(({ runId }) => runId),
+    );
+  });
 
   // Looked up when it runs: a log's `close` is made before its first append makes the log.
   const logOf = (runId: string) =>
-    Effect.suspend(() =>
-      Option.match(MutableHashMap.get(logs, runId), {
-        onSome: Effect.succeed,
+    SynchronizedRef.modifyEffect(logs, (all) =>
+      Option.match(HashMap.get(all, runId), {
+        onSome: (log) => Effect.succeed([log, all] as const),
         onNone: () =>
           Effect.gen(function* () {
-            sweep(yield* Clock.currentTimeMillis);
-            const log: MemoryLog = {
-              events: [],
-              state: yield* SubscriptionRef.make<LogState>({ count: 0, closed: false }),
-              closedAt: MutableRef.make(Option.none()),
-            };
-            MutableHashMap.set(logs, runId, log);
-            return log;
+            const log = yield* SubscriptionRef.make<LogState>({
+              events: Chunk.empty(),
+              closedAt: Option.none(),
+            });
+            return [log, HashMap.set(yield* sweep(all), runId, log)] as const;
           }),
       }),
     );
@@ -142,34 +143,31 @@ export const memoryRunLogs = Effect.sync(() => {
   const of = (runId: string): RunLog => ({
     append: (event) =>
       Effect.flatMap(logOf(runId), (log) =>
-        SubscriptionRef.modifyEffect(log.state, (state) =>
-          state.closed
+        SubscriptionRef.updateEffect(log, (state) =>
+          Option.isSome(state.closedAt)
             ? Effect.fail(RunLogFailed.make({ reason: "closed" }))
-            : Effect.sync(() => {
-                log.events.push(event);
-                return [undefined, { ...state, count: log.events.length }] as const;
-              }),
+            : Effect.succeed({ ...state, events: Chunk.append(state.events, event) }),
         ),
       ),
     read: (offset) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const log = yield* Effect.fromOption(MutableHashMap.get(logs, runId)).pipe(
-            Effect.mapError(() => RunLogFailed.make({ reason: "unknown_run" })),
-          );
+          const log = yield* Effect.flatMap(SynchronizedRef.get(logs), (all) =>
+            Effect.fromOption(HashMap.get(all, runId)),
+          ).pipe(Effect.mapError(() => RunLogFailed.make({ reason: "unknown_run" })));
           const after = yield* skipped(
             runId,
             offset,
-            (yield* SubscriptionRef.get(log.state)).count,
+            Chunk.size((yield* SubscriptionRef.get(log)).events),
           );
           // The current state comes first, then each change; the closing one is read too.
-          return SubscriptionRef.changes(log.state).pipe(
-            Stream.takeUntil(({ closed }) => closed),
+          return SubscriptionRef.changes(log).pipe(
+            Stream.takeUntil(({ closedAt }) => Option.isSome(closedAt)),
             Stream.mapAccum(
               () => after,
-              (read, { count }) => [
-                Math.max(read, count),
-                log.events.slice(read, count).map((event, index) => ({
+              (read, { events }) => [
+                Math.max(read, Chunk.size(events)),
+                Chunk.toReadonlyArray(Chunk.drop(events, read)).map((event, index) => ({
                   offset: memoryOffset(runId, read + index + 1),
                   event,
                 })),
@@ -180,13 +178,10 @@ export const memoryRunLogs = Effect.sync(() => {
       ),
     close: Effect.flatMap(logOf(runId), (log) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        SubscriptionRef.update(log.state, (state) => {
-          MutableRef.update(
-            log.closedAt,
-            Option.orElseSome(() => now),
-          );
-          return { ...state, closed: true };
-        }),
+        SubscriptionRef.update(log, (state) => ({
+          ...state,
+          closedAt: Option.orElseSome(state.closedAt, () => now),
+        })),
       ),
     ),
   });

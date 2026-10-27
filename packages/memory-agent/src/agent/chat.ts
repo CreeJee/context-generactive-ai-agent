@@ -5,8 +5,8 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
   Array as EffectArray,
+  HashMap,
   HashSet,
-  MutableHashMap,
   MutableHashSet,
   DateTime,
   Predicate,
@@ -638,15 +638,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // second workflow execution for a run.
   const goalExecutionOwnerGeneration = yield* crypto.randomUUIDv4();
   /** The answer a steered message may cut, per session, while an app-run model answers. */
-  const steerCuts = MutableHashMap.empty<string, SteerCut>();
+  const steerCuts = yield* Ref.make(HashMap.empty<string, SteerCut>());
   /** Lets go of a run's cut, unless a later run of the session already holds its own. */
   const stopSteering = (sessionId: string, steer: SteerCut) =>
-    Effect.when(
-      Effect.sync(() => MutableHashMap.remove(steerCuts, sessionId)),
-      Effect.sync(() =>
-        Option.exists(MutableHashMap.get(steerCuts, sessionId), (held) => held === steer),
-      ),
-    ).pipe(Effect.asVoid);
+    Ref.update(steerCuts, (cuts) =>
+      Option.exists(HashMap.get(cuts, sessionId), (held) => held === steer)
+        ? HashMap.remove(cuts, sessionId)
+        : cuts,
+    );
 
   const notificationWakeups = yield* Queue.unbounded<string>();
   const serializeNotification = yield* keyedSerialLimit();
@@ -675,7 +674,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // messages, and read-only pages hear the session is free so one can take over.
   leases.onExpired((sessionId) =>
     Effect.gen(function* () {
-      if (!isTruthy(liveRuns.get(sessionId))) yield* queue.holdWaiting(sessionId, "pageLeft");
+      if (!isTruthy(yield* liveRuns.get(sessionId)))
+        yield* queue.holdWaiting(sessionId, "pageLeft");
       yield* events.publishSession(sessionId, "queue");
       yield* events.publishSession(sessionId, "run-state");
     }).pipe(
@@ -1088,7 +1088,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       yield* execution.stop(sessionId);
       yield* workTrace.holdParentNotifications(sessionId);
       yield* background.stopSession(sessionId);
-      const parent = liveRuns.get(sessionId);
+      const parent = yield* liveRuns.get(sessionId);
       if (isTruthy(parent)) {
         // Archiving or deleting the session cancels its run, as the user's cancel does.
         yield* parent.cancel;
@@ -1326,7 +1326,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (reportSource !== null && external !== null)
           return refused({ error: "report_requires_local_model" });
         // One run at a time per session: a second would race the first for persisted chat state.
-        const live = liveRuns.get(sessionId);
+        const live = yield* liveRuns.get(sessionId);
         if (isTruthy(live)) return refused({ error: "run_in_progress", runId: live.runId });
         // A process may exit after persistence commits a completed run but before its
         // asynchronous end callback applies a queued Goal. Recover only terminal runs;
@@ -1570,15 +1570,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Stream.provideService(RunStore, runStore),
             Stream.provideService(Crypto.Crypto, crypto),
           );
-          const claim = yield* liveRuns.claim(
+          const claim = yield* liveRuns.claim({
             sessionId,
             runId,
-            abortController,
-            undefined,
-            cancellation.release,
-            Effect.sync(() => abortController.abort(cancelRequested)),
-            settleQueue(sessionId, runId),
-          );
+            controller: abortController,
+            releaseResources: cancellation.release,
+            cancelExecution: Effect.sync(() => abortController.abort(cancelRequested)),
+            settle: settleQueue(sessionId, runId),
+          });
           if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
           yield* Effect.when(
@@ -2175,7 +2174,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             .pipe(
               fallbackLogged("Provider retry wait failed", () => ProviderRetryOutcome.Exhausted()),
             );
-        const cuttable = steerCuttableModel(
+        const cuttable = yield* steerCuttableModel(
           goalRun ? unsentRetried(runModel.model, sentAgain) : runModel.model,
         );
         const restore = yield* modelHandoffHistoryEffect({
@@ -2271,17 +2270,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Stream.provideService(RunStore, runStore),
           Stream.provideService(Crypto.Crypto, crypto),
         );
-        const claim = yield* liveRuns.claim(
+        const claim = yield* liveRuns.claim({
           sessionId,
           runId,
-          abortController,
-          undefined,
-          cancellation.release,
+          controller: abortController,
+          releaseResources: cancellation.release,
           // The loop ends a cancelled run itself, so a cancel only aborts it and the page still
           // hears how the run ended.
-          Effect.sync(() => abortController.abort(cancelRequested)),
-          settleQueue(sessionId, runId),
-        );
+          cancelExecution: Effect.sync(() => abortController.abort(cancelRequested)),
+          settle: settleQueue(sessionId, runId),
+        });
         if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
         cancellationToRelease = cancellation.cancel.pipe(
           Effect.ensuring(claim.release),
@@ -2289,7 +2287,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         // A Goal run's answer is never cut: stopping it early would end the Goal step.
         yield* Effect.when(
-          Effect.sync(() => MutableHashMap.set(steerCuts, sessionId, cuttable.steer)),
+          Ref.update(steerCuts, HashMap.set(sessionId, cuttable.steer)),
           Effect.succeed(!goalRun),
         );
         stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
@@ -2354,7 +2352,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
         yield* events.publishSession(sessionId, "run-state");
-        const live = liveRuns.get(sessionId);
+        const live = yield* liveRuns.get(sessionId);
         if (!isTruthy(live)) {
           const children =
             (yield* subagents.list(sessionId)).some((child) => child.status === "running") ||
@@ -2405,7 +2403,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (!leases.permits(sessionId, holder)) return inUse();
-        if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
+        if (isTruthy(yield* liveRuns.get(sessionId)) || background.hasSession(sessionId))
           return json(409, { error: "run_in_progress" });
         const result = yield* uncertain.acknowledge(sessionId, input.runIds);
         return yield* UncertainContinue.$match(result, {
@@ -2423,7 +2421,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
-        if (isTruthy(liveRuns.get(sessionId))) return json(409, { error: "run_in_progress" });
+        if (isTruthy(yield* liveRuns.get(sessionId)))
+          return json(409, { error: "run_in_progress" });
         const discarded = yield* runStore.discardPendingInterrupts(sessionId);
         const workflow = yield* workflows.get(sessionId);
         yield* workflows.finishRun(sessionId, workflow.phase);
@@ -2439,7 +2438,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
-        if (isTruthy(liveRuns.get(sessionId))) return json(409, { error: "run_in_progress" });
+        if (isTruthy(yield* liveRuns.get(sessionId)))
+          return json(409, { error: "run_in_progress" });
         const budget = budgetFor((yield* windowFor(yield* active.selected)).tokens);
         const result: CompactResult = yield* compactByHand(
           runStore.chatMetadata,
@@ -2464,7 +2464,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     status: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        const live = liveRuns.get(sessionId);
+        const live = yield* liveRuns.get(sessionId);
         const last = yield* lastRun(sessionId);
         const usage = yield* lastContextUsageEffect({
           metadata: runStore.chatMetadata,
@@ -2508,7 +2508,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
-        if (isTruthy(liveRuns.get(sessionId))) return json(409, { error: "run_in_progress" });
+        if (isTruthy(yield* liveRuns.get(sessionId)))
+          return json(409, { error: "run_in_progress" });
         const state = yield* workflows.setPhase(sessionId, phase);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
@@ -2526,7 +2527,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
-        const live = liveRuns.get(sessionId);
+        const live = yield* liveRuns.get(sessionId);
         if (action === "resume" && isTruthy(live)) return json(409, { error: "run_in_progress" });
         const state = yield* workflows.controlGoal(sessionId, action);
         yield* execution.stop(sessionId);
@@ -2558,7 +2559,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           case "release":
             leases.release(sessionId, holder);
             // The page is gone: nothing will send its waiting messages as a next turn.
-            if (!isTruthy(liveRuns.get(sessionId)) && leases.view(sessionId, null).state === "free")
+            if (
+              !isTruthy(yield* liveRuns.get(sessionId)) &&
+              leases.view(sessionId, null).state === "free"
+            )
               yield* queue.holdWaiting(sessionId, "pageLeft");
             break;
         }
@@ -2652,12 +2656,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const known = yield* Effect.forEach(attachmentIds, attachments.get);
         if (known.some((attachment) => !isTruthy(attachment)))
           return json(400, { error: "unknown_attachment" });
-        if (!isTruthy(liveRuns.get(sessionId))) return json(409, { error: "not_running" });
+        if (!isTruthy(yield* liveRuns.get(sessionId))) return json(409, { error: "not_running" });
         const message = yield* queue.add(sessionId, text, attachmentIds, mode === "steer");
         // Steering stops the answer where it is, unless it has begun a tool call; the run then
         // completes and the server sends the message as the next turn.
         yield* Effect.when(
-          Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(steerCuts, sessionId))?.cut()),
+          Effect.flatMap(Ref.get(steerCuts), (cuts) =>
+            Effect.transposeOption(Option.map(HashMap.get(cuts, sessionId), (steer) => steer.cut)),
+          ),
           Effect.succeed(mode === "steer"),
         );
         return json(201, message);
@@ -2758,7 +2764,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const run = (followupRunId: string) =>
       Effect.gen(function* () {
         yield* Effect.sleep("25 millis");
-        if (isTruthy(liveRuns.get(sessionId))) return;
+        if (isTruthy(yield* liveRuns.get(sessionId))) return;
         const session = yield* sessions.get(sessionId);
         if (session.archivedAt !== null) return;
         const last = yield* lastRun(sessionId);
@@ -2848,7 +2854,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       }).pipe(
         Effect.onInterrupt(() =>
           Effect.gen(function* () {
-            const live = liveRuns.get(sessionId);
+            const live = yield* liveRuns.get(sessionId);
             if (live?.runId !== followupRunId) return;
             live.controller.abort(new Error("service_shutdown"));
             yield* live.cancel;

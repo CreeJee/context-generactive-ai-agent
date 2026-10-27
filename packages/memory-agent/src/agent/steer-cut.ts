@@ -1,4 +1,14 @@
-import { Deferred, Effect, Exit, HashSet, Match, MutableRef, Option, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  HashSet,
+  Match,
+  Option,
+  Ref,
+  Stream,
+  SynchronizedRef,
+} from "effect";
 import { type LanguageModel, Response } from "effect/ai";
 
 export interface SteerCut {
@@ -7,7 +17,7 @@ export interface SteerCut {
    * streaming, or it has begun a tool call: that call must run, and the message joins the request
    * after it.
    */
-  readonly cut: () => boolean;
+  readonly cut: Effect.Effect<boolean>;
 }
 
 /** What the response being streamed has opened, as far as the run has received it. */
@@ -52,48 +62,54 @@ const closing = (opened: Opened): ReadonlyArray<Response.AnyPart> => [
  * it is, closing what it opened, so the run completes and the steered message follows at once as
  * the next turn.
  */
-export const steerCuttableModel = (model: LanguageModel.LanguageModel) => {
-  const current = MutableRef.make(Option.none<MutableRef.MutableRef<Opened>>());
+export const steerCuttableModel = Effect.fnUntraced(function* (model: LanguageModel.LanguageModel) {
+  const current = yield* Ref.make(Option.none<SynchronizedRef.SynchronizedRef<Opened>>());
   const cuttable = <E, R>(parts: Stream.Stream<Response.AnyPart, E, R>) =>
-    Stream.suspend(() => {
-      const opened = MutableRef.make<Opened>({
-        cut: Deferred.makeUnsafe<void>(),
-        text: HashSet.empty(),
-        reasoning: HashSet.empty(),
-        toolCall: false,
-        finished: false,
-      });
-      const { cut } = MutableRef.get(opened);
-      return parts.pipe(
-        Stream.interruptWhen(Deferred.await(cut)),
-        // Tracked once received, so a cut closes exactly what the run has.
-        Stream.tap((part) =>
-          Effect.sync(() => MutableRef.update(opened, (was) => openedBy(was, part))),
-        ),
-        Stream.concat(
-          Stream.suspend(() =>
-            Deferred.isDoneUnsafe(cut) && !MutableRef.get(opened).finished
-              ? Stream.fromIterable(closing(MutableRef.get(opened)))
-              : Stream.empty,
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const cut = yield* Deferred.make<void>();
+        const opened = yield* SynchronizedRef.make<Opened>({
+          cut,
+          text: HashSet.empty(),
+          reasoning: HashSet.empty(),
+          toolCall: false,
+          finished: false,
+        });
+        return parts.pipe(
+          Stream.interruptWhen(Deferred.await(cut)),
+          // Tracked once received, so a cut closes exactly what the run has.
+          Stream.tap((part) => SynchronizedRef.update(opened, (was) => openedBy(was, part))),
+          Stream.concat(
+            Stream.unwrap(
+              Effect.zipWith(Deferred.isDone(cut), SynchronizedRef.get(opened), (wasCut, was) =>
+                wasCut && !was.finished ? Stream.fromIterable(closing(was)) : Stream.empty,
+              ),
+            ),
           ),
-        ),
-        Stream.onStart(Effect.sync(() => MutableRef.set(current, Option.some(opened)))),
-        Stream.ensuring(
-          Effect.sync(() =>
-            MutableRef.update(
+          Stream.onStart(Ref.set(current, Option.some(opened))),
+          Stream.ensuring(
+            Ref.update(
               current,
               Option.filter((streaming) => streaming !== opened),
             ),
           ),
-        ),
-      );
-    });
-  const steer: SteerCut = {
-    cut: () =>
-      Option.exists(MutableRef.get(current), (streaming) => {
-        const { cut, toolCall, finished } = MutableRef.get(streaming);
-        return !toolCall && !finished && Deferred.doneUnsafe(cut, Exit.void);
+        );
       }),
+    );
+  const steer: SteerCut = {
+    cut: Effect.flatMap(
+      Ref.get(current),
+      Option.match({
+        onNone: () => Effect.succeed(false),
+        // Decided under the response's lock, so no tool call starts between the check and the cut.
+        onSome: (streaming) =>
+          SynchronizedRef.modifyEffect(streaming, (was) =>
+            !was.toolCall && !was.finished
+              ? Effect.map(Deferred.done(was.cut, Exit.void), (cut) => [cut, was] as const)
+              : Effect.succeed([false, was] as const),
+          ),
+      }),
+    ),
   };
   return {
     // SAFETY: the parts pass through unchanged; a cut adds only ends of what the response opened
@@ -105,4 +121,4 @@ export const steerCuttableModel = (model: LanguageModel.LanguageModel) => {
     },
     steer,
   };
-};
+});

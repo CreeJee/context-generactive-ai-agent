@@ -17,16 +17,15 @@ describe("createLiveRuns", () => {
       const { runs, first } = yield* fixture;
       const settling = yield* Deferred.make<void>();
       const complete = yield* Deferred.make<void>();
-      const claim = yield* runs.claim(
-        "session",
-        "first",
-        first,
-        undefined,
-        Effect.void,
-        undefined,
-        Deferred.succeed(settling, undefined).pipe(Effect.andThen(Deferred.await(complete))),
-      );
-      const active = runs.get("session");
+      const claim = yield* runs.claim({
+        sessionId: "session",
+        runId: "first",
+        controller: first,
+        settle: Deferred.succeed(settling, undefined).pipe(
+          Effect.andThen(Deferred.await(complete)),
+        ),
+      });
+      const active = yield* runs.get("session");
       if (claim === null || active === null) throw new Error("Missing active run");
       const release = yield* Effect.forkChild(claim.release);
       const ended = yield* Effect.forkChild(active.ended);
@@ -36,27 +35,28 @@ describe("createLiveRuns", () => {
       yield* Deferred.succeed(complete, undefined);
       yield* Fiber.join(release);
       yield* Fiber.join(ended);
-      expect(runs.get("session")).toBeNull();
+      expect(yield* runs.get("session")).toBeNull();
     }),
   );
   it.effect("one session has one active stream and releases its claim on completion", () =>
     Effect.gen(function* () {
       const { runs, first, second } = yield* fixture;
-      const claim = yield* runs.claim("session", "first", first);
+      const claim = yield* runs.claim({ sessionId: "session", runId: "first", controller: first });
       expect(claim).not.toBeNull();
       if (claim === null) return;
-      expect(yield* runs.claim("session", "second", second)).toBeNull();
+      const again = { sessionId: "session", runId: "second", controller: second };
+      expect(yield* runs.claim(again)).toBeNull();
       yield* Stream.runDrain(claim.track(Stream.empty));
-      expect(runs.get("session")).toBeNull();
-      expect(yield* runs.claim("session", "second", second)).not.toBeNull();
+      expect(yield* runs.get("session")).toBeNull();
+      expect(yield* runs.claim(again)).not.toBeNull();
     }),
   );
 
   it.effect("a failing stream preserves its typed failure and frees the session", () =>
     Effect.gen(function* () {
       const { runs, first } = yield* fixture;
-      const claim = yield* runs.claim("session", "first", first);
-      const active = runs.get("session");
+      const claim = yield* runs.claim({ sessionId: "session", runId: "first", controller: first });
+      const active = yield* runs.get("session");
       expect(claim).not.toBeNull();
       expect(active).not.toBeNull();
       if (claim === null || active === null) return;
@@ -65,7 +65,7 @@ describe("createLiveRuns", () => {
         failure,
       );
       yield* active.ended;
-      expect(runs.get("session")).toBeNull();
+      expect(yield* runs.get("session")).toBeNull();
     }),
   );
 });

@@ -160,7 +160,7 @@ const make = Effect.gen(function* () {
    */
   const ask = Effect.fn("BtwChat.ask")(function* (threadId: string, question: BtwQuestion) {
     const thread = yield* threads.get(threadId);
-    if (liveRuns.get(threadId) !== null) return refused({ error: "run_in_progress" });
+    if ((yield* liveRuns.get(threadId)) !== null) return refused({ error: "run_in_progress" });
     const selection = yield* active.selected;
     const auth = yield* active.authFor(selection?.provider ?? (yield* active.provider));
     if (AuthConnectionState.$is("error")(auth))
@@ -216,13 +216,12 @@ const make = Effect.gen(function* () {
     // Only an explicit delete or the service shutting down cancels the answer.
     const cancellation = yield* cancellations.allocate("service_shutdown");
     const released = Effect.andThen(cancellation.release, Scope.close(modelScope, Exit.void));
-    const claim = yield* liveRuns.claim(
-      threadId,
-      question.runId,
-      cancellation.controller,
-      undefined,
-      released,
-    );
+    const claim = yield* liveRuns.claim({
+      sessionId: threadId,
+      runId: question.runId,
+      controller: cancellation.controller,
+      releaseResources: released,
+    });
     if (claim === null) {
       yield* released;
       return refused({ error: "run_in_progress" });
@@ -281,13 +280,13 @@ const make = Effect.gen(function* () {
     /** Explicit delete: stops a running answer first so it cannot save into a removed thread. */
     remove: Effect.fn("BtwChat.remove")(function* (threadId: string) {
       yield* threads.get(threadId);
-      yield* Option.match(Option.fromNullishOr(liveRuns.get(threadId)), {
+      yield* Option.match(Option.fromNullishOr(yield* liveRuns.get(threadId)), {
         onNone: () => Effect.void,
         onSome: (live) => Effect.andThen(live.cancel, live.ended),
       });
       yield* Effect.when(
         Effect.fail(BtwError.make({ reason: BtwRunInProgress.make({ threadId }) })),
-        Effect.succeed(liveRuns.get(threadId) !== null),
+        Effect.map(liveRuns.get(threadId), (live) => live !== null),
       );
       yield* threads.remove(threadId);
     }),

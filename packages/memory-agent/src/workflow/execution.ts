@@ -34,7 +34,7 @@ const Progress = Schema.Struct({
   completedSteps: Schema.Array(Schema.String),
   evidence: Schema.Array(Schema.String),
   toolResults: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
   ),
 });
 const executionFields = {

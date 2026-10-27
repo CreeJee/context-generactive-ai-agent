@@ -89,13 +89,13 @@ const Verification = Schema.Struct({
 });
 export type Verification = typeof Verification.Type;
 
-const verificationDefault = (): Verification => ({
+const verificationDefault: Verification = {
   status: "not_run",
   summary: "",
   evidence: [],
   recoveryPhase: null,
   updatedAt: null,
-});
+};
 
 const goalFields = {
   completion: Schema.optionalKey(CompletionSnapshot),
@@ -107,11 +107,9 @@ const goalFields = {
   nonGoals: Schema.Array(Schema.String),
   assumptions: Schema.Array(Schema.String),
   openQuestions: Schema.Array(GoalQuestion),
-  evidence: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
-  ),
+  evidence: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
   verification: Verification.pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(verificationDefault)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(verificationDefault)),
   ),
   updatedAt: Schema.String,
 } as const;
@@ -132,7 +130,7 @@ const planStepFields = {
 } as const;
 
 const recordedEvidence = Schema.Array(Schema.String).pipe(
-  Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
 );
 
 export const PlanStep = Schema.Struct({
@@ -181,11 +179,9 @@ const planFields = {
   steps: Schema.Array(PlanStep),
   risks: Schema.Array(Schema.String),
   openQuestions: Schema.Array(Schema.String),
-  evidence: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
-  ),
+  evidence: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
   verification: Verification.pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(verificationDefault)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(verificationDefault)),
   ),
   updatedAt: Schema.String,
 } as const;
@@ -281,9 +277,7 @@ export type UpdatePlan = typeof UpdatePlan.Type;
 const StepProgress = Schema.Struct({
   id: Schema.String,
   status: StepProgressStatus,
-  evidence: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
-  ),
+  evidence: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
 });
 
 const VerificationUpdate = Schema.Struct({
@@ -297,12 +291,12 @@ export const UpdateWorkflowProgress = Schema.Struct({
   criterionMappings: Schema.optionalKey(Schema.Array(CriterionMapping)),
   goalStatus: Schema.optionalKey(Schema.Literals(["active", "paused", "completed", "failed"])),
   planStatus: Schema.optionalKey(Schema.Literals(["executing", "completed", "blocked"])),
-  steps: Schema.Array(StepProgress).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => []))),
+  steps: Schema.Array(StepProgress).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
   goalEvidence: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
   ),
   planEvidence: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
   ),
   verification: Schema.optionalKey(VerificationUpdate),
   detail: Schema.String,
@@ -687,7 +681,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           ...input.goal,
           version: 1,
           evidence: [],
-          verification: verificationDefault(),
+          verification: verificationDefault,
           updatedAt: now,
         },
         plan: null,
@@ -1033,7 +1027,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const goal: GoalArtifact = {
               ...input,
               evidence: [],
-              verification: verificationDefault(),
+              verification: verificationDefault,
               version: (current.goal?.version ?? 0) + 1,
               updatedAt: DateTime.formatIso(
                 DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
@@ -1093,7 +1087,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                       }),
                     ),
                     evidence: [],
-                    verification: verificationDefault(),
+                    verification: verificationDefault,
                     version: (current.plan?.version ?? 0) + 1,
                     goalVersion: current.goal?.version ?? 0,
                     updatedAt: nowIso(),

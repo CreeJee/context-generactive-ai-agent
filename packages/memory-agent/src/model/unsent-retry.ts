@@ -1,12 +1,4 @@
-import {
-  Clock,
-  Effect,
-  Function as EffectFunction,
-  MutableRef,
-  Option,
-  Schema,
-  Stream,
-} from "effect";
+import { Clock, Effect, Function as EffectFunction, Option, Ref, Schema, Stream } from "effect";
 import { AiError, type LanguageModel } from "effect/ai";
 import { ProviderRetryOutcome, type ProviderRetryStage } from "../workflow/provider-retry.ts";
 import {
@@ -61,39 +53,35 @@ function unsentRetriedBody(
     retry: number,
     firstFailedAt: Option.Option<number>,
   ): Stream.Stream<A, E, R> =>
-    Stream.suspend(() => {
-      const received = MutableRef.make(false);
-      return open().pipe(
-        Stream.tap(() => Effect.sync(() => MutableRef.set(received, true))),
-        Stream.catch((error) =>
-          Option.match(
-            Option.filter(unsentStage(error), () => !MutableRef.get(received)),
-            {
-              onNone: () => Stream.fail(error),
-              onSome: (stage) =>
-                Stream.unwrap(
-                  Effect.gen(function* () {
-                    const failedAt = yield* Option.match(firstFailedAt, {
-                      onNone: () => Clock.currentTimeMillis,
-                      onSome: Effect.succeed,
-                    });
-                    const outcome = yield* wait({
-                      retry: retry + 1,
-                      stage,
-                      firstFailedAt: failedAt,
-                    });
-                    return ProviderRetryOutcome.$match(outcome, {
-                      Retry: () => attempt(open, retry + 1, Option.some(failedAt)),
-                      Exhausted: () => Stream.fail(error),
-                      Cancelled: () => Stream.fail(error),
-                    });
-                  }),
-                ),
-            },
+    Stream.unwrap(
+      Effect.map(Ref.make(false), (received) =>
+        open().pipe(
+          Stream.tap(() => Ref.set(received, true)),
+          Stream.catch((error) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const stage = unsentStage(error);
+                if (Option.isNone(stage) || (yield* Ref.get(received))) return Stream.fail(error);
+                const failedAt = yield* Option.match(firstFailedAt, {
+                  onNone: () => Clock.currentTimeMillis,
+                  onSome: Effect.succeed,
+                });
+                const outcome = yield* wait({
+                  retry: retry + 1,
+                  stage: stage.value,
+                  firstFailedAt: failedAt,
+                });
+                return ProviderRetryOutcome.$match(outcome, {
+                  Retry: () => attempt(open, retry + 1, Option.some(failedAt)),
+                  Exhausted: () => Stream.fail(error),
+                  Cancelled: () => Stream.fail(error),
+                });
+              }),
+            ),
           ),
         ),
-      );
-    });
+      ),
+    );
   return {
     ...model,
     // SAFETY: the parts pass through unchanged; a retry streams the same request's parts again.

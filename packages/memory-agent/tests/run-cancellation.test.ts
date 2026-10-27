@@ -20,30 +20,30 @@ it.effect(
       const runs = yield* createLiveRuns;
       const started = yield* Deferred.make<void>();
       const allowClose = yield* Deferred.make<void>();
-      let endings = 0;
-      const claim = yield* runs.claim(
-        "session",
-        "run",
-        run.controller,
-        () => {
-          endings++;
-        },
-        Deferred.succeed(started, undefined).pipe(
+      const endings = yield* Ref.make(0);
+      const claim = yield* runs.claim({
+        sessionId: "session",
+        runId: "run",
+        controller: run.controller,
+        releaseResources: Deferred.succeed(started, undefined).pipe(
           Effect.andThen(Deferred.await(allowClose)),
           Effect.andThen(run.release),
+          Effect.andThen(Ref.update(endings, (count) => count + 1)),
         ),
-      );
+      });
       expect(claim).not.toBeNull();
       if (claim === null) return;
       const releasing = yield* Effect.forkScoped(claim.release);
       yield* Deferred.await(started);
-      expect(runs.get("session")?.runId).toBe("run");
-      expect(yield* runs.claim("session", "next", run.controller)).toBeNull();
+      expect((yield* runs.get("session"))?.runId).toBe("run");
+      expect(
+        yield* runs.claim({ sessionId: "session", runId: "next", controller: run.controller }),
+      ).toBeNull();
       yield* Deferred.succeed(allowClose, undefined);
       yield* Fiber.join(releasing);
-      expect(runs.get("session")).toBeNull();
+      expect(yield* runs.get("session")).toBeNull();
       yield* claim.release;
-      expect(endings).toBe(1);
+      expect(yield* Ref.get(endings)).toBe(1);
     }),
 );
 
