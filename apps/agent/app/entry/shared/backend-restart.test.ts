@@ -18,7 +18,7 @@ describe("development backend restart detection", () => {
         expect(headers.get("x-session-holder")).toBe("holder");
         expect(
           developmentRequestDecision(
-            createDevelopmentBoundary({ buildId: "build-a" }),
+            createDevelopmentBoundary({ buildId: "build-a", instanceId: "instance-test" }),
             "POST",
             "/api/chat",
             headers.get("x-context-agent-build-id") ?? undefined,

@@ -7,9 +7,10 @@ import { Hex } from "effect/encoding";
 
 import { nativeFailure } from "memory-agent/native-effect";
 import { nodePlatform } from "memory-agent/node-platform";
+import { path as hostPath } from "memory-agent/synchronous-path";
 import { DateTime, Match, Option, Schema, Scope, Exit, Cause } from "effect";
 
-const { join, resolve } = nodePlatform.runSync(Path.Path);
+const { join, resolve } = hostPath;
 
 export const developmentBuildHeader = "x-context-agent-build-id";
 
@@ -110,12 +111,10 @@ export interface DevelopmentBoundary {
 
 export function createDevelopmentBoundary({
   buildId,
-  instanceId = nodePlatform.runSync(
-    Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4()),
-  ),
+  instanceId,
 }: {
   readonly buildId: string;
-  readonly instanceId?: string;
+  readonly instanceId: string;
 }): DevelopmentBoundary {
   let isDraining = false;
   return {

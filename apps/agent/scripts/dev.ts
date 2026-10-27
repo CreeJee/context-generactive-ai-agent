@@ -1,5 +1,5 @@
 import { FetchHttpClient, HttpClient } from "effect/http";
-import { NodePath, NodeServices } from "@effect/platform-node";
+import { NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
 import { Cause, Clock, Config, Console, Effect, Exit, FileSystem, Layer } from "effect";
 import { DateTime, Ref, Sink, Stdio, Stream } from "effect";
@@ -13,12 +13,11 @@ import { developmentBuildId } from "../server/dev-safety.ts";
 import { devHelp, readDevConfiguration } from "./dev-configuration.ts";
 import { assertPortAvailable } from "./dev-process.ts";
 
-const nodePath = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
-const { dirname } = nodePath;
-
 const developmentRuntime = ManagedRuntime.make(
   Layer.merge(NodeServices.layer, FetchHttpClient.layer),
 );
+const nodePath = await developmentRuntime.runPromise(Path.Path);
+const { dirname } = nodePath;
 const app = await developmentRuntime.runPromise(
   nodePath.fromFileUrl(new URL("..", import.meta.url)),
 );
@@ -26,15 +25,15 @@ const app = await developmentRuntime.runPromise(
 const configuration = await developmentRuntime.runPromise(
   readDevConfiguration(process.argv.slice(2), process.env, app).pipe(
     Effect.catchTag("DevConfigurationError", (failure) =>
-      Effect.sync(() => {
-        Effect.runSync(Console.error(failure.message));
-        process.exit(1);
-      }),
+      Effect.andThen(
+        Console.error(failure.message),
+        Effect.sync(() => process.exit(1)),
+      ),
     ),
   ),
 );
 if (configuration.help) {
-  Effect.runSync(Console.log(devHelp));
+  await developmentRuntime.runPromise(Console.log(devHelp));
   process.exit(0);
 }
 const { backendPort, webPort, manifestFile, mode, spans } = configuration;
@@ -375,6 +374,6 @@ const developmentExit = await developmentRuntime.runPromiseExit(
   mode === "web" ? Effect.scoped(runWebOnly()) : runWithBackend(mode === "all"),
 );
 if (Exit.isFailure(developmentExit)) {
-  Effect.runSync(Console.error(Cause.pretty(developmentExit.cause)));
+  await developmentRuntime.runPromise(Console.error(Cause.pretty(developmentExit.cause)));
   process.exitCode = 1;
 }

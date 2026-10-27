@@ -1,5 +1,6 @@
 import { nodePlatform } from "memory-agent/node-platform";
-import { Option, Path, Schema, Stdio } from "effect";
+import { Option, Schema, Stdio } from "effect";
+import { path as nodePath } from "memory-agent/synchronous-path";
 import { Config, Console, Crypto, Effect, Match } from "effect";
 import { Argument, Flag } from "effect/cli";
 import { runNativeEffect } from "memory-agent/native-effect";
@@ -20,15 +21,19 @@ import { createAppApi, startAcpAgent } from "memory-agent/acp";
 import { SdkStreams } from "memory-agent/acp";
 import { Cause, Context, Exit, Layer, Scope, Stream } from "effect";
 import * as build from "#server-build";
-import { isThisApp, launchFolder, openProjectEffect, type LaunchFolder } from "./launch-project.ts";
+import {
+  isThisApp,
+  launchFolder,
+  openProjectEffect,
+  runLaunchRequest,
+  type LaunchFolder,
+} from "./launch-project.ts";
 import { readBuildConfig } from "./build-config.ts";
 import { readReleaseInfo } from "./release-info.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
 import { parseCommandLine } from "./command-line.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve, type Exposure } from "./serve.ts";
-
-const nodePath = nodePlatform.runSync(Path.Path);
 const { dirname } = nodePath;
 
 const usage = `사용법:
@@ -73,7 +78,7 @@ const folderArgument = Option.getOrUndefined(commandLine.folder);
 if (commandLine.version) {
   const release = readReleaseInfo();
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(
+  await Effect.runPromise(
     Console.log(`context-agent ${release.version} (${release.channel}, ${release.target})`),
   );
   process.exit(0);
@@ -81,7 +86,7 @@ if (commandLine.version) {
 
 if (commandLine.help) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.error(usage));
+  await Effect.runPromise(Console.error(usage));
   process.exit(0);
 }
 const { port } = commandLine;
@@ -163,24 +168,24 @@ if (folderArgument === "acp") {
     : await launchFolder(folderArgument, process.cwd(), storageRoot, executableFolder);
   if (folder.kind === "invalid") {
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(Console.error(`폴더를 찾을 수 없어요: ${folder.path}`));
+    await Effect.runPromise(Console.error(`폴더를 찾을 수 없어요: ${folder.path}`));
     process.exit(2);
   }
 
   if (await isThisApp(baseUrl)) {
     // One server per storage root: a second start hands the folder to the running app.
-    const page = await runNativeEffect(pageFor(folder));
+    const page = await runLaunchRequest(pageFor(folder));
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(Console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`));
+    await Effect.runPromise(Console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`));
     if (commandLine.open) openInBrowser(page);
     process.exit(0);
   }
 
   // Native host/SDK configuration boundary reads or forwards the host environment.
   const developmentBuildId = Option.getOrUndefined(
-    Effect.runSync(Config.option(Config.String("CONTEXT_AGENT_BUILD_ID"))),
+    await Effect.runPromise(Config.option(Config.String("CONTEXT_AGENT_BUILD_ID"))),
   );
-  const runtimeInstanceId = nodePlatform.runSync(
+  const runtimeInstanceId = await nodePlatform.runPromise(
     Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4()),
   );
   const releaseStorageLock = await acquireStorageLock(storageRoot, port, runtimeInstanceId);
@@ -252,26 +257,29 @@ if (folderArgument === "acp") {
     developmentBuildId,
     runtimeInstanceId,
   }).catch((error: NodeJS.ErrnoException) =>
-    closeBackend().then(() => {
-      // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-      Effect.runSync(
-        Console.error(
-          error.code === "EADDRINUSE"
-            ? `포트 ${port}를 다른 프로그램이 쓰고 있어요. --port로 다른 포트를 지정하세요.`
-            : `서버를 시작하지 못했어요: ${error.message}`,
+    closeBackend()
+      .then(() =>
+        // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+        Effect.runPromise(
+          Console.error(
+            error.code === "EADDRINUSE"
+              ? `포트 ${port}를 다른 프로그램이 쓰고 있어요. --port로 다른 포트를 지정하세요.`
+              : `서버를 시작하지 못했어요: ${error.message}`,
+          ),
         ),
-      );
-      process.exit(1);
-    }),
+      )
+      .then(() => process.exit(1)),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`));
+  await Effect.runPromise(
+    Console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`),
+  );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(
+  await Effect.runPromise(
     Console.error(
       `--broadcast: 모든 네트워크의 ${port} 포트에 열었어요. 인증이 없으니 같은 네트워크의 누구나 이 앱을 쓸 수 있어요.`,
     ).pipe(Effect.when(Effect.succeed(commandLine.broadcast))),
   );
-  const page = await runNativeEffect(pageFor(folder));
+  const page = await runLaunchRequest(pageFor(folder));
   if (commandLine.open) openInBrowser(page);
 }

@@ -1,5 +1,5 @@
 import { NodeHttpServer, NodeSink } from "@effect/platform-node";
-import { Path } from "effect";
+import { path } from "memory-agent/synchronous-path";
 import { runNativeEffect } from "memory-agent/native-effect";
 import { nodePlatform } from "memory-agent/node-platform";
 import { isTruthy } from "../app/truthy.ts";
@@ -16,7 +16,7 @@ import {
   createDevelopmentBoundary,
 } from "./dev-safety.ts";
 
-const { extname, resolve, sep } = nodePlatform.runSync(Path.Path);
+const { extname, resolve, sep } = path;
 
 /**
  * Who can reach the server. `loopback` listens on 127.0.0.1 and answers only loopback Host names (R14).
@@ -32,7 +32,7 @@ export interface ServeOptions {
   readonly clientDirectory: string;
   /** Present only for the stable development backend behind the HMR frontend. */
   readonly developmentBuildId?: string;
-  readonly runtimeInstanceId?: string;
+  readonly runtimeInstanceId: string;
 }
 
 /** Only the loopback names; any other Host means a rebinding page is talking to this server (R14). */
@@ -160,7 +160,7 @@ export function serve(options: ServeOptions) {
       if (decision.kind !== "allow") {
         if (decision.kind === "reject")
           // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-          Effect.runSync(
+          nodePlatform.runFork(
             Console.warn(
               `[dev-backend] blocked ${request.method ?? "UNKNOWN"} ${pathname}: ${decision.error} ` +
                 `(backend=${decision.backendBuildId}, browser=${decision.presentedBuildId ?? "missing"})`,

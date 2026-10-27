@@ -1,7 +1,7 @@
 import { FetchHttpClient, HttpBody, HttpClient } from "effect/http";
-import { ManagedRuntime, Path, FileSystem, Option } from "effect";
+import { FileSystem, ManagedRuntime, Option } from "effect";
+import { path } from "memory-agent/synchronous-path";
 import { Effect } from "effect";
-import { runNativeEffect } from "memory-agent/native-effect";
 import { nodePlatform } from "memory-agent/node-platform";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
@@ -9,7 +9,7 @@ import { homeDirectory } from "memory-agent/host-system";
 import { Schema } from "effect";
 
 /** The folder the app opens as a project, or why it opens none. */
-const { dirname, isAbsolute, relative, resolve } = nodePlatform.runSync(Path.Path);
+const { dirname, isAbsolute, relative, resolve } = path;
 
 export type LaunchFolder =
   | { readonly kind: "folder"; readonly root: string }
@@ -71,7 +71,10 @@ const launchFolderEffect = Effect.fn("launch.folder")(function* (
   return { kind: "folder", root };
 });
 
-const launchHttpClient = ManagedRuntime.make(FetchHttpClient.layer).runSync(HttpClient.HttpClient);
+/** Runs the launch requests for callers outside Effect; they reach the app over fetch. */
+const launchRuntime = ManagedRuntime.make(FetchHttpClient.layer);
+export const runLaunchRequest = <A, E>(request: Effect.Effect<A, E, HttpClient.HttpClient>) =>
+  launchRuntime.runPromise(request);
 
 const Project = Schema.Struct({ id: Schema.String, root: Schema.String });
 const Rejected = Schema.Struct({
@@ -86,7 +89,7 @@ export type OpenedProject =
 /** Whether something answering on this address is this app (it lists projects). */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const isThisAppEffect = Effect.fn("launch.isThisApp")(function* (baseUrl: string) {
-  const response = yield* launchHttpClient
+  const response = yield* (yield* HttpClient.HttpClient)
     .get(`${baseUrl}/api/projects`)
     .pipe(Effect.timeout(3_000));
   return (
@@ -96,7 +99,7 @@ const isThisAppEffect = Effect.fn("launch.isThisApp")(function* (baseUrl: string
   );
 });
 export const isThisApp = (baseUrl: string) =>
-  runNativeEffect(isThisAppEffect(baseUrl).pipe(Effect.orElseSucceed(() => false)));
+  launchRuntime.runPromise(isThisAppEffect(baseUrl).pipe(Effect.orElseSucceed(() => false)));
 
 /**
  * Registers the folder as a project on the running app, or finds it if it is registered already.
@@ -107,16 +110,17 @@ export const openProject: {
   (root: string): (baseUrl: string) => ReturnType<typeof openProjectBody>;
 } & typeof openProjectBody = EffectFunction.dual(2, openProjectBody);
 function openProjectBody(baseUrl: string, root: string): Promise<OpenedProject> {
-  return runNativeEffect(openProjectEffect(baseUrl, root));
+  return launchRuntime.runPromise(openProjectEffect(baseUrl, root));
 }
 export const openProjectEffect = Effect.fn("launch.openProject")(function* (
   baseUrl: string,
   root: string,
 ) {
+  const client = yield* HttpClient.HttpClient;
   const payload = yield* Schema.encodeEffect(
     Schema.fromJsonString(Schema.Struct({ root: Schema.String })),
   )({ root });
-  const response = yield* launchHttpClient.post(`${baseUrl}/api/projects`, {
+  const response = yield* client.post(`${baseUrl}/api/projects`, {
     body: HttpBody.text(payload, "application/json"),
   });
   const body: unknown = yield* response.json;
@@ -129,7 +133,7 @@ export const openProjectEffect = Effect.fn("launch.openProject")(function* (
     } as const satisfies OpenedProject;
   if (body.reason !== "already_registered")
     return { kind: "rejected", reason: body.reason } as const satisfies OpenedProject;
-  const listing = yield* launchHttpClient.get(`${baseUrl}/api/projects`);
+  const listing = yield* client.get(`${baseUrl}/api/projects`);
   const projects: unknown = yield* listing.json;
   const existing = Schema.is(Schema.Array(Project))(projects)
     ? projects.find((project) => project.root === root)

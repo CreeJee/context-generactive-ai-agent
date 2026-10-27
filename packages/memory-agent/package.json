@@ -26,6 +26,7 @@
     "./testing": "./src/testing/index.ts",
     "./native-effect": "./src/runtime/native-effect.ts",
     "./node-platform": "./src/runtime/node-platform.ts",
+    "./synchronous-path": "./src/runtime/synchronous-path.ts",
     "./host-system": "./src/runtime/host-system.ts",
     "./runtime-resources": {
       "types": "./src/runtime/resources.ts",

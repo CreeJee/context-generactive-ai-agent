@@ -43,7 +43,7 @@ describe("stable development backend safety", () => {
       // A UI-only HMR update must not block an otherwise valid mutation.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary({ buildId: initial }),
+          createDevelopmentBoundary({ buildId: initial, instanceId: "instance-test" }),
           "POST",
           "/api/projects",
           uiBuildId,
@@ -55,7 +55,7 @@ describe("stable development backend safety", () => {
       // Editing disk sources does not change the running backend's identity.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary({ buildId: initial }),
+          createDevelopmentBoundary({ buildId: initial, instanceId: "instance-test" }),
           "POST",
           "/api/chat",
           initial,
@@ -64,7 +64,7 @@ describe("stable development backend safety", () => {
       // An unvalidated UI/backend contract must not silently mutate the old backend.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary({ buildId: initial }),
+          createDevelopmentBoundary({ buildId: initial, instanceId: "instance-test" }),
           "POST",
           "/api/projects",
           changedBackendId,
@@ -74,7 +74,7 @@ describe("stable development backend safety", () => {
   );
 
   test("reports its build and rejects stale or draining mutations", () => {
-    const boundary = createDevelopmentBoundary({ buildId: "build-a" });
+    const boundary = createDevelopmentBoundary({ buildId: "build-a", instanceId: "instance-test" });
     expect(developmentRequestDecision(boundary, "GET", "/api/health", undefined)).toMatchObject({
       kind: "health",
       status: 200,
