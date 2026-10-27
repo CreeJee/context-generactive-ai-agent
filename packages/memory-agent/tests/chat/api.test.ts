@@ -3,8 +3,9 @@ import { HttpServer } from "effect/http";
 import { HttpApiTest } from "effect/http-api";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
+import { ChatApi, type RunEvent, SameSite } from "../../src/api/chat-api.ts";
 import { ChatApiHandlers } from "../../src/api/chat-api-live.ts";
+import { applyEvent, type ChatView, streamStarted, viewOf } from "../../src/api/chat-view.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { testAgent } from "../support/test-env.ts";
 import { agentChat, freshSession } from "./tab.ts";
@@ -130,6 +131,70 @@ testAgent({ testProvider: {} })("chat API", (it) => {
         .join({ params: { session, run }, query: { after: "not-an-offset" } })
         .pipe(Effect.flatMap(Stream.runCollect), Effect.flip);
       expect(badOffset).toMatchObject({ error: "invalid_stream_offset" });
+    }),
+  );
+});
+
+// The scripted model names its calls alike in every session, and an interrupt's id follows its
+// call, so the test that answers an approval has an agent of its own.
+testAgent({ testProvider: {} })("chat API view", (it) => {
+  it.effect("a run's events build the messages the snapshot shows after it", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const session = yield* freshSession;
+      const api = yield* chatApi;
+      const snapshot = api.snapshot({ params: { session }, query: { limit: 500 } });
+      const read = <E>(events: Stream.Stream<RunEvent, E>, view: ChatView) =>
+        Stream.runFold(
+          events,
+          () => view,
+          (current, { data }) => applyEvent(current, data),
+        );
+
+      const asked = yield* read(
+        yield* api.run({
+          params: { session },
+          headers: {},
+          payload: { runId: `${session}-1`, messages: [message("please use the shell")] },
+        }),
+        viewOf({
+          ...(yield* snapshot),
+          messages: [
+            { id: "m-1", role: "user", parts: [{ type: "text", content: "please use the shell" }] },
+          ],
+        }),
+      );
+      const waiting = yield* snapshot;
+      expect(asked.messages).toEqual(waiting.messages);
+      expect(asked.interrupts).toEqual(waiting.interrupts);
+
+      const approved = yield* read(
+        yield* api.run({
+          params: { session },
+          headers: {},
+          payload: {
+            runId: `${session}-2`,
+            parentRunId: `${session}-1`,
+            messages: [],
+            resume: waiting.interrupts!.pending.map(({ id }) => ({
+              interruptId: id,
+              status: "resolved" as const,
+              payload: { approved: true },
+            })),
+          },
+        }),
+        streamStarted(asked),
+      );
+      const answered = yield* snapshot;
+      expect(approved.messages).toEqual(answered.messages);
+      expect(approved.interrupts).toBeNull();
+
+      // A page that rejoins reads the run from its start and writes its messages again.
+      const rejoined = yield* read(
+        yield* api.join({ params: { session, run: `${session}-2` }, query: {} }),
+        viewOf(answered),
+      );
+      expect(rejoined.messages).toEqual(answered.messages);
     }),
   );
 });

@@ -35,7 +35,7 @@ import { lazyToolsFor, ToolLookup } from "../tools/discovery.ts";
 import { jsonSchemaIssues, prepareRepaired } from "../tools/input-repair.ts";
 import type { RunTool } from "../tools/run-tool.ts";
 import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
-import type { AgUiEvent } from "./chunks.ts";
+import { type AgUiEvent, reasoningMessageId } from "./chunks.ts";
 import { type ResumeEntry, type ResumeRejected, type Resumed, resumeAnswers } from "./resume.ts";
 import {
   type Admission,
@@ -749,7 +749,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
           return { ...state, calls: [...state.calls, offered.call] };
         });
 
-      const reasoningId = (id: string) => `${messageId}:${id}`;
+      const reasoningId = (block: string) => reasoningMessageId({ message: messageId, block });
       const onPart = (state: Streamed, part: Response.AnyPart) => {
         const kept: Streamed = { ...state, parts: [...state.parts, part] };
         const emitted = (...events: ReadonlyArray<AgUiEvent>) =>

@@ -60,6 +60,22 @@ export const TextMessageContent = event("TEXT_MESSAGE_CONTENT", {
 });
 export const TextMessageEnd = event("TEXT_MESSAGE_END", { messageId: Schema.String });
 
+/**
+ * A reasoning message's id: the assistant message of its model step, then the provider's block id.
+ * The page shows the reasoning inside that message.
+ */
+export const reasoningMessageId = ({
+  message,
+  block,
+}: {
+  readonly message: string;
+  readonly block: string;
+}) => `${message}:${block}`;
+
+/** The assistant message a reasoning message belongs to. */
+export const reasoningStepMessage = (reasoningId: string) =>
+  reasoningId.split(":", 1)[0] ?? reasoningId;
+
 export const ReasoningStart = event("REASONING_START", { messageId: Schema.String });
 export const ReasoningMessageStart = event("REASONING_MESSAGE_START", {
   messageId: Schema.String,
