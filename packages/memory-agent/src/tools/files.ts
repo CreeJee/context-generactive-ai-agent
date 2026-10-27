@@ -5,8 +5,9 @@ import { path as platformPath, posix } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
 import {
   Array as Arr,
-  MutableHashMap,
+  HashMap,
   Option,
+  Ref,
   Context,
   Crypto,
   Effect,
@@ -245,18 +246,17 @@ const make = Effect.gen(function* () {
     );
   });
   type Candidates = HashSet.HashSet<string> | null;
-  const candidateCache = MutableHashMap.empty<string, Candidates>();
+  /** Oldest first. */
+  const candidateCache = yield* Ref.make<ReadonlyArray<readonly [string, Candidates]>>([]);
   const readPage = createTextPageReader();
 
   /** Keeps `candidates` under `key`, dropping the oldest entries past the cache's size. */
   const remember = (key: string, candidates: Candidates) =>
-    Effect.sync(() => {
-      MutableHashMap.set(candidateCache, key, candidates);
-      Arr.take(
-        Array.from(MutableHashMap.keys(candidateCache)),
-        MutableHashMap.size(candidateCache) - candidateCacheSize,
-      ).forEach((old) => MutableHashMap.remove(candidateCache, old));
-    });
+    Ref.update(candidateCache, (cached) =>
+      [...cached.filter(([known]) => known !== key), [key, candidates] as const].slice(
+        -candidateCacheSize,
+      ),
+    );
 
   /**
    * In a Git work tree, the files that can match at all; null means search every file. The first
@@ -270,20 +270,25 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<Candidates> => {
     const key = `${view.id}\u0000${caseSensitive}\u0000${query}`;
     return view.source === "git"
-      ? Option.match(MutableHashMap.get(candidateCache, key), {
-          onSome: (cached) => Effect.succeed(cached),
-          onNone: () =>
-            Option.match(started, {
+      ? Effect.flatMap(Ref.get(candidateCache), (cached) =>
+          Option.match(
+            Arr.findFirst(cached, ([known]) => known === key),
+            {
+              onSome: ([, candidates]) => Effect.succeed(candidates),
               onNone: () =>
-                gitGrepFilesEffect({
-                  root: view.root,
-                  directory: view.directory,
-                  query,
-                  caseSensitive,
-                }),
-              onSome: Fiber.join,
-            }).pipe(Effect.tap((candidates) => remember(key, candidates))),
-        })
+                Option.match(started, {
+                  onNone: () =>
+                    gitGrepFilesEffect({
+                      root: view.root,
+                      directory: view.directory,
+                      query,
+                      caseSensitive,
+                    }),
+                  onSome: Fiber.join,
+                }).pipe(Effect.tap((candidates) => remember(key, candidates))),
+            },
+          ),
+        )
       : Effect.as(
           Option.match(started, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
           null,
@@ -394,25 +399,30 @@ const make = Effect.gen(function* () {
           // Each directory is checked once per page (no links, still inside the project); the file
           // itself is checked on the opened handle, so thousands of files do not mean thousands of
           // synchronous path walks.
-          const directories = MutableHashMap.empty<string, Result.Result<void, PathRejected>>();
+          const directories = yield* Ref.make(
+            HashMap.empty<string, Result.Result<void, PathRejected>>(),
+          );
           const candidates = yield* candidatesFor(view, query, caseSensitive, started);
           const page = yield* searchTextFilesEffect({
             paths: view.paths,
             readBytes: Effect.fnUntraced(function* (path: string) {
               const directory = posix.dirname(path);
-              const checked = yield* Option.match(MutableHashMap.get(directories, directory), {
-                onSome: (known) => Effect.succeed(known),
-                onNone: () =>
-                  resolveProjectPath(root, directory, "directory").pipe(
-                    Effect.as<Result.Result<void, PathRejected>>(Result.succeed(undefined)),
-                    Effect.catchTag("PathRejected", (error) =>
-                      Effect.succeed<Result.Result<void, PathRejected>>(Result.fail(error)),
+              const checked = yield* Option.match(
+                HashMap.get(yield* Ref.get(directories), directory),
+                {
+                  onSome: (known) => Effect.succeed(known),
+                  onNone: () =>
+                    resolveProjectPath(root, directory, "directory").pipe(
+                      Effect.as<Result.Result<void, PathRejected>>(Result.succeed(undefined)),
+                      Effect.catchTag("PathRejected", (error) =>
+                        Effect.succeed<Result.Result<void, PathRejected>>(Result.fail(error)),
+                      ),
+                      Effect.tap((result) =>
+                        Ref.update(directories, HashMap.set(directory, result)),
+                      ),
                     ),
-                    Effect.tap((result) =>
-                      Effect.sync(() => MutableHashMap.set(directories, directory, result)),
-                    ),
-                  ),
-              });
+                },
+              );
               yield* Result.match(checked, {
                 onSuccess: Effect.succeed,
                 onFailure: (rejection) =>

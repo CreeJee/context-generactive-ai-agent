@@ -1,12 +1,13 @@
 import {
   Array as EffectArray,
-  MutableHashMap,
+  HashMap,
   Option,
   DateTime,
   Clock,
   Semaphore,
   Fiber,
   Scope,
+  SynchronizedRef,
 } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -268,26 +269,26 @@ const make = Effect.gen(function* () {
 
   // The service owns native Sharp and filesystem work until it settles. These SDK operations
   // cannot be aborted safely midway through publishing their files.
-  const conversions = MutableHashMap.empty<string, Fiber.Fiber<ModelImage>>();
-  const conversionLock = yield* Semaphore.make(1);
+  const conversions = yield* SynchronizedRef.make(HashMap.empty<string, Fiber.Fiber<ModelImage>>());
   const conversionFor = Effect.fn("Attachments.conversionFor")(function* (attachment: Attachment) {
-    return yield* Option.match(MutableHashMap.get(conversions, attachment.id), {
-      onSome: Effect.succeed,
-      onNone: () =>
-        Effect.forkIn(
-          encodeForModel(attachment).pipe(
-            Effect.uninterruptible,
-            Effect.ensuring(Effect.sync(() => MutableHashMap.remove(conversions, attachment.id))),
+    return yield* SynchronizedRef.modifyEffect(conversions, (running) =>
+      Option.match(HashMap.get(running, attachment.id), {
+        onSome: (fiber) => Effect.succeed([fiber, running] as const),
+        onNone: () =>
+          Effect.forkIn(
+            encodeForModel(attachment).pipe(
+              Effect.uninterruptible,
+              // Waits for the lock, so it runs after the conversion was stored.
+              Effect.ensuring(SynchronizedRef.update(conversions, HashMap.remove(attachment.id))),
+            ),
+            conversionScope,
+            { startImmediately: true },
+          ).pipe(
+            Effect.map((fiber) => [fiber, HashMap.set(running, attachment.id, fiber)] as const),
           ),
-          conversionScope,
-          { startImmediately: true },
-        ).pipe(
-          Effect.tap((fiber) =>
-            Effect.sync(() => MutableHashMap.set(conversions, attachment.id, fiber)),
-          ),
-        ),
-    });
-  }, conversionLock.withPermits(1));
+      }),
+    );
+  });
   const forModel = (attachment: Attachment) =>
     Effect.flatMap(conversionFor(attachment), Fiber.join);
   const dataUrl = (image: ModelImage) =>

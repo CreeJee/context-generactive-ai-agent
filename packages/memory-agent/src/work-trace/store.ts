@@ -4,9 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
-  Deferred,
   MutableHashMap,
-  MutableHashSet,
   DateTime,
   Clock,
   Context,
@@ -16,6 +14,7 @@ import {
   Layer,
   Match,
   Option,
+  PubSub,
   Schema,
 } from "effect";
 import { SqlClient, type Statement } from "effect/sql";
@@ -44,6 +43,11 @@ export const heartbeatIntervalMs = 10_000;
 export const heartbeatLostMs = 60_000;
 
 const ReadFailed = Schema.TaggedStruct("ReadFailed", {});
+
+/** What trace readers wait for: a new event of a session, or progress a heartbeat reported. */
+type TraceChange =
+  | { readonly kind: "event"; readonly sessionId: string; readonly cursor: number }
+  | { readonly kind: "progress"; readonly sessionId: string };
 
 export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>()(
   "WorkTraceReadFailed",
@@ -869,7 +873,7 @@ const make = Effect.gen(function* () {
     return attempts.length;
   }).pipe(sql.withTransaction);
 
-  const listeners = MutableHashSet.empty<(sessionId: string, cursor: number) => void>();
+  const changes = yield* PubSub.unbounded<TraceChange>();
   const appendEvent = Effect.fnUntraced(function* (input: AppendEventInput) {
     const event = yield* Effect.gen(function* () {
       const next = yield* decodeSequence(
@@ -890,14 +894,17 @@ const make = Effect.gen(function* () {
       );
       return { id, cursor: row.seq, attemptSequence: next.sequence, occurredAt };
     }).pipe(sql.withTransaction);
-    Array.from(listeners).forEach((listener) => listener(input.sessionId, event.cursor));
+    yield* PubSub.publish(changes, {
+      kind: "event",
+      sessionId: input.sessionId,
+      cursor: event.cursor,
+    });
     return event;
   });
 
   /** Wakes trace readers when a heartbeat says something new. Periodic beats alone do not. */
-  const progressListeners = MutableHashSet.empty<(sessionId: string) => void>();
   const announceProgress = (sessionId: string) =>
-    Effect.sync(() => Array.from(progressListeners).forEach((listener) => listener(sessionId)));
+    PubSub.publish(changes, { kind: "progress", sessionId });
   const liveStatuses = sql.literal("('queued', 'running', 'waiting', 'blocked')");
 
   /** Records what a live attempt is doing now. An attempt that already ended keeps its last beat. */
@@ -2257,33 +2264,22 @@ const make = Effect.gen(function* () {
   }) {
     const { sessionId, afterCursor } = options;
     if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
-    const changed = yield* Deferred.make<"event" | "progress">();
-    const listener = (changedSessionId: string, cursor: number) => {
-      if (changedSessionId === sessionId && cursor > afterCursor)
-        Deferred.doneUnsafe(changed, Effect.succeed("event"));
-    };
-    const progressed = (changedSessionId: string) => {
-      if (changedSessionId === sessionId) Deferred.doneUnsafe(changed, Effect.succeed("progress"));
-    };
-    return yield* Effect.acquireUseRelease(
-      Effect.sync(() => {
-        MutableHashSet.add(listeners, listener);
-        MutableHashSet.add(progressListeners, progressed);
+    const wanted = (change: TraceChange) =>
+      change.sessionId === sessionId && (change.kind === "progress" || change.cursor > afterCursor);
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(changes);
+        // Close the gap between the first durable read and subscribing.
+        if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
+        const result = yield* PubSub.take(subscription).pipe(
+          Effect.repeat({ until: wanted }),
+          Effect.timeoutOption(Math.max(1, options.heartbeatMs ?? 15_000)),
+        );
+        return Option.match(result, {
+          onNone: () => "heartbeat" as const,
+          onSome: (change) => change.kind,
+        });
       }),
-      () =>
-        Effect.gen(function* () {
-          // Close the gap between the first durable read and listener registration.
-          if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
-          const result = yield* Deferred.await(changed).pipe(
-            Effect.timeoutOption(Math.max(1, options.heartbeatMs ?? 15_000)),
-          );
-          return Option.getOrElse(result, () => "heartbeat" as const);
-        }),
-      () =>
-        Effect.sync(() => {
-          MutableHashSet.remove(listeners, listener);
-          MutableHashSet.remove(progressListeners, progressed);
-        }),
     );
   });
 

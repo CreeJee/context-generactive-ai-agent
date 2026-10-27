@@ -8,6 +8,7 @@ import {
   Match,
   MutableHashSet,
   Option,
+  Ref,
   Schema,
   Stream,
 } from "effect";
@@ -89,40 +90,57 @@ export function hostShell(source: NodeJS.ProcessEnv) {
   return Effect.map(shellInvocation("", source), (invocation) => invocation.file);
 }
 
+/** The first and last bytes of a stream, and how many it had in all. */
+interface Captured {
+  readonly head: Buffer;
+  readonly tailChunks: ReadonlyArray<Uint8Array>;
+  readonly tailLength: number;
+  readonly total: number;
+}
+
+const nothingCaptured: Captured = {
+  head: Buffer.alloc(0),
+  tailChunks: [],
+  tailLength: 0,
+  total: 0,
+};
+
+/** Drops the oldest tail chunks that the last `tailBytes` no longer reach. */
+const trimmedTail = (
+  chunks: ReadonlyArray<Uint8Array>,
+  length: number,
+): Pick<Captured, "tailChunks" | "tailLength"> => {
+  const [first, ...rest] = chunks;
+  return first !== undefined && length - first.length >= tailBytes
+    ? trimmedTail(rest, length - first.length)
+    : { tailChunks: chunks, tailLength: length };
+};
+
 /** Keeps the first and last bytes of a stream and counts what was dropped in between. */
-const makeCapture = () => {
-  let head = Buffer.alloc(0);
-  const tailChunks: Uint8Array[] = [];
-  let tailLength = 0;
-  let total = 0;
-
-  const push = (input: Uint8Array) => {
-    let chunk = input;
-    total += chunk.length;
-    if (head.length < headBytes) {
-      const room = headBytes - head.length;
-      head = Buffer.concat([head, chunk.subarray(0, room)]);
-      chunk = chunk.subarray(room);
-    }
-    if (chunk.length === 0) return;
-    tailChunks.push(chunk);
-    tailLength += chunk.length;
-    while (tailLength - (tailChunks[0]?.length ?? 0) >= tailBytes) {
-      tailLength -= tailChunks.shift()!.length;
-    }
+const captured = (state: Captured, input: Uint8Array): Captured => {
+  const room = Math.max(headBytes - state.head.length, 0);
+  const chunk = input.subarray(room);
+  const tail =
+    chunk.length === 0
+      ? state
+      : trimmedTail([...state.tailChunks, chunk], state.tailLength + chunk.length);
+  return {
+    head: room > 0 ? Buffer.concat([state.head, input.subarray(0, room)]) : state.head,
+    tailChunks: tail.tailChunks,
+    tailLength: tail.tailLength,
+    total: state.total + input.length,
   };
+};
 
-  const result = () => {
-    const kept = Buffer.concat(tailChunks);
-    const tail = kept.subarray(Math.max(kept.length - tailBytes, 0));
-    const omitted = total - head.length - tail.length;
-    const text =
-      omitted > 0
-        ? `${head.toString("utf8")}\n… ${omitted} bytes omitted …\n${tail.toString("utf8")}`
-        : Buffer.concat([head, tail]).toString("utf8");
-    return { text, truncated: omitted > 0, bytes: total };
-  };
-  return { push, result };
+const capturedText = ({ head, tailChunks, total }: Captured) => {
+  const kept = Buffer.concat(tailChunks);
+  const tail = kept.subarray(Math.max(kept.length - tailBytes, 0));
+  const omitted = total - head.length - tail.length;
+  const text =
+    omitted > 0
+      ? `${head.toString("utf8")}\n… ${omitted} bytes omitted …\n${tail.toString("utf8")}`
+      : Buffer.concat([head, tail]).toString("utf8");
+  return { text, truncated: omitted > 0, bytes: total };
 };
 
 export interface CommandResult {
@@ -169,32 +187,31 @@ export const runCommand = (options: CommandOptions) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { command } = options;
-      const effectClock = yield* Clock.Clock;
       const invocation = yield* shellInvocation(command, options.env);
       const shell = invocation.file;
-      const started = effectClock.currentTimeMillisUnsafe();
-      const stdout = makeCapture();
-      const stderr = makeCapture();
-      const result = (
+      const started = yield* Clock.currentTimeMillis;
+      const stdout = yield* Ref.make(nothingCaptured);
+      const stderr = yield* Ref.make(nothingCaptured);
+      const result = Effect.fnUntraced(function* (
         status: CommandResult["status"],
         exitCode: number | null,
         signal: string | null,
-      ): CommandResult => {
-        const out = stdout.result();
-        const err = stderr.result();
+      ): Effect.fn.Return<CommandResult> {
+        const out = capturedText(yield* Ref.get(stdout));
+        const err = capturedText(yield* Ref.get(stderr));
         return {
           command,
           shell,
           status,
           exitCode,
           signal,
-          durationMs: effectClock.currentTimeMillisUnsafe() - started,
+          durationMs: (yield* Clock.currentTimeMillis) - started,
           stdout: out.text,
           stderr: err.text,
           stdoutTruncated: out.truncated,
           stderrTruncated: err.truncated,
         };
-      };
+      });
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const handle = yield* spawner
         .spawn(
@@ -226,16 +243,17 @@ export const runCommand = (options: CommandOptions) =>
           runFork(handle.kill({ killSignal: "SIGKILL" }));
         },
       };
+      // The process exit hook reads this set synchronously, so it stays a native mutable set.
       yield* Effect.acquireRelease(
         Effect.sync(() => MutableHashSet.add(activeCommands, active)),
         () => Effect.sync(() => MutableHashSet.remove(activeCommands, active)),
       );
       const drain = (
         output: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
-        capture: typeof stdout,
+        capture: Ref.Ref<Captured>,
       ) =>
         output.pipe(
-          Stream.runForEach((chunk) => Effect.sync(() => capture.push(chunk))),
+          Stream.runForEach((chunk) => Ref.update(capture, (state) => captured(state, chunk))),
           Effect.forkScoped,
         );
       const pipes = yield* Effect.all([drain(handle.stdout, stdout), drain(handle.stderr, stderr)]);
@@ -285,7 +303,7 @@ export const runCommand = (options: CommandOptions) =>
           Signaled: (status) => ({ exitCode: null, signal: status.signal }),
         }),
       });
-      return result(
+      return yield* result(
         ended.reason ?? (exit.exitCode === 0 ? "succeeded" : "failed"),
         exit.exitCode,
         exit.signal,
