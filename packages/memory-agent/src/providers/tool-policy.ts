@@ -10,6 +10,7 @@ import {
   Context,
   Effect,
   Exit,
+  FileSystem,
   Layer,
   Match,
   Predicate,
@@ -410,7 +411,7 @@ function validateSandbox(
   tool: AnyProviderToolDescriptor,
   options: ProviderToolExecutionOptions,
   sandbox: ProviderToolSandboxPolicy | undefined,
-): Effect.Effect<string | null, ValidationFailure> {
+): Effect.Effect<string | null, ValidationFailure, FileSystem.FileSystem> {
   const sandboxViolation = (reason: ProviderToolSandboxViolation["reason"]) =>
     ProviderToolSandboxViolation.make({ toolId: tool.id, reason });
   const optionsViolation = (reason: ProviderToolOptionsViolation["reason"]) =>
@@ -571,13 +572,21 @@ const trustedSandbox = (
 };
 export function makeProviderToolPolicy(options: {
   readonly registry: ProviderToolCapabilityRegistry["Service"];
+  /** Checks the trusted workspace and the paths a call asks for. */
+  readonly fileSystem: FileSystem.FileSystem;
   readonly config?: ProviderToolPolicyConfig | undefined;
   readonly featureFlags?: ModelFeatureFlagsApi | undefined;
 }) {
-  return makeProviderToolPolicyBody(options.registry, options.config, options.featureFlags);
+  return makeProviderToolPolicyBody(
+    options.registry,
+    options.fileSystem,
+    options.config,
+    options.featureFlags,
+  );
 }
 function makeProviderToolPolicyBody(
   registry: ProviderToolCapabilityRegistry["Service"],
+  fileSystem: FileSystem.FileSystem,
   config: ProviderToolPolicyConfig = {},
   featureFlags?: ModelFeatureFlagsApi,
 ): ProviderToolPolicyApi {
@@ -694,7 +703,9 @@ function makeProviderToolPolicyBody(
         });
         const exposed = publicDescriptor(tool);
         yield* Effect.when(approvalOutcome(input), Effect.succeed(exposed.requiresApproval));
-        const workspaceRoot = yield* validateSandbox(tool, input.options, sandbox);
+        const workspaceRoot = yield* validateSandbox(tool, input.options, sandbox).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+        );
         return Object.freeze({ tool: exposed, workspaceRoot });
       }),
   };
@@ -706,9 +717,12 @@ export class ProviderToolPolicy extends Context.Service<
   /** Production default: provider-hosted tools only; no local authority is granted. */
   static readonly layer = Layer.effect(
     ProviderToolPolicy,
-    Effect.map(ProviderToolCapabilityRegistry, (registry) =>
-      makeProviderToolPolicy({ registry: registry }),
-    ),
+    Effect.gen(function* () {
+      return makeProviderToolPolicy({
+        registry: yield* ProviderToolCapabilityRegistry,
+        fileSystem: yield* FileSystem.FileSystem,
+      });
+    }),
   );
   /** Production flag-aware policy. Both model exposure and execution revalidation read fresh flags. */
   static readonly featureFlagLayer = Layer.effect(
@@ -716,6 +730,7 @@ export class ProviderToolPolicy extends Context.Service<
     Effect.gen(function* () {
       return makeProviderToolPolicy({
         registry: yield* ProviderToolCapabilityRegistry,
+        fileSystem: yield* FileSystem.FileSystem,
         config: {},
         featureFlags: yield* ModelFeatureFlags,
       });
@@ -727,6 +742,7 @@ export class ProviderToolPolicy extends Context.Service<
       Effect.gen(function* () {
         return makeProviderToolPolicy({
           registry: yield* ProviderToolCapabilityRegistry,
+          fileSystem: yield* FileSystem.FileSystem,
           config: config,
           featureFlags: yield* ModelFeatureFlags,
         });
@@ -736,9 +752,13 @@ export class ProviderToolPolicy extends Context.Service<
   static readonly layerWithConfig = (config: ProviderToolPolicyConfig) =>
     Layer.effect(
       ProviderToolPolicy,
-      Effect.map(ProviderToolCapabilityRegistry, (registry) =>
-        makeProviderToolPolicy({ registry: registry, config: config }),
-      ),
+      Effect.gen(function* () {
+        return makeProviderToolPolicy({
+          registry: yield* ProviderToolCapabilityRegistry,
+          fileSystem: yield* FileSystem.FileSystem,
+          config: config,
+        });
+      }),
     );
   static readonly layerFrom = (service: ProviderToolPolicyApi) =>
     Layer.succeed(ProviderToolPolicy, service);

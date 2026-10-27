@@ -200,6 +200,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
     const repository = top.stdout.trim();
     const prefix = yield* expect(operation, projectRoot, ["rev-parse", "--show-prefix"]);
     const base = yield* canonicalPathEffect(worktreesBase).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
       Effect.mapError((cause) =>
         CardWorktreeFailed.make({ operation, reason: reasons.UnsafeWorktreeBase.make({}), cause }),
       ),

@@ -1,15 +1,7 @@
-import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { Hex } from "effect/encoding";
-import {
-  Context as PlatformContext,
-  Effect as PlatformEffect,
-  Layer as PlatformLayer,
-  Crypto,
-  FileSystem,
-} from "effect";
+import { Context, Crypto, FileSystem } from "effect";
 import { Function as EffectFunction } from "effect";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { path } from "../runtime/synchronous-path.ts";
 import { Effect, Exit, Match, MutableHashMap, Option, Schema, Scope } from "effect";
 import { PathRejected } from "./paths.ts";
@@ -17,27 +9,8 @@ import { PathRejected } from "./paths.ts";
 // Path operations remain synchronous at these public host boundaries.
 const { basename, dirname, join } = path;
 
-// NodeCrypto's digest and UUID primitives execute synchronously at host API boundaries.
-const hostCrypto = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodeCrypto.layer);
-      return PlatformContext.get(services, Crypto.Crypto);
-    }),
-  ),
-);
-
-const fileSystem = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodeFileSystem.layer);
-      return PlatformContext.get(services, FileSystem.FileSystem);
-    }),
-  ),
-);
-
 // A Reference makes the OS boundary testable without changing the host platform globally.
-export const FileReadPlatform = PlatformContext.Reference<"windows" | "posix">(
+export const FileReadPlatform = Context.Reference<"windows" | "posix">(
   "memory-agent/files/FileReadPlatform",
   { defaultValue: () => (process.platform === "win32" ? "windows" : "posix") },
 );
@@ -181,6 +154,7 @@ const readWindowsFileBytes = Effect.fn("readWindowsFileBytes")(function* (
   options: FileReadOptions,
 ) {
   const { absolute, path } = options;
+  const fileSystem = yield* FileSystem.FileSystem;
   const leaf = yield* fileIo(path, "open", fileSystem.lstat(absolute));
   if (leaf.type === "SymbolicLink") return yield* PathRejected.make({ path, reason: "symlink" });
   return yield* Effect.scoped(
@@ -192,6 +166,7 @@ const readWindowsFileBytes = Effect.fn("readWindowsFileBytes")(function* (
 
 const readPosixFileBytes = Effect.fn("readPosixFileBytes")(function* (options: FileReadOptions) {
   const { absolute, path } = options;
+  const fileSystem = yield* FileSystem.FileSystem;
   return yield* Effect.scoped(
     fileIo(path, "open", fileSystem.open(absolute, { noFollow: true })).pipe(
       Effect.flatMap((handle) => readOpenedFile(handle, options)),
@@ -249,6 +224,7 @@ export const createTextFileEffect = Effect.fn("createTextFile")(function* (optio
   readonly text: string;
 }) {
   const { absolute, path, text } = options;
+  const fileSystem = yield* FileSystem.FileSystem;
   yield* fileIo(path, "mkdir", fileSystem.makeDirectory(dirname(absolute), { recursive: true }));
   const bytes = Buffer.from(text, "utf8");
   const noFollow = (yield* FileReadPlatform) === "posix";
@@ -278,12 +254,13 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
   readonly text: string;
 }) {
   const { absolute, path, expectedSha256, text } = options;
+  const fileSystem = yield* FileSystem.FileSystem;
   const current = yield* readTextFileEffect({ absolute, path });
   yield* Effect.when(changed(path), Effect.succeed(current.sha256 !== expectedSha256));
   const bytes = Buffer.from(text, "utf8");
   const temporary = join(
     dirname(absolute),
-    `.${basename(absolute)}.${yield* hostCrypto.randomUUIDv4()}.tmp`,
+    `.${basename(absolute)}.${yield* (yield* Crypto.Crypto).randomUUIDv4()}.tmp`,
   );
   const noFollow = (yield* FileReadPlatform) === "posix";
   // The temporary file's handle lives in its own scope, so it closes before the swap and the
@@ -323,7 +300,11 @@ export const deleteTextFileEffect = Effect.fn("deleteTextFile")(function* (optio
   const { absolute, path, expectedSha256 } = options;
   const current = yield* readTextFileEffect({ absolute, path });
   yield* Effect.when(changed(path), Effect.succeed(current.sha256 !== expectedSha256));
-  yield* fileIo(path, "remove", fileSystem.remove(absolute));
+  yield* fileIo(
+    path,
+    "remove",
+    Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(absolute)),
+  );
   return { bytes: current.bytes };
 });
 
@@ -416,6 +397,8 @@ export const createTextPageReader = () => {
     readonly checkLeaf?: boolean;
   }) {
     const { absolute, path, startLine, maxLines, checkLeaf = false } = options;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const crypto = yield* Crypto.Crypto;
     const noFollow = (yield* FileReadPlatform) === "posix";
     return yield* Effect.scoped(
       Effect.gen(function* () {
@@ -467,7 +450,7 @@ export const createTextPageReader = () => {
             catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
           });
           // NodeCrypto digest only fails as a defect, as createHash did.
-          const digest = yield* Effect.orDie(hostCrypto.digest("SHA-256", contents));
+          const digest = yield* Effect.orDie(crypto.digest("SHA-256", contents));
           index = { stamp, size, offsets: Uint32Array.from(offsets), sha256: Hex.encode(digest) };
         }
         const totalLines = index.offsets.length;

@@ -1,6 +1,6 @@
 import { Cause } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Crypto, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFilesEffect, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { resolveFencedOutsidePath, type Fenced } from "../files/paths.ts";
@@ -78,9 +78,10 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const snapshots = yield* createSnapshots();
   const readPage = createTextPageReader();
+  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
 
   /** The listing `lookup` finds, failing with `expired` when its snapshot is gone. */
-  const unexpired = <E>(lookup: Effect.Effect<Snapshot | undefined, E>, expired: string) =>
+  const unexpired = <E, R>(lookup: Effect.Effect<Snapshot | undefined, E, R>, expired: string) =>
     Effect.flatMap(lookup, (found) =>
       Effect.fromOption(
         Option.liftPredicate(found, isTruthy),
@@ -135,7 +136,7 @@ const make = Effect.gen(function* () {
               paths,
               nextOffset: next < view.paths.length ? next : null,
             };
-          }),
+          }).pipe(Effect.provideContext(platform)),
         ),
 
       readOutsideFile: ({ path, startLine, maxLines }: typeof readOutsideInput.Type) =>
@@ -154,7 +155,7 @@ const make = Effect.gen(function* () {
                 checkLeaf: true,
               })),
             };
-          }),
+          }).pipe(Effect.provideContext(platform)),
         ),
 
       searchOutsideFile: ({
@@ -248,7 +249,7 @@ const make = Effect.gen(function* () {
                 : null,
               complete: page.next === null && page.skipped.length === 0 && !view.truncated,
             };
-          }),
+          }).pipe(Effect.provideContext(platform)),
         ),
     };
   };

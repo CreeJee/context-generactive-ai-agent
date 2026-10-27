@@ -15,7 +15,7 @@ const scopedFiles = Effect.fnUntraced(function* (root: string) {
   const path = yield* Path.Path;
   const visit = (
     directory: string,
-  ): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError> =>
+  ): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError, FileSystem.FileSystem> =>
     Effect.flatMap(fs.readDirectory(path.join(root, directory)), (names) =>
       Effect.map(
         Effect.forEach(names, (name) => {

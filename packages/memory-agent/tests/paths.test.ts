@@ -3,6 +3,7 @@ import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { isCredentialPath, resolveOutsidePath, resolveProjectPath } from "../src/files/paths.ts";
+import { withTestPlatform } from "./support/platform.ts";
 
 const layout = Effect.fn("paths.layout")(function* () {
   const context = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
@@ -26,10 +27,11 @@ const layout = Effect.fn("paths.layout")(function* () {
   }).pipe(Effect.provideContext(context));
 });
 
-const reason = <A>(
+const reason = <A, R>(
   effect: Effect.Effect<
     A,
-    import("../src/files/paths.ts").PathRejected | import("effect").PlatformError.PlatformError
+    import("../src/files/paths.ts").PathRejected | import("effect").PlatformError.PlatformError,
+    R
   >,
 ) =>
   effect.pipe(
@@ -77,7 +79,7 @@ describe("resolveProjectPath", () => {
         absolute: path.join(project, "docs", "new", "plan.md"),
         stats: undefined,
       });
-    }),
+    }).pipe(withTestPlatform),
   );
 
   it.live("refuses escapes, .git, credentials and malformed spellings", () =>
@@ -98,7 +100,7 @@ describe("resolveProjectPath", () => {
       );
       expect(yield* reason(resolveProjectPath(project, ".GIT/HEAD", "file"))).toBe("git_internal");
       expect(yield* reason(resolveProjectPath(project, ".env", "new-or-file"))).toBe("credential");
-    }),
+    }).pipe(withTestPlatform),
   );
 
   it.live("refuses symlinks anywhere on the path and hard-linked files", () =>
@@ -113,7 +115,7 @@ describe("resolveProjectPath", () => {
       );
       expect(yield* reason(resolveProjectPath(project, "notes.md", "file"))).toBe("symlink");
       expect(yield* reason(resolveProjectPath(project, "hard.md", "file"))).toBe("hard_link");
-    }),
+    }).pipe(withTestPlatform),
   );
 
   it.live("reports kind mismatches", () =>
@@ -127,7 +129,7 @@ describe("resolveProjectPath", () => {
         "not_directory",
       );
       expect(yield* reason(resolveProjectPath(project, "missing.ts", "file"))).toBe("not_found");
-    }),
+    }).pipe(withTestPlatform),
   );
 });
 
@@ -152,7 +154,7 @@ describe("resolveOutsidePath", () => {
         absolute: path.join(outside, "a", "b.txt"),
         stats: undefined,
       });
-    }),
+    }).pipe(withTestPlatform),
   );
 
   it.live("refuses relative paths, the project, the storage root and credentials", () =>
@@ -179,7 +181,7 @@ describe("resolveOutsidePath", () => {
           resolveOutsidePath(project, storage, path.join(outside, ".env"), "new-or-file"),
         ),
       ).toBe("credential");
-    }),
+    }).pipe(withTestPlatform),
   );
 
   it.live("judges a symlink by where it points", () =>
@@ -205,7 +207,7 @@ describe("resolveOutsidePath", () => {
           ),
         ),
       ).toBe("inside_project");
-    }),
+    }).pipe(withTestPlatform),
   );
 
   it.live("protects the directories a linked project or storage root points to", () =>
@@ -226,6 +228,6 @@ describe("resolveOutsidePath", () => {
           resolveOutsidePath(project, storageLink, path.join(storage, "state.txt"), "file"),
         ),
       ).toBe("credential");
-    }),
+    }).pipe(withTestPlatform),
   );
 });

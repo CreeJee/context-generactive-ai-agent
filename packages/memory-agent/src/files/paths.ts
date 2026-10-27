@@ -1,11 +1,5 @@
-import {
-  Context as PlatformContext,
-  Effect as PlatformEffect,
-  Layer as PlatformLayer,
-  FileSystem,
-} from "effect";
+import { FileSystem } from "effect";
 import { Function as EffectFunction } from "effect";
-import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { path } from "../runtime/synchronous-path.ts";
 import { Effect, HashSet, Option, Schema } from "effect";
 import type { PlatformError } from "effect";
@@ -154,18 +148,8 @@ function pathsOverlapBody(left: string, right: string): boolean {
   return contains(left, right) || contains(right, left);
 }
 
-// These exports are host filesystem boundaries, like text.ts. Build the first-party service once;
-// every inspection remains an interruptible Effect, with PlatformError in its failure channel.
-const fileSystem = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodeFileSystem.layer);
-      return PlatformContext.get(services, FileSystem.FileSystem);
-    }),
-  ),
-);
 const lstat = (path: string) =>
-  fileSystem.lstat(path).pipe(
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.lstat(path)).pipe(
     Effect.asSome,
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
     Effect.map(Option.getOrUndefined),
@@ -179,8 +163,9 @@ const lstat = (path: string) =>
  */
 export const canonicalPathEffect = Effect.fn("Paths.canonicalPath")(function* (
   path: string,
-): Effect.fn.Return<string, PlatformError.PlatformError> {
-  return yield* fileSystem.realPath(path).pipe(
+): Effect.fn.Return<string, PlatformError.PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.realPath(path).pipe(
     Effect.catchReason("PlatformError", "NotFound", () => {
       const parent = dirname(path);
       return parent === path
@@ -248,7 +233,7 @@ function resolveProjectPathBody(
   root: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Effect.Effect<ProjectPath, PathRejected | PlatformError.PlatformError> {
+): Effect.Effect<ProjectPath, PathRejected | PlatformError.PlatformError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const spelled = path === "" ? "." : path;
     if (isAbsolute(spelled) || spelled.includes("\\") || hasControlCharacter(spelled))
@@ -321,7 +306,7 @@ function resolveOutsidePathBody(
   storageRoot: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Effect.Effect<OutsidePath, PathRejected | PlatformError.PlatformError> {
+): Effect.Effect<OutsidePath, PathRejected | PlatformError.PlatformError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     if (!isAbsolute(path) || hasControlCharacter(path)) return yield* reject(path, "invalid_path");
     const spelled = resolve(path);
@@ -369,7 +354,11 @@ export const resolveFencedOutsidePath = Effect.fn("Paths.resolveFencedOutsidePat
   storageRoot: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Effect.fn.Return<OutsidePath, PathRejected | PlatformError.PlatformError> {
+): Effect.fn.Return<
+  OutsidePath,
+  PathRejected | PlatformError.PlatformError,
+  FileSystem.FileSystem
+> {
   const resolved = yield* resolveOutsidePathBody(projectRoot, storageRoot, path, kind);
   yield* Effect.forEach(
     fence?.deniedRoots ?? [],

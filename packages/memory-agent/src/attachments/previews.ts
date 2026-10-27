@@ -1,5 +1,5 @@
 import { errorTag } from "../tools/failure.ts";
-import { Context, Effect, HashSet, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, FileSystem, HashSet, Layer, Option, Predicate, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import { readFileBytesEffect } from "../files/text.ts";
 import type { JsonValue } from "../json.ts";
@@ -29,6 +29,7 @@ const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
   const attachments = yield* Attachments;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   /**
    * A preview of the SVG a tool just wrote, or nothing. The file is read back through the same
@@ -45,6 +46,7 @@ const make = Effect.gen(function* () {
         mimeType: picture.mimeType,
       });
     }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
       // The preview is extra: the tool's own result stands without it.
       Effect.catch((error) =>
         Effect.as(

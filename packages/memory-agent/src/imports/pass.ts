@@ -115,7 +115,9 @@ const make = (home: string) =>
     const bulk = yield* BulkNodes;
     const config = yield* GlobalConfig;
     const redactor = yield* SecretRedactor;
-    const storageRoot = yield* canonicalPathEffect(storage.path);
+    const canonicalPath = (path: string) =>
+      canonicalPathEffect(path).pipe(Effect.provideContext(filesystemContext));
+    const storageRoot = yield* canonicalPath(storage.path);
     const checkouts = yield* Checkouts;
 
     const hideText = (text: string) =>
@@ -208,7 +210,7 @@ const make = (home: string) =>
      */
     const projectOf = (cwd: string) =>
       Effect.gen(function* () {
-        const canonical = yield* canonicalPathEffect(cwd);
+        const canonical = yield* canonicalPath(cwd);
         const registered = yield* projects.listAll;
         const owner = EffectArray.head(
           registered
@@ -456,7 +458,7 @@ const make = (home: string) =>
         Effect.flatMap(
           Effect.filter(
             (transcript) =>
-              canonicalPathEffect(transcript.path).pipe(
+              canonicalPath(transcript.path).pipe(
                 Effect.map((canonical) => !isWithin(storageRoot, canonical)),
               ),
             { concurrency: 16 },

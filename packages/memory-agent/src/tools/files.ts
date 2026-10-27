@@ -8,8 +8,10 @@ import {
   MutableHashMap,
   Option,
   Context,
+  Crypto,
   Effect,
   Fiber,
+  FileSystem,
   Result,
   Layer,
   Schema,
@@ -196,7 +198,8 @@ const replaced = (edit: {
 const make = Effect.gen(function* () {
   const redactor = yield* SecretRedactor;
   const snapshots = yield* createSnapshots();
-  const unexpired = <E>(lookup: Effect.Effect<Snapshot | undefined, E>, expired: string) =>
+  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
+  const unexpired = <E, R>(lookup: Effect.Effect<Snapshot | undefined, E, R>, expired: string) =>
     Effect.flatMap(lookup, (found) =>
       Effect.fromOption(
         Option.liftPredicate(found, isTruthy),
@@ -329,7 +332,7 @@ const make = Effect.gen(function* () {
             paths,
             nextOffset: next < view.paths.length ? next : null,
           };
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
 
     searchFiles: ({
@@ -447,7 +450,7 @@ const make = Effect.gen(function* () {
             ),
             complete: page.next === null && page.skipped.length === 0,
           };
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
 
     readFile: ({ path, startLine, maxLines }: typeof readFileInput.Type) =>
@@ -466,7 +469,7 @@ const make = Effect.gen(function* () {
               checkLeaf: true,
             })),
           };
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
 
     writeFile: ({ path, content, expectedSha256 }: typeof writeFileInput.Type) =>
@@ -517,7 +520,7 @@ const make = Effect.gen(function* () {
             onNone: () => create,
             onSome: replace,
           });
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
 
     editFile: ({
@@ -553,7 +556,7 @@ const make = Effect.gen(function* () {
             text: edited.text,
           });
           return { path, replacements: edited.replacements, ...written };
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
 
     deleteFile: ({ path, expectedSha256 }: typeof deleteFileInput.Type) =>
@@ -567,7 +570,7 @@ const make = Effect.gen(function* () {
             expectedSha256: expectedSha256,
           });
           return { path, deleted: true, ...removed };
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
   });
 

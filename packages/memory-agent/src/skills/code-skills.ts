@@ -3,9 +3,11 @@ import {
   Array as EffectArray,
   Clock,
   Context,
+  Crypto,
   Data,
   DateTime,
   Effect,
+  FileSystem,
   Function as EffectFunction,
   HashSet,
   Layer,
@@ -345,6 +347,7 @@ export const SavedProgram = Data.taggedEnum<SavedProgram>();
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
   // The table keeps its name from when every saved skill was a shell script.
   const approved = (projectId: string, name: string, sha256: string) =>
     Effect.map(
@@ -485,7 +488,7 @@ const make = Effect.gen(function* () {
           }),
         }),
       );
-    }),
+    }, Effect.provideContext(platform)),
 
     /** The program to run: refused unless its current content is approved (or the project is `full`). */
     runnable: Effect.fn("CodeSkills.runnable")(function* (project: Project, name: string) {
@@ -500,7 +503,7 @@ const make = Effect.gen(function* () {
               detail: `${name}'s program changed since it was approved, or was never approved. Read it, then save it again with save_code_skill so the user can approve this content.`,
             }),
           );
-    }),
+    }, Effect.provideContext(platform)),
   };
 });
 

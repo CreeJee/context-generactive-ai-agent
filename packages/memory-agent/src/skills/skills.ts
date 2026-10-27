@@ -172,7 +172,9 @@ const make = (options: SkillsOptions) =>
         if (entry.type !== "File") return SkillRead.none();
         if (Number(entry.size) > maxSkillBytes) return problem("too_large");
         // Open the same leaf without following a link swapped in after discovery.
-        const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file });
+        const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+        );
         if (bytes.length > maxSkillBytes) return problem("too_large");
         const text = new TextDecoder().decode(bytes);
         const { fields, body } = parseFrontMatter(text);

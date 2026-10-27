@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { Context, Crypto, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import {
@@ -132,6 +132,7 @@ const make = Effect.gen(function* () {
   const codeSkills = yield* CodeSkills;
   const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
 
   /** The approved tools' calls for `project`, each failing with what the model reads. */
   const callsFor = (project: Fenced<Project>, binding?: BackgroundBinding) => ({
@@ -164,7 +165,7 @@ const make = Effect.gen(function* () {
             project.root,
             storage.path,
             workdir ?? ".",
-          );
+          ).pipe(Effect.provideContext(platform));
           const seconds = Math.min(
             Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
             maxTimeoutSeconds,
@@ -287,7 +288,7 @@ const make = Effect.gen(function* () {
                 Effect.map((replaced) => ({ path: target.absolute, created: false, ...replaced })),
               ),
           });
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
 
     deleteOutsideFile: ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
@@ -307,7 +308,7 @@ const make = Effect.gen(function* () {
             expectedSha256,
           });
           return { path: target.absolute, deleted: true, ...removed };
-        }),
+        }).pipe(Effect.provideContext(platform)),
       ),
   });
 

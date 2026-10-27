@@ -50,7 +50,11 @@ const defaultPolicyLayer = ProviderToolPolicy.layer.pipe(
 );
 const run = Effect.fn("providerPolicy.run")(function* <A, E>(
   effect: Effect.Effect<A, E, ProviderToolPolicy>,
-  layer: Layer.Layer<ProviderToolPolicy, ProviderToolMetadataFailure> = defaultPolicyLayer,
+  layer: Layer.Layer<
+    ProviderToolPolicy,
+    ProviderToolMetadataFailure,
+    FileSystem.FileSystem
+  > = defaultPolicyLayer,
 ) {
   const services = yield* Layer.build(layer);
   return yield* Effect.provideContext(effect, services);
@@ -147,6 +151,7 @@ describe("ProviderToolPolicy", () => {
         registry: registry,
         config: {},
         featureFlags: flags,
+        fileSystem: yield* FileSystem.FileSystem,
       });
       expect((yield* policy.expose(basePolicy())).tools.map((tool) => tool.id)).toEqual([
         "openai:web_search",
@@ -165,7 +170,7 @@ describe("ProviderToolPolicy", () => {
       );
       expect(denied).toBeInstanceOf(ProviderToolPolicyDenied);
       expect(denied).toMatchObject({ reason: "feature_flag_disabled" });
-    }),
+    }).pipe(withTestPlatform),
   );
 
   effectTest.live("does not expose local high-risk tools without trusted authority", () =>
