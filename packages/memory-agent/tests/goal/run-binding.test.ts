@@ -1,19 +1,16 @@
 import { Cause, Effect, Fiber, Schema } from "effect";
-import { expect, vi } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { decodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
-import * as workerPreflight from "../../src/agent/full-loop-preflight.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
-import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
+import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
-  statement: "Run safely in worker",
+  statement: "Run safely",
   outcomes: ["One durable turn"],
   constraints: [],
   nonGoals: [],
@@ -93,45 +90,6 @@ const latestRevision = (session: string) =>
     );
   });
 
-const Receipt = Schema.Struct({ fingerprint: Schema.String, status: Schema.String });
-const Frame = Schema.fromJsonString(
-  Schema.Struct({ operation: Schema.String, input: Schema.Json }),
-);
-const MiddlewareInput = Schema.Struct({ index: Schema.Finite, hook: Schema.String });
-
-/** Owner ledger receipts of middleware hooks, named by the worker's middleware order. */
-const middlewareHooks = Effect.fnUntraced(function* (
-  runId: string,
-  middlewareNames: readonly string[],
-) {
-  const receipts = yield* Schema.decodeUnknownEffect(Schema.Array(Receipt))(
-    yield* sqlAll("SELECT fingerprint, status FROM owner_rpc_operations WHERE run_id = ?", runId),
-  );
-  // The ledger persists canonical {operation,input} in fingerprint, not input_json.
-  const hooks = yield* Effect.forEach(
-    receipts,
-    Effect.fnUntraced(function* (receipt) {
-      const frame = yield* Schema.decodeEffect(Frame)(receipt.fingerprint);
-      if (frame.operation !== "middleware") return [];
-      const input = yield* Schema.decodeUnknownEffect(MiddlewareInput)(
-        decodeFullLoopValue(frame.input),
-      );
-      return [{ name: middlewareNames[input.index], hook: input.hook, status: receipt.status }];
-    }),
-  );
-  return hooks.flat();
-});
-
-/** Replace ChatState's middleware for this test only. */
-const extendMiddleware = Effect.fnUntraced(function* (
-  extra: ReturnType<ChatState["Service"]["middleware"]>[number],
-) {
-  const state = yield* ChatState;
-  const original = state.middleware.bind(state);
-  vi.spyOn(state, "middleware").mockImplementation(() => [...original(), extra]);
-  yield* Effect.addFinalizer(() => Effect.sync(() => vi.restoreAllMocks()));
-});
-
 type Refusal = "unresolved-bound-run" | "foreign-session" | "changed-goal";
 
 /**
@@ -161,98 +119,7 @@ const slowTurn = turnGate();
 testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
   "Goal chat run admission",
   (it) => {
-    it.effect.each([false, true])("opt-in AgentChat full worker finalizer failure=%s", (fail) =>
-      Effect.gen(function* () {
-        const session = yield* withGoal;
-        const runId = `${session}:worker`;
-        const failingCleanup = vi.fn(() => {
-          throw new Error("injected owner finalizer failure");
-        });
-        if (fail)
-          yield* extendMiddleware({
-            name: "memory-agent/partial-answer",
-            onFinish: failingCleanup,
-          });
-        let middlewareNames: readonly string[] = [];
-        const preflight = workerPreflight.preflightFullLoopExecution;
-        vi.spyOn(workerPreflight, "preflightFullLoopExecution").mockImplementation(
-          (turn, capabilities) => {
-            middlewareNames = capabilities.middleware.map((middleware) => middleware.name ?? "");
-            return preflight(turn, capabilities);
-          },
-        );
-        yield* Effect.addFinalizer(() => Effect.sync(() => vi.restoreAllMocks()));
-        const response = yield* post(session, runId);
-        expect(response.status).toBe(200);
-        const body = yield* sdkCall(() => response.text());
-        expect(body).toContain("Hello from fast-1");
-        if (fail) {
-          expect(failingCleanup).toHaveBeenCalledTimes(1);
-          expect(body.match(/"type":"RUN_ERROR"/g)).toHaveLength(1);
-          expect(body).not.toContain("injected owner finalizer failure");
-        } else {
-          expect(body).not.toContain("RUN_ERROR");
-          const hooks = yield* middlewareHooks(runId, middlewareNames);
-          for (const name of ["memory-agent/subagents", "memory-agent/promoted-memory-use"]) {
-            expect(
-              hooks.filter((entry) => entry.name === name && entry.hook === "onFinish"),
-            ).toEqual([{ name, hook: "onFinish", status: "succeeded" }]);
-          }
-        }
-        expect(yield* count("nodes WHERE session_id = ? AND kind = 'assistant'", session)).toEqual({
-          n: fail ? 0 : 1,
-        });
-        expect(
-          yield* count("owner_rpc_operations WHERE run_id = ? AND status = 'pending'", runId),
-        ).toEqual({ n: 0 });
-        expect(
-          Number((yield* count("owner_rpc_operations WHERE run_id = ?", runId))?.n),
-        ).toBeGreaterThan(0);
-        expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
-          status: fail ? "failed" : "completed",
-        });
-        const execution = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({ status: Schema.String, result_json: Schema.String }),
-        )(
-          yield* sqlGet(
-            "SELECT status, result_json FROM owner_workflow_executions WHERE json_extract(payload_json, '$.identity.runId') = ?",
-            runId,
-          ),
-        );
-        expect(execution.status).toBe("completed");
-        expect(execution.result_json).toContain(fail ? "Failure" : "Success");
-        if (fail) expect(execution.result_json).toContain("SideEffectUncertain");
-        expect(yield* count("workflow_run_bindings WHERE run_id = ?", runId)).toEqual({ n: 1 });
-        expect(yield* count("workflow_worker_dispatches WHERE run_id = ?", runId)).toEqual({
-          n: 1,
-        });
-        expect((yield* post(session, runId)).status).toBe(409);
-        expect(yield* count("nodes WHERE session_id = ? AND kind = 'user'", session)).toEqual({
-          n: 1,
-        });
-      }),
-    );
-
-    it.effect("unsupported opt-in worker preflight creates neither binding nor user node", () =>
-      Effect.gen(function* () {
-        const session = yield* withGoal;
-        // A member the worker cannot carry, beyond what ChatState's own middleware declares.
-        const unsupported = { name: "unsupported-preflight", unsupportedMember: true };
-        yield* extendMiddleware(unsupported);
-        const response = yield* post(session, `${session}:unsupported`);
-        expect(response.status).toBe(409);
-        expect(yield* sdkCall(() => response.json())).toEqual({
-          error: "unsupported_worker_capabilities",
-          detail: "UnsupportedMiddlewareMember",
-        });
-        expect(yield* count("workflow_run_bindings WHERE session_id = ?", session)).toEqual({
-          n: 0,
-        });
-        expect(yield* count("nodes WHERE session_id = ?", session)).toEqual({ n: 0 });
-      }),
-    );
-
-    it.effect("new Goal turns automatically acquire a durable worker binding", () =>
+    it.effect("new Goal turns automatically acquire a durable binding", () =>
       Effect.gen(function* () {
         const session = yield* withGoal;
         for (const runId of [`${session}:automatic`, `${session}:another-automatic`]) {

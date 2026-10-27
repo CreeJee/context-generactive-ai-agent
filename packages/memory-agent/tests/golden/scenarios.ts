@@ -130,8 +130,7 @@ export const chatScenarios: {
   scenario("a call to a tool the run never offered", "unknown-tool", "ask", (chat) =>
     chat.send("golden:unknown-tool"),
   );
-  // Requests a changed page could send. A Goal worker's own requests to the owner are checked in
-  // tests/full-loop/owner-authority.test.ts; step 5 removes the worker.
+  // Requests a changed page could send.
   it.effect(
     "requests the page never sends are refused and leave the approval waiting",
     () =>

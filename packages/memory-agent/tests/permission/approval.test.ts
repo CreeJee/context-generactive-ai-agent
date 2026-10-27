@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
@@ -125,10 +125,37 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const tab = yield* chatClient(sessionId, "send");
       yield* tab.send("please use the shell");
       yield* tab.pendingInterrupt;
-      expect(tab.client.getInterrupts()[0]).toMatchObject({ toolName: "save_code_skill" });
-      tab.client.resolveInterrupts(true);
-      yield* tab.answered("Shell said", "the Verify shell result");
-      expect(tab.text()).toContain("approved-output");
+      const [pending] = tab.client.getInterrupts();
+      expect(pending).toMatchObject({ message: "Approval required to run save_code_skill" });
+      // A Goal run is on the Effect AI loop, whose approvals the page's client cannot answer
+      // before step 6 (docs/effect-ai-migration.md). Answer as that client will: a new run whose
+      // parent is the interrupted one.
+      const resumed = yield* (yield* AgentChat).handle(
+        new Request("http://127.0.0.1/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            threadId: sessionId,
+            runId: `${sessionId}:approved`,
+            parentRunId: pending?.interruptedRunId,
+            resume: [
+              {
+                interruptId: pending?.interruptId,
+                status: "resolved",
+                payload: { approved: true },
+              },
+            ],
+            messages: [],
+            tools: [],
+            context: [],
+          }),
+        }),
+        sessionId,
+      );
+      expect(resumed.status).toBe(200);
+      const answer = yield* sdk(() => resumed.text());
+      expect(answer).toContain("Shell said");
+      expect(answer).toContain("approved-output");
     }),
   );
 

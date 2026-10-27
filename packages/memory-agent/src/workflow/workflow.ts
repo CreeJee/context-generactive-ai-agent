@@ -1198,8 +1198,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             if (input.planStatus === "completed" && steps.some((step) => step.status !== "done"))
               return yield* WorkflowProgressRefused.make({ reason: "steps_incomplete" });
 
-            const stageCompletion =
-              (yield* completion.required(sessionId)) && (yield* completion.running(recorderRunId));
+            // The ledger holds a running recorder's own calls as pending until the run settles.
+            const stageCompletion = yield* completion.running(recorderRunId);
             const mappings = input.criterionMappings;
             const derived =
               mappings === undefined

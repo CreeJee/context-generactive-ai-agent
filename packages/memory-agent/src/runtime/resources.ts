@@ -90,20 +90,6 @@ export type RuntimeWorker =
   | "sandbox-worker"
   | "code-worker";
 
-/** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
-export function runtimeArtifact(name: "artifact-manifest.json" | "native.mjs") {
-  const root = runtimeRoot();
-  return root === null
-    ? path.join(
-        createRequire(import.meta.url).resolve("memory-agent/package.json"),
-        "..",
-        "dist",
-        "runtime",
-        name,
-      )
-    : path.join(root, name);
-}
-
 /**
  * A worker script's file. In a checkout it is found through the package exports rather than next to
  * the module that starts it, because the app bundles that module into its server build while the

@@ -25,7 +25,6 @@ const inspection = Schema.Struct({
   bindings: Schema.Array(Schema.Unknown),
   operations: Schema.Array(Schema.Unknown),
   revisions: Schema.Array(Schema.Unknown),
-  dispatches: Schema.Array(Schema.Unknown),
   executions: Schema.Array(Schema.Struct({ runId: Schema.String, status: Schema.String })),
   runs: Schema.Array(Schema.Struct({ status: Schema.String })),
 });
@@ -185,7 +184,6 @@ it.live(
             const recovered = yield* inspect(second);
             expect(recovered.bindings).toEqual(old.bindings);
             expect(recovered.revisions).toEqual(old.revisions);
-            expect(recovered.dispatches).toEqual(old.dispatches);
             expect(recovered.operations).toEqual(old.operations);
             expect(recovered.runs).toHaveLength(1);
             expect(recovered.runs[0].status).toBe("failed");

@@ -16,7 +16,7 @@ import { TestEnv } from "../support/test-env.ts";
 /** The call id the scripted model wrote, without the conversation it carries. */
 const scripted = (id: string) => id.replace(/@.*$/, "");
 
-goldenAgent({ chatLoop: "effect-ai" })("parallel tools in a Goal run", (it) => {
+goldenAgent()("parallel tools in a Goal run", (it) => {
   it.effect(
     "records every call of the step and shows all results to the next step",
     () =>

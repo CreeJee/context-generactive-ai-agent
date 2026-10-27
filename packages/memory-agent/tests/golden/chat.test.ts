@@ -1,15 +1,14 @@
-import { Effect } from "effect";
 import { chatScenarios, goalRestartScenario, goalScenarios, goldenAgent } from "./scenarios.ts";
 
+// Every Goal run is on the Effect AI loop whatever `ChatLoop` says (docs/effect-ai-migration.md
+// step 5), so its golden files are the Effect AI loop's.
 goldenAgent()("golden chat rows", (it) => {
   chatScenarios(it, "");
-  goalScenarios(it, "");
+  goalScenarios(it, "effect-ai/");
 });
 
 // A restart replaces the agent, so this block has an agent of its own.
 goldenAgent()("golden chat rows across a restart", (it) => {
-  // The next Goal turn is left out: the worker's ledger still refuses its first side effect
-  // (`uncertain_run`) after the user continued, and the run never ends. The Effect AI loop runs it
-  // (`effect-ai.test.ts`).
-  goalRestartScenario(it, "", () => Effect.void);
+  // The Goal's next turn writes again once the user continued past the cut run.
+  goalRestartScenario(it, "effect-ai/", (chat) => chat.send("golden:goal-after-restart"));
 });

@@ -61,19 +61,6 @@ const program = Effect.gen(function* () {
     dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
     optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   });
-  const RuntimeArtifactManifest = Schema.Struct({
-    version: Schema.Literal(1),
-    native: Schema.Struct({
-      file: Schema.Literal("native.mjs"),
-      sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-      sourceHash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-      contractVersion: Schema.Literal("native-factories/v1"),
-    }),
-    worker: Schema.Struct({
-      file: Schema.Literal("full-loop-worker.mjs"),
-      sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-    }),
-  });
   const readPackage = Effect.fn("package.readPackage")(function* (directory: string) {
     return yield* Schema.decodeEffect(Schema.fromJsonString(PackageJson))(
       yield* fs.readFileString(join(directory, "package.json")),
@@ -208,10 +195,8 @@ const program = Effect.gen(function* () {
       "kiwi-nlp",
       // Finds its helper binaries (seccomp, Windows helper, JVM proxy agent) next to its own files.
       "@anthropic-ai/sandbox-runtime",
-      // Full-loop Goal workers import their own file-backed SDK, not the owner's bundle.
-      "@tanstack/ai",
+      // The Kiwi and embedding workers load Effect and its platform services from here.
       "effect",
-      // Native factories share the owner's Effect and platform services rather than bundling duplicates.
       "@effect/platform-node",
     ]) {
       const found = yield* findPackage(memoryAgent, root);
@@ -373,31 +358,6 @@ const program = Effect.gen(function* () {
   yield* fs.remove(work, { recursive: true, force: true });
   yield* fs.makeDirectory(stage, { recursive: true });
   yield* fs.copy(join(app, "build", "client"), join(stage, "client"));
-  // Goal worker and native factory artifacts are produced by memory-agent's dependency build.
-  // Packaging only verifies/copies these bytes; it never compiles them at startup or on first use.
-  const prebuiltRuntime = join(memoryAgent, "dist", "runtime");
-  const artifactManifestPath = join(prebuiltRuntime, "artifact-manifest.json");
-  if (!(yield* fs.exists(artifactManifestPath)))
-    return yield* PackagePreflightFailed.make({
-      message: `${relative(repo, artifactManifestPath)} is missing; run \`vp run build\` first`,
-    });
-  const artifactManifest = yield* Schema.decodeEffect(
-    Schema.fromJsonString(RuntimeArtifactManifest),
-  )(yield* fs.readFileString(artifactManifestPath));
-  for (const artifact of [artifactManifest.native, artifactManifest.worker]) {
-    const source = join(prebuiltRuntime, artifact.file);
-    if (!(yield* fs.exists(source)))
-      return yield* PackagePreflightFailed.make({
-        message: `${relative(repo, source)} is missing; run \`vp run build\` first`,
-      });
-    const actual = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(source)));
-    if (actual !== artifact.sha256)
-      return yield* PackagePreflightFailed.make({
-        message: `${relative(repo, source)} does not match artifact-manifest.json`,
-      });
-    yield* fs.copy(source, join(stage, artifact.file));
-  }
-  yield* fs.copy(artifactManifestPath, join(stage, "artifact-manifest.json"));
   // Workers are TypeScript importing sibling modules, so each is bundled into one file; a checkout
   // runs the source. Most bundle their dependencies too (Effect, secretlint). The Kiwi and
   // embedding workers load their model packages from the runtime `node_modules`, so only their own

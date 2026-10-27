@@ -1,6 +1,6 @@
 import { Data, DateTime, Effect, Function as EffectFunction, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
-import { recoveredReadRunSql } from "../agent/owner-read-recovery.ts";
+import { recoveredReadRunSql } from "./read-recoveries.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
 
 export type RunBinding = {

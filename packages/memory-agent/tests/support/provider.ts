@@ -6,7 +6,7 @@ import {
 } from "../../src/providers/contracts.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage, TokenUsage } from "@tanstack/ai";
-import type { Response } from "effect/ai";
+import type { LanguageModel, Response } from "effect/ai";
 import { optionalProperty } from "../../src/optional-property.ts";
 import {
   scriptedModel,
@@ -285,6 +285,8 @@ export interface TestProviderOptions {
   readonly delayedTurnGate?: ScriptedTurn["waitFor"];
   /** Run chats on this adapter instead of the scripted one, such as a provider's own adapter. */
   readonly adapter?: (selection: ModelSelection) => RunTextAdapter;
+  /** Wraps the scripted model the Effect AI loop runs on, such as to hold its stream. */
+  readonly model?: (model: LanguageModel.LanguageModel) => LanguageModel.LanguageModel;
 }
 
 export function turnGate() {
@@ -491,7 +493,7 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
             adapter: options.adapter ?? (() => adapter),
             model: (_selection: ModelSelection, run: ModelRun) =>
               Effect.map(scripted.forRun(run), (model) => ({
-                model,
+                model: options.model?.(model) ?? model,
                 source: scriptedSource,
                 shownFailure: shownScriptedFailure,
               })),

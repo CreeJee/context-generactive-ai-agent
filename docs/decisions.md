@@ -704,6 +704,7 @@
 
 - Goal 네이티브 artifact 생성에 사용하는 Vite는 checkout의 설치된 패키지에서 필요할 때 로드한다. 서버·SEA 번들에 Vite와 선택적 devtools·tsx·esbuild 의존성을 포함하지 않는다. 네이티브 entry도 번들 위치가 아닌 memory-agent 패키지의 원본 경로로 해석한다. 독립 실행 파일의 네이티브 artifact 생성 지원은 별도 검증 범위다.
 - full-loop worker·codec·RPC client 원본은 TypeScript로 관리한다. Node 26의 타입 제거로 실행할 수 있는 문법만 사용하고, Goal 스냅샷과 런타임 패키징은 세 파일 및 형제 import를 그대로 보존한다. codec의 태그·재귀 값과 RPC 요청·응답·대기열을 타입으로 표현한다. SDK의 동적 hook·값 복원 경계는 기존 동작을 유지한다.
+- (2026-10-27 대체) native Goal 구현과 full-loop worker·codec·RPC client를 지웠다. 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 
 ### 개발 요청의 백엔드 빌드 고정 (2026-10-03)
 
@@ -729,14 +730,16 @@
 - Dev accepts CLI backend/web ports, storage and manifest paths, with CLI values taking precedence over environment defaults. Readiness requires the matching build ID and `status: ready`; frontend HMR remains enabled and backend changes require an explicit rebuild/restart. Isolated verification uses temporary storage and alternate ports, leaving existing servers and user sessions alone.
 - Goal source generation identifies both the Goal and worker build bytes. The separate worker hash verifies bytes; identical worker builds in different Goals must not collide with the database's globally unique generation constraint. Previously saved content-hash pins remain verifiable and are not rewritten.
 - New-Goal intent admission excludes only the calling run's pending RPC; uncertain effects remain refused. Applying the intent after termination rechecks all owner receipts without that exclusion.
-- Criterion mappings from a running recorder are proposals, not completion snapshots. Only after successful SDK and durable Goal settlement does the owner revalidate versions, node ownership/success, dispatch identity and all operation receipts to publish completion evidence. Failed or uncertain runs cannot complete the Goal.
+- Criterion mappings from a running recorder are proposals, not completion snapshots. Only after successful SDK and durable Goal settlement does the owner revalidate versions, node ownership/success, dispatch identity and all operation receipts to publish completion evidence. Failed or uncertain runs cannot complete the Goal. (2026-10-27: dispatch identity is no longer required; see "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".)
 - Worker approval continuation requires owner persistence. The SDK validates the stored complete interrupt batch and original response schemas; only its owner-validated approval Map authorizes pending calls. A resolved pause is distinct from a crash and does not replay completed tools or fabricate success for the interrupted run.
 - A definite read-tool error crosses the RPC as a tagged failed result and retains `ok: false`; it does not become an uncertain side effect. Write/provider failures still use the conservative uncertainty gate.
+- (2026-10-27 대체) Goal worker를 지워 worker 세대 식별, worker 승인 재개, RPC의 읽기 실패 전달은 없어졌다. 읽기 실패를 `succeeded`로 적는 규칙은 새 loop의 도구 장부가 이어받고, 바꾸기 전에 거절한 쓰기도 `succeeded`로 적는다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 - Native SQLite read sessions close explicitly before worker teardown. The owner awaits a close acknowledgement before termination, with a bounded fallback for a failed worker. This makes SQLite and N-API resource lifetime explicit across runtime reopen. Scope-owned test runtimes close before temporary storage is removed. Parallel and serial stress runs still produced a SQLite WAL/SHM SIGBUS on macOS; this lifetime change alone is not evidence that the crash is resolved. The same-process Node SQLite/bundled rusqlite boundary requires further review; do not bypass locking or WAL visibility to force a green test.
 - Existing Effect diagnostic severity remains unchanged. Approved unstable API use is inventoried separately from ordinary TypeScript errors; it is not reported as a passing configured type check.
 
 ### Effect execution admission and safe observability (2026-10-10)
 
+- (2026-10-27 대체) `worker` gate와 `CONTEXT_AGENT_WORKER_*` 설정은 Goal worker와 함께 지웠다. 남은 gate는 workflow, model, tool이다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 - One process-scoped `ExecutionAdmission` service owns separate workflow, worker, model and tool gates. Each gate uses an active `Semaphore` plus a total-admitted `Semaphore`, so active work and queued waiters are both bounded. Configuration is validated from `CONTEXT_AGENT_{WORKFLOW,WORKER,MODEL,TOOL}_{CONCURRENCY,QUEUE_CAPACITY}`; invalid values fail Layer construction.
 - (2026-10-14 대체) 대기열까지 꽉 차도 바로 실패하지 않는다. 호출자는 지터를 둔 지수 백오프(50ms에서 시작해 최대 2초 간격)로 다시 시도한다. 이미 실행 중인 일(worker, 모델 호출, 도구, 실행 중 provider 재시도 대기)은 살아 있는 동안 계속 기다리고, 취소되면 기다림도 끝난다. 사용자의 요청이 기다리는 새 Goal 실행 admission만 30초 뒤에 `ExecutionSaturated`로 실패해 HTTP 503 `goal_workflow_saturated`가 된다. 로컬 동시성 한도 때문에 이미 시작한 실행이 중간에 실패하면 안 되기 때문이다.
 - A full queue fails immediately with typed `ExecutionSaturated`. Workflow admission maps this to HTTP 503 before issuing a worker capability; full-loop workers hold a worker permit for their Scope, model `next()` calls hold model permits, and owner tool implementations hold tool permits. Interruption and Scope finalization release both permits exactly once.
@@ -750,6 +753,7 @@
 - The native artifact keeps the explicitly shared Effect/TanStack runtime imports and is evaluated from a scoped staging directory adjacent to the checkout/package runtime so those imports resolve to the owner's module identities. Its immutable bytes are copied once into owner storage under the artifact hash before an atomic Goal registration. Existing Goals load only their registered durable bytes, so a new application build cannot silently replace historical execution code.
 - The full-loop worker is bundled except for `node:` imports. A new Goal copies the verified build artifact into its durable Goal pin and records a Goal-specific manifest. `sourceGeneration` hashes the Goal ID and worker hash; the worker SHA-256 separately verifies file integrity. Cold adoption validates saved bytes and manifest without reading current build inputs, including earlier content-hash generation pins. Worker leases still prevent registry disposal while an OS worker is active.
 - Missing, malformed, corrupt, or mismatched manifests/artifacts are explicit startup or admission failures. There is no source-tree/SDK-tree capture, `.ts` worker fallback, runtime compiler, or legacy artifact fallback on these paths.
+- (2026-10-27 대체) Goal worker와 native Goal 구현을 지워 `memory-agent#build`는 `vp pack`만 한다. `native.mjs`, `full-loop-worker.mjs`, manifest를 만들지 않고, packaging은 manifest를 검사하거나 복사하지 않으며 runtime `node_modules`에 `@tanstack/ai`를 넣지 않는다. 시작은 manifest를 읽지 않는다. Goal 저장소에 남은 artifact와 pin은 지우지 않는다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 
 ### Durable approval, timer, and queue boundary (2026-10-10)
 
@@ -769,6 +773,7 @@
 - 이 결정은 `DurableQueue` 보류(2026-10-10)를 바꾸지 않는다.
 - 구현(2026-10-13): 재시도는 Goal 실행(full-loop worker)의 provider 호출에만 적용한다. 일반 채팅은 이어서 달성할 목적이 없으므로 제외한다. 실패를 바로 표시하고 사용자가 다시 보낸다.
 - 구현: 재시도 범위는 owner의 모델 스트림 pull이다. `RequestNotSent`이고 어댑터의 `RUN_STARTED` 외 chunk가 worker에 하나도 가지 않았을 때만 같은 요청을 새 스트림으로 다시 보내고, 새 스트림의 `RUN_STARTED`는 건너뛴다. 그 외 실패, 소진, 취소는 원래 provider 실패로 끝난다. 각 pull은 model 게이트를 거치고, 대기하는 동안에는 model permit을 잡지 않는다. 대기 workflow는 Goal 실행처럼 workflow 게이트를 거쳐 admission한다.
+- (2026-10-27 대체) 재시도 범위는 owner의 모델 스트림 pull이 아니라 새 loop에서 Goal run의 모델이다(`model/unsent-retry.ts`). part가 하나도 오지 않은 `RequestNotSent`만 다시 보내고, 대기·소진·취소 규칙은 그대로다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 - 구현: Goal run 하나가 attempt 하나다. 상위 Goal run은 `agent_run_attempts`를 만들지 않으므로 키는 bound run ID와 그 run의 대기 순번이다. 순번은 프로세스 카운터가 아니라 그 run에 저장된 대기 workflow 수에서 정한다. 백오프와 한도는 한 provider 요청의 연속 재시도 횟수와 첫 실패 시각으로 센다. `retryAt`은 admission 전에 owner가 한 번 계산해 workflow payload(SQLite)에 저장한다. workflow 본문은 저장된 값으로 `DurableClock`만 다시 건다.
 - 구현: 소진되면 `external_dependency` blocker를 기록한다. run이 실패로 끝나도 blocker가 남는다. 취소·일시 중지·중단·phase 변경은 대기 workflow를 interrupt하고 timer를 지운다. 대기 중인 시각은 workflow 패널에 표시한다.
 - 소진 한도(2026-10-13 확정): 한 provider 요청의 첫 실패부터 다음 재시도 시각까지 24시간. 횟수 한도는 두지 않는다. 대기 상한이 30분이라 횟수 한도는 경과 시간 한도보다 먼저 끝나 긴 장애를 버티지 못한다. 재시도는 같은 요청을 다시 보낼 뿐 새 작업이나 단계를 만들지 않으므로 순환·무한 작업 감지는 이 경계에 두지 않는다. Plan 의존 순환은 `PlanDependenciesRejected`가 막는다.
@@ -789,6 +794,8 @@
 
 ### Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
 
+- (2026-10-27 대체) Goal worker와 이 전송을 지웠다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
+
 - The production full-loop uses `@effect/platform-node` `NodeWorker`, `effect/workers` `Worker`/`SerializedWorker`, and `effect/rpc` `Rpc`/`RpcGroup`/`RpcMiddleware`. The old handwritten worker frame parser, pending-Promise resolver, and chunk-ack listener are no longer on this production path.
 - `RunFullLoop` is a schema-decoded streaming RPC. Its capability middleware compares the complete session/run/Goal/revision/generation/token tuple before the SDK loop runs. Transferable `MessagePort` schema carries a dedicated reverse owner-RPC channel; the reverse server still executes the existing owner ledger/admission checks, so RPC transport does not become a second authority or source of truth.
 - The MessagePort protocol adapter is project-owned and scoped: bounded inbound queue, typed close/message/overflow failures, structured-clone codec, transfer-list support, native RPC acknowledgements, and listener/port cleanup. `streamBufferSize: 0` keeps producer progress tied to consumer acknowledgement rather than adding an unbounded application buffer.
@@ -796,6 +803,8 @@
 - Goal worker pins copy the build-produced self-contained `.mjs`; its SHA-256 verifies bytes and a Goal/build hash identifies the source generation. They no longer capture protocol source files or SDK dependency trees on first request.
 
 ### Owner RPC fingerprint의 bounded evidence와 해시 비교 (2026-10-11)
+
+- (2026-10-27 대체) owner RPC를 지워 fingerprint를 비교하는 곳(권한·high-water·cached reply·uncertain fence)이 없다. 새 도구 장부는 같은 형식으로 도구 호출만 적는다. 큰 middleware의 index/hook 보관은 새 행에 없고, 구형 fingerprint의 offline 변환은 남는다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 
 - 반복 context snapshot을 fingerprint에 저장하지 않고, 기존 canonical request 전체의 SHA-256과 명시적 버전 envelope로 비교한다. 진단·읽기 복구 입력은 16,384자까지, 큰 middleware는 index/hook만 보관한다. 권한·high-water·cached reply·uncertain fence는 유지한다.
 - 구형 fingerprint도 동일 digest로 비교하며 명시적 offline 변환만 지원한다. 불변 읽기 복구 receipt에 연결된 원래 fingerprint를 변경하지 않는다. 실제 변환과 공간 회수는 검증된 복구 백업과 전후 비-fingerprint 데이터 일치 확인을 전제로 한다.
@@ -1709,11 +1718,15 @@
 
 ### 검증된 background 읽기 실패의 명시적 복구 (2026-10-11)
 
+- (2026-10-27 대체) operator API를 지웠다. 새 receipt는 만들지 않는다. 0.0.17이 만든 receipt는 입장 검사가 계속 인정한다(`workflow/read-recoveries.ts`). "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
+
 - 현재 Goal의 terminal 실패 run에서 마지막 `get_background_result` 하나만 uncertain인 경우, 직전 승인·binding·durable Failure와 다른 미완료 작업의 부재를 검증한 operator API가 별도 불변 receipt를 남긴다. schema 49는 원본 failed/uncertain/Failure를 보존하며 성공·완료 근거를 위조하지 않는다.
 - 새 run의 입장 검사와 owner effect fence는 receipt를 원본과 대조하여 해당 과거 run만 제외한다. 원래 run ID 재입장과 그 run의 새 read/write RPC 예약은 계속 거부한다. 다른 pending/uncertain, stale preview, 변경된 원본과 새로운 Goal의 별도 보호는 유지한다.
 - API는 fresh assessment digest·no-replay 확인·운영자가 복원 검증한 일관된 백업 식별자·세션 lease/cross-site 검사를 요구한다. 백업 확인은 operator assertion이며 API의 파일 검증이 아니다. 모델 도구로 제공하거나 메시지/agent 실행을 자동 요청하지 않는다. 실제 적용은 충분한 백업 공간과 복원 검증, 공유 서버 재시작/receipt 적용 승인을 확보한 뒤 진행한다.
 
 ### 최소 읽기 복구와 DB 단일 기준 (2026-10-11)
+
+- (2026-10-27 대체) 읽기 복구 부분은 위 항목처럼 operator API와 함께 없어졌다. DB 단일 기준 부분은 그대로다.
 
 - 한 건의 append-only 읽기 복구에는 원본 관련 레코드의 일관된 snapshot을 격리 DB에서 복원 검증하고 불변 revoke event로 차단을 되돌릴 수 있으면 `operator_verified_original_records`를 허용한다. 전체 DB backup만을 요구하는 앞선 판단을 수정한다. 실제 backup 검증은 operator 책임이며 전체 DB 복원 가능성을 보장하지 않는다.
 - 이미 실제 저장소에 적용된 schema 49를 유지하며 추가 version을 만들지 않는다. 실패 run·uncertain RPC·durable Failure는 수정하지 않고 새 run만 허용한다. 같은 binding 검사 함수의 preview로 admission을 확인하며 메시지·모델 호출·재생은 하지 않는다.
@@ -2629,7 +2642,7 @@
 - 영속화: 1.0 conformance는 activity store를 요구한다. 이 앱은 AG-UI activity를 내지 않으므로 store를 두지 않고 conformance에서 뺀다. 0.61이 저장한 interrupt에는 이미 binding이 있어서 1.0에서도 이어진다.
 - 사용량: 1.0에서 TanStack Anthropic 어댑터의 `promptTokens`는 캐시 읽기·쓰기를 포함한다. 이 앱의 Anthropic 대화는 TanStack 어댑터가 아니라 구독 어댑터(`oauth/protocol.ts`)로 간다. 그래서 사용량 장부의 `separate` 의미는 바뀌지 않는다.
 - 거절한 승인: 1.0은 모델에 `{ error: "User declined tool execution" }`을 준다(0.61은 `approved: false`). 기록은 그대로 실패 결과로 남는다.
-- Goal worker 경계(owner↔worker)는 1.0 프로토콜에 맞춘다. TanStack의 Durable Runs·Takeover는 sandbox 실행을 다른 호스트가 이어받는 기능이다. 그래서 owner 부작용을 한 번만 실행하는 이 경계를 대신하지 않는다.
+- Goal worker 경계(owner↔worker)는 1.0 프로토콜에 맞춘다(2026-10-27 대체: Goal worker를 지웠다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)"). TanStack의 Durable Runs·Takeover는 sandbox 실행을 다른 호스트가 이어받는 기능이다. 그래서 owner 부작용을 한 번만 실행하는 이 경계를 대신하지 않는다.
   - 1.0 SDK는 tool call마다 스트림 출처를 담은 `metadata`를 붙인다. owner의 관찰 기록에는 이것이 없다. owner는 worker가 보낸 tool call을 id·type·이름·인자로만 대조한다. hook에는 여전히 owner 자신의 기록을 넘긴다.
   - 1.0 persistence는 `onConfig`에서 재개 상태를 함수(`Symbol.for("tanstack.ai.durableResume")`)로 돌려준다. `chat()`은 onConfig 체인 뒤에 그 함수를 부른다. 함수는 worker로 갈 수 없어서, owner가 자기 도구로 부르고 그 결과를 `resumeToolState`로 보낸다. 이 처리가 없으면 승인 뒤 재개한 Goal run이 승인을 잃는다. 이 심볼은 `@tanstack/ai`와 `@tanstack/ai-persistence` 사이의 내부 약속이다. 그래서 1.x 업그레이드 때 승인 재개 테스트로 확인한다.
 - MCP: `@tanstack/ai-mcp` 1.0은 프로토콜 협상을 `auto`로 고정한다. 그래서 stdio 서버에 연결할 때마다 SDK가 짧게 사는 복제 프로세스로 `server/discover`를 먼저 묻는다. 서버 프로세스는 연결 한 번에 두 번 시작된다. 2025 프로토콜 서버는 도구 목록 한 번에 `tools/list`를 두 번 받는다(SDK 캐시 채우기). TanStack이 고른 기본값이므로 따른다. 시작이 무거운 서버가 문제가 되면 `prior`로 협상을 건너뛸 수 있다.
@@ -2719,13 +2732,13 @@
   - 지금 상태: TanStack 1.0으로 올린 뒤(2026-10-24) 한 step의 호출은 순서 없이 동시에 돈다. `chat()`에 `toolExecution`을 넘기지 않아 기본값 `'parallel'`이다. 그래서 "도구 성능 (2026-09-15)"의 "쓰기 뒤의 읽기는 그 쓰기가 끝난 뒤에" 규칙은 지켜지지 않는다.
   - owner가 읽기를 미리 실행하던 `parallelReads`는 지운다. TanStack이 도구를 순서대로 실행하던 때의 우회다. 순서 규칙은 loop의 도구 실행이 맡는다.
 - read recovery(2026-10-11)의 새 receipt는 만들지 않는다. 로컬 DB에서 쓰인 적이 없다. 0.0.17 릴리즈에 들어 있으므로 이미 있는 receipt는 계속 인정한다.
-- 옛 Goal 세션도 새 코드에서 이어서 run을 시작한다. worker 세대·native artifact·dispatch와 옛 장부 행은 지우지 않고 읽기만 한다. 완료 근거는 worker 세대가 있는 Goal의 새 run도 받는다. 지금은 dispatch 세대가 없는 run을 거절한다.
-- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 전환 안에서 한다(아래 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"). 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다.
+- 옛 Goal 세션도 새 코드에서 이어서 run을 시작한다. worker 세대·native artifact·dispatch와 옛 장부 행은 지우지 않고 읽기만 한다. 완료 근거는 worker 세대가 있는 Goal의 새 run도 받는다. 지금은 dispatch 세대가 없는 run을 거절한다. (2026-10-27 바꿨다: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)")
+- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 전환 안에서 한다(아래 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"). 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다. (2026-10-27 달았다.)
 
 ## TanStack AI를 Effect AI로 전환한다 (2026-10-26)
 
 - 사용자 결정: TanStack AI 패키지 9개와 pnpm patch 2개를 모두 빼고, 모델 호출·도구·agent loop·채팅 전송을 Effect AI(`effect/ai`)와 직접 만든 코드로 옮긴다. 2026-10-26에 시작한다. 계획은 [effect-ai-migration.md](effect-ai-migration.md)다.
-- 점진적 전환은 하지 않는다. TanStack과 Effect를 잇는 bridge를 두지 않고, 새 모듈을 모두 만든 뒤 한 릴리즈에서 한 번에 바꾼다. 새 모듈은 계획의 7단계 전까지 앱에 연결하지 않는다.
+- 점진적 전환은 하지 않는다. TanStack과 Effect를 잇는 bridge를 두지 않고, 새 모듈을 모두 만든 뒤 한 릴리즈에서 한 번에 바꾼다. 새 모듈은 계획의 7단계 전까지 앱에 연결하지 않는다. (2026-10-27 Goal만 예외: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)")
 - provider 패키지는 `@effect/ai-openai-compat` 하나만 쓴다. 구독 Anthropic·ChatGPT, external ACP, scripted provider는 `LanguageModel.make`로 직접 만든다. `@effect/ai-anthropic`은 구독 요청의 `display: "summarized"`와 `block_binding`을 표현하지 못한다.
 - DB의 테이블·열은 바꾸지 않는다. JSON 열 안의 TanStack 메타데이터는 migration 하나로 지우고, 쓰는 값만 우리 필드로 옮긴다. 조건은 기존 채팅이 지금처럼 열리고 이어서 대화할 수 있는 것이다.
 - API payload는 새 client에 맞춰 바꾼다. chunk는 AG-UI 1.0 표준 모양으로만 쓴다. client는 `useChat` 대신 `@effect/atom-react`로 만든 hook을 쓴다.
@@ -2789,6 +2802,24 @@
 
 - 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 4단계다. 파일과 TanStack과 달라진 점은 계획의 4단계 "결과"에 있다.
 - `ChatLoop`(`"tanstack"` | `"effect-ai"`)를 `MemoryAgentLayerOptions.chatLoop`로 고른다. 기본값은 `"tanstack"`이다. 스위치는 6단계 client 전까지 테스트와 개발 확인용이다. 새 loop의 interrupt에는 TanStack binding이 없어서 지금 페이지는 승인을 풀지 못한다. 7단계에서 스위치와 TanStack 경로를 함께 지운다.
-- Goal worker run, 구현 Goal run, bound run, 이미지 provider 도구를 쓰는 run은 스위치와 관계없이 지금 경로로 돈다. 앞의 셋은 5단계에서 옮긴다.
+- Goal worker run, 구현 Goal run, bound run, 이미지 provider 도구를 쓰는 run은 스위치와 관계없이 지금 경로로 돈다. 앞의 셋은 5단계에서 옮긴다. (2026-10-27 대체: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)". Goal run은 스위치와 관계없이 새 loop로 돈다.)
 - 새 loop의 대화는 저장된 thread에 아직 저장되지 않은 사용자 메시지(id로 비교)를 더한 것이다. 페이지가 보낸 assistant·tool 메시지는 쓰지 않는다. 서버가 쓴 답과 도구 결과는 서버 저장본이 맞기 때문이다. 페이지에 편집과 재생성이 없으므로 잘라 낼 지점은 두지 않는다.
 - 취소는 실행만 끊는다. run이 어떻게 끝났는지는 loop가 정하고, 그 마지막 이벤트까지 페이지에 보낸다.
+
+## Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 5단계다. 파일과 golden 차이는 계획의 5단계 "결과"에 있다.
+- 사용자 결정: "새 모듈은 7단계 전까지 앱에 연결하지 않는다"를 Goal에 대해 거둬들인다. Goal run(새 Goal 턴, bound run, 승인 뒤 재개)은 `ChatLoop`와 관계없이 새 loop로 돈다. 위 "AgentChat은 ChatLoop 스위치로 새 loop를 고른다 (2026-10-27)"에서 지금 경로로 남겼던 Goal worker run, 구현 Goal run, bound run이 모두 새 loop로 간다.
+  - 대가: 지금 페이지는 새 loop의 interrupt를 풀지 못한다. 그래서 페이지에서 Goal run을 승인하는 흐름은 6단계 client부터 된다. 사용자가 받아들였다.
+  - 이미지 provider 도구를 쓰는 Goal run은 409 `goal_image_tool_unavailable`로 시작하지 않는다. 새 loop에는 provider 이미지 도구가 아직 없고, Goal의 도구 장부는 새 loop에만 있다.
+- 그래서 Goal worker를 7단계까지 남길 이유가 없다. 5단계에서 지운다: Goal worker와 owner RPC, native Goal 구현, read recovery operator API, `ExecutionAdmission`의 `worker` gate와 `CONTEXT_AGENT_WORKER_*` 설정, "옛 Goal 처리"의 packaging·build. 옛 기록(worker 세대, native artifact, dispatch, 옛 장부 행, read recovery receipt)은 지우지 않고 읽기만 한다.
+- 도구 장부는 위 "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"대로다.
+  - 호출마다 실행 전에 run의 다음 번호로 `pending`을 예약한다. 번호는 한 SQL 문장 안에서 정하므로 동시에 예약해도 겹치지 않는다. 예약하지 못한 호출은 실행하지 않는다.
+  - 읽기 도구는 실패하거나 취소돼도 `succeeded`다. worker의 판정("Configurable dev and Goal settlement boundaries (2026-10-10)")과 같다.
+  - 사용자 결정: 쓰기 도구가 아무것도 바꾸기 전에 거절한 실패도 `succeeded`(`output: "refused"`)다. 바뀐 것이 없다고 확실한 실패까지 `uncertain`으로 두면, 모델이 바로 고칠 수 있는 거절 하나로 Goal이 사용자 확인을 기다리게 된다.
+    - 거절로 보는 실패: 한 번의 commit으로 바꾸는 파일 도구(`write_file`, `edit_file`, `delete_file`, `write_outside_file`, `delete_outside_file`)가 파일 입출력 실패(`TextFileIoFailed`)도 defect도 없이 실패한 경우다. 경로 거절, 기대 sha256 불일치, edit의 `no_match`·`ambiguous_match`가 여기 든다. 표시는 도구가 단다(`ToolFailed.refused`).
+    - 셸·코드 실행·스킬 저장처럼 여러 단계를 거치는 쓰기는 표시하지 않는다.
+  - 그 밖의 쓰기 실패와 취소는 `uncertain`이다. 결과를 적지 못한 행은 `pending`으로 남는다. 어느 쪽이든 다음 run 입장에서 사용자 확인을 받는다.
+- provider 요청 전 transport 실패의 재시도("Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)")는 새 loop에서 모델을 감싸 한다. 조건은 같다: `RequestNotSent`이고 모델 part가 하나도 오지 않았다.
+- 완료 근거는 dispatch 세대(`workflow_worker_dispatches`)를 더 요구하지 않는다. "Configurable dev and Goal settlement boundaries (2026-10-10)"의 "dispatch identity" 검사를 대체한다. binding·revision, durable 실행 완료, 장부의 미해결 쓰기 검사는 그대로다.
+- 아직 도는 run이 적은 criterion mapping은 Goal 종류와 관계없이 제안으로 보관하고(`completionRequest`), run이 끝난 뒤 `finishRun`에서 장부까지 다시 검사해 완료 근거로 적는다. 전에는 worker 세대나 native 등록이 있는 Goal만 이렇게 했다. 새 loop는 기록하는 호출 자신을 실행이 끝날 때까지 장부에 `pending`으로 두므로, 바로 검사하면 모든 mapping이 거절된다. "Configurable dev and Goal settlement boundaries (2026-10-10)"의 "proposals, not completion snapshots" 규칙을 모든 Goal에 넓힌 것이다.

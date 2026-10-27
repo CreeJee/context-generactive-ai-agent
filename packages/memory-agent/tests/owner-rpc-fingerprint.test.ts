@@ -1,55 +1,36 @@
-import { Predicate } from "effect";
 import { expect, test } from "vite-plus/test";
 import {
   compactLegacyOwnerRpcFingerprint,
   ownerRpcCanonicalJson,
   ownerRpcFingerprint,
-  ownerRpcFingerprintDigest,
+  ownerRpcFrame,
   OwnerRpcFingerprintFailed,
 } from "../src/agent/owner-rpc-fingerprint.ts";
-import { encodeFullLoopValue, decodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
 import { sha256 } from "../src/runtime/synchronous-crypto.ts";
 
-test("large middleware requests retain a digest and hook evidence without the context", () => {
-  const input = encodeFullLoopValue({
-    index: 3,
-    hook: "onFinish",
-    context: { messages: [{ content: "private context".repeat(100_000) }] },
-  });
-  const stored = ownerRpcFingerprint("middleware", input);
-  expect(stored.length).toBeLessThan(512);
-  expect(stored).not.toContain("private context");
-  const compact = JSON.parse(stored);
-  expect(Predicate.isTagged(compact, "OwnerRpcFingerprintV1")).toBe(true);
-  expect(compact).toMatchObject({
-    operation: "middleware",
-    inputKind: "middleware-hook",
-    digest: sha256(ownerRpcCanonicalJson({ operation: "middleware", input })),
-  });
-  expect(decodeFullLoopValue(JSON.parse(stored).input)).toEqual({ index: 3, hook: "onFinish" });
-});
+const digestOf = (fingerprint: string): string => JSON.parse(fingerprint).digest;
 
 test("digest preserves canonical key ordering and distinguishes the entire request", () => {
   const first = ownerRpcFingerprint("tool", { b: ["한글", -0], a: true });
   const reordered = ownerRpcFingerprint("tool", { a: true, b: ["한글", 0] });
-  expect(ownerRpcFingerprintDigest(first)).toBe(ownerRpcFingerprintDigest(reordered));
-  expect(ownerRpcFingerprintDigest(first)).not.toBe(
-    ownerRpcFingerprintDigest(ownerRpcFingerprint("tool", { a: true, b: ["changed", 0] })),
+  expect(digestOf(first)).toBe(digestOf(reordered));
+  expect(digestOf(first)).not.toBe(
+    digestOf(ownerRpcFingerprint("tool", { a: true, b: ["changed", 0] })),
   );
   const nonFinite = () => ownerRpcFingerprint("tool", { number: Number.NaN });
   expect(nonFinite).toThrow(OwnerRpcFingerprintFailed);
   expect(nonFinite).toThrow(expect.objectContaining({ reason: "non_finite" }));
 });
 
-test("legacy conversion hashes the original bytes and retains small read recovery inputs", () => {
-  const input = encodeFullLoopValue({
+test("legacy conversion hashes the original bytes and retains small call inputs", () => {
+  const input = ownerRpcFrame({
     name: "get_background_result",
     toolCallId: "read-call",
     args: { taskId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", offset: 0 },
   });
   const legacy = ownerRpcCanonicalJson({ operation: "tool", input });
   const migrated = compactLegacyOwnerRpcFingerprint(legacy);
-  expect(ownerRpcFingerprintDigest(migrated)).toBe(ownerRpcFingerprintDigest(legacy));
+  expect(digestOf(migrated)).toBe(sha256(legacy));
   expect(JSON.parse(migrated)).toMatchObject({ operation: "tool", input, inputKind: "complete" });
   expect(compactLegacyOwnerRpcFingerprint(migrated)).toBe(migrated);
 });
@@ -61,7 +42,7 @@ test("large historical snapshots compact without retaining their request tree", 
   });
   const migrated = compactLegacyOwnerRpcFingerprint(legacy);
   expect(migrated.length).toBeLessThan(300);
-  expect(ownerRpcFingerprintDigest(migrated)).toBe(sha256(legacy));
+  expect(digestOf(migrated)).toBe(sha256(legacy));
   expect(JSON.parse(migrated)).toMatchObject({
     operation: "middleware",
     inputKind: "omitted",
@@ -72,8 +53,8 @@ test("large historical snapshots compact without retaining their request tree", 
   expect(unsupported).toThrow(expect.objectContaining({ reason: "unsupported_legacy" }));
 });
 
-test("maximum report recovery requests and envelope overhead remain replayable on repeated conversion", () => {
-  const input = encodeFullLoopValue({
+test("maximum report read requests and envelope overhead stay whole on repeated conversion", () => {
+  const input = ownerRpcFrame({
     name: "get_subagent_reports",
     toolCallId: "read-reports",
     args: {
@@ -89,5 +70,5 @@ test("maximum report recovery requests and envelope overhead remain replayable o
   const migrated = compactLegacyOwnerRpcFingerprint(legacy);
   expect(migrated.length).toBeGreaterThan(16_384);
   expect(compactLegacyOwnerRpcFingerprint(migrated)).toBe(migrated);
-  expect(ownerRpcFingerprintDigest(migrated)).toBe(sha256(legacy));
+  expect(digestOf(migrated)).toBe(sha256(legacy));
 });

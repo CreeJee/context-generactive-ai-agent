@@ -1,6 +1,10 @@
-import { Cause, Effect, Exit, HashSet, Match, Option, Schema } from "effect";
+import { Cause, Effect, Exit, HashSet, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { ownerRpcCanonicalJson, ownerRpcFingerprint } from "../agent/owner-rpc-fingerprint.ts";
+import {
+  ownerRpcCanonicalJson,
+  ownerRpcFingerprint,
+  ownerRpcFrame,
+} from "../agent/owner-rpc-fingerprint.ts";
 import { JsonValue } from "../json.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
 import { errorTag, ToolFailed } from "../tools/failure.ts";
@@ -32,25 +36,9 @@ const encodeSettled = Schema.encodeEffect(Schema.fromJsonString(Settled));
 /** The `status` column names the reply's case. */
 const statusOf = Settled.match({ succeeded: () => "succeeded", uncertain: () => "uncertain" });
 
-const isList = (value: JsonValue): value is ReadonlyArray<JsonValue> => Array.isArray(value);
-
-/** The ledger's frame of a value, as the Goal worker's codec sent tool invocations. */
-const frameOf = (value: JsonValue): JsonValue =>
-  Match.value(value).pipe(
-    Match.when(Match.null, (): JsonValue => ["null"]),
-    Match.when(Match.boolean, (flag): JsonValue => ["boolean", flag]),
-    Match.when(Match.number, (number): JsonValue => ["number", number]),
-    Match.when(Match.string, (text): JsonValue => ["string", text]),
-    Match.when(isList, (items): JsonValue => ["array", items.map(frameOf)]),
-    Match.orElse((fields): JsonValue => [
-      "object",
-      Object.entries(fields).map(([key, field]): JsonValue => [key, frameOf(field)]),
-    ]),
-  );
-
 /** The fingerprint of a call: `uncertainRuns` shows its tool name and arguments to the user. */
 const fingerprintOf = (name: string, args: JsonValue, toolCallId: string) =>
-  Effect.try(() => ownerRpcFingerprint("tool", frameOf({ name, args, toolCallId })));
+  Effect.try(() => ownerRpcFingerprint("tool", ownerRpcFrame({ name, args, toolCallId })));
 
 /** A call that could not be written first does not run. */
 const notRecorded = ToolFailed.make({

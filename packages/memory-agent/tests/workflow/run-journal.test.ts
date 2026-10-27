@@ -1,10 +1,7 @@
 import { SqlClient } from "effect/sql";
-import { DateTime, Effect, Match, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
-import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
-import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
-import { OwnerRpcAdmission, OwnerRpcReply } from "../../src/agent/owner-rpc.ts";
+import { ownerRpcFingerprint, ownerRpcFrame } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { RunEventRejected, workflowRunEvents } from "../../src/workflow/run-events.ts";
@@ -85,7 +82,7 @@ testAgent()("workflow run bindings", (it) => {
         runId,
         ownerRpcFingerprint(
           "tool",
-          encodeFullLoopValue({ name: "run_shell", toolCallId: "call", args: {} }),
+          ownerRpcFrame({ name: "run_shell", toolCallId: "call", args: {} }),
         ),
       );
       const owner = yield* uncertainRuns;
@@ -184,7 +181,7 @@ testAgent()("workflow run bindings", (it) => {
             id,
             ownerRpcFingerprint(
               kind,
-              encodeFullLoopValue({ name, toolCallId: `${name}-call`, args: {} }),
+              ownerRpcFrame({ name, toolCallId: `${name}-call`, args: {} }),
             ),
             status,
           );
@@ -256,22 +253,13 @@ testAgent()("workflow run bindings", (it) => {
       Effect.gen(function* () {
         const session = yield* withGoal();
         const old = `${session}:old`;
-        const binding = boundRun(yield* bindLatest(session, old));
+        boundRun(yield* bindLatest(session, old));
         yield* finishRun(session, old, "completed");
-        const ledger = yield* makeSqliteOwnerRpcLedger;
-        const key = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(binding);
-        expect(yield* ledger.reserve(key, 1, "effect", sideEffect)).toEqual(
-          OwnerRpcAdmission.reserved(),
-        );
-        yield* Match.value(status).pipe(
-          Match.when("pending", () => Effect.void),
-          Match.when("uncertain", () =>
-            ledger.settle(key, 1, OwnerRpcReply.uncertain({ operationId: 1 })),
-          ),
-          Match.when("succeeded", () =>
-            ledger.settle(key, 1, OwnerRpcReply.succeeded({ operationId: 1, output: null })),
-          ),
-          Match.exhaustive,
+        yield* sqlRun(
+          "INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, 'effect', ?, '{}', ?)",
+          old,
+          sideEffect ? 1 : 0,
+          status,
         );
         yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["Revised outcome"] });
         const receipts = () => sqlAll("SELECT * FROM owner_rpc_operations WHERE run_id = ?", old);

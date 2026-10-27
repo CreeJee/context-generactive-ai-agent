@@ -1,8 +1,6 @@
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Cause } from "effect";
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { ExecutionAdmission } from "../runtime/execution-admission.ts";
-import { runTrace } from "../runtime/run-trace.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
@@ -25,9 +23,6 @@ import { aborted } from "../runtime/aborted.ts";
 import type { RunTool } from "../tools/run-tool.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { workflowActions } from "../workflow/actions.ts";
-import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
-import { OwnerNativeArtifacts } from "./owner-native-artifacts.ts";
-import { OwnerNativeBuild } from "./owner-native-build.ts";
 import { Scope } from "effect";
 import {
   RUN_CANCEL_REASON,
@@ -61,7 +56,6 @@ import {
   Ref,
   Schema,
   Stream,
-  Semaphore,
 } from "effect";
 import type { SqlError } from "effect/sql";
 import { CardAttempts } from "../kanban/card-attempts.ts";
@@ -76,8 +70,6 @@ import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { GlobalConfig, GlobalConfigFailedReason } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
-import * as GoalWorkerAssets from "./goal-worker-assets.ts";
-import * as GoalWorkerGenerations from "./goal-worker-generation-store.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import {
   ImageFeature,
@@ -104,14 +96,10 @@ import { McpServers, mcpInstructionsForMode, type McpRunTools } from "../mcp/ser
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
-import { Graph } from "../memory/graph.ts";
-import { Interpretations } from "../memory/interpretations.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
 import { Projects, type Project } from "../projects/projects.ts";
 import { PermissionGate } from "../permissions/gate.ts";
-import type { PermissionClassifier } from "../permissions/classifier.ts";
-import type { PermissionReviews } from "../permissions/reviews.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
@@ -122,7 +110,6 @@ import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
-import type { Worker } from "node:worker_threads";
 import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { repeatGuard, repeatGuardHook } from "../tools/repeat-guard.ts";
@@ -163,39 +150,18 @@ import { createLiveRuns } from "./live-runs.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { createChatExecution } from "./chat-execution.ts";
 import { shownRunErrors, withShownRunErrors } from "./run-errors.ts";
-import { createFullLoopExecution, preflightFullLoopExecution } from "./full-loop-execution.ts";
-import {
-  FullLoopAdmissionReason,
-  FullLoopAdmissionRejected,
-  fullLoopAdmissionReasonName,
-} from "./full-loop-admission-preflight.ts";
 import type { ChatExecutionTurn, ChatExecutionCapabilities } from "./chat-execution.ts";
-import { goalWorkerAuthority, type GoalWorkerCapability } from "./goal-worker-authority.ts";
-// Protocol ledger adapter, not an Effect service constructor; the central owner
-// supplies its existing SQLite connection and transaction boundary.
-// oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
-import { makeSqliteOwnerRpcLedger } from "./owner-rpc-ledger.ts";
 import {
   acknowledgedRunSql,
   resolvedRunSql,
   toolOperationSql,
   workflowRunBindings,
-  Admission,
 } from "../workflow/run-bindings.ts";
 import {
   UncertainContinue,
   uncertainRuns,
   type UncertainContinueRequest,
 } from "../workflow/uncertain-runs.ts";
-import {
-  OwnerReadRecovery,
-  ReadRecoveryAdmission,
-  ReadRecoveryConfirmResult,
-  ReadRecoveryPreview,
-  ReadRecoveryRevokeResult,
-  type ReadRecoveryConfirmation,
-  type ReadRecoveryRevocation,
-} from "./owner-read-recovery.ts";
 import { sqliteStreamDurability } from "../workflow/durable-stream.ts";
 import {
   serverRestartedCode,
@@ -294,15 +260,6 @@ export const reportAnalysisInstructions = `You are in a local, separate issue-re
 - Diagnose using the user's model; distinguish observed facts from hypotheses and missing data.
 - Produce a self-contained issue report for a developer who cannot access this local session: symptom, relevant timestamps, errors, tool calls/results, provenance, uncertainty, and suggested next checks.
 - Do not claim to have sent the report; the user must review and explicitly send it. Do not include login tokens or secrets.`;
-
-/** The `detail` a refused Goal worker source answers with: its reason, never its cause. */
-const goalSourceFailure = (
-  error: GoalWorkerAssets.GoalWorkerAssetsFailed | GoalWorkerGenerations.GoalWorkerGenerationError,
-) =>
-  Match.valueTags(error, {
-    GoalWorkerGenerationError: ({ reason }) => reason,
-    GoalWorkerAssetsFailed: ({ reason }) => GoalWorkerAssets.goalWorkerAssetsReasonName(reason),
-  });
 
 /** Where this app keeps settings the model may be asked about. */
 export interface SettingsPlaces {
@@ -582,19 +539,10 @@ const isStreamJoin = (request: Request) =>
 
 export { modelBoundMessages };
 
-export interface GoalWorkerOptions {
-  readonly assets?: Parameters<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>[0];
-  readonly onWorker?: (worker: Worker) => void;
-}
-export const GoalWorkerConfiguration = Context.Reference<GoalWorkerOptions>(
-  "memory-agent/agent/chat/GoalWorkerConfiguration",
-  { defaultValue: () => ({}) },
-);
-
 /**
  * The loop that runs a chat run the app's model answers: TanStack's, or Effect AI's
- * (docs/effect-ai-migration.md step 4). Effect AI runs Goal runs too (step 5), but never a run with
- * the provider image tool.
+ * (docs/effect-ai-migration.md step 4). Effect AI runs every Goal run whatever this says (step 5),
+ * and never a run with the provider image tool.
  */
 export const ChatLoop = Context.Reference<"tanstack" | "effect-ai">(
   "memory-agent/agent/chat/ChatLoop",
@@ -608,7 +556,6 @@ const serviceShutdown = "service_shutdown";
 export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const context = yield* Effect.context();
   const ownerSignal = yield* Effect.abortSignal;
-  const admission = yield* ExecutionAdmission;
   const runEffect = runNativeEffectWith(context);
   const runEffectSync = Effect.runSyncWith(context);
   const active = yield* ActiveProvider;
@@ -618,33 +565,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     openai: createSubscriptionRuntimeImplementation("openai"),
     anthropic: createSubscriptionRuntimeImplementation("anthropic"),
   };
-  const goalNativeImplementations = createGoalNativeImplementations();
-  // SDK middleware is synchronous interop: supply the single central owner's
-  // Layer Context explicitly on each factory invocation, not the route caller's
-  // Context. Overrides belong at owner construction, not at handle/hydrate.
-  // This infrastructure stays outside the Goal registry (which retains code only).
   const workflowRuleContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
-  const nativeOwnerContext = yield* Effect.context<
-    Nodes | PermissionReviews | SecretRedactor | PermissionClassifier | SqlClient.SqlClient
-  >();
-  const nativeMemoryOwner = yield* Effect.all({
-    search: MemorySearch,
-    nodes: Nodes,
-    graph: Graph,
-    interpretations: Interpretations,
-    knowledge: KnowledgePromotions,
-  });
-  const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) =>
+  const runtimeForAdapter = (selection: ModelSelection) =>
     ProviderConnection.match(providerConnection(selection.provider), {
       "compatible-endpoint": () => active.runtime(selection),
       subscription: ({ accountProvider }) =>
         isTruthy(registry?.subscriptionDependencies)
           ? Effect.map(registry.subscriptionDependencies(accountProvider), (dependencies) =>
-              (goalInstanceId === null
-                ? nativeImplementations
-                : goalNativeImplementations.forGoal(goalInstanceId))[accountProvider].bind(
-                dependencies,
-              ),
+              nativeImplementations[accountProvider].bind(dependencies),
             )
           : active.runtime(selection),
     });
@@ -683,9 +611,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runBindings = yield* workflowRunBindings;
   const goalLedger = yield* toolLedger;
   const uncertain = yield* uncertainRuns;
-  const readRecovery = yield* OwnerReadRecovery;
-  const workerAuthority = yield* goalWorkerAuthority;
-  const workerLedger = yield* makeSqliteOwnerRpcLedger;
   const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
   const withSql = Effect.provideService(SqlClient.SqlClient, sql);
@@ -760,13 +685,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Result: Schema.Struct({ failed: Schema.Finite }),
     execute: ({ runId, sessionId }) => sql`SELECT 1 AS failed FROM chat_runs
       WHERE run_id = ${runId} AND thread_id = ${sessionId} AND status = 'failed'`,
-  });
-  const latestRevisionId = SqlSchema.findOneOption({
-    Request: Schema.String,
-    Result: Schema.Struct({ id: Schema.Finite }),
-    execute: (sessionId) => sql`
-      SELECT id FROM workflow_state_revisions WHERE session_id = ${sessionId}
-      ORDER BY id DESC LIMIT 1`,
   });
   const nodes = yield* Nodes;
   const recorder = yield* Recorder;
@@ -852,48 +770,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const places: SettingsPlaces = { storageRoot: (yield* StorageRoot).path };
   const liveRuns = yield* createLiveRuns;
   const cancellations = yield* SdkCancellations;
-  const goalWorker = yield* GoalWorkerConfiguration;
   const chatLoop = yield* ChatLoop;
   const runStore = yield* RunStore;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
-  const ownerBuild = Option.getOrElse(
-    yield* Effect.serviceOption(OwnerNativeBuild),
-    () => OwnerNativeBuild.production,
-  );
-  const nativeArtifactContext = yield* Layer.build(
-    OwnerNativeArtifacts.layer.pipe(Layer.provide(Layer.succeed(OwnerNativeBuild, ownerBuild))),
-  );
-  const ownerNativeArtifacts = Context.get(nativeArtifactContext, OwnerNativeArtifacts);
-  const adoptedNativeGoals = MutableHashSet.empty<string>();
-  const workerGenerations = yield* GoalWorkerGenerations.goalWorkerGenerationStore;
-  type WorkerAssetsRegistry = Effect.Success<
-    ReturnType<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>
-  >;
-  let workerAssetsRegistry: WorkerAssetsRegistry | undefined;
-  const assetsRegistryLock = yield* Semaphore.make(1);
-  const assetsRegistry = Effect.gen(function* () {
-    if (workerAssetsRegistry === undefined) {
-      const created = yield* GoalWorkerAssets.makeGoalWorkerAssetsRegistry({
-        temporaryDirectory: places.storageRoot,
-        ...goalWorker.assets,
-      }).pipe(Effect.provideContext(workflowRuleContext));
-      if (!workerScopeAlive) {
-        yield* created.dispose({ remove: true });
-        return yield* GoalWorkerAssets.GoalWorkerAssetsFailed.make({
-          reason: GoalWorkerAssets.GoalWorkerAssetsReason.cases.Inactive.make({}),
-        });
-      }
-      workerAssetsRegistry = created;
-    }
-    return workerAssetsRegistry;
-  }).pipe((effect) => assetsRegistryLock.withPermit(effect));
-  let workerScopeAlive = true;
-  // One owner-process fence for durable workflow admission. Worker capability generations remain
-  // per run and cannot create a second workflow execution after owner restart.
+  // One owner-process fence for durable workflow admission: a restarted owner cannot create a
+  // second workflow execution for a run.
   const goalExecutionOwnerGeneration = randomUUID();
-  // Worker internals change on exit; use the stable run ID for registration and cleanup.
-  const ownedSDKWorkers = MutableHashMap.empty<string, { worker: Worker; release: () => void }>();
   /** The answer a steered message may cut, per session, while an app-run model answers. */
   const steerCuts = MutableHashMap.empty<string, SteerCut>();
   /** Lets go of a run's cut, unless a later run of the session already holds its own. */
@@ -904,46 +787,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Option.exists(MutableHashMap.get(steerCuts, sessionId), (held) => held === steer),
       ),
     ).pipe(Effect.asVoid);
-  // Registered after service acquisition: fence RPC first, await actual OS worker exit,
-  // then dispose the registry while retaining every durable snapshot for cold adoption.
-  yield* Effect.addFinalizer(() =>
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    Effect.gen(function* () {
-      workerScopeAlive = false;
-      const workers = [...ownedSDKWorkers];
-      for (const [runId] of workers) workerAuthority.revoke(runId);
-      yield* Effect.forEach(
-        workers,
-        ([runId, owned]) =>
-          nativePromise(() => owned.worker.terminate()).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                owned.release();
-                MutableHashMap.remove(ownedSDKWorkers, runId);
-              }),
-            ),
-            Effect.uninterruptible,
-          ),
-        { concurrency: "unbounded", discard: true },
-      );
-    }).pipe(
-      // Shutdown is best effort: a Worker that did not terminate or a registry still leased is
-      // logged by its tag, and the remaining cleanup still runs.
-      Effect.catch((error) =>
-        Effect.logWarning("Goal worker shutdown failed", { error: errorTag(error) }),
-      ),
-      Effect.ensuring(
-        Effect.suspend(() => workerAssetsRegistry?.dispose() ?? Effect.void).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Goal worker assets disposal failed", {
-              error: errorTag(error),
-              reason: GoalWorkerAssets.goalWorkerAssetsReasonName(error.reason),
-            }),
-          ),
-        ),
-      ),
-    ),
-  );
 
   const notificationWakeups = yield* Queue.unbounded<string>();
   const serializeNotification = yield* keyedSerialLimit();
@@ -1648,9 +1491,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? parentRunId
             : undefined;
         // A pre-bound run belongs to one owner session, even before the SDK creates chat_runs.
-        // This check is not worker authorization: unbound requests remain on the legacy path.
-        let workerCapability: GoalWorkerCapability | null = null;
-        let boundRun = Option.getOrUndefined(yield* runBinding(runId));
+        const boundRun = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(boundRun) && boundRun.session_id !== sessionId)
           return json(409, { error: "run_id_conflict" });
         // Until automatic owner admission is atomic with execution, a reserved run with an
@@ -1691,20 +1532,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return json(409, { error: "workflow_changed" });
         }
-        // Prepare the complete capability set before committing worker admission.
-        let workerRevision: number | null = null;
-        let workerGoalId: string | null = null;
+        // A new turn of a session with a Goal is a Goal run, admitted once it is ready to start.
+        const latest = isTruthy(previousRun)
+          ? undefined
+          : Option.getOrUndefined(yield* latestRevision(sessionId));
+        if (isTruthy(latest?.goal_instance_id) && (!isTruthy(selection) || isTruthy(boundRun)))
+          return json(409, { error: "automatic_goal_admission_unavailable" });
+        const newGoalRun = isTruthy(latest?.goal_instance_id)
+          ? { goalInstanceId: latest.goal_instance_id, revisionId: latest.id }
+          : null;
         let goalExecutionPayload: GoalExecutionPayload | null = null;
-        let workerAssets: GoalWorkerAssets.GoalExecutionAssets | undefined;
-        if (!isTruthy(previousRun)) {
-          const latest = Option.getOrUndefined(yield* latestRevision(sessionId));
-          if (isTruthy(latest?.goal_instance_id)) {
-            if (!isTruthy(selection) || isTruthy(boundRun))
-              return json(409, { error: "automatic_goal_admission_unavailable" });
-            workerRevision = latest.id;
-            workerGoalId = latest.goal_instance_id;
-          }
-        }
         if (previousRun?.status === "aborted")
           return resumeServerSentEventsResponse({ adapter: memoryStream({ runId, offset: "-1" }) });
         // Internal completion turns carry operational context only, never a synthetic user turn.
@@ -1775,7 +1612,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (!isTruthy(userNode)) throw new Error("User evidence accessed before admission");
           return userNode.id;
         };
-        if (workerRevision === null) yield* persistUserTurn;
+        if (newGoalRun === null) yield* persistUserTurn;
         if (!isTruthy(userNode) && !(turn !== null)) return json(409, { error: "no_user_turn" });
 
         if (external !== null) {
@@ -1870,47 +1707,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           return response;
         }
         if (!isTruthy(selection)) return json(412, { error: "model_selection_required" });
-        // Only a new run may select the current Goal. A persisted continuation uses its
-        // immutable binding (or the legacy implementation when no binding exists). Replay
-        // and hydration paths above never select or bind an implementation.
-        const pinnedGoal = isTruthy(boundRun)
-          ? boundRun.goal_instance_id
-          : isTruthy(previousRun)
-            ? null
-            : (Option.getOrUndefined(yield* latestRevision(sessionId))?.goal_instance_id ?? null);
-        // Effect AI runs every Goal on today's code (docs/effect-ai-migration.md "옛 Goal 처리").
-        const implementationGoal = chatLoop === "effect-ai" ? null : pinnedGoal;
-        if (implementationGoal !== null) {
-          const loaded = yield* ownerNativeArtifacts
-            .acquire(implementationGoal)
-            .pipe(
-              Effect.provideService(Scope.Scope, scope),
-              Effect.asSome,
-              fallbackLogged("Goal native generation unavailable", Option.none),
-            );
-          if (Option.isNone(loaded))
-            return json(409, { error: "goal_native_generation_unavailable" });
-          if (!MutableHashSet.has(adoptedNativeGoals, implementationGoal)) {
-            goalNativeImplementations.adopt(implementationGoal, loaded.value);
-            MutableHashSet.add(adoptedNativeGoals, implementationGoal);
-          }
-        }
-        const nativeGoal =
-          implementationGoal === null
-            ? null
-            : goalNativeImplementations.forGoal(implementationGoal);
-        // Only factory references survive across runs. Bind fresh capabilities to the
-        // current owner's Context; retain the legacy service seams for unbound runs.
-        const runNativeFactory = Effect.runSyncWith(nativeOwnerContext);
-        const gateForRun = (binding: Parameters<typeof permissionGate.forRun>[0]) =>
-          isTruthy(nativeGoal)
-            ? runNativeFactory(nativeGoal.makePermissionGateMiddleware(binding))
-            : permissionGate.forRun(binding);
-        const recordForRun = (binding: Parameters<typeof recorder.forRun>[0]) =>
-          isTruthy(nativeGoal)
-            ? runNativeFactory(nativeGoal.makeRecordingMiddleware(binding))
-            : recorder.forRun(binding);
-        const runtime = yield* runtimeForAdapter(selection, implementationGoal);
+        // Every Goal runs on today's code, whichever code ran it before (docs/effect-ai-migration.md
+        // "옛 Goal 처리").
+        const runtime = yield* runtimeForAdapter(selection);
         // Pin the profile-specific client before later async preparation and tool/model turns.
         const runAdapter = runtime.adapter(selection);
         runAdapterToRelease = runAdapter;
@@ -2277,9 +2076,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             }),
           );
 
-        if (chatLoop === "effect-ai" && !injectImageProviderTool) {
-          // A Goal run is admitted once it is ready to start, and only then records its turn.
-          const goalRun = workerRevision !== null || isTruthy(boundRun);
+        // Only the Effect AI loop keeps a Goal's ledger, and it has no provider image tool yet.
+        const goalRun = newGoalRun !== null || isTruthy(boundRun);
+        if (goalRun && injectImageProviderTool)
+          return json(409, { error: "goal_image_tool_unavailable" });
+        if ((chatLoop === "effect-ai" || goalRun) && !injectImageProviderTool) {
           const answers = {
             projectId,
             sessionId,
@@ -2547,8 +2348,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             }),
           ];
           // A Goal's new run is bound now that it is ready to start; only then is its turn recorded.
-          if (workerRevision !== null && workerGoalId !== null) {
-            const admitted = yield* admitGoalRun(workerGoalId, workerRevision);
+          if (newGoalRun !== null) {
+            const admitted = yield* admitGoalRun(newGoalRun.goalInstanceId, newGoalRun.revisionId);
             if (Result.isFailure(admitted)) return admitted.failure;
             yield* persistUserTurn;
           }
@@ -2680,7 +2481,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const askEveryCall = [...mcpNames, ...delegation.tools.map((tool) => tool.name)];
         if (project.permissionMode === "auto")
           middleware.push(
-            gateForRun({
+            permissionGate.forRun({
               project,
               sessionId,
               selection,
@@ -2690,7 +2491,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           );
         else if (project.permissionMode === "ask" && askEveryCall.length > 0)
           middleware.push(
-            gateForRun({
+            permissionGate.forRun({
               project,
               sessionId,
               selection,
@@ -2714,28 +2515,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           runId,
           abortSignal: abortController.signal,
         });
-        const memoryRun = isTruthy(nativeGoal)
-          ? nativeGoal.createMemoryTools(
-              {
-                ...nativeMemoryOwner,
-                // The artifact shares the host `effect` (never bundled), so the run's tracer applies.
-                caller: yield* runTrace,
-              },
-              projectId,
-              { projectId, sessionId, runId, userNodeId },
-              memoryScope,
-            )
-          : yield* memoryTools.forRun(
-              {
-                projectId,
-                sessionId,
-                runId,
-                get userNodeId() {
-                  return userNodeId();
-                },
-              },
-              memoryScope,
-            );
+        const memoryRun = yield* memoryTools.forRun(
+          {
+            projectId,
+            sessionId,
+            runId,
+            get userNodeId() {
+              return userNodeId();
+            },
+          },
+          memoryScope,
+        );
         const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryRun.tools.filter((tool) => !HashSet.has(unusedPromotionTools, tool.name)),
           // An SVG the model writes comes back with a picture of it, for the page to show.
@@ -2841,7 +2631,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? [memoryRun.middleware]
             : []),
           reads.middleware,
-          recordForRun({
+          recorder.forRun({
             projectId,
             sessionId,
             runId,
@@ -2938,271 +2728,36 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           middleware,
           stream: { abortController },
         };
-        if (workerRevision !== null) {
-          const preflightFailure = yield* Effect.try({
-            try: () => preflightFullLoopExecution(executionTurn, capabilities),
-            // The preflight rejects with its typed reason; an SDK schema it could not inspect
-            // counts as an unsupported capability too.
-            catch: (cause) =>
-              Schema.is(FullLoopAdmissionRejected)(cause)
-                ? cause
-                : FullLoopAdmissionRejected.make({
-                    member: "turn",
-                    reason: FullLoopAdmissionReason.cases.NotCloneable.make({}),
-                  }),
-          }).pipe(
-            Effect.match({
-              onFailure: (error) =>
-                json(409, {
-                  error: "unsupported_worker_capabilities",
-                  detail: fullLoopAdmissionReasonName(error.reason),
-                }),
-              onSuccess: () => null,
-            }),
-          );
-          if (preflightFailure !== null) return preflightFailure;
-          // Source identity is metadata-first and independent of workflow revisions
-          // and the fresh per-run capability generation. Never repair a missing pin
-          // by assigning today's code to a Goal that already executed.
-          const inactiveOwner = GoalWorkerAssets.GoalWorkerAssetsFailed.make({
-            reason: GoalWorkerAssets.GoalWorkerAssetsReason.cases.Inactive.make({}),
-          });
-          const generationFailure = yield* Effect.gen(function* () {
-            const goalId = yield* Effect.sync(() => workerGoalId).pipe(
-              Effect.filterOrFail(
-                (goalId): goalId is string => workerScopeAlive && isTruthy(goalId),
-                () => inactiveOwner,
-              ),
-            );
-            // Never repair a missing pin by assigning today's code to a Goal that executed.
-            const pin = yield* workerGenerations.pinned(goalId);
-            const registry = yield* assetsRegistry;
-            workerAssets = Option.isSome(pin)
-              ? yield* registry.adopt({ ...pin.value, canonicalWorkerUrl: pin.value.workerUrl })
-              : yield* registry.resolve(goalId);
-            if (Option.isNone(pin)) {
-              const admittedAssets = workerAssets;
-              yield* Effect.when(
-                Effect.fail(inactiveOwner),
-                Effect.sync(() => !workerScopeAlive),
-              );
-              yield* workerGenerations.record({
-                goalInstanceId: admittedAssets.goalInstanceId,
-                sourceGeneration: admittedAssets.sourceGeneration,
-                manifestHash: admittedAssets.manifestHash,
-                workerUrl: admittedAssets.canonicalWorkerUrl,
-              });
-            }
-          }).pipe(
-            Effect.match({
-              onFailure: (error) =>
-                json(409, {
-                  error: "goal_source_generation_unavailable",
-                  detail: goalSourceFailure(error),
-                }),
-              onSuccess: () => null,
-            }),
-          );
-          if (generationFailure !== null) return generationFailure;
-          if (!isTruthy(workerGoalId))
-            return json(409, { error: "goal_source_generation_unavailable" });
-          // Capability preparation may yield: owner admission rechecks the captured revision and
-          // commits the run binding with the first durable Effect Workflow request atomically.
-          const generation = randomUUID();
-          const admitted = yield* admitGoalRun(workerGoalId, workerRevision);
-          if (Result.isFailure(admitted)) return admitted.failure;
-          workerCapability = yield* workerAuthority.issue(admitted.success, generation);
-          if (!(workerCapability !== null)) return json(409, { error: "run_outcome_uncertain" });
-          boundRun = {
-            session_id: sessionId,
-            goal_instance_id: admitted.success.goalInstanceId,
-            workflow_revision_id: admitted.success.workflowRevisionId,
-          };
-          yield* persistUserTurn;
-        }
         const claim = yield* liveRuns.claim(
           sessionId,
           runId,
           abortController,
           undefined,
           cancellation.release,
-          workerCapability !== null ? cancellation.settled : cancellation.cancel,
+          cancellation.cancel,
           settleQueue(sessionId, runId),
         );
         if (!isTruthy(claim)) return json(409, { error: "run_in_progress" });
         cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
-        // A Goal worker's answer is never cut: stopping it early would end the Goal step.
-        if (workerCapability === null) MutableHashMap.set(steerCuts, sessionId, steering);
+        MutableHashMap.set(steerCuts, sessionId, steering);
         stopSteeringOnExit = stopRunSteering;
         yield* runStarted;
-        let workerLease: Effect.Success<ReturnType<WorkerAssetsRegistry["use"]>> | undefined;
-        const releaseWorker = () => {
-          workerLease?.release();
-          MutableHashMap.remove(ownedSDKWorkers, runId);
-        };
-        const pinnedWorkerUrl = () => {
-          if (!(workerAssets !== undefined)) throw new Error("Goal worker source was not admitted");
-          return workerAssets.workerUrl;
-        };
-        const executor =
-          workerCapability !== null
-            ? createFullLoopExecution<typeof runAdapter>({
-                admission,
-                capability: workerCapability,
-                ledger: workerLedger,
-                workerUrl: pinnedWorkerUrl(),
-                acquireWorkerLease: Effect.gen(function* () {
-                  if (
-                    !workerScopeAlive ||
-                    workerAssets === undefined ||
-                    workerAssetsRegistry === undefined
-                  )
-                    return yield* GoalWorkerAssets.GoalWorkerAssetsFailed.make({
-                      reason: GoalWorkerAssets.GoalWorkerAssetsReason.cases.Inactive.make({}),
-                    });
-                  workerLease = yield* workerAssetsRegistry.use(workerAssets);
-                }),
-                onWorker: (worker) => {
-                  MutableHashMap.set(ownedSDKWorkers, runId, { worker, release: releaseWorker });
-                  worker.once("exit", releaseWorker);
-                  goalWorker.onWorker?.(worker);
-                },
-                onWorkerStopped: releaseWorker,
-                permits: (capability) =>
-                  workerScopeAlive
-                    ? workerAuthority.permits({ ...capability, requestId: "owner-rpc" })
-                    : Effect.succeed(false),
-                permitsFinalization: (capability) =>
-                  workerScopeAlive
-                    ? workerAuthority.permitsFinalization({
-                        ...capability,
-                        requestId: "owner-finalization",
-                      })
-                    : Effect.succeed(false),
-                // Audited owner cleanup only: run/transcript persistence, partial answers,
-                // recorded evidence and workflow settling, then background indexing/summaries.
-                // No permission, tool, provider, or worker-supplied name grants terminal access.
-                finalizationMiddleware: [
-                  "chat-persistence",
-                  "memory-agent/partial-answer",
-                  "memory-agent/record",
-                  "memory-agent/workflow-lifecycle",
-                  "memory-agent/index",
-                  "memory-agent/turn-summaries",
-                  "memory-agent/subagents",
-                  "memory-agent/promoted-memory-use",
-                ],
-                revoke: () => workerAuthority.revoke(runId),
-                providerRetry: {
-                  wait: (request, signal) =>
-                    providerRetries.wait(
-                      { ...request, sessionId, runId },
-                      signal,
-                      events.publishSession(sessionId, "run-state"),
-                    ),
-                },
-                lastOperationId: 0,
-              })
-            : createChatExecution<typeof runAdapter>();
-        const executionStream = executor.execute(executionTurn, capabilities);
-        // Only worker publication is normalized here. Transport must not synthesize
-        // a second, differently timestamped (or secret-bearing) exception frame after
-        // durability has acknowledged the owner-authored failure. Consume the worker
-        // to settlement so its audited cleanup/finally still runs; never restart it.
-        const stream =
-          workerCapability !== null
-            ? Stream.toAsyncIterable(
-                Stream.suspend(() => {
-                  let errorDelivered = false;
-                  const failure = () => ({
-                    type: EventType.RUN_ERROR as const,
-                    runId,
-                    threadId: sessionId,
-                    timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
-                    code: "worker_execution_failed",
-                    message: "Agent execution failed. This run will not be replayed automatically.",
-                  });
-                  return Stream.fromAsyncIterable(
-                    executionStream,
-                    (cause) => new Cause.UnknownError(cause),
-                  ).pipe(
-                    Stream.mapEffect((chunk): Effect.Effect<StreamChunk | null> => {
-                      if (chunk.type !== "RUN_ERROR") return Effect.succeed(chunk);
-                      if (errorDelivered) return Effect.succeed(null);
-                      errorDelivered = true;
-                      // The page gets the single owner failure; the worker's own code stays in
-                      // the log so a failed run can still be told apart afterwards.
-                      return Effect.as(
-                        Effect.logWarning("Worker run failed", { runId, code: chunk.code ?? null }),
-                        failure(),
-                      );
-                    }),
-                    Stream.filter((chunk) => chunk !== null),
-                    Stream.catchCause((cause) => {
-                      const failed = failure();
-                      const thrown = Cause.squash(cause);
-                      const inner = thrown instanceof Cause.UnknownError ? thrown.cause : thrown;
-                      // Settle the actual SDK row before publishing the single owner failure.
-                      return Stream.fromEffect(
-                        Effect.logError("Worker run stream failed", {
-                          runId,
-                          // Only the failure's tag or class: its message may carry provider text.
-                          error: inner instanceof Error ? errorTag(inner) : "non-error",
-                        }).pipe(
-                          Effect.andThen(
-                            nativePromise(
-                              () =>
-                                chatState.persistence.stores.runs?.update(runId, {
-                                  status: "failed",
-                                  finishedAt: failed.timestamp,
-                                  error: { code: failed.code, message: failed.message },
-                                }) ?? Promise.resolve(),
-                            ),
-                          ),
-                        ),
-                      ).pipe(
-                        Stream.flatMap(() => {
-                          if (errorDelivered) return Stream.empty;
-                          errorDelivered = true;
-                          return Stream.succeed(failed);
-                        }),
-                      );
-                    }),
-                  );
-                }),
-              )
-            : withShownRunErrors(redactor, executionStream);
-        // Commit each bound run's output before delivering it to the page.
-        const recorded = isTruthy(boundRun)
-          ? Stream.toAsyncIterable(
-              boundRunRecorded(
-                Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)),
-              ),
-            )
-          : stream;
-        const published = yield* cancellation.publish(recorded);
-        const tracked = claim.track(published);
-        // Worker teardown aborts its execution signal as resource cleanup. That is
-        // not a delivery cancellation: the owner still must publish the committed
-        // failure. A client delivery cancellation does cancel the worker, one-way.
-        const deliveryAbortController =
-          workerCapability !== null ? yield* cancellation.delivery : abortController;
-        const withAccountLease = tracked.pipe(
-          Stream.ensuring(settleWorkflow),
-          Stream.ensuring(Effect.sync(() => releaseSubscriptionRun(runAdapter))),
-          Stream.ensuring(stopRunSteering),
+        const published = yield* cancellation.publish(
+          withShownRunErrors(
+            redactor,
+            createChatExecution<typeof runAdapter>().execute(executionTurn, capabilities),
+          ),
         );
-        // Bound runs publish only after central durable delivery-log acknowledgement.
-        // Unbound legacy runs retain the SDK's process-local memory namespace.
-        const durableAdapter = isTruthy(boundRun)
-          ? yield* streamDurability({ sessionId, runId })
-          : memoryStream({ runId });
+        const withAccountLease = claim
+          .track(published)
+          .pipe(
+            Stream.ensuring(settleWorkflow),
+            Stream.ensuring(Effect.sync(() => releaseSubscriptionRun(runAdapter))),
+            Stream.ensuring(stopRunSteering),
+          );
         const response = toServerSentEventsResponse(Stream.toAsyncIterable(withAccountLease), {
-          abortController: deliveryAbortController,
-          durability: {
-            adapter: durableAdapter,
-            batch: 1,
-          },
+          abortController,
+          durability: { adapter: memoryStream({ runId }), batch: 1 },
         });
         cancellationToRelease = Effect.void;
         runAdapterToRelease = null; // ownership transferred to the stream's finally
@@ -3334,90 +2889,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const result: CancelResult = { runId: live.runId, stopped, status: run?.status ?? null };
         return json(200, result);
       }),
-
-    /** Read-only preview of an operator recovery assessment; never dispatches an agent. */
-    readRecovery: (sessionId: string, runId: string) =>
-      Effect.gen(function* () {
-        yield* sessions.get(sessionId);
-        const result = yield* readRecovery.assess(sessionId, runId);
-        if (!ReadRecoveryPreview.$is("recovered")(result)) return json(200, result);
-        const latest = yield* latestRevisionId(sessionId);
-        if (Option.isNone(latest))
-          return json(200, {
-            ...result,
-            admission: ReadRecoveryAdmission.blocked({ reason: "workflow_changed" }),
-          });
-        const admission = yield* runBindings.preview(
-          sessionId,
-          `operator-preview:${randomUUID()}`,
-          latest.value.id,
-        );
-        return Admission.$match(admission, {
-          bound: () => json(200, { ...result, admission: ReadRecoveryAdmission.ready() }),
-          refused: ({ reason }) =>
-            json(200, { ...result, admission: ReadRecoveryAdmission.blocked({ reason }) }),
-        });
-      }).pipe(
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          ReadRecoveryStorageError: () =>
-            Effect.succeed(json(500, { error: "read_recovery_storage_failed" })),
-        }),
-      ),
-
-    revokeReadRecovery: (
-      sessionId: string,
-      holder: string | null,
-      runId: string,
-      input: ReadRecoveryRevocation,
-    ) =>
-      Effect.gen(function* () {
-        yield* sessions.get(sessionId);
-        if (!leases.permits(sessionId, holder)) return inUse();
-        if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
-          return json(409, { error: "run_in_progress" });
-        const result = yield* readRecovery.revoke(sessionId, runId, input);
-        return yield* ReadRecoveryRevokeResult.$match(result, {
-          blocked: (blocked) => Effect.succeed(json(409, blocked)),
-          revoked: (revoked) =>
-            Effect.as(events.publishSession(sessionId, "run-state"), json(200, revoked)),
-        });
-      }).pipe(
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          SchemaError: () =>
-            Effect.succeed(json(400, { error: "invalid_read_recovery_revocation" })),
-          ReadRecoveryStorageError: () =>
-            Effect.succeed(json(500, { error: "read_recovery_storage_failed" })),
-        }),
-      ),
-
-    confirmReadRecovery: (
-      sessionId: string,
-      holder: string | null,
-      runId: string,
-      input: ReadRecoveryConfirmation,
-    ) =>
-      Effect.gen(function* () {
-        yield* sessions.get(sessionId);
-        if (!leases.permits(sessionId, holder)) return inUse();
-        if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
-          return json(409, { error: "run_in_progress" });
-        const result = yield* readRecovery.confirm(sessionId, runId, input);
-        return yield* ReadRecoveryConfirmResult.$match(result, {
-          blocked: (blocked) => Effect.succeed(json(409, blocked)),
-          recovered: (recovered) =>
-            Effect.as(events.publishSession(sessionId, "run-state"), json(200, recovered)),
-        });
-      }).pipe(
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          SchemaError: () =>
-            Effect.succeed(json(400, { error: "invalid_read_recovery_confirmation" })),
-          ReadRecoveryStorageError: () =>
-            Effect.succeed(json(500, { error: "read_recovery_storage_failed" })),
-        }),
-      ),
 
     /**
      * The user saw the runs whose tools left their outcome unknown (`uncertainRuns` in the run

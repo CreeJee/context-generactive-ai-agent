@@ -1,7 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
-  Cause,
   Context,
   Duration,
   Effect,
@@ -17,20 +16,10 @@ import { DatabaseSync } from "node:sqlite";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
-import {
-  pullModelChunk,
-  type OwnerModelStream,
-  type ProviderRetryOwner,
-} from "../../src/agent/full-loop-provider-retry.ts";
-import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
-import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
+import { ownerRpcFingerprint, ownerRpcFrame } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Database } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import { NodeDetail } from "../../src/memory/nodes.ts";
-import {
-  SubscriptionStreamFailed,
-  SubscriptionStreamFailedReason,
-} from "../../src/providers/subscription-adapter.ts";
 import {
   ExecutionAdmission,
   defaultExecutionAdmissionLimits,
@@ -41,7 +30,6 @@ import {
   ProviderRetryOutcome,
   providerRetryLayer,
 } from "../../src/workflow/provider-retry.ts";
-import { OwnerWorkflowStorageError } from "../../src/workflow/owner-workflow-storage.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
 const open = Effect.fnUntraced(function* (file: string) {
@@ -216,7 +204,7 @@ describe("durable provider retry", () => {
               runId,
               ownerRpcFingerprint(
                 "tool",
-                encodeFullLoopValue({ name: "run_shell", toolCallId: `${runId}-call`, args: {} }),
+                ownerRpcFrame({ name: "run_shell", toolCallId: `${runId}-call`, args: {} }),
               ),
             );
           });
@@ -287,104 +275,5 @@ describe("durable provider retry", () => {
         yield* Scope.close(reopened.scope, Exit.void);
       }),
     ),
-  );
-});
-
-describe("owner model pull", () => {
-  const failing = (reason: SubscriptionStreamFailed["reason"]) =>
-    SubscriptionStreamFailed.make({ provider: "openai", reason });
-  const reasons = SubscriptionStreamFailedReason.cases;
-  const iterator = (steps: ReadonlyArray<{ readonly type: string } | Error>) => {
-    let index = 0;
-    return {
-      next: () => {
-        const step = steps[index++];
-        return step instanceof Error
-          ? Promise.reject(step)
-          : Promise.resolve(
-              step === undefined ? { done: true, value: undefined } : { done: false, value: step },
-            );
-      },
-    };
-  };
-  const recordingRetries = (waits: number[]): ProviderRetryOwner => ({
-    wait: (input) =>
-      Effect.sync(() => {
-        waits.push(input.retry);
-        return ProviderRetryOutcome.Retry();
-      }),
-  });
-  const pull = (stream: OwnerModelStream, retries: ProviderRetryOwner) =>
-    Effect.scoped(
-      Effect.flatMap(Effect.abortSignal, (signal) =>
-        pullModelChunk(stream, retries, signal, (effect) => effect),
-      ),
-    );
-
-  it.effect("preserves a durable wait failure without reopening the provider stream", () =>
-    Effect.gen(function* () {
-      const failure = OwnerWorkflowStorageError.make({
-        operation: "provider_retry.list",
-        reason: "database",
-        cause: "fixture",
-      });
-      let reopened = false;
-      const stream: OwnerModelStream = {
-        iterator: iterator([failing(reasons.RequestNotSent.make({ stage: "dns" }))]),
-        open: () => {
-          reopened = true;
-          return iterator([]);
-        },
-        delivered: false,
-      };
-      expect(yield* pull(stream, { wait: () => Effect.fail(failure) }).pipe(Effect.flip)).toBe(
-        failure,
-      );
-      expect(reopened).toBe(false);
-    }),
-  );
-
-  it.effect("resends a request that was never sent on a fresh stream", () =>
-    Effect.gen(function* () {
-      const waits: number[] = [];
-      const stream: OwnerModelStream = {
-        iterator: iterator([failing(reasons.RequestNotSent.make({ stage: "dns" }))]),
-        open: () => iterator([{ type: "RUN_STARTED" }, { type: "TEXT_MESSAGE_START" }]),
-        delivered: false,
-      };
-      expect(yield* pull(stream, recordingRetries(waits))).toEqual({
-        done: false,
-        value: { type: "TEXT_MESSAGE_START" },
-      });
-      expect(waits).toEqual([1]);
-    }),
-  );
-
-  it.effect("never resends a request the provider may have received or answered", () =>
-    Effect.gen(function* () {
-      const waits: number[] = [];
-      const unknown = yield* pull(
-        {
-          iterator: iterator([failing(reasons.RequestOutcomeUnknown.make({}))]),
-          open: () => iterator([]),
-          delivered: false,
-        },
-        recordingRetries(waits),
-      ).pipe(Effect.flip);
-      expect(Cause.isUnknownError(unknown) && unknown.cause).toBeInstanceOf(
-        SubscriptionStreamFailed,
-      );
-      const afterOutput: OwnerModelStream = {
-        iterator: iterator([
-          { type: "TOOL_CALL_START" },
-          failing(reasons.RequestNotSent.make({ stage: "connect" })),
-        ]),
-        open: () => iterator([]),
-        delivered: false,
-      };
-      yield* pull(afterOutput, recordingRetries(waits));
-      yield* pull(afterOutput, recordingRetries(waits)).pipe(Effect.flip);
-      expect(waits).toEqual([]);
-    }),
   );
 });

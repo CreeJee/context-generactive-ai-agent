@@ -335,7 +335,15 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     /** Answer every pending approval and permission review, then wait for the resumed run. */
     approve: Effect.fnUntraced(function* (approved: boolean) {
       const loop = yield* ChatLoop;
-      yield* loop === "effect-ai" ? answerByHand(approved) : answerOnPage(approved);
+      // A Goal's run is on the Effect AI loop whatever the switch says.
+      const goalRun = yield* sqlGet(
+        `SELECT 1 FROM chat_interrupts i JOIN workflow_run_bindings b ON b.run_id = i.run_id
+         WHERE i.thread_id = ? AND i.status = 'pending' LIMIT 1`,
+        sessionId,
+      );
+      yield* loop === "effect-ai" || goalRun !== undefined
+        ? answerByHand(approved)
+        : answerOnPage(approved);
       yield* settled;
     }),
   };

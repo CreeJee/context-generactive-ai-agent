@@ -104,12 +104,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         );
         expect(missingHolder.status).toBe(423);
         expect(context.provider!.adapter.invocations).toHaveLength(0);
-        for (const table of [
-          "workflow_run_bindings",
-          "workflow_worker_dispatches",
-          "chat_runs",
-          "nodes",
-        ])
+        for (const table of ["workflow_run_bindings", "chat_runs", "nodes"])
           expect(yield* sqlGet(`SELECT count(*) AS n FROM ${table}`)).toEqual({ n: 0 });
         const valid = yield* callRoute(
           action,
@@ -190,10 +185,8 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "nodes",
           "chat_runs",
           "workflow_run_bindings",
-          "workflow_worker_dispatches",
           "owner_rpc_operations",
           "workflow_run_events",
-          "workflow_goal_worker_generations",
           "session_workflows",
           "workflow_state_revisions",
           "workflow_goal_identities",
@@ -274,10 +267,8 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "nodes",
           "chat_runs",
           "workflow_run_bindings",
-          "workflow_worker_dispatches",
           "owner_rpc_operations",
           "workflow_run_events",
-          "workflow_goal_worker_generations",
         ];
         const snapshot = Effect.forEach(tables, (table) =>
           sqlAll(`SELECT * FROM ${table} ORDER BY rowid`),

@@ -262,7 +262,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
   - TanStack 소유는 아니다. Goal worker를 없애면 Goal 도구 장부로만 쓴다(5단계).
   - 새 행은 도구 호출(`operation = 'tool'`)뿐이다. 번호는 owner가 run 안에서 매긴다. 모델 chunk, middleware, 권한 확인 행은 더 쓰지 않는다.
   - 열은 그대로다. `side_effect`, `status`, `fingerprint`를 보는 SQL은 새 행에서도 같은 뜻으로 돈다(`packages/memory-agent/src/workflow/uncertain-runs.ts`, `run-bindings.ts`, `completion-evidence.ts`).
-  - 옛 행은 그대로 둔다. 쓰기 tool의 권한 확인은 `operation_id - 1`, 실행은 `operation_id`에 기록되어 있다. read recovery receipt(`packages/memory-agent/src/agent/owner-read-recovery.ts`의 `recoveredReadRunSql`)가 이 규칙으로 옛 행을 가리키므로, receipt를 읽는 SQL은 남긴다.
+  - 옛 행은 그대로 둔다. 쓰기 tool의 권한 확인은 `operation_id - 1`, 실행은 `operation_id`에 기록되어 있다. read recovery receipt(`packages/memory-agent/src/workflow/read-recoveries.ts`의 `recoveredReadRunSql`)가 이 규칙으로 옛 행을 가리키므로, receipt를 읽는 SQL은 남긴다.
 - **hook이 채우는 테이블**
   - 대상: `nodes`(`tool_result` 노드의 `detail.ok`와 `text`), `subagents`, work trace
   - TanStack hook 정보에서 값을 만들므로 같은 행이 나와야 한다.
@@ -273,7 +273,7 @@ migration은 7단계 전환 커밋에서 등록한다. 지금 코드는 `metadat
 Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세션도 새 코드에서 이어서 진행한다. 그래서 전에 적었던 거절(loader contract 변경과 409 `goal_native_generation_unavailable`), 세션 읽기 전용, 자동 진행 문구 수정은 하지 않는다.
 
 - **새 run.** Goal 세션의 새 run은 일반 채팅과 같은 owner loop로 간다.
-  - `packages/memory-agent/src/agent/chat.ts`의 `workerRevision` 선택과 worker 경로(`createFullLoopExecution`)를 지운다.
+  - `packages/memory-agent/src/agent/chat.ts`의 `workerRevision` 선택과 worker 경로(`createFullLoopExecution`)를 지운다. 5단계에서 지웠다.
   - bound run 기록(`workflow_run_bindings`)과 durable 실행(`GoalExecution`, `packages/memory-agent/src/workflow/goal-execution.ts`)은 지금처럼 남긴다.
 - **완료 근거.** `packages/memory-agent/src/workflow/completion-evidence.ts`는 worker 세대가 있는 Goal이면 run마다 dispatch 세대(`workflow_worker_dispatches`)를 요구한다. 새 run에는 dispatch가 없으므로 이 조건을 뺀다. binding·revision, durable 실행 완료, 장부에 남은 미해결 쓰기 조건은 그대로다.
   - `required`(native artifact나 worker 세대가 있으면 근거를 요구)도 같이 본다. 새 Goal에는 둘 다 없다.
@@ -282,14 +282,14 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 결과를 모르는 도구가 없으면 자동으로 이어 간다(`endedWithKnownEffectsSql`).
   - 있으면 `server_restarted` blocker로 멈추고, 사용자가 확인하면 이어 간다(`uncertainRuns`).
   - 옛 run의 장부 행도 같은 SQL로 판정한다. 부작용 없는 행과 middleware 행은 지금도 미해결로 세지 않는다(`run-bindings.ts`의 `toolOperationSql`).
-- **packaging과 build.**
+- **packaging과 build.** 5단계에서 했다.
   - build는 worker `.mjs`와 native artifact(`dist/runtime/native.mjs`)와 manifest를 만들지 않는다(`packages/memory-agent/scripts/build-runtime-artifacts.ts`). `neverBundle`의 `@tanstack/ai`도 같이 빠진다.
   - packaging은 manifest 검증과 artifact 복사, artifact용 `@tanstack/ai` 복사를 그만둔다(`apps/agent/scripts/package.ts`).
   - 디스크에 남은 Goal worker 자산 파일은 지우지 않는다. 시작할 때 manifest가 없어도 실패하지 않아야 한다.
 
 ## 단계
 
-새 모듈은 7단계 전까지 앱에 연결하지 않는다. 단계마다 커밋하고, 각 커밋은 빌드된다. 릴리즈는 하나다.
+새 모듈은 7단계 전까지 앱에 연결하지 않는다. 단, Goal run은 5단계부터 새 loop로 돈다(decisions.md "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)"). 단계마다 커밋하고, 각 커밋은 빌드된다. 릴리즈는 하나다.
 
 ### 0. 기준 고정
 
@@ -309,9 +309,9 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 - 완료 기준: 지금 코드에서 통과한다. 타입으로 확인할 수 없는 경계라 테스트로 둔다.
 - 결과(2026-10-26): `packages/memory-agent/tests/golden/`. `driver.ts`만 클라이언트를 안다. 전환할 때는 이 파일만 바꾸고 시나리오와 golden 파일은 그대로 둔다.
   - 거절 경로는 페이지와 같은 모양의 요청을 직접 보내고, 응답과 행을 같이 저장한다(`rejections`).
-  - Goal worker가 owner에 보내는 요청의 거절(승인 없는 실행 등)은 golden이 아니라 `tests/full-loop/owner-authority.test.ts`가 맡는다. 5단계에서 worker와 함께 사라진다.
+  - Goal worker가 owner에 보내는 요청의 거절(승인 없는 실행 등)은 golden이 아니라 `tests/full-loop/owner-authority.test.ts`가 맡았다. 5단계에서 worker와 함께 지웠다.
   - 지금 코드의 결함도 golden에 그대로 남겼다. 이 자리의 golden 차이는 의도한 수정이다.
-    - 확인한 끊긴 Goal run 뒤의 Goal 턴은 시작하지 못한다. 장부의 부작용 예약이 확인 기록(`workflow_uncertain_acknowledgements`)을 보지 않고 `uncertain_run`으로 거절한다(`agent/owner-rpc-ledger.ts`). `goal-restart`는 확인까지만 두고, 5단계가 다음 턴을 더한다.
+    - 확인한 끊긴 Goal run 뒤의 Goal 턴은 시작하지 못한다. 장부의 부작용 예약이 확인 기록(`workflow_uncertain_acknowledgements`)을 보지 않고 `uncertain_run`으로 거절한다(`agent/owner-rpc-ledger.ts`). `goal-restart`는 확인까지만 두고, 5단계가 다음 턴을 더한다. 5단계에서 이 결함은 worker와 함께 사라졌고, `effect-ai/goal-restart`가 다음 턴까지 간다.
     - 모델이 없는 도구를 부르면 `tool_result` 노드의 text가 `[object Object]`다(`unknown-tool`).
   - golden에 넣지 않은 결함: 사용자 메시지가 저장되기 전에 취소하면 run이 `aborted`가 아니라 `failed`("All fibers interrupted without error")로 끝난다. `cancelled`는 모델 호출이 시작된 뒤에 취소한다.
 
@@ -499,7 +499,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - run 안에서는 결과를 모르는 쓰기가 다른 쓰기를 막지 않는다(지금의 `uncertain_run` fence). 다음 run의 입장 검사(`run-bindings.ts`의 `unresolved`)가 막는다.
 - 지울 것:
   - `packages/memory-agent/src/agent`의 Goal worker 모듈(약 5,000줄): `full-loop-*.ts`, `effect-rpc-message-port.ts`, `owner-rpc.ts`, `owner-rpc-ledger.ts`의 RPC 처리, `owner-native-*.ts`, `native-artifact-*.ts`, `goal-worker-*.ts`, `owner-tool-grants.ts`. 목록은 구현 때 CodeGraph로 다시 확인한다.
-  - `packages/memory-agent/src/tools/parallel-reads.ts`
+  - `packages/memory-agent/src/tools/parallel-reads.ts`(7단계로 옮겼다. "결과")
   - read recovery의 새 receipt를 만드는 operator API. receipt를 읽는 입장 검사는 남긴다(0.0.17 호환).
   - `ExecutionAdmission`의 `worker` gate와 `CONTEXT_AGENT_WORKER_*` 설정
 - "옛 Goal 처리"의 변경을 넣는다.
@@ -508,6 +508,43 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   - 한 턴의 병렬 tool 중 늦게 끝나는 것이 있어도 run이 성공한다.
   - 병렬 쓰기 일부가 실패해도 나머지 결과가 기록되고, 다음 step의 모델이 모두 본다.
   - worker 세대가 있는 옛 Goal 세션에서 새 run이 돌고, 완료 근거가 나온다.
+- 결과(2026-10-27):
+  - 사용자 결정으로 Goal run(새 Goal 턴, bound run, 승인 뒤 재개)은 스위치(`ChatLoop`)와 관계없이 새 loop로 돈다(decisions.md "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)").
+    - 지금 페이지는 새 loop의 interrupt를 풀지 못한다. 페이지에서 Goal run을 승인하는 흐름은 6단계 client부터 된다.
+    - 이미지 provider 도구를 쓰는 Goal run은 409 `goal_image_tool_unavailable`로 시작하지 않는다. 새 loop에 provider 이미지 도구가 아직 없기 때문이다.
+  - 지운 것:
+    - `packages/memory-agent/src/agent`의 worker 모듈 25개(`full-loop-*.ts`, `effect-rpc-message-port.ts`, `owner-rpc.ts`, `owner-rpc-ledger.ts`, `owner-native-*.ts`, `native-artifact-*.ts`, `goal-worker-*.ts`, `goal-native-implementation.ts`, `owner-tool-grants.ts`, `owner-read-recovery.ts`)와 그 테스트
+    - read recovery operator API(`apps/agent`의 `sessions.$session.read-recovery.$run` route 둘과 handler). 0.0.17 receipt를 읽는 SQL은 `workflow/read-recoveries.ts`로 옮겼다.
+    - `ExecutionAdmission`의 `worker` gate와 `CONTEXT_AGENT_WORKER_CONCURRENCY`·`CONTEXT_AGENT_WORKER_QUEUE_CAPACITY`
+    - fingerprint의 middleware 증거 쓰기와 digest 비교. 값 frame 인코더(`ownerRpcFrame`)는 `agent/owner-rpc-fingerprint.ts`에 남아 도구 장부가 쓴다. 옛 행의 `"middleware-hook"`은 계속 decode한다.
+    - "옛 Goal 처리"의 packaging·build: `memory-agent#build`는 `vp pack`만 한다(`scripts/build-runtime-artifacts.ts`와 `runtime/resources.ts`의 `runtimeArtifact`를 지웠다). packaging(`apps/agent/scripts/package.ts`)은 manifest 검사·복사와 runtime `node_modules`의 `@tanstack/ai`를 뺐다. `effect`와 `@effect/platform-node`는 Kiwi·embedding worker가 쓰므로 남는다.
+    - `tools/parallel-reads.ts`는 지우지 않았다. TanStack이 한 step의 호출을 순서대로 실행하는 것을 보완하는 TanStack 경로 전용 최적화이고, 기본값 `"tanstack"`의 채팅과 서브에이전트가 아직 쓴다. 지금 지우면 그 읽기만 느려지므로 7단계에서 TanStack과 함께 지운다.
+  - 새 loop의 Goal run이 일반 채팅과 다른 점은 계획의 넷 그대로다. 모두 `packages/memory-agent/src` 아래다.
+    - 입장: `admitGoalRun`(`agent/chat.ts`)이 bound run 기록과 durable 실행 시작을 한 번에 한다. 새 loop는 hook을 준비한 뒤, 사용자 턴을 저장하기 전에 입장한다. 거절 응답(409 `run_outcome_uncertain`, 409 거절 사유, 503 `goal_workflow_saturated`, 500 `goal_workflow_admission_failed`)은 worker 경로가 쓰던 것과 같다.
+    - 도구 장부: `workflow/tool-ledger.ts`의 `toolLedger.forRun`이 run의 도구를 감싼다.
+      - 호출마다 실행 전에 run의 다음 번호를 `pending`으로 예약한다. 번호 계산과 삽입이 한 문장(`INSERT … SELECT max + 1`)이라 동시에 예약해도 겹치지 않는다.
+      - 예약하지 못한 호출은 실행하지 않고 `ledger_unavailable` 실패를 모델에 돌린다. 결과를 적지 못한 행은 `pending`으로 남고, 다음 run 입장이 사용자에게 묻는다.
+      - 읽기 도구는 실패하거나 취소돼도 `succeeded`다. worker의 판정과 같다(decisions.md "Configurable dev and Goal settlement boundaries (2026-10-10)"의 읽기 실패).
+      - 쓰기 도구가 아무것도 바꾸기 전에 거절한 실패(파일 도구의 `ToolFailed.refused`)는 `succeeded`(`output: "refused"`)다. 그 밖의 쓰기 실패와 취소는 `uncertain`이다.
+      - fingerprint 입력은 worker codec 모양(`["object", [["name", …], ["args", …], ["toolCallId", …]]]`)이다. `invocationFieldSql`이 지금 행처럼 읽는다.
+      - 장부를 열지 못하면(binding 없음) run은 500 `goal_ledger_unavailable`로 시작하지 않는다.
+    - 재시도: `model/unsent-retry.ts`의 `unsentRetried`가 Goal run의 모델을 감싼다. 실패가 `RequestNotSent`이고 part가 하나도 오지 않았을 때만 `ProviderRetries.wait`로 기다렸다가 같은 요청을 다시 연다. 기다림이 `Exhausted`나 `Cancelled`면 원래 실패로 끝난다.
+    - 기록: chunk를 `workflow_run_events`(`chunk:N`)에 적는다(`boundRunRecorded`, TanStack 경로와 같은 함수). SSE 재접속은 `streamDurability`(sqlite)로 한다. steer는 Goal run의 답을 자르지 않는다. 둘 다 TanStack 경로와 같다.
+  - 완료 근거: 아직 도는 run이 적은 criterion mapping은 Goal 종류와 관계없이 `completionRequest`로 보관하고, `finishRun`에서 다시 검사한다(`workflow/workflow.ts`의 `stageCompletion`). 새 장부는 기록하는 호출 자신을 실행 중 `pending`으로 두므로, 바로 검사하면 거절된다. 전에는 worker 세대나 native 등록이 있는 Goal만 보관했다.
+  - golden: Goal 시나리오는 기본 agent(`tests/golden/chat.test.ts`)에서 돌고 `tests/golden/__golden__/effect-ai/`와 비교한다. TanStack Goal golden(`goal-approval`, `goal-restart`, `goal-tools`)은 지웠다. 장부는 도구 행만 비교한다. worker 경로와 다른 점은 아래뿐이다(4단계 차이 제외).
+    - Goal run도 일반 채팅처럼 lazy 도구를 discovery로 연다. worker는 모든 도구를 처음부터 열었다(`goal-approval`, `goal-restart`).
+    - Goal run의 assistant 메시지에 `id`, `createdAt`, `model`, `source`, `finishReason`이 있다. history group id는 `stored:<thread>:<n>` 대신 메시지 id다. 도구 호출만 있는 메시지의 `content`는 `""` 대신 `null`이다.
+    - 재시작으로 끊긴 run에서 끝난 step의 메시지가 thread에 남는다. worker 경로는 사용자 메시지만 남겼다. 끊길 때 실행 중이던 쓰기는 `pending` 대신 `uncertain`이다.
+    - `goal-restart`는 사용자 확인 뒤의 다음 Goal 턴까지 간다. worker 경로는 그 턴의 첫 쓰기를 `uncertain_run`으로 거절해 run이 끝나지 않았다.
+    - `goal-tools`의 `list_files`는 `notes*`만 본다. 한 step의 호출은 동시에 돌아서 같은 step의 쓰기 결과가 목록에 들어갈 수 있다.
+  - 테스트:
+    - Goal run의 승인은 페이지 client 대신 새 run(`parentRunId`, `resume`)으로 답한다. golden driver의 `approve`는 승인 대기가 bound run의 것이면 그렇게 한다(`tests/golden/driver.ts`). Verify의 셸 승인도 같다(`tests/permission/approval.test.ts`).
+    - 보내지 못한 요청만 다시 보낸다: `tests/model/unsent-retry.test.ts`
+    - OS owner 복구 fixture(`tests/fixtures/goal-owner-process.mts`)의 partial mode는 test provider의 `model` 옵션으로 Effect 모델 stream을 text 뒤에서 붙잡는다.
+  - 완료 기준 확인:
+    - 늦게 끝나는 호출과 실패한 쓰기: `tests/goal/parallel-tools.test.ts`. 셸 스킬이 형제 쓰기보다 늦게 끝나고 쓰기 하나가 거절돼도 run이 끝난다. 장부에 호출이 모두 적히고(거절된 쓰기는 `succeeded`·`refused`), 다음 step의 모델이 세 결과를 호출 순서로 본다.
+    - 옛 Goal: 새 loop는 worker 세대와 native artifact를 읽지 않는다. 완료 근거는 dispatch가 없는 run도 받는다(`tests/workflow/completion-evidence.test.ts`).
+    - 자동 진행과 검증 완료: `tests/workflow/execution.test.ts`
 
 ### 6. client
 
@@ -539,7 +576,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
   1. 모든 진입점을 새 runtime으로 바꾸고, client를 6단계 hook으로 바꾸고, migration을 등록한다.
      - 진입점: 본 채팅, BTW, 서브에이전트, Goal, ACP, MCP, 단발 호출. Goal은 5단계에서 owner loop로 옮겼으므로 본 채팅과 같이 바뀐다.
      - API payload가 바뀌어 기존 `useChat`으로는 확인할 수 없으므로, backend와 client를 함께 바꾼다.
-  2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목.
+  2. TanStack을 지운다: 패키지 9개, patch 2개, catalog·`minimumReleaseAgeExclude`·`patchedDependencies`의 TanStack 항목, `tools/parallel-reads.ts`(5단계 "결과").
 - 검사: golden(거절 경로 포함), 로컬 DB 검사 도구, `vp check`, `vp run typecheck`, memory-agent `vp test --maxWorkers=4`, `vp run test:browser`
 - decisions.md에 대체 결정을 남긴다. 대상은 아래 목록이다.
 
@@ -591,7 +628,7 @@ Goal worker를 없애므로 옛 Goal을 거절할 이유가 없다. 옛 Goal 세
 
 worker를 없애면 owner와 worker 사이의 검사(`agent/full-loop-execution.ts`의 `authorizeRequest`: 관찰된 tool call만 실행, hook 허용 목록, context snapshot 동일성, 미등록 interrupt 거절)는 대상이 사라진다. loop가 owner 안에서 모델 stream을 직접 읽기 때문이다. 남는 검증은 이것이다.
 
-- 장부는 외부 부작용 재생 방지다: `side_effect`·`status`·`fingerprint`, `workflow/run-bindings.ts`의 `previous`·`unresolved` 검사(`run_outcome_uncertain`), `workflow/uncertain-runs.ts`의 확인, `agent/owner-read-recovery.ts`의 receipt SQL. 새 장부 행이 이 SQL에서 지금 도구 행과 같은 뜻이어야 한다.
+- 장부는 외부 부작용 재생 방지다: `side_effect`·`status`·`fingerprint`, `workflow/run-bindings.ts`의 `previous`·`unresolved` 검사(`run_outcome_uncertain`), `workflow/uncertain-runs.ts`의 확인, `workflow/read-recoveries.ts`의 receipt SQL. 새 장부 행이 이 SQL에서 지금 도구 행과 같은 뜻이어야 한다.
 - 장부 예약은 실행 전이다. 예약하지 못한 호출은 실행하지 않는다. 장부에 없는 도구는 실행되지 않았다는 규칙이 재시작 뒤 자동 이어가기의 근거다(decisions.md 2026-10-13).
 - 미리 시작하는 실행의 권한 확인. 지금 owner는 `parallelReads`가 미리 시작할 읽기의 권한 사슬을 시작 전에 모두 평가한다(`agent/full-loop-execution.ts`의 `toolAuthorize`). 새 scheduler는 호출마다 자기 권한 사슬을 통과한 뒤에만 시작한다("도구 실행 방식").
 
@@ -669,7 +706,7 @@ TanStack을 전제로 쓴 항목들이다. 구현할 때 새 항목으로 대체
 - compatible 어댑터의 run id와 bound run 전달 실패 (2026-10-21)
 - 시스템 프롬프트와 도구 설명은 규칙을 한 곳에만 둔다 (2026-10-24)
 
-Goal worker를 전제로 쓴 항목들이다. 5단계를 구현할 때 "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"로 대체한다고 적는다.
+Goal worker를 전제로 쓴 항목들이다. worker를 지운 5단계에서 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)"로 대체한다고 적었다.
 
 - 개발 빌더와 full-loop worker 소스 (2026-10-03)
 - Configurable dev and Goal settlement boundaries (2026-10-10)의 worker 세대·worker 승인 부분
