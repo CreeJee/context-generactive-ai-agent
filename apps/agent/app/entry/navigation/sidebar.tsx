@@ -78,7 +78,8 @@ export function ModelSection({
   onSelect: (model: string, reasoningEffort?: string) => void;
 }) {
   const current = models.find((model) => model.id === selection?.model);
-  const efforts = current && selection ? effortChoices(selection, current) : [];
+  const efforts =
+    current !== undefined && selection !== null ? effortChoices(selection, current) : [];
   return (
     <Section title="모델">
       <DataListItem term="모델">
