@@ -1,4 +1,3 @@
-import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -28,22 +27,6 @@ const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
  * (not a work tree, git missing, or a case-insensitive query with non-ASCII letters), so the caller
  * searches every file instead. Lines are matched afterwards by the caller; this only narrows files.
  */
-export const gitGrepFiles: {
-  (
-    directory: string,
-    query: string,
-    caseSensitive: boolean,
-  ): (root: string) => ReturnType<typeof gitGrepFilesBody>;
-} & typeof gitGrepFilesBody = EffectFunction.dual(4, gitGrepFilesBody);
-function gitGrepFilesBody(
-  root: string,
-  directory: string,
-  query: string,
-  caseSensitive: boolean,
-): Promise<HashSet.HashSet<string> | null> {
-  return Effect.runPromise(gitGrepFilesEffect({ root, directory, query, caseSensitive }));
-}
-
 export const gitGrepFilesEffect = (options: {
   readonly root: string;
   readonly directory: string;

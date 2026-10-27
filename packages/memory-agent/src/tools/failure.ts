@@ -1,8 +1,6 @@
-import { nativeFailure } from "../runtime/native-effect.ts";
 import { tagOfUnknown } from "../runtime/failure-tag.ts";
 import { Function as EffectFunction } from "effect";
-import { Cause, Context, Effect, Exit, HashMap, Result, Option, Predicate, Schema } from "effect";
-import { type RunTrace } from "../runtime/run-trace.ts";
+import { Cause, Effect, HashMap, Option, Predicate, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected, TextFileIoFailed, textFileRejectedReasonName } from "../files/text.ts";
 import { optionalProperty } from "../optional-property.ts";
@@ -148,53 +146,6 @@ function toolFailureBody(error: Error, path: string): ToolFailed {
   );
 }
 
-/** Runs one tool operation, rethrowing any failure as a model-facing message. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const guarded: {
-  <A, E = never>(
-    operation: () => Promise<A> | Effect.Effect<A, E>,
-    signal?: AbortSignal,
-  ): (path: string) => Promise<A>;
-} & typeof guardedBody = EffectFunction.dual(
-  (args) => Schema.is(Schema.String)(args[0]),
-  guardedBody,
-);
-function guardedBody<A, E = never>(
-  path: string,
-  operation: () => Promise<A> | Effect.Effect<A, E>,
-  signal?: AbortSignal,
-): Promise<A> {
-  return guardedOn(Context.empty(), path, operation, signal);
-}
-
-/** `guarded` on a run's context, so the tool's spans join the run's trace. */
-export const guardedWith =
-  (caller: RunTrace) =>
-  <A, E = never>(
-    path: string,
-    operation: () => Promise<A> | Effect.Effect<A, E>,
-    signal?: AbortSignal,
-  ): Promise<A> =>
-    guardedOn(caller, path, operation, signal);
-
-function guardedOn<A, E, R>(
-  context: Context.Context<R>,
-  path: string,
-  operation: () => Promise<A> | Effect.Effect<A, E>,
-  signal?: AbortSignal,
-): Promise<A> {
-  const work = Effect.suspend<A, E | Cause.UnknownError, never>(() => {
-    const result = operation();
-    return Effect.isEffect(result) ? result : Effect.tryPromise(() => result);
-  });
-  return Effect.runPromiseExitWith(context)(guardedEffect(path, work), { signal }).then(
-    Exit.match({
-      onSuccess: (value) => value,
-      onFailure: (cause) => Promise.reject(nativeFailure(cause).cause),
-    }),
-  );
-}
-
 /** Keep model-facing path/error redaction at the SDK edge, including native callback exceptions. */
 export const guardedEffect: {
   <A, E, R>(
@@ -258,9 +209,3 @@ function caught<A, E, R>(
     }),
   );
 }
-
-/** Unwraps a path resolution inside {@link guarded}, throwing the rejection. */
-export const orThrow = <A>(result: Result.Result<A, PathRejected>) =>
-  Result.getOrElse(result, (rejection) => {
-    throw rejection;
-  });

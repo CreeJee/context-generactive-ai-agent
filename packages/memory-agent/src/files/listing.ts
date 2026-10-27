@@ -3,7 +3,6 @@ import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcess
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Effect Path has no glob matcher; minimatch is what Node's `path.matchesGlob` runs.
 import { minimatch } from "minimatch";
@@ -66,7 +65,6 @@ export interface FileListing {
   readonly truncated: boolean;
 }
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, directory: string) {
   const git = yield* Effect.scoped(
     Layer.build(NodeFileSystem.layer).pipe(
@@ -127,7 +125,6 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
  * `credentialPrefix` joined with the relative path: empty for a project, whose root may itself sit
  * under an unusual name, and the absolute base outside, where `~/.config` + `gh` must still match.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
   base: string,
   directory: string,
@@ -182,13 +179,6 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
  * by a glob relative to that directory. Symlinks, `.git` and credential-looking files are left out;
  * a tracked file deleted from disk is not listed.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const listProjectFiles: {
-  (
-    directory: string,
-    glob: string | undefined,
-  ): (root: string) => ReturnType<typeof listProjectFilesBody>;
-} & typeof listProjectFilesBody = EffectFunction.dual(3, listProjectFilesBody);
 export const listProjectFilesEffect = Effect.fn("FileListing.project")(function* (
   root: string,
   directory: string,
@@ -228,23 +218,11 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   } satisfies FileListing;
 });
 
-function listProjectFilesBody(
-  root: string,
-  directory: string,
-  glob: string | undefined,
-): Promise<FileListing> {
-  return Effect.runPromise(listProjectFilesEffect(root, directory, glob));
-}
-
 /**
  * Every regular file below an outside `directory` (canonical, already validated), as absolute
  * paths, optionally filtered by a glob relative to it. Never uses Git ignore rules: outside
  * listings show what is on disk, minus links, `.git`, `node_modules` and credentials.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const listOutsideFiles: {
-  (glob: string | undefined): (directory: string) => ReturnType<typeof listOutsideFilesBody>;
-} & typeof listOutsideFilesBody = EffectFunction.dual(2, listOutsideFilesBody);
 export const listOutsideFilesEffect = Effect.fn("FileListing.outside")(function* (
   directory: string,
   glob: string | undefined,
@@ -261,10 +239,6 @@ export const listOutsideFilesEffect = Effect.fn("FileListing.outside")(function*
     truncated: walked.truncated,
   } satisfies FileListing;
 });
-
-function listOutsideFilesBody(directory: string, glob: string | undefined): Promise<FileListing> {
-  return Effect.runPromise(listOutsideFilesEffect(directory, glob));
-}
 
 export interface Snapshot extends FileListing {
   readonly id: string;

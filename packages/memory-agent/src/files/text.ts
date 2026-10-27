@@ -147,12 +147,6 @@ export interface FileBytes {
   readonly mode: number;
 }
 
-/**
- * Reads raw bytes (no text checks). Throws {@link TextFileRejected} `too_large`. With `checkLeaf`,
- * the opened file itself must be a regular file with one link, checked on the handle (for callers
- * that validated the directories but not the file).
- */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 interface FileReadOptions {
   readonly absolute: string;
   readonly path: string;
@@ -213,6 +207,11 @@ const readPosixFileBytes = Effect.fn("readPosixFileBytes")(function* (options: F
   );
 });
 
+/**
+ * Reads raw bytes (no text checks). Fails with {@link TextFileRejected} `too_large`. With
+ * `checkLeaf`, the opened file itself must be a regular file with one link, checked on the handle
+ * (for callers that validated the directories but not the file).
+ */
 export const readFileBytesEffect = Effect.fn("readFileBytes")(function* (options: FileReadOptions) {
   return yield* Match.value(yield* FileReadPlatform).pipe(
     Match.when("windows", () => readWindowsFileBytes(options)),
@@ -221,23 +220,7 @@ export const readFileBytesEffect = Effect.fn("readFileBytes")(function* (options
   );
 });
 
-export const readFileBytes: {
-  (path: string, checkLeaf?: boolean): (absolute: string) => Promise<FileBytes>;
-  (absolute: string, path: string, checkLeaf?: boolean): Promise<FileBytes>;
-} = EffectFunction.dual(
-  (args) => Schema.is(Schema.String)(args[1]),
-  (absolute: string, path: string, checkLeaf = false) =>
-    Effect.runPromise(readFileBytesEffect({ absolute, path, checkLeaf })),
-);
-
-/** Decodes bytes as UTF-8 text, throwing {@link TextFileRejected} for binary or invalid content. */
-export const decodeText: {
-  (path: string): (bytes: Uint8Array) => ReturnType<typeof decodeTextBody>;
-} & typeof decodeTextBody = EffectFunction.dual(2, decodeTextBody);
-function decodeTextBody(bytes: Uint8Array, path: string): string {
-  return Effect.runSync(decodeTextEffect({ bytes, path }));
-}
-
+/** Decodes bytes as UTF-8 text, failing with {@link TextFileRejected} for binary or invalid content. */
 export const decodeTextEffect = Effect.fnUntraced(function* (options: {
   readonly bytes: Uint8Array;
   readonly path: string;
@@ -256,16 +239,8 @@ export const decodeTextEffect = Effect.fnUntraced(function* (options: {
 /**
  * Reads a UTF-8 text file, rejecting linked leaves. POSIX uses atomic noFollow; Windows
  * checks the observed leaf before opening it. `path` is only used in errors.
- * Throws {@link TextFileRejected} for binary, oversized or undecodable content.
+ * Fails with {@link TextFileRejected} for binary, oversized or undecodable content.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const readTextFile: {
-  (path: string): (absolute: string) => ReturnType<typeof readTextFileBody>;
-} & typeof readTextFileBody = EffectFunction.dual(2, readTextFileBody);
-function readTextFileBody(absolute: string, path: string): Promise<TextFile> {
-  return Effect.runPromise(readTextFileEffect({ absolute, path }));
-}
-
 export const readTextFileEffect = Effect.fn("readTextFile")(function* (options: {
   readonly absolute: string;
   readonly path: string;
@@ -276,14 +251,6 @@ export const readTextFileEffect = Effect.fn("readTextFile")(function* (options: 
 });
 
 /** Creates a new file, failing if anything already exists at that name. Parents are created. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const createTextFile: {
-  (path: string, text: string): (absolute: string) => ReturnType<typeof createTextFileBody>;
-} & typeof createTextFileBody = EffectFunction.dual(3, createTextFileBody);
-function createTextFileBody(absolute: string, path: string, text: string) {
-  return Effect.runPromise(createTextFileEffect({ absolute, path, text }));
-}
-
 export const createTextFileEffect = Effect.fn("createTextFile")(function* (options: {
   readonly absolute: string;
   readonly path: string;
@@ -312,18 +279,6 @@ export const createTextFileEffect = Effect.fn("createTextFile")(function* (optio
  * Replaces a file's content atomically (temp file in the same directory, then rename), but only
  * when it still has the content the caller read. The permission bits are kept.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const replaceTextFile: {
-  (
-    path: string,
-    expectedSha256: string,
-    text: string,
-  ): (absolute: string) => ReturnType<typeof replaceTextFileBody>;
-} & typeof replaceTextFileBody = EffectFunction.dual(4, replaceTextFileBody);
-function replaceTextFileBody(absolute: string, path: string, expectedSha256: string, text: string) {
-  return Effect.runPromise(replaceTextFileEffect({ absolute, path, expectedSha256, text }));
-}
-
 export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (options: {
   readonly absolute: string;
   readonly path: string;
@@ -368,17 +323,6 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
 });
 
 /** Removes a file only when it still has the content the caller read. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const deleteTextFile: {
-  (
-    path: string,
-    expectedSha256: string,
-  ): (absolute: string) => ReturnType<typeof deleteTextFileBody>;
-} & typeof deleteTextFileBody = EffectFunction.dual(3, deleteTextFileBody);
-function deleteTextFileBody(absolute: string, path: string, expectedSha256: string) {
-  return Effect.runPromise(deleteTextFileEffect({ absolute, path, expectedSha256 }));
-}
-
 export const deleteTextFileEffect = Effect.fn("deleteTextFile")(function* (options: {
   readonly absolute: string;
   readonly path: string;

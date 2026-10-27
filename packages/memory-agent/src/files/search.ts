@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
 import {
-  Array as EffectArray,
   Cache,
   Data,
   Effect,
@@ -16,7 +15,6 @@ import {
   decodeTextEffect,
   type LinePage,
   TextFileIoFailed,
-  TextFileIoReason,
   TextFileRejected,
   textFileRejectedReasonName,
 } from "./text.ts";
@@ -125,7 +123,6 @@ type ReadFailure =
   | TextFileRejected
   | TextFileIoFailed
   | import("effect/PlatformError").PlatformError;
-type NativeRead = (path: string, signal: AbortSignal) => Promise<Uint8Array>;
 
 export interface SearchTextInput<R = never> extends SearchOptions {
   readonly paths: readonly string[];
@@ -135,72 +132,6 @@ export interface SearchTextInput<R = never> extends SearchOptions {
   readonly start: SearchPosition;
   readonly readPage?: (path: string, startLine: number) => Effect.Effect<LinePage, ReadFailure, R>;
 }
-
-const nodeCode = Schema.is(Schema.Struct({ code: Schema.String }));
-const nativeRead = (readBytes: NativeRead, path: string) =>
-  Effect.tryPromise({
-    try: (signal) => readBytes(path, signal),
-    catch: (cause): ReadFailure => {
-      if (
-        Schema.is(PathRejected)(cause) ||
-        Schema.is(TextFileRejected)(cause) ||
-        Schema.is(TextFileIoFailed)(cause)
-      )
-        return cause;
-      if (nodeCode(cause))
-        return TextFileIoFailed.make({
-          path,
-          reason: TextFileIoReason.make({ operation: "read", code: cause.code, cause }),
-        });
-      throw cause;
-    },
-  });
-
-/** Native SDK entry point; Effect callers use searchTextFilesEffect directly. */
-export const searchTextFiles: {
-  (input: SearchTextInput): Promise<SearchPage>;
-  (
-    readBytes: NativeRead,
-    query: string,
-    caseSensitive: boolean,
-    start: SearchPosition,
-    options?: SearchOptions,
-  ): (paths: readonly string[]) => Promise<SearchPage>;
-  (
-    paths: readonly string[],
-    readBytes: NativeRead,
-    query: string,
-    caseSensitive: boolean,
-    start: SearchPosition,
-    options?: SearchOptions,
-  ): Promise<SearchPage>;
-} = EffectFunction.dual(
-  (args) =>
-    EffectArray.isArray(args[0]) ||
-    Schema.is(Schema.Struct({ paths: Schema.Array(Schema.String) }))(args[0]),
-  (
-    input: SearchTextInput | readonly string[],
-    readBytes?: NativeRead,
-    query = "",
-    caseSensitive = true,
-    start: SearchPosition = { file: 0, line: 0 },
-    options: SearchOptions = {},
-  ) => {
-    if (!Schema.is(Schema.Array(Schema.String))(input))
-      return Effect.runPromise(searchTextFilesEffect(input));
-    if (readBytes === undefined) throw new Error("Missing native file reader");
-    return Effect.runPromise(
-      searchTextFilesEffect({
-        paths: input,
-        readBytes: (path) => nativeRead(readBytes, path),
-        query,
-        caseSensitive,
-        start,
-        ...options,
-      }),
-    );
-  },
-);
 
 export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
   input: SearchTextInput<R>,

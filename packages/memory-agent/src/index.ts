@@ -570,11 +570,10 @@ export {
   type CommandOptions,
   type CommandResult,
 } from "./shell/run.ts";
-export { guarded, orThrow, toolFailure } from "./tools/failure.ts";
+export { toolFailure } from "./tools/failure.ts";
 export {
   decodeSearchCursor,
   encodeSearchCursor,
-  searchTextFiles,
   type SearchCursor,
   type SearchMatch,
   type SearchPage,
@@ -585,19 +584,12 @@ export {
   TextFileRejected,
   linePage,
   maxTextBytes,
-  readTextFile,
   type LinePage,
   type TextFile,
 } from "./files/text.ts";
-export {
-  listOutsideFiles,
-  listProjectFiles,
-  walkLimit,
-  type FileListing,
-} from "./files/listing.ts";
+export { walkLimit, type FileListing } from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
 export { readOnlyToolNames } from "./tools/effects.ts";
-export { gitGrepFiles } from "./files/git-grep.ts";
 export {
   McpScope,
   McpServerConfig,
