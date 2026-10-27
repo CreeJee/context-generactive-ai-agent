@@ -20,7 +20,7 @@ import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts
 import { kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { runtimeRequire } from "../src/runtime/resources.ts";
 
-const home = defaultStorageRoot;
+const home = await Effect.runPromise(defaultStorageRoot);
 /**
  * macOS physical footprint in MB, what the system counts against the process under memory
  * pressure. Unlike RSS it drops when freed memory is given back, even if pages stay mapped.

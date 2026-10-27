@@ -32,7 +32,9 @@ const agentLayer: Layer.Layer<
 > = Layer.unwrap(
   Effect.suspend(() =>
     configuredStorageRoot === undefined
-      ? Config.String("CONTEXT_AGENT_HOME").pipe(Config.withDefault(defaultStorageRoot))
+      ? Effect.flatMap(defaultStorageRoot, (home) =>
+          Config.String("CONTEXT_AGENT_HOME").pipe(Config.withDefault(home)),
+        )
       : Effect.succeed(configuredStorageRoot),
   ).pipe(Effect.map(memoryAgentLayer)),
 );

@@ -7,23 +7,15 @@ import {
   Layer as PlatformLayer,
   Crypto,
   FileSystem,
-  Path,
 } from "effect";
 import { Function as EffectFunction } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodePath from "@effect/platform-node/NodePath";
+import { path } from "../runtime/synchronous-path.ts";
 import { Effect, Exit, Match, MutableHashMap, Option, Schema, Scope } from "effect";
 import { PathRejected } from "./paths.ts";
 
 // Path operations remain synchronous at these public host boundaries.
-const { basename, dirname, join } = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodePath.layer);
-      return PlatformContext.get(services, Path.Path);
-    }),
-  ),
-);
+const { basename, dirname, join } = path;
 
 // NodeCrypto's digest and UUID primitives execute synchronously at host API boundaries.
 const hostCrypto = PlatformEffect.runSync(

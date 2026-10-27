@@ -493,7 +493,7 @@ const { kiwiStorage, kiwiCached } = await Effect.runPromise(
       return yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const kiwiStorage = defaultStorageRoot;
+        const kiwiStorage = yield* defaultStorageRoot;
         const kiwiCached = yield* fs
           .exists(
             path.join(

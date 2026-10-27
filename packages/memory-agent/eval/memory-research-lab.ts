@@ -58,7 +58,7 @@ const repoRoot = join(process.cwd(), "..", "..");
 const tmpBase = join(repoRoot, "node_modules", ".vp-tmp");
 const labPrefix = "memory-research-lab-";
 
-const home = defaultStorageRoot;
+const home = await Effect.runPromise(defaultStorageRoot);
 const quint8File = join(home, "models", localModel.id, modelFile("quint8"));
 const fp32File = join(home, "models", localModel.id, modelFile("fp32"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");

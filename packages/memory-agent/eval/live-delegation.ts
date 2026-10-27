@@ -63,7 +63,7 @@ const selection = EffectFunction.flow(
 )(
   await runOAuthNodeEffect(
     Effect.flatMap(FileSystem.FileSystem, (fs) =>
-      fs.readFileString(join(defaultStorageRoot, "config.json")),
+      Effect.flatMap(defaultStorageRoot, (root) => fs.readFileString(join(root, "config.json"))),
     ),
   ),
 );

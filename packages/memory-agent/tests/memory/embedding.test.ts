@@ -405,7 +405,7 @@ const cachedModels = await Effect.runPromise(
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const root = yield* Config.String("MEMORY_EMBEDDING_TEST_ROOT").pipe(
-          Config.withDefault(defaultStorageRoot),
+          Config.withDefault(yield* defaultStorageRoot),
         );
         const available = (file: string) =>
           fs

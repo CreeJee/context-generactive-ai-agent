@@ -38,7 +38,7 @@ import {
 } from "./recall-corpus.ts";
 import { technicalQueries, technicalSessions } from "./recall-technical.ts";
 
-const home = defaultStorageRoot;
+const home = await Effect.runPromise(defaultStorageRoot);
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 for (const file of [embeddingModel, kiwiFile])

@@ -2210,7 +2210,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         const hooks: ReadonlyArray<RunHook<RunStore | Crypto.Crypto>> = [
           delivery.hookForRun({ projectId, sessionId, runId }),
-          ...(reportSource !== null ? [] : [yield* projectInstructionsHook(project.root)]),
+          ...(reportSource !== null
+            ? []
+            : [
+                yield* projectInstructionsHook(project.root).pipe(
+                  Effect.provideContext(workflowRuleContext),
+                ),
+              ]),
           // Before the gate, so a refused repeat is never reviewed or put to the user.
           yield* repeatGuardHook,
           ...gate,

@@ -2,24 +2,16 @@ import {
   Context as PlatformContext,
   Effect as PlatformEffect,
   Layer as PlatformLayer,
-  Path,
   FileSystem,
 } from "effect";
 import { Function as EffectFunction } from "effect";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
-import * as NodePath from "@effect/platform-node/NodePath";
+import { path } from "../runtime/synchronous-path.ts";
 import { Effect, HashSet, Option, Schema } from "effect";
 import type { PlatformError } from "effect";
 
 // Path operations remain synchronous at these public host boundaries.
-const { basename, dirname, isAbsolute, join, relative, resolve, sep } = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodePath.layer);
-      return PlatformContext.get(services, Path.Path);
-    }),
-  ),
-);
+const { basename, dirname, isAbsolute, join, relative, resolve, sep } = path;
 
 /**
  * Why a path was refused. Messages the model sees name the reason, never file contents.

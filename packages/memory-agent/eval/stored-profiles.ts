@@ -10,8 +10,8 @@ const readOnlyProfiles = OAuthProfiles.layer.pipe(
   Layer.provide(
     Database.over(
       Effect.acquireRelease(
-        Effect.try(
-          () => new DatabaseSync(path.join(defaultStorageRoot, "agent.db"), { readOnly: true }),
+        Effect.flatMap(defaultStorageRoot, (root) =>
+          Effect.try(() => new DatabaseSync(path.join(root, "agent.db"), { readOnly: true })),
         ),
         (sqlite) => Effect.sync(() => sqlite.close()),
       ),

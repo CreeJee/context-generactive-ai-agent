@@ -2,14 +2,8 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Hex } from "effect/encoding";
 import { readFileBytesEffect } from "../files/text.ts";
-import {
-  Context as PlatformContext,
-  Effect as PlatformEffect,
-  Layer as PlatformLayer,
-  Path,
-} from "effect";
 import { isTruthy } from "../truthy.ts";
-import * as NodePath from "@effect/platform-node/NodePath";
+import { path } from "../runtime/synchronous-path.ts";
 import {
   Array as EffectArray,
   Match,
@@ -28,14 +22,7 @@ import { homeDirectory } from "../runtime/host-system.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
 
 // Path operations remain synchronous at these public host boundaries.
-const { dirname, join } = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodePath.layer);
-      return PlatformContext.get(services, Path.Path);
-    }),
-  ),
-);
+const { dirname, join } = path;
 
 /**
  * Where a skill comes from. `builtin` ships with this app; the user's own (`global`) and the

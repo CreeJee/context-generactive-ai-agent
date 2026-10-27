@@ -1,23 +1,7 @@
-import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
-import * as NodePath from "@effect/platform-node/NodePath";
-import {
-  Array as Arr,
-  Effect,
-  FileSystem,
-  Layer,
-  ManagedRuntime,
-  Match,
-  Order,
-  Path,
-  PlatformError,
-} from "effect";
+import { Array as Arr, Effect, FileSystem, Match, Order, Path, PlatformError } from "effect";
 import { isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import { readTextFileEffect } from "../files/text.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
-
-const platformRuntime = ManagedRuntime.make(Layer.merge(NodeFileSystem.layer, NodePath.layer));
-const fs = platformRuntime.runSync(FileSystem.FileSystem);
-const path = platformRuntime.runSync(Path.Path);
 
 const prefix = "[Project AGENTS.md instructions]";
 
@@ -26,7 +10,9 @@ const skipped = (relative: string, name: string) =>
   isCredentialPath(relative) || name === "node_modules" || name === ".git";
 
 /** The AGENTS.md files below the root, as project paths. */
-const scopedFiles = (root: string) => {
+const scopedFiles = Effect.fnUntraced(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const visit = (
     directory: string,
   ): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError> =>
@@ -55,8 +41,8 @@ const scopedFiles = (root: string) => {
         Arr.flatten,
       ),
     );
-  return visit("");
-};
+  return yield* visit("");
+});
 
 /**
  * The root guidance and a catalog of the scoped instruction files. A project without any AGENTS.md
@@ -90,14 +76,16 @@ const instructionsFor = Effect.fnUntraced(function* (root: string) {
  * Root guidance and a path catalog, loaded once per conversation run and sent after the system
  * prompts the hooks before this one chose. A project without any AGENTS.md gets no prompt at all.
  */
-export const projectInstructionsHook = (root: string) =>
-  Effect.map(
-    Effect.cached(Effect.mapError(instructionsFor(root), asRunFailed)),
-    (instructions): RunHook => ({
-      request: (_scope, request) =>
-        Effect.map(instructions, (added) => ({
-          ...request,
-          system: [...request.system, ...added],
-        })),
-    }),
+export const projectInstructionsHook = Effect.fnUntraced(function* (root: string) {
+  const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const instructions = yield* Effect.cached(
+    instructionsFor(root).pipe(Effect.mapError(asRunFailed), Effect.provideContext(context)),
   );
+  return {
+    request: (_scope, request) =>
+      Effect.map(instructions, (added) => ({
+        ...request,
+        system: [...request.system, ...added],
+      })),
+  } satisfies RunHook;
+});

@@ -153,7 +153,9 @@ if (folderArgument === "acp") {
   );
   await connection.closed;
 } else {
-  const storageRoot = Option.getOrElse(commandLine.storage, () => defaultStorageRoot);
+  const storageRoot = await Effect.runPromise(
+    Option.match(commandLine.storage, { onNone: () => defaultStorageRoot, onSome: Effect.succeed }),
+  );
   // Only the executable has a folder of its own; `node` running the bundle does not count.
   const executableFolder = isSea() ? dirname(process.execPath) : null;
   const folder: LaunchFolder = commandLine.devBackend

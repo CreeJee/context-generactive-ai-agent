@@ -1,10 +1,7 @@
 import { createRequire } from "node:module";
-import * as NodePath from "@effect/platform-node/NodePath";
-import { Config, ConfigProvider, Effect, ManagedRuntime, Path, Option, Schema } from "effect";
+import { Config, ConfigProvider, Effect, Option, Schema } from "effect";
 import { workerData } from "node:worker_threads";
-
-const pathRuntime = ManagedRuntime.make(NodePath.layer);
-const path = pathRuntime.runSync(Path.Path);
+import { path } from "./synchronous-path.ts";
 
 /**
  * Packages this app loads from disk at run time rather than bundling: native addons (vector index,

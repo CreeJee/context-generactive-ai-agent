@@ -14,9 +14,11 @@ import {
   Deferred,
   Effect,
   FiberMap,
+  FileSystem,
   Layer,
   Match,
   Option,
+  Path,
   PubSub,
   Ref,
   Schema,
@@ -544,6 +546,7 @@ const make = Effect.gen(function* () {
 
   const serializeNamed = yield* keyedSerialLimit();
   const completions = yield* PubSub.unbounded<string>();
+  const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   /** Controllers indexed independently so archive/delete stops one child, not its parent or peers. */
   type ActiveChild = {
     readonly taskId: string;
@@ -778,7 +781,7 @@ const make = Effect.gen(function* () {
           ),
       };
       const hooks: ReadonlyArray<RunHook> = [
-        yield* projectInstructionsHook(binding.project.root),
+        yield* Effect.provideContext(projectInstructionsHook(binding.project.root), platform),
         // Before the gate, so a refused repeat is never reviewed or relayed to the user.
         yield* repeatGuardHook,
         relayGateHook,

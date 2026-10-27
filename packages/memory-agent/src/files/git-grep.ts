@@ -2,19 +2,12 @@ import { isTruthy } from "../truthy.ts";
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Effect, HashSet, Layer, Match, Path, Stream, Cause } from "effect";
+import { Context, Effect, HashSet, Layer, Match, Stream, Cause } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
+import { path as hostPath } from "../runtime/synchronous-path.ts";
 
 /** Git runs with its own folder and the system folders on its search path, and nothing else. */
-const hostPath = Effect.runSync(
-  Effect.scoped(
-    Effect.gen(function* () {
-      const services = yield* Layer.build(NodePath.layer);
-      return Context.get(services, Path.Path);
-    }),
-  ),
-);
 export const gitEnvironment = (git: string) =>
   helperEnvironment([hostPath.dirname(git)], { user: false });
 

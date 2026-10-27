@@ -85,7 +85,7 @@ const program = Effect.gen(function* () {
   );
   const live = process.argv.includes("--live");
   const selection = yield* fs
-    .readFileString(path.join(defaultStorageRoot, "config.json"))
+    .readFileString(path.join(yield* defaultStorageRoot, "config.json"))
     .pipe(Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(ModelSelection))));
   // The installed subscription serializer's Anthropic max_tokens contract is known. Do not
   // invent an output-budget parameter for another provider or silently change the chosen model.
