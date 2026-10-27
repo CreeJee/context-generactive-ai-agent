@@ -227,8 +227,8 @@ const make = Effect.gen(function* () {
         }),
       );
       if (published > 0) {
-        events.publishGlobal("embedding");
-        events.publishGlobal("imports");
+        yield* events.publishGlobal("embedding");
+        yield* events.publishGlobal("imports");
       }
       return published;
     }).pipe(oneBatchAtATime.withPermits(1));

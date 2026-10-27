@@ -50,7 +50,7 @@ export function action({ request }: Route.ActionArgs) {
 
       const response = Effect.gen(function* () {
         const project = yield* (yield* Projects).add(body.success.root);
-        (yield* AppEvents).publishGlobal("projects");
+        yield* (yield* AppEvents).publishGlobal("projects");
         return Response.json(project, { status: 201 });
       }).pipe(
         Effect.catchTag("ProjectRootRejected", (error) =>

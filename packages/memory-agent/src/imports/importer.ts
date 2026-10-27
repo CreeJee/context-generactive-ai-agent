@@ -267,16 +267,15 @@ const make = (watching: boolean, home: string) =>
       );
 
     /** Transcripts on disk per source, counted by the worker so the folders are walked there. */
-    let latestCounts: TranscriptCounts | null = null;
+    const latestCounts = yield* Ref.make<TranscriptCounts | null>(null);
     const countTranscripts = request((current) => current.count).pipe(
-      Effect.tap((counts) =>
-        Effect.sync(() => {
-          latestCounts = counts;
-        }),
-      ),
+      Effect.tap((counts) => Ref.set(latestCounts, counts)),
     );
 
-    let activity: ImportActivity | null = null;
+    const activity = yield* Ref.make<ImportActivity | null>(null);
+    /** Shows the pass as it is now in settings. */
+    const showActivity = (next: ImportActivity) =>
+      Effect.andThen(Ref.set(activity, next), events.publishGlobal("imports"));
     const running = yield* SynchronizedRef.make(
       Option.none<Deferred.Deferred<number, ImportWorkerFailed>>(),
     );
@@ -290,17 +289,12 @@ const make = (watching: boolean, home: string) =>
               PassEvent.match(event, {
                 Progress: (progress) =>
                   Effect.as(
-                    Effect.sync(() => {
-                      activity = ImportActivity.running({ startedAt, ...progressOf(progress) });
-                      events.publishGlobal("imports");
-                    }),
+                    showActivity(ImportActivity.running({ startedAt, ...progressOf(progress) })),
                     outcome,
                   ),
                 Finished: (finished) =>
                   Effect.as(
-                    Effect.sync(() => {
-                      latestCounts = finished.counts;
-                    }),
+                    Ref.set(latestCounts, finished.counts),
                     Option.some(progressOf(finished)),
                   ),
               }),
@@ -315,10 +309,7 @@ const make = (watching: boolean, home: string) =>
         ),
       ).pipe(
         Effect.tap(() =>
-          Effect.sync(() => {
-            events.publishGlobal("imports");
-            events.publishGlobal("projects");
-          }),
+          Effect.andThen(events.publishGlobal("imports"), events.publishGlobal("projects")),
         ),
       );
 
@@ -328,14 +319,13 @@ const make = (watching: boolean, home: string) =>
 
     const crashed = (startedAt: string, reason: ImportWorkerFailed["reason"]) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        Effect.sync(() => {
-          activity = ImportActivity.crashed({
+        showActivity(
+          ImportActivity.crashed({
             startedAt,
             finishedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
             reason,
-          });
-          events.publishGlobal("imports");
-        }),
+          }),
+        ),
       );
 
     /**
@@ -347,38 +337,36 @@ const make = (watching: boolean, home: string) =>
         onSome: (done) => Effect.succeed([done, current] as const),
         onNone: () =>
           Effect.gen(function* () {
-            const effectClock = yield* Clock.Clock;
-
             const done = yield* Deferred.make<number, ImportWorkerFailed>();
             const startedAt = DateTime.formatIso(
               DateTime.makeUnsafe(yield* Clock.currentTimeMillis),
             );
-            activity = ImportActivity.running({
-              startedAt,
-              checked: 0,
-              total: 0,
-              written: 0,
-              failed: 0,
-            });
-            events.publishGlobal("imports");
+            yield* showActivity(
+              ImportActivity.running({
+                startedAt,
+                checked: 0,
+                total: 0,
+                written: 0,
+                failed: 0,
+              }),
+            );
             yield* pass(startedAt).pipe(
               Effect.tap((progress) =>
-                Effect.sync(() => {
-                  activity = ImportActivity.finished({
-                    startedAt,
-                    finishedAt: DateTime.formatIso(
-                      DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                    ),
-                    ...progress,
-                  });
-                  events.publishGlobal("imports");
-                }),
+                Effect.flatMap(Clock.currentTimeMillis, (now) =>
+                  showActivity(
+                    ImportActivity.finished({
+                      startedAt,
+                      finishedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+                      ...progress,
+                    }),
+                  ),
+                ),
               ),
               Effect.tap(() =>
                 Effect.tap(projects.listAll, (list) =>
-                  Effect.sync(() =>
-                    list.forEach((project) => events.publishProject(project.id, "sessions")),
-                  ),
+                  Effect.forEach(list, (project) => events.publishProject(project.id, "sessions"), {
+                    discard: true,
+                  }),
                 ).pipe(
                   // The pass is done either way; pages only miss the hint to reload their lists.
                   Effect.catch((error) =>
@@ -429,15 +417,12 @@ const make = (watching: boolean, home: string) =>
       ),
     ).pipe(Effect.asVoid);
 
-    let watchHealth: LoopHealth = healthyLoop;
+    const watchHealth = yield* Ref.make<LoopHealth>(healthyLoop);
     const setWatchHealth = (next: LoopHealth) =>
       Effect.asVoid(
         Effect.when(
-          Effect.sync(() => {
-            watchHealth = next;
-            events.publishGlobal("imports");
-          }),
-          Effect.sync(() => !sameLoopHealth(watchHealth, next)),
+          events.publishGlobal("imports"),
+          Ref.modify(watchHealth, (current) => [!sameLoopHealth(current, next), next]),
         ),
       );
     /**
@@ -464,18 +449,19 @@ const make = (watching: boolean, home: string) =>
 
     const overview = Effect.gen(function* () {
       // As it was when asked; counting below may take long enough for a short pass to end.
-      const current = activity;
+      const current = yield* Ref.get(activity);
       const settings = yield* config.read;
+      const known = yield* Ref.get(latestCounts);
       // While a pass runs, the counts it started from are good enough and spare the worker a walk.
       const counts =
-        ImportActivity.$is("running")(current) && isTruthy(latestCounts)
-          ? latestCounts
+        ImportActivity.$is("running")(current) && isTruthy(known)
+          ? known
           : yield* countTranscripts.pipe(
               // The worker could not count: the last counts, or none, until it can.
               Effect.catchTag("ImportWorkerFailed", (error) =>
-                Effect.as(
+                Effect.andThen(
                   Effect.logDebug("import_count_failed", { reason: error.reason }),
-                  latestCounts ?? [],
+                  Effect.map(Ref.get(latestCounts), (last) => last ?? []),
                 ),
               ),
             );
@@ -496,7 +482,7 @@ const make = (watching: boolean, home: string) =>
         failures: yield* failedTranscripts(),
         unindexed: yield* indexer.pending,
         activity: current,
-        watch: watching ? watchHealth : null,
+        watch: watching ? yield* Ref.get(watchHealth) : null,
       } satisfies ImportOverview;
     });
 
@@ -505,7 +491,7 @@ const make = (watching: boolean, home: string) =>
       start: startPass,
       overview,
       /** The watch loop's health without counting transcripts; `null` when not watching. */
-      watchHealth: Effect.sync(() => (watching ? watchHealth : null)),
+      watchHealth: Effect.map(Ref.get(watchHealth), (health) => (watching ? health : null)),
       /** Turns migration on or off and, when turning it on, starts reading what is there now. */
       setEnabled: (enabled: boolean) =>
         Effect.andThen(

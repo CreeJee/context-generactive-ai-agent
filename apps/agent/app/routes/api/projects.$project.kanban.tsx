@@ -71,7 +71,7 @@ export function action({ request, params }: Route.ActionArgs) {
             if (before !== null) yield* sessions.get(before);
             yield* (yield* ProjectScheduler).moveGoal(params.project, sessionId, before);
             // The board list carries each Goal's place, so open boards read it again.
-            (yield* AppEvents).publishProject(params.project, "sessions");
+            yield* (yield* AppEvents).publishProject(params.project, "sessions");
           }),
       });
       return yield* settings(params.project);

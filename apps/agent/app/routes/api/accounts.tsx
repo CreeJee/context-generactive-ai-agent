@@ -96,9 +96,7 @@ export function action({ request }: Route.ActionArgs) {
         const started = yield* manager.start(provider, label!);
         // The login finishes in another tab; pages hear it instead of polling.
         yield* Effect.forkDetach(
-          manager
-            .settled(provider)
-            .pipe(Effect.ensuring(Effect.sync(() => events.publishGlobal("auth")))),
+          manager.settled(provider).pipe(Effect.ensuring(events.publishGlobal("auth"))),
         );
         return reply(SubscriptionView.subscription(started));
       }

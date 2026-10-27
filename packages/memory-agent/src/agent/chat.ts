@@ -1486,7 +1486,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           });
           userNode = appended;
           yield* attachments.link(appended.id, attached);
-          if (title === null) events.publishProject(projectId, "sessions");
+          if (title === null) yield* events.publishProject(projectId, "sessions");
         });
         const userNodeId = () => {
           if (!isTruthy(userNode)) throw new Error("User evidence accessed before admission");

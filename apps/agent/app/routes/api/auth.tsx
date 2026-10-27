@@ -96,7 +96,7 @@ export function action({ request }: Route.ActionArgs) {
               : configured.auth.cancel;
         const state = yield* operation;
         const events = yield* AppEvents;
-        events.publishGlobal("auth");
+        yield* events.publishGlobal("auth");
         if (AuthConnectionState.$is("pending")(state))
           yield* Effect.forkDetach(
             Effect.gen(function* () {
@@ -107,7 +107,7 @@ export function action({ request }: Route.ActionArgs) {
             }).pipe(
               Effect.catch(logFailure("OAuth login status polling stopped")),
               // Pages re-read the state however the wait ended.
-              Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
+              Effect.ensuring(events.publishGlobal("auth")),
             ),
           );
         return Response.json(browserState(state));

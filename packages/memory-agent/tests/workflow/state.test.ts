@@ -621,7 +621,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const workflows = yield* Workflows;
         yield* executing(id);
         const events = yield* AppEvents;
-        const beforeRevision = events.revision();
+        const beforeRevision = yield* events.revision;
         const persistedAtPublish: unknown[] = [];
         const published: unknown[] = [];
         const publishSession = events.publishSession;
@@ -676,7 +676,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
       yield* workflows.updatePlan(id, plan);
       const before = yield* workflows.setPhase(id, "plan");
       const events = yield* AppEvents;
-      const beforeRevision = events.revision();
+      const beforeRevision = yield* events.revision;
       const publish = vi.spyOn(events, "publishSession");
       yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
       const progress = yield* workflowTool(id, "execute", "update_workflow_progress");
@@ -684,7 +684,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
         yield* progress({ ...noProgress, planStatus: "executing", detail: "Stale progress" }),
       ).toEqual({ error: "workflow_progress_refused", reason: "phase_not_executable" });
       expect(publish).not.toHaveBeenCalled();
-      expect(events.revision()).toBe(beforeRevision);
+      expect(yield* events.revision).toBe(beforeRevision);
       expect(yield* workflows.get(id)).toEqual(before);
     }),
   );

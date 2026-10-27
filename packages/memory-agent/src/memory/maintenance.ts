@@ -216,7 +216,7 @@ const make = Effect.gen(function* () {
         yield* vectors.flushRemovals;
       }),
     );
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
     return true;
   });
 
@@ -224,7 +224,7 @@ const make = Effect.gen(function* () {
     yield* setStatus("failed", "그래프 정리를 완료하지 못했어요. 다음 시작 시 다시 시도해요.").pipe(
       Effect.catch(logFailure("Memory graph maintenance status not saved")),
     );
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
   });
 
   const run = Effect.gen(function* () {
@@ -234,11 +234,11 @@ const make = Effect.gen(function* () {
       ON CONFLICT DO NOTHING`);
     if ((yield* repaired(progress)).status === "completed") return;
     yield* repaired(setStatus("running"));
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
     yield* indexer.exclusive(vectors.flushRemovals);
     yield* batch.pipe(Effect.tap(Effect.yieldNow), Effect.repeat({ while: (more) => more }));
     yield* repaired(setStatus("completed"));
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
   }).pipe(
     // The next start retries a failed or broken run. Logs carry the tag only: causes hold SQL.
     // A defect stays in the run's exit after the status is saved.

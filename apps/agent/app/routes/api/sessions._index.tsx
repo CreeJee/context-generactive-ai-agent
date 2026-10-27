@@ -54,7 +54,7 @@ export function action({ request }: Route.ActionArgs) {
             return Response.json({ error: "external_agent_unavailable" }, { status: 409 });
         }
         const session = yield* (yield* Sessions).create(projectId, title ?? null, external ?? null);
-        (yield* AppEvents).publishProject(projectId, "sessions");
+        yield* (yield* AppEvents).publishProject(projectId, "sessions");
         return Response.json(session, { status: 201 });
       }).pipe(
         Effect.catchTag("ProjectNotFound", () =>

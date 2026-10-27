@@ -41,9 +41,9 @@ describe("AppEvents", () => {
       const events = yield* makeAppEvents;
       const session = yield* events.sessionStream(new Request("http://local"), "s1");
       const project = yield* events.projectStream(new Request("http://local"), "p1");
-      events.publish({ scope: "session", projectId: "p1", sessionId: "s2", topic: "queue" });
-      events.publish({ scope: "session", projectId: "p1", sessionId: "s1", topic: "queue" });
-      events.publish({ scope: "project", projectId: "p1", topic: "sessions" });
+      yield* events.publish({ scope: "session", projectId: "p1", sessionId: "s2", topic: "queue" });
+      yield* events.publish({ scope: "session", projectId: "p1", sessionId: "s1", topic: "queue" });
+      yield* events.publish({ scope: "project", projectId: "p1", topic: "sessions" });
       const [sessionText, projectText] = yield* Effect.all(
         [readFrames({ response: session, count: 2 }), readFrames({ response: project, count: 2 })],
         { concurrency: "unbounded" },
@@ -67,7 +67,7 @@ describe("AppEvents", () => {
           'event: heartbeat\ndata: {"at":15000}',
         );
         yield* Effect.promise(() => reader.cancel());
-        events.publishGlobal("auth");
+        yield* events.publishGlobal("auth");
         const next = yield* events.globalStream(new Request("http://local"));
         expect(yield* readFrames({ response: next, count: 1 })).toContain('"revision":1');
       }),

@@ -1,5 +1,5 @@
 import { isTruthy } from "../../truthy.ts";
-import { Context, Data, Effect, Layer, Match } from "effect";
+import { Context, Data, Effect, Layer, Match, Ref } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
 import { GlobalConfig, type EmbeddingChoice, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -65,32 +65,27 @@ const make = Effect.gen(function* () {
   const maintenance = yield* MemoryGraphMaintenance;
   const memoryBytes = yield* totalMemory;
   const layerScope = yield* Effect.scope;
-  let checking = false;
+  const checking = yield* Ref.make(false);
 
   /**
    * Checks WebGPU in the background and remembers the answer. It loads the full-precision model in
    * a worker of its own (downloading it first if needed), so it is done once, not on every start.
    */
-  const startCheck = Effect.suspend(() => {
+  const startCheck = Effect.gen(function* () {
     // Tests and evaluations run other embedders; there is no local model to check for them.
-    if (checking || !EmbedderRuntime.$is("local")(embedder.runtime())) return Effect.void;
-    checking = true;
-    events.publishGlobal("embedding");
-    return Effect.asVoid(
-      Effect.forkIn(
-        checkGpu(storage.path).pipe(
-          Effect.flatMap((result) => config.update({ gpuCheck: result })),
-          // Unchecked stays unchecked; the next start or a changed setting checks again.
-          Effect.catch(logFailure("embedding_gpu_check_failed")),
-          Effect.ensuring(
-            Effect.sync(() => {
-              checking = false;
-              events.publishGlobal("embedding");
-            }),
-          ),
+    if (!EmbedderRuntime.$is("local")(embedder.runtime())) return;
+    if (yield* Ref.getAndSet(checking, true)) return;
+    yield* events.publishGlobal("embedding");
+    yield* Effect.forkIn(
+      checkGpu(storage.path).pipe(
+        Effect.flatMap((result) => config.update({ gpuCheck: result })),
+        // Unchecked stays unchecked; the next start or a changed setting checks again.
+        Effect.catch(logFailure("embedding_gpu_check_failed")),
+        Effect.ensuring(
+          Effect.andThen(Ref.set(checking, false), events.publishGlobal("embedding")),
         ),
-        layerScope,
       ),
+      layerScope,
     );
   });
 
@@ -117,7 +112,7 @@ const make = Effect.gen(function* () {
 
   const overview = Effect.gen(function* () {
     const settings = yield* config.read;
-    const gpu: GpuState = checking
+    const gpu: GpuState = (yield* Ref.get(checking))
       ? GpuState.checking()
       : (settings.gpuCheck ?? GpuState.unchecked());
     return {
@@ -138,7 +133,7 @@ const make = Effect.gen(function* () {
     choose: (choice: EmbeddingChoice) =>
       Effect.gen(function* () {
         const settings = yield* config.update({ embeddingDevice: choice });
-        events.publishGlobal("embedding");
+        yield* events.publishGlobal("embedding");
         yield* maintenance.start;
         yield* Effect.when(startCheck, Effect.succeed(wantsCheck(settings, memoryBytes)));
         return yield* overview;
