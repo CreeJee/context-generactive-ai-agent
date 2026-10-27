@@ -1,4 +1,3 @@
-import { convertMessagesToModelMessages, type ModelMessage, type UIMessage } from "@tanstack/ai";
 import {
   Array as Arr,
   DateTime,
@@ -6,32 +5,20 @@ import {
   Function as EffectFunction,
   HashSet,
   Option,
-  Schema,
 } from "effect";
 import { type StoredMessage, StoredUserMessage } from "../chat-store/schema.ts";
-import { optionalProperty } from "../optional-property.ts";
 
 /**
  * What a chat request adds to the thread on the Effect AI loop (docs/effect-ai-migration.md step
- * 4). The page holds the conversation it shows and sends all of it, but it writes only user
- * messages: the answers and tool results it holds were written by runs and are already stored.
+ * 4). The thread holds the conversation, so the page sends only its new user turn: the answers and
+ * tool results were written by runs and are already stored.
  */
 
-/**
- * The user messages of a request as the thread keeps them, each with the time the server received
- * it. A message the thread cannot keep, such as one with an audio part, fails.
- */
-export const pageTurns = (messages: ReadonlyArray<UIMessage | ModelMessage>) =>
-  Effect.flatMap(DateTime.now, (now) =>
-    Effect.forEach(
-      convertMessagesToModelMessages([...messages]).filter((message) => message.role === "user"),
-      (message) =>
-        Schema.decodeUnknownEffect(StoredUserMessage)({
-          role: "user",
-          ...optionalProperty("id", message.id),
-          createdAt: DateTime.formatIso(now),
-          content: message.content,
-        }),
+/** The user messages of a request as the thread keeps them, each with the time the server received it. */
+export const pageTurns = (messages: ReadonlyArray<typeof StoredUserMessage.Type>) =>
+  Effect.map(DateTime.now, (now) =>
+    messages.map((message) =>
+      StoredUserMessage.make({ ...message, createdAt: DateTime.formatIso(now) }),
     ),
   );
 

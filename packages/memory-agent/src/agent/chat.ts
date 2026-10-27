@@ -12,10 +12,8 @@ import {
   MutableRef,
   DateTime,
   Predicate,
-  SchemaTransformation,
 } from "effect";
 import { modelFailureOf, runChat, type RunHook } from "../loop/run.ts";
-import { ResumeEntry } from "../loop/resume.ts";
 import { tanstackMetadata } from "../chat-store/metadata.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { chatSnapshot } from "../chat-state/snapshot.ts";
@@ -29,18 +27,15 @@ import { Scope } from "effect";
 import {
   RUN_ACCEPTED_EVENT,
   RUN_CANCEL_REASON,
-  chatParamsFromRequestBody,
   EventType,
   memoryStream,
   requestRunCancel,
   type ChatMiddleware,
-  type ModelMessage,
   type StreamChunk,
   type StreamDurability,
-  type UIMessage,
 } from "@tanstack/ai";
-import type { Refusal } from "../api/chat-api.ts";
-import { JsonValue } from "../json.ts";
+import type { Refusal, RunInput } from "../api/chat-api.ts";
+import { ImagePart, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
 import { optionalProperty } from "../optional-property.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
@@ -335,128 +330,25 @@ export const workspaceInstructions: {
 /** How attached images are referred to in the user's text. */
 export const attachmentInstructions = `Images the user attached arrive with their message, in order. "#1" in the user's text means the first attached image, "#2" the second, and so on. If an image did not arrive or cannot be read, say so instead of guessing its contents.`;
 
-/** One part of a user message, reduced to what the agent keeps. */
-const TurnPart = Schema.TaggedUnion({
-  text: { text: Schema.String },
-  image: { url: Schema.String },
-  other: {},
-});
-type TurnPart = typeof TurnPart.Type;
-const { text: TextTurnPart, image: ImageTurnPart, other: OtherTurnPart } = TurnPart.cases;
-
-/**
- * Each union member is a complete incoming shape — AG-UI `text`, TanStack `content`, an image by
- * URL, or anything else (inline data, audio) that the agent does not keep — so decoding picks the
- * member and no field probing is needed.
- */
-const IncomingPart = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }).pipe(
-    Schema.decodeTo(
-      TextTurnPart,
-      SchemaTransformation.transform({
-        decode: (part) => TextTurnPart.make({ text: part.text }),
-        encode: (part) => ({ type: "text" as const, text: part.text }),
-      }),
-    ),
-  ),
-  Schema.Struct({ type: Schema.Literal("text"), content: Schema.String }).pipe(
-    Schema.decodeTo(
-      TextTurnPart,
-      SchemaTransformation.transform({
-        decode: (part) => TextTurnPart.make({ text: part.content }),
-        encode: (part) => ({ type: "text" as const, content: part.text }),
-      }),
-    ),
-  ),
-  Schema.Struct({
-    type: Schema.Literal("image"),
-    source: Schema.Struct({ type: Schema.Literal("url"), value: Schema.String }),
-  }).pipe(
-    Schema.decodeTo(
-      ImageTurnPart,
-      SchemaTransformation.transform({
-        decode: (part) => ImageTurnPart.make({ url: part.source.value }),
-        encode: (part) => ({
-          type: "image" as const,
-          source: { type: "url" as const, value: part.url },
-        }),
-      }),
-    ),
-  ),
-  Schema.Struct({ type: Schema.String }).pipe(
-    Schema.decodeTo(
-      OtherTurnPart,
-      SchemaTransformation.transform({
-        decode: () => OtherTurnPart.make({}),
-        encode: () => ({ type: "other" }),
-      }),
-    ),
-  ),
-]);
-
 interface UserTurn {
   readonly text: string;
   readonly imageUrls: readonly string[];
 }
 
-const toTurn = (parts: readonly TurnPart[]): UserTurn => ({
-  text: parts
-    .flatMap(TurnPart.match({ text: ({ text }) => [text], image: () => [], other: () => [] }))
-    .join(""),
-  imageUrls: parts.flatMap(
-    TurnPart.match({ text: () => [], image: ({ url }) => [url], other: () => [] }),
-  ),
-});
+const UrlImageSource = Schema.Struct({ type: Schema.Literal("url"), value: Schema.String });
 
-const Content = Schema.Union([
-  Schema.String.pipe(
-    Schema.decodeTo(
-      Schema.Array(TextTurnPart),
-      SchemaTransformation.transform({
-        decode: (text): readonly (typeof TextTurnPart.Type)[] => [TextTurnPart.make({ text })],
-        encode: (parts) => toTurn(parts).text,
-      }),
-    ),
-  ),
-  Schema.Array(IncomingPart),
-]);
-
-/** A new user turn ends the message list: a ModelMessage carries `content`, a UIMessage `parts`. */
-const IncomingUserTurn = Schema.Union([
-  Schema.Struct({ role: Schema.Literal("user"), content: Content }).pipe(
-    Schema.decodeTo(
-      Schema.Array(TurnPart),
-      SchemaTransformation.transform({
-        decode: (message) => message.content,
-        encode: (parts) => ({ role: "user" as const, content: parts }),
-      }),
-    ),
-  ),
-  Schema.Struct({ role: Schema.Literal("user"), parts: Content }).pipe(
-    Schema.decodeTo(
-      Schema.Array(TurnPart),
-      SchemaTransformation.transform({
-        decode: (message) => message.parts,
-        encode: (parts) => ({ role: "user" as const, parts }),
-      }),
-    ),
-  ),
-]);
-const decodeUserTurn = Schema.decodeUnknownOption(IncomingUserTurn);
-
-/** The text and image URLs of a new user turn, when the message is one. */
-export const incomingUserTurn = (message: ModelMessage | UIMessage): Option.Option<UserTurn> =>
-  Option.map(decodeUserTurn(message), toTurn);
-
-const decodeQueuedNext = Schema.decodeUnknownOption(
-  Schema.Struct({ queuedNext: Schema.Literal(true) }),
-);
-const decodeUnsupportedQueuedId = Schema.decodeUnknownOption(
-  Schema.Struct({ queuedMessageId: Schema.String }),
-);
-const decodeImageTurnIntent = Schema.decodeUnknownOption(
-  Schema.Struct({ imageIntent: Schema.Literal("generate_image") }),
-);
+/** The text and image URLs of a new user turn. Images held inline are not kept. */
+const userTurn = (content: (typeof StoredUserMessage.Type)["content"]): UserTurn =>
+  Schema.is(Schema.String)(content)
+    ? { text: content, imageUrls: [] }
+    : {
+        text: content.flatMap((part) => (Schema.is(TextPart)(part) ? [part.content] : [])).join(""),
+        imageUrls: content.flatMap((part) =>
+          Schema.is(ImagePart)(part) && Schema.is(UrlImageSource)(part.source)
+            ? [part.source.value]
+            : [],
+        ),
+      };
 
 export const QueueRequest = Schema.Struct({
   text: Schema.String,
@@ -521,11 +413,11 @@ type InternalFollowup = Data.TaggedEnum<{
 }>;
 const InternalFollowup = Data.taggedEnum<InternalFollowup>();
 
-/** A request to start a run: who sent it, and its AG-UI `RunAgentInput` body. */
+/** A request to start a run: who sent it, and the run it asks for. */
 export interface ChatRequest {
   /** The page holding the session, from `X-Session-Holder`. */
   readonly holder: string | null;
-  readonly body: Effect.Effect<JsonValue, Cause.UnknownError | Schema.SchemaError>;
+  readonly input: RunInput;
 }
 
 /** How a chat request starts. */
@@ -1543,14 +1435,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (!isTruthy(selection)) return refused({ error: "model_selection_required" });
         }
 
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const params = yield* request.body.pipe(
-          Effect.flatMap((body) => nativePromise(() => chatParamsFromRequestBody(body))),
-          Effect.asSome,
-          // An unreadable body or one the SDK refuses is the client's error.
-          Effect.catchTag(["UnknownError", "SchemaError"], () => Effect.succeedNone),
-        );
-        if (Option.isNone(params)) return refused({ error: "invalid_chat_request" });
         // The session is the thread: persistence, provider requests and hydration all key on it.
         const {
           messages: incomingMessages,
@@ -1558,7 +1442,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           parentRunId,
           resume,
           forwardedProps,
-        } = params.value;
+        } = request.input;
         // Match the submitted IDs to an owner-persisted interrupt batch. The SDK still validates
         // response schemas and approval arguments before executing any tool.
         const pendingResume =
@@ -1635,10 +1519,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
         // placeholder turn altogether, including its text and attachments.
         const queuedNext =
-          InternalFollowup.$is("steered")(internalFollowup) ||
-          Option.isSome(decodeQueuedNext(forwardedProps));
-        if (Option.isSome(decodeUnsupportedQueuedId(forwardedProps)))
-          return refused({ error: "invalid_chat_request" });
+          InternalFollowup.$is("steered")(internalFollowup) || forwardedProps?.queuedNext === true;
         const next = queuedNext ? yield* queue.claimNext(sessionId) : null;
         if (queuedNext && !isTruthy(next)) return refused({ error: "queued_message_not_next" });
         claimedNext = next?.id ?? null;
@@ -1658,7 +1539,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const turn =
           internalFollowup !== null && !InternalFollowup.$is("steered")(internalFollowup)
             ? null
-            : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
+            : Option.getOrNull(
+                Option.map(EffectArray.last(messages), ({ content }) => userTurn(content)),
+              );
         const lastMessage = messages.at(-1);
         if (turn !== null && isTruthy(lastMessage) && isEmptyUserText(lastMessage))
           return refused({ error: "empty_message" });
@@ -1740,9 +1623,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             },
             externalAgent: answeredBy,
           };
-          const turns = yield* pageTurns(messages).pipe(Effect.option);
-          if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
-          const conversation = withPageTurns(yield* runStore.thread(sessionId), turns.value);
+          const conversation = withPageTurns(
+            yield* runStore.thread(sessionId),
+            yield* pageTurns(messages),
+          );
           const model = yield* externalModel({
             agent: answeredBy,
             turn: (text, onUpdate) =>
@@ -1837,7 +1721,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           !accountModels.value.some((model) => model.id === selection.model)
         )
           return refused({ error: "model_unavailable_for_account", provider: selection.provider });
-        const requestedImage = Option.isSome(decodeImageTurnIntent(forwardedProps));
+        const requestedImage = forwardedProps?.imageIntent === "generate_image";
         if (requestedImage && selection.provider === "openai-compatible")
           return refused({ error: "provider_image_generation_unavailable" });
         if (reportSource !== null && requestedImage)
@@ -2363,13 +2247,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           !compatibleToolCalling(yield* config.read, selection.model)
             ? []
             : offered;
-        const resumed = Schema.decodeOption(Schema.Array(ResumeEntry))(resume ?? []);
-        if (Option.isNone(resumed)) return refused({ error: "invalid_chat_request" });
-        // The page sends the conversation it holds; only its user messages are new to the thread.
-        const turns = yield* pageTurns(messages).pipe(Effect.option);
-        if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
+        // The page sends only its new user turn; a turn the thread already holds is not added again.
         const stored = yield* runStore.thread(sessionId);
-        const conversation = withPageTurns(stored, turns.value);
+        const conversation = withPageTurns(stored, yield* pageTurns(messages));
 
         // What the model pins for the run, such as an account, is let go when its stream ends.
         const modelScope = yield* Scope.make();
@@ -2477,7 +2357,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             threadId: sessionId,
             runId,
             conversation,
-            resume: resumed.value,
+            resume: resume ?? [],
             cancel: cancelledByUser(abortController),
           },
         ).pipe(
@@ -2954,20 +2834,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Starts the follow-up run as the chat API does: the run's log, or the refusal's code. */
     const send = (kind: InternalFollowup) =>
       api
-        .start(
-          {
-            holder: null,
-            body: Effect.succeed({
-              threadId: sessionId,
-              runId: followupRunId,
-              messages: [],
-              tools: [],
-              context: [],
-            }),
-          },
-          sessionId,
-          kind,
-        )
+        .start({ holder: null, input: { runId: followupRunId, messages: [] } }, sessionId, kind)
         .pipe(
           Effect.flatMap(
             ChatStart.$match({

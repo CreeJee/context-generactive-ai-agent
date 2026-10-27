@@ -117,16 +117,7 @@ export const ChatApiHandlers = HttpApiBuilder.group(
       run: ({ params, headers, payload }) =>
         chat
           .start(
-            {
-              holder: headers["x-session-holder"] ?? null,
-              // The session is the thread; the API takes no client tools or context.
-              body: Effect.succeed({
-                ...payload,
-                threadId: params.session,
-                tools: [],
-                context: [],
-              }),
-            },
+            { holder: headers["x-session-holder"] ?? null, input: payload },
             params.session,
             null,
           )

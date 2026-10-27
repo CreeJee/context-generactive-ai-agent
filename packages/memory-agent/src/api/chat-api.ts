@@ -38,12 +38,7 @@ const refusal = <const Codes extends readonly [string, ...Array<string>]>(
 ) =>
   Schema.Struct({ error: Schema.Literals(codes), ...details }).pipe(HttpApiSchema.status(status));
 
-const BadRequest = refusal(400, [
-  "invalid_chat_request",
-  "empty_message",
-  "unknown_attachment",
-  "invalid_stream_offset",
-]);
+const BadRequest = refusal(400, ["empty_message", "unknown_attachment", "invalid_stream_offset"]);
 const Unauthorized = refusal(401, ["login_required"]);
 const Forbidden = refusal(403, ["cross_site_request", "invalid_origin"]);
 const NotFound = refusal(404, [

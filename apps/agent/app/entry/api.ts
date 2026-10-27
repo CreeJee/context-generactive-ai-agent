@@ -305,7 +305,6 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_agent_change",
   "invalid_answer",
   "invalid_board_edit",
-  "invalid_chat_request",
   "invalid_conversation_settings",
   "invalid_decision_answer",
   "invalid_recall_settings",
