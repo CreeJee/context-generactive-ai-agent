@@ -1,13 +1,11 @@
 import { HashSet } from "effect";
 import { it } from "@effect/vitest";
-import { Cause, Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { toolLocations } from "../src/acp/tool-view.ts";
 import {
-  DirectoryRenameFailed,
   findExecutable,
   helperEnvironment,
-  renameWhenReleased,
   shellInvocation,
   tarExecutable,
 } from "../src/runtime/host.ts";
@@ -100,39 +98,6 @@ describe("host differences", () => {
     expect(tarExecutable({ PATH: "/usr/bin" }, "darwin")).toBe("tar");
     expect(tarExecutable(windowsEnv, "win32")).toBe("C:\\Windows\\System32\\tar.exe");
   });
-
-  it.live("a folder still held open by antivirus is renamed once released, on Windows only", () =>
-    Effect.gen(function* () {
-      const busy = () => Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-      const renameAfter = (failures: number) => {
-        let calls = 0;
-        return {
-          rename: () => {
-            calls++;
-            if (calls <= failures) throw busy();
-          },
-          calls: () => calls,
-        };
-      };
-      const windows = renameAfter(2);
-      yield* Effect.promise(() =>
-        renameWhenReleased({ from: "a", to: "b", platform: "win32", rename: windows.rename }),
-      );
-      expect(windows.calls()).toBe(3);
-
-      const posix = renameAfter(1);
-      const rejected = yield* Effect.flip(
-        Effect.tryPromise({
-          try: () =>
-            renameWhenReleased({ from: "a", to: "b", platform: "linux", rename: posix.rename }),
-          catch: (cause) => new Cause.UnknownError(cause),
-        }),
-      );
-      expect(rejected.cause).toBeInstanceOf(DirectoryRenameFailed);
-      expect(rejected.cause).toMatchObject({ reason: { code: "EPERM" } });
-      expect(posix.calls()).toBe(1);
-    }),
-  );
 
   test("ACP tool locations resolve project-relative paths and normalize them", () => {
     const args = (path: string) => JSON.stringify({ path });

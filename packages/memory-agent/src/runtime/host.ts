@@ -1,17 +1,12 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { NodeFileSystem } from "@effect/platform-node";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { posix, win32 } from "./synchronous-path.ts";
 import {
   Array as EffectArray,
   Effect,
   FileSystem,
-  ManagedRuntime,
   Function as EffectFunction,
-  HashSet,
   Option,
-  Schedule,
   Schema,
 } from "effect";
 
@@ -104,72 +99,6 @@ function tarExecutableBody(
   if (platform !== "win32") return "tar";
   return win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "tar.exe");
 }
-
-const ErrorCode = Schema.Struct({ code: Schema.String });
-/** What Windows returns while another process (antivirus, search indexer) still holds a file open. */
-const busyCodes = HashSet.make("EPERM", "EACCES", "EBUSY");
-
-/**
- * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
- * antivirus may scan freshly written executables or native libraries before releasing their folder.
- */
-const RenameFailed = Schema.TaggedStruct("RenameFailed", { code: Schema.String });
-
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export class DirectoryRenameFailed extends Schema.TaggedError<DirectoryRenameFailed>()(
-  "DirectoryRenameFailed",
-  {
-    from: Schema.String,
-    to: Schema.String,
-    reason: RenameFailed,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `rename_failed (${this.reason.code})`;
-  }
-}
-
-interface RenameOptions {
-  readonly to: string;
-  readonly platform?: NodeJS.Platform;
-  readonly rename?: (from: string, to: string) => void;
-}
-
-const renameRuntime = ManagedRuntime.make(NodeFileSystem.layer);
-
-/** Native archive installer entry point; Effect callers retain the caller clock and interruption. */
-export function renameWhenReleased(
-  options: RenameOptions & { readonly from: string },
-): Promise<void> {
-  return renameRuntime.runPromise(renameWhenReleasedEffect(options));
-}
-
-export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function* (
-  options: RenameOptions & { readonly from: string },
-) {
-  const { from, to, platform = process.platform, rename } = options;
-  const mapFailure = (cause: unknown) => {
-    const { code } = Option.getOrThrowWith(
-      Schema.decodeUnknownOption(ErrorCode)(cause),
-      () => cause,
-    );
-    return DirectoryRenameFailed.make({ from, to, reason: RenameFailed.make({ code }), cause });
-  };
-  const operation =
-    rename === undefined
-      ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
-          fs.rename(from, to).pipe(Effect.mapError((error) => mapFailure(error.cause))),
-        )
-      : Effect.try({ try: () => rename(from, to), catch: mapFailure });
-  return yield* operation.pipe(
-    Effect.retry({
-      times: 19,
-      schedule: Schedule.spaced("500 millis"),
-      while: (error) => platform === "win32" && HashSet.has(busyCodes, error.reason.code),
-    }),
-  );
-});
 
 /** What Windows programs need to start at all, whatever else they are given. */
 const windowsSystemVariables = [

@@ -33,12 +33,6 @@ export {
   type PinnedArchive,
 } from "./archive-install.ts";
 
-/** Public result for the native caller; domain code uses ArchiveInstallFailed. */
-export interface ArchiveFailure {
-  readonly reason: "download_failed" | "checksum_mismatch" | "unsafe_archive" | "extract_failed";
-  readonly detail: string;
-}
-
 const UnsupportedAlgorithm = Schema.TaggedStruct("UnsupportedAlgorithm", {
   algorithm: Schema.String,
 });
@@ -64,11 +58,6 @@ function npmIntegrityBody(url: string, integrity: string): PinnedArchive {
   }
   return { url, algorithm, digest: Buffer.from(base64, "base64").toString("hex") };
 }
-
-const explain = (cause: unknown): string =>
-  cause instanceof Error
-    ? `${cause.message}${cause.cause instanceof Error ? `: ${explain(cause.cause)}` : ""}`
-    : String(cause);
 
 const HostOperationFailed = ArchiveInstallFailedReason.cases.HostOperationFailed;
 
@@ -248,39 +237,3 @@ export const archiveInstallerLayer = ArchiveInstaller.layer.pipe(
   Layer.provide(archiveHostLayer),
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
 );
-
-const nativeFailure = (error: ArchiveInstallFailed) =>
-  ArchiveInstallFailedReason.match<ArchiveFailure>(error.reason, {
-    DownloadFailed: ({ cause }) => ({ reason: "download_failed", detail: explain(cause) }),
-    HttpStatus: ({ status }) => ({ reason: "download_failed", detail: `HTTP ${status}` }),
-    ChecksumMismatch: ({ algorithm }) => ({
-      reason: "checksum_mismatch",
-      detail: `${algorithm} differs from the pin`,
-    }),
-    UnsafeEntry: ({ entry }) => ({ reason: "unsafe_archive", detail: entry }),
-    HostOperationFailed: ({ cause }) => ({ reason: "extract_failed", detail: explain(cause) }),
-  });
-
-/** Native Promise entry point. Effect consumers compose ArchiveInstaller in their own runtime. */
-export const installArchive: {
-  (target: string): (archive: PinnedArchive) => ReturnType<typeof installArchiveBody>;
-} & typeof installArchiveBody = EffectFunction.dual(2, installArchiveBody);
-function installArchiveBody(
-  archive: PinnedArchive,
-  target: string,
-): Promise<ArchiveFailure | null> {
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(archiveInstallerLayer);
-        return yield* Effect.flatMap(ArchiveInstaller, (installer) =>
-          installer.install({ archive, target }),
-        ).pipe(
-          Effect.provideContext(context),
-          Effect.as(null),
-          Effect.catchTag("ArchiveInstallFailed", (error) => Effect.succeed(nativeFailure(error))),
-        );
-      }),
-    ),
-  );
-}

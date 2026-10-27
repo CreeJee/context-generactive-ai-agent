@@ -2,22 +2,29 @@ import { NodeCrypto } from "@effect/platform-node";
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { Scope, Exit } from "effect";
 import { it } from "@effect/vitest";
-import { Cause, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { withTestPlatform } from "./support/platform.ts";
 import { afterEach, describe, expect, vi } from "vite-plus/test";
-import { installArchive, npmIntegrity, type PinnedArchive } from "../src/runtime/archive.ts";
+import {
+  ArchiveInstaller,
+  archiveInstallerLayer,
+  npmIntegrity,
+  type PinnedArchive,
+} from "../src/runtime/archive.ts";
+import { ArchiveInstallFailedReason } from "../src/runtime/archive-install.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 import { tgz, type TarEntry } from "./support/tgz.ts";
 
 afterEach(() => vi.unstubAllEnvs());
-const sdkCall = Effect.fn("runtimeTest.sdkCall")(function* <A>(
-  operation: () => A | PromiseLike<A>,
+const install = Effect.fn("runtimeTest.install")(function* (
+  archive: PinnedArchive,
+  target: string,
 ) {
-  return yield* Effect.tryPromise({
-    try: () => Promise.resolve(operation()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  }).pipe(Effect.uninterruptible);
+  const context = yield* Layer.build(archiveInstallerLayer);
+  return yield* Context.get(context, ArchiveInstaller).install({ archive, target });
 });
+const rejection = (archive: PinnedArchive, target: string) =>
+  Effect.map(Effect.flip(install(archive, target)), (failure) => failure.reason);
 const withCrypto = Effect.fn("runtimeTest.withCrypto")(function* <A, E, R>(
   program: Effect.Effect<A, E, R>,
 ) {
@@ -84,7 +91,7 @@ describe("runtime packages", () => {
   );
 });
 
-describe("installArchive", () => {
+describe("archive installer", () => {
   const files: TarEntry[] = [
     { name: "package/bin/tool", content: "#!/bin/sh\necho hi\n", mode: 0o755 },
   ];
@@ -102,7 +109,7 @@ describe("installArchive", () => {
         yield* fs.makeDirectory(target);
         yield* fs.writeFileString(path.join(target, "old"), "old");
         const pin = yield* pinned(url("/tool.tgz"), bytes);
-        expect(yield* sdkCall(() => installArchive(pin, target))).toBeNull();
+        yield* install(pin, target);
         expect(yield* fs.readFileString(path.join(target, "package/bin/tool"))).toContain(
           "echo hi",
         );
@@ -123,20 +130,18 @@ describe("installArchive", () => {
         const dir = yield* tempDir();
         const target = path.join(dir, "tool");
         const wrongPin = { ...(yield* pinned(url("/tool.tgz"), good)), digest: "0".repeat(64) };
-        expect(yield* sdkCall(() => installArchive(wrongPin, target))).toMatchObject({
-          reason: "checksum_mismatch",
-        });
+        expect(yield* rejection(wrongPin, target)).toEqual(
+          ArchiveInstallFailedReason.cases.ChecksumMismatch.make({ algorithm: "sha256" }),
+        );
         const missingPin = yield* pinned(url("/missing.tgz"), good);
-        expect(yield* sdkCall(() => installArchive(missingPin, target))).toEqual({
-          reason: "download_failed",
-          detail: "HTTP 404",
-        });
+        expect(yield* rejection(missingPin, target)).toEqual(
+          ArchiveInstallFailedReason.cases.HttpStatus.make({ status: 404 }),
+        );
         const escapingPin = yield* pinned(url("/escaping.tgz"), escaping);
-        expect(yield* sdkCall(() => installArchive(escapingPin, target))).toEqual({
-          reason: "unsafe_archive",
-          detail: "../outside",
-        });
-        // The log says why a download failed, not only that fetch did.
+        expect(yield* rejection(escapingPin, target)).toEqual(
+          ArchiveInstallFailedReason.cases.UnsafeEntry.make({ entry: "../outside" }),
+        );
+        // A refused connection is a failed download, not a failure of the host's own steps.
         const listenerScope = yield* Scope.make();
         const { port } = yield* Scope.provide(
           testHttpServer(Effect.succeed(HttpServerResponse.empty())),
@@ -144,10 +149,9 @@ describe("installArchive", () => {
         );
         yield* Scope.close(listenerScope, Exit.void);
         const closedPin = yield* pinned(`http://127.0.0.1:${port}/x.tgz`, good);
-        expect(yield* sdkCall(() => installArchive(closedPin, target))).toMatchObject({
-          reason: "download_failed",
-          detail: expect.stringContaining("ECONNREFUSED"),
-        });
+        expect(
+          ArchiveInstallFailedReason.guards.DownloadFailed(yield* rejection(closedPin, target)),
+        ).toBe(true);
         expect(yield* fs.readDirectory(dir)).toEqual([]);
         expect(yield* fs.exists(path.join(dir, "..", "outside"))).toBe(false);
       }).pipe(withCrypto, withTestPlatform),
