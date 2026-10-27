@@ -288,7 +288,7 @@ export function App() {
         return null;
       }).pipe(
         Effect.catchTag("UnknownError", (failure) =>
-          Effect.sync(() => projectErrorMessage(refusalOf(failure.cause))),
+          Effect.succeed(projectErrorMessage(refusalOf(failure.cause))),
         ),
       ),
     );
@@ -366,7 +366,7 @@ export function App() {
           report: () => Effect.sync(() => window.location.assign(reportHref(projectId, sessionId))),
           mode: ({ mode }) =>
             uiPromise(() => permissionMutation.mutateAsync(mode)).pipe(
-              Effect.when(Effect.sync(() => isTruthy(projectId))),
+              Effect.when(Effect.succeed(isTruthy(projectId))),
               Effect.asVoid,
             ),
           model: ({ model }) => uiPromise(() => selectModel(model)),

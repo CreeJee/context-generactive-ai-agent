@@ -54,11 +54,11 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
       uiPromise(() => enqueue.mutateAsync({ text, attachmentIds, mode })).pipe(
         Effect.as<AddOutcome>(AddOutcome.queued()),
         Effect.catchTag("UnknownError", (failure) =>
-          Effect.sync((): AddOutcome => {
-            if (isApiError(failure.cause) && failure.cause.code === "not_running")
-              return AddOutcome["not-running"]();
-            return AddOutcome.failed();
-          }),
+          Effect.succeed<AddOutcome>(
+            isApiError(failure.cause) && failure.cause.code === "not_running"
+              ? AddOutcome["not-running"]()
+              : AddOutcome.failed(),
+          ),
         ),
       ),
     );
