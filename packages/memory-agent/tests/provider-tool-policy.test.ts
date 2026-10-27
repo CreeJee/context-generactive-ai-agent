@@ -1,6 +1,16 @@
 import { withTestPlatform } from "./support/platform.ts";
 import { it as effectTest } from "@effect/vitest";
-import { Deferred, Effect, Result, Fiber, FileSystem, Layer, Path } from "effect";
+import {
+  Array as Arr,
+  Deferred,
+  Effect,
+  Result,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+} from "effect";
 import { describe, expect } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
 import { matchGolden, subscriptionToolRequestBodies } from "./support/requests.ts";
@@ -31,6 +41,7 @@ import {
   type ProviderToolRequest,
   type ProviderToolPolicyApi,
   type ProviderToolPolicyContext,
+  type ProviderToolResultEnvelope,
   type ProviderToolRuntimeApi,
 } from "../src/providers/tool-policy.ts";
 
@@ -635,7 +646,7 @@ describe("ProviderToolRuntime", () => {
               runId: "run-1",
               options: { networkRequested: true },
               approval: "not_requested",
-              operation: () => Promise.resolve({ raw, usage }),
+              operation: () => Effect.succeed({ raw, usage }),
             }),
           ),
         );
@@ -673,7 +684,7 @@ describe("ProviderToolRuntime", () => {
     () =>
       Effect.gen(function* () {
         const raw = Object.freeze({ type: "future_provider_event", payload: { value: 42 } });
-        const lifecycle: unknown[] = [];
+        const lifecycle = yield* Ref.make<ReadonlyArray<ProviderToolResultEnvelope>>([]);
         const result = yield* runRuntime(
           Effect.flatMap(ProviderToolRuntime, (runtime) =>
             runtime.execute({
@@ -684,13 +695,11 @@ describe("ProviderToolRuntime", () => {
               runId: "run-unknown",
               options: { networkRequested: true },
               approval: "not_requested",
-              operation: ({ progress }) => {
-                progress({ raw: { pending: true }, kind: "approval_required" });
-                return { raw, kind: "future_provider_event" };
-              },
-              onLifecycle: (event) => {
-                lifecycle.push(event);
-              },
+              operation: ({ progress }) =>
+                progress({ raw: { pending: true }, kind: "approval_required" }).pipe(
+                  Effect.as({ raw, kind: "future_provider_event" }),
+                ),
+              onLifecycle: (event) => Ref.update(lifecycle, Arr.append(event)),
             }),
           ),
         );
@@ -700,7 +709,7 @@ describe("ProviderToolRuntime", () => {
           unknownKind: true,
         });
         expect(result.raw).toBe(raw);
-        expect(lifecycle).toEqual(
+        expect(yield* Ref.get(lifecycle)).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ status: "approval-required", unknownKind: false }),
             expect.objectContaining({
@@ -715,8 +724,8 @@ describe("ProviderToolRuntime", () => {
 
   effectTest.live("emits ordered terminal lifecycle states for failure and interruption", () =>
     Effect.gen(function* () {
-      const failedLifecycle: string[] = [];
-      let rejectedReleases = 0;
+      const failedLifecycle = yield* Ref.make<ReadonlyArray<string>>([]);
+      const rejectedReleases = yield* Ref.make(0);
       const rejection = yield* runRuntime(
         Effect.flatMap(ProviderToolRuntime, (runtime) =>
           errorOf(
@@ -728,33 +737,22 @@ describe("ProviderToolRuntime", () => {
               runId: "run-1",
               options: { networkRequested: true },
               approval: "not_requested",
-              acquire: () => ({
-                release: () => {
-                  rejectedReleases++;
-                },
-              }),
-              operation: () => Promise.reject(new Error("provider rejected")),
-              onLifecycle: (event) => {
-                failedLifecycle.push(event.status);
-              },
+              acquire: Effect.succeed({ release: Ref.update(rejectedReleases, (n) => n + 1) }),
+              operation: () => Effect.fail("provider rejected"),
+              onLifecycle: (event) => Ref.update(failedLifecycle, Arr.append(event.status)),
             }),
           ),
         ),
       );
       expect(rejection).toBeInstanceOf(ProviderToolOperationFailure);
-      expect(rejectedReleases).toBe(1);
-      expect(failedLifecycle).toEqual(["running", "failed"]);
-      let aborted = false;
-      let cancelledReleases = 0;
-      const cancelledLifecycle: string[] = [];
-      const operationContext = yield* Effect.context<never>();
+      expect(yield* Ref.get(rejectedReleases)).toBe(1);
+      expect(yield* Ref.get(failedLifecycle)).toEqual(["running", "failed"]);
+      const aborted = yield* Ref.make(false);
+      const cancelledReleases = yield* Ref.make(0);
+      const cancelledLifecycle = yield* Ref.make<ReadonlyArray<string>>([]);
       const operationStarted = yield* Deferred.make<void>();
-      const operationCompleted = yield* Deferred.make<{ raw: null }>();
-      const lateAllowed = yield* Deferred.make<void>();
-      let lateProgress = () => {};
-      const lateFiber = yield* Effect.forkChild(
-        Deferred.await(lateAllowed).pipe(Effect.andThen(Effect.sync(() => lateProgress()))),
-      );
+      // A progress report the operation could still send after its execution ended.
+      const lateProgress = yield* Deferred.make<Effect.Effect<void>>();
       yield* Effect.gen(function* () {
         const runtime = yield* ProviderToolRuntime;
         const fiber = yield* Effect.forkChild(
@@ -766,25 +764,23 @@ describe("ProviderToolRuntime", () => {
             runId: "run-1",
             options: { networkRequested: true },
             approval: "not_requested",
-            acquire: () => ({
-              release: () => {
-                cancelledReleases++;
-              },
-            }),
-            operation: ({ signal, progress }) => {
-              signal.addEventListener("abort", () => {
-                aborted = true;
-                progress({ raw: "before-cancel", kind: "progress" });
-                lateProgress = () => progress({ raw: "too-late", kind: "progress" });
-                Deferred.doneUnsafe(operationCompleted, Effect.succeed({ raw: null }));
-              });
-              Deferred.doneUnsafe(operationStarted, Effect.void);
-              // The SDK operation returns a Promise; execution cancellation settles its Deferred.
-              return Effect.runPromiseWith(operationContext)(Deferred.await(operationCompleted));
-            },
-            onLifecycle: (event) => {
-              cancelledLifecycle.push(event.status);
-            },
+            acquire: Effect.succeed({ release: Ref.update(cancelledReleases, (n) => n + 1) }),
+            operation: ({ progress }) =>
+              Deferred.succeed(operationStarted, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() =>
+                  Ref.set(aborted, true).pipe(
+                    Effect.andThen(progress({ raw: "before-cancel", kind: "progress" })),
+                    Effect.andThen(
+                      Deferred.succeed(
+                        lateProgress,
+                        progress({ raw: "too-late", kind: "progress" }),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            onLifecycle: (event) => Ref.update(cancelledLifecycle, Arr.append(event.status)),
           }),
         );
         yield* Deferred.await(operationStarted);
@@ -796,13 +792,12 @@ describe("ProviderToolRuntime", () => {
           return yield* Effect.provideContext(program, services);
         }, Effect.scoped),
       );
-      expect(aborted).toBe(true);
-      expect(cancelledReleases).toBe(1);
-      const callbacksAtScopeEnd = cancelledLifecycle.length;
-      yield* Deferred.succeed(lateAllowed, undefined);
-      yield* Fiber.join(lateFiber);
-      expect(cancelledLifecycle.at(-1)).toBe("cancelled");
-      expect(cancelledLifecycle).toHaveLength(callbacksAtScopeEnd);
+      expect(yield* Ref.get(aborted)).toBe(true);
+      expect(yield* Ref.get(cancelledReleases)).toBe(1);
+      const callbacksAtScopeEnd = (yield* Ref.get(cancelledLifecycle)).length;
+      yield* Effect.flatten(Deferred.await(lateProgress));
+      expect((yield* Ref.get(cancelledLifecycle)).at(-1)).toBe("cancelled");
+      expect(yield* Ref.get(cancelledLifecycle)).toHaveLength(callbacksAtScopeEnd);
     }).pipe(withTestPlatform),
   );
 
@@ -819,10 +814,8 @@ describe("ProviderToolRuntime", () => {
               runId: "run-release",
               options: { networkRequested: true },
               approval: "not_requested",
-              acquire: () => ({
-                release: () => Promise.reject(new Error("release failed")),
-              }),
-              operation: () => ({ raw: "completed" }),
+              acquire: Effect.succeed({ release: Effect.fail("release failed") }),
+              operation: () => Effect.succeed({ raw: "completed" }),
             }),
           ),
         ),
@@ -870,7 +863,7 @@ describe("ProviderToolRuntime", () => {
           Layer.provide(policyLayer),
           Layer.provide(ProviderToolCapabilityRegistry.layer),
         );
-        let executed = false;
+        const executed = yield* Ref.make(false);
         const result = yield* Effect.flatMap(
           ProviderToolRuntime,
           (runtime) =>
@@ -886,10 +879,7 @@ describe("ProviderToolRuntime", () => {
               runId: "run-local",
               options: {},
               approval: "granted",
-              operation: () => {
-                executed = true;
-                return { raw: "must-not-run" };
-              },
+              operation: () => Ref.set(executed, true).pipe(Effect.as({ raw: "must-not-run" })),
             }),
           // Test entry point owns this Layer and its resource scope.
         ).pipe(
@@ -898,7 +888,7 @@ describe("ProviderToolRuntime", () => {
             return yield* Effect.provideContext(program, services);
           }, Effect.scoped),
         );
-        expect(executed).toBe(false);
+        expect(yield* Ref.get(executed)).toBe(false);
         expect(result).toMatchObject({
           status: "pending",
           runId: "run-local",

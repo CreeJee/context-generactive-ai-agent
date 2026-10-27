@@ -13,6 +13,7 @@ import {
   Layer,
   Match,
   Predicate,
+  Ref,
   Schema,
 } from "effect";
 import {
@@ -878,15 +879,14 @@ export interface ProviderToolOperationResult<Raw = unknown> {
   readonly usage?: unknown;
   readonly cost?: unknown;
 }
-export interface ProviderToolLease {
-  readonly release: () => void | Promise<void>;
+export interface ProviderToolLease<E = never> {
+  readonly release: Effect.Effect<void, E>;
 }
 export interface ProviderToolOperationContext {
-  readonly signal: AbortSignal;
   readonly workspaceRoot: string | null;
-  readonly progress: <Raw>(event: ProviderToolOperationResult<Raw>) => void;
+  readonly progress: <Raw>(event: ProviderToolOperationResult<Raw>) => Effect.Effect<void>;
 }
-export interface ProviderToolExecutionRequest<Raw = unknown> {
+export interface ProviderToolExecutionRequest<Raw = unknown, E = never> {
   readonly policy: ProviderToolPolicyContext;
   readonly toolId: ProviderToolId;
   readonly kind: string;
@@ -894,12 +894,15 @@ export interface ProviderToolExecutionRequest<Raw = unknown> {
   readonly runId: string;
   readonly options: ProviderToolExecutionOptions;
   readonly approval: ProviderToolApprovalState;
-  /** Invoked only for provider-hosted or hybrid tools; caller-loop tools return action metadata. */
+  /**
+   * Invoked only for provider-hosted or hybrid tools; caller-loop tools return action metadata.
+   * Cancelling the execution interrupts it.
+   */
   readonly operation?: (
     context: ProviderToolOperationContext,
-  ) => ProviderToolOperationResult<Raw> | Promise<ProviderToolOperationResult<Raw>>;
-  readonly acquire?: (signal: AbortSignal) => ProviderToolLease | Promise<ProviderToolLease>;
-  readonly onLifecycle?: (event: ProviderToolResultEnvelope) => void | Promise<void>;
+  ) => Effect.Effect<ProviderToolOperationResult<Raw>, E>;
+  readonly acquire?: Effect.Effect<ProviderToolLease<E>, E>;
+  readonly onLifecycle?: (event: ProviderToolResultEnvelope) => Effect.Effect<void, E>;
 }
 export type ProviderToolRuntimeFailure =
   | ProviderToolPolicyFailure
@@ -1021,7 +1024,7 @@ function normalizeProviderToolLifecycleStatusBody(
   );
 }
 const runtimeEnvelope = <Raw>(
-  request: ProviderToolExecutionRequest,
+  request: Pick<ProviderToolExecutionRequest, "policy" | "accountId" | "runId">,
   descriptor: AnyProviderToolDescriptor,
   fallback: ProviderToolLifecycleStatus,
   result: ProviderToolOperationResult<Raw>,
@@ -1062,8 +1065,8 @@ export interface ProviderToolRuntimeApi {
     readonly ComposedProviderTool[],
     ProviderToolPolicyFailure | ProviderToolNotExposed | ProviderToolFactoryOptionsFailure
   >;
-  readonly execute: <Raw>(
-    request: ProviderToolExecutionRequest<Raw>,
+  readonly execute: <Raw, E = never>(
+    request: ProviderToolExecutionRequest<Raw, E>,
   ) => Effect.Effect<ProviderToolResultEnvelope<Raw | undefined>, ProviderToolRuntimeFailure>;
 }
 const isProviderToolRequest = Schema.is(ProviderToolRequest);
@@ -1149,16 +1152,16 @@ function makeProviderToolRuntimeBody(
           options: request.options,
           approval: request.approval,
         });
+        const notify = (envelope: ProviderToolResultEnvelope) =>
+          (request.onLifecycle ?? (() => Effect.void))(envelope).pipe(
+            Effect.mapError((cause) =>
+              ProviderToolLifecycleFailure.make({ toolId: request.toolId, cause }),
+            ),
+          );
         const lifecycle = (
           status: ProviderToolLifecycleStatus,
           result: ProviderToolOperationResult,
-        ) => {
-          const envelope = runtimeEnvelope(request, descriptor, status, result);
-          return Effect.tryPromise({
-            try: () => Promise.resolve(request.onLifecycle?.(envelope)),
-            catch: (cause) => ProviderToolLifecycleFailure.make({ toolId: request.toolId, cause }),
-          });
-        };
+        ) => notify(runtimeEnvelope(request, descriptor, status, result));
         // A caller-loop tool is only described; the caller runs it.
         const described = Effect.as(
           lifecycle("pending", { raw: undefined }),
@@ -1173,50 +1176,44 @@ function makeProviderToolRuntimeBody(
             }),
           }),
         );
-        const acquire = Effect.tryPromise({
-          try: (signal) =>
-            request.acquire === undefined
-              ? Promise.resolve<ProviderToolLease>({ release: () => undefined })
-              : Promise.resolve(request.acquire(signal)),
-          catch: (cause) =>
+        const acquire = (
+          request.acquire ?? Effect.succeed<ProviderToolLease<never>>({ release: Effect.void })
+        ).pipe(
+          Effect.mapError((cause) =>
             ProviderToolLeaseFailure.make({ toolId: request.toolId, phase: "acquire", cause }),
-        });
+          ),
+        );
         const use = (operation: NonNullable<typeof request.operation>) =>
           Effect.gen(function* () {
             yield* lifecycle("running", { raw: undefined });
-            const progress: ProviderToolOperationResult[] = [];
-            const operationExit = yield* Effect.tryPromise({
-              try: (signal) =>
-                Promise.resolve(
-                  operation({
-                    signal,
-                    workspaceRoot: decision.workspaceRoot,
-                    progress: (event) => {
-                      progress.push(event);
-                    },
-                  }),
-                ),
-              catch: (cause) =>
+            const progress = yield* Ref.make<ReadonlyArray<ProviderToolOperationResult>>([]);
+            const operationExit = yield* operation({
+              workspaceRoot: decision.workspaceRoot,
+              progress: (event) => Ref.update(progress, EffectArray.append(event)),
+            }).pipe(
+              Effect.mapError((cause) =>
                 ProviderToolOperationFailure.make({
                   toolId: request.toolId,
                   reason: "operation_failed",
                   cause,
                 }),
-            }).pipe(Effect.exit);
-            yield* Effect.forEach(progress, (event) => lifecycle("running", event), {
-              discard: true,
-            });
+              ),
+              Effect.exit,
+            );
+            yield* Effect.forEach(
+              yield* Ref.get(progress),
+              (event) => lifecycle("running", event),
+              {
+                discard: true,
+              },
+            );
             const completed = runtimeEnvelope(
               request,
               descriptor,
               "succeeded",
               yield* operationExit,
             );
-            yield* Effect.tryPromise({
-              try: () => Promise.resolve(request.onLifecycle?.(completed)),
-              catch: (cause) =>
-                ProviderToolLifecycleFailure.make({ toolId: request.toolId, cause }),
-            });
+            yield* notify(completed);
             return completed;
           });
         const run = (operation: NonNullable<typeof request.operation>) =>
@@ -1231,15 +1228,15 @@ function makeProviderToolRuntimeBody(
                     raw: undefined,
                   }),
               });
-              yield* Effect.tryPromise({
-                try: () => Promise.resolve(lease.release()),
-                catch: (cause) =>
+              yield* lease.release.pipe(
+                Effect.mapError((cause) =>
                   ProviderToolLeaseFailure.make({
                     toolId: request.toolId,
                     phase: "release",
                     cause,
                   }),
-              });
+                ),
+              );
               return yield* useExit;
             }),
           );
