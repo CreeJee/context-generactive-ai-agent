@@ -17,8 +17,6 @@ function linkController(signal: AbortSignal, shutdownReason: string): Controller
 
 export interface SdkCancellation {
   readonly controller: AbortController;
-  /** Independent delivery cancellation: execution teardown must not discard its final frames. */
-  readonly delivery: Effect.Effect<AbortController>;
   readonly release: Effect.Effect<void>;
   readonly cancel: Effect.Effect<void>;
   /** Wait for execution cleanup while its output is still being drained and persisted. */
@@ -69,19 +67,6 @@ const allocate = Effect.fn("SdkCancellations.allocate")(function* (options: {
   });
   return {
     controller: controller.controller,
-    delivery: Effect.sync(() => {
-      const delivery = linkController(signal, options.shutdownReason);
-      const forward = () => controller.controller.abort(delivery.controller.signal.reason);
-      delivery.controller.signal.addEventListener("abort", forward, { once: true });
-      links.push({
-        controller: delivery.controller,
-        detach: () => {
-          delivery.detach();
-          delivery.controller.signal.removeEventListener("abort", forward);
-        },
-      });
-      return delivery.controller;
-    }),
     // A completed stream detaches before closing, preserving its committed finish.
     release,
     settled: Effect.suspend(() => settled),

@@ -53,7 +53,7 @@
   "queue": [],
   "runs": [
     {
-      "cancel_requested": 1,
+      "cancel_requested": null,
       "error": null,
       "error_code": null,
       "run_id": "<id-2>",

@@ -2870,9 +2870,11 @@
 - 다시 붙기는 `join`(path의 runId, `after` offset)뿐이다. `Last-Event-ID`, `?offset=`, `X-Run-Id` 규칙은 `hydrate`와 함께 없어졌다. 그 run의 로그가 아닌 offset은 `invalid_stream_offset`이다.
 - 앱 연결: `ChatApi`를 server에 직접 붙이지 않는다. React Router resource route가 web handler로 넘기는 방식을 둔다. 다른 API가 아직 route에 있고, route는 요청을 넘기기만 해서 옮겨 얻는 것이 적다. 앱 테스트는 같은 handler(`chatApiRoutes`)를 테스트 agent로 만든다.
 - 취소와 재시작: 사용자의 취소와 세션 보관·삭제만 run을 `aborted`로 끝낸다. owner 종료로, 또는 종료 순서상 먼저 끊긴 로그 fiber로 controller가 abort된 run은 `failed/server_restarted`다. "테스트의 Fiber와 네이티브 SDK 게이트 (2026-10-07)"의 규칙을 새 loop에서도 지킨다.
+  - 취소는 run의 controller를 우리 reason(`cancel_requested`)으로 abort하기만 한다. TanStack의 `RUN_CANCEL_REASON`과 `requestRunCancel`은 쓰지 않는다. `chat_runs.cancel_requested`도 더 쓰지 않는다. TanStack sandbox가 detach와 취소를 가르던 열이고, 앱에는 읽는 곳이 없다.
 - 사용자 턴의 `createdAt`은 서버가 요청을 받은 시각이다. 페이지는 시각을 보내지 않는다.
 - client가 끊은 SSE는 로그 읽기를 abort해서 바로 닫는다. 로그 reader에 `return`을 묻지 않는다. async generator는 대기 중인 읽기가 끝나야 답하므로, 조용한 run에서는 다음 로그 항목까지 stream이 열려 있게 된다.
 - ACP bridge는 `ChatApi`의 `HttpApiClient`로 run을 보내고 SSE를 editor의 session update로 넘긴다. run이 승인을 기다리며 끝나면 editor에 하나씩 묻고 resume run으로 답한다. 세션을 다시 열면 snapshot 한 페이지(500개)를 보여 준다. 화면 상태가 필요 없어 atom은 쓰지 않는다.
 - BTW는 `ChatApi`의 `btw` 그룹(`messages`, `ask`)이다. 답은 요청과 떨어져 돌아서 패널을 닫아도 저장된다. BTW run은 `btw_threads.messages`만 쓰고 run·interrupt 행을 남기지 않는다.
 - 단발 모델 호출(권한 분류, 턴 요약, 리포트 진단, 메모리 해석, 개선 해석)은 `generateText`·`streamText`다. 사용량 수치를 보내지 않은 응답은 사용량 행을 남기지 않는다.
 - release 전에 `migrateTanStackRows`를 등록해야 한다. 등록 전에는 옛 행의 TanStack metadata를 새 loop가 읽지 않으므로, 새 loop가 다시 쓴 thread에서 `finishReason`·`model`·`source`가 빠질 수 있다.
+  - 등록했다(2026-10-27, `1abbb951`). "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)"의 "등록"에 있다.

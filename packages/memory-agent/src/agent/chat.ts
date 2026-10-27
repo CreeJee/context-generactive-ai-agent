@@ -26,10 +26,8 @@ import { workflowActions } from "../workflow/actions.ts";
 import { Scope } from "effect";
 import {
   RUN_ACCEPTED_EVENT,
-  RUN_CANCEL_REASON,
   EventType,
   memoryStream,
-  requestRunCancel,
   type ChatMiddleware,
   type StreamChunk,
   type StreamDurability,
@@ -433,6 +431,8 @@ export { modelBoundMessages };
 
 /** The reason the owner aborts a run's controller with when it shuts down; a cancel has another. */
 const serviceShutdown = "service_shutdown";
+/** The reason a run's controller aborts with when the user cancels the run. */
+const cancelRequested = "cancel_requested";
 
 /**
  * Ends when the user cancels the run, or archives or deletes its session; the loop then ends it as
@@ -442,7 +442,7 @@ const serviceShutdown = "service_shutdown";
 const cancelledByUser = (controller: AbortController) =>
   aborted(controller.signal).pipe(
     Effect.andThen(() =>
-      controller.signal.reason === RUN_CANCEL_REASON ? Effect.void : Effect.never,
+      controller.signal.reason === cancelRequested ? Effect.void : Effect.never,
     ),
   );
 
@@ -1669,7 +1669,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             abortController,
             undefined,
             cancellation.release,
-            Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
+            Effect.sync(() => abortController.abort(cancelRequested)),
             settleQueue(sessionId, runId),
           );
           if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
@@ -2371,7 +2371,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           cancellation.release,
           // The loop ends a cancelled run itself, so a cancel only aborts it and the page still
           // hears how the run ended.
-          Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
+          Effect.sync(() => abortController.abort(cancelRequested)),
           settleQueue(sessionId, runId),
         );
         if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
@@ -2473,11 +2473,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             status: last?.status ?? null,
           });
         }
-        yield* agentPromise("cancel-run", () =>
-          requestRunCancel(chatState.persistence.stores.runs, live.runId),
-        );
         yield* workTrace.holdParentNotifications(sessionId);
-        live.controller.abort(RUN_CANCEL_REASON);
+        live.controller.abort(cancelRequested);
         const stopped = yield* Effect.all(
           [
             live.cancel.pipe(Effect.andThen(live.ended)),
@@ -2633,10 +2630,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
         if (action !== "resume" && isTruthy(live)) {
-          yield* agentPromise("cancel-run", () =>
-            requestRunCancel(chatState.persistence.stores.runs, live.runId),
-          );
-          live.controller.abort(RUN_CANCEL_REASON);
+          live.controller.abort(cancelRequested);
           yield* live.cancel;
         }
         return json(200, state);

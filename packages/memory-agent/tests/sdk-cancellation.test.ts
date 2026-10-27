@@ -53,7 +53,6 @@ it.effect("producer survives the request scope and delivers committed terminal f
   Effect.gen(function* () {
     const { owner, cancellations } = yield* fixture;
     const run = yield* cancellations.allocate("service_shutdown");
-    const delivery = yield* run.delivery;
     run.controller.abort("worker_teardown");
     const output = yield* Effect.scoped(
       run.publish(Stream.toAsyncIterable(Stream.fromIterable(["partial", "RUN_ERROR"]))),
@@ -61,7 +60,6 @@ it.effect("producer survives the request scope and delivers committed terminal f
     const frames = yield* Stream.runCollect(output);
     expect(frames).toEqual(["partial", "RUN_ERROR"]);
     yield* Scope.close(owner, Exit.void);
-    expect(delivery.signal.aborted).toBe(false);
   }),
 );
 
@@ -192,38 +190,17 @@ it.effect("request completion keeps the run alive, owner shutdown cancels it", (
   }),
 );
 
-it.effect("worker teardown preserves delivery, while delivery cancellation stops execution", () =>
-  Effect.gen(function* () {
-    const { cancellations } = yield* fixture;
-    const failed = yield* cancellations.allocate("service_shutdown");
-    const delivery = yield* failed.delivery;
-    failed.controller.abort("worker_teardown");
-    expect(delivery.signal.aborted).toBe(false);
-    yield* failed.release;
-    expect(delivery.signal.aborted).toBe(false);
-
-    const cancelled = yield* cancellations.allocate("service_shutdown");
-    const cancelledDelivery = yield* cancelled.delivery;
-    cancelledDelivery.abort("run_cancelled");
-    expect(cancelled.controller.signal.aborted).toBe(true);
-    expect(cancelled.controller.signal.reason).toBe("run_cancelled");
-    yield* cancelled.release;
-  }),
-);
-
 it.effect(
   "successful release detaches controllers and owner shutdown only cancels active runs",
   () =>
     Effect.gen(function* () {
       const { owner, cancellations } = yield* fixture;
       const completed = yield* cancellations.allocate("service_shutdown");
-      const delivery = yield* completed.delivery;
       yield* completed.release;
       yield* completed.release;
       const active = yield* cancellations.allocate("service_shutdown");
       yield* Scope.close(owner, Exit.void);
       expect(completed.controller.signal.aborted).toBe(false);
-      expect(delivery.signal.aborted).toBe(false);
       expect(active.controller.signal.aborted).toBe(true);
     }),
 );
