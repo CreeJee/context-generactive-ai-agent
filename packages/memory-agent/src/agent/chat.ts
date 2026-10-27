@@ -3468,34 +3468,56 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // used by HTTP admission prevents an internal follow-up racing a user turn or another child.
   const followup = (sessionId: string) => {
     const followupRunId = randomUUID();
+    const notStarted = (code: string) => () => Effect.succeed(Result.fail(code));
+    /** Starts the follow-up run as the chat API does: the run's log, or the refusal's code. */
     const send = (kind: InternalFollowup) =>
-      handle(
-        new Request("http://local/internal/subagent-followup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: stringifyJson({
-            threadId: sessionId,
-            runId: followupRunId,
-            messages: [],
-            tools: [],
-            context: [],
-          }),
-        }),
-        sessionId,
-        kind,
-      );
-    // The response producer persists and publishes the normal durable stream. Drain it without
-    // retaining a second copy, so background updates hydrate exactly like browser-started turns.
-    const drain = (response: Response) =>
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      response.ok && response.body !== null
-        ? Stream.runDrain(
-            Stream.fromReadableStream({
-              evaluate: () => response.body!,
-              onError: (cause) => AgentOperationFailed.make({ operation: "drain-followup", cause }),
+      api
+        .start(
+          {
+            holder: null,
+            body: Effect.succeed({
+              threadId: sessionId,
+              runId: followupRunId,
+              messages: [],
+              tools: [],
+              context: [],
             }),
-          )
-        : Effect.void;
+          },
+          sessionId,
+          kind,
+          "api",
+        )
+        .pipe(
+          Effect.flatMap(
+            ChatStart.$match({
+              Refused: ({ refusal }) => Effect.succeed(Result.fail(refusal.error)),
+              Answered: () => Effect.die("A follow-up got a response only the page's route sends"),
+              Following: (following) => Effect.succeed(Result.succeed(following)),
+            }),
+          ),
+          Effect.catchTags({
+            SessionNotFound: notStarted("session_not_found"),
+            ProjectNotFound: notStarted("project_not_found"),
+            ProviderUnavailable: notStarted("provider_unavailable"),
+            ModelUnavailable: notStarted("provider_unavailable"),
+          }),
+        );
+    // The run fills its log whether or not anyone reads it. Reading the log to its end keeps the
+    // session's next follow-up waiting until this run ends.
+    const drain = Result.match({
+      onFailure: () => Effect.void,
+      onSuccess: ({ log, after }: { readonly log: StreamDurability; readonly after: string }) =>
+        Stream.runDrain(
+          Stream.unwrap(
+            Effect.map(Effect.abortSignal, (signal) =>
+              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+              Stream.fromAsyncIterable(log.read(after, signal), (cause) =>
+                AgentOperationFailed.make({ operation: "drain-followup", cause }),
+              ),
+            ),
+          ),
+        ),
+    });
     return Effect.gen(function* () {
       yield* Effect.sleep("25 millis");
       if (isTruthy(liveRuns.get(sessionId))) return;
@@ -3513,10 +3535,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
       const steered = send(InternalFollowup.steered()).pipe(
         Effect.onError(() => unsent),
-        Effect.filterOrElse(
-          (response) => response.ok,
-          (response) => Effect.as(unsent, response),
-        ),
+        Effect.tap((started) => Effect.when(unsent, Effect.succeed(Result.isFailure(started)))),
         Effect.flatMap(drain),
       );
       const automatic = Effect.gen(function* () {
@@ -3562,20 +3581,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           chatState.persistence.stores.interrupts.listPending(sessionId),
         );
         if (pendingApprovals.length > 0) return;
-        const response = yield* send(
+        const started = yield* send(
           continuing
             ? InternalFollowup.workflow({ afterRunId: last.runId })
             : InternalFollowup.notification(),
         );
-        if (!response.ok && continuing) {
+        if (Result.isFailure(started) && continuing) {
           yield* execution.blockPending(sessionId, last.runId, {
             reason: "external_dependency",
             detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
-            evidence: [`HTTP ${response.status}`],
+            evidence: [started.failure],
           });
           yield* events.publishSession(sessionId, "run-state");
         }
-        yield* drain(response);
+        yield* drain(started);
       });
       yield* Effect.when(
         steered,

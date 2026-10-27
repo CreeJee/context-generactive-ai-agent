@@ -53,15 +53,8 @@
         {
           "content": null,
           "createdAt": "<time>",
-          "finishReason": "tool_calls",
           "id": "<id-2>",
-          "model": "scripted-1",
           "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
           "toolCalls": [
             {
               "function": {
@@ -91,15 +84,8 @@
         {
           "content": "first started",
           "createdAt": "<time>",
-          "finishReason": "stop",
           "id": "<id-6>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
+          "role": "assistant"
         }
       ],
       "ordinal": 2,
@@ -114,7 +100,7 @@
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-8>",
+          "id": "<id-7>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -128,7 +114,7 @@
                 "arguments": "{\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}",
                 "name": "get_subagent_reports"
               },
-              "id": "call-reports@<id-7>",
+              "id": "call-reports@<id-8>",
               "type": "function"
             }
           ]
@@ -137,13 +123,13 @@
           "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}]}",
           "id": "stored:<session>:5",
           "role": "tool",
-          "toolCallId": "call-reports@<id-7>"
+          "toolCallId": "call-reports@<id-8>"
         }
       ],
       "ordinal": 3,
       "ready": 1,
       "thread_id": "<session>",
-      "ui_id": "<id-8>"
+      "ui_id": "<id-7>"
     },
     {
       "format_version": 1,
@@ -188,15 +174,8 @@
         {
           "content": null,
           "createdAt": "<time>",
-          "finishReason": "tool_calls",
           "id": "<id-11>",
-          "model": "scripted-1",
           "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
           "toolCalls": [
             {
               "function": {
@@ -226,15 +205,8 @@
         {
           "content": "second started",
           "createdAt": "<time>",
-          "finishReason": "stop",
           "id": "<id-14>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
+          "role": "assistant"
         }
       ],
       "ordinal": 7,
@@ -249,7 +221,7 @@
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-16>",
+          "id": "<id-15>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -263,7 +235,7 @@
                 "arguments": "{\"attempts\":[{\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}]}",
                 "name": "get_subagent_reports"
               },
-              "id": "call-reports@<id-15>",
+              "id": "call-reports@<id-16>",
               "type": "function"
             }
           ]
@@ -272,13 +244,13 @@
           "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}]}",
           "id": "stored:<session>:12",
           "role": "tool",
-          "toolCallId": "call-reports@<id-15>"
+          "toolCallId": "call-reports@<id-16>"
         }
       ],
       "ordinal": 8,
       "ready": 1,
       "thread_id": "<session>",
-      "ui_id": "<id-16>"
+      "ui_id": "<id-15>"
     },
     {
       "format_version": 1,
@@ -434,26 +406,26 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-7>",
+      "run_id": "<id-8>",
       "text": ""
     },
     {
       "detail": {
-        "toolCallId": "call-reports@<id-7>",
+        "toolCallId": "call-reports@<id-8>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_call",
-      "run_id": "<id-7>",
+      "run_id": "<id-8>",
       "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}"
     },
     {
       "detail": {
         "ok": true,
-        "toolCallId": "call-reports@<id-7>",
+        "toolCallId": "call-reports@<id-8>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_result",
-      "run_id": "<id-7>",
+      "run_id": "<id-8>",
       "text": {
         "reports": [
           {
@@ -471,7 +443,7 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-7>",
+      "run_id": "<id-8>",
       "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}"
     },
     {
@@ -520,26 +492,26 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-15>",
+      "run_id": "<id-16>",
       "text": ""
     },
     {
       "detail": {
-        "toolCallId": "call-reports@<id-15>",
+        "toolCallId": "call-reports@<id-16>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_call",
-      "run_id": "<id-15>",
+      "run_id": "<id-16>",
       "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}]}"
     },
     {
       "detail": {
         "ok": true,
-        "toolCallId": "call-reports@<id-15>",
+        "toolCallId": "call-reports@<id-16>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_result",
-      "run_id": "<id-15>",
+      "run_id": "<id-16>",
       "text": {
         "reports": [
           {
@@ -557,13 +529,13 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-15>",
+      "run_id": "<id-16>",
       "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}"
     }
   ],
   "notifications": [
     {
-      "delivered_to_run_id": "<id-7>",
+      "delivered_to_run_id": "<id-8>",
       "kind": "completed",
       "parent_run_id": "<id-20>",
       "payload": {
@@ -573,7 +545,7 @@
       "task_id": "<id-4>"
     },
     {
-      "delivered_to_run_id": "<id-15>",
+      "delivered_to_run_id": "<id-16>",
       "kind": "completed",
       "parent_run_id": "<id-22>",
       "payload": {
@@ -607,7 +579,7 @@
       "cancel_requested": null,
       "error": null,
       "error_code": null,
-      "run_id": "<id-7>",
+      "run_id": "<id-8>",
       "status": "completed",
       "thread_id": "<session>",
       "usage": null
@@ -634,7 +606,7 @@
       "cancel_requested": null,
       "error": null,
       "error_code": null,
-      "run_id": "<id-15>",
+      "run_id": "<id-16>",
       "status": "completed",
       "thread_id": "<session>",
       "usage": null
@@ -688,15 +660,8 @@
         {
           "content": null,
           "createdAt": "<time>",
-          "finishReason": "tool_calls",
           "id": "<id-2>",
-          "model": "scripted-1",
           "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
           "toolCalls": [
             {
               "function": {
@@ -716,21 +681,14 @@
         {
           "content": "first started",
           "createdAt": "<time>",
-          "finishReason": "stop",
           "id": "<id-6>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
+          "role": "assistant"
         },
         {
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-8>",
+          "id": "<id-7>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -744,7 +702,7 @@
                 "arguments": "{\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}",
                 "name": "get_subagent_reports"
               },
-              "id": "call-reports@<id-7>",
+              "id": "call-reports@<id-8>",
               "type": "function"
             }
           ]
@@ -752,7 +710,7 @@
         {
           "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}]}",
           "role": "tool",
-          "toolCallId": "call-reports@<id-7>"
+          "toolCallId": "call-reports@<id-8>"
         },
         {
           "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}",
@@ -776,15 +734,8 @@
         {
           "content": null,
           "createdAt": "<time>",
-          "finishReason": "tool_calls",
           "id": "<id-11>",
-          "model": "scripted-1",
           "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
           "toolCalls": [
             {
               "function": {
@@ -804,21 +755,14 @@
         {
           "content": "second started",
           "createdAt": "<time>",
-          "finishReason": "stop",
           "id": "<id-14>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
+          "role": "assistant"
         },
         {
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-16>",
+          "id": "<id-15>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -832,7 +776,7 @@
                 "arguments": "{\"attempts\":[{\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}]}",
                 "name": "get_subagent_reports"
               },
-              "id": "call-reports@<id-15>",
+              "id": "call-reports@<id-16>",
               "type": "function"
             }
           ]
@@ -840,7 +784,7 @@
         {
           "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}]}",
           "role": "tool",
-          "toolCallId": "call-reports@<id-15>"
+          "toolCallId": "call-reports@<id-16>"
         },
         {
           "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}",
