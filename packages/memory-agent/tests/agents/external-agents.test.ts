@@ -221,7 +221,7 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       yield* eventually(fs.exists(`${log}.slow`), "the background ACP prompt to arrive");
       const tasks = yield* BackgroundTasks;
       yield* tasks.stopSession(sessionId);
-      expect(tasks.hasSession(sessionId)).toBe(false);
+      expect(yield* tasks.hasSession(sessionId)).toBe(false);
       expect(isConnected((yield* agents.overview(project)).agents[0]?.state)).toBe(true);
       expect(ExternalPromptOutcome.$is("completed")(yield* prompt("after cancellation"))).toBe(
         true,

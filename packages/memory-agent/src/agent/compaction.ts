@@ -313,14 +313,13 @@ export const lookupSources = (lookups: {
   readonly nodeText: (id: string) => string | null;
 }): CompactionSources => {
   const found = (ids: readonly string[], lookup: (id: string) => string | null) =>
-    Effect.sync(
-      () =>
-        new Map(
-          ids.flatMap((id) => {
-            const value = lookup(id);
-            return value === null ? [] : [[id, value] as const];
-          }),
-        ),
+    Effect.succeed(
+      new Map(
+        ids.flatMap((id) => {
+          const value = lookup(id);
+          return value === null ? [] : [[id, value] as const];
+        }),
+      ),
     );
   return {
     toolResultIds: (ids) => found(ids, lookups.toolResultId),

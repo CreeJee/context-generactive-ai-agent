@@ -274,7 +274,7 @@ testAgent()("background result storage failure", (it) => {
         });
         expect(resultWrites).toBe(1);
         expect(yield* Fiber.join(notified)).toEqual([session.id]);
-        expect(tasks.hasSession(session.id)).toBe(false);
+        expect(yield* tasks.hasSession(session.id)).toBe(false);
       }),
   );
 });
@@ -335,7 +335,7 @@ testAgent()("background shell across restart", (it) => {
             timeoutSeconds: 5,
           }),
         );
-        expect(background.hasSession(session.id)).toBe(true);
+        expect(yield* background.hasSession(session.id)).toBe(true);
         expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
           status: "running",
         });
@@ -395,7 +395,7 @@ testAgent()("background cancellation across restart", (it) => {
         receipt.taskId,
       );
       yield* env.reopen;
-      expect((yield* env.use(BackgroundTasks)).hasSession(session.id)).toBe(false);
+      expect(yield* (yield* env.use(BackgroundTasks)).hasSession(session.id)).toBe(false);
       expect(yield* env.use(readResult(session.id, { taskId: receipt.taskId }))).toMatchObject({
         status: "interrupted",
       });

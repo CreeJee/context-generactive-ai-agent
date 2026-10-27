@@ -2356,7 +2356,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!isTruthy(live)) {
           const children =
             (yield* subagents.list(sessionId)).some((child) => child.status === "running") ||
-            background.hasSession(sessionId);
+            (yield* background.hasSession(sessionId));
           if (!children)
             return pendingExecution
               ? json(200, { runId: "", stopped: true, status: "completed" })
@@ -2403,7 +2403,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (!leases.permits(sessionId, holder)) return inUse();
-        if (isTruthy(yield* liveRuns.get(sessionId)) || background.hasSession(sessionId))
+        if (isTruthy(yield* liveRuns.get(sessionId)) || (yield* background.hasSession(sessionId)))
           return json(409, { error: "run_in_progress" });
         const result = yield* uncertain.acknowledge(sessionId, input.runIds);
         return yield* UncertainContinue.$match(result, {

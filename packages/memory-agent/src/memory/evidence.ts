@@ -277,7 +277,7 @@ export const readStructuredEvidence = Effect.fn("Memory.readStructuredEvidence")
       Effect.flatMap(Effect.fromNullishOr),
       Effect.filterOrFail((source) => HashSet.has(allowed, source.projectId)),
     );
-    const page = nodes.page(node, offset);
+    const page = yield* nodes.page(node, offset);
     // A visible source whose provenance cannot be traced is still evidence, reported as untraced.
     const { trace, chain } = yield* visibleTrace(id, allowed).pipe(
       Effect.catchTag("NoSuchElementError", () =>

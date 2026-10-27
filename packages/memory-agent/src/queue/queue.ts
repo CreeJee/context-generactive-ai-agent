@@ -6,9 +6,10 @@ import {
   Crypto,
   Effect,
   Layer,
+  HashMap,
   Match,
-  MutableHashMap,
   Option,
+  Ref,
   Schema,
 } from "effect";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
@@ -67,15 +68,18 @@ export class QueueChangeRefused extends Schema.TaggedError<QueueChangeRefused>()
 
 const SessionMessage = Schema.Struct({ sessionId: Schema.String, id: Schema.String });
 
+/** The next turn each session has selected, by session id. */
+type Reservations = HashMap.HashMap<
+  string,
+  { readonly id: string; readonly holdOnRelease: boolean }
+>;
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   const now = Clock.currentTimeMillis;
-  // Reservations are checked and changed without a yield in between, so no two fibres claim one.
-  const reservations = MutableHashMap.empty<
-    string,
-    { readonly id: string; readonly holdOnRelease: boolean }
-  >();
+  // Reservations are checked and changed in one Ref.modify, so no two fibres claim one.
+  const reservations = yield* Ref.make<Reservations>(HashMap.empty());
   const findOne = SqlSchema.findOneOption({
     Request: SessionMessage,
     Result: Row,
@@ -96,11 +100,8 @@ const make = Effect.gen(function* () {
     );
     yield* Effect.when(
       Effect.fail(QueueChangeRefused.make({ id, reason: "reserved" })),
-      Effect.succeed(
-        Option.exists(
-          MutableHashMap.get(reservations, sessionId),
-          (reserved) => reserved.id === id,
-        ),
+      Effect.map(Ref.get(reservations), (held) =>
+        Option.exists(HashMap.get(held, sessionId), (reserved) => reserved.id === id),
       ),
     );
     yield* Effect.when(
@@ -288,46 +289,44 @@ const make = Effect.gen(function* () {
 
     /** Atomically select and reserve the current head until delivery or explicit release. */
     claimNext: (sessionId: string) =>
-      MutableHashMap.has(reservations, sessionId)
-        ? Effect.succeed(null)
-        : Effect.map(head(sessionId), (row) =>
-            Option.getOrNull(
-              Option.map(
-                Option.filter(
-                  row,
-                  // Checked again after the read: another fibre may have claimed the head meanwhile.
-                  (found) =>
-                    found.state === "waiting" && !MutableHashMap.has(reservations, sessionId),
-                ),
-                (found) => {
-                  const message = toMessage(found);
-                  MutableHashMap.set(reservations, sessionId, {
-                    id: message.id,
-                    holdOnRelease: false,
-                  });
-                  return message;
-                },
+      Effect.gen(function* () {
+        if (HashMap.has(yield* Ref.get(reservations), sessionId)) return null;
+        const row = yield* head(sessionId);
+        return yield* Ref.modify(
+          reservations,
+          (held): readonly [QueuedMessage | null, Reservations] =>
+            Option.match(
+              Option.filter(
+                row,
+                // Checked again after the read: another fibre may have claimed the head meanwhile.
+                (found) => found.state === "waiting" && !HashMap.has(held, sessionId),
               ),
+              {
+                onNone: () => [null, held],
+                onSome: (found) => {
+                  const message = toMessage(found);
+                  return [
+                    message,
+                    HashMap.set(held, sessionId, { id: message.id, holdOnRelease: false }),
+                  ];
+                },
+              },
             ),
-          ),
+        );
+      }),
 
     releaseNext: (sessionId: string, id: string) =>
-      Effect.suspend(() =>
+      Ref.modify(reservations, (held): readonly [boolean, Reservations] =>
         Option.match(
-          Option.filter(
-            MutableHashMap.get(reservations, sessionId),
-            (reservation) => reservation.id === id,
-          ),
+          Option.filter(HashMap.get(held, sessionId), (reservation) => reservation.id === id),
           {
-            onNone: () => Effect.void,
-            onSome: (reservation) => {
-              MutableHashMap.remove(reservations, sessionId);
-              return Effect.asVoid(
-                Effect.when(setState(id, "held"), Effect.succeed(reservation.holdOnRelease)),
-              );
-            },
+            onNone: () => [false, held],
+            onSome: (reservation) => [reservation.holdOnRelease, HashMap.remove(held, sessionId)],
           },
         ),
+      ).pipe(
+        Effect.flatMap((hold) => Effect.when(setState(id, "held"), Effect.succeed(hold))),
+        Effect.asVoid,
       ),
 
     markDelivered: (id: string, via: Exclude<DeliveryVia, "steer">, runId: string | null) =>
@@ -336,9 +335,10 @@ const make = Effect.gen(function* () {
           UPDATE queued_messages SET state = 'delivered', delivered_via = ${via}, run_id = ${runId},
             draft = NULL, updated_at = ${yield* now}
           WHERE id = ${id}`;
-        Array.from(reservations)
-          .filter(([, reservation]) => reservation.id === id)
-          .forEach(([sessionId]) => MutableHashMap.remove(reservations, sessionId));
+        yield* Ref.update(
+          reservations,
+          HashMap.filter((reservation) => reservation.id !== id),
+        );
       }),
 
     markFailed: (id: string, reason: string) =>
@@ -354,14 +354,13 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // A selected next turn is locked until committed or released. Holding it here would allow
         // a different state to be delivered from the content already selected for this request.
-        const reserved = MutableHashMap.get(reservations, sessionId);
-        yield* Option.match(reserved, {
-          onNone: () => Effect.void,
-          onSome: (reservation) =>
-            Effect.sync(() =>
-              MutableHashMap.set(reservations, sessionId, { ...reservation, holdOnRelease: true }),
-            ),
-        });
+        const reserved = yield* Ref.modify(reservations, (held) => [
+          HashMap.get(held, sessionId),
+          HashMap.modify(held, sessionId, (reservation) => ({
+            ...reservation,
+            holdOnRelease: true,
+          })),
+        ]);
         const reservedId = Option.match(reserved, {
           onNone: () => "",
           onSome: (reservation) => reservation.id,

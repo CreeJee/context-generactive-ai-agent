@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Context, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
@@ -32,7 +32,7 @@ const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const scope = yield* Effect.scope;
   const permit = yield* Semaphore.make(1);
-  let started = false;
+  const started = yield* Ref.make(false);
   const version = memoryGraphRepairVersion;
   const meaningful = sql.literal(meaningfulNodeFilter);
   const nonBlankTarget = sql.literal(nonBlankTextSql("target.text"));
@@ -254,20 +254,10 @@ const make = Effect.gen(function* () {
     permit.withPermits(1),
   );
 
-  const start = Effect.suspend(() => {
-    if (started) return Effect.void;
-    started = true;
-    return Effect.forkIn(
-      run.pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            started = false;
-          }),
-        ),
-      ),
-      scope,
-    ).pipe(Effect.asVoid);
-  });
+  const start = Effect.forkIn(run.pipe(Effect.ensuring(Ref.set(started, false))), scope).pipe(
+    Effect.when(Effect.map(Ref.getAndSet(started, true), (was) => !was)),
+    Effect.asVoid,
+  );
   yield* start;
   return {
     run,

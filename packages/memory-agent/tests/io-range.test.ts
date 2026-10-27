@@ -83,12 +83,12 @@ layer(NodeServices.layer)((it) => {
           expect(page?.text).toBe(text.slice(begin, end));
         }
         const seeded = yield* Effect.provideContext(createResultPageReader, context);
-        seeded.remember("r", text);
+        yield* seeded.remember("r", text);
         expect(yield* seeded.read("r", "p", "s", 100003)).toEqual(
           yield* reader.read("r", "p", "s", 100003),
         );
         sqlite.prepare("UPDATE nodes SET text = ? WHERE id = 'r'").run("z".repeat(text.length));
-        seeded.invalidate();
+        yield* seeded.invalidate;
         expect((yield* seeded.read("r", "p", "s", 100003))?.text).toBe("z".repeat(4000));
         sqlite.exec("DELETE FROM nodes");
         expect(yield* seeded.read("r", "p", "s", 0)).toBeNull();

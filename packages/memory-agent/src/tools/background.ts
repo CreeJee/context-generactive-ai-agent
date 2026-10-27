@@ -1,5 +1,5 @@
 import {
-  MutableHashMap,
+  HashMap,
   Cause,
   Clock,
   Context,
@@ -10,6 +10,7 @@ import {
   Layer,
   Option,
   PubSub,
+  Ref,
   Schema,
   Semaphore,
   Stream,
@@ -129,8 +130,9 @@ const make = Effect.gen(function* () {
   const runStore = yield* RunStore;
   const redactor = yield* SecretRedactor;
   const fibers = yield* FiberMap.make<string>();
-  const dispatch = Semaphore.makeUnsafe(1);
-  const sessions = MutableHashMap.empty<string, string>();
+  const dispatch = yield* Semaphore.make(1);
+  /** Each running task's session, by task id. */
+  const sessions = yield* Ref.make(HashMap.empty<string, string>());
   const completions = yield* PubSub.unbounded<string>();
   const loadResult = Effect.fn("BackgroundTasks.loadResult")(function* (taskId: string) {
     const saved = yield* Effect.mapError(runStore.metadata.get(namespace, taskId), (cause) =>
@@ -207,7 +209,7 @@ const make = Effect.gen(function* () {
           threadId: `background-${yield* traceEffect(crypto.randomUUIDv4())}`,
         }),
       );
-      MutableHashMap.set(sessions, handle.taskId, binding.sessionId);
+      yield* Ref.update(sessions, HashMap.set(handle.taskId, binding.sessionId));
       const save = Effect.fn("BackgroundTasks.saveResult")(function* (
         status: typeof SavedResult.Type.status,
         result: string,
@@ -306,11 +308,7 @@ const make = Effect.gen(function* () {
         ),
         Effect.exit,
         Effect.asVoid,
-        Effect.ensuring(
-          Effect.sync(() => {
-            MutableHashMap.remove(sessions, handle.taskId);
-          }),
-        ),
+        Effect.ensuring(Ref.update(sessions, HashMap.remove(handle.taskId))),
       );
       // The attempt beats while the operation runs; a lost fiber stops the beats.
       yield* FiberMap.run(
@@ -419,16 +417,15 @@ const make = Effect.gen(function* () {
     }),
     /** The session of each task as it settles. */
     completions: Stream.fromPubSub(completions),
-    hasSession(sessionId: string) {
-      return [...MutableHashMap.values(sessions)].includes(sessionId);
-    },
+    hasSession: (sessionId: string) =>
+      Effect.map(Ref.get(sessions), (running) => HashMap.some(running, (id) => id === sessionId)),
     stopTask(taskId: string) {
       return FiberMap.remove(fibers, taskId);
     },
     stopSession: Effect.fn("BackgroundTasks.stopSession")(function* (sessionId: string) {
       yield* Effect.forEach(
-        [...sessions].filter(([, id]) => id === sessionId),
-        ([taskId]) => FiberMap.remove(fibers, taskId),
+        HashMap.keys(HashMap.filter(yield* Ref.get(sessions), (id) => id === sessionId)),
+        (taskId) => FiberMap.remove(fibers, taskId),
         { concurrency: "unbounded", discard: true },
       );
     }),

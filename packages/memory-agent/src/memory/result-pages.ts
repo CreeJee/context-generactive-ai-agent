@@ -1,4 +1,4 @@
-import { Effect, MutableHashMap, Option, Schema } from "effect";
+import { Effect, Ref, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { EvidencePage } from "./nodes.ts";
 
@@ -24,6 +24,12 @@ interface TextIndex {
   readonly length: number;
   readonly points: readonly Checkpoint[];
 }
+interface Cache {
+  /** Moves on at every invalidation, so a read that spanned one fails as changed. */
+  readonly generation: number;
+  /** Oldest first. */
+  readonly indexes: ReadonlyArray<readonly [string, TextIndex]>;
+}
 
 /**
  * Append-only node text. Cache IDs are strings; no schema migration or persisted copy is needed.
@@ -41,15 +47,16 @@ export const createResultPageReader = Effect.gen(function* () {
     sql`SELECT substr(CAST(text AS BLOB), ${start}, ${length}) AS bytes FROM nodes
       WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
         AND session_id = ${sessionId}`.pipe(Effect.mapError(failed));
-  const cache = MutableHashMap.empty<string, TextIndex>();
+  const cache = yield* Ref.make<Cache>({ generation: 0, indexes: [] });
   /** Caches the index; past 32 entries, the earliest cached go first. */
-  const cacheIndex = (id: string, index: TextIndex) => {
-    MutableHashMap.set(cache, id, index);
-    Array.from(MutableHashMap.keys(cache))
-      .slice(0, -32)
-      .forEach((old) => MutableHashMap.remove(cache, old));
-  };
-  let generation = 0;
+  const withIndex = (state: Cache, id: string, index: TextIndex): Cache => ({
+    ...state,
+    indexes: [...state.indexes.filter(([cached]) => cached !== id), [id, index] as const].slice(
+      -32,
+    ),
+  });
+  const changed = () =>
+    ResultPageReadFailed.make({ reason: ResultPageReadReason.cases.Changed.make({}) });
   const read = Effect.fnUntraced(function* (
     id: string,
     projectId: string,
@@ -91,7 +98,7 @@ export const createResultPageReader = Effect.gen(function* () {
     sessionId: string,
     offset: number,
   ): Effect.fn.Return<EvidencePage | null, ResultPageReadFailed> {
-    const started = generation;
+    const { generation: started, indexes } = yield* Ref.get(cache);
     // Authorization happens before text retrieval, including for cached indexes and deleted nodes.
     const [row] = yield* metadata(id, projectId, sessionId);
     if (row === undefined) return null;
@@ -102,7 +109,7 @@ export const createResultPageReader = Effect.gen(function* () {
         }),
       ),
     );
-    let index = Option.getOrUndefined(MutableHashMap.get(cache, id));
+    let index = indexes.find(([cached]) => cached === id)?.[1];
     if (index?.size !== size) {
       const points: Checkpoint[] = [];
       let byte = 0;
@@ -115,12 +122,13 @@ export const createResultPageReader = Effect.gen(function* () {
         byte += part.bytes;
         yield* Effect.yieldNow;
       }
-      if (generation !== started)
-        return yield* ResultPageReadFailed.make({
-          reason: ResultPageReadReason.cases.Changed.make({}),
-        });
-      index = { size, length, points };
-      cacheIndex(id, index);
+      const built = { size, length, points };
+      // Cached only when nothing changed meanwhile, checked and cached in one step.
+      const unchanged = yield* Ref.modify(cache, (state) =>
+        state.generation === started ? [true, withIndex(state, id, built)] : [false, state],
+      );
+      if (!unchanged) return yield* changed();
+      index = built;
     }
     const start = Math.min(Math.max(0, Math.trunc(offset)), index.length);
     let point: Checkpoint = { byte: 0, offset: 0 };
@@ -141,10 +149,7 @@ export const createResultPageReader = Effect.gen(function* () {
     const last = text.charCodeAt(end - 1);
     if (start + end - begin < index.length && end - begin > 1 && last >= 0xd800 && last <= 0xdbff)
       end--;
-    if (generation !== started)
-      return yield* ResultPageReadFailed.make({
-        reason: ResultPageReadReason.cases.Changed.make({}),
-      });
+    if ((yield* Ref.get(cache)).generation !== started) return yield* changed();
     return {
       id,
       kind: "tool_result",
@@ -156,12 +161,9 @@ export const createResultPageReader = Effect.gen(function* () {
   });
   return {
     read: readPage,
-    invalidate(this: void) {
-      generation++;
-      MutableHashMap.clear(cache);
-    },
+    invalidate: Ref.update(cache, (state) => ({ generation: state.generation + 1, indexes: [] })),
     /** Saving already has the complete redacted string. Index it here, before any page is asked for. */
-    remember(id: string, text: string) {
+    remember: (id: string, text: string) => {
       const points: Checkpoint[] = text.length === 0 ? [] : [{ byte: 0, offset: 0 }];
       let byte = 0;
       let blockStart = 0;
@@ -174,7 +176,9 @@ export const createResultPageReader = Effect.gen(function* () {
           blockStart = byte;
         }
       }
-      cacheIndex(id, { size: byte, length: text.length, points });
+      return Ref.update(cache, (state) =>
+        withIndex(state, id, { size: byte, length: text.length, points }),
+      );
     },
   };
 });

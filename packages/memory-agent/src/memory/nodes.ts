@@ -278,7 +278,7 @@ const make = Effect.gen(function* () {
           created_at: createdAt,
         })} RETURNING *`;
         const node = nodeOfRow(yield* Schema.decodeUnknownEffect(NodeRow)(inserted));
-        if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
+        if (node.kind === "tool_result") yield* resultPages.remember(node.id, node.text);
         // Only the first accepted, redacted user message names a local conversation.
         if (
           input.kind === "user" &&
@@ -326,10 +326,14 @@ const make = Effect.gen(function* () {
       }).pipe(sql.withTransaction),
     );
 
-  function page(node: Node, offset = 0): EvidencePage {
-    if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
-    return { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) };
-  }
+  const page = (node: Node, offset = 0): Effect.Effect<EvidencePage> =>
+    Effect.as(
+      Effect.when(
+        resultPages.remember(node.id, node.text),
+        Effect.succeed(node.kind === "tool_result"),
+      ),
+      { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) },
+    );
   const found = Effect.map(Option.match({ onNone: () => null, onSome: nodeOfRow }));
 
   return {
@@ -408,8 +412,11 @@ const make = Effect.gen(function* () {
     read: (id: string, offset = 0) =>
       stored(
         one(id).pipe(
-          Effect.map(
-            Option.match({ onNone: () => null, onSome: (row) => page(nodeOfRow(row), offset) }),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(null),
+              onSome: (row) => page(nodeOfRow(row), offset),
+            }),
           ),
         ),
       ),

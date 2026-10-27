@@ -200,7 +200,7 @@ const make = (options: ReportDeliveryOptions) =>
       }),
     );
 
-    const status = Effect.sync(() =>
+    const status = Effect.succeed(
       WebhookConfig.$match(config, {
         missing: () => ({ configured: false, webhookIdSuffix: null }),
         invalid: () => ({ configured: false, webhookIdSuffix: null }),

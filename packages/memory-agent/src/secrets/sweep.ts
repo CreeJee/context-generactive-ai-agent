@@ -250,10 +250,7 @@ const make = (running: boolean) =>
               // the index and the table disagreeing on size, which reopening detects and rebuilds.
               vectors
                 .remove(changed.map((row) => row.seq))
-                .pipe(
-                  Effect.andThen(vectors.save),
-                  Effect.andThen(Effect.sync(() => nodes.invalidateResultPages())),
-                ),
+                .pipe(Effect.andThen(vectors.save), Effect.andThen(nodes.invalidateResultPages)),
               Effect.succeed(changed.length > 0),
             );
             yield* stored(

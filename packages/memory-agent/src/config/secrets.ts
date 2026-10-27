@@ -1,4 +1,4 @@
-import { MutableHashMap, Option, Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { HashMap, Option, Context, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
 import { type KeyringEntry, type KeyringFailure, openKeyringEntry } from "../runtime/keyring.ts";
 
 /** Keychain service name every secret of this app is stored under. */
@@ -53,13 +53,13 @@ export class SecretStore extends Context.Service<SecretStore, SecretStoreApi>()(
   static readonly keychain = Layer.effect(SecretStore, keychain);
 
   /** Kept in memory only, for tests. */
-  static readonly memory = Layer.sync(SecretStore, () => {
-    const values = MutableHashMap.empty<SecretName, string>();
-    return {
+  static readonly memory = Layer.effect(
+    SecretStore,
+    Effect.map(Ref.make(HashMap.empty<SecretName, string>()), (values): SecretStoreApi => ({
       get: (name) =>
-        Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(values, name)) ?? null),
-      set: (name, value) => Effect.sync(() => void MutableHashMap.set(values, name, value)),
-      remove: (name) => Effect.sync(() => void MutableHashMap.remove(values, name)),
-    };
-  });
+        Effect.map(Ref.get(values), (stored) => Option.getOrNull(HashMap.get(stored, name))),
+      set: (name, value) => Ref.update(values, HashMap.set(name, value)),
+      remove: (name) => Ref.update(values, HashMap.remove(name)),
+    })),
+  );
 }

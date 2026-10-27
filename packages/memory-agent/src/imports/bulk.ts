@@ -111,7 +111,6 @@ const make = Effect.gen(function* () {
       let userNodeId = yield* idOf(lastUser(sessionId));
       let assistantNodeId = yield* idOf(answerInOpenTurn(sessionId));
       let written = 0;
-      let repeated = 0;
 
       const append = Effect.fnUntraced(function* (
         kind: NodeKind,
@@ -167,75 +166,72 @@ const make = Effect.gen(function* () {
         Effect.flatMap(
           alreadyImported({ source, externalId }),
           Option.match({
-            onSome: () =>
-              Effect.sync(() => {
-                repeated += 1;
-              }),
-            onNone: () => writeItem,
+            onSome: () => Effect.succeed(true),
+            onNone: () => Effect.as(writeItem, false),
           }),
         );
 
-      yield* Effect.forEach(
-        migration.items,
-        (item) =>
-          Match.valueTags(item, {
-            session: () => Effect.void,
-            ignored: () => Effect.void,
-            message: (item) =>
-              once(
-                item.externalId,
-                Effect.gen(function* () {
-                  const id = yield* append(item.role, item.text, item.at, item.externalId, {});
-                  if (item.role === "user") {
-                    userNodeId = id;
-                    assistantNodeId = null;
-                    return;
-                  }
-                  yield* link(id, userNodeId, "reply", item.at);
-                  assistantNodeId = id;
-                }),
-              ),
-            tool_call: (item) =>
-              once(
-                item.externalId,
-                Effect.gen(function* () {
-                  const calledBy = yield* assistantFor(item.at);
-                  const id = yield* append("tool_call", item.text, item.at, item.externalId, {
-                    toolName: item.toolName,
-                    toolCallId: item.toolCallId,
-                  });
-                  yield* link(calledBy, id, "calls", item.at);
-                  yield* Effect.forEach(
-                    EffectArray.dedupe(item.refs),
-                    (ref) =>
-                      Effect.gen(function* () {
-                        const earlier = yield* idOf(latestWithRef({ ref, projectId }));
-                        yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
-                        yield* link(id, earlier, "touches", item.at);
-                      }),
-                    { discard: true },
-                  );
-                }),
-              ),
-            tool_result: (item) =>
-              once(
-                item.externalId,
-                Effect.gen(function* () {
-                  const called = Option.getOrNull(
-                    yield* callNode({ sessionId, toolCallId: item.toolCallId }),
-                  );
-                  const id = yield* append("tool_result", item.text, item.at, item.externalId, {
-                    toolName: called?.tool_name ?? undefined,
-                    toolCallId: item.toolCallId,
-                    ok: item.ok,
-                  });
-                  yield* link(called?.id ?? null, id, "returns", item.at);
-                }),
-              ),
-          }),
-        { discard: true },
+      const repeats = yield* Effect.forEach(migration.items, (item) =>
+        Match.valueTags(item, {
+          session: () => Effect.succeed(false),
+          ignored: () => Effect.succeed(false),
+          message: (item) =>
+            once(
+              item.externalId,
+              Effect.gen(function* () {
+                const id = yield* append(item.role, item.text, item.at, item.externalId, {});
+                if (item.role === "user") {
+                  userNodeId = id;
+                  assistantNodeId = null;
+                  return;
+                }
+                yield* link(id, userNodeId, "reply", item.at);
+                assistantNodeId = id;
+              }),
+            ),
+          tool_call: (item) =>
+            once(
+              item.externalId,
+              Effect.gen(function* () {
+                const calledBy = yield* assistantFor(item.at);
+                const id = yield* append("tool_call", item.text, item.at, item.externalId, {
+                  toolName: item.toolName,
+                  toolCallId: item.toolCallId,
+                });
+                yield* link(calledBy, id, "calls", item.at);
+                yield* Effect.forEach(
+                  EffectArray.dedupe(item.refs),
+                  (ref) =>
+                    Effect.gen(function* () {
+                      const earlier = yield* idOf(latestWithRef({ ref, projectId }));
+                      yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
+                      yield* link(id, earlier, "touches", item.at);
+                    }),
+                  { discard: true },
+                );
+              }),
+            ),
+          tool_result: (item) =>
+            once(
+              item.externalId,
+              Effect.gen(function* () {
+                const called = Option.getOrNull(
+                  yield* callNode({ sessionId, toolCallId: item.toolCallId }),
+                );
+                const id = yield* append("tool_result", item.text, item.at, item.externalId, {
+                  toolName: called?.tool_name ?? undefined,
+                  toolCallId: item.toolCallId,
+                  ok: item.ok,
+                });
+                yield* link(called?.id ?? null, id, "returns", item.at);
+              }),
+            ),
+        }),
       );
-      return { written, repeated } satisfies MigrationCount;
+      return {
+        written,
+        repeated: repeats.filter((repeat) => repeat).length,
+      } satisfies MigrationCount;
     }).pipe(
       sql.withTransaction,
       Effect.mapError((cause) => BulkWriteFailed.make({ cause })),
