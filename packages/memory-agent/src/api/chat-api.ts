@@ -118,12 +118,13 @@ export class SameSite extends HttpApiMiddleware.Service<SameSite>()(
 ) {}
 
 /** The page's answer to one interrupt of the run it resumes. */
-const ResumeEntry = Schema.Struct({
+export const ResumeEntry = Schema.Struct({
   interruptId: Schema.String,
   status: Schema.Literals(["resolved", "cancelled"]),
   payload: Schema.optionalKey(JsonValue),
   metadata: Schema.optionalKey(Schema.Record(Schema.String, JsonValue)),
 });
+export type ResumeEntry = typeof ResumeEntry.Type;
 
 /** A user message the page sends, with the content the thread stores. */
 const UserMessage = Schema.Struct({

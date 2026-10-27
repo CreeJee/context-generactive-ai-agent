@@ -42,6 +42,28 @@ export const viewOf = (snapshot: ChatSnapshot): ChatView => ({
   streamed: HashSet.empty(),
 });
 
+/**
+ * The view with `snapshot`, the newest page read again after a run. The older messages the page
+ * read before it stay, unless the newest page no longer reaches them.
+ */
+export const caughtUp: {
+  (snapshot: ChatSnapshot): (view: ChatView) => ChatView;
+  (view: ChatView, snapshot: ChatSnapshot): ChatView;
+} = EffectFunction.dual(2, (view: ChatView, snapshot: ChatSnapshot): ChatView => {
+  const kept = Option.flatMap(Arr.head(snapshot.messages), (first) =>
+    Arr.findFirstIndex(view.messages, (message) => message.id === first.id),
+  ).pipe(
+    Option.filter((index) => index > 0),
+    Option.map((index) => view.messages.slice(0, index)),
+  );
+  return {
+    ...viewOf(snapshot),
+    messages: [...Option.getOrElse(kept, () => []), ...snapshot.messages],
+    older: Option.isSome(kept) ? view.older : snapshot.older,
+    failure: view.failure,
+  };
+});
+
 /** The view once the page reads a new stream; a reconnect keeps what it has written. */
 export const streamStarted = (view: ChatView): ChatView => ({ ...view, streamed: HashSet.empty() });
 
