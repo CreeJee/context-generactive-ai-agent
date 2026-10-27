@@ -5,7 +5,11 @@ import { Effect } from "effect";
 import { describe, expect } from "vite-plus/test";
 import type { ProviderToolConfig } from "../../src/providers/provider-tools.ts";
 import { providerTools } from "../../src/providers/provider-tools.ts";
-import { toolRequestDifferences } from "../support/requests.ts";
+import {
+  matchGolden,
+  subscriptionToolRequestBodies,
+  toolRequestDifferences,
+} from "../support/requests.ts";
 
 /**
  * The subscription endpoints get each provider tool as the function tool TanStack sent for it
@@ -104,5 +108,13 @@ describe("provider tools", () => {
           { provider: "openai", difference: undefined },
         ]);
     }),
+  );
+
+  it.effect("are in the golden requests", () =>
+    matchGolden("./__golden__/provider-tools.json")(
+      [openAICases, anthropicCases, fallbackCases].map((cases) =>
+        subscriptionToolRequestBodies(cases.map(([, tool]) => tool)),
+      ),
+    ),
   );
 });

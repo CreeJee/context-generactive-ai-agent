@@ -1,11 +1,12 @@
 // Native SDK boundary: the TanStack side runs the real `chat()` with a client that only records
 // the request body, so both sides are compared on what would go over the wire.
 import { chat, toolDefinition, type AnyTool, type ModelMessage } from "@tanstack/ai";
-import { Cause, Context, Effect, Layer, Predicate, Stream } from "effect";
+import { Cause, Context, Effect, Layer, Predicate, Schema, Stream } from "effect";
 import { Tool } from "effect/ai";
+import { expect } from "vite-plus/test";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import { GlobalConfig, type Settings } from "../../src/config/global-config.ts";
-import type { JsonValue } from "../../src/json.ts";
+import { JsonValue } from "../../src/json.ts";
 import {
   compatibleRequest,
   compatibleTarget,
@@ -378,3 +379,69 @@ export const runToolRequestDifferences = ({
       yield* compatibleToolRequestDifference({ chatTools, modelTools }),
     ];
   });
+
+/**
+ * Whether `value` is the golden file at `path`, relative to the test file: the requests the
+ * comparisons above proved equal, kept for when TanStack is gone.
+ */
+export const matchGolden = (path: string) => (value: JsonValue) =>
+  Effect.flatMap(encodeGolden(value), (text) =>
+    Effect.promise(() => expect(`${text}\n`).toMatchFileSnapshot(path)),
+  );
+
+const encodeGolden = Schema.encodeEffect(Schema.fromJsonString(JsonValue, { space: 2 }));
+
+const subscriptionBodies = (
+  threadId: string,
+  stored: ReadonlyArray<StoredMessage>,
+  modelTools: ReadonlyArray<Tool.Any>,
+): JsonValue =>
+  Object.fromEntries(
+    selections.map((selection) => [
+      selection.provider,
+      parseBody(effectBody(selection, threadId, stored, modelTools)),
+    ]),
+  );
+
+const compatibleBody = (
+  stored: ReadonlyArray<StoredMessage>,
+  modelTools: ReadonlyArray<Tool.Any>,
+) =>
+  Effect.map(effectCompatibleBody(stored, modelTools), (body) =>
+    body === undefined ? null : parseBody(body),
+  );
+
+/**
+ * The request the Effect AI model sends each provider to continue a thread that reads `stored`;
+ * the compatible one is null when the model refused it. `next` must already end the thread.
+ */
+export const requestBodies = ({
+  threadId,
+  stored,
+}: {
+  readonly threadId: string;
+  readonly stored: ReadonlyArray<StoredMessage>;
+}) =>
+  Effect.map(compatibleBody(stored, effectTools), (compatible) => ({
+    subscription: subscriptionBodies(threadId, stored, effectTools),
+    compatible,
+  }));
+
+/** The request each subscription provider gets for a one-message thread that offers `modelTools`. */
+export const subscriptionToolRequestBodies = (modelTools: ReadonlyArray<Tool.Any>) =>
+  subscriptionBodies("thread-1", [next], modelTools);
+
+/** The same for every provider; the compatible one is null when the model refused it. */
+export const toolRequestBodies = (modelTools: ReadonlyArray<Tool.Any>) =>
+  Effect.map(compatibleBody([next], modelTools), (compatible) => ({
+    subscription: subscriptionToolRequestBodies(modelTools),
+    compatible,
+  }));
+
+/** The requests for a tool set as the loop offers it, lazy ones by name. */
+export const runToolRequestBodies = (runTools: ReadonlyArray<RunTool>) =>
+  Effect.flatMap(lazyToolsFor(runTools, []), (lazyTools) =>
+    Effect.flatMap(lazyTools.offered, (offered) =>
+      toolRequestBodies(offered.map((tool) => tool.tool)),
+    ),
+  );

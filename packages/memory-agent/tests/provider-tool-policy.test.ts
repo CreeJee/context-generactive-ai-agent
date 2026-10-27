@@ -3,7 +3,11 @@ import { it as effectTest } from "@effect/vitest";
 import { Deferred, Effect, Result, Fiber, FileSystem, Layer, Path } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
-import { toolRequestDifferences } from "./support/requests.ts";
+import {
+  matchGolden,
+  subscriptionToolRequestBodies,
+  toolRequestDifferences,
+} from "./support/requests.ts";
 import {
   ProviderToolCapabilityRegistry,
   makeProviderToolCapabilityRegistry,
@@ -547,6 +551,9 @@ describe("ProviderToolRuntime", () => {
           { provider: "anthropic", difference: undefined },
           { provider: "openai", difference: undefined },
         ]);
+        yield* matchGolden("./__golden__/provider-tool-policy.json")(
+          subscriptionToolRequestBodies([...openai, ...anthropic].map((entry) => entry.modelTool)),
+        );
       }).pipe(withTestPlatform),
   );
 

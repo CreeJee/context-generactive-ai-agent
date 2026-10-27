@@ -6,7 +6,11 @@ import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { openPage, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
+import {
+  matchGolden,
+  runToolRequestBodies,
+  runToolRequestDifferences,
+} from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -185,6 +189,10 @@ testAgent()("MCP servers of a project", (it) => {
         expect(
           yield* runToolRequestDifferences({ chatTools: chat.tools, runTools: run.tools }),
         ).toEqual([undefined, undefined, undefined]);
+        yield* Effect.flatMap(
+          runToolRequestBodies(run.tools),
+          matchGolden("./__golden__/mcp.json"),
+        );
         expect(run.guides).toEqual(chat.guides);
         const name = mcpToolName("fake", "echo");
         const echo = chat.tools.find((tool) => tool.name === name);

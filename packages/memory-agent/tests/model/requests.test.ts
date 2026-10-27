@@ -1,10 +1,18 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Array as Arr, Effect, FileSystem, Path, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StoredMessage } from "../../src/chat-store/schema.ts";
+import { JsonValue } from "../../src/json.ts";
 import { fromPrompt, toPrompt } from "../../src/model/prompt.ts";
-import { asTanStack, next, requestDifferences, system } from "../support/requests.ts";
+import {
+  asTanStack,
+  matchGolden,
+  next,
+  requestBodies,
+  requestDifferences,
+  system,
+} from "../support/requests.ts";
 
 /**
  * The Effect AI model sends what the TanStack adapter sent for every stored conversation, and its
@@ -30,14 +38,17 @@ const goldenHistories = Effect.gen(function* () {
   const files = yield* Effect.forEach(names.toSorted(), (name) =>
     Effect.map(
       Effect.flatMap(fs.readFileString(path.join(directory, name)), decodeGolden),
-      (golden) => ({ name, golden }),
+      (golden) => ({ name: path.basename(name, ".json"), golden }),
     ),
   );
   return files.flatMap(({ name, golden: { threads = [], history = [] } }) => [
-    ...threads.map((thread) => ({ name: `${name} thread`, history: thread.messages })),
+    ...threads.map((thread) => ({
+      name: `${name} thread ${thread.thread_id}`,
+      history: thread.messages,
+    })),
     // The screen history of a thread, group after group, is a longer history of the same shapes.
     ...[...new Set(history.map((group) => group.thread_id))].map((threadId) => ({
-      name: `${name} history`,
+      name: `${name} history ${threadId}`,
       history: history
         .filter((group) => group.thread_id === threadId)
         .flatMap((group) => group.messages),
@@ -223,6 +234,10 @@ const cases: ReadonlyArray<{ readonly name: string; readonly history: Array<Stor
 
 const allHistories = Effect.map(goldenHistories, (golden) => [...golden, ...cases]);
 
+const sameBodies = Schema.toEquivalence(JsonValue);
+const goldenFile = (name: string) =>
+  `./__golden__/requests/${name.replace(/\W+/g, " ").trim().replaceAll(" ", "-")}.json`;
+
 describe("Effect AI subscription and compatible models", () => {
   it.effect("keeps every stored message through the prompt", () =>
     Effect.gen(function* () {
@@ -250,5 +265,25 @@ describe("Effect AI subscription and compatible models", () => {
         ]);
       }
     }),
+  );
+
+  // A screen history that sends what its thread sends adds nothing, so each request is kept once.
+  it.effect("sends the requests in the golden files", () =>
+    allHistories.pipe(
+      Effect.flatMap(
+        Effect.forEach(({ name, history }) =>
+          Effect.map(
+            requestBodies({ threadId: "thread-1", stored: [...history, next] }),
+            (bodies) => ({ name, bodies }),
+          ),
+        ),
+      ),
+      Effect.map(Arr.dedupeWith((a, b) => sameBodies(a.bodies, b.bodies))),
+      Effect.flatMap(
+        Effect.forEach(({ name, bodies }) => matchGolden(goldenFile(name))(bodies), {
+          discard: true,
+        }),
+      ),
+    ),
   );
 });

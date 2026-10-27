@@ -9,7 +9,12 @@ import {
 } from "../../src/tools/definitions.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 import { toToolSchema } from "../../src/tools/schema.ts";
-import { compatibleToolRequestDifference, toolRequestDifferences } from "../support/requests.ts";
+import {
+  compatibleToolRequestDifference,
+  matchGolden,
+  toolRequestBodies,
+  toolRequestDifferences,
+} from "../support/requests.ts";
 
 /**
  * A tool written with an Effect Schema reaches every provider with the parameters TanStack sent
@@ -52,5 +57,9 @@ describe("tool parameters", () => {
         yield* compatibleToolRequestDifference({ chatTools: chatTools(), modelTools }),
       ).toBeUndefined();
     }),
+  );
+
+  it.effect("are in the golden requests", () =>
+    Effect.flatMap(toolRequestBodies(modelTools), matchGolden("./__golden__/tool-schema.json")),
   );
 });

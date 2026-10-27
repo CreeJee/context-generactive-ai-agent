@@ -8,7 +8,12 @@ import { discoveryToolName, lazyToolsFor, ToolLookup } from "../../src/tools/dis
 import { lazily } from "../../src/tools/lazy.ts";
 import { runTool, type RunTool } from "../../src/tools/run-tool.ts";
 import { toToolSchema } from "../../src/tools/schema.ts";
-import { compatibleToolRequestDifference, toolRequestDifferences } from "../support/requests.ts";
+import {
+  compatibleToolRequestDifference,
+  matchGolden,
+  runToolRequestBodies,
+  toolRequestDifferences,
+} from "../support/requests.ts";
 
 /**
  * Lazy tools are offered, discovered and refused as TanStack's lazy tool manager did
@@ -54,6 +59,10 @@ describe("lazy tools", () => {
         yield* compatibleToolRequestDifference({ chatTools: chatTools(), modelTools }),
       ).toBeUndefined();
     }),
+  );
+
+  it.effect("offer the golden requests before anything is discovered", () =>
+    Effect.flatMap(runToolRequestBodies(tools), matchGolden("./__golden__/discovery.json")),
   );
 
   it.effect("answer a discovery call and offer what it found from then on", () =>
