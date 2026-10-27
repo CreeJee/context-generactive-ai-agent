@@ -145,10 +145,12 @@ if (folderArgument === "acp") {
       ),
     ),
   );
-  const connection = startAcpAgent({
-    api,
-    stream: ndJsonStream(writable, readable),
-  });
+  const connection = await Effect.runPromise(
+    startAcpAgent({
+      api,
+      stream: ndJsonStream(writable, readable),
+    }),
+  );
   await connection.closed;
 } else {
   const storageRoot = Option.getOrElse(commandLine.storage, () => defaultStorageRoot);

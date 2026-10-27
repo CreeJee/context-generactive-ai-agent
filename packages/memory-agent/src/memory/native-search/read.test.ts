@@ -57,7 +57,7 @@ it(
             const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-read-" });
             const databasePath = paths.join(directory, "fixture.sqlite");
             const db = yield* Effect.acquireRelease(
-              Effect.sync(() => createApplicationReadFixture(databasePath)),
+              createApplicationReadFixture(databasePath),
               (connection) => Effect.sync(() => connection.close()),
             );
             const legacy = legacyFixtureChannels(db);

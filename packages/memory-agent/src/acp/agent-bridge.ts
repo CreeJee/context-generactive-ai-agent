@@ -6,9 +6,10 @@ import {
   MutableHashSet,
   HashMap,
   MutableHashMap,
-  Context,
+  Crypto,
   Effect,
   Fiber,
+  FileSystem,
   Layer,
   Match,
   Stream,
@@ -16,8 +17,8 @@ import {
 import { FetchHttpClient } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { isTruthy } from "../truthy.ts";
-import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import { oauthProtocolFileSystem } from "../oauth/node-runtime.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
   AgentContext,
@@ -272,16 +273,14 @@ const replayed = (message: ChatMessage) =>
     (): ReadonlyArray<SessionUpdate> => [],
   );
 
-/** The agent side of ACP for editors such as Zed, backed by the running app (R17). */
-export function startAcpAgent(options: {
+const makeAcpAgent = Effect.fnUntraced(function* (options: {
   readonly stream: AcpStream;
   readonly api: AppApi;
-}): acp.AgentConnection {
+}) {
   const { api } = options;
-  // The bridge runs in its own process, outside the app's services.
-  const redactor = Effect.runSync(
-    Effect.scoped(Effect.map(Layer.build(SecretRedactor.layer), Context.get(SecretRedactor))),
-  );
+  const redactor = yield* SecretRedactor;
+  const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
   const editorError = toEditorError(redactor);
   const sessions = MutableHashMap.empty<string, BridgeSession>();
 
@@ -346,13 +345,7 @@ export function startAcpAgent(options: {
     );
 
   /** The app's chat API. Its calls go through the bridge's fetch (`withAppFetch`). */
-  const { chat } = Effect.runSync(
-    Effect.scoped(
-      Effect.flatMap(Layer.build(FetchHttpClient.layer), (http) =>
-        Effect.provideContext(HttpApiClient.make(ChatApi, { baseUrl: api.baseUrl }), http),
-      ),
-    ),
-  );
+  const { chat } = yield* HttpApiClient.make(ChatApi, { baseUrl: api.baseUrl });
   const withAppFetch = Effect.provideService(FetchHttpClient.Fetch, api.fetcher);
 
   /** Starts one run of a turn and forwards its events; the approvals it ends waiting for. */
@@ -361,7 +354,7 @@ export function startAcpAgent(options: {
       const events = yield* chat.run({
         params: { session: session.id },
         headers: { "x-session-holder": session.holder },
-        payload: { runId: yield* oauthProtocolCrypto.randomUUIDv7(), ...input },
+        payload: { runId: yield* crypto.randomUUIDv7(), ...input },
       });
       return yield* events.pipe(
         Stream.map(({ data }) => data),
@@ -407,7 +400,7 @@ export function startAcpAgent(options: {
     );
 
   const open = Effect.fn("AcpAgent.open")(function* (sessionId: string, project: ProjectSummary) {
-    const holder = `acp-${yield* oauthProtocolCrypto.randomUUIDv4()}`;
+    const holder = `acp-${yield* crypto.randomUUIDv4()}`;
     const lease = yield* api.lease(sessionId, holder, "claim");
     if (lease.state !== "mine")
       return yield* AppRequestFailed.make({
@@ -434,7 +427,7 @@ export function startAcpAgent(options: {
   });
 
   const projectFor = Effect.fn("AcpAgent.projectFor")(function* (cwd: string) {
-    const root = yield* oauthProtocolFileSystem
+    const root = yield* fileSystem
       .realPath(cwd)
       .pipe(
         Effect.mapError(() =>
@@ -480,43 +473,38 @@ export function startAcpAgent(options: {
   /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = MutableHashSet.empty<string>();
-    const timer = Effect.runFork(
-      Effect.gen(function* () {
-        const approvals = yield* api.approvals(session.id);
-        yield* Effect.forEach(
-          approvals,
-          (approval) => {
-            if (MutableHashSet.has(asked, approval.id)) return Effect.void;
-            MutableHashSet.add(asked, approval.id);
-            return askEditor(turn, session.id, {
-              toolCallId: approval.id,
-              toolName: approval.toolName,
-              argumentsJson: approval.argumentsJson,
-              requester: requesterLabel(approval.requester),
-            }).pipe(
-              Effect.flatMap((approved) =>
-                api.answerApproval(session.id, session.holder, approval.id, approved),
-              ),
-              // An unanswered approval stays pending in the app, where the page can answer it.
-              Effect.catchTag(["UnknownError", "AppRequestFailed"], () => Effect.void),
-            );
-          },
-          { concurrency: "unbounded", discard: true },
-        );
-      }).pipe(
-        // A failed poll is retried with backoff. When the retries run out, or on a defect, relaying
-        // stops for this turn; the waiting approvals stay answerable in the app (decided 2026-10-18).
-        superviseLoopStep({ message: "acp_approval_relay_stopped", setHealth: () => Effect.void }),
-        Effect.repeat({
-          schedule: Schedule.spaced(relayPollMs),
-          while: LoopStep.$is("Continued"),
-        }),
-        Effect.delay(relayPollMs),
-      ),
+    return Effect.gen(function* () {
+      const approvals = yield* api.approvals(session.id);
+      yield* Effect.forEach(
+        approvals,
+        (approval) => {
+          if (MutableHashSet.has(asked, approval.id)) return Effect.void;
+          MutableHashSet.add(asked, approval.id);
+          return askEditor(turn, session.id, {
+            toolCallId: approval.id,
+            toolName: approval.toolName,
+            argumentsJson: approval.argumentsJson,
+            requester: requesterLabel(approval.requester),
+          }).pipe(
+            Effect.flatMap((approved) =>
+              api.answerApproval(session.id, session.holder, approval.id, approved),
+            ),
+            // An unanswered approval stays pending in the app, where the page can answer it.
+            Effect.catchTag(["UnknownError", "AppRequestFailed"], () => Effect.void),
+          );
+        },
+        { concurrency: "unbounded", discard: true },
+      );
+    }).pipe(
+      // A failed poll is retried with backoff. When the retries run out, or on a defect, relaying
+      // stops for this turn; the waiting approvals stay answerable in the app (decided 2026-10-18).
+      superviseLoopStep({ message: "acp_approval_relay_stopped", setHealth: () => Effect.void }),
+      Effect.repeat({
+        schedule: Schedule.spaced(relayPollMs),
+        while: LoopStep.$is("Continued"),
+      }),
+      Effect.delay(relayPollMs),
     );
-    return () => {
-      void runNativeEffect(Fiber.interrupt(timer));
-    };
   };
 
   const app = acp
@@ -602,12 +590,12 @@ export function startAcpAgent(options: {
             failure: null,
           };
           session.turn = turn;
-          const stopRelay = relayApprovals(session, turn);
+          const relay = yield* Effect.forkChild(relayApprovals(session, turn));
           return yield* Effect.gen(function* () {
             yield* runOnce(session, turn, {
               messages: [
                 {
-                  id: yield* oauthProtocolCrypto.randomUUIDv7(),
+                  id: yield* crypto.randomUUIDv7(),
                   role: "user",
                   content: promptText(ctx.params.prompt),
                 },
@@ -626,10 +614,13 @@ export function startAcpAgent(options: {
             return { stopReason: "end_turn" as const satisfies StopReason };
           }).pipe(
             Effect.ensuring(
-              Effect.sync(() => {
-                stopRelay();
-                session.turn = null;
-              }),
+              Fiber.interrupt(relay).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    session.turn = null;
+                  }),
+                ),
+              ),
             ),
           );
         }).pipe(Effect.catch(editorError)),
@@ -662,4 +653,21 @@ export function startAcpAgent(options: {
     MutableHashMap.clear(sessions);
   });
   return connection;
-}
+});
+
+/** The agent side of ACP for editors such as Zed, backed by the running app (R17). */
+export const startAcpAgent = (options: { readonly stream: AcpStream; readonly api: AppApi }) =>
+  // The bridge runs in its own process, outside the app's services.
+  Effect.scoped(
+    Effect.flatMap(
+      Layer.build(
+        Layer.mergeAll(
+          SecretRedactor.layer,
+          FetchHttpClient.layer,
+          NodeCrypto.layer,
+          NodeFileSystem.layer,
+        ),
+      ),
+      (services) => Effect.provideContext(makeAcpAgent(options), services),
+    ),
+  );

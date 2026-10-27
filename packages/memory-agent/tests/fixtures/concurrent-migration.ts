@@ -16,7 +16,7 @@ await Effect.runPromise(
           try {
             sqlite.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
             process.stdout.write("ready\n");
-            migrateDatabase(sqlite);
+            yield* migrateDatabase(sqlite);
             expect(sqlite.prepare("PRAGMA user_version").get()?.user_version).toBe(
               migrations.length,
             );

@@ -45,8 +45,10 @@ const { readable, writable } = await Effect.runPromise(
   ),
 );
 const api = createAppApi(baseUrl);
-const connection = startAcpAgent({
-  api,
-  stream: ndJsonStream(writable, readable),
-});
+const connection = await Effect.runPromise(
+  startAcpAgent({
+    api,
+    stream: ndJsonStream(writable, readable),
+  }),
+);
 await connection.closed;

@@ -34,11 +34,11 @@ const withDatabase = Effect.fnUntraced(function* <A>(
     Effect.sync(() => {
       const sqlite = new DatabaseSync(file);
       sqlite.exec("PRAGMA foreign_keys = ON");
-      migrateDatabase(sqlite);
       return sqlite;
     }),
     (sqlite) => Effect.sync(() => sqlite.close()),
   );
+  yield* migrateDatabase(sqlite);
   return use({ sqlite });
 }, Effect.scoped);
 

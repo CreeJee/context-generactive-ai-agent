@@ -1,6 +1,6 @@
 // Minimal differential fixture for native read-session tests, not an application DB initializer.
 import { DatabaseSync } from "node:sqlite";
-import { Array as EffectArray } from "effect";
+import { Effect, Array as EffectArray } from "effect";
 import { meaningfulNodeFilter } from "../quality.ts";
 import { migrateDatabase } from "../../db/database.ts";
 
@@ -43,10 +43,10 @@ export function createReadFixture(path: string) {
 }
 
 /** Worker integration uses the real owner migration path rather than relabeling a minimal DB. */
-export function createApplicationReadFixture(path: string) {
+export const createApplicationReadFixture = Effect.fnUntraced(function* (path: string) {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON");
-  migrateDatabase(db);
+  yield* migrateDatabase(db);
   db.exec(
     "INSERT INTO projects(id,root,name,created_at) VALUES ('allowed','/tmp/allowed','allowed','fixture'),('other-project','/tmp/other','other','fixture')",
   );
@@ -67,7 +67,7 @@ export function createApplicationReadFixture(path: string) {
     INSERT OR REPLACE INTO interpret_jobs(node_id,status,updated_at) VALUES ('alpha','pending','fixture'),('beta','done','fixture'),('other','pending','fixture'),('suppressed','pending','fixture'),('whitespace','pending','fixture'),('latest','pending','fixture');
   `);
   return db;
-}
+});
 
 /** Copies the inspected old SQL's project-before-limit and each-short-term append order. */
 export function legacyFixtureChannels(db: DatabaseSync) {

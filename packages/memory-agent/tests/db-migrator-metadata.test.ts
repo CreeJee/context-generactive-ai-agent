@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
+import { SqlError } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { DatabaseSchemaRejectedReason, migrateDatabase } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
@@ -17,13 +18,13 @@ it.effect(
       const db = yield* open;
       for (const sql of migrations) db.exec(sql);
       db.exec(`PRAGMA user_version = ${migrations.length}`);
-      migrateDatabase(db);
+      yield* migrateDatabase(db);
       const before = db.prepare("SELECT * FROM effect_sql_migrations ORDER BY migration_id").all();
       expect(before).toHaveLength(migrations.length);
       expect(before.map((row) => row.migration_id)).toEqual(
         migrations.map((_, index) => index + 1),
       );
-      migrateDatabase(db);
+      yield* migrateDatabase(db);
       expect(db.prepare("SELECT * FROM effect_sql_migrations ORDER BY migration_id").all()).toEqual(
         before,
       );
@@ -33,13 +34,11 @@ it.effect(
 it.effect("rejects missing metadata without repairing it or changing the released cursor", () =>
   Effect.gen(function* () {
     const db = yield* open;
-    migrateDatabase(db);
+    yield* migrateDatabase(db);
     db.exec("DELETE FROM effect_sql_migrations WHERE migration_id = 1");
-    expect(() => migrateDatabase(db)).toThrow(
-      expect.objectContaining({
-        reason: DatabaseSchemaRejectedReason.cases.MetadataMismatch.make({}),
-      }),
-    );
+    expect(yield* Effect.flip(migrateDatabase(db))).toMatchObject({
+      reason: DatabaseSchemaRejectedReason.cases.MetadataMismatch.make({}),
+    });
     expect(
       db.prepare("SELECT migration_id FROM effect_sql_migrations WHERE migration_id = 1").get(),
     ).toBeUndefined();
@@ -53,7 +52,7 @@ it.effect("rolls back metadata creation together with a failed pending migration
     const db = yield* open;
     // A conflicting pre-existing table causes the first historical migration to fail.
     db.exec("CREATE TABLE projects (conflict TEXT); PRAGMA foreign_keys = ON");
-    expect(() => migrateDatabase(db)).toThrow();
+    expect(SqlError.isSqlError(yield* Effect.flip(migrateDatabase(db)))).toBe(true);
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
     expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     expect(
