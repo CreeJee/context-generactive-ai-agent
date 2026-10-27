@@ -95,7 +95,7 @@ const fakeAgentProject = Effect.fnUntraced(function* () {
       try: (signal) =>
         agents.prompt(project, "fake", sessionId, text, {
           signal: options.signal ?? signal,
-          askPermission: () => Promise.resolve(options.approve ?? false),
+          askPermission: () => Effect.succeed(options.approve ?? false),
         }),
       catch: (cause) => new Cause.UnknownError(cause),
     });

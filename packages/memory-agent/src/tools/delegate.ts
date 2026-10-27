@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, Option, Schema } from "effect";
+import { Context, Effect, Fiber, Layer, Match, Option, Schema } from "effect";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgents, ExternalPromptOutcome } from "../external-agents/agents.ts";
@@ -124,17 +124,20 @@ const make = Effect.gen(function* () {
             agents.prompt(project, agent, sessionId, task, {
               signal: runSignal,
               askPermission: (request) =>
-                relayed.ask(
-                  sessionId,
-                  runId,
-                  {
-                    requester: ApprovalRequester.cases.external_agent.make({ agent }),
-                    toolName: request.toolCall.title ?? "external tool",
-                    argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
-                    reason: "외부 에이전트가 권한을 요청했어요.",
-                    askedBy: "agent",
-                  },
-                  runSignal,
+                Effect.flatMap(
+                  relayed.ask(
+                    sessionId,
+                    runId,
+                    {
+                      requester: ApprovalRequester.cases.external_agent.make({ agent }),
+                      toolName: request.toolCall.title ?? "external tool",
+                      argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
+                      reason: "외부 에이전트가 권한을 요청했어요.",
+                      askedBy: "agent",
+                    },
+                    runSignal,
+                  ),
+                  Fiber.join,
                 ),
             }),
           ).pipe(

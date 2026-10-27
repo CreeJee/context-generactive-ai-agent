@@ -1,5 +1,4 @@
-import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { Array as Arr, Crypto, Data, HashMap, HashSet } from "effect";
+import { Array as Arr, Crypto, Data, Exit, Fiber, HashMap, HashSet, Predicate } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Function as EffectFunction } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -66,7 +65,7 @@ export const subagentToolNames = [
 
 export class SubagentOperationFailed extends Schema.TaggedError<SubagentOperationFailed>()(
   "SubagentOperationFailed",
-  { operation: Schema.Literals(["run", "recover", "store"]), cause: Schema.Defect() },
+  { operation: Schema.Literal("store"), cause: Schema.Defect() },
 ) {}
 
 const adoptionMessages = {
@@ -460,9 +459,6 @@ const isAnswerPayload = Schema.is(Schema.Struct({ messageId: Schema.String }));
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
 
-  const context = yield* Effect.context();
-  const runEffect = runNativeEffectWith(context);
-  const runEffectSync = Effect.runSyncWith(context);
   const scope = yield* Effect.scope;
   const sql = yield* SqlClient.SqlClient;
   const events = yield* AppEvents;
@@ -615,7 +611,7 @@ const make = Effect.gen(function* () {
           "approval_waiting",
           `Waiting for approval: ${call.name}`,
         );
-        const decision = relayed.ask(
+        const decision = yield* relayed.ask(
           binding.sessionId,
           binding.runId,
           {
@@ -631,7 +627,7 @@ const make = Effect.gen(function* () {
           signal,
         );
         yield* events.publishSession(binding.sessionId, "relayed-approvals");
-        const approved = yield* nativePromise(() => decision);
+        const approved = yield* Fiber.join(decision);
         yield* events.publishSession(binding.sessionId, "relayed-approvals");
         yield* record(
           approved ? "approved" : "denied",
@@ -820,7 +816,6 @@ const make = Effect.gen(function* () {
       );
     }).pipe(Effect.scoped);
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const runChild = (
     binding: SubagentBinding,
     row: SubagentRow,
@@ -828,231 +823,238 @@ const make = Effect.gen(function* () {
     handle: AttemptHandle,
     controller: AbortController,
     notifyParentImmediately = false,
-  ): Promise<ChildOutcome> =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* events.publishSession(binding.sessionId, "subagents");
-        const threadId = subagentThreadId(row.id);
-        // Named messages may have waited behind another attempt. Publish the task now executing.
-        yield* startAgain(row.instructions, binding.runId, task, row.id);
-        yield* trace.transitionAttempt(
-          handle,
-          binding.sessionId,
-          "running",
-          "attempt_started",
-          "Subagent started",
-          null,
-          notifyParentImmediately,
-          binding.runId,
-        );
-        const progress = yield* Ref.make(childRunStart);
-        yield* loopChildRun(
-          binding,
-          row,
-          task,
-          handle,
-          controller.signal,
-          binding.tools,
-          progress,
-        ).pipe(
-          // A failed stream is recorded by code. Defects and interruption end the child run; its
-          // launcher records a defect as a crash.
-          Effect.catch(() =>
-            Ref.update(progress, (run) => ({
-              ...run,
-              failure: Option.some(AttemptFailureReason.cases.ModelStreamFailed.make({})),
-            })),
-          ),
-        );
+  ) =>
+    Effect.gen(function* () {
+      yield* events.publishSession(binding.sessionId, "subagents");
+      const threadId = subagentThreadId(row.id);
+      // Named messages may have waited behind another attempt. Publish the task now executing.
+      yield* startAgain(row.instructions, binding.runId, task, row.id);
+      yield* trace.transitionAttempt(
+        handle,
+        binding.sessionId,
+        "running",
+        "attempt_started",
+        "Subagent started",
+        null,
+        notifyParentImmediately,
+        binding.runId,
+      );
+      const progress = yield* Ref.make(childRunStart);
+      yield* loopChildRun(
+        binding,
+        row,
+        task,
+        handle,
+        controller.signal,
+        binding.tools,
+        progress,
+      ).pipe(
+        // A failed stream is recorded by code. Defects and interruption end the child run; its
+        // launcher records a defect as a crash.
+        Effect.catch(() =>
+          Ref.update(progress, (run) => ({
+            ...run,
+            failure: Option.some(AttemptFailureReason.cases.ModelStreamFailed.make({})),
+          })),
+        ),
+      );
 
-        const ran = yield* Ref.get(progress);
-        const persisted = yield* runStore.thread(threadId);
-        // Where the report's answer is in the child's transcript.
-        const answerMessageId = Option.filter(ran.lastMessageId, (id) =>
-          persisted.some((message) => message.id === id),
-        );
-        const answer = Option.getOrElse(
-          Option.flatMap(ran.lastMessageId, (id) => HashMap.get(ran.texts, id)),
-          () => "",
-        );
-        const failureCode = Option.getOrNull(Option.map(ran.failure, attemptFailureCode));
-        const status = controller.signal.aborted
-          ? "cancelled"
-          : Option.match(ran.failure, {
-              onNone: () => "completed" as const,
-              onSome: () => "failed" as const,
-            });
-        yield* trace.transitionAttempt(
-          handle,
-          binding.sessionId,
-          status,
-          attemptEnds[status].event,
-          attemptEnds[status].summary,
-          Option.getOrNull(Option.map(ran.failure, (reason) => ({ reason }))),
-          notifyParentImmediately,
-          binding.runId,
-          optionalProperty("messageId", Option.getOrUndefined(answerMessageId)),
-        );
-        yield* finish(status, answer, failureCode, row.id);
-        yield* events.publishSession(binding.sessionId, "subagents");
-        return {
-          status,
-          subagentId: row.id,
-          agent: row.name,
-          taskId: handle.taskId,
-          attemptId: handle.id,
-          answer,
-          error: failureCode,
-        };
-      }),
-    );
+      const ran = yield* Ref.get(progress);
+      const persisted = yield* runStore.thread(threadId);
+      // Where the report's answer is in the child's transcript.
+      const answerMessageId = Option.filter(ran.lastMessageId, (id) =>
+        persisted.some((message) => message.id === id),
+      );
+      const answer = Option.getOrElse(
+        Option.flatMap(ran.lastMessageId, (id) => HashMap.get(ran.texts, id)),
+        () => "",
+      );
+      const failureCode = Option.getOrNull(Option.map(ran.failure, attemptFailureCode));
+      const status = controller.signal.aborted
+        ? "cancelled"
+        : Option.match(ran.failure, {
+            onNone: () => "completed" as const,
+            onSome: () => "failed" as const,
+          });
+      yield* trace.transitionAttempt(
+        handle,
+        binding.sessionId,
+        status,
+        attemptEnds[status].event,
+        attemptEnds[status].summary,
+        Option.getOrNull(Option.map(ran.failure, (reason) => ({ reason }))),
+        notifyParentImmediately,
+        binding.runId,
+        optionalProperty("messageId", Option.getOrUndefined(answerMessageId)),
+      );
+      yield* finish(status, answer, failureCode, row.id);
+      yield* events.publishSession(binding.sessionId, "subagents");
+      return {
+        status,
+        subagentId: row.id,
+        agent: row.name,
+        taskId: handle.taskId,
+        attemptId: handle.id,
+        answer,
+        error: failureCode,
+      } satisfies ChildOutcome;
+    });
+
+  type ChildRunFailure = Effect.Error<ReturnType<typeof runChild>>;
 
   /** Every job belongs to the service scope, not the tool invocation or HTTP request. */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const launch = (
     binding: SubagentBinding,
     row: SubagentRow,
     task: string,
     handle: AttemptHandle,
-    onSettled?: (
+    onSettled: (
       outcome: ChildOutcome | null,
-    ) => Effect.Effect<unknown, SqlError.SqlError | Schema.SchemaError>,
-  ): Promise<SubagentReceipt> => {
-    // The SDK requires this controller across receipt delivery and the service-owned job.
+    ) => Effect.Effect<unknown, SqlError.SqlError | Schema.SchemaError> = () => Effect.void,
+  ) => {
+    // Stops the child: the parent's signal, `stopTask` and `stopSession` abort it, and the child's
+    // run reads it as its cancel and asks its approvals with it.
     const controller = new AbortController();
-    return runEffect(
-      Effect.gen(function* () {
-        const receipt: SubagentReceipt = {
-          status: "running",
-          subagentId: row.id,
-          agent: row.name,
-          taskId: handle.taskId,
-          attemptId: handle.id,
-        };
-        const done = runEffectSync(Deferred.make<void>());
-        const stop = () => controller.abort(binding.abortSignal.reason);
-        binding.abortSignal.addEventListener("abort", stop, { once: true });
-        if (binding.abortSignal.aborted) stop();
-        const child: ActiveChild = {
-          taskId: handle.taskId,
-          sessionId: binding.sessionId,
-          receipt,
-          handle,
-          controller,
-          settled: Deferred.await(done),
-          started: false,
-        };
-        let pending: Promise<ChildOutcome> | undefined;
-        const work = Effect.tryPromise({
-          try: (signal) => {
-            child.started = true;
-            const interrupted = () => controller.abort(signal.reason);
-            signal.addEventListener("abort", interrupted, { once: true });
-            pending = runChild(binding, row, task, handle, controller).finally(() =>
-              signal.removeEventListener("abort", interrupted),
+    return Effect.gen(function* () {
+      const receipt: SubagentReceipt = {
+        status: "running",
+        subagentId: row.id,
+        agent: row.name,
+        taskId: handle.taskId,
+        attemptId: handle.id,
+      };
+      const done = yield* Deferred.make<void>();
+      const stop = () => controller.abort(binding.abortSignal.reason);
+      binding.abortSignal.addEventListener("abort", stop, { once: true });
+      if (binding.abortSignal.aborted) stop();
+      const child: ActiveChild = {
+        taskId: handle.taskId,
+        sessionId: binding.sessionId,
+        receipt,
+        handle,
+        controller,
+        settled: Deferred.await(done),
+        started: false,
+      };
+      // The child's run once it started. Interrupting `work` aborts `controller` instead of the
+      // run, which records its outcome before it ends.
+      const running = yield* Ref.make(Option.none<Fiber.Fiber<ChildOutcome, ChildRunFailure>>());
+      const work = Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          child.started = true;
+          const run = yield* Effect.forkScoped(runChild(binding, row, task, handle, controller));
+          yield* Ref.set(running, Option.some(run));
+          return yield* restore(Fiber.join(run)).pipe(
+            Effect.onInterrupt(() => Effect.sync(() => controller.abort())),
+          );
+        }),
+      ).pipe(
+        // The child's runtime died before it recorded an outcome. The tag, not the cause's text,
+        // is kept: that can hold paths or provider bodies.
+        Effect.catchCauseIf(Predicate.not(Cause.hasInterrupts), () =>
+          Effect.gen(function* () {
+            yield* trace.transitionAttempt(
+              handle,
+              binding.sessionId,
+              "failed",
+              "attempt_failed",
+              "Subagent crashed",
+              { reason: AttemptFailureReason.cases.AgentCrashed.make({}) },
+              false,
+              binding.runId,
             );
-            return pending;
-          },
-          catch: (cause) => SubagentOperationFailed.make({ operation: "run", cause }),
-        }).pipe(
-          // The child's runtime died before it recorded an outcome. The tag, not the cause's text,
-          // is kept: that can hold paths or provider bodies.
-          Effect.catch(() =>
-            Effect.gen(function* () {
-              yield* trace.transitionAttempt(
-                handle,
-                binding.sessionId,
-                "failed",
-                "attempt_failed",
-                "Subagent crashed",
-                { reason: AttemptFailureReason.cases.AgentCrashed.make({}) },
-                false,
-                binding.runId,
-              );
-              yield* finish("failed", "", "AgentCrashed", row.id);
-            }),
-          ),
-          // Keep the named-agent permit until the SDK has stopped and recorded its outcome.
-          // Releasing on Effect interruption alone would let the next message overlap that stream.
-          Effect.ensuring(
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            Effect.gen(function* () {
-              // Waits for the stream to settle; its outcome was recorded by `work`.
-              if (pending !== undefined) yield* Effect.exit(nativePromise(() => pending!));
-              child.started = false;
-            }),
-          ),
-        );
-        const cancelled = Effect.callback<never>((resume) => {
-          const abort = () => resume(Effect.interrupt);
-          if (controller.signal.aborted) abort();
-          else controller.signal.addEventListener("abort", abort, { once: true });
-          return Effect.sync(() => controller.signal.removeEventListener("abort", abort));
-        });
-        const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
-          Effect.ensuring(
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // Interruption aborts the SDK signal; retain the service until the outcome is recorded.
-            Effect.gen(function* () {
-              if (isTruthy(pending)) {
-                const outcome = yield* nativePromise(() => pending!.catch(() => null));
-                if (onSettled !== undefined) yield* onSettled(outcome);
-              } else {
-                yield* trace.transitionAttempt(
-                  handle,
-                  binding.sessionId,
-                  "cancelled",
-                  "attempt_cancelled",
-                  "Queued subagent cancelled",
-                  null,
-                  false,
-                  binding.runId,
-                );
-                if (onSettled !== undefined) yield* onSettled(null);
-              }
-            }).pipe(
-              Effect.ensuring(
-                Effect.gen(function* () {
-                  binding.abortSignal.removeEventListener("abort", stop);
-                  if (!(activeFor(row.id, false, handle.id) !== undefined) && !isTruthy(pending))
-                    // A finalizer cannot fail: a store failure is logged by tag, and the waiters
-                    // and the page still learn the child settled.
-                    yield* finish("cancelled", "", null, row.id).pipe(
-                      Effect.catch((error) =>
-                        Effect.logWarning("subagent_cancel_not_recorded", {
-                          error: errorTag(error),
-                        }),
-                      ),
-                    );
-                }).pipe(
-                  Effect.ensuring(Deferred.succeed(done, undefined)),
-                  Effect.andThen(events.publishSession(binding.sessionId, "subagents")),
-                  Effect.andThen(Effect.sync(() => completionListener?.(binding.sessionId))),
-                ),
-              ),
-              Effect.catch((error) =>
-                Effect.logWarning("subagent_settlement_not_recorded", {
-                  error: errorTag(error),
-                }),
-              ),
+            yield* finish("failed", "", "AgentCrashed", row.id);
+          }),
+        ),
+        // Keep the named-agent permit until the child's run has stopped and recorded its
+        // outcome. Releasing on Effect interruption alone would let the next message overlap it.
+        Effect.ensuring(
+          // Waits for the run to settle; its outcome was recorded by `work`.
+          Effect.flatMap(
+            Ref.get(running),
+            Option.match({ onNone: () => Effect.void, onSome: Fiber.await }),
+          ).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                child.started = false;
+              }),
             ),
           ),
-        );
-        MutableHashMap.set(childMetadata, handle.id, child);
-        // The attempt beats while its fiber lives, queued or running. If the fiber ends without
-        // settling the attempt, the beats stop and the store's watchdog fails it as lost.
-        yield* FiberMap.run(
-          activeChildren,
-          handle.id,
-          Effect.forkScoped(trace.keepAlive(handle)).pipe(
-            Effect.andThen(job),
-            Effect.scoped,
-            Effect.ensuring(Effect.sync(() => MutableHashMap.remove(childMetadata, handle.id))),
+        ),
+      );
+      const cancelled = Effect.callback<never>((resume) => {
+        const abort = () => resume(Effect.interrupt);
+        if (controller.signal.aborted) abort();
+        else controller.signal.addEventListener("abort", abort, { once: true });
+        return Effect.sync(() => controller.signal.removeEventListener("abort", abort));
+      });
+      const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
+        Effect.ensuring(
+          // Interruption aborts the child's signal; retain the service until the outcome is
+          // recorded.
+          Effect.flatMap(
+            Ref.get(running),
+            Option.match({
+              onSome: (run) =>
+                Effect.map(Fiber.await(run), (exit) => (Exit.isSuccess(exit) ? exit.value : null)),
+              onNone: () =>
+                trace
+                  .transitionAttempt(
+                    handle,
+                    binding.sessionId,
+                    "cancelled",
+                    "attempt_cancelled",
+                    "Queued subagent cancelled",
+                    null,
+                    false,
+                    binding.runId,
+                  )
+                  .pipe(Effect.as(null)),
+            }),
+          ).pipe(
+            Effect.flatMap(onSettled),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                binding.abortSignal.removeEventListener("abort", stop);
+                const started = Option.isSome(yield* Ref.get(running));
+                if (!(activeFor(row.id, false, handle.id) !== undefined) && !started)
+                  // A finalizer cannot fail: a store failure is logged by tag, and the waiters
+                  // and the page still learn the child settled.
+                  yield* finish("cancelled", "", null, row.id).pipe(
+                    Effect.catch((error) =>
+                      Effect.logWarning("subagent_cancel_not_recorded", {
+                        error: errorTag(error),
+                      }),
+                    ),
+                  );
+              }).pipe(
+                Effect.ensuring(Deferred.succeed(done, undefined)),
+                Effect.andThen(events.publishSession(binding.sessionId, "subagents")),
+                Effect.andThen(Effect.sync(() => completionListener?.(binding.sessionId))),
+              ),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("subagent_settlement_not_recorded", {
+                error: errorTag(error),
+              }),
+            ),
           ),
-        );
-        return receipt;
-      }),
-    );
+        ),
+      );
+      MutableHashMap.set(childMetadata, handle.id, child);
+      // The attempt beats while its fiber lives, queued or running. If the fiber ends without
+      // settling the attempt, the beats stop and the store's watchdog fails it as lost.
+      yield* FiberMap.run(
+        activeChildren,
+        handle.id,
+        Effect.forkScoped(trace.keepAlive(handle)).pipe(
+          Effect.andThen(job),
+          Effect.scoped,
+          Effect.ensuring(Effect.sync(() => MutableHashMap.remove(childMetadata, handle.id))),
+        ),
+      );
+      return receipt;
+    });
   };
 
   const startOneOff = Effect.fnUntraced(function* (
@@ -1078,7 +1080,7 @@ const make = Effect.gen(function* () {
       kind: "start",
       threadId: subagentThreadId(row.id),
     });
-    return yield* nativePromise(() => launch(binding, row, task, handle));
+    return yield* launch(binding, row, task, handle);
   });
 
   /** Creates or continues a named child and starts its next traced attempt. */
@@ -1145,7 +1147,7 @@ const make = Effect.gen(function* () {
       message,
       instructions,
     );
-    return yield* nativePromise(() => launch(binding, row, message, handle));
+    return yield* launch(binding, row, message, handle);
   });
 
   /** Starts the attempt a resume claimed, unless its agent was removed. */
@@ -1164,11 +1166,7 @@ const make = Effect.gen(function* () {
         }),
       onSome: (known) =>
         startAgain(known.instructions, binding.runId, claim.context.originalRequest, known.id).pipe(
-          Effect.flatMap((row) =>
-            nativePromise((): Promise<SubagentReport> =>
-              launch(binding, row, retryMessage(claim.context), claim.handle),
-            ),
-          ),
+          Effect.flatMap((row) => launch(binding, row, retryMessage(claim.context), claim.handle)),
         ),
     });
   });
@@ -1193,52 +1191,44 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   /** Starts the retries the user asked for from Work Trace since the parent's last run. */
   const retryForRun = (binding: SubagentBinding) =>
-    runEffect(
-      Effect.gen(function* () {
-        const claims = yield* trace.claimRetries(binding.sessionId, binding.runId);
-        yield* nativePromise(() =>
-          Promise.all(
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            claims.map((claim) =>
-              runEffect(
-                Effect.gen(function* () {
-                  const existing = yield* byId(binding.sessionId, claim.agentId);
-                  yield* Option.match(existing, {
-                    // The agent was removed after the retry was claimed: end the queued attempt.
-                    onNone: () =>
-                      trace.transitionAttempt(
-                        claim.handle,
-                        binding.sessionId,
-                        "cancelled",
-                        "attempt_cancelled",
-                        "Subagent no longer exists",
-                        null,
-                        true,
-                        binding.runId,
-                      ),
-                    onSome: (known) =>
-                      startAgain(
-                        known.instructions,
-                        binding.runId,
-                        claim.context.originalRequest,
-                        known.id,
-                      ).pipe(
-                        Effect.flatMap((row) =>
-                          nativePromise(() =>
-                            launch(binding, row, retryMessage(claim.context), claim.handle),
-                          ),
-                        ),
-                      ),
-                  });
-                }),
-              ),
-            ),
-          ),
-        );
-      }),
+    trace.claimRetries(binding.sessionId, binding.runId).pipe(
+      Effect.flatMap((claims) =>
+        Effect.forEach(
+          claims,
+          (claim) =>
+            Effect.gen(function* () {
+              const existing = yield* byId(binding.sessionId, claim.agentId);
+              yield* Option.match(existing, {
+                // The agent was removed after the retry was claimed: end the queued attempt.
+                onNone: () =>
+                  trace.transitionAttempt(
+                    claim.handle,
+                    binding.sessionId,
+                    "cancelled",
+                    "attempt_cancelled",
+                    "Subagent no longer exists",
+                    null,
+                    true,
+                    binding.runId,
+                  ),
+                onSome: (known) =>
+                  startAgain(
+                    known.instructions,
+                    binding.runId,
+                    claim.context.originalRequest,
+                    known.id,
+                  ).pipe(
+                    Effect.flatMap((row) =>
+                      launch(binding, row, retryMessage(claim.context), claim.handle),
+                    ),
+                  ),
+              });
+            }),
+          { concurrency: "unbounded", discard: true },
+        ),
+      ),
     );
 
   const attemptState = (sessionId: string, taskId: string, attemptId: string) =>
@@ -1265,84 +1255,82 @@ const make = Effect.gen(function* () {
       ),
     );
   const terminal = (status: string) => !["queued", "running", "waiting"].includes(status);
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const getReport = (
+  const getReport = Effect.fnUntraced(function* (
     sessionId: string,
     taskId: string,
     attemptId: string,
-  ): Promise<SubagentReport> =>
-    runEffect(
-      Effect.gen(function* () {
-        const { detail, attempt } = yield* attemptState(sessionId, taskId, attemptId);
-        const gone = () => new Cause.UnknownError(new Error("Subagent no longer exists"));
-        const subagentId = yield* Effect.fromOption(
-          Option.liftPredicate(detail.task.agentId, isTruthy),
-          gone,
-        );
-        const row = yield* Effect.flatMap(byId(sessionId, subagentId), (found) =>
-          Effect.fromOption(found, gone),
-        );
-        const base = { subagentId, agent: row.name, taskId, attemptId };
-        const settled = Effect.map(
-          runStore.thread(attempt.threadId),
-          (messages): SubagentReport => {
-            // The attempt's terminal event names its last assistant message.
-            const answerId = detail.events.findLast(
-              (event) => event.attemptId === attemptId && isAnswerPayload(event.payload),
-            )?.payload;
-            const message = isAnswerPayload(answerId)
-              ? messages.find(
-                  (entry) => entry.role === "assistant" && entry.id === answerId.messageId,
-                )
-              : undefined;
-            const answer = Schema.is(Schema.String)(message?.content)
-              ? message.content
-              : (message?.content ?? [])
-                  .flatMap((part) => (part.type === "text" ? [part.content] : []))
-                  .join("");
-            return {
-              ...base,
-              status:
-                attempt.status === "completed"
-                  ? "completed"
-                  : attempt.status === "cancelled"
-                    ? "cancelled"
-                    : attempt.status === "failed"
-                      ? "failed"
-                      : "interrupted",
-              answer,
-              error: attempt.failure === null ? null : attemptFailureCode(attempt.failure.reason),
-            };
-          },
-        );
-        return yield* terminal(attempt.status)
-          ? settled
-          : Effect.succeed<SubagentReport>({ ...base, status: "running" });
-      }),
+  ) {
+    const { detail, attempt } = yield* attemptState(sessionId, taskId, attemptId);
+    const gone = () => new Cause.UnknownError(new Error("Subagent no longer exists"));
+    const subagentId = yield* Effect.fromOption(
+      Option.liftPredicate(detail.task.agentId, isTruthy),
+      gone,
     );
+    const row = yield* Effect.flatMap(byId(sessionId, subagentId), (found) =>
+      Effect.fromOption(found, gone),
+    );
+    const base = { subagentId, agent: row.name, taskId, attemptId };
+    const settled = Effect.map(runStore.thread(attempt.threadId), (messages): SubagentReport => {
+      // The attempt's terminal event names its last assistant message.
+      const answerId = detail.events.findLast(
+        (event) => event.attemptId === attemptId && isAnswerPayload(event.payload),
+      )?.payload;
+      const message = isAnswerPayload(answerId)
+        ? messages.find((entry) => entry.role === "assistant" && entry.id === answerId.messageId)
+        : undefined;
+      const answer = Schema.is(Schema.String)(message?.content)
+        ? message.content
+        : (message?.content ?? [])
+            .flatMap((part) => (part.type === "text" ? [part.content] : []))
+            .join("");
+      return {
+        ...base,
+        status:
+          attempt.status === "completed"
+            ? "completed"
+            : attempt.status === "cancelled"
+              ? "cancelled"
+              : attempt.status === "failed"
+                ? "failed"
+                : "interrupted",
+        answer,
+        error: attempt.failure === null ? null : attemptFailureCode(attempt.failure.reason),
+      };
+    });
+    return yield* terminal(attempt.status)
+      ? settled
+      : Effect.succeed<SubagentReport>({ ...base, status: "running" });
+  });
+
+  /** What a parent run's dispatch of a subagent task can fail with. */
+  type DispatchFailure =
+    | Effect.Error<ReturnType<typeof startNamed>>
+    | Effect.Error<ReturnType<typeof resumeTask>>;
 
   /**
    * One parent run's subagent calls, and what the run reviewed, was told and adopted. Dispatch is
    * nonblocking; only explicit retrieval marks a report reviewed in this run.
    */
   const parentRun = (binding: SubagentBinding) => {
-    const started = MutableHashMap.empty<string, Promise<SubagentReport>>();
+    const started = MutableHashMap.empty<string, Fiber.Fiber<SubagentReport, DispatchFailure>>();
     const reviewed = MutableHashMap.empty<string, ChildOutcome>();
     let deliveredNotificationIds = binding.deliveredParentNotificationIds;
     let adoptionDraft: AdoptionDraft | null = null;
 
-    /** Starts the call's task once; the same call asked again gets the same report. */
-    const dispatch = <E>(
-      toolCallId: string,
-      task: Effect.Effect<SubagentReport, E>,
-    ): Promise<SubagentReport> =>
-      Option.getOrElse(MutableHashMap.get(started, toolCallId), () => {
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const outcome = runEffect(task);
-        outcome.catch(() => undefined);
-        MutableHashMap.set(started, toolCallId, outcome);
-        return outcome;
-      });
+    /**
+     * Starts the call's task once; the same call asked again gets the same report. The task
+     * belongs to the service, not to the tool call that started it.
+     */
+    const dispatch = (toolCallId: string, task: Effect.Effect<SubagentReport, DispatchFailure>) =>
+      Effect.suspend(() =>
+        Option.match(MutableHashMap.get(started, toolCallId), {
+          onSome: Effect.succeed,
+          onNone: () =>
+            Effect.tap(Effect.forkIn(task, scope), (fiber) =>
+              Effect.sync(() => MutableHashMap.set(started, toolCallId, fiber)),
+            ),
+        }),
+      ).pipe(Effect.flatMap(Fiber.join));
 
     const notReviewed = ({ taskId, attemptId }: AdoptionDraft["reports"][number]) =>
       !MutableHashMap.has(reviewed, `${taskId}:${attemptId}`);
@@ -1393,12 +1381,10 @@ const make = Effect.gen(function* () {
         dispatch(toolCallId, resumeTask(binding, toolCallId, input)),
 
       reports: ({ attempts }: typeof AttemptsInput.Type) =>
-        nativePromise(() =>
-          Promise.all(
-            attempts.map(({ taskId, attemptId }) =>
-              getReport(binding.sessionId, taskId, attemptId),
-            ),
-          ),
+        Effect.forEach(
+          attempts,
+          ({ taskId, attemptId }) => getReport(binding.sessionId, taskId, attemptId),
+          { concurrency: "unbounded" },
         ),
 
       /** Marks the completed reports reviewed. Only this run's memory gates adoption. */
@@ -1427,10 +1413,7 @@ const make = Effect.gen(function* () {
 
       /** Retries the run's unfinished children in the background. */
       retry: Effect.forkIn(
-        Effect.tryPromise({
-          try: () => retryForRun(binding),
-          catch: (cause) => SubagentOperationFailed.make({ operation: "recover", cause }),
-        }).pipe(
+        retryForRun(binding).pipe(
           Effect.catch((error) =>
             Effect.logWarning("Subagent retry deferred", { error: errorTag(error) }),
           ),
@@ -1529,13 +1512,12 @@ const make = Effect.gen(function* () {
         tools: [
           runTool({
             ...runSubagent,
-            handler: (input, { toolCallId }) => nativePromise(() => parent.run(toolCallId, input)),
+            handler: (input, { toolCallId }) => parent.run(toolCallId, input),
           }),
           runTool({
             ...resumeSubagent,
             lazy: true,
-            handler: (input, { toolCallId }) =>
-              nativePromise(() => parent.resume(toolCallId, input)),
+            handler: (input, { toolCallId }) => parent.resume(toolCallId, input),
           }),
           runTool({
             ...getSubagentReports,
@@ -1596,12 +1578,8 @@ const make = Effect.gen(function* () {
             ),
           );
           yield* Ref.set(launched, true);
-          yield* nativePromise(() =>
-            launch(owned, row, attempt.message, handle, (outcome) =>
-              Deferred.succeed(settled, outcome),
-            ),
-          ).pipe(
-            Effect.mapError((cause) => SubagentOperationFailed.make({ operation: "run", cause })),
+          yield* launch(owned, row, attempt.message, handle, (outcome) =>
+            Deferred.succeed(settled, outcome),
           );
           return yield* Deferred.await(settled);
         });
@@ -1616,58 +1594,49 @@ const make = Effect.gen(function* () {
     },
 
     /** Stop all session children, including those whose parent finished normally. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    stopSession(sessionId: string) {
-      return runEffect(
-        Effect.gen(function* () {
-          const entries = liveChildren().filter((child) => child.sessionId === sessionId);
-          yield* Effect.sync(() =>
-            entries.forEach((entry) =>
-              entry.controller.abort(new Error("session_cancel_requested")),
-            ),
-          );
-          yield* Effect.forEach(entries, (entry) => entry.settled, { concurrency: "unbounded" });
-        }),
-      );
-    },
+    stopSession: (sessionId: string) =>
+      Effect.gen(function* () {
+        const entries = liveChildren().filter((child) => child.sessionId === sessionId);
+        yield* Effect.sync(() =>
+          entries.forEach((entry) => entry.controller.abort(new Error("session_cancel_requested"))),
+        );
+        yield* Effect.forEach(entries, (entry) => entry.settled, {
+          concurrency: "unbounded",
+          discard: true,
+        });
+      }),
 
     /** Stop exactly one live child and wait until its terminal transition settles. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    stopTask(taskId: string) {
-      return runEffect(
-        Effect.suspend(() =>
-          Option.match(
-            Arr.findFirst(liveChildren(), (child) => child.taskId === taskId),
-            {
-              onNone: () => Effect.succeed("not_running" as const),
-              onSome: (entry) =>
-                Effect.sync(() =>
-                  entry.controller.abort(new Error("task_lifecycle_requested")),
-                ).pipe(Effect.andThen(entry.settled), Effect.as("stopped" as const)),
-            },
-          ),
+    stopTask: (taskId: string) =>
+      Effect.suspend(() =>
+        Option.match(
+          Arr.findFirst(liveChildren(), (child) => child.taskId === taskId),
+          {
+            onNone: () => Effect.succeed("not_running" as const),
+            onSome: (entry) =>
+              Effect.sync(() => entry.controller.abort(new Error("task_lifecycle_requested"))).pipe(
+                Effect.andThen(entry.settled),
+                Effect.as("stopped" as const),
+              ),
+          },
         ),
-      );
-    },
+      ),
 
     /** Children of a session. Their calls waiting for the user are in `RelayedApprovals`. */
     list: (sessionId: string) =>
       stored(bySession(sessionId)).pipe(Effect.map((rows) => rows.map(toView))),
 
     /** A child's saved conversation. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     transcript: (sessionId: string, subagentId: string) =>
-      runEffect(
-        Effect.gen(function* () {
-          const row = yield* byId(sessionId, subagentId);
-          return yield* Option.match(row, {
-            onNone: () => Effect.succeed(null),
-            onSome: (found) =>
-              Effect.map(runStore.thread(subagentThreadId(subagentId)), (messages) => ({
-                subagent: toView(found),
-                messages,
-              })),
-          });
+      Effect.flatMap(
+        byId(sessionId, subagentId),
+        Option.match({
+          onNone: () => Effect.succeed(null),
+          onSome: (found) =>
+            Effect.map(runStore.thread(subagentThreadId(subagentId)), (messages) => ({
+              subagent: toView(found),
+              messages,
+            })),
         }),
       ),
   };

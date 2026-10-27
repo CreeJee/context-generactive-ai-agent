@@ -2,10 +2,10 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
 import {
-  Cause,
   Context,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Path,
@@ -29,12 +29,6 @@ const request: RelayedRequest = {
   reason: "Approve this write",
   askedBy: "every_call",
 };
-
-const result = <A>(promise: Promise<A>) =>
-  Effect.tryPromise({
-    try: () => promise,
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 const withRelay = <A, E, R>(
   use: (relay: RelayedApprovals["Service"]) => Effect.Effect<A, E, R | SqlClient.SqlClient>,
@@ -102,15 +96,15 @@ describe("durable relayed approvals", () => {
       withRelay((relay) =>
         Effect.gen(function* () {
           const { controller } = yield* runCancellation;
-          const first = relay.ask("s", "run-1", request, controller.signal);
-          const second = relay.ask("s", "run-2", request, controller.signal);
+          const first = yield* relay.ask("s", "run-1", request, controller.signal);
+          const second = yield* relay.ask("s", "run-2", request, controller.signal);
           const [a, b] = yield* pending(relay, "s", 2);
           expect(yield* relay.answer("other", b!.id, true)).toBe(false);
           expect(yield* relay.answer("s", b!.id, true)).toBe(true);
           expect(yield* relay.answer("s", b!.id, true)).toBe(true);
           expect(yield* relay.answer("s", b!.id, false)).toBe(false);
           expect(yield* relay.answer("s", a!.id, false)).toBe(true);
-          expect(yield* Effect.forEach([first, second], result, { concurrency: 2 })).toEqual([
+          expect(yield* Effect.forEach([first, second], Fiber.join, { concurrency: 2 })).toEqual([
             false,
             true,
           ]);
@@ -123,10 +117,10 @@ describe("durable relayed approvals", () => {
     withRelay((relay) =>
       Effect.gen(function* () {
         const { controller } = yield* runCancellation;
-        const waiting = relay.ask("s", "run-1", request, controller.signal);
+        const waiting = yield* relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(relay, "s", 1);
         controller.abort();
-        expect(yield* result(waiting)).toBe(false);
+        expect(yield* Fiber.join(waiting)).toBe(false);
         expect(yield* pending(relay, "s", 0)).toEqual([]);
         expect(yield* relay.answer("s", approval!.id, true)).toBe(false);
         expect(
@@ -152,8 +146,7 @@ describe("durable relayed approvals", () => {
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
         const { controller } = yield* runCancellation;
-        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
-        void waiting.catch(() => false);
+        yield* first.relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 
@@ -182,8 +175,7 @@ describe("durable relayed approvals", () => {
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
         const { controller } = yield* runCancellation;
-        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
-        void waiting.catch(() => false);
+        yield* first.relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 
@@ -229,8 +221,7 @@ describe("durable relayed approvals", () => {
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
         const { controller } = yield* runCancellation;
-        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
-        void waiting.catch(() => false);
+        yield* first.relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 

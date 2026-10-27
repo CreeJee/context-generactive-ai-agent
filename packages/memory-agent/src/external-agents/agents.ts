@@ -152,7 +152,7 @@ export interface PromptHooks {
   /** Every update, for callers that stream progress. */
   readonly onUpdate?: (update: SessionUpdate) => void;
   /** The agent's own permission request; true only for an explicit approval. */
-  readonly askPermission: (request: RequestPermissionRequest) => Promise<boolean>;
+  readonly askPermission: (request: RequestPermissionRequest) => Effect.Effect<boolean>;
 }
 
 interface SessionHandlers {
@@ -842,8 +842,8 @@ const make = Effect.gen(function* () {
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
             askPermission: (request) =>
               runNativeEffect(
-                nativePromise(() => hooks.askPermission(request)).pipe(
-                  Effect.map((answer) => permissionAnswer(request, answer)),
+                Effect.map(hooks.askPermission(request), (answer) =>
+                  permissionAnswer(request, answer),
                 ),
               ),
           });

@@ -1,7 +1,6 @@
 import { SqlClient, SqlSchema } from "effect/sql";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import { Cause } from "effect";
-import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
+import { Cause, Fiber } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
@@ -242,33 +241,13 @@ export interface SettingsPlaces {
   readonly storageRoot: string;
 }
 
-const AgentOperation = Schema.Literals([
-  "stop-subagent",
-  "load-messages",
-  "load-run",
-  "load-resume-interrupts",
-  "stop-session",
-  "cancel-run",
-  "discard-interrupts",
-  "load-usage",
-  "load-transcript",
-  "list-approvals",
-  "drain-followup",
-  "report-evidence-snapshot",
-]);
-type AgentOperation = typeof AgentOperation.Type;
+const AgentOperation = Schema.Literals(["load-transcript", "drain-followup"]);
 
-/** A chat-state, subagent or follow-up Promise boundary rejected; `cause` stays on the server. */
+/** A subagent transcript or a follow-up's run log could not be read; `cause` stays on the server. */
 export class AgentOperationFailed extends Schema.TaggedError<AgentOperationFailed>()(
   "AgentOperationFailed",
   { operation: AgentOperation, cause: Schema.optional(Schema.Defect()) },
 ) {}
-
-const agentPromise = <A>(operation: AgentOperation, evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => AgentOperationFailed.make({ operation, cause }),
-  });
 
 /**
  * Where the file tools work, how to change files without losing the user's edits, the current
@@ -442,7 +421,6 @@ const cancelledByUser = (controller: AbortController) =>
 export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const context = yield* Effect.context();
   const ownerSignal = yield* Effect.abortSignal;
-  const runEffect = runNativeEffectWith(context);
   const runEffectSync = Effect.runSyncWith(context);
   const active = yield* ActiveProvider;
   const registry = Option.getOrUndefined(yield* Effect.serviceOption(ProviderRegistry));
@@ -972,16 +950,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
    * not allowed sending memory to external agents, nothing matches or the search fails.
    */
   const memoryPreamble = (project: Project, text: string, userNodeId: string) =>
-    runEffect(
-      recallScope.pipe(
-        Effect.flatMap((scope) =>
-          Effect.when(
-            externalMemoryLeads(project, text, userNodeId, scope.crossProject),
-            Effect.succeed(scope.toExternalAgents),
-          ),
+    recallScope.pipe(
+      Effect.flatMap((scope) =>
+        Effect.when(
+          externalMemoryLeads(project, text, userNodeId, scope.crossProject),
+          Effect.succeed(scope.toExternalAgents),
         ),
-        Effect.map(Option.getOrElse(() => "")),
       ),
+      Effect.map(Option.getOrElse(() => "")),
     );
   const externalMemoryLeads = (
     project: Project,
@@ -1132,11 +1108,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       const activeTasks = (yield* workTrace.taskTree(sessionId))
         .filter((task) => task.activeAttemptId !== null)
         .map((task) => task.id);
-      yield* Effect.forEach(
-        activeTasks,
-        (taskId) => agentPromise("stop-session", () => subagents.stopTask(taskId)),
-        { concurrency: "unbounded", discard: true },
-      );
+      yield* Effect.forEach(activeTasks, subagents.stopTask, {
+        concurrency: "unbounded",
+        discard: true,
+      });
     });
 
   const api = {
@@ -1207,10 +1182,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
         if (LifecycleRequest.$is("completed")(requested)) return json(200, requested);
         if (isTruthy(requested.activeAttemptId))
-          yield* agentPromise("stop-subagent", () => subagents.stopTask(taskId)).pipe(
-            Effect.andThen(background.stopTask(taskId)),
-            Effect.timeoutOption(cancelWaitMs),
-          );
+          yield* subagents
+            .stopTask(taskId)
+            .pipe(Effect.andThen(background.stopTask(taskId)), Effect.timeoutOption(cancelWaitMs));
         const completed = yield* workTrace.finalizeTaskLifecycle(requested.operationId);
         return LifecycleOutcome.$is("completed")(completed)
           ? json(200, completed)
@@ -1537,30 +1511,27 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           cancellationToRelease = cancellation.cancel;
           const abortController = cancellation.controller;
           const answeredBy = external;
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
           const askPermission = (permission: RequestPermissionRequest) =>
-            runEffect(
-              Effect.gen(function* () {
-                const decision = relayed.ask(
-                  sessionId,
-                  runId,
-                  {
-                    requester: ApprovalRequester.cases.external_agent.make({
-                      agent: answeredBy,
-                    }),
-                    toolName: permission.toolCall.title ?? "external tool",
-                    argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
-                    reason: "외부 에이전트가 권한을 요청했어요.",
-                    askedBy: "agent",
-                  },
-                  abortController.signal,
-                );
-                yield* events.publishSession(sessionId, "relayed-approvals");
-                const approved = yield* nativePromise(() => decision);
-                yield* events.publishSession(sessionId, "relayed-approvals");
-                return approved;
-              }),
-            );
+            Effect.gen(function* () {
+              const decision = yield* relayed.ask(
+                sessionId,
+                runId,
+                {
+                  requester: ApprovalRequester.cases.external_agent.make({
+                    agent: answeredBy,
+                  }),
+                  toolName: permission.toolCall.title ?? "external tool",
+                  argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
+                  reason: "외부 에이전트가 권한을 요청했어요.",
+                  askedBy: "agent",
+                },
+                abortController.signal,
+              );
+              yield* events.publishSession(sessionId, "relayed-approvals");
+              const approved = yield* Fiber.join(decision);
+              yield* events.publishSession(sessionId, "relayed-approvals");
+              return approved;
+            });
           const binding = {
             projectId,
             sessionId,
@@ -1586,7 +1557,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   }),
                 catch: (cause) => new Cause.UnknownError(cause),
               }),
-            preamble: (text) => nativePromise(() => memoryPreamble(project, text, userNodeId())),
+            preamble: (text) =>
+              Effect.try({ try: userNodeId, catch: (cause) => new Cause.UnknownError(cause) }).pipe(
+                Effect.flatMap((nodeId) => memoryPreamble(project, text, nodeId)),
+              ),
           });
           const loopEvents = runChat(
             {
@@ -2397,13 +2371,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ? json(200, { runId: "", stopped: true, status: "completed" })
               : json(409, { error: "no_running_run" });
           yield* workTrace.holdParentNotifications(sessionId);
-          const stopped = yield* agentPromise("stop-session", () =>
-            subagents.stopSession(sessionId),
-          ).pipe(
-            Effect.andThen(background.stopSession(sessionId)),
-            Effect.timeoutOption(cancelWaitMs),
-            Effect.map(Option.isSome),
-          );
+          const stopped = yield* subagents
+            .stopSession(sessionId)
+            .pipe(
+              Effect.andThen(background.stopSession(sessionId)),
+              Effect.timeoutOption(cancelWaitMs),
+              Effect.map(Option.isSome),
+            );
           const last = yield* lastRun(sessionId);
           return json(200, {
             runId: last?.runId ?? "",
@@ -2416,7 +2390,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const stopped = yield* Effect.all(
           [
             live.cancel.pipe(Effect.andThen(live.ended)),
-            agentPromise("stop-session", () => subagents.stopSession(sessionId)),
+            subagents.stopSession(sessionId),
             background.stopSession(sessionId),
           ],
           { concurrency: "unbounded", discard: true },
@@ -2707,9 +2681,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** One subagent's saved conversation. */
     subagentTranscript: (sessionId: string, subagentId: string) =>
       Effect.gen(function* () {
-        const transcript = yield* agentPromise("load-transcript", () =>
-          subagents.transcript(sessionId, subagentId),
-        );
+        const transcript = yield* subagents
+          .transcript(sessionId, subagentId)
+          .pipe(
+            Effect.mapError((cause) =>
+              AgentOperationFailed.make({ operation: "load-transcript", cause }),
+            ),
+          );
         return isTruthy(transcript)
           ? json(200, transcript)
           : json(404, { error: "subagent_not_found" });

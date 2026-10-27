@@ -18,7 +18,6 @@ import {
   freshSession,
   heldDefaultTurn,
   heldTurns,
-  sdk,
   send,
   settled,
   until,
@@ -461,7 +460,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       expect(first.subagentId).toBe(second.subagentId);
       expect(first.attemptId).not.toBe(second.attemptId);
-      expect(yield* sdk(() => children.stopTask(second.taskId))).toBe("stopped");
+      expect(yield* children.stopTask(second.taskId)).toBe("stopped");
       expect((yield* trace.taskDetail(sessionId, second.taskId))?.attempts[0]?.status).toBe(
         "cancelled",
       );

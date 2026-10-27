@@ -123,7 +123,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
               message.content.includes("call run_subagent"),
           ),
         ).toBe(false);
-        const transcript = yield* sdk(() => subagents.transcript(sessionId, child!.id));
+        const transcript = yield* subagents.transcript(sessionId, child!.id);
         expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
         const trace = yield* Schema.decodeUnknownEffect(TraceSummary)(
           yield* sqlGet(
