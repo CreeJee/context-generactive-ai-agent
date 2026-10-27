@@ -1,12 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Array as Arr, Effect, HashSet, Match, Option, Schema, Struct } from "effect";
-import {
-  type ChatMetadata,
-  type ChatMetadataFailed,
-  tanstackMetadata,
-} from "../chat-store/metadata.ts";
+import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import {
   answeredToolCalls,
   type CompactionMessage,
@@ -193,27 +188,6 @@ export interface ModelHandoffOptions<M extends ConversationMessage, E> {
   readonly toolResultIds: (
     toolCallIds: readonly string[],
   ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
-}
-
-/** The same options from TanStack's stores, until step 7 of docs/effect-ai-migration.md. */
-export interface TanstackHandoffOptions extends Omit<
-  ModelHandoffOptions<ModelMessage, never>,
-  "metadata" | "loadHistory"
-> {
-  readonly metadata: MetadataStore;
-  readonly loadHistory: () => Promise<readonly ModelMessage[]>;
-}
-
-export function modelHandoffHistory(options: TanstackHandoffOptions) {
-  const history = Effect.runSync(
-    modelHandoffHistoryEffect({
-      ...options,
-      metadata: tanstackMetadata(options.metadata),
-      loadHistory: Effect.tryPromise(options.loadHistory),
-    }),
-  );
-  // Native SDK Promise boundary.
-  return (messages: readonly ModelMessage[]) => Effect.runPromise(history(messages));
 }
 
 export const modelHandoffHistoryEffect = <M extends ConversationMessage, E>(

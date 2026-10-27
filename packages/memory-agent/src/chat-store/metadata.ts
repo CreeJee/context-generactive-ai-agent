@@ -1,4 +1,3 @@
-import type { MetadataStore } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import type { JsonValue } from "../json.ts";
 
@@ -10,8 +9,7 @@ export class ChatMetadataFailed extends Schema.TaggedError<ChatMetadataFailed>()
 
 /**
  * The `chat_metadata` rows a session keeps beside its conversation, as compaction, model handoff
- * and context usage read and write them. The TanStack runtime and the Effect AI loop each have a
- * store of these rows.
+ * and context usage read and write them. `RunStore` keeps these rows.
  */
 export interface ChatMetadata {
   /** The value kept under the key, undecoded; absent when there is none. */
@@ -22,12 +20,3 @@ export interface ChatMetadata {
     value: JsonValue,
   ) => Effect.Effect<void, ChatMetadataFailed>;
 }
-
-const fromPromise = <A>(evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({ try: evaluate, catch: (cause) => ChatMetadataFailed.make({ cause }) });
-
-/** TanStack's store, until step 7 of docs/effect-ai-migration.md. */
-export const tanstackMetadata = (store: MetadataStore): ChatMetadata => ({
-  get: (namespace, key) => fromPromise(() => store.get(namespace, key)),
-  set: (namespace, key, value) => fromPromise(() => store.set(namespace, key, value)),
-});

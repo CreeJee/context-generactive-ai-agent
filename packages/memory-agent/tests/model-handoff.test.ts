@@ -1,11 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { Crypto, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
-import {
-  convertMessagesToModelMessages,
-  modelMessagesToUIMessages,
-  type MetadataStore,
-  type ModelMessage,
-} from "@tanstack/ai";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { modelHandoffNamespace } from "../src/agent/handoff-state.ts";
@@ -16,30 +10,26 @@ import {
   ModelHandoffReason,
 } from "../src/agent/model-handoff.ts";
 import { lookupSources } from "../src/agent/compaction.ts";
-import { tanstackMetadata } from "../src/chat-store/metadata.ts";
+import { type ChatMetadata, ChatMetadataFailed } from "../src/chat-store/metadata.ts";
 import type { StoredMessage } from "../src/chat-store/schema.ts";
 
-function fixture(stored: readonly ModelMessage[]) {
+function fixture(stored: ReadonlyArray<StoredMessage>) {
   const values = MutableHashMap.empty<string, unknown>();
-  const metadata: MetadataStore = {
+  const metadata: ChatMetadata = {
     get: (namespace, key) =>
-      Promise.resolve(
-        Option.getOrUndefined(MutableHashMap.get(values, `${namespace}:${key}`)) ?? null,
+      Effect.sync(
+        () => Option.getOrUndefined(MutableHashMap.get(values, `${namespace}:${key}`)) ?? null,
       ),
-    set: (namespace, key, value) => {
-      MutableHashMap.set(values, `${namespace}:${key}`, value);
-      return Promise.resolve();
-    },
-    delete: (namespace, key) => {
-      MutableHashMap.remove(values, `${namespace}:${key}`);
-      return Promise.resolve();
-    },
+    set: (namespace, key, value) =>
+      Effect.sync(() => {
+        MutableHashMap.set(values, `${namespace}:${key}`, value);
+      }),
   };
   const restore =
     (target: string, model: string, history = stored) =>
-    (messages: readonly ModelMessage[]) =>
+    (messages: ReadonlyArray<StoredMessage>) =>
       modelHandoffHistoryEffect({
-        metadata: tanstackMetadata(metadata),
+        metadata,
         threadId: "session",
         target,
         model,
@@ -66,13 +56,13 @@ const oldAnswer = {
   toolCalls: [oldCall],
   model: "old-model",
 };
-const past: ModelMessage[] = [
+const past: Array<StoredMessage> = [
   { role: "user", content: "프로젝트를 빌드해 줘" },
   oldAnswer,
   { role: "tool", toolCallId: "old-call", content: "build completed" },
 ];
-const notice: ModelMessage = { role: "assistant", content: handoffNotice };
-const pointer: ModelMessage = {
+const notice: StoredMessage = { role: "assistant", content: handoffNotice };
+const pointer: StoredMessage = {
   role: "assistant",
   content:
     "[Earlier tool call run_shell. Its output is kept in memory as node old-result: call read_evidence with that id to read it.]",
@@ -97,7 +87,7 @@ it.effect("stored messages name the model that wrote them", () =>
     ];
     const restore = (model: string) =>
       modelHandoffHistoryEffect({
-        metadata: tanstackMetadata(fixture([]).metadata),
+        metadata: fixture([]).metadata,
         threadId: "session",
         target: model,
         model,
@@ -117,11 +107,11 @@ it.effect("stored messages name the model that wrote them", () =>
 it.effect("a retry/restart keeps the checkpoint and new-model tool iterations", () =>
   Effect.gen(function* () {
     const f = fixture(past);
-    const question: ModelMessage = { role: "user", content: "continue" };
+    const question: StoredMessage = { role: "user", content: "continue" };
     const first = [...past, question];
     const restored = yield* f.restore("new", "new-model")(first);
     const newCall = { ...oldCall, id: "new-call" };
-    const tail: ModelMessage[] = [
+    const tail: Array<StoredMessage> = [
       question,
       { role: "assistant", content: null, toolCalls: [newCall] },
       { role: "tool", toolCallId: "new-call", content: "new result" },
@@ -168,7 +158,11 @@ it.effect("rejects an invalidated boundary instead of dropping unrelated history
       f.restore(
         "new",
         "new-model",
-      )([past[0]!, past[1]!, { role: "tool", content: "different result" }]),
+      )([
+        past[0]!,
+        past[1]!,
+        { role: "tool", toolCallId: "old-call", content: "different result" },
+      ]),
     );
     expect(ModelHandoffReason.guards.HistoryChanged(failed.reason)).toBe(true);
   }),
@@ -183,9 +177,12 @@ it.effect("does not invent a user request for an assistant-only legacy thread", 
   }),
 );
 
-it.effect("UI hydration preserves a handoff across tool fan-out and field reordering", () =>
+it.effect("a later turn keeps the handoff, and a changed boundary is refused", () =>
   Effect.gen(function* () {
-    const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
+    const stored: Array<StoredMessage> = past.map((message, index) => ({
+      ...message,
+      id: `message-${index}`,
+    }));
     stored.push({
       role: "assistant",
       content: null,
@@ -194,11 +191,11 @@ it.effect("UI hydration preserves a handoff across tool fan-out and field reorde
     });
     const f = fixture(stored);
     yield* f.restore("new", "new-model")(stored);
-    const tail: ModelMessage = { role: "user", content: "continue", id: "next" };
-    const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages([...stored, tail]));
-    const restored = yield* f.restore("new", "new-model")(hydrated);
-    expect(restored).toEqual([notice, hydrated[0], pointer, hydrated.at(-1)]);
-    const changed = hydrated.map((message) =>
+    const tail: StoredMessage = { role: "user", content: "continue", id: "next" };
+    const later = [...stored, tail];
+    const restored = yield* f.restore("new", "new-model")(later);
+    expect(restored).toEqual([notice, later[0], pointer, tail]);
+    const changed = later.map((message) =>
       message.id === "boundary" ? { ...message, content: "changed" } : message,
     );
     const failed = yield* Effect.flip(f.restore("new", "new-model")(changed));
@@ -206,9 +203,12 @@ it.effect("UI hydration preserves a handoff across tool fan-out and field reorde
   }),
 );
 
-it.effect("migrates a verified legacy boundary before replaying hydrated history", () =>
+it.effect("migrates a verified legacy boundary before replaying the stored history", () =>
   Effect.gen(function* () {
-    const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
+    const stored: Array<StoredMessage> = past.map((message, index) => ({
+      ...message,
+      id: `message-${index}`,
+    }));
     const f = fixture(stored);
     const legacyBoundary = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
       stored.at(-1),
@@ -219,20 +219,15 @@ it.effect("migrates a verified legacy boundary before replaying hydrated history
     const legacyAnchor = Buffer.from(
       yield* crypto.digest("SHA-256", new TextEncoder().encode(legacyBoundary)),
     ).toString("hex");
-    yield* Effect.promise(() =>
-      f.metadata.set(modelHandoffNamespace, "session", {
-        _tag: "handoff",
-        target: "new",
-        through: stored.length,
-        anchor: legacyAnchor,
-        context: "legacy evidence",
-      }),
-    );
-    const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages(stored));
-    expect(yield* f.restore("new", "new-model")(hydrated)).toEqual([notice, hydrated[0], pointer]);
-    expect(
-      yield* Effect.promise(() => f.metadata.get(modelHandoffNamespace, "session")),
-    ).toMatchObject({
+    yield* f.metadata.set(modelHandoffNamespace, "session", {
+      _tag: "handoff",
+      target: "new",
+      through: stored.length,
+      anchor: legacyAnchor,
+      context: "legacy evidence",
+    });
+    expect(yield* f.restore("new", "new-model")(stored)).toEqual([notice, stored[0], pointer]);
+    expect(yield* f.metadata.get(modelHandoffNamespace, "session")).toMatchObject({
       anchorId: "message-2",
       anchor: expect.stringMatching(/^v2:/),
     });
@@ -246,14 +241,16 @@ it.effect(
       let reads = 0;
       const cause = new Error("private metadata details");
       const restore = yield* modelHandoffHistoryEffect({
-        metadata: tanstackMetadata({
-          get: () => {
-            reads += 1;
-            return Promise.reject(cause);
-          },
-          set: () => Promise.resolve(),
-          delete: () => Promise.resolve(),
-        }),
+        metadata: {
+          get: () =>
+            Effect.andThen(
+              Effect.sync(() => {
+                reads += 1;
+              }),
+              Effect.fail(ChatMetadataFailed.make({ cause })),
+            ),
+          set: () => Effect.void,
+        },
         threadId: "session",
         target: "new",
         model: "new-model",
