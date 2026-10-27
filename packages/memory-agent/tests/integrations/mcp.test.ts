@@ -5,7 +5,7 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { chatClient, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
+import { openPage, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
 import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -348,13 +348,8 @@ const mcpChat = Effect.fnUntraced(function* (mode: "ask" | "auto") {
   yield* (yield* Projects).setPermissionMode(project.id, mode);
   yield* (yield* McpServers).setTrusted(project, "project", "fake", true);
   const session = (yield* (yield* Sessions).create(project.id)).id;
-  const page = yield* chatClient(session, "send");
-  return {
-    ...page,
-    session,
-    callId: scopedCallId("call-mcp_fake__echo", session),
-    finished: page.answered("mcp_fake__echo said", "the answer"),
-  };
+  const page = yield* openPage(session);
+  return { page, session, callId: scopedCallId("call-mcp_fake__echo", session) };
 });
 
 // Interrupt IDs are unique across the database, so the model scopes its call IDs to the session.
@@ -365,24 +360,17 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
       "ask mode asks before every MCP call and runs it once approved",
       () =>
         Effect.gen(function* () {
-          const { client, text, send, pendingInterrupt, finished, session, callId } =
-            yield* mcpChat("ask");
+          const { page, session, callId } = yield* mcpChat("ask");
           const nodes = yield* Nodes;
-          yield* send('call mcp_fake__echo {"text":"hi from mcp"}');
-          yield* pendingInterrupt;
-          expect(client.getInterrupts()[0]).toMatchObject({
-            kind: "generic",
-            definitionId: "permission-review",
-            payload: { toolName: "mcp_fake__echo" },
-          });
+          yield* page.send('call mcp_fake__echo {"text":"hi from mcp"}');
+          expect(page.pending()).toMatchObject([
+            { reason: "permission_review", metadata: { payload: { toolName: "mcp_fake__echo" } } },
+          ]);
           expect((yield* nodes.session(session)).some((node) => node.kind === "tool_result")).toBe(
             false,
           );
-          client.resolveInterrupts((item) => {
-            if (item.kind === "generic") item.resolveInterrupt({ approved: true });
-          });
-          yield* finished;
-          expect(text()).toContain("echo: hi from mcp");
+          yield* page.resolve(() => true);
+          expect(page.answer()).toContain("echo: hi from mcp");
           expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
             decision: "approved",
             decidedBy: "user",
@@ -395,14 +383,12 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
       "a declined MCP call never reaches the server",
       () =>
         Effect.gen(function* () {
-          const { client, text, send, pendingInterrupt, finished, session } = yield* mcpChat("ask");
-          yield* send('call mcp_fake__echo {"text":"never"}');
-          yield* pendingInterrupt;
-          client.resolveInterrupts((item) => {
-            if (item.kind === "generic") item.resolveInterrupt({ approved: false });
-          });
-          yield* finished;
-          expect(text()).not.toContain("echo: never");
+          const { page, session } = yield* mcpChat("ask");
+          yield* page.send('call mcp_fake__echo {"text":"never"}');
+          expect(page.pending()).toHaveLength(1);
+          yield* page.resolve(() => false);
+          expect(page.answer()).toContain("mcp_fake__echo said");
+          expect(page.answer()).not.toContain("echo: never");
           expect(
             (yield* (yield* Nodes).session(session)).find((node) => node.kind === "tool_result")
               ?.detail,
@@ -415,11 +401,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
       "auto mode sends MCP calls through the permission review",
       () =>
         Effect.gen(function* () {
-          const { client, text, send, finished, session, callId } = yield* mcpChat("auto");
-          yield* send('call mcp_fake__echo {"text":"reviewed"}');
-          yield* finished;
-          expect(client.getInterrupts()).toHaveLength(0);
-          expect(text()).toContain("echo: reviewed");
+          const { page, session, callId } = yield* mcpChat("auto");
+          yield* page.send('call mcp_fake__echo {"text":"reviewed"}');
+          expect(page.pending()).toHaveLength(0);
+          expect(page.answer()).toContain("echo: reviewed");
           expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
             decision: "allow",
             decidedBy: "classifier",

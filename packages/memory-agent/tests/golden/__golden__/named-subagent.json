@@ -53,8 +53,15 @@
         {
           "content": null,
           "createdAt": "<time>",
+          "finishReason": "tool_calls",
           "id": "<id-2>",
+          "model": "scripted-1",
           "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
           "toolCalls": [
             {
               "function": {
@@ -84,8 +91,15 @@
         {
           "content": "first started",
           "createdAt": "<time>",
+          "finishReason": "stop",
           "id": "<id-6>",
-          "role": "assistant"
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
         }
       ],
       "ordinal": 2,
@@ -174,8 +188,15 @@
         {
           "content": null,
           "createdAt": "<time>",
+          "finishReason": "tool_calls",
           "id": "<id-11>",
+          "model": "scripted-1",
           "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
           "toolCalls": [
             {
               "function": {
@@ -205,8 +226,15 @@
         {
           "content": "second started",
           "createdAt": "<time>",
+          "finishReason": "stop",
           "id": "<id-14>",
-          "role": "assistant"
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
         }
       ],
       "ordinal": 7,
@@ -660,8 +688,15 @@
         {
           "content": null,
           "createdAt": "<time>",
+          "finishReason": "tool_calls",
           "id": "<id-2>",
+          "model": "scripted-1",
           "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
           "toolCalls": [
             {
               "function": {
@@ -681,8 +716,15 @@
         {
           "content": "first started",
           "createdAt": "<time>",
+          "finishReason": "stop",
           "id": "<id-6>",
-          "role": "assistant"
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
         },
         {
           "content": null,
@@ -734,8 +776,15 @@
         {
           "content": null,
           "createdAt": "<time>",
+          "finishReason": "tool_calls",
           "id": "<id-11>",
+          "model": "scripted-1",
           "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
           "toolCalls": [
             {
               "function": {
@@ -755,8 +804,15 @@
         {
           "content": "second started",
           "createdAt": "<time>",
+          "finishReason": "stop",
           "id": "<id-14>",
-          "role": "assistant"
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
         },
         {
           "content": null,

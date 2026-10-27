@@ -8,6 +8,11 @@ import { GlobalConfig } from "../../src/config/global-config.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
+import {
+  scriptedModel,
+  scriptedSource,
+  shownScriptedFailure,
+} from "../../src/testing/scripted-model.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -34,19 +39,6 @@ const post = Effect.fnUntraced(function* (sessionId: string, content: Content) {
     }),
     sessionId,
   );
-});
-
-/** Count the provider's account releases for the rest of the test. */
-const countReleases = Effect.gen(function* () {
-  const { adapter } = (yield* TestEnv).provider!;
-  const released = MutableRef.make(0);
-  yield* Effect.acquireRelease(
-    Effect.sync(() =>
-      Object.assign(adapter, { releaseRun: () => void MutableRef.increment(released) }),
-    ),
-    () => Effect.sync(() => Reflect.deleteProperty(adapter, "releaseRun")),
-  );
-  return () => MutableRef.get(released);
 });
 
 const imagePart = Effect.fnUntraced(function* () {
@@ -84,40 +76,6 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
         ))?.count,
       }).toEqual({ runs: 0, users: 0 });
     }),
-  );
-
-  it.effect.each([{ run: "streamed" }, { run: "model_mismatch" }] as const)(
-    "releases a pinned account exactly once when the run is $run",
-    ({ run }) =>
-      Effect.gen(function* () {
-        yield* selectTestModel();
-        const sessionId = yield* freshSession;
-        switch (run) {
-          case "streamed": {
-            const released = yield* countReleases;
-            const response = yield* post(sessionId, "hello");
-            expect(response.status).toBe(200);
-            // Only after the durable SSE stream finishes.
-            yield* sdk(() => response.text());
-            expect(released()).toBe(1);
-            break;
-          }
-          case "model_mismatch": {
-            yield* (yield* GlobalConfig).update({
-              provider: "openai",
-              model: "not-in-new-account",
-              reasoningEffort: "low",
-            });
-            const released = yield* countReleases;
-            const response = yield* post(sessionId, "hello");
-            // Early, before streaming.
-            expect(response.status).toBe(409);
-            expect(yield* json(response)).toMatchObject({ error: "model_unavailable_for_account" });
-            expect(released()).toBe(1);
-            break;
-          }
-        }
-      }),
   );
 
   it.effect("answers from memory through provider tools, records the run and indexes it", () =>
@@ -341,3 +299,31 @@ testAgent({ providerRegistry: ProviderRegistry.layer([], []) })(
     );
   },
 );
+
+/** How many runs let their model go, as a run lets its pinned account go. */
+const released = MutableRef.make(0);
+
+testAgent({
+  testProvider: {
+    runModel: (_selection, run) =>
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.sync(() => MutableRef.increment(released)));
+        const scripted = yield* scriptedModel([{ text: "hello" }]);
+        return {
+          model: yield* scripted.forRun(run),
+          source: scriptedSource,
+          shownFailure: shownScriptedFailure,
+        };
+      }),
+  },
+})("a run's model", (it) => {
+  it.effect("is let go once, when the run's stream ends", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const response = yield* post(yield* freshSession, "hello");
+      expect(response.status).toBe(200);
+      yield* sdk(() => response.text());
+      expect(MutableRef.get(released)).toBe(1);
+    }),
+  );
+});

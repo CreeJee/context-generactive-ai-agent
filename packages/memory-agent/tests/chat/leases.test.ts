@@ -3,7 +3,8 @@ import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { testAgent } from "../support/test-env.ts";
-import { freshSession, json, openTab, sdk, until } from "./tab.ts";
+import { openPage } from "../support/chat-client.ts";
+import { freshSession, json } from "./tab.ts";
 
 const Lease = Schema.Union([
   Schema.Struct({ state: Schema.Literal("mine") }),
@@ -35,42 +36,28 @@ testAgent({ testProvider: {} })("session leases", (it) => {
         );
         expect(yield* leaseOf("tab-a")).toEqual({ state: "mine" });
 
-        const owner = yield* openTab(sessionId, "tab-a");
-        yield* Effect.forkChild(
-          sdk(() => owner.client.sendMessage("please use the shell")),
-          { startImmediately: true },
-        );
-        yield* until(() => owner.client.getInterrupts().length === 1, "the approval request");
+        const owner = yield* openPage(sessionId, "tab-a");
+        yield* owner.send("please use the shell");
+        expect(owner.pending()).toHaveLength(1);
 
         // The read-only tab sees the same conversation and the waiting approval…
-        const reader = yield* openTab(sessionId, "tab-b");
-        yield* until(
-          () => reader.client.getInterrupts().length === 1,
-          "the approval in the read-only tab",
-        );
+        const reader = yield* openPage(sessionId, "tab-b");
+        expect(reader.pending()).toHaveLength(1);
         // …but its answer is refused, and so are a new message and a cancel.
-        reader.client.resolveInterrupts(true);
-        yield* until(() => reader.client.getError() !== undefined, "the refused approval");
-        expect(reader.client.getError()?.message).toContain("423");
+        expect(yield* Effect.flip(reader.resolve(() => true))).toMatchObject({
+          error: "session_in_use",
+        });
+        expect(yield* Effect.flip(reader.send("hello"))).toMatchObject({ error: "session_in_use" });
         expect((yield* agent.cancel(sessionId, "tab-b")).status).toBe(423);
 
         // The owner leaves; the reader is told the session is free and continues after claiming it.
         yield* agent.lease(sessionId, "tab-a", "release");
-        owner.client.dispose();
         expect(yield* leaseOf("tab-b")).toEqual({ state: "free" });
         yield* agent.lease(sessionId, "tab-b", "claim");
-        reader.client.dispose();
-        const continued = yield* openTab(sessionId, "tab-b");
-        yield* until(
-          () => continued.client.getInterrupts().length === 1,
-          "the approval after taking over",
-        );
-        continued.client.resolveInterrupts(true);
-        yield* until(
-          () => continued.answer().includes("approved-output"),
-          "the answer after approval",
-        );
-        yield* until(() => !continued.client.getIsLoading(), "the run to finish");
+        const continued = yield* openPage(sessionId, "tab-b");
+        expect(continued.pending()).toHaveLength(1);
+        yield* continued.resolve(() => true);
+        expect(continued.answer()).toContain("approved-output");
       }),
   );
 });

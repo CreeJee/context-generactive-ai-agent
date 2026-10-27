@@ -1,8 +1,6 @@
 // Native ACP processes prove actual OS environment isolation, reconnect and cancellation.
-import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Effect, Fiber, FiberSet, FileSystem, Path, Schedule, Schema, Stream } from "effect";
+import { Cause, Effect, Fiber, FileSystem, Path, Schedule, Schema, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
 import { ApprovalRequester } from "../../src/approvals/relayed-state.ts";
@@ -18,8 +16,8 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
 import { DelegateTools } from "../../src/tools/delegate.ts";
-import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { chatApi } from "../support/chat-api.ts";
+import { openPage } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { runToolRequestDifferences } from "../support/requests.ts";
 import { inRun } from "../support/run-span.ts";
@@ -317,45 +315,23 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         yield* trust;
         yield* current(selectTestModel());
         const relayed = yield* RelayedApprovals;
-        const agent = yield* AgentChat;
-        const run = yield* FiberSet.makeRuntimePromise<never>();
-        const client = yield* Effect.acquireRelease(
-          Effect.sync(
-            () =>
-              new ChatClient({
-                threadId: "thread",
-                tools: approvalToolDefinitions,
-                interrupts: [permissionReviewInterrupt],
-                connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {
-                  fetchClient: (input, init) =>
-                    run(agent.handle(new Request(input, init), sessionId)),
-                }),
-              }),
-          ),
-          (client) => Effect.sync(() => client.dispose()),
+        const page = yield* openPage(sessionId);
+        // The delegation waits for its report inline, however long the relayed answer takes.
+        yield* page.send(
+          'call delegate_to_agent {"agent":"fake","task":"needs permission to edit","yieldMs":15000}',
         );
-        const answer = () =>
-          client
-            .getMessages()
-            .flatMap((message) =>
-              message.role === "assistant"
-                ? message.parts.flatMap((part) => (part.type === "text" ? [part.content] : []))
-                : [],
-            )
-            .join("");
-
-        yield* sdk(() =>
-          client.sendMessage(
-            'call delegate_to_agent {"agent":"fake","task":"needs permission to edit"}',
-          ),
+        expect(page.pending()).toMatchObject([
+          {
+            reason: "permission_review",
+            metadata: { payload: { toolName: "delegate_to_agent", askedBy: "every_call" } },
+          },
+        ]);
+        const resumed = yield* Effect.forkChild(
+          page.resolve(() => true),
+          {
+            startImmediately: true,
+          },
         );
-        yield* until(() => client.getInterrupts().length === 1, "approval of the delegation");
-        expect(client.getInterrupts()[0]).toMatchObject({
-          payload: { toolName: "delegate_to_agent", askedBy: "every_call" },
-        });
-        client.resolveInterrupts((item) => {
-          if (item.kind === "generic") item.resolveInterrupt({ approved: true });
-        });
         yield* until(
           Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
           "the agent's permission request",
@@ -367,7 +343,8 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           askedBy: "agent",
         });
         yield* relayed.answer(sessionId, request!.id, true);
-        yield* until(() => answer().includes("permission: once"), "the delegation result");
+        yield* Fiber.join(resumed);
+        expect(page.answer()).toContain("permission: once");
       }),
     // Three bounded approval/process waits can exceed Vitest's default five seconds under load.
     20_000,

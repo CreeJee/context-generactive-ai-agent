@@ -175,8 +175,10 @@
       "thread_id": "<session>",
       "usage": {
         "cachedInputTokens": 2000,
+        "cacheWriteInputTokens": 0,
         "inputTokens": 2400,
         "outputTokens": 60,
+        "reasoningTokens": 0,
         "totalTokens": 2460
       }
     }

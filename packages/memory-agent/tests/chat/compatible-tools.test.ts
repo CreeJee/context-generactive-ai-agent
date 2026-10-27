@@ -41,7 +41,8 @@ const chunk = (delta: Delta, finishReason: string | null = null) => ({
 // tool result it answers in text.
 const requests: ChatRequest[] = [];
 const endpoint: typeof fetch = (input, init) => {
-  if (!(input instanceof Request ? input.url : input.toString()).endsWith("/chat/completions"))
+  const sent = new Request(input, init);
+  if (!sent.url.endsWith("/chat/completions"))
     return Promise.resolve(Response.json({ object: "list", data: [] }));
   const answer = (request: ChatRequest) => {
     requests.push(request);
@@ -62,7 +63,12 @@ const endpoint: typeof fetch = (input, init) => {
           chunk({}, "tool_calls"),
         );
   };
-  return Effect.runPromise(Effect.map(Schema.decodeUnknownEffect(ChatRequest)(init?.body), answer));
+  return Effect.runPromise(
+    Effect.tryPromise(() => sent.text()).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(ChatRequest)),
+      Effect.map(answer),
+    ),
+  );
 };
 
 testAgent({

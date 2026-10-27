@@ -5,7 +5,7 @@ const { join } = path;
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
 import { ProviderUnavailable, type ProviderId } from "./providers/contracts.ts";
-import { AgentChat, ChatLoop } from "./agent/chat.ts";
+import { AgentChat } from "./agent/chat.ts";
 import { BtwChat } from "./btw/chat.ts";
 import { ProjectImprovement } from "./improve/discovery.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
@@ -119,8 +119,6 @@ import {
 } from "./runtime/execution-admission.ts";
 
 export interface MemoryAgentLayerOptions {
-  /** The loop of chat runs; TanStack's until step 7 of docs/effect-ai-migration.md. */
-  readonly chatLoop?: typeof ChatLoop.Service;
   readonly executionAdmission?: ExecutionAdmissionLimits;
   readonly openDatabase?: Parameters<typeof Database.layer>[1];
   /** Isolated evaluation transport; production uses its endpoint-bound keyring. */
@@ -383,8 +381,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     ),
   );
   return AgentChat.layer.pipe(
-    // Kept in the agent's services, so a client of the agent can tell which wire it speaks.
-    Layer.provideMerge(Layer.succeed(ChatLoop, options.chatLoop ?? ChatLoop.defaultValue())),
     Layer.provideMerge(kanbanRuntime),
     Layer.provideMerge(
       Layer.mergeAll(

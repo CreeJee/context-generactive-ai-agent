@@ -6,11 +6,10 @@ import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
-import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { inRun } from "../support/run-span.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { chatClient, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
+import { openPage, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
 
 /** A fresh session in a project set to `auto`, with the test model selected. */
 const autoSession = Effect.gen(function* () {
@@ -20,16 +19,16 @@ const autoSession = Effect.gen(function* () {
   return (yield* (yield* Sessions).create(project.id)).id;
 });
 
-/** A session whose tab asked the model to run `command` through the shell. */
+/** A session whose page asked the model to run `command` through the shell. */
 const shellRequest = Effect.fnUntraced(function* (command: string) {
   const sessionId = yield* autoSession;
-  const tab = yield* chatClient(sessionId, "send");
-  yield* tab.send(`shell: ${command}`);
+  const page = yield* openPage(sessionId);
+  yield* page.send(`shell: ${command}`);
   const nodes = yield* Nodes;
   const reviews = yield* PermissionReviews;
   return {
     sessionId,
-    tab,
+    page,
     shellResult: () =>
       Effect.map(nodes.session(sessionId), (session) =>
         session.find((node) => node.kind === "tool_result"),
@@ -78,10 +77,9 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
 
   it.effect("runs a call the review allows without asking, and records why", () =>
     Effect.gen(function* () {
-      const { tab, review, shellResult } = yield* shellRequest("printf reviewed-ok");
-      yield* tab.answered("Shell said", "the answer");
-      expect(tab.client.getInterrupts()).toHaveLength(0);
-      expect(tab.text()).toContain('"scriptSha256"');
+      const { page, review, shellResult } = yield* shellRequest("printf reviewed-ok");
+      expect(page.pending()).toHaveLength(0);
+      expect(page.answer()).toContain('"scriptSha256"');
       expect(yield* review).toMatchObject({
         decision: "allow",
         decidedBy: "classifier",
@@ -96,11 +94,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
 
   it.effect("never runs a blocked call and tells the model why", () =>
     Effect.gen(function* () {
-      const { tab, shellResult } = yield* shellRequest("printf block-me-output");
-      yield* tab.answered("Shell said", "the answer");
-      expect(tab.client.getInterrupts()).toHaveLength(0);
-      expect(tab.text()).toContain("blocked_by_permission_review");
-      expect(tab.text()).not.toContain("block-me-output\\n");
+      const { page, shellResult } = yield* shellRequest("printf block-me-output");
+      expect(page.pending()).toHaveLength(0);
+      expect(page.answer()).toContain("blocked_by_permission_review");
+      expect(page.answer()).not.toContain("block-me-output\\n");
       expect((yield* shellResult())?.detail).toMatchObject({
         ok: false,
         permission: { decision: "block" },
@@ -110,20 +107,16 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
 
   it.effect("asks the user when the review is unsure, then runs only after approval", () =>
     Effect.gen(function* () {
-      const { tab, review, shellResult } = yield* shellRequest("printf ask-me-approved");
-      yield* tab.pendingInterrupt;
-      expect(tab.client.getInterrupts()[0]).toMatchObject({
-        kind: "generic",
-        definitionId: "permission-review",
-        payload: { toolName: "save_code_skill", reason: "검토 결과: ask" },
-      });
+      const { page, review, shellResult } = yield* shellRequest("printf ask-me-approved");
+      expect(page.pending()).toMatchObject([
+        {
+          reason: "permission_review",
+          metadata: { payload: { toolName: "save_code_skill", reason: "검토 결과: ask" } },
+        },
+      ]);
       expect(yield* shellResult()).toBeUndefined();
-      tab.client.resolveInterrupts((item) => {
-        if (item.kind === "generic" && item.binding.definitionId === permissionReviewInterrupt.id)
-          item.resolveInterrupt({ approved: true });
-      });
-      yield* tab.answered("Shell said", "the answer");
-      expect(tab.text()).toContain('"scriptSha256"');
+      yield* page.resolve(() => true);
+      expect(page.answer()).toContain('"scriptSha256"');
       expect(yield* review).toMatchObject({ decision: "approved", decidedBy: "user" });
       expect((yield* shellResult())?.detail).toMatchObject({
         ok: true,
@@ -134,13 +127,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
 
   it.effect("a declined review never runs the call", () =>
     Effect.gen(function* () {
-      const { tab, shellResult } = yield* shellRequest("printf ask-me-declined");
-      yield* tab.pendingInterrupt;
-      tab.client.resolveInterrupts((item) => {
-        if (item.kind === "generic") item.resolveInterrupt({ approved: false });
-      });
-      yield* tab.answered("Shell said", "the answer");
-      expect(tab.text()).toContain('"approved":false');
+      const { page, shellResult } = yield* shellRequest("printf ask-me-declined");
+      expect(page.pending()).toHaveLength(1);
+      yield* page.resolve(() => false);
+      expect(page.answer()).toContain('"approved":false');
       expect((yield* shellResult())?.detail).toMatchObject({
         ok: false,
         permission: { decision: "denied", decidedBy: "user" },
@@ -150,8 +140,8 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
 
   it.effect("a broken verdict falls back to asking the user", () =>
     Effect.gen(function* () {
-      const { tab, review, shellResult } = yield* shellRequest("printf broken-review");
-      yield* tab.pendingInterrupt;
+      const { page, review, shellResult } = yield* shellRequest("printf broken-review");
+      expect(page.pending()).toHaveLength(1);
       expect(yield* review).toMatchObject({ decision: "ask", decidedBy: "fallback" });
       expect(yield* shellResult()).toBeUndefined();
     }),
@@ -159,20 +149,11 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
 
   it.effect("a restored permission review resolves once after leaving the conversation", () =>
     Effect.gen(function* () {
-      const { sessionId, tab, shellResult } = yield* shellRequest("printf ask-me-restored");
-      yield* tab.pendingInterrupt;
-      tab.client.dispose();
-      const reloaded = yield* chatClient(sessionId, "restore");
-      yield* reloaded.pendingInterrupt;
-      reloaded.client.resolveInterrupts((item) => {
-        if (item.kind === "generic") item.resolveInterrupt({ approved: true });
-      });
-      yield* reloaded.until(
-        Effect.map(shellResult(), (result) => result !== undefined),
-        "approved call to execute",
-      );
-      yield* reloaded.until(() => !reloaded.client.getIsLoading(), "resumed run to finish");
-      expect(reloaded.client.getInterrupts()).toHaveLength(0);
+      const { sessionId, shellResult } = yield* shellRequest("printf ask-me-restored");
+      const reloaded = yield* openPage(sessionId);
+      expect(reloaded.pending()).toHaveLength(1);
+      yield* reloaded.resolve(() => true);
+      expect(reloaded.pending()).toHaveLength(0);
       expect((yield* shellResult())?.detail).toMatchObject({ ok: true });
     }),
   );

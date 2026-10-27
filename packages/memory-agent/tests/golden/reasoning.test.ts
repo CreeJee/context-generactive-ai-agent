@@ -1,10 +1,11 @@
 import { Effect, Stream } from "effect";
+import {
+  shownSubscriptionFailure,
+  subscriptionModel,
+  type StreamingOAuthClient,
+} from "../../src/model/subscription.ts";
 import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import type { SubscriptionAccountProvider } from "../../src/providers/contracts.ts";
-import {
-  SubscriptionTextAdapter,
-  type StreamingOAuthClient,
-} from "../../src/providers/subscription-adapter.ts";
 import { nativeStream } from "../../src/runtime/native-stream.ts";
 import { testAgent } from "../support/test-env.ts";
 import { conversation, expectGolden } from "./driver.ts";
@@ -82,8 +83,20 @@ const scriptedClient = (provider: SubscriptionAccountProvider): StreamingOAuthCl
 for (const provider of ["anthropic", "openai"] as const)
   testAgent({
     testProvider: {
-      adapter: (selection) =>
-        new SubscriptionTextAdapter(scriptedClient(provider), { ...selection, provider }),
+      // As the provider's runtime makes it, on the scripted client.
+      runModel: (selection, run) =>
+        Effect.map(
+          subscriptionModel({
+            client: scriptedClient(provider),
+            selection: { ...selection, provider },
+            promptCache: { retention: run.cacheRetention, key: run.threadId },
+          }),
+          (model) => ({
+            model,
+            source: { provider, api: "text", model: selection.model },
+            shownFailure: shownSubscriptionFailure,
+          }),
+        ),
     },
   })(`golden reasoning rows (${provider})`, (it) => {
     it.effect(

@@ -1,7 +1,25 @@
 import { chatRoute } from "./chat-route.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Effect, Function as EffectFunction } from "effect";
+import { Cause, Crypto, Effect, Function as EffectFunction, MutableRef, Stream } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
+import {
+  type ChatMessage,
+  maxPageSize,
+  MessagePart,
+  type PendingInterrupts,
+  type RunEvent,
+  type RunInput,
+} from "../../src/api/chat-api.ts";
+import { partsOf, type UserContent } from "../../src/api/chat-session.ts";
+import {
+  applyEvent,
+  caughtUp,
+  type ChatView,
+  streamStarted,
+  viewOf,
+} from "../../src/api/chat-view.ts";
+import { optionalProperty } from "../../src/optional-property.ts";
+import { chatApi } from "./chat-api.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import { defaultTestResponder } from "./provider.ts";
@@ -118,6 +136,98 @@ export const chatClient = Effect.fnUntraced(function* (sessionId: string, connec
       yield* until(() => !client.getIsLoading(), "the run to finish");
     }),
     pendingInterrupt: until(() => client.getInterrupts().length === 1, "the pending interrupt"),
+  };
+});
+
+/** An approval a session waits for, as the page lists it. */
+export type PendingApproval = PendingInterrupts["pending"][number];
+
+/**
+ * A browser tab on the chat API, answered in-process by the agent open now. It reads the session as
+ * the page's hook does (`src/api/chat-session.ts`): the newest messages, then each run it starts or
+ * answers, then the newest messages again.
+ */
+export const openPage = Effect.fnUntraced(function* (
+  session: string,
+  holder: string | null = null,
+) {
+  const api = yield* chatApi;
+  const crypto = yield* Crypto.Crypto;
+  const headers = holder === null ? {} : { "x-session-holder": holder };
+  const newest = api.snapshot({ params: { session }, query: { limit: maxPageSize } });
+  const view = MutableRef.make(viewOf(yield* newest));
+  const changed = (change: (current: ChatView) => ChatView) =>
+    Effect.sync(() => MutableRef.update(view, change));
+  /** Reads a run's events into the view until its stream ends, then the newest messages again. */
+  const following = <E>(events: Stream.Stream<RunEvent, E>) =>
+    changed(streamStarted).pipe(
+      Effect.andThen(Stream.runForEach(events, ({ data }) => changed(applyEvent(data)))),
+      Effect.andThen(newest),
+      Effect.flatMap((snapshot) => changed(caughtUp(snapshot))),
+    );
+  const texts = (role: ChatMessage["role"]) =>
+    MutableRef.get(view)
+      .messages.filter((message) => message.role === role)
+      .map((message) =>
+        message.parts
+          .flatMap((part) => (MessagePart.guards.text(part) ? [part.content] : []))
+          .join(""),
+      );
+  return {
+    view: () => MutableRef.get(view),
+    texts,
+    /** Every assistant message's text, in order. */
+    answer: () => texts("assistant").join(""),
+    pending: (): ReadonlyArray<PendingApproval> => MutableRef.get(view).interrupts?.pending ?? [],
+    /** Sends a user turn and reads its run to the end. A refused turn leaves the conversation. */
+    send: Effect.fnUntraced(function* (
+      content: UserContent,
+      forwardedProps?: RunInput["forwardedProps"],
+    ) {
+      const id = yield* crypto.randomUUIDv7();
+      yield* changed((current) => ({
+        ...current,
+        messages: [...current.messages, { id, role: "user", parts: partsOf(content) }],
+      }));
+      const events = yield* api
+        .run({
+          params: { session },
+          headers,
+          payload: {
+            runId: yield* crypto.randomUUIDv7(),
+            messages: [{ id, role: "user", content }],
+            ...optionalProperty("forwardedProps", forwardedProps),
+          },
+        })
+        .pipe(
+          Effect.tapError(() =>
+            changed((current) => ({
+              ...current,
+              messages: current.messages.filter((message) => message.id !== id),
+            })),
+          ),
+        );
+      yield* following(events);
+    }),
+    /** Answers every approval the session waits for, and reads the run that resumes it. */
+    resolve: Effect.fnUntraced(function* (approved: (pending: PendingApproval) => boolean) {
+      const waiting = yield* Effect.fromNullishOr(MutableRef.get(view).interrupts);
+      const events = yield* api.run({
+        params: { session },
+        headers,
+        payload: {
+          runId: yield* crypto.randomUUIDv7(),
+          parentRunId: waiting.runId,
+          messages: [],
+          resume: waiting.pending.map((pending) => ({
+            interruptId: pending.id,
+            status: "resolved",
+            payload: { approved: approved(pending) },
+          })),
+        },
+      });
+      yield* following(events);
+    }),
   };
 });
 

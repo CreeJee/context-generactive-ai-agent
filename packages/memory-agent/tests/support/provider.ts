@@ -1,8 +1,8 @@
 import {
   AuthConnectionState,
   ProviderOperationFailed,
+  type AgentModelRuntime,
   type ModelRun,
-  type RunTextAdapter,
 } from "../../src/providers/contracts.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage, TokenUsage } from "@tanstack/ai";
@@ -283,8 +283,8 @@ export interface TestProviderOptions {
   readonly responder?: ScriptedResponder;
   /** Replace scripted delays with a test-controlled gate. */
   readonly delayedTurnGate?: ScriptedTurn["waitFor"];
-  /** Run chats on this adapter instead of the scripted one, such as a provider's own adapter. */
-  readonly adapter?: (selection: ModelSelection) => RunTextAdapter;
+  /** Run chats on this model instead of the scripted one, such as a provider's own model. */
+  readonly runModel?: AgentModelRuntime["model"];
   /** Wraps the scripted model the Effect AI loop runs on, such as to hold its stream. */
   readonly model?: (model: LanguageModel.LanguageModel) => LanguageModel.LanguageModel;
 }
@@ -490,13 +490,15 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
         runtime: () =>
           Effect.succeed({
             provider: "openai" as const,
-            adapter: options.adapter ?? (() => adapter),
-            model: (_selection: ModelSelection, run: ModelRun) =>
-              Effect.map(scripted.forRun(run), (model) => ({
-                model: options.model?.(model) ?? model,
-                source: scriptedSource,
-                shownFailure: shownScriptedFailure,
-              })),
+            adapter: () => adapter,
+            model:
+              options.runModel ??
+              ((_selection: ModelSelection, run: ModelRun) =>
+                Effect.map(scripted.forRun(run), (model) => ({
+                  model: options.model?.(model) ?? model,
+                  source: scriptedSource,
+                  shownFailure: shownScriptedFailure,
+                }))),
             contextWindow: () => 200_000,
             agentLoop: subscriptionAgentLoop,
             runMiddleware: () => ({ name: "memory-agent/test-provider" }),

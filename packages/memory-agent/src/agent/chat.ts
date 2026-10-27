@@ -19,7 +19,7 @@ import { ResumeEntry } from "../loop/resume.ts";
 import { tanstackMetadata } from "../chat-store/metadata.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { chatSnapshot } from "../chat-state/snapshot.ts";
-import { projectInstructions, projectInstructionsHook } from "./project-instructions.ts";
+import { projectInstructionsHook } from "./project-instructions.ts";
 import { pageTurns, withPageTurns } from "./page-turns.ts";
 import { aborted } from "../runtime/aborted.ts";
 import type { RunTool } from "../tools/run-tool.ts";
@@ -35,7 +35,6 @@ import {
   requestRunCancel,
   resumeServerSentEventsResponse,
   toServerSentEventsResponse,
-  type AnyServerTool,
   type ChatMiddleware,
   type ModelMessage,
   type StreamChunk,
@@ -71,7 +70,7 @@ import { KanbanOrchestrator, type KanbanAttentionReason } from "../kanban/orches
 import { KanbanTools, kanbanAttentionPrompt, kanbanInstructions } from "../kanban/tools.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
-import { modelBoundMessages, modelImages, modelImagesHook } from "../attachments/model-images.ts";
+import { modelBoundMessages, modelImagesHook } from "../attachments/model-images.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
@@ -91,15 +90,11 @@ import {
   providerConnection,
   ProviderId,
   type ModelSelection,
-  type RunTextAdapter,
 } from "../providers/contracts.ts";
-import {
-  createSubscriptionRuntimeImplementation,
-  releaseSubscriptionRun,
-} from "../providers/subscription-runtime.ts";
+import { createSubscriptionRuntimeImplementation } from "../providers/subscription-runtime.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { ProviderToolRuntime } from "../providers/tool-policy.ts";
-import { McpServers, mcpInstructionsForMode, type McpRunTools } from "../mcp/servers.ts";
+import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
@@ -110,7 +105,7 @@ import { PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
-import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
+import { gatedToolNames } from "../tools/definitions.ts";
 import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { DrawingPreviews } from "../attachments/previews.ts";
@@ -118,46 +113,36 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
-import { parallelReads } from "../tools/parallel-reads.ts";
-import { repeatGuard, repeatGuardHook } from "../tools/repeat-guard.ts";
+import { repeatGuardHook } from "../tools/repeat-guard.ts";
 import { ChildTools, Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
-import { ExternalAgentAdapter } from "../external-agents/adapter.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
 import { MemorySearch } from "../memory/search.ts";
 import { MemoryTools, type MemoryToolScope } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
-import { steerCuttable, steerCuttableModel, type SteerCut } from "./steer-cut.ts";
+import { steerCuttableModel, type SteerCut } from "./steer-cut.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import { NextDelivery, QueueEdit, type QueuedMessage } from "../queue/queue-state.ts";
-import { modelHandoffHistory, modelHandoffHistoryEffect } from "./model-handoff.ts";
+import { modelHandoffHistoryEffect } from "./model-handoff.ts";
 import {
   budgetFor,
   compactByHand,
-  compaction,
   compactionHook,
   estimateTokens,
   messageText,
   type CompactionSources,
 } from "./compaction.ts";
-import {
-  contextUsageHook,
-  contextView,
-  lastContextUsage,
-  recordContextUsage,
-} from "./context-usage.ts";
-import { ApiUsage, apiUsageHook, collectApiUsage } from "./api-usage.ts";
+import { contextUsageHook, contextView, lastContextUsage } from "./context-usage.ts";
+import { ApiUsage, apiUsageHook } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import { fallbackLogged, logDefect, logFailure } from "../runtime/logged-failures.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
-import { createChatExecution } from "./chat-execution.ts";
-import { shownRunErrors, withShownRunErrors } from "./run-errors.ts";
-import type { ChatExecutionTurn, ChatExecutionCapabilities } from "./chat-execution.ts";
+import { shownRunErrors } from "./run-errors.ts";
 import {
   acknowledgedRunSql,
   resolvedRunSql,
@@ -175,7 +160,6 @@ import {
   serverRestartedMessage,
   type CancelResult,
   type CompactResult,
-  type CompactionStage,
   type SessionRunState,
 } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -214,7 +198,6 @@ import {
   initialReportEvidence,
   reportBinding,
   reportRunToolsForSession,
-  reportToolsForSession,
 } from "../tools/report-evidence.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -579,16 +562,6 @@ const pageResponse = ChatStart.$match({
 
 export { modelBoundMessages };
 
-/**
- * The loop that runs a chat run the app's model answers: TanStack's, or Effect AI's
- * (docs/effect-ai-migration.md step 4). Effect AI runs every Goal run whatever this says (step 5),
- * and never a run with the provider image tool.
- */
-export const ChatLoop = Context.Reference<"tanstack" | "effect-ai">(
-  "memory-agent/agent/chat/ChatLoop",
-  { defaultValue: () => "tanstack" },
-);
-
 /** The reason the owner aborts a run's controller with when it shuts down; a cancel has another. */
 const serviceShutdown = "service_shutdown";
 
@@ -810,7 +783,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const places: SettingsPlaces = { storageRoot: (yield* StorageRoot).path };
   const liveRuns = yield* createLiveRuns;
   const cancellations = yield* SdkCancellations;
-  const chatLoop = yield* ChatLoop;
   const runStore = yield* RunStore;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
@@ -1540,7 +1512,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ? internalFollowup
         : null;
       let claimedNext: string | null = null;
-      let runAdapterToRelease: RunTextAdapter | null = null;
       let cancellationToRelease: Effect.Effect<void> = Effect.void;
       let stopSteeringOnExit: Effect.Effect<void> = Effect.void;
       return Effect.gen(function* () {
@@ -1684,18 +1655,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         claimedNext = next?.id ?? null;
         const queuedId = next?.id;
         const nextMessage = isTruthy(next) ? [yield* delivery.toUserMessage(next)] : [];
+        // The thread already holds the conversation, so an internal follow-up brings only the
+        // steered message. A queued next turn takes the place of the page's placeholder turn.
         const messages =
           internalFollowup !== null
-            ? [
-                ...(yield* agentPromise("load-messages", () =>
-                  chatState.persistence.stores.messages.loadThread(sessionId),
-                )),
+            ? nextMessage
+            : [
+                ...(isTruthy(next) ? incomingMessages.slice(0, -1) : incomingMessages),
                 ...nextMessage,
-              ]
-            : isTruthy(next)
-              ? [...incomingMessages.slice(0, -1), ...nextMessage]
-              : incomingMessages;
-        const threadId = sessionId;
+              ];
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn =
@@ -1783,183 +1751,106 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             },
             externalAgent: answeredBy,
           };
-          if (chatLoop === "effect-ai" || deliveredTo === "api") {
-            const turns = yield* pageTurns(internalFollowup !== null ? nextMessage : messages).pipe(
-              Effect.option,
-            );
-            if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
-            const conversation = withPageTurns(yield* runStore.thread(sessionId), turns.value);
-            const model = yield* externalModel({
-              agent: answeredBy,
-              turn: (text, onUpdate) =>
-                Effect.tryPromise({
-                  try: (signal) =>
-                    externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
-                      signal,
-                      onUpdate,
-                      askPermission,
-                    }),
-                  catch: (cause) => new Cause.UnknownError(cause),
-                }),
-              preamble: (text) => nativePromise(() => memoryPreamble(project, text, userNodeId())),
-            });
-            const loopEvents = runChat(
-              {
-                model,
-                // What TanStack wrote for the external agent adapter.
-                source: { provider: "external-acp", api: "text", model: answeredBy },
-                system: [],
-                tools: [],
-                hooks: [recorder.hookForRun(binding), indexInBackground.hook],
-                modelFailure: modelFailureOf(shownExternalFailure),
-              },
-              {
-                threadId: sessionId,
-                runId,
-                conversation,
-                resume: [],
-                cancel: aborted(abortController.signal).pipe(
-                  Effect.andThen(() =>
-                    abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
-                  ),
-                ),
-              },
-            ).pipe(
-              shownRunErrors(redactor),
-              Stream.provideService(RunStore, runStore),
-              Stream.provideService(Crypto.Crypto, crypto),
-            );
-            const claim = yield* liveRuns.claim(
-              sessionId,
+          const turns = yield* pageTurns(messages).pipe(Effect.option);
+          if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
+          const conversation = withPageTurns(yield* runStore.thread(sessionId), turns.value);
+          const model = yield* externalModel({
+            agent: answeredBy,
+            turn: (text, onUpdate) =>
+              Effect.tryPromise({
+                try: (signal) =>
+                  externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
+                    signal,
+                    onUpdate,
+                    askPermission,
+                  }),
+                catch: (cause) => new Cause.UnknownError(cause),
+              }),
+            preamble: (text) => nativePromise(() => memoryPreamble(project, text, userNodeId())),
+          });
+          const loopEvents = runChat(
+            {
+              model,
+              // What TanStack wrote for the external agent adapter.
+              source: { provider: "external-acp", api: "text", model: answeredBy },
+              system: [],
+              tools: [],
+              hooks: [recorder.hookForRun(binding), indexInBackground.hook],
+              modelFailure: modelFailureOf(shownExternalFailure),
+            },
+            {
+              threadId: sessionId,
               runId,
-              abortController,
-              undefined,
-              cancellation.release,
-              Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
-              settleQueue(sessionId, runId),
-            );
-            if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
-            cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
-            yield* Effect.when(
-              workTrace.resumeParentNotifications(sessionId),
-              Effect.succeed(turn !== null),
-            );
-            yield* events.publishSession(sessionId, "run-state");
-            yield* Option.match(Option.fromNullishOr(queuedId), {
-              onNone: () => Effect.void,
-              onSome: (id) =>
-                queue
-                  .markDelivered(id, "next_turn", runId)
-                  .pipe(Effect.andThen(events.publishSession(sessionId, "queue"))),
-            });
-            // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types
-            // leave `undefined` out of optional fields, where the SDK's types allow it.
-            const chunks = yield* cancellation.publish(
-              yield* Stream.toAsyncIterableEffect(loopEvents as Stream.Stream<StreamChunk>),
-            );
-            const delivered = claim.track(chunks);
-            const log = memoryStream({ runId });
-            const started =
-              deliveredTo === "page"
-                ? ChatStart.Answered({
-                    response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
-                      abortController: yield* cancellation.delivery,
-                      durability: { adapter: log, batch: 1 },
-                    }),
-                  })
-                : yield* Effect.as(
-                    Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
-                      startImmediately: true,
-                    }),
-                    ChatStart.Following({ log, after: "-1" }),
-                  );
-            cancellationToRelease = Effect.void;
-            return started;
-          }
+              conversation,
+              resume: [],
+              cancel: aborted(abortController.signal).pipe(
+                Effect.andThen(() =>
+                  abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
+                ),
+              ),
+            },
+          ).pipe(
+            shownRunErrors(redactor),
+            Stream.provideService(RunStore, runStore),
+            Stream.provideService(Crypto.Crypto, crypto),
+          );
           const claim = yield* liveRuns.claim(
             sessionId,
             runId,
             abortController,
             undefined,
             cancellation.release,
-            cancellation.cancel,
+            Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
             settleQueue(sessionId, runId),
           );
           if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
           cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
-          if (turn !== null) yield* workTrace.resumeParentNotifications(sessionId);
+          yield* Effect.when(
+            workTrace.resumeParentNotifications(sessionId),
+            Effect.succeed(turn !== null),
+          );
           yield* events.publishSession(sessionId, "run-state");
-          if (isTruthy(queuedId)) {
-            yield* queue.markDelivered(queuedId, "next_turn", runId);
-            yield* events.publishSession(sessionId, "queue");
-          }
-          const adapter = new ExternalAgentAdapter(
-            answeredBy,
-            (text, signal, onUpdate) =>
-              externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
-                signal,
-                onUpdate,
-                askPermission,
-              }),
-            (text) => memoryPreamble(project, text, userNodeId()),
+          yield* Option.match(Option.fromNullishOr(queuedId), {
+            onNone: () => Effect.void,
+            onSome: (id) =>
+              queue
+                .markDelivered(id, "next_turn", runId)
+                .pipe(Effect.andThen(events.publishSession(sessionId, "queue"))),
+          });
+          // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types
+          // leave `undefined` out of optional fields, where the SDK's types allow it.
+          const chunks = yield* cancellation.publish(
+            yield* Stream.toAsyncIterableEffect(loopEvents as Stream.Stream<StreamChunk>),
           );
-          const externalMiddleware: ChatMiddleware[] = [
-            ...chatState.middleware(abortController.signal),
-            recorder.forRun(binding),
-            indexInBackground.middleware,
-          ];
-          const stream = withShownRunErrors(
-            redactor,
-            createChatExecution<typeof adapter>().execute(
-              { messages, threadId, runId, parentRunId },
-              {
-                model: { adapter },
-                tools: [],
-                middleware: externalMiddleware,
-                stream: { abortController },
-              },
-            ),
-          );
-          const published = yield* cancellation.publish(stream);
-          const response = toServerSentEventsResponse(
-            Stream.toAsyncIterable(claim.track(published)),
-            {
-              abortController,
-              durability: { adapter: memoryStream({ runId }), batch: 1 },
-            },
-          );
+          const delivered = claim.track(chunks);
+          const log = memoryStream({ runId });
+          const started =
+            deliveredTo === "page"
+              ? ChatStart.Answered({
+                  response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
+                    abortController: yield* cancellation.delivery,
+                    durability: { adapter: log, batch: 1 },
+                  }),
+                })
+              : yield* Effect.as(
+                  Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
+                    startImmediately: true,
+                  }),
+                  ChatStart.Following({ log, after: "-1" }),
+                );
           cancellationToRelease = Effect.void;
-          return ChatStart.Answered({ response });
+          return started;
         }
         if (!isTruthy(selection)) return refused({ error: "model_selection_required" });
         // Every Goal runs on today's code, whichever code ran it before (docs/effect-ai-migration.md
         // "옛 Goal 처리").
         const runtime = yield* runtimeForAdapter(selection);
-        // Pin the profile-specific client before later async preparation and tool/model turns.
-        const runAdapter = runtime.adapter(selection);
-        runAdapterToRelease = runAdapter;
-        const steering = steerCuttable(runAdapter);
-        const stopRunSteering = stopSteering(sessionId, steering);
         // The model the conversation's last main answer came from, which a handoff starts from.
         const previousModel = Option.getOrUndefined(
           yield* previousMainModel(sessionId).pipe(
             fallbackLogged("Previous model unreadable", Option.none),
           ),
         );
-        const restoreModelHistory = modelHandoffHistory({
-          metadata,
-          threadId: sessionId,
-          target: stringifyJson([
-            selection.provider,
-            selection.model,
-            runAdapter.historyKey ?? null,
-          ]),
-          model: selection.model,
-          provider: selection.provider,
-          previous: previousModel,
-          loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
-          toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
-        });
         // Refresh model-advertised limits before choosing this run's compaction budget. A catalog
         // failure must not prevent an otherwise valid request; the runtime has a safe fallback.
         // A successfully fetched catalogue, however, must not silently run a model absent from
@@ -2328,510 +2219,132 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               () => [],
             )
           : [];
-        if (chatLoop === "effect-ai" || goalRun || deliveredTo === "api") {
-          const answers = {
-            projectId,
-            sessionId,
-            runId,
-            get userNodeId() {
-              return userNodeId();
-            },
-          };
-          const readOnly = workflowReadOnly || reportSource !== null;
-          // Present only while the user has Kagi turned on with a key (R19).
-          const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
-          // A report session never connects external MCP servers or loads additional skills.
-          const mcp = readOnly ? { tools: [], guides: [] } : yield* mcpServers.runTools(project);
-          const skills =
-            reportSource !== null
-              ? { skills: [], tools: [], instructions: null }
-              : yield* skillTools.runToolsFor(project);
-          // Trusted external ACP agents (R17); every delegation is gated below.
-          const delegation = readOnly
-            ? { tools: [], instructions: null }
-            : yield* delegateTools.runToolsFor({
-                project,
-                sessionId,
-                signal: abortController.signal,
-                runId,
-              });
-          const askEveryCall = [...mcp.tools, ...delegation.tools].map(({ tool }) => tool.name);
-          const gated = HashSet.fromIterable([...gatedToolNames, ...askEveryCall]);
-          // In `auto` mode the gate reviews every gated call; in `ask` mode the built-in tools ask
-          // through their own approval, and the gate asks about the calls the page has no
-          // definitions for (MCP tools, delegations).
-          const gate = Match.value(project.permissionMode).pipe(
-            Match.when("auto", () => [
-              permissionGate.hookForRun({
-                project,
-                sessionId,
-                selection,
-                gated,
-                decider: "classifier",
-              }),
-            ]),
-            Match.when("ask", () =>
-              askEveryCall.length > 0
-                ? [
-                    permissionGate.hookForRun({
-                      project,
-                      sessionId,
-                      selection,
-                      gated: HashSet.fromIterable(askEveryCall),
-                      decider: "user",
-                    }),
-                  ]
-                : [],
-            ),
-            Match.when("full", () => []),
-            Match.exhaustive,
-          );
-          // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code
-          // skill tools from the approved tool set, so it can build and test without editing source.
-          const phaseApproved = (binding?: BackgroundBinding) =>
-            reportSource !== null || (workflowReadOnly && workflow.phase !== "verify")
-              ? []
-              : approvedTools
-                  .runToolsFor(project, undefined, binding)
-                  .filter(
-                    ({ tool }) =>
-                      !workflowReadOnly || HashSet.has(verificationToolNames, tool.name),
-                  );
-          const phaseApprovedTools = phaseApproved({
-            sessionId,
-            runId,
-            abortSignal: abortController.signal,
-          });
-          const memory = memoryTools.runToolsFor(answers, memoryScope);
-          const allSharedTools = redactor.withHiddenRunResults([
-            ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
-            // An SVG the model writes comes back with a picture of it, for the page to show.
-            ...drawingPreviews.withRunPreviews(project, fileTools.runToolsFor(project)),
-            ...outsideTools.runToolsFor(project),
-            ...webTools,
-            ...mcp.tools,
-            ...skills.tools,
-            ...delegation.tools,
-            ...workflowTools.runToolsFor(sessionId, workflow.phase, runId),
-            ...background.runToolsFor(sessionId),
-          ]);
-          const sharedTools =
-            reportSource !== null
-              ? yield* withSql(
-                  reportRunToolsForSession(
-                    sessionId,
-                    projectId,
-                    redactReport,
-                    workTrace.taskTree(reportSource.sourceSessionId),
-                  ),
-                )
-              : allSharedTools.filter(
-                  ({ tool }) => !workflowReadOnly || HashSet.has(workflowReadToolNames, tool.name),
-                );
-          /** The standing rules for an agent with these tools: this run's, or a child's. */
-          const standingPromptsFor = (tools: ReadonlyArray<RunTool>) => [
-            ...(reportSource !== null
-              ? [reportAnalysisInstructions]
-              : [memoryRulesFor(tools.map(({ tool }) => tool))]),
-            ...(webTools.length > 0 ? [kagiInstructions] : []),
-            ...(!workflowReadOnly && mcp.tools.length > 0
-              ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
-              : []),
-            ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
-            concurrentCallsInstructions,
-          ];
-          const situation = yield* runContext(skills, delegation.instructions);
-          // Children get the same tools and rules, never more, and no subagent tools of their own.
-          // Their approval-gated calls wait on the page instead of pausing this run (R18).
-          const childSharedTools = sharedTools.filter(({ tool }) => !(tool.name in promotionRules));
-          const children = subagents.runToolsFor({
-            project,
-            sessionId,
-            runId,
-            selection,
-            abortSignal: abortController.signal,
-            tools: ChildTools.RunTools({
-              tools: [
-                ...childSharedTools,
-                ...(readOnly
-                  ? []
-                  : redactor.withHiddenRunResults(approvedTools.runToolsFor(project, "gate"))),
-              ],
-            }),
-            systemPrompts: promptLayout(
-              standingPromptsFor(childSharedTools),
-              [
-                ...(isTruthy(skills.instructions) ? [skills.instructions] : []),
-                situation.workspace,
-              ],
-              [],
-            ),
-            deliveredParentNotificationIds: HashSet.fromIterable(
-              situation.parentNotifications.map((notification) => notification.id),
-            ),
-            gated,
-          });
-          // The board's tools are the parent's alone; card agents never change the board.
-          const boardTools =
-            situation.onKanbanBoard && !workflowReadOnly
-              ? kanbanTools.runToolsFor(sessionId, runId)
-              : [];
-          // A program calls the run's tools as the model would, except the ones that ask first. Its
-          // run_skill runs a sh skill to the end: a program has no way to wait on a background task.
-          const programs = codeTools.forRunTools(
-            [
-              ...sharedTools,
-              ...boardTools,
-              ...redactor.withHiddenRunResults([
-                ...phaseApprovedTools.filter(({ tool }) => tool.name !== "run_skill"),
-                ...phaseApproved().filter(({ tool }) => tool.name === "run_skill"),
-              ]),
-            ],
-            project.permissionMode === "full" ? HashSet.empty() : gated,
-          );
-          const offered = [
-            ...sharedTools,
-            ...boardTools,
-            ...redactor.withHiddenRunResults([
-              ...phaseApprovedTools.map((tool) => programs.codeSkills(project, tool)),
-              ...(readOnly ? [] : children.tools),
-              ...(reportSource !== null ? [] : [programs.runCode]),
-            ]),
-          ];
-          const tools =
-            selection.provider === "openai-compatible" &&
-            !compatibleToolCalling(yield* config.read, selection.model)
-              ? []
-              : offered;
-          const resumed = Schema.decodeOption(Schema.Array(ResumeEntry))(resume ?? []);
-          if (Option.isNone(resumed)) return refused({ error: "invalid_chat_request" });
-          // The page sends the conversation it holds; only its user messages are new to the thread.
-          const turns = yield* pageTurns(internalFollowup !== null ? nextMessage : messages).pipe(
-            Effect.option,
-          );
-          if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
-          const stored = yield* runStore.thread(sessionId);
-          const conversation = withPageTurns(stored, turns.value);
-
-          // What the model pins for the run, such as an account, is let go when its stream ends.
-          const modelScope = yield* Scope.make();
-          cancellationToRelease = cancellation.cancel.pipe(
-            Effect.ensuring(Scope.close(modelScope, Exit.void)),
-          );
-          const runModel = yield* runtime
-            .model(selection, {
-              threadId: sessionId,
-              runId,
-              // Replies often come after the 5-minute cache ends, so the conversation is kept for 1 hour.
-              cacheRetention: "long",
-            })
-            .pipe(Effect.provideService(Scope.Scope, modelScope));
-          // A Goal run sends a request the provider never got again, after a durable wait.
-          const sentAgain = (retry: UnsentRetry) =>
-            providerRetries
-              .wait(
-                { ...retry, sessionId, runId },
-                abortController.signal,
-                events.publishSession(sessionId, "run-state"),
-              )
-              .pipe(
-                fallbackLogged("Provider retry wait failed", () =>
-                  ProviderRetryOutcome.Exhausted(),
-                ),
-              );
-          const cuttable = steerCuttableModel(
-            goalRun ? unsentRetried(runModel.model, sentAgain) : runModel.model,
-          );
-          const restore = yield* modelHandoffHistoryEffect({
-            metadata: runStore.chatMetadata,
-            threadId: sessionId,
-            target: stringifyJson([
-              selection.provider,
-              selection.model,
-              runModel.historyKey ?? null,
-            ]),
-            model: selection.model,
-            provider: selection.provider,
-            previous: previousModel,
-            // The conversation as the earlier model left it; this run's turn comes after the cut.
-            loadHistory: Effect.succeed(stored),
-            toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
-          });
-          const window = () => runtime.contextWindow(selection.model);
-          const compacting = yield* compactionHook({
-            sources: compactionSources(sessionId, reportSource !== null ? undefined : project, [
-              turn?.text ?? "",
-              workflow.goal?.statement ?? "",
-              workflow.plan?.summary ?? "",
-            ]),
-            budget: budgetFor(window()),
-            restore,
-          });
-          const hooks: ReadonlyArray<RunHook<RunStore | Crypto.Crypto>> = [
-            delivery.hookForRun({ projectId, sessionId, runId }),
-            ...(reportSource !== null ? [] : [yield* projectInstructionsHook(project.root)]),
-            // Before the gate, so a refused repeat is never reviewed or put to the user.
-            yield* repeatGuardHook,
-            ...gate,
-            yield* children.hook,
-            ...(reportSource !== null ? [] : [yield* memory.hook]),
-            recorder.hookForRun(answers),
-            workflowLifecycle.hook,
-            indexInBackground.hook,
-            summaries.hookForRun(sessionId),
-            // Last to choose the history sent to the model; only retained local images are inlined.
-            compacting.hook,
-            modelImagesHook(attachments),
-            contextUsageHook({
-              windowTokens: Effect.sync(window),
-              compactionStage: compacting.stage,
-              windowKnown: Effect.sync(
-                () => runtime.contextWindowKnown?.(selection.model) ?? false,
-              ),
-            }),
-            apiUsageHook(usageLedger, {
-              rootSessionId: sessionId,
-              purpose: "main",
-              provider: selection.provider,
-              model: selection.model,
-            }),
-          ];
-          // A Goal's new run is bound now that it is ready to start; only then is its turn recorded.
-          if (newGoalRun !== null) {
-            const admitted = yield* admitGoalRun(newGoalRun.goalInstanceId, newGoalRun.revisionId);
-            if (Result.isFailure(admitted)) return refused(admitted.failure);
-            yield* persistUserTurn;
-          }
-          // A Goal run writes each call in its ledger before the call runs.
-          const runTools = goalRun
-            ? yield* goalLedger.forRun(runId).pipe(
-                Effect.map((ledgered) => ledgered(tools)),
-                Effect.option,
-              )
-            : Option.some(tools);
-          if (Option.isNone(runTools)) return refused({ error: "goal_ledger_unavailable" });
-          const loopEvents = runChat(
-            {
-              model: cuttable.model,
-              source: runModel.source,
-              system: promptLayout(standingPromptsFor(sharedTools), situation.prompts, [
-                ...(holdsImages ? [attachmentInstructions] : []),
-                ...(!workflowReadOnly ? [subagentInstructions] : []),
-              ]),
-              tools: runTools.value,
-              providerTools: providerTools.map(({ modelTool }) => modelTool),
-              hooks,
-              modelFailure: modelFailureOf(runModel.shownFailure),
-            },
-            {
-              threadId: sessionId,
-              runId,
-              conversation,
-              resume: resumed.value,
-              // The owner's shutdown aborts the controller too; that run ends as cut by a restart.
-              cancel: aborted(abortController.signal).pipe(
-                Effect.andThen(() =>
-                  abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
-                ),
-              ),
-            },
-          ).pipe(
-            shownRunErrors(redactor),
-            Stream.provideService(RunStore, runStore),
-            Stream.provideService(Crypto.Crypto, crypto),
-          );
-          const claim = yield* liveRuns.claim(
-            sessionId,
-            runId,
-            abortController,
-            undefined,
-            cancellation.release,
-            // The loop ends a cancelled run itself, so a cancel only aborts it and the page still
-            // hears how the run ended.
-            Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
-            settleQueue(sessionId, runId),
-          );
-          if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
-          cancellationToRelease = cancellation.cancel.pipe(
-            Effect.ensuring(claim.release),
-            Effect.ensuring(Scope.close(modelScope, Exit.void)),
-          );
-          // A Goal run's answer is never cut: stopping it early would end the Goal step.
-          yield* Effect.when(
-            Effect.sync(() => MutableHashMap.set(steerCuts, sessionId, cuttable.steer)),
-            Effect.succeed(!goalRun),
-          );
-          stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
-          yield* runStarted;
-          // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types leave
-          // `undefined` out of optional fields, where the SDK's types allow it.
-          const loopChunks = loopEvents as Stream.Stream<StreamChunk>;
-          const chunks = yield* cancellation.publish(
-            yield* Stream.toAsyncIterableEffect(
-              goalRun ? boundRunRecorded(loopChunks) : loopChunks,
-            ),
-          );
-          const delivered = claim
-            .track(chunks)
-            .pipe(
-              Stream.ensuring(settleWorkflow),
-              Stream.ensuring(Scope.close(modelScope, Exit.void)),
-              Stream.ensuring(stopSteering(sessionId, cuttable.steer)),
-            );
-          // A Goal run's page reads its committed output, as on the TanStack path.
-          const log = goalRun
-            ? yield* streamDurability({ sessionId, runId })
-            : memoryStream({ runId });
-          const started =
-            deliveredTo === "page"
-              ? ChatStart.Answered({
-                  response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
-                    // Only the execution aborts on a cancel, so the run's last events reach the page.
-                    abortController: yield* cancellation.delivery,
-                    durability: { adapter: log, batch: 1 },
-                  }),
-                })
-              : yield* Effect.as(
-                  Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
-                    startImmediately: true,
-                  }),
-                  ChatStart.Following({ log, after: "-1" }),
-                );
-          cancellationToRelease = Effect.void;
-          stopSteeringOnExit = Effect.void;
-          return started;
-        }
-
+        const answers = {
+          projectId,
+          sessionId,
+          runId,
+          get userNodeId() {
+            return userNodeId();
+          },
+        };
+        const readOnly = workflowReadOnly || reportSource !== null;
         // Present only while the user has Kagi turned on with a key (R19).
-        const webTools = reportSource !== null ? [] : yield* kagiTools.tools;
+        const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
         // A report session never connects external MCP servers or loads additional skills.
-        const mcp: McpRunTools =
-          workflowReadOnly || reportSource !== null
-            ? { tools: [], guides: [] }
-            : yield* mcpServers.tools(project);
-        const mcpTools = mcp.tools;
+        const mcp = readOnly ? { tools: [], guides: [] } : yield* mcpServers.runTools(project);
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
-            : yield* skillTools.forProject(project);
-        const middleware: Array<ChatMiddleware<unknown, typeof permissionReviewInterrupt>> = [
-          ...chatState.middleware(abortController.signal),
-          // After chat state, so steered messages are added to the transcript it has just saved.
-          delivery.forRun({ projectId, sessionId, runId }),
-          ...(!(reportSource !== null) ? [projectInstructions(project.root)] : []),
-          // Before the gate, so a refused repeat is never reviewed or put to the user.
-          repeatGuard(),
-        ];
+            : yield* skillTools.runToolsFor(project);
         // Trusted external ACP agents (R17); every delegation is gated below.
-        const delegation =
-          workflowReadOnly || reportSource !== null
-            ? { tools: [], instructions: null }
-            : yield* delegateTools.forRun(project, sessionId, abortController.signal, runId);
-        // The gate runs right after chat state, so a refused call is skipped before tools run. In
-        // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
-        // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
-        // delegations).
-        const mcpNames = mcpTools.map((tool) => tool.name);
-        const askEveryCall = [...mcpNames, ...delegation.tools.map((tool) => tool.name)];
-        if (project.permissionMode === "auto")
-          middleware.push(
-            permissionGate.forRun({
+        const delegation = readOnly
+          ? { tools: [], instructions: null }
+          : yield* delegateTools.runToolsFor({
+              project,
+              sessionId,
+              signal: abortController.signal,
+              runId,
+            });
+        const askEveryCall = [...mcp.tools, ...delegation.tools].map(({ tool }) => tool.name);
+        const gated = HashSet.fromIterable([...gatedToolNames, ...askEveryCall]);
+        // In `auto` mode the gate reviews every gated call; in `ask` mode the built-in tools ask
+        // through their own approval, and the gate asks about the calls the page has no
+        // definitions for (MCP tools, delegations).
+        const gate = Match.value(project.permissionMode).pipe(
+          Match.when("auto", () => [
+            permissionGate.hookForRun({
               project,
               sessionId,
               selection,
-              gated: HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
+              gated,
               decider: "classifier",
             }),
-          );
-        else if (project.permissionMode === "ask" && askEveryCall.length > 0)
-          middleware.push(
-            permissionGate.forRun({
-              project,
-              sessionId,
-              selection,
-              gated: HashSet.fromIterable(askEveryCall),
-              decider: "user",
-            }),
-          );
-        // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code skill tools
-        // from the approved tool set so it can execute builds and tests without editing source.
-        // This is enforced by omitting tools, not by relying on the prompt.
+          ]),
+          Match.when("ask", () =>
+            askEveryCall.length > 0
+              ? [
+                  permissionGate.hookForRun({
+                    project,
+                    sessionId,
+                    selection,
+                    gated: HashSet.fromIterable(askEveryCall),
+                    decider: "user",
+                  }),
+                ]
+              : [],
+          ),
+          Match.when("full", () => []),
+          Match.exhaustive,
+        );
+        // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code
+        // skill tools from the approved tool set, so it can build and test without editing source.
         const phaseApproved = (binding?: BackgroundBinding) =>
           reportSource !== null || (workflowReadOnly && workflow.phase !== "verify")
-            ? Effect.succeed([])
-            : Effect.map(approvedTools.forProject(project, undefined, binding), (tools) =>
-                workflowReadOnly
-                  ? tools.filter((tool) => HashSet.has(verificationToolNames, tool.name))
-                  : tools,
-              );
-        const phaseApprovedTools = yield* phaseApproved({
+            ? []
+            : approvedTools
+                .runToolsFor(project, undefined, binding)
+                .filter(
+                  ({ tool }) => !workflowReadOnly || HashSet.has(verificationToolNames, tool.name),
+                );
+        const phaseApprovedTools = phaseApproved({
           sessionId,
           runId,
           abortSignal: abortController.signal,
         });
-        const memoryRun = yield* memoryTools.forRun(
-          {
-            projectId,
-            sessionId,
-            runId,
-            get userNodeId() {
-              return userNodeId();
-            },
-          },
-          memoryScope,
-        );
-        const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
-          ...memoryRun.tools.filter((tool) => !HashSet.has(unusedPromotionTools, tool.name)),
+        const memory = memoryTools.runToolsFor(answers, memoryScope);
+        const allSharedTools = redactor.withHiddenRunResults([
+          ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
           // An SVG the model writes comes back with a picture of it, for the page to show.
-          ...(yield* drawingPreviews.withPreviews(project, yield* fileTools.forProject(project))),
-          ...(yield* outsideTools.forProject(project)),
+          ...drawingPreviews.withRunPreviews(project, fileTools.runToolsFor(project)),
+          ...outsideTools.runToolsFor(project),
           ...webTools,
-          ...mcpTools,
+          ...mcp.tools,
           ...skills.tools,
           ...delegation.tools,
-          ...(yield* workflowTools.forSession(sessionId, workflow.phase, runId)),
-          ...(yield* background.forSession(sessionId)),
+          ...workflowTools.runToolsFor(sessionId, workflow.phase, runId),
+          ...background.runToolsFor(sessionId),
         ]);
         const sharedTools =
           reportSource !== null
             ? yield* withSql(
-                reportToolsForSession(
+                reportRunToolsForSession(
                   sessionId,
                   projectId,
                   redactReport,
                   workTrace.taskTree(reportSource.sourceSessionId),
                 ),
               )
-            : workflowReadOnly
-              ? allSharedTools.filter((tool) => HashSet.has(workflowReadToolNames, tool.name))
-              : allSharedTools;
+            : allSharedTools.filter(
+                ({ tool }) => !workflowReadOnly || HashSet.has(workflowReadToolNames, tool.name),
+              );
         /** The standing rules for an agent with these tools: this run's, or a child's. */
-        const standingPromptsFor = (tools: readonly AnyServerTool[]) => [
-          ...(reportSource !== null ? [reportAnalysisInstructions] : [memoryRulesFor(tools)]),
+        const standingPromptsFor = (tools: ReadonlyArray<RunTool>) => [
+          ...(reportSource !== null
+            ? [reportAnalysisInstructions]
+            : [memoryRulesFor(tools.map(({ tool }) => tool))]),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
-          ...(!workflowReadOnly && mcpTools.length > 0
+          ...(!workflowReadOnly && mcp.tools.length > 0
             ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
             : []),
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
           concurrentCallsInstructions,
         ];
-        const standingPrompts = standingPromptsFor(sharedTools);
         const situation = yield* runContext(skills, delegation.instructions);
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
-        const childSharedTools = sharedTools.filter((tool) => !(tool.name in promotionRules));
-        const children = subagents.forRun({
+        const childSharedTools = sharedTools.filter(({ tool }) => !(tool.name in promotionRules));
+        const children = subagents.runToolsFor({
           project,
           sessionId,
           runId,
           selection,
           abortSignal: abortController.signal,
-          tools: ChildTools.TanStack({
+          tools: ChildTools.RunTools({
             tools: [
               ...childSharedTools,
-              ...(workflowReadOnly || reportSource !== null
+              ...(readOnly
                 ? []
-                : redactor.withHiddenResults(yield* approvedTools.forProject(project, "gate"))),
+                : redactor.withHiddenRunResults(approvedTools.runToolsFor(project, "gate"))),
             ],
           }),
           systemPrompts: promptLayout(
@@ -2842,164 +2355,232 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           deliveredParentNotificationIds: HashSet.fromIterable(
             situation.parentNotifications.map((notification) => notification.id),
           ),
-          gated: HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
+          gated,
         });
         // The board's tools are the parent's alone; card agents never change the board.
         const boardTools =
           situation.onKanbanBoard && !workflowReadOnly
-            ? kanbanTools.forSession(sessionId, runId)
+            ? kanbanTools.runToolsFor(sessionId, runId)
             : [];
         // A program calls the run's tools as the model would, except the ones that ask first. Its
         // run_skill runs a sh skill to the end: a program has no way to wait on a background task.
-        const programs = yield* codeTools.forTools(
+        const programs = codeTools.forRunTools(
           [
             ...sharedTools,
             ...boardTools,
-            ...redactor.withHiddenResults([
-              ...phaseApprovedTools.filter((tool) => tool.name !== "run_skill"),
-              ...(yield* phaseApproved()).filter((tool) => tool.name === "run_skill"),
+            ...redactor.withHiddenRunResults([
+              ...phaseApprovedTools.filter(({ tool }) => tool.name !== "run_skill"),
+              ...phaseApproved().filter(({ tool }) => tool.name === "run_skill"),
             ]),
           ],
-          project.permissionMode === "full"
-            ? HashSet.empty()
-            : HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
+          project.permissionMode === "full" ? HashSet.empty() : gated,
         );
-        // Read-only calls of one step run at once instead of one after another.
-        const reads = parallelReads(
-          [
-            ...sharedTools,
-            ...boardTools,
-            ...redactor.withHiddenResults([
-              ...phaseApprovedTools.map((tool) => programs.codeSkills(project, tool)),
-              ...(workflowReadOnly || reportSource !== null ? [] : children.tools),
-              ...(reportSource !== null ? [] : [programs.runCode]),
-            ]),
-          ],
-          abortController.signal,
+        const offered = [
+          ...sharedTools,
+          ...boardTools,
+          ...redactor.withHiddenRunResults([
+            ...phaseApprovedTools.map((tool) => programs.codeSkills(project, tool)),
+            ...(readOnly ? [] : children.tools),
+            ...(reportSource !== null ? [] : [programs.runCode]),
+          ]),
+        ];
+        const tools =
+          selection.provider === "openai-compatible" &&
+          !compatibleToolCalling(yield* config.read, selection.model)
+            ? []
+            : offered;
+        const resumed = Schema.decodeOption(Schema.Array(ResumeEntry))(resume ?? []);
+        if (Option.isNone(resumed)) return refused({ error: "invalid_chat_request" });
+        // The page sends the conversation it holds; only its user messages are new to the thread.
+        const turns = yield* pageTurns(messages).pipe(Effect.option);
+        if (Option.isNone(turns)) return refused({ error: "invalid_chat_request" });
+        const stored = yield* runStore.thread(sessionId);
+        const conversation = withPageTurns(stored, turns.value);
+
+        // What the model pins for the run, such as an account, is let go when its stream ends.
+        const modelScope = yield* Scope.make();
+        cancellationToRelease = cancellation.cancel.pipe(
+          Effect.ensuring(Scope.close(modelScope, Exit.void)),
         );
-        const window = () => runtime.contextWindow(selection.model);
-        let compactionStage: CompactionStage = "none";
-        middleware.push(
-          children.middleware,
-          ...(!(reportSource !== null) && isTruthy(memoryRun.middleware)
-            ? [memoryRun.middleware]
-            : []),
-          reads.middleware,
-          recorder.forRun({
-            projectId,
-            sessionId,
+        const runModel = yield* runtime
+          .model(selection, {
+            threadId: sessionId,
             runId,
-            get userNodeId() {
-              return userNodeId();
-            },
-          }),
-          workflowLifecycle.middleware,
-          indexInBackground.middleware,
-          summaries.afterRun(sessionId),
+            // Replies often come after the 5-minute cache ends, so the conversation is kept for 1 hour.
+            cacheRetention: "long",
+          })
+          .pipe(Effect.provideService(Scope.Scope, modelScope));
+        // A Goal run sends a request the provider never got again, after a durable wait.
+        const sentAgain = (retry: UnsentRetry) =>
+          providerRetries
+            .wait(
+              { ...retry, sessionId, runId },
+              abortController.signal,
+              events.publishSession(sessionId, "run-state"),
+            )
+            .pipe(
+              fallbackLogged("Provider retry wait failed", () => ProviderRetryOutcome.Exhausted()),
+            );
+        const cuttable = steerCuttableModel(
+          goalRun ? unsentRetried(runModel.model, sentAgain) : runModel.model,
+        );
+        const restore = yield* modelHandoffHistoryEffect({
+          metadata: runStore.chatMetadata,
+          threadId: sessionId,
+          target: stringifyJson([selection.provider, selection.model, runModel.historyKey ?? null]),
+          model: selection.model,
+          provider: selection.provider,
+          previous: previousModel,
+          // The conversation as the earlier model left it; this run's turn comes after the cut.
+          loadHistory: Effect.succeed(stored),
+          toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
+        });
+        const window = () => runtime.contextWindow(selection.model);
+        const compacting = yield* compactionHook({
+          sources: compactionSources(sessionId, reportSource !== null ? undefined : project, [
+            turn?.text ?? "",
+            workflow.goal?.statement ?? "",
+            workflow.plan?.summary ?? "",
+          ]),
+          budget: budgetFor(window()),
+          restore,
+        });
+        const hooks: ReadonlyArray<RunHook<RunStore | Crypto.Crypto>> = [
+          delivery.hookForRun({ projectId, sessionId, runId }),
+          ...(reportSource !== null ? [] : [yield* projectInstructionsHook(project.root)]),
+          // Before the gate, so a refused repeat is never reviewed or put to the user.
+          yield* repeatGuardHook,
+          ...gate,
+          yield* children.hook,
+          ...(reportSource !== null ? [] : [yield* memory.hook]),
+          recorder.hookForRun(answers),
+          workflowLifecycle.hook,
+          indexInBackground.hook,
+          summaries.hookForRun(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
-          compaction(
-            metadata,
-            compactionSources(sessionId, reportSource !== null ? undefined : project, [
-              turn?.text ?? "",
-              workflow.goal?.statement ?? "",
-              workflow.plan?.summary ?? "",
-            ]),
-            budgetFor(window()),
-            (stage) => {
-              compactionStage = stage;
-            },
-            restoreModelHistory,
-          ),
-          modelImages(attachments, runEffect),
-          recordContextUsage({
-            metadata,
-            windowTokens: window,
-            compactionStage: () => compactionStage,
-            windowKnown: () => runtime.contextWindowKnown?.(selection.model) ?? false,
+          compacting.hook,
+          modelImagesHook(attachments),
+          contextUsageHook({
+            windowTokens: Effect.sync(window),
+            compactionStage: compacting.stage,
+            windowKnown: Effect.sync(() => runtime.contextWindowKnown?.(selection.model) ?? false),
           }),
-          collectApiUsage(usageLedger, {
+          apiUsageHook(usageLedger, {
             rootSessionId: sessionId,
             purpose: "main",
             provider: selection.provider,
             model: selection.model,
           }),
-          runtime.runMiddleware(),
+        ];
+        // A Goal's new run is bound now that it is ready to start; only then is its turn recorded.
+        if (newGoalRun !== null) {
+          const admitted = yield* admitGoalRun(newGoalRun.goalInstanceId, newGoalRun.revisionId);
+          if (Result.isFailure(admitted)) return refused(admitted.failure);
+          yield* persistUserTurn;
+        }
+        // A Goal run writes each call in its ledger before the call runs.
+        const runTools = goalRun
+          ? yield* goalLedger.forRun(runId).pipe(
+              Effect.map((ledgered) => ledgered(tools)),
+              Effect.option,
+            )
+          : Option.some(tools);
+        if (Option.isNone(runTools)) return refused({ error: "goal_ledger_unavailable" });
+        const loopEvents = runChat(
+          {
+            model: cuttable.model,
+            source: runModel.source,
+            system: promptLayout(standingPromptsFor(sharedTools), situation.prompts, [
+              ...(holdsImages ? [attachmentInstructions] : []),
+              ...(!workflowReadOnly ? [subagentInstructions] : []),
+            ]),
+            tools: runTools.value,
+            providerTools: providerTools.map(({ modelTool }) => modelTool),
+            hooks,
+            modelFailure: modelFailureOf(runModel.shownFailure),
+          },
+          {
+            threadId: sessionId,
+            runId,
+            conversation,
+            resume: resumed.value,
+            // The owner's shutdown aborts the controller too; that run ends as cut by a restart.
+            cancel: aborted(abortController.signal).pipe(
+              Effect.andThen(() =>
+                abortController.signal.reason === serviceShutdown ? Effect.never : Effect.void,
+              ),
+            ),
+          },
+        ).pipe(
+          shownRunErrors(redactor),
+          Stream.provideService(RunStore, runStore),
+          Stream.provideService(Crypto.Crypto, crypto),
         );
-        // SAFETY: ProviderToolRuntime only returns tools created by TanStack's installed Provider
-        // Tool factories; those satisfy chat's server-tool contract but retain provider-specific types.
-        const tools: AnyServerTool[] =
-          selection.provider === "openai-compatible" &&
-          !compatibleToolCalling(yield* config.read, selection.model)
-            ? []
-            : [
-                ...reads.tools,
-                ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
-              ];
-        const executionTurn: ChatExecutionTurn<typeof runAdapter> = {
-          messages,
-          systemPrompts: promptLayout(standingPrompts, situation.prompts, [
-            ...(holdsImages ? [attachmentInstructions] : []),
-            ...(!workflowReadOnly ? [subagentInstructions] : []),
-          ]),
-          threadId,
-          runId,
-          parentRunId,
-          resume,
-          interrupts: [permissionReviewInterrupt],
-          // Replies often come after the 5-minute cache ends, so the conversation is kept for 1 hour.
-          promptCache: "long",
-        };
-        const capabilities: ChatExecutionCapabilities<typeof runAdapter> = {
-          model: { adapter: runAdapter, agentLoopStrategy: runtime.agentLoop },
-          tools,
-          middleware,
-          stream: { abortController },
-        };
         const claim = yield* liveRuns.claim(
           sessionId,
           runId,
           abortController,
           undefined,
           cancellation.release,
-          cancellation.cancel,
+          // The loop ends a cancelled run itself, so a cancel only aborts it and the page still
+          // hears how the run ended.
+          Effect.sync(() => abortController.abort(RUN_CANCEL_REASON)),
           settleQueue(sessionId, runId),
         );
         if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
-        cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
-        MutableHashMap.set(steerCuts, sessionId, steering);
-        stopSteeringOnExit = stopRunSteering;
-        yield* runStarted;
-        const published = yield* cancellation.publish(
-          withShownRunErrors(
-            redactor,
-            createChatExecution<typeof runAdapter>().execute(executionTurn, capabilities),
-          ),
+        cancellationToRelease = cancellation.cancel.pipe(
+          Effect.ensuring(claim.release),
+          Effect.ensuring(Scope.close(modelScope, Exit.void)),
         );
-        const withAccountLease = claim
-          .track(published)
+        // A Goal run's answer is never cut: stopping it early would end the Goal step.
+        yield* Effect.when(
+          Effect.sync(() => MutableHashMap.set(steerCuts, sessionId, cuttable.steer)),
+          Effect.succeed(!goalRun),
+        );
+        stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
+        yield* runStarted;
+        // SAFETY: every loop event is an AG-UI event as the page reads it; the loop's types leave
+        // `undefined` out of optional fields, where the SDK's types allow it.
+        const loopChunks = loopEvents as Stream.Stream<StreamChunk>;
+        const chunks = yield* cancellation.publish(
+          yield* Stream.toAsyncIterableEffect(goalRun ? boundRunRecorded(loopChunks) : loopChunks),
+        );
+        const delivered = claim
+          .track(chunks)
           .pipe(
             Stream.ensuring(settleWorkflow),
-            Stream.ensuring(Effect.sync(() => releaseSubscriptionRun(runAdapter))),
-            Stream.ensuring(stopRunSteering),
+            Stream.ensuring(Scope.close(modelScope, Exit.void)),
+            Stream.ensuring(stopSteering(sessionId, cuttable.steer)),
           );
-        const response = toServerSentEventsResponse(Stream.toAsyncIterable(withAccountLease), {
-          abortController,
-          durability: { adapter: memoryStream({ runId }), batch: 1 },
-        });
+        // A Goal run's page reads its committed output, as on the TanStack path.
+        const log = goalRun
+          ? yield* streamDurability({ sessionId, runId })
+          : memoryStream({ runId });
+        const started =
+          deliveredTo === "page"
+            ? ChatStart.Answered({
+                response: toServerSentEventsResponse(Stream.toAsyncIterable(delivered), {
+                  // Only the execution aborts on a cancel, so the run's last events reach the page.
+                  abortController: yield* cancellation.delivery,
+                  durability: { adapter: log, batch: 1 },
+                }),
+              })
+            : yield* Effect.as(
+                Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
+                  startImmediately: true,
+                }),
+                ChatStart.Following({ log, after: "-1" }),
+              );
         cancellationToRelease = Effect.void;
-        runAdapterToRelease = null; // ownership transferred to the stream's finally
         stopSteeringOnExit = Effect.void;
-        return ChatStart.Answered({ response });
+        return started;
       }).pipe(
         Effect.ensuring(Effect.suspend(() => cancellationToRelease)),
         Effect.ensuring(Effect.suspend(() => stopSteeringOnExit)),
         Effect.ensuring(
           Effect.suspend(() =>
             isTruthy(claimedNext) ? queue.releaseNext(sessionId, claimedNext) : Effect.void,
-          ).pipe(
-            Effect.catch(logFailure("Queued next turn was not released")),
-            Effect.andThen(Effect.sync(() => releaseSubscriptionRun(runAdapterToRelease))),
-          ),
+          ).pipe(Effect.catch(logFailure("Queued next turn was not released"))),
         ),
         // The run's tool calls run under this span; they outlast it while the response streams.
         Effect.withSpan("AgentChat.start"),

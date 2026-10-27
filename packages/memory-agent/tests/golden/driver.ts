@@ -1,6 +1,6 @@
-import { Crypto, Effect, Fiber, FileSystem, Match, Option, Path, Schema } from "effect";
+import { Crypto, Effect, Fiber, FileSystem, Option, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat, ChatLoop } from "../../src/agent/chat.ts";
+import { AgentChat } from "../../src/agent/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -181,22 +181,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     });
     return yield* answerOf(yield* chatRoute(agent, request, sessionId));
   });
-  /** The page answers the approvals its client binds to the tools it knows. */
-  const answerOnPage = Effect.fnUntraced(function* (approved: boolean) {
-    yield* page.tab.pendingInterrupt;
-    page.tab.client.resolveInterrupts((item) => {
-      Match.value(item).pipe(
-        Match.discriminatorsExhaustive("kind")({
-          generic: (review) => review.resolveInterrupt({ approved }),
-          "tool-approval": (tool) => tool.resolveInterrupt(approved),
-        }),
-      );
-    });
-    yield* page.tab.until(() => !page.tab.client.getIsLoading(), "the resumed run to end");
-  });
   /**
-   * The Effect AI loop's interrupts carry no TanStack binding, so the page's client cannot answer
-   * them. Answer them as the client of step 6 does: a new run whose parent is the interrupted one.
+   * The loop's interrupts carry no TanStack binding, so the page's client cannot answer them.
+   * Answer them as the page does: a new run whose parent is the interrupted one.
    */
   const answerByHand = Effect.fnUntraced(function* (approved: boolean) {
     const pending = yield* Effect.flatMap(
@@ -334,16 +321,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     }),
     /** Answer every pending approval and permission review, then wait for the resumed run. */
     approve: Effect.fnUntraced(function* (approved: boolean) {
-      const loop = yield* ChatLoop;
-      // A Goal's run is on the Effect AI loop whatever the switch says.
-      const goalRun = yield* sqlGet(
-        `SELECT 1 FROM chat_interrupts i JOIN workflow_run_bindings b ON b.run_id = i.run_id
-         WHERE i.thread_id = ? AND i.status = 'pending' LIMIT 1`,
-        sessionId,
-      );
-      yield* loop === "effect-ai" || goalRun !== undefined
-        ? answerByHand(approved)
-        : answerOnPage(approved);
+      yield* answerByHand(approved);
       yield* settled;
     }),
   };

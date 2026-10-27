@@ -1,4 +1,4 @@
-import { Effect, Function as EffectFunction } from "effect";
+import { Effect } from "effect";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { testAgent, type TestEnvOptions } from "../support/test-env.ts";
@@ -35,8 +35,6 @@ export const goldenAgent = (options: TestEnvOptions = {}) =>
   testAgent({ testProvider: { responder: goldenResponder }, ...options });
 type It = Parameters<Parameters<ReturnType<typeof goldenAgent>>[1]>[0];
 
-/** A directory of `__golden__` with its trailing slash, or `""` for the top. */
-type Goldens = "" | `${string}/`;
 type Scenario = (
   title: string,
   golden: string,
@@ -44,32 +42,24 @@ type Scenario = (
   body: (chat: Chat) => Effect.Effect<void, Effect.Error<Step>, Effect.Services<Step>>,
 ) => void;
 
-/** A scenario in its own conversation, compared with the golden file of the same name in `goldens`. */
-export const scenarioIn: {
-  (goldens: Goldens): (it: It) => Scenario;
-  (it: It, goldens: Goldens): Scenario;
-} = EffectFunction.dual(
-  2,
-  (it: It, goldens: Goldens): Scenario =>
-    (title, golden, mode, body) =>
-      it.effect(
-        title,
-        () =>
-          Effect.gen(function* () {
-            const chat = yield* conversation(mode);
-            yield* body(chat);
-            yield* expectGolden(chat.sessionId, `${goldens}${golden}`);
-          }),
-        20_000,
-      ),
-);
+/** A scenario in its own conversation, compared with the golden file of the same name. */
+const scenarioIn =
+  (it: It): Scenario =>
+  (title, golden, mode, body) =>
+    it.effect(
+      title,
+      () =>
+        Effect.gen(function* () {
+          const chat = yield* conversation(mode);
+          yield* body(chat);
+          yield* expectGolden(chat.sessionId, golden);
+        }),
+      20_000,
+    );
 
-/** The scenarios of a chat run that no Goal starts, compared with the golden files in `goldens`. */
-export const chatScenarios: {
-  (goldens: Goldens): (it: It) => void;
-  (it: It, goldens: Goldens): void;
-} = EffectFunction.dual(2, (it: It, goldens: Goldens) => {
-  const scenario = scenarioIn(it, goldens);
+/** The scenarios of a chat run that no Goal starts. */
+export const chatScenarios = (it: It) => {
+  const scenario = scenarioIn(it);
 
   scenario("plain answer", "plain-answer", "ask", (chat) => chat.send("hello"));
   scenario("read tool", "read-tool", "ask", (chat) => chat.send("golden:read"));
@@ -171,7 +161,7 @@ export const chatScenarios: {
         // The approval still waits and the page can answer it.
         yield* chat.approve(true);
         yield* matchGolden(
-          `${goldens}rejections`,
+          "rejections",
           {
             answers,
             conversation: yield* migratedRows(chat.sessionId),
@@ -193,14 +183,11 @@ export const chatScenarios: {
       yield* chat.send("turn five");
     }),
   );
-});
+};
 
-/** The scenarios of Goal runs, compared with the golden files in `goldens`. */
-export const goalScenarios: {
-  (goldens: Goldens): (it: It) => void;
-  (it: It, goldens: Goldens): void;
-} = EffectFunction.dual(2, (it: It, goldens: Goldens) => {
-  const scenario = scenarioIn(it, goldens);
+/** The scenarios of Goal runs. */
+export const goalScenarios = (it: It) => {
+  const scenario = scenarioIn(it);
   scenario("a Goal run reads and writes in one step", "goal-tools", "ask", (chat) =>
     Effect.andThen(chat.goal, chat.send("golden:goal-tools")),
   );
@@ -211,17 +198,20 @@ export const goalScenarios: {
       yield* chat.approve(true);
     }),
   );
-});
+};
 
 /**
  * A Goal run a restart cuts, which the user confirms, then `next`. A restart replaces the agent, so
  * this scenario needs an agent of its own.
  */
-export const goalRestartScenario: {
-  (goldens: Goldens, next: (chat: Chat) => Step): (it: It) => void;
-  (it: It, goldens: Goldens, next: (chat: Chat) => Step): void;
-} = EffectFunction.dual(3, (it: It, goldens: Goldens, next: (chat: Chat) => Step) =>
-  scenarioIn(it, goldens)(
+export const goalRestartScenario = ({
+  it,
+  next,
+}: {
+  readonly it: It;
+  readonly next: (chat: Chat) => Step;
+}) =>
+  scenarioIn(it)(
     "a Goal run cut by a restart is confirmed by the user",
     "goal-restart",
     "full",
@@ -246,5 +236,4 @@ export const goalRestartScenario: {
         yield* chat.continuePastUncertain;
         yield* next(chat);
       }),
-  ),
-);
+  );
