@@ -1,5 +1,3 @@
-import { runNativeEffect } from "../runtime/native-effect.ts";
-import type { ChatMiddleware } from "@tanstack/ai";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import {
@@ -12,7 +10,6 @@ import {
   Order,
   Path,
   PlatformError,
-  Schema,
 } from "effect";
 import { isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import { readTextFileEffect } from "../files/text.ts";
@@ -90,32 +87,8 @@ const instructionsFor = Effect.fnUntraced(function* (root: string) {
 });
 
 /**
- * SDK boundary: load root guidance and a path catalog once per conversation run. A project without
- * any AGENTS.md gets no prompt at all.
- */
-export function projectInstructions(root: string): ChatMiddleware {
-  const instructions = Effect.runSync(Effect.cached(instructionsFor(root)));
-  return {
-    name: "memory-agent/project-instructions",
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onConfig(_ctx, config) {
-      return runNativeEffect(
-        Effect.map(instructions, (added) => ({
-          systemPrompts: [
-            ...config.systemPrompts.filter(
-              (prompt) => !Schema.is(Schema.String)(prompt) || !prompt.startsWith(prefix),
-            ),
-            ...added,
-          ],
-        })),
-      );
-    },
-  };
-}
-
-/**
- * The same instructions for the Effect AI loop, read once per run and sent after the system prompts
- * the hooks before this one chose.
+ * Root guidance and a path catalog, loaded once per conversation run and sent after the system
+ * prompts the hooks before this one chose. A project without any AGENTS.md gets no prompt at all.
  */
 export const projectInstructionsHook = (root: string) =>
   Effect.map(

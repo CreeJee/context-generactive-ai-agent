@@ -1,9 +1,7 @@
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { AppEvents } from "../events/app-events.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
-import { definitionOf } from "../tools/schema.ts";
 import { CardDraft, type BoardEditRefused } from "../workflow/board-edit.ts";
 import type { PlanDependenciesRejected } from "../workflow/plan-schedule.ts";
 import type { WorkflowStorageError } from "../workflow/workflow.ts";
@@ -87,7 +85,6 @@ const editBoard = {
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const runtime = yield* Effect.context<KanbanBoardActions | Boards>();
-  const run = Effect.runPromiseWith(runtime);
 
   /** The tools' calls in `sessionId`, each change saved as the run `runId`'s. */
   const callsFor = (sessionId: string, runId: string) => {
@@ -154,15 +151,7 @@ const make = Effect.gen(function* () {
   };
 
   return {
-    forSession(sessionId: string, runId: string): AnyServerTool[] {
-      const calls = callsFor(sessionId, runId);
-      return [
-        toolDefinition(definitionOf(readBoard)).server(() => run(calls.readBoard())),
-        toolDefinition(definitionOf(editBoard)).server((input) => run(calls.editBoard(input))),
-      ];
-    },
-
-    /** {@link forSession} for the Effect AI loop (docs/effect-ai-migration.md step 3). */
+    /** The board tools of a run in `sessionId`. */
     runToolsFor(sessionId: string, runId: string): RunTool[] {
       const calls = callsFor(sessionId, runId);
       return [

@@ -107,7 +107,7 @@ import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
 import { repeatGuardHook } from "../tools/repeat-guard.ts";
-import { ChildTools, Subagents, subagentInstructions } from "../subagents/subagents.ts";
+import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
@@ -2197,14 +2197,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           runId,
           selection,
           abortSignal: abortController.signal,
-          tools: ChildTools.RunTools({
-            tools: [
-              ...childSharedTools,
-              ...(readOnly
-                ? []
-                : redactor.withHiddenRunResults(approvedTools.runToolsFor(project, "gate"))),
-            ],
-          }),
+          tools: [
+            ...childSharedTools,
+            ...(readOnly
+              ? []
+              : redactor.withHiddenRunResults(approvedTools.runToolsFor(project, "gate"))),
+          ],
           systemPrompts: promptLayout(
             standingPromptsFor(childSharedTools),
             [...(isTruthy(skills.instructions) ? [skills.instructions] : []), situation.workspace],

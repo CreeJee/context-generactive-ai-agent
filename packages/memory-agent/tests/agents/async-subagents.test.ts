@@ -6,12 +6,11 @@ import type { JsonValue } from "../../src/json.ts";
 import { StepEnded } from "../../src/loop/run.ts";
 import { RunEnd } from "../../src/loop/store.ts";
 import { messageText } from "../../src/messages/text.ts";
-import { ChildTools, Subagents } from "../../src/subagents/subagents.ts";
+import { Subagents } from "../../src/subagents/subagents.ts";
 import type { AdapterInvocation, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
   current,
@@ -351,7 +350,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     }),
   );
 
-  it.effect("the Effect AI tools ask as the TanStack ones and gate adoption the same way", () =>
+  it.effect("adoption is gated on reports reviewed in the same run", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
       const { project } = yield* TestEnv;
@@ -363,22 +362,12 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         runId: "run-effect-ai",
         selection: yield* current(selectTestModel()),
         abortSignal: yield* Effect.abortSignal,
-        tools: ChildTools.RunTools({ tools: [] }),
+        tools: [],
         systemPrompts: [],
         deliveredParentNotificationIds: HashSet.empty<string>(),
         gated: HashSet.empty<string>(),
       };
       const { tools, hook } = children.runToolsFor(binding);
-      expect(
-        yield* runToolRequestDifferences({
-          chatTools: children.forRun({
-            ...binding,
-            runId: "run-tanstack",
-            tools: ChildTools.TanStack({ tools: [] }),
-          }).tools,
-          runTools: tools,
-        }),
-      ).toEqual([undefined, undefined, undefined]);
       const [run, , reports, adopt] = tools;
       const call = (tool: RunTool | undefined, params: JsonValue) =>
         Effect.fromNullishOr(tool).pipe(

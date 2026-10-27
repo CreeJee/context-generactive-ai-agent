@@ -1,15 +1,4 @@
-import type { ChatMiddleware } from "@tanstack/ai";
-import {
-  Effect,
-  HashMap,
-  HashSet,
-  Match,
-  MutableRef,
-  Option,
-  Predicate,
-  Ref,
-  Schema,
-} from "effect";
+import { Effect, HashMap, HashSet, Match, Option, Ref, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 import { RunFailed, type RunHook } from "../loop/run.ts";
 import { type CallAnswer, CallOutcome } from "../loop/scheduler.ts";
@@ -141,55 +130,6 @@ const sameness = (result: JsonValue) =>
     }),
   );
 
-const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(JsonValue));
-
-/**
- * Stops a model that repeats itself. A call that returned the same result three times in a row is
- * refused once with a note saying so; a second refusal in the same run ends the run with
- * {@link RepeatedToolCall} before the next model call. A waiting tool never counts, and any other
- * call in between starts the count again. One guard serves one run.
- */
-export const repeatGuard = (): ChatMiddleware => {
-  const guard = MutableRef.make(unguarded);
-  return {
-    name: "memory-agent/repeat-guard",
-    onBeforeToolCall(_ctx, hook) {
-      const [refused, next] = beforeCall(
-        MutableRef.get(guard),
-        hook.toolCallId,
-        hook.toolName,
-        JSON.stringify(hook.args),
-      );
-      MutableRef.set(guard, next);
-      return Option.match(refused, {
-        onNone: () => undefined,
-        onSome: (result) => ({ type: "skip" as const, result }),
-      });
-    },
-    onAfterToolCall(_ctx, info) {
-      MutableRef.update(guard, (current) =>
-        afterCall(
-          current,
-          info.toolCallId,
-          info.ok
-            ? // The result as its tool message keeps it, which leaves out undefined fields.
-              `ok\n${Option.match(decodeJsonText(JSON.stringify(info.result)), { onNone: () => "", onSome: sameness })}`
-            : `error\n${Predicate.isError(info.error) ? info.error.message : JSON.stringify(info.error)}`,
-        ),
-      );
-    },
-    // After the tool phase, so every call of the last step has its result in the transcript.
-    onShouldContinue(ctx) {
-      return Option.match(MutableRef.get(guard).stoppedAt, {
-        onNone: () => undefined,
-        onSome: (toolName) => {
-          throw RepeatedToolCall.make({ toolName, runId: ctx.runId, threadId: ctx.threadId });
-        },
-      });
-    },
-  };
-};
-
 const outcomeOf = (answer: CallAnswer) =>
   Match.valueTags(answer, {
     Returned: ({ result }) => `ok\n${sameness(result)}`,
@@ -197,7 +137,12 @@ const outcomeOf = (answer: CallAnswer) =>
     Refused: ({ error }) => `error\n${error}`,
   });
 
-/** The same guard for the Effect AI loop; one hook serves one run. */
+/**
+ * Stops a model that repeats itself. A call that returned the same result three times in a row is
+ * refused once with a note saying so; a second refusal in the same run ends the run with
+ * {@link RepeatedToolCall} before the next model call. A waiting tool never counts, and any other
+ * call in between starts the count again. One hook serves one run.
+ */
 export const repeatGuardHook = Effect.map(Ref.make(unguarded), (guard): RunHook => ({
   admit: (_scope, call) =>
     Ref.modify(guard, (current) => {

@@ -1,6 +1,4 @@
-import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
-import { runNativeEffect } from "../runtime/native-effect.ts";
 import { Clock, Context, Effect, Function as EffectFunction, Layer, Option, Schema } from "effect";
 import type { Response } from "effect/ai";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -154,41 +152,6 @@ const make = Effect.gen(function* () {
 
 type UsageLedger = Pick<Effect.Success<typeof make>, "record">;
 
-/** Counts-only provider response capture; never persist prompts, messages or tool arguments. */
-const collectApiUsageBody = (
-  ledger: UsageLedger,
-  source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
-): ChatMiddleware => ({
-  name: "memory-agent/api-usage",
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  onUsage(ctx, usage) {
-    const read = usage.promptTokensDetails?.cachedTokens;
-    const write = usage.promptTokensDetails?.cacheWriteTokens;
-    return runNativeEffect(
-      Effect.asVoid(
-        ledger.record({
-          ...source,
-          runId: ctx.runId,
-          threadId: ctx.threadId,
-          // `promptTokens` is the whole input; an Anthropic row keeps only its uncached part.
-          inputTokens:
-            source.provider === "anthropic"
-              ? usage.promptTokens - (read ?? 0) - (write ?? 0)
-              : usage.promptTokens,
-          outputTokens: usage.completionTokens,
-          ...optionalProperty("cacheReadTokens", read),
-          ...optionalProperty("cacheWriteTokens", write),
-        }),
-      ),
-    );
-  },
-});
-export const collectApiUsage: {
-  (
-    source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
-  ): (ledger: UsageLedger) => ReturnType<typeof collectApiUsageBody>;
-} & typeof collectApiUsageBody = EffectFunction.dual(2, collectApiUsageBody);
-
 /** An Effect AI response: who it counts for, and the provider's counts. */
 type UsageResponse = Omit<
   ApiUsageResponse,
@@ -227,7 +190,7 @@ export const recordUsage: {
   (response: UsageResponse): (ledger: UsageLedger) => ReturnType<typeof recordUsageBody>;
 } & typeof recordUsageBody = EffectFunction.dual(2, recordUsageBody);
 
-/** The same capture for the Effect AI loop. */
+/** Counts-only provider response capture; never persist prompts, messages or tool arguments. */
 const apiUsageHookBody = (
   ledger: UsageLedger,
   source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,

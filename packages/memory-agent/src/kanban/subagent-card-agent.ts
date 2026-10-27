@@ -1,17 +1,15 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Crypto, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
-import { ChildTools, Subagents } from "../subagents/subagents.ts";
+import { Subagents } from "../subagents/subagents.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
 import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
-import { runTool } from "../tools/run-tool.ts";
-import { definitionOf } from "../tools/schema.ts";
+import { runTool, type RunTool } from "../tools/run-tool.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import {
   CardAgent,
@@ -84,13 +82,9 @@ const recordCardVerdict = {
 
 const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
 
-/**
- * record_card_verdict for one verifier run, and the verdict it recorded. The TanStack tool and the
- * Effect AI tool (docs/effect-ai-migration.md step 3) record into the same verdict.
- */
+/** record_card_verdict for one verifier run, and the verdict it recorded. */
 export const verdictRecorder = Effect.gen(function* () {
   const verdict = yield* Ref.make(Option.none<CardVerdict>());
-  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const record = (input: typeof CardVerdictInput.Type) =>
     Effect.as(
       Ref.set(
@@ -109,8 +103,6 @@ export const verdictRecorder = Effect.gen(function* () {
     );
   return {
     verdict: Ref.get(verdict),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    tool: toolDefinition(definitionOf(recordCardVerdict)).server((input) => runSync(record(input))),
     runTool: runTool({ ...recordCardVerdict, handler: record }),
   };
 });
@@ -175,13 +167,11 @@ const make = Effect.gen(function* () {
                 sessionId: run.sessionId,
                 runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
                 selection: chosen,
-                tools: ChildTools.TanStack({
-                  tools: [
-                    ...(yield* fileTools.forProject(project)),
-                    ...(yield* outsideTools.forProject(project)),
-                    ...(yield* approvedTools.forProject(project, "gate")),
-                  ],
-                }),
+                tools: [
+                  ...fileTools.runToolsFor(project),
+                  ...outsideTools.runToolsFor(project),
+                  ...approvedTools.runToolsFor(project, "gate"),
+                ],
                 systemPrompts: [],
                 gated: gatedToolNames,
               },
@@ -240,14 +230,14 @@ const make = Effect.gen(function* () {
       const verified = (chosen: Option.Option.Value<typeof selection>) =>
         Effect.gen(function* () {
           const recorder = yield* verdictRecorder;
-          const tools: AnyServerTool[] = [
-            ...(yield* fileTools.forProject(project)).filter((tool) =>
-              HashSet.has(readToolNames, tool.name),
-            ),
-            ...(yield* approvedTools.forProject(project, "gate")).filter((tool) =>
-              HashSet.has(checkToolNames, tool.name),
-            ),
-            recorder.tool,
+          const tools: RunTool[] = [
+            ...fileTools
+              .runToolsFor(project)
+              .filter(({ tool }) => HashSet.has(readToolNames, tool.name)),
+            ...approvedTools
+              .runToolsFor(project, "gate")
+              .filter(({ tool }) => HashSet.has(checkToolNames, tool.name)),
+            recorder.runTool,
           ];
           const outcome = yield* subagents.runAttempt(
             {
@@ -255,7 +245,7 @@ const make = Effect.gen(function* () {
               sessionId: input.sessionId,
               runId,
               selection: chosen,
-              tools: ChildTools.TanStack({ tools }),
+              tools,
               systemPrompts: [],
               gated: gatedToolNames,
             },

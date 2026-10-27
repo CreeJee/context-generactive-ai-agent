@@ -6,16 +6,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { isTruthy } from "../truthy.ts";
 import { aborted } from "../runtime/aborted.ts";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { projectInstructions, projectInstructionsHook } from "../agent/project-instructions.ts";
-import {
-  EventType,
-  chat,
-  toolDefinition,
-  type AnyServerTool,
-  type ChatMiddleware,
-  type ModelMessage,
-  type StreamChunk,
-} from "@tanstack/ai";
+import { projectInstructionsHook } from "../agent/project-instructions.ts";
 import {
   Cause,
   Stream,
@@ -33,7 +24,7 @@ import {
 } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { ApiUsage, apiUsageHook, collectApiUsage } from "../agent/api-usage.ts";
+import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import { type ConversationMessage, messageText } from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
@@ -50,16 +41,8 @@ import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { CodeTools } from "../tools/code.ts";
 import { errorTag } from "../tools/failure.ts";
-import { lazily } from "../tools/lazy.ts";
-import { parallelReads } from "../tools/parallel-reads.ts";
-import {
-  RepeatedToolCall,
-  repeatGuard,
-  repeatGuardHook,
-  repeatedToolCallCode,
-} from "../tools/repeat-guard.ts";
+import { repeatGuardHook, repeatedToolCallCode } from "../tools/repeat-guard.ts";
 import { type RunTool, runTool } from "../tools/run-tool.ts";
-import { definitionOf } from "../tools/schema.ts";
 import {
   ArtifactLocator,
   AttemptFailureReason,
@@ -74,7 +57,7 @@ import {
 } from "../work-trace/store.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 import { AppEvents } from "../events/app-events.ts";
-import { childRunTools, childTools } from "./role.ts";
+import { childRunTools } from "./role.ts";
 
 export const subagentToolNames = [
   "run_subagent",
@@ -334,17 +317,6 @@ const toView = (row: SubagentRow): SubagentView => ({
 
 export const subagentThreadId = (subagentId: string) => `subagent-${subagentId}`;
 
-/**
- * The parent's tools, minus subagent tools. Children never get more than this, and run on the loop
- * their parent runs on.
- */
-export type ChildTools = Data.TaggedEnum<{
-  TanStack: { readonly tools: readonly AnyServerTool[] };
-  /** The Effect AI loop's (docs/effect-ai-migration.md step 4). */
-  RunTools: { readonly tools: ReadonlyArray<RunTool> };
-}>;
-export const ChildTools = Data.taggedEnum<ChildTools>();
-
 /** The run a subagent tool call belongs to, and what children get from it. */
 export interface SubagentBinding {
   readonly project: Project;
@@ -353,7 +325,8 @@ export interface SubagentBinding {
   readonly selection: ModelSelection;
   /** Aborts with the parent run: cancelling it stops its children and their approval waits. */
   readonly abortSignal: AbortSignal;
-  readonly tools: ChildTools;
+  /** The parent's tools, minus subagent tools. Children never get more than this. */
+  readonly tools: ReadonlyArray<RunTool>;
   readonly systemPrompts: readonly string[];
   /** Durable status notifications included in this parent's prompt and eligible for adoption. */
   readonly deliveredParentNotificationIds: HashSet.HashSet<string>;
@@ -389,12 +362,6 @@ export type SubagentReport =
       readonly reason: string;
     };
 type ChildOutcome = Extract<SubagentReport, { answer: string }>;
-
-/** What subagents add to a parent run. */
-export interface SubagentRunTools {
-  readonly tools: AnyServerTool[];
-  readonly middleware: ChatMiddleware;
-}
 
 const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
@@ -453,16 +420,6 @@ const childRunStep = (run: ChildRun, event: AgUiEvent): ChildRun =>
       TEXT_MESSAGE_CONTENT: ({ messageId, delta }) => childRunText(run, messageId, delta),
       RUN_ERROR: ({ code }) => childRunFailed(run, code),
     }),
-    Match.orElse(() => run),
-  );
-
-/** A TanStack child run, one chunk further. */
-const tanStackChildRunStep = (run: ChildRun, chunk: StreamChunk): ChildRun =>
-  Match.value(chunk).pipe(
-    Match.when({ type: EventType.TEXT_MESSAGE_CONTENT }, ({ messageId, delta }) =>
-      childRunText(run, messageId, delta),
-    ),
-    Match.when({ type: EventType.RUN_ERROR }, ({ code }) => childRunFailed(run, code)),
     Match.orElse(() => run),
   );
 
@@ -724,33 +681,6 @@ const make = Effect.gen(function* () {
       : Effect.succeedNone;
   };
 
-  /** {@link relayDecision} for a TanStack child run. */
-  const relayGate = (
-    binding: SubagentBinding,
-    row: SubagentRow,
-    handle: AttemptHandle,
-    signal: AbortSignal,
-  ): ChatMiddleware => ({
-    name: "memory-agent/subagent-gate",
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onBeforeToolCall(_ctx, hook) {
-      return runEffect(
-        relayDecision(binding, row, handle, signal, {
-          id: hook.toolCallId,
-          name: hook.toolName,
-          written: hook.toolCall.function.arguments,
-        }).pipe(
-          Effect.map(
-            Option.match({
-              onNone: () => undefined,
-              onSome: (result) => ({ type: "skip" as const, result }),
-            }),
-          ),
-        ),
-      );
-    },
-  });
-
   /** A child's call settled; the file a write returned is kept as the attempt's artifact. */
   const callSettled = <A>(
     handle: AttemptHandle,
@@ -780,130 +710,6 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-
-  /** The model run of a TanStack child. */
-  const tanStackChildRun = (
-    binding: SubagentBinding,
-    row: SubagentRow,
-    task: string,
-    handle: AttemptHandle,
-    controller: AbortController,
-    tools: readonly AnyServerTool[],
-    progress: Ref.Ref<ChildRun>,
-  ) => {
-    const threadId = subagentThreadId(row.id);
-    const loadThread = nativePromise(() =>
-      chatState.persistence.stores.messages.loadThread(threadId),
-    );
-    return Effect.gen(function* () {
-      const history = yield* loadThread;
-      const messages: ModelMessage[] = [...history, { role: "user", content: task }];
-      const runtime = yield* active.runtime(binding.selection);
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      const readChildResult = toolDefinition(definitionOf(readSubagentToolResult)).server(
-        ({ toolCallId, offset }) =>
-          runEffect(
-            Effect.map(loadThread, (saved) =>
-              childResultIn(saved, { toolCallId, offset: offset ?? 0 }),
-            ),
-          ),
-      );
-      const ownTools = [...childTools(tools), readChildResult];
-      // The calls that would wait on the relay gate stay with the child.
-      const programs = yield* codeTools.forTools(
-        ownTools,
-        binding.project.permissionMode === "full" ? HashSet.empty() : binding.gated,
-      );
-      const reads = parallelReads(
-        [...ownTools.map((tool) => programs.codeSkills(binding.project, tool)), programs.runCode],
-        controller.signal,
-      );
-      const childContext: ChatMiddleware = {
-        name: "memory-agent/subagent-context",
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onConfig(ctx, config) {
-          return ctx.phase === "init"
-            ? undefined
-            : runEffect(
-                Effect.map(loadThread, (saved) => {
-                  const providerMessages = compactChildToolResults(
-                    config.messages,
-                    savedToolCallIds(saved),
-                  );
-                  return providerMessages.every(
-                    (message, index) => message === config.messages[index],
-                  ) && providerMessages.length === config.messages.length
-                    ? undefined
-                    : { providerMessages: [...providerMessages] };
-                }),
-              );
-        },
-      };
-      // After the approval gate: a call that reaches here may run, so it stays pending until it
-      // settles. A denied or blocked call never reaches here.
-      const traceMiddleware: ChatMiddleware = {
-        name: "memory-agent/subagent-trace",
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onBeforeToolCall(_ctx, hook) {
-          return runEffect(
-            trace
-              .toolStarted(handle, binding.sessionId, {
-                id: hook.toolCallId,
-                name: hook.toolName,
-              })
-              .pipe(Effect.as(undefined)),
-          );
-        },
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onAfterToolCall(_ctx, hook) {
-          return runEffect(
-            callSettled(
-              handle,
-              binding.sessionId,
-              { id: hook.toolCallId, name: hook.toolName },
-              hook.ok,
-              hook.result,
-            ),
-          );
-        },
-      };
-      const middleware: ChatMiddleware[] = [
-        ...chatState.middleware(),
-        projectInstructions(binding.project.root),
-        // Before the gate, so a refused repeat is never reviewed or relayed to the user.
-        repeatGuard(),
-        relayGate(binding, row, handle, controller.signal),
-        traceMiddleware,
-        reads.middleware,
-        childContext,
-        collectApiUsage(usageLedger, {
-          rootSessionId: binding.sessionId,
-          purpose: "subagent",
-          provider: binding.selection.provider,
-          model: binding.selection.model,
-        }),
-        runtime.runMiddleware(),
-      ];
-      const stream = chat({
-        adapter: runtime.adapter(binding.selection),
-        agentLoopStrategy: runtime.agentLoop,
-        messages,
-        tools: reads.tools,
-        systemPrompts: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],
-        threadId,
-        runId: handle.chatRunId,
-        // Same 1-hour cache as the main conversation.
-        promptCache: "long",
-        abortController: controller,
-        middleware,
-      });
-      return yield* Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)).pipe(
-        Stream.runForEach((chunk) =>
-          Ref.update(progress, (run) => tanStackChildRunStep(run, chunk)),
-        ),
-      );
-    });
-  };
 
   /** The model run of a child on the Effect AI loop. */
   const loopChildRun = (
@@ -1042,22 +848,21 @@ const make = Effect.gen(function* () {
           binding.runId,
         );
         const progress = yield* Ref.make(childRunStart);
-        yield* ChildTools.$match(binding.tools, {
-          TanStack: ({ tools }) =>
-            tanStackChildRun(binding, row, task, handle, controller, tools, progress),
-          RunTools: ({ tools }) =>
-            loopChildRun(binding, row, task, handle, controller.signal, tools, progress),
-        }).pipe(
+        yield* loopChildRun(
+          binding,
+          row,
+          task,
+          handle,
+          controller.signal,
+          binding.tools,
+          progress,
+        ).pipe(
           // A failed stream is recorded by code. Defects and interruption end the child run; its
           // launcher records a defect as a crash.
-          Effect.catch((error) =>
+          Effect.catch(() =>
             Ref.update(progress, (run) => ({
               ...run,
-              failure: Option.some(
-                Cause.isUnknownError(error) && Schema.is(RepeatedToolCall)(error.cause)
-                  ? AttemptFailureReason.cases.RepeatedToolCall.make({})
-                  : AttemptFailureReason.cases.ModelStreamFailed.make({}),
-              ),
+              failure: Option.some(AttemptFailureReason.cases.ModelStreamFailed.make({})),
             })),
           ),
         );
@@ -1690,92 +1495,11 @@ const make = Effect.gen(function* () {
   };
 
   return {
-    forRun(binding: SubagentBinding): SubagentRunTools {
-      const parent = parentRun(binding);
-      const reportResults = MutableHashMap.empty<string, readonly SubagentReport[]>();
-
-      const runSubagentTool = toolDefinition(definitionOf(runSubagent)).server((input, context) =>
-        parent.run(context?.toolCallId ?? randomUUID(), input),
-      );
-      // TanStack types the input as sent; its defaults are filled in here.
-      const resumeTool = toolDefinition(definitionOf(resumeSubagent)).server((input, context) =>
-        parent.resume(context?.toolCallId ?? randomUUID(), {
-          ...input,
-          confirmUncertain: input.confirmUncertain ?? false,
-        }),
-      );
-      const reportsTool = toolDefinition(definitionOf(getSubagentReports)).server(
-        (input, context) =>
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          runEffect(
-            parent.reports(input).pipe(
-              Effect.tap((reports) =>
-                Effect.sync(() =>
-                  MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports),
-                ),
-              ),
-              Effect.map(reportsAnswer),
-            ),
-          ),
-      );
-      const adoptTool = toolDefinition(definitionOf(adoptSubagentReports)).server((input) =>
-        runEffect(
-          parent.adopt({
-            ...input,
-            reflectedNotificationIds: input.reflectedNotificationIds ?? [],
-          }),
-        ),
-      );
-
-      const middleware: ChatMiddleware = {
-        name: "memory-agent/subagents",
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onStart() {
-          return runEffect(parent.retry);
-        },
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onConfig(ctx, config) {
-          if (ctx.phase !== "beforeModel") return;
-          return runEffect(
-            Effect.map(parent.deliver, (prompt) =>
-              Option.getOrUndefined(
-                Option.map(prompt, (notice) => ({
-                  systemPrompts: [...config.systemPrompts, notice],
-                })),
-              ),
-            ),
-          );
-        },
-        onAfterToolCall(_ctx, info) {
-          if (info.toolName !== "get_subagent_reports" || !info.ok) return;
-          parent.review(
-            Option.getOrElse(MutableHashMap.get(reportResults, info.toolCallId), () => []),
-          );
-        },
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onFinish(ctx) {
-          if (!isTruthy(ctx.currentMessageId)) return;
-          return runEffect(parent.recordAdoption(ctx.currentMessageId));
-        },
-        onAbort() {
-          return runEffect(parent.release);
-        },
-        onError() {
-          return runEffect(parent.release);
-        },
-      };
-
-      return {
-        tools: [runSubagentTool, lazily(resumeTool), reportsTool, adoptTool],
-        middleware,
-      };
-    },
-
     /**
-     * {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). Its `hook` does
-     * what the middleware did: retries the run's unfinished children as it starts, delivers status
-     * notifications before each model call, records what the last answer adopted once the run
-     * finishes or waits, and gives the notifications back when it fails or is cancelled.
+     * The subagent tools of a parent run. Its `hook` retries the run's unfinished children as it
+     * starts, delivers status notifications before each model call, records what the last answer
+     * adopted once the run finishes or waits, and gives the notifications back when it fails or is
+     * cancelled.
      */
     runToolsFor(binding: SubagentBinding) {
       const parent = parentRun(binding);
