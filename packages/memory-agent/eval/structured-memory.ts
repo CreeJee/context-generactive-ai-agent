@@ -26,7 +26,7 @@ import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
-import { createMemoryTools } from "../src/tools/memory.ts";
+import { memoryReadRunTools } from "../src/tools/memory.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { seedChainCases, seedEvidenceCases } from "./structured-memory-fixtures.ts";
 import { evidenceNarrative } from "./evidence-narrative.ts";
@@ -118,7 +118,9 @@ const program = Effect.gen(function* () {
     }),
     services,
   );
-  const tools = createMemoryTools(seeded.env, seeded.projectId).tools;
+  const traceTool = memoryReadRunTools({ env: seeded.env, projectId: seeded.projectId }).find(
+    ({ tool }) => tool.name === "trace_evidence",
+  );
   // Freeze the question time after all fixture events, before any model requests.
   const questionAt = seeded.cases
     .flatMap((fixture) => fixture.sources.map((source) => source.createdAt))
@@ -134,10 +136,11 @@ const program = Effect.gen(function* () {
       if (structured === null) return yield* BenchmarkFailed.make({ reason: "fixture" });
       // Exactly the pre-PR read_evidence result; same source page and metadata.
       const { evidenceContext: _context, ...legacy } = structured;
-      const trace = yield* Effect.tryPromise({
-        try: () => Promise.resolve(tools[2].execute!({ id: fixture.root.id })),
-        catch: () => BenchmarkFailed.make({ reason: "fixture" }),
-      });
+      const trace = yield* Effect.fromNullishOr(traceTool).pipe(
+        Effect.flatMap((found) => found.prepare({ id: fixture.root.id })),
+        Effect.flatMap((run) => run({ toolCallId: `trace-${fixture.root.id}` })),
+        Effect.mapError(() => BenchmarkFailed.make({ reason: "fixture" })),
+      );
       // Exactly what find_memory attaches to this match; retrieval itself is not under test.
       const latest = yield* Effect.provideContext(
         Effect.flatMap(MemorySearch, (search) => search.latest(fixture.root.id)),

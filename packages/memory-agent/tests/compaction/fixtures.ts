@@ -1,17 +1,19 @@
-import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
-import { Cause, Effect, Function as EffectFunction, Stream } from "effect";
-import type { CompactionSources } from "../../src/agent/compaction.ts";
-import type { Node, Nodes } from "../../src/memory/nodes.ts";
-import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
+import { Cause, Effect, Function as EffectFunction } from "effect";
+import {
+  requestHistory,
+  type Budget,
+  type CompactionSources,
+  type ConversationMessage,
+} from "../../src/agent/compaction.ts";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
+import { RunStore } from "../../src/loop/store.ts";
+import { type Node, Nodes } from "../../src/memory/nodes.ts";
 
 export const call = <A>(operation: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
     try: () => Promise.resolve(operation()),
     catch: (cause) => new Cause.UnknownError(cause),
   });
-
-export const drain = <A>(stream: AsyncIterable<A>) =>
-  Stream.runDrain(Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)));
 
 export const noLimit = 1_000_000;
 
@@ -23,15 +25,21 @@ export const sourcesOf: {
   nodeTexts: nodes.texts,
 }));
 
-/** What the model is sent on the first call of a run over `messages`. */
-export const firstSent = Effect.fnUntraced(function* (
-  messages: readonly ModelMessage[],
-  middleware: ChatMiddleware,
-  threadId: string,
+/** What the model is sent next, under automatic compaction alone. */
+export const nextRequest = Effect.fnUntraced(function* (
+  messages: ReadonlyArray<ConversationMessage>,
+  sessionId: string,
+  budget: Budget = { compactAt: noLimit, leaveOutAt: noLimit },
 ) {
-  const adapter = new ScriptedTextAdapter([{ text: "네" }]);
-  yield* drain(chat({ adapter, threadId, messages: [...messages], middleware: [middleware] }));
-  return adapter.invocations[0]?.messages ?? [];
+  const sent = yield* requestHistory({
+    metadata: (yield* RunStore).chatMetadata,
+    threadId: sessionId,
+    messages,
+    restored: null,
+    sources: sourcesOf(yield* Nodes, sessionId),
+    budget,
+  });
+  return sent.messages;
 });
 
 /**
@@ -53,7 +61,7 @@ export const conversation: {
 function conversationBody(nodes: Nodes["Service"], at: ConversationAt, answers: readonly string[]) {
   return Effect.gen(function* () {
     const userNodes: Node[] = [];
-    const messages: ModelMessage[] = [];
+    const messages: StoredMessage[] = [];
     const toolOutput = "테스트 결과 ".repeat(200);
     let toolResult: Node | null = null;
     for (const [index, answer] of answers.entries()) {

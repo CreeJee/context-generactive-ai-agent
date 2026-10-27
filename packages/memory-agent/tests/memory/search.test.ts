@@ -1,18 +1,6 @@
 import { layer } from "@effect/vitest";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { chat } from "@tanstack/ai";
-import {
-  Cause,
-  Effect,
-  FileSystem,
-  Layer,
-  MutableHashMap,
-  Option,
-  Path,
-  Random,
-  Schema,
-  Stream,
-} from "effect";
+import { Effect, FileSystem, Layer, MutableHashMap, Option, Path, Random, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
@@ -26,8 +14,8 @@ import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { fakeTerms } from "../../src/testing/fake-morph.ts";
-import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
+import { scriptedRun } from "../support/loop-run.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet } from "../support/sql.ts";
 
@@ -289,36 +277,29 @@ testAgent()("MemorySearch.find", (it) => {
         arguments: JSON.stringify(args),
       });
       const runId = `${newSession.id}:run`;
-      yield* Stream.runDrain(
-        Stream.fromAsyncIterable(
-          chat({
-            threadId: "thread",
-            adapter: new ScriptedTextAdapter([
-              { toolCalls: [call("c1", "find_memory", { query: "SQLite 결정" })] },
-              {
-                toolCalls: [
-                  call("c2", "read_evidence", { id: earlier.decision.id }),
-                  call("c3", "trace_evidence", { id: earlier.result.id }),
-                  call("c4", "read_evidence", { id: hidden.node.id }),
-                ],
-              },
-              { text: "이전 세션에서 SQLite로 결정했습니다." },
-            ]),
-            messages: [{ role: "user", content: question.text }],
-            tools: (yield* MemoryTools).forProject(project.id),
-            runId,
-            middleware: [
-              (yield* Recorder).forRun({
-                projectId: project.id,
-                sessionId: newSession.id,
-                runId,
-                userNodeId: question.id,
-              }),
+      const binding = {
+        projectId: project.id,
+        sessionId: newSession.id,
+        runId,
+        userNodeId: question.id,
+      };
+      yield* scriptedRun({
+        turns: [
+          { toolCalls: [call("c1", "find_memory", { query: "SQLite 결정" })] },
+          {
+            toolCalls: [
+              call("c2", "read_evidence", { id: earlier.decision.id }),
+              call("c3", "trace_evidence", { id: earlier.result.id }),
+              call("c4", "read_evidence", { id: hidden.node.id }),
             ],
-          }),
-          (cause) => new Cause.UnknownError(cause),
-        ),
-      );
+          },
+          { text: "이전 세션에서 SQLite로 결정했습니다." },
+        ],
+        runId,
+        conversation: [{ role: "user", content: question.text }],
+        tools: (yield* MemoryTools).runToolsFor(binding).tools,
+        hooks: [(yield* Recorder).hookForRun(binding)],
+      });
       const results = MutableHashMap.fromIterable(
         (yield* nodes.session(newSession.id))
           .filter((node) => node.kind === "tool_result")

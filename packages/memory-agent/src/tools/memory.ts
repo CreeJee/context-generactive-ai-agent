@@ -1,11 +1,8 @@
-import { isTruthy } from "../truthy.ts";
-import { toolDefinition, type ChatMiddleware } from "@tanstack/ai";
 import {
   Array as EffectArray,
   MutableHashSet,
   Context,
   Effect,
-  Function as EffectFunction,
   Layer,
   Option,
   Ref,
@@ -19,9 +16,8 @@ import { Interpretations } from "../memory/interpretations.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { MemorySearch } from "../memory/search.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
+import { optionalProperty } from "../optional-property.ts";
 import { runTool } from "./run-tool.ts";
-import { definitionOf } from "./schema.ts";
 
 export const memoryToolNames = [
   "find_memory",
@@ -145,11 +141,6 @@ export interface MemoryToolEnvironment {
   readonly graph: Graph["Service"];
   readonly interpretations: Interpretations["Service"];
   readonly knowledge: KnowledgePromotions["Service"];
-  /**
-   * Fiber context the tool effects run on, so their spans reach the app tracer and nest under the
-   * caller's span. Callers without a fiber of their own (tests) leave it out.
-   */
-  readonly caller?: Context.Context<never>;
 }
 
 export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
@@ -261,73 +252,6 @@ const memoryCalls = (projectId: string, scope?: MemoryToolScope) => {
   return { reads, runCalls };
 };
 
-/** The implementation is fixed here; only live services and fresh run state are supplied. */
-export const createMemoryTools: {
-  (
-    projectId: string,
-    binding?: MemoryToolRunBinding,
-    scope?: MemoryToolScope,
-  ): (env: MemoryToolEnvironment) => ReturnType<typeof createMemoryToolsBody>;
-} & typeof createMemoryToolsBody = EffectFunction.dual(
-  (args) => !Schema.is(Schema.String)(args[0]),
-  createMemoryToolsBody,
-);
-function createMemoryToolsBody(
-  env: MemoryToolEnvironment,
-  projectId: string,
-  binding?: MemoryToolRunBinding,
-  scope?: MemoryToolScope,
-) {
-  const runtime = Context.merge(env.caller ?? Context.empty(), memoryServices(env));
-  const run = Effect.runPromiseWith(runtime);
-  const { reads, runCalls } = memoryCalls(projectId, scope);
-  const calls = reads(binding);
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const base = [
-    toolDefinition(definitionOf(findMemory)).server((input, context) =>
-      run(calls.findMemory(input), { signal: context?.abortSignal }),
-    ),
-    toolDefinition(definitionOf(readEvidence)).server((input, context) =>
-      run(calls.readEvidence(input), { signal: context?.abortSignal }),
-    ),
-    toolDefinition(definitionOf(traceEvidence)).server((input, context) =>
-      run(calls.traceEvidence(input), { signal: context?.abortSignal }),
-    ),
-  ] as const;
-  return Option.match(Option.fromNullishOr(binding), {
-    onNone: () => ({ tools: base, middleware: null }),
-    onSome: (runBinding) => {
-      const bound = runCalls(runBinding);
-      const middleware: ChatMiddleware = {
-        name: "memory-agent/promoted-memory-use",
-        onFinish: (ctx) =>
-          Option.match(Option.liftPredicate(ctx.currentMessageId, isTruthy), {
-            onNone: () => undefined,
-            onSome: (messageId) => run(bound.recordUse(messageId)),
-          }),
-      };
-      return {
-        tools: [
-          ...base,
-          toolDefinition(definitionOf(readToolResult)).server(({ id, offset }, context) =>
-            run(bound.readToolResult({ id, offset: offset ?? 0 }), {
-              signal: context?.abortSignal,
-            }),
-          ),
-          toolDefinition(definitionOf(promoteMemoryCandidate)).server((input) =>
-            run(bound.promote(input)),
-          ),
-          toolDefinition(definitionOf(usePromotedMemory)).server((input) =>
-            Effect.runSync(bound.useMemory(input)),
-          ),
-        ] as const,
-        middleware,
-      };
-    },
-  });
-}
-
 /** Runs a call of {@link memoryCalls} on these services, keeping the caller's fiber and span. */
 const providedBy =
   (context: Context.Context<MemoryService>) =>
@@ -345,9 +269,8 @@ const readRunTools = (
 ];
 
 /**
- * The read-only memory tools for the Effect AI loop (docs/effect-ai-migration.md step 3), with no
- * run binding: nothing records a retrieval, a use or a promotion. The calls run on the loop's
- * fiber, so `env.caller` is not used.
+ * The read-only memory tools, with no run binding: nothing records a retrieval, a use or a
+ * promotion. The calls run on the loop's fiber.
  */
 export const memoryReadRunTools = ({
   env,
@@ -377,70 +300,55 @@ const recordUseHook = <E>(recordUse: (parentMessageId: string) => Effect.Effect<
       ).pipe(Effect.when(Effect.succeed(finishedRun(end))), Effect.ignore({ log: "Warn" })),
   }));
 
+/**
+ * Memory tools plus durable retrieval/use attribution for one chat run. The calls run on the loop's
+ * fiber, so their spans nest under the run; `hook` records the memories the answer used.
+ */
+export const memoryRunTools = ({
+  env,
+  binding,
+  scope,
+}: {
+  readonly env: MemoryToolEnvironment;
+  readonly binding: MemoryToolRunBinding;
+  readonly scope?: MemoryToolScope;
+}) => {
+  const provided = providedBy(memoryServices(env));
+  const { reads, runCalls } = memoryCalls(binding.projectId, scope);
+  const bound = runCalls(binding);
+  return {
+    tools: [
+      ...readRunTools(reads(binding), provided),
+      runTool({ ...readToolResult, handler: provided(bound.readToolResult) }),
+      runTool({ ...promoteMemoryCandidate, handler: provided(bound.promote) }),
+      runTool({ ...usePromotedMemory, handler: bound.useMemory }),
+    ],
+    hook: recordUseHook(provided(bound.recordUse)),
+  };
+};
+
 const make = Effect.gen(function* () {
-  const services: MemoryToolEnvironment = {
+  const env: MemoryToolEnvironment = {
     search: yield* MemorySearch,
     nodes: yield* Nodes,
     graph: yield* Graph,
     interpretations: yield* Interpretations,
     knowledge: yield* KnowledgePromotions,
   };
-  // Carries the app tracer for callers that have no fiber of their own.
-  const layerContext = yield* Effect.context<never>();
-  const runBinding = (binding: RunBinding): MemoryToolRunBinding => ({
-    projectId: binding.projectId,
-    sessionId: binding.sessionId,
-    runId: binding.runId,
-    // AgentChat prepares capabilities before admission; never spread its deferred getter.
-    userNodeId: () => binding.userNodeId,
-  });
-  const toolsFor = (
-    context: Context.Context<never>,
-    projectId: string,
-    binding?: RunBinding,
-    scope?: MemoryToolScope,
-  ) =>
-    createMemoryTools(
-      { ...services, caller: context },
-      projectId,
-      binding !== undefined ? runBinding(binding) : undefined,
-      scope,
-    );
-  type ReadTools = Extract<ReturnType<typeof toolsFor>["tools"], { readonly length: 3 }>;
   return {
-    /** Read-only compatibility binding used by tests and non-chat callers. */
-    forProject(projectId: string): ReadTools {
-      // SAFETY: an omitted run binding returns the three-element read-only branch above.
-      return toolsFor(layerContext, projectId).tools as ReadTools;
-    },
-    /**
-     * Memory tools plus durable retrieval/use attribution for one chat run. Tool calls run on the
-     * run's context, so their spans nest under the run.
-     */
-    forRun: Effect.fnUntraced(function* (binding: RunBinding, scope?: MemoryToolScope) {
-      const caller = yield* runTrace;
-      return toolsFor(onRun(layerContext, caller), binding.projectId, binding, scope);
-    }),
-
-    /**
-     * {@link forRun} for the Effect AI loop (docs/effect-ai-migration.md step 3). The calls run on
-     * the loop's fiber, so their spans nest under the run; `hook` takes the place of the
-     * middleware's finish.
-     */
-    runToolsFor: (binding: RunBinding, scope?: MemoryToolScope) => {
-      const provided = providedBy(memoryServices(services));
-      const { reads, runCalls } = memoryCalls(binding.projectId, scope);
-      const bound = runCalls(runBinding(binding));
-      return {
-        tools: [
-          ...readRunTools(reads(runBinding(binding)), provided),
-          runTool({ ...readToolResult, handler: provided(bound.readToolResult) }),
-          runTool({ ...promoteMemoryCandidate, handler: provided(bound.promote) }),
-          runTool({ ...usePromotedMemory, handler: bound.useMemory }),
-        ],
-        hook: recordUseHook(provided(bound.recordUse)),
-      };
-    },
+    /** {@link memoryRunTools} over the agent's own memory. */
+    runToolsFor: (binding: RunBinding, scope?: MemoryToolScope) =>
+      memoryRunTools({
+        env,
+        binding: {
+          projectId: binding.projectId,
+          sessionId: binding.sessionId,
+          runId: binding.runId,
+          // AgentChat prepares capabilities before admission; never spread its deferred getter.
+          userNodeId: () => binding.userNodeId,
+        },
+        ...optionalProperty("scope", scope),
+      }),
   };
 });
 

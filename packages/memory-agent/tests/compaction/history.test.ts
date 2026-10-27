@@ -1,10 +1,9 @@
-import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
   clearedOutput,
-  compaction,
+  compactionHook,
   estimateConversation,
   turnSummariesNamespace,
   type Budget,
@@ -15,16 +14,16 @@ import {
   pendingColdObservationEffect,
   type StoredContextUsage,
 } from "../../src/agent/context-usage.ts";
-import { chatPersistence } from "../../src/chat-state/persistence.ts";
-import { tanstackMetadata } from "../../src/chat-store/metadata.ts";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
+import type { JsonValue } from "../../src/json.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
-import { isTruthy } from "../../src/truthy.ts";
+import { scriptedRun } from "../support/loop-run.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { inRun } from "../support/run-span.ts";
-import { call, conversation, drain, firstSent, noLimit, sourcesOf } from "./fixtures.ts";
+import { conversation, nextRequest, noLimit, sourcesOf } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -38,7 +37,7 @@ const freshSession = Effect.gen(function* () {
 /** Usage as any release stored it: older ones lack the observation and compaction fields. */
 type LegacyUsage = Partial<StoredContextUsage>;
 
-const metadataStore = Effect.map(chatPersistence, (persistence) => persistence.stores.metadata);
+const metadataStore = Effect.map(RunStore, (store) => store.chatMetadata);
 
 testAgent()("compaction over recorded history", (it) => {
   it.effect(
@@ -75,28 +74,26 @@ testAgent()("compaction over recorded history", (it) => {
         const own = yield* nodes.append({ ...at, kind: "tool_result", text });
         const foreign = yield* nodes.append({ ...other, kind: "tool_result", text });
         const wrongKind = yield* nodes.append({ ...at, kind: "assistant", text });
-        const execute = (yield* inRun(
-          (yield* MemoryTools).forRun({
-            ...at,
-            runId: `${at.sessionId}:r1`,
-            userNodeId: wrongKind.id,
-          }),
-        )).tools[3]?.execute;
-        if (!isTruthy(execute)) return expect.unreachable("read_tool_result unavailable");
-        expect(yield* call(() => execute({ id: own.id, offset: 0 }))).toMatchObject({
+        const { tools } = (yield* MemoryTools).runToolsFor({
+          ...at,
+          runId: `${at.sessionId}:r1`,
+          userNodeId: wrongKind.id,
+        });
+        const read = (params: JsonValue) => callTool(tools, "read_tool_result", params);
+        expect(yield* read({ id: own.id, offset: 0 })).toMatchObject({
           id: own.id,
           text: text.slice(0, 4_000),
           nextOffset: 4_000,
         });
-        expect(yield* call(() => execute({ id: own.id, offset: 4_000 }))).toMatchObject({
+        expect(yield* read({ id: own.id, offset: 4_000 })).toMatchObject({
           text: text.slice(4_000),
           nextOffset: null,
         });
-        expect(yield* call(() => execute({ id: foreign.id }))).toEqual({
+        expect(yield* read({ id: foreign.id })).toEqual({
           error: "not_found",
           id: foreign.id,
         });
-        expect(yield* call(() => execute({ id: wrongKind.id }))).toEqual({
+        expect(yield* read({ id: wrongKind.id })).toEqual({
           error: "not_found",
           id: wrongKind.id,
         });
@@ -107,12 +104,8 @@ testAgent()("compaction over recorded history", (it) => {
     Effect.gen(function* () {
       const { sessionId: threadId } = yield* freshSession;
       const metadata = yield* metadataStore;
-      const pending = pendingColdObservationEffect({
-        metadata: tanstackMetadata(metadata),
-        threadId,
-      });
-      const usage = (value: LegacyUsage) =>
-        call(() => metadata.set(contextUsageNamespace, threadId, value));
+      const pending = pendingColdObservationEffect({ metadata, threadId });
+      const usage = (value: LegacyUsage) => metadata.set(contextUsageNamespace, threadId, value);
       const cold = (observationId: string) =>
         usage({ inputTokens: 100, cachedTokens: 0, observationId, compactionStage: "none" });
       expect(yield* pending).toBeNull();
@@ -120,11 +113,7 @@ testAgent()("compaction over recorded history", (it) => {
       expect(yield* pending).toBeNull();
       yield* cold("first");
       expect(yield* pending).toBe("first");
-      yield* consumeColdObservationEffect({
-        metadata: tanstackMetadata(metadata),
-        threadId,
-        observationId: "first",
-      });
+      yield* consumeColdObservationEffect({ metadata, threadId, observationId: "first" });
       expect(yield* pending).toBeNull();
       yield* cold("second");
       expect(yield* pending).toBe("second");
@@ -139,13 +128,9 @@ testAgent()("compaction over recorded history", (it) => {
       const nodes = yield* Nodes;
       const metadata = yield* metadataStore;
       const { messages } = yield* conversation(nodes, at, ["one", "two", "three", "four"]);
-      const middleware = compaction(metadata, sourcesOf(nodes, at.sessionId), {
-        compactAt: noLimit,
-        leaveOutAt: noLimit,
-      });
-      const sent = () => firstSent(messages, middleware, at.sessionId);
+      const sent = () => nextRequest(messages, at.sessionId);
       const usage = (value: LegacyUsage) =>
-        call(() => metadata.set(contextUsageNamespace, at.sessionId, value));
+        metadata.set(contextUsageNamespace, at.sessionId, value);
       expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
       yield* usage({ inputTokens: 100, cachedTokens: null });
       expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
@@ -154,12 +139,7 @@ testAgent()("compaction over recorded history", (it) => {
       expect(early[0]?.content).toContain("earlier messages of this conversation were left out");
       expect(early).toContainEqual({ role: "user", content: "질문 4" });
       expect(early.at(-1)).toEqual({ role: "user", content: "질문 5" });
-      expect(
-        yield* pendingColdObservationEffect({
-          metadata: tanstackMetadata(metadata),
-          threadId: at.sessionId,
-        }),
-      ).toBeNull();
+      expect(yield* pendingColdObservationEffect({ metadata, threadId: at.sessionId })).toBeNull();
       // Consumption is durable: the same observation does not trigger again after the first attempt.
       expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
       yield* usage({ inputTokens: 100, cachedTokens: 0, observationId: "cold-2" });
@@ -175,8 +155,6 @@ testAgent()("compaction over recorded history", (it) => {
       Effect.gen(function* () {
         const at = yield* freshSession;
         const nodes = yield* Nodes;
-        const metadata = yield* metadataStore;
-        const tools = (yield* MemoryTools).forProject(at.projectId);
         const output = "빌드 로그 ".repeat(1_000);
         const lint = "린트 경고 ".repeat(200);
         yield* nodes.append({ ...at, kind: "user", text: "린트 돌려 줘" });
@@ -205,7 +183,8 @@ testAgent()("compaction over recorded history", (it) => {
           text: output,
           detail: { toolName: "run_shell", toolCallId: "old-1", ok: true },
         });
-        const messages: ModelMessage[] = [
+        const question = yield* nodes.append({ ...at, kind: "user", text: "그 로그 다시 읽어 줘" });
+        const messages: StoredMessage[] = [
           { role: "user", content: "린트 돌려 줘" },
           {
             role: "assistant",
@@ -234,54 +213,51 @@ testAgent()("compaction over recorded history", (it) => {
           },
           { role: "tool", toolCallId: "old-1", content: output },
           { role: "assistant", content: "빌드는 성공했어요." },
-          { role: "user", content: "그 로그 다시 읽어 줘" },
+          { role: "user", content: question.text },
         ];
-        const adapter = new ScriptedTextAdapter([
-          {
-            toolCalls: [
-              {
-                id: "new-1",
-                name: "read_evidence",
-                arguments: yield* stringifyJson({ id: result.id }),
-              },
-            ],
-          },
-          { text: "다시 읽었어요." },
-        ]);
-        let saved: readonly ModelMessage[] = [];
-        // Records the conversation as the engine keeps it, whatever the model was sent.
-        const canonical: ChatMiddleware = {
-          name: "test/canonical",
-          onFinish: (ctx) => {
-            saved = [...ctx.messages];
-          },
-        };
         // The log (about 4,500 tokens) is over budget; the page read_evidence returns in this run
         // (about 3,000) is not.
         const budget: Budget = { compactAt: 4_000, leaveOutAt: noLimit };
-        yield* drain(
-          chat({
-            adapter,
-            messages,
-            tools,
-            threadId: at.sessionId,
-            middleware: [canonical, compaction(metadata, sourcesOf(nodes, at.sessionId), budget)],
-          }),
-        );
-        const [first, second] = adapter.invocations;
-        const toolContent = (sent: readonly ModelMessage[] | undefined, id: string) =>
+        const compacting = yield* compactionHook({
+          sources: sourcesOf(nodes, at.sessionId),
+          budget,
+          restore: () => Effect.succeed(null),
+        });
+        const runId = `${at.sessionId}:run`;
+        const { invocations } = yield* scriptedRun({
+          turns: [
+            {
+              toolCalls: [
+                {
+                  id: "new-1",
+                  name: "read_evidence",
+                  arguments: yield* stringifyJson({ id: result.id }),
+                },
+              ],
+            },
+            { text: "다시 읽었어요." },
+          ],
+          runId,
+          threadId: at.sessionId,
+          conversation: messages,
+          tools: (yield* MemoryTools).runToolsFor({ ...at, runId, userNodeId: question.id }).tools,
+          hooks: [compacting.hook],
+        });
+        const [first, second] = yield* invocations;
+        const toolContent = (sent: ReadonlyArray<StoredMessage> | undefined, id: string) =>
           sent?.find((message) => message.role === "tool" && message.toolCallId === id)?.content;
         // Output answered before the latest answer is replaced by a pointer to its memory node.
-        expect(toolContent(first?.messages, "older-1")).toBe(clearedOutput(lintResult.id));
+        expect(toolContent(first?.history, "older-1")).toBe(clearedOutput(lintResult.id));
         // The latest answered run stays whole until a later run answers.
-        expect(toolContent(first?.messages, "old-1")).toBe(output);
-        expect(first?.messages.at(-1)).toEqual({ role: "user", content: "그 로그 다시 읽어 줘" });
+        expect(toolContent(first?.history, "old-1")).toBe(output);
+        expect(first?.history.at(-1)).toEqual({ role: "user", content: "그 로그 다시 읽어 줘" });
         // The output of the call in progress reaches the model whole.
-        expect(toolContent(second?.messages, "old-1")).toBe(output);
-        expect(toolContent(second?.messages, "new-1")).toEqual(
+        expect(toolContent(second?.history, "old-1")).toBe(output);
+        expect(toolContent(second?.history, "new-1")).toEqual(
           expect.stringContaining("빌드 로그 빌드 로그"),
         );
         // The conversation that is saved keeps every output.
+        const saved = yield* (yield* RunStore).thread(at.sessionId);
         expect(toolContent(saved, "older-1")).toBe(lint);
         expect(toolContent(saved, "old-1")).toBe(output);
       }),
@@ -303,18 +279,15 @@ testAgent()("compaction over recorded history", (it) => {
           long,
         ]);
         const summaries = (blocks: readonly { end: number; text: string }[]) =>
-          call(() =>
-            metadata.set(turnSummariesNamespace, at.sessionId, {
-              blocks: blocks.map(({ end, text }) => ({
-                end,
-                nextTurnNodeId: userNodes[end]!.id,
-                text,
-              })),
-            }),
-          );
-        const sources = sourcesOf(nodes, at.sessionId);
-        const sent = (budget: Budget, conversation: readonly ModelMessage[]) =>
-          firstSent(conversation, compaction(metadata, sources, budget), at.sessionId);
+          metadata.set(turnSummariesNamespace, at.sessionId, {
+            blocks: blocks.map(({ end, text }) => ({
+              end,
+              nextTurnNodeId: userNodes[end]!.id,
+              text,
+            })),
+          });
+        const sent = (budget: Budget, conversation: ReadonlyArray<StoredMessage>) =>
+          nextRequest(conversation, at.sessionId, budget);
         const overBudget: Budget = { compactAt: 1_000, leaveOutAt: noLimit };
         yield* summaries([{ end: 2, text: "- 배포 절차를 정했다" }]);
         const firstBlock = yield* sent(overBudget, messages);

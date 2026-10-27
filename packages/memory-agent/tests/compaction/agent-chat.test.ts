@@ -2,15 +2,8 @@ import { Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { ApiUsage } from "../../src/agent/api-usage.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
-import {
-  budgetFor,
-  requestHistory,
-  turnSummariesNamespace,
-  type Budget,
-  type ConversationMessage,
-} from "../../src/agent/compaction.ts";
+import { budgetFor, turnSummariesNamespace } from "../../src/agent/compaction.ts";
 import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
-import { StoredMessage } from "../../src/chat-store/schema.ts";
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -18,7 +11,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { call, conversation, noLimit, sourcesOf } from "./fixtures.ts";
+import { call, conversation, nextRequest } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -67,33 +60,13 @@ const lastInvocation = Effect.map(TestEnv, ({ provider }) =>
     : provider.adapter.invocations.at(-1)!.messages,
 );
 
-/** What the model is sent next, under automatic compaction alone. */
-const nextRequest = Effect.fnUntraced(function* (
-  messages: ReadonlyArray<ConversationMessage>,
-  sessionId: string,
-  budget: Budget = { compactAt: noLimit, leaveOutAt: noLimit },
-) {
-  const sent = yield* requestHistory({
-    metadata: (yield* RunStore).chatMetadata,
-    threadId: sessionId,
-    messages,
-    restored: null,
-    sources: sourcesOf(yield* Nodes, sessionId),
-    budget,
-  });
-  return sent.messages;
-});
-
 /** A recorded conversation, saved as the session's thread. */
 const savedConversation = Effect.fnUntraced(function* (
   at: { readonly projectId: string; readonly sessionId: string },
   answers: readonly string[],
 ) {
   const recorded = yield* conversation(yield* Nodes, at, answers);
-  yield* (yield* RunStore).saveThread(
-    at.sessionId,
-    yield* Schema.decodeUnknownEffect(Schema.Array(StoredMessage))(recorded.messages),
-  );
+  yield* (yield* RunStore).saveThread(at.sessionId, recorded.messages);
   return recorded;
 });
 

@@ -1,12 +1,9 @@
-import { chat } from "@tanstack/ai";
 import { layer } from "@effect/vitest";
-import { Cause, Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
+import { Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
-import { btwEvidenceRunTools, btwEvidenceTools } from "../../src/btw/tools.ts";
-import { StepEnded } from "../../src/loop/run.ts";
+import { StepEnded, type RunHook } from "../../src/loop/run.ts";
 import { RunEnd } from "../../src/loop/store.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
-import { EvidenceReadFailed } from "../../src/memory/evidence.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
@@ -14,13 +11,17 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
-import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
+import {
+  MemoryTools,
+  memoryReadRunTools,
+  memoryRunTools,
+  type MemoryToolEnvironment,
+} from "../../src/tools/memory.ts";
+import type { RunTool } from "../../src/tools/run-tool.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import type { JsonValue } from "../../src/json.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { runToolRequestDifferences } from "../support/requests.ts";
-import { inRun } from "../support/run-span.ts";
 import { sqlRun } from "../support/sql.ts";
 
 const environment = Effect.gen(function* () {
@@ -33,15 +34,21 @@ const environment = Effect.gen(function* () {
   };
 });
 
-const call = <A>(execute: () => A) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(execute()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
+/** The memory tools, by name, called as the model would. */
+const callers = (tools: ReadonlyArray<RunTool>) => {
+  const named = (name: string) => (params: JsonValue) => callTool(tools, name, params);
+  return {
+    find: named("find_memory"),
+    read: named("read_evidence"),
+    trace: named("trace_evidence"),
+    promote: named("promote_memory_candidate"),
+    use: named("use_promoted_memory"),
+  };
+};
 
-/** The typed reason a tool call failed with, or null when it succeeded. */
-const refusal = <A>(execute: () => A) =>
-  Effect.match(call(execute), { onFailure: (error) => error.cause, onSuccess: () => null });
+/** The read-only tools over `env`'s memory of every project cross recall allows. */
+const reads = (env: MemoryToolEnvironment, projectId: string) =>
+  callers(memoryReadRunTools({ env, projectId }));
 
 /** Each test gets its own session in the shared agent; run IDs are global, so they carry it. */
 const freshSession = Effect.gen(function* () {
@@ -115,8 +122,8 @@ testAgent()("structured memory evidence", (it) => {
           model: "fixture",
         });
       }
-      const read = createMemoryTools(env, at.projectId).tools[1];
-      const result = yield* call(() => read.execute!({ id: original.id, offset: 4000 }));
+      const { read } = reads(env, at.projectId);
+      const result = yield* read({ id: original.id, offset: 4000 });
       expect(result).toHaveProperty("evidenceContext.changes.length", 8);
       expect(result).toHaveProperty("evidenceContext.changes.0.source.id", replacement.id);
       expect(result).toMatchObject({
@@ -141,7 +148,7 @@ testAgent()("structured memory evidence", (it) => {
           ]),
         },
       });
-      expect(yield* call(() => read.execute!({ id: replacement.id, offset: 599 }))).toMatchObject({
+      expect(yield* read({ id: replacement.id, offset: 599 })).toMatchObject({
         text: "😀 replacement",
         evidenceContext: {
           assessment: { kind: "recorded_change" },
@@ -181,8 +188,8 @@ testAgent()("structured memory evidence", (it) => {
             model: "fixture",
           });
         }
-        const read = createMemoryTools(env, at.projectId).tools[1];
-        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+        const { read } = reads(env, at.projectId);
+        expect(yield* read({ id: original.id })).toMatchObject({
           evidenceContext: { assessment: { kind: "no_recorded_change" }, changes: [] },
         });
         const pending = yield* env.nodes.append({ ...at, kind: "user", text: "Maybe change that" });
@@ -194,7 +201,7 @@ testAgent()("structured memory evidence", (it) => {
           reason: "ambiguous",
           model: "fixture",
         });
-        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+        expect(yield* read({ id: original.id })).toMatchObject({
           evidenceContext: {
             assessment: { kind: "unresolved" },
             hasUnconfirmedChanges: true,
@@ -216,7 +223,7 @@ testAgent()("structured memory evidence", (it) => {
           reason: "confirmed by the user",
           model: "fixture",
         });
-        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+        expect(yield* read({ id: original.id })).toMatchObject({
           evidenceContext: {
             assessment: { kind: "recorded_change" },
             hasUnconfirmedChanges: false,
@@ -260,8 +267,8 @@ testAgent()("structured memory evidence", (it) => {
         model: "fixture",
       });
       yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
-      const [find, read, trace] = createMemoryTools(env, at.projectId).tools;
-      expect(yield* call(() => find.execute!({ query: "배포 창구 화요일" }))).toMatchObject({
+      const { find, read, trace } = reads(env, at.projectId);
+      expect(yield* find({ query: "배포 창구 화요일" })).toMatchObject({
         matches: expect.arrayContaining([
           expect.objectContaining({
             id: original.id,
@@ -270,11 +277,11 @@ testAgent()("structured memory evidence", (it) => {
           }),
         ]),
       });
-      expect(yield* call(() => trace.execute!({ id: original.id }))).toMatchObject({
+      expect(yield* trace({ id: original.id })).toMatchObject({
         challengedBy: [{ id: later.id, relation: "corrects", target: original.id }],
         unconfirmed: [],
       });
-      expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+      expect(yield* read({ id: original.id })).toMatchObject({
         evidenceContext: {
           assessment: { kind: "recorded_change" },
           hasUnconfirmedChanges: false,
@@ -315,8 +322,8 @@ testAgent()("structured memory evidence", (it) => {
       yield* change(branch, root, "corrects");
       yield* change(maybe, withdrawn, "retracts", "unconfirmed");
       yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
-      const [find] = createMemoryTools(env, at.projectId).tools;
-      expect(yield* call(() => find.execute!({ query: "Orion 캐시 포트 7000" }))).toMatchObject({
+      const { find } = reads(env, at.projectId);
+      expect(yield* find({ query: "Orion 캐시 포트 7000" })).toMatchObject({
         matches: expect.arrayContaining([
           expect.objectContaining({
             id: root.id,
@@ -366,14 +373,14 @@ testAgent()("structured memory evidence", (it) => {
       });
       const first = yield* read("retries = 2", "a".repeat(64));
       yield* read("retries = 5", "b".repeat(64));
-      const [, readEvidence, trace] = createMemoryTools(env, at.projectId).tools;
-      expect(yield* call(() => readEvidence.execute!({ id: first.result.id }))).toMatchObject({
+      const { read: readEvidence, trace } = reads(env, at.projectId);
+      expect(yield* readEvidence({ id: first.result.id })).toMatchObject({
         evidenceContext: {
           assessment: { kind: "no_recorded_change" },
           provenance: [expect.objectContaining({ id: first.call.id })],
         },
       });
-      expect(yield* call(() => trace.execute!({ id: first.result.id }))).toMatchObject({
+      expect(yield* trace({ id: first.result.id })).toMatchObject({
         chain: [{ id: first.result.id }, { id: first.call.id }],
       });
     }),
@@ -417,8 +424,8 @@ testAgent()("structured memory evidence", (it) => {
         reason: "different environment",
         model: "fixture",
       });
-      const read = createMemoryTools(env, at.projectId).tools[1];
-      expect(yield* call(() => read.execute!({ id: result.id }))).toMatchObject({
+      const { read } = reads(env, at.projectId);
+      expect(yield* read({ id: result.id })).toMatchObject({
         text: result.text,
         detail: { ok: false },
         evidenceContext: {
@@ -477,23 +484,25 @@ testAgent()("structured memory evidence", (it) => {
           model: "fixture",
         });
       }
-      const shared = createMemoryTools(env, at.projectId).tools[1];
-      const scoped = createMemoryTools(env, at.projectId, undefined, "project").tools[1];
-      expect(yield* call(() => shared.execute!({ id: root.id }))).toMatchObject({
+      const shared = reads(env, at.projectId).read;
+      const scoped = callers(
+        memoryReadRunTools({ env, projectId: at.projectId, scope: "project" }),
+      ).read;
+      expect(yield* shared({ id: root.id })).toMatchObject({
         evidenceContext: { provenance: [expect.objectContaining({ id: hidden.id })], changes: [] },
       });
-      expect(yield* call(() => scoped.execute!({ id: root.id }))).toMatchObject({
+      expect(yield* scoped({ id: root.id })).toMatchObject({
         evidenceContext: { provenance: [], changes: [], provenanceScopeLimited: true },
       });
-      expect(yield* call(() => scoped.execute!({ id: hidden.id }))).toEqual({
+      expect(yield* scoped({ id: hidden.id })).toEqual({
         error: "not_found",
         id: hidden.id,
       });
       yield* projects.setCrossRecallExcluded(other.id, true);
-      expect(yield* call(() => shared.execute!({ id: root.id }))).toMatchObject({
+      expect(yield* shared({ id: root.id })).toMatchObject({
         evidenceContext: { provenance: [], changes: [], provenanceScopeLimited: true },
       });
-      expect(yield* call(() => shared.execute!({ id: hidden.id }))).toEqual({
+      expect(yield* shared({ id: hidden.id })).toEqual({
         error: "not_found",
         id: hidden.id,
       });
@@ -505,14 +514,14 @@ testAgent()("structured memory evidence", (it) => {
       const at = yield* freshSession;
       const env = yield* environment;
       const node = yield* env.nodes.append({ ...at, kind: "user", text: "evidence" });
-      const untraced = createMemoryTools(
+      const untraced = reads(
         { ...env, graph: { ...env.graph, trace: () => Effect.succeed(null) } },
         at.projectId,
-      ).tools[1];
-      expect(yield* call(() => untraced.execute!({ id: node.id }))).toMatchObject({
+      ).read;
+      expect(yield* untraced({ id: node.id })).toMatchObject({
         evidenceContext: { assessment: { kind: "untraced" } },
       });
-      const broken = createMemoryTools(
+      const broken = reads(
         {
           ...env,
           graph: {
@@ -526,10 +535,10 @@ testAgent()("structured memory evidence", (it) => {
           },
         },
         at.projectId,
-      ).tools[1];
-      const failure = yield* refusal(() => broken.execute!({ id: node.id }));
-      expect(failure).toBeInstanceOf(EvidenceReadFailed);
-      expect(failure).toMatchObject({ reason: { stage: "trace" } });
+      ).read;
+      // The model reads the failure's tag, never the storage detail.
+      const failure = yield* Effect.flip(broken({ id: node.id }));
+      expect(failure).toMatchObject({ tag: "EvidenceReadFailed" });
       expect(
         yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(failure),
       ).not.toContain("private storage detail");
@@ -561,27 +570,43 @@ layer(
           });
         const a = yield* append(envA, first, "first owner evidence");
         const b = yield* append(envB, second, "second owner evidence");
-        const toolsA = createMemoryTools(envA, first.project.id).tools;
-        const toolsB = createMemoryTools(envB, second.project.id).tools;
-        expect(yield* call(() => toolsA[1].execute!({ id: a.id }))).toMatchObject({ text: a.text });
-        expect(yield* call(() => toolsB[1].execute!({ id: b.id }))).toMatchObject({ text: b.text });
-        expect(yield* call(() => toolsB[1].execute!({ id: a.id }))).toEqual({
+        const toolsA = reads(envA, first.project.id);
+        const toolsB = reads(envB, second.project.id);
+        expect(yield* toolsA.read({ id: a.id })).toMatchObject({ text: a.text });
+        expect(yield* toolsB.read({ id: b.id })).toMatchObject({ text: b.text });
+        expect(yield* toolsB.read({ id: a.id })).toEqual({
           error: "not_found",
           id: a.id,
         });
-        expect(yield* call(() => toolsA[1].execute!({ id: b.id }))).toEqual({
+        expect(yield* toolsA.read({ id: b.id })).toEqual({
           error: "not_found",
           id: b.id,
         });
         const wrapper = yield* second.use(MemoryTools);
-        expect(
-          yield* call(() => wrapper.forProject(second.project.id)[1].execute!({ id: b.id })),
-        ).toMatchObject({ text: b.text });
+        const bound = wrapper.runToolsFor({
+          projectId: second.project.id,
+          sessionId: second.session.id,
+          runId: `${second.session.id}:run`,
+          userNodeId: "user",
+        });
+        expect(yield* callers(bound.tools).read({ id: b.id })).toMatchObject({ text: b.text });
       }),
   );
 });
 
 testAgent()("memory tools per run", (it) => {
+  /** Ends the run with `answer` as its last message, as the loop does, so `hook` records the use. */
+  const finish = Effect.fnUntraced(function* (
+    hook: Effect.Effect<RunHook>,
+    runId: string,
+    answer: { readonly role: "assistant"; readonly id: string; readonly content: string },
+  ) {
+    const { stepEnded, ended } = yield* hook;
+    const scope = { threadId: `${runId}:thread`, runId, emit: () => Effect.void };
+    yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
+    yield* ended!(scope, RunEnd.Completed(), [answer]);
+  });
+
   it.effect(
     "fresh run getters and conversation bindings are not reused; native promotion gates remain",
     () =>
@@ -592,73 +617,74 @@ testAgent()("memory tools per run", (it) => {
         let currentUser = "missing";
         let readsA = 0;
         let readsB = 0;
-        const a = createMemoryTools(env, at.projectId, {
-          ...at,
-          runId: `${at.sessionId}:run-a`,
-          userNodeId: () => {
-            readsA++;
-            return user.id;
+        const a = memoryRunTools({
+          env,
+          binding: {
+            ...at,
+            runId: `${at.sessionId}:run-a`,
+            userNodeId: () => {
+              readsA++;
+              return user.id;
+            },
           },
         });
-        const b = createMemoryTools(env, at.projectId, {
-          ...at,
-          runId: `${at.sessionId}:run-b`,
-          userNodeId: () => {
-            readsB++;
-            return currentUser;
+        const b = memoryRunTools({
+          env,
+          binding: {
+            ...at,
+            runId: `${at.sessionId}:run-b`,
+            userNodeId: () => {
+              readsB++;
+              return currentUser;
+            },
           },
         });
-        if (a.tools.length !== 6 || b.tools.length !== 6)
-          return expect.unreachable("Expected run tools");
-        const promoteA = a.tools[4];
-        const promoteB = b.tools[4];
-        expect(yield* refusal(() => promoteA.execute!(unadoptedClaim))).toMatchObject({
-          reason: "claim_not_adopted",
-        });
-        expect(yield* refusal(() => promoteB.execute!(unadoptedClaim))).toMatchObject({
-          reason: "missing_user_authorization",
+        const promoteA = callers(a.tools).promote;
+        const promoteB = callers(b.tools).promote;
+        const notAdopted = {
+          tag: "MemoryPromotionRejected",
+          detail: "Memory promotion source is not an adopted final-answer claim",
+        };
+        expect(yield* Effect.flip(promoteA(unadoptedClaim))).toMatchObject(notAdopted);
+        expect(yield* Effect.flip(promoteB(unadoptedClaim))).toMatchObject({
+          tag: "MemoryPromotionRejected",
+          detail: "Memory promotion requires the current user turn as authorization",
         });
         currentUser = user.id;
-        expect(yield* refusal(() => promoteB.execute!(unadoptedClaim))).toMatchObject({
-          reason: "claim_not_adopted",
-        });
+        expect(yield* Effect.flip(promoteB(unadoptedClaim))).toMatchObject(notAdopted);
         expect(readsA).toBe(1);
         expect(readsB).toBe(2);
-        expect(a.middleware).not.toBe(b.middleware);
-        const useB = b.tools[5];
-        expect(() => useB.execute!({ memoryNodeIds: [user.id] })).toThrow(
-          "Only promoted memories retrieved in this run can be used",
-        );
+        expect(a.hook).not.toBe(b.hook);
+        expect(
+          yield* Effect.flip(callers(b.tools).use({ memoryNodeIds: [user.id] })),
+        ).toMatchObject({ tag: "PromotedMemoryUseRejected" });
       }),
   );
 
-  it.effect("the existing forRun wrapper preserves the deferred admission user-node getter", () =>
+  it.effect("the run binding keeps the deferred admission user-node getter", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;
       const env = yield* environment;
       let reads = 0;
       const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = yield* inRun(
-        (yield* MemoryTools).forRun({
-          ...at,
-          runId: `${at.sessionId}:deferred-run`,
-          get userNodeId() {
-            reads++;
-            return user.id;
-          },
-        }),
-      );
+      const prepared = (yield* MemoryTools).runToolsFor({
+        ...at,
+        runId: `${at.sessionId}:deferred-run`,
+        get userNodeId() {
+          reads++;
+          return user.id;
+        },
+      });
       expect(reads).toBe(0);
-      if (prepared.tools.length !== 6) return expect.unreachable("Expected run tools");
-      const promote = prepared.tools[4];
-      expect(yield* refusal(() => promote.execute!(unadoptedClaim))).toMatchObject({
-        reason: "claim_not_adopted",
+      expect(yield* Effect.flip(callers(prepared.tools).promote(unadoptedClaim))).toMatchObject({
+        tag: "MemoryPromotionRejected",
+        detail: "Memory promotion source is not an adopted final-answer claim",
       });
       expect(reads).toBe(1);
     }),
   );
 
-  it.effect("runs a run's tool calls on its context, so their spans join the run's trace", () =>
+  it.effect("runs a run's tool calls on its fiber, so their spans join the run's trace", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;
       const recorded: Tracer.Span[] = [];
@@ -669,17 +695,17 @@ testAgent()("memory tools per run", (it) => {
           return span;
         },
       });
-      const { tools, run } = yield* Effect.gen(function* () {
-        const prepared = yield* (yield* MemoryTools).forRun({
-          ...at,
-          runId: `${at.sessionId}:traced-run`,
-          userNodeId: "user",
-        });
-        return { tools: prepared.tools, run: yield* Effect.currentSpan };
+      const { tools } = (yield* MemoryTools).runToolsFor({
+        ...at,
+        runId: `${at.sessionId}:traced-run`,
+        userNodeId: "user",
+      });
+      const { run, toolSpans } = yield* Effect.gen(function* () {
+        const run = yield* Effect.currentSpan;
+        const before = recorded.length;
+        yield* callers(tools).find({ query: "anything" });
+        return { run, toolSpans: recorded.slice(before) };
       }).pipe(Effect.withSpan("chat.run"), Effect.withTracer(tracer));
-      const before = recorded.length;
-      yield* call(() => tools[0].execute!({ query: "anything" }));
-      const toolSpans = recorded.slice(before);
       expect(toolSpans.length).toBeGreaterThan(0);
       expect(toolSpans.every((span) => span.traceId === run.traceId)).toBe(true);
     }),
@@ -726,55 +752,43 @@ testAgent()("memory tools per run", (it) => {
       const runA = `${sessionId}:memory-run-a`;
       const runB = `${sessionId}:memory-run-b`;
       const makeRun = (runId: string) =>
-        createMemoryTools(env, at.projectId, { ...at, runId, userNodeId: () => user.id });
+        memoryRunTools({ env, binding: { ...at, runId, userNodeId: () => user.id } });
       const first = makeRun(runA);
       const second = makeRun(runB);
-      if (
-        first.tools.length !== 6 ||
-        second.tools.length !== 6 ||
-        first.middleware === null ||
-        second.middleware === null
-      )
-        return expect.unreachable("Expected run tools and middleware");
+      const firstCalls = callers(first.tools);
+      const secondCalls = callers(second.tools);
       const promoted = yield* Schema.decodeUnknownEffect(
         Schema.Struct({ memoryNodeId: Schema.NonEmptyString }),
       )(
-        yield* call(() =>
-          first.tools[4].execute!({
-            claimId,
-            taskId: handle.taskId,
-            attemptId: handle.id,
-            proposedText: "isolated-memory-state is a fixture decision",
-            resolvedText: "isolated-memory-state is a fixture decision",
-            disposition: "save",
-          }),
-        ),
+        yield* firstCalls.promote({
+          claimId,
+          taskId: handle.taskId,
+          attemptId: handle.id,
+          proposedText: "isolated-memory-state is a fixture decision",
+          resolvedText: "isolated-memory-state is a fixture decision",
+          disposition: "save",
+        }),
       );
       const memoryNodeIds = [promoted.memoryNodeId];
       yield* (yield* Indexer).indexAll();
-      const found = yield* call(() => first.tools[0].execute!({ query: "isolated-memory-state" }));
+      const found = yield* firstCalls.find({ query: "isolated-memory-state" });
       expect(found).toMatchObject({
         matches: expect.arrayContaining([expect.objectContaining({ id: promoted.memoryNodeId })]),
       });
-      expect(first.tools[5].execute!({ memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
-      expect(() => second.tools[5].execute!({ memoryNodeIds })).toThrow(
-        "Only promoted memories retrieved in this run can be used",
-      );
-      const finish = (middleware: NonNullable<typeof first.middleware>) =>
-        call(() =>
-          chat({
-            threadId: "thread",
-            adapter: new ScriptedTextAdapter([{ text: "fixture answer" }]),
-            messages: [],
-            middleware: [middleware],
-            stream: false,
-          }),
-        );
-      yield* finish(second.middleware);
+      expect(yield* firstCalls.use({ memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
+      expect(yield* Effect.flip(secondCalls.use({ memoryNodeIds }))).toMatchObject({
+        tag: "PromotedMemoryUseRejected",
+      });
+      const answer = (id: string) => ({
+        role: "assistant" as const,
+        id,
+        content: "fixture answer",
+      });
+      yield* finish(second.hook, runB, answer("answer-b"));
       expect((yield* env.knowledge.usageForTask(handle.taskId)).map((usage) => usage.kind)).toEqual(
         ["retrieved"],
       );
-      yield* finish(first.middleware);
+      yield* finish(first.hook, runA, answer("answer-a"));
       const usage = () =>
         Effect.map(env.knowledge.usageForTask(handle.taskId), (entries) =>
           entries.map((entry) => ({ kind: entry.kind, parentRunId: entry.parentRunId })),
@@ -783,115 +797,14 @@ testAgent()("memory tools per run", (it) => {
         { kind: "retrieved", parentRunId: runA },
         { kind: "used", parentRunId: runA },
       ]);
-      yield* call(() => second.tools[0].execute!({ query: "isolated-memory-state" }));
-      second.tools[5].execute!({ memoryNodeIds });
-      yield* finish(second.middleware);
+      yield* secondCalls.find({ query: "isolated-memory-state" });
+      yield* secondCalls.use({ memoryNodeIds });
+      yield* finish(second.hook, runB, answer("answer-b"));
       expect(yield* usage()).toEqual([
         { kind: "retrieved", parentRunId: runA },
         { kind: "used", parentRunId: runA },
         { kind: "retrieved", parentRunId: runB },
         { kind: "used", parentRunId: runB },
-      ]);
-    }),
-  );
-
-  it.effect("btw's Effect AI evidence tools ask as its TanStack ones", () =>
-    Effect.gen(function* () {
-      const { projectId } = yield* freshSession;
-      const env = yield* environment;
-      expect(
-        yield* runToolRequestDifferences({
-          chatTools: btwEvidenceTools(env, projectId),
-          runTools: btwEvidenceRunTools({ env, projectId }),
-        }),
-      ).toEqual([undefined, undefined, undefined]);
-    }),
-  );
-
-  it.effect("the Effect AI tools ask as the TanStack ones and record use without middleware", () =>
-    Effect.gen(function* () {
-      const at = yield* freshSession;
-      const { sessionId } = at;
-      const env = yield* environment;
-      const trace = yield* WorkTraceStore;
-      const agentId = `${sessionId}:effect-agent`;
-      const parentRunId = `${sessionId}:effect-parent`;
-      yield* sqlRun(
-        `INSERT INTO subagents
-          (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
-          VALUES (?, ?, 'effect', 'research', 'interrupted', ?, 'task', 1, 1)`,
-        agentId,
-        sessionId,
-        parentRunId,
-      );
-      const user = yield* env.nodes.append({
-        ...at,
-        kind: "user",
-        text: "Save this fixture decision: effect-memory-state.",
-      });
-      const handle = yield* trace.startAttempt({
-        sessionId,
-        parentRunId,
-        parentToolCallId: `${sessionId}:effect-call`,
-        agentId,
-        title: "Effect research",
-        request: "Research effect state",
-        kind: "start",
-        threadId: `${sessionId}:effect-thread`,
-      });
-      const claimId = yield* trace.finalizeAnswerClaim({
-        ...at,
-        parentRunId,
-        parentMessageId: "effect-answer",
-        usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
-        reflectedNotificationIds: [],
-      });
-      const memory = yield* MemoryTools;
-      const runId = `${sessionId}:effect-run`;
-      const binding = { ...at, runId, userNodeId: user.id };
-      const { tools, hook } = memory.runToolsFor(binding);
-      expect(
-        yield* runToolRequestDifferences({
-          chatTools: (yield* inRun(memory.forRun(binding))).tools,
-          runTools: tools,
-        }),
-      ).toEqual([undefined, undefined, undefined]);
-
-      const callOf = (index: number, params: JsonValue) =>
-        Effect.flatMap(tools[index]!.prepare(params), (run) => run({ toolCallId: "call" }));
-      const promoted = yield* Schema.decodeUnknownEffect(
-        Schema.Struct({ memoryNodeId: Schema.NonEmptyString }),
-      )(
-        yield* callOf(4, {
-          claimId,
-          taskId: handle.taskId,
-          attemptId: handle.id,
-          proposedText: "effect-memory-state is a fixture decision",
-          resolvedText: "effect-memory-state is a fixture decision",
-          disposition: "save",
-        }),
-      );
-      const memoryNodeIds = [promoted.memoryNodeId];
-      expect(yield* Effect.flip(callOf(5, { memoryNodeIds }))).toMatchObject({
-        tag: "PromotedMemoryUseRejected",
-      });
-      yield* (yield* Indexer).indexAll();
-      yield* callOf(0, { query: "effect-memory-state" });
-      expect(yield* callOf(5, { memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
-      // The run's answer ends it, so the use is recorded under that message.
-      const { stepEnded, ended } = yield* hook;
-      const scope = { threadId: `${sessionId}:effect-thread`, runId, emit: () => Effect.void };
-      const answer = { role: "assistant" as const, id: "effect-answer-message", content: "done" };
-      yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
-      yield* ended!(scope, RunEnd.Completed(), [answer]);
-      expect(
-        (yield* env.knowledge.usageForTask(handle.taskId)).map((entry) => ({
-          kind: entry.kind,
-          parentRunId: entry.parentRunId,
-        })),
-      ).toEqual([
-        { kind: "retrieved", parentRunId: runId },
-        { kind: "used", parentRunId: runId },
       ]);
     }),
   );

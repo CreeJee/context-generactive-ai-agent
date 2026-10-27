@@ -1,21 +1,7 @@
 import { Function as EffectFunction, pipe } from "effect";
 import { isTruthy } from "../truthy.ts";
-import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
-import {
-  Array as EffectArray,
-  HashMap,
-  HashSet,
-  MutableHashSet,
-  Effect,
-  Option,
-  Ref,
-  Schema,
-} from "effect";
-import {
-  type ChatMetadata,
-  type ChatMetadataFailed,
-  tanstackMetadata,
-} from "../chat-store/metadata.ts";
+import { Array as EffectArray, HashMap, HashSet, Effect, Option, Ref, Schema } from "effect";
+import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
@@ -83,21 +69,6 @@ export class CompactionFailed extends Schema.TaggedError<CompactionFailed>()("Co
   reason: CompactionReason,
   cause: Schema.Defect(),
 }) {}
-
-const compactionPromise = <A>(options: {
-  readonly operation: CompactionFailed["operation"];
-  readonly reason: keyof typeof CompactionReason.cases;
-  readonly evaluate: () => PromiseLike<A>;
-}) =>
-  Effect.tryPromise({
-    try: options.evaluate,
-    catch: (cause) =>
-      CompactionFailed.make({
-        operation: options.operation,
-        reason: CompactionReason.cases[options.reason].make({}),
-        cause,
-      }),
-  });
 
 /** Share past which the oldest messages are left out, whatever else was done. */
 export const leaveOutAtShare = 0.55;
@@ -761,90 +732,6 @@ function lightweightToolResultsBody<M extends ConversationMessage>(
 }
 
 /**
- * Compacts what one session sends to the model (see {@link compact}), before every model call of
- * a run. Goes last among the middleware that shape the conversation.
- */
-function compactionBody(
-  metadata: MetadataStore,
-  sources: CompactionSources,
-  budget: Budget,
-  observed: (stage: CompactionStage) => void = () => undefined,
-  historyForModel?: (messages: readonly ModelMessage[]) => Promise<readonly ModelMessage[] | null>,
-): ChatMiddleware {
-  return {
-    name: "memory-agent/compaction",
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onConfig: (ctx, config) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          if (ctx.phase === "init") {
-            const restored =
-              historyForModel === undefined
-                ? null
-                : yield* compactionPromise({
-                    operation: "history",
-                    reason: "HistoryFailed",
-                    evaluate: () => historyForModel(config.messages),
-                  });
-            if (!isTruthy(restored)) return;
-            const replayed = MutableHashSet.fromIterable(
-              restored.flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
-            );
-            const answered = MutableHashSet.fromIterable(
-              config.messages
-                .filter((message) => message.role === "tool")
-                .map((message) => message.toolCallId),
-            );
-            const approvals = config.resumeToolState?.approvals;
-            const abandoned = config.messages.flatMap((message) =>
-              (message.toolCalls ?? [])
-                .filter(
-                  (call) =>
-                    !MutableHashSet.has(replayed, call.id) &&
-                    !MutableHashSet.has(answered, call.id) &&
-                    !isTruthy(approvals?.has(call.id)) &&
-                    !isTruthy(approvals?.has(`approval_${call.id}`)),
-                )
-                .map((call) => call.id),
-            );
-            if (abandoned.length === 0) return;
-            return {
-              resumeToolState: {
-                ...config.resumeToolState,
-                cancelledToolCallIds: new Set([
-                  ...(config.resumeToolState?.cancelledToolCallIds ?? []),
-                  ...abandoned,
-                ]),
-              },
-            };
-          }
-          const restored =
-            historyForModel === undefined
-              ? null
-              : yield* compactionPromise({
-                  operation: "history",
-                  reason: "HistoryFailed",
-                  evaluate: () => historyForModel(config.messages),
-                });
-          const { messages, stage } = yield* requestHistory({
-            metadata: tanstackMetadata(metadata),
-            threadId: ctx.threadId,
-            messages: config.messages,
-            restored,
-            sources,
-            budget,
-          });
-          observed(stage);
-          return changed(config.messages, messages)
-            ? { providerMessages: [...messages] }
-            : undefined;
-        }),
-        { signal: ctx.signal },
-      ),
-  };
-}
-
-/**
  * What one model request of a session sends of its conversation, and the stage that made it so
  * (see {@link compactEffect}). `restored` is the history a model handoff put in place of
  * `messages`, headed by its notice. A pending cold-cache observation leaves out early once and is
@@ -953,40 +840,6 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   };
   return { hook, stage: Ref.get(stage) };
 });
-
-const isBudget = Schema.is(Schema.Struct({ compactAt: Schema.Finite, leaveOutAt: Schema.Finite }));
-type CompactionObserver = ((stage: CompactionStage) => void) | undefined;
-type HistoryForModel =
-  | ((messages: readonly ModelMessage[]) => Promise<readonly ModelMessage[] | null>)
-  | undefined;
-export const compaction: {
-  (metadata: MetadataStore, sources: CompactionSources, budget: Budget): ChatMiddleware;
-  (
-    metadata: MetadataStore,
-    sources: CompactionSources,
-    budget: Budget,
-    observed: CompactionObserver,
-  ): ChatMiddleware;
-  (
-    metadata: MetadataStore,
-    sources: CompactionSources,
-    budget: Budget,
-    observed: CompactionObserver,
-    historyForModel: HistoryForModel,
-  ): ChatMiddleware;
-  (sources: CompactionSources, budget: Budget): (metadata: MetadataStore) => ChatMiddleware;
-  (
-    sources: CompactionSources,
-    budget: Budget,
-    observed: CompactionObserver,
-  ): (metadata: MetadataStore) => ChatMiddleware;
-  (
-    sources: CompactionSources,
-    budget: Budget,
-    observed: CompactionObserver,
-    historyForModel: HistoryForModel,
-  ): (metadata: MetadataStore) => ChatMiddleware;
-} = EffectFunction.dual((args) => isBudget(args[2]), compactionBody);
 
 /** How summarizing went before `/compact`. */
 export type SummaryOutcome = "done" | "failed" | "unavailable";

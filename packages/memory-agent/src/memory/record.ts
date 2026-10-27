@@ -1,12 +1,4 @@
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
-import type {
-  AfterToolCallInfo,
-  ChatMiddleware,
-  ErrorInfo,
-  ToolCall,
-  ToolPhaseCompleteInfo,
-} from "@tanstack/ai";
 import {
   Array as Arr,
   Context,
@@ -14,13 +6,12 @@ import {
   HashMap,
   Layer,
   Match,
-  MutableHashMap,
   Option,
   Predicate,
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
-import type { StoredMessage } from "../chat-store/schema.ts";
+import type { StoredMessage, StoredToolCall } from "../chat-store/schema.ts";
 import type { JsonValue } from "../json.ts";
 import { type AnsweredCall, asRunFailed, type RunHook, StepEnded } from "../loop/run.ts";
 import { RunEnd } from "../loop/store.ts";
@@ -40,11 +31,6 @@ export interface RunBinding {
   readonly externalAgent?: string;
 }
 
-interface ToolOutcome {
-  ok: boolean;
-  error?: string;
-}
-
 type AssistantMessage = Extract<StoredMessage, { readonly role: "assistant" }>;
 
 /** A call of a step as the model made it, with its result if it has one. */
@@ -57,8 +43,6 @@ interface RecordedCall {
   readonly result: Option.Option<{ readonly ok: boolean; readonly text: string }>;
 }
 
-const isString = Schema.is(Schema.String);
-const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 /**
  * A result that reports the work did not succeed: a thrown tool or a declined tool approval
  * (`{ error }`), a denied permission review (`{ approved: false }`), a shell command that did not
@@ -83,19 +67,8 @@ const isErrorResult = Schema.is(
 );
 
 /** Tool results are stored as the text the model saw: strings as-is, everything else as JSON. */
-function resultText(entry: ToolPhaseCompleteInfo["results"][number]): string {
-  if (entry.result === undefined) return "";
-  return isString(entry.result) ? entry.result : JSON.stringify(entry.result);
-}
-
-/** {@link resultText} of an Effect AI loop result. */
 const jsonText = (result: JsonValue) =>
   Predicate.isString(result) ? result : JSON.stringify(result);
-
-function failureText(info: AfterToolCallInfo | ErrorInfo): string {
-  if (info.error instanceof Error) return info.error.message;
-  return isString(info.error) ? info.error : JSON.stringify(info.error);
-}
 
 /**
  * What a call's answer is recorded as. A tool that ran and failed is recorded as its error
@@ -116,7 +89,7 @@ const partialReason = RunEnd.$match({
   Aborted: () => Option.some("aborted"),
 });
 
-/** One run's recorder; every write goes through it, from either chat loop. */
+/** One run's recorder; every write goes through it. */
 const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
   const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
@@ -266,126 +239,14 @@ const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
   return { hide, permissionOf, recordStep, recordAnswer, recordPartial };
 });
 
-const recordedCallOf = (call: Pick<ToolCall, "id" | "function">) => ({
+const recordedCallOf = (call: typeof StoredToolCall.Type) => ({
   id: call.id,
   name: call.function.name,
   written: call.function.arguments,
 });
 
-/** Actual recording implementation; each invocation uses current central services and run state. */
-export const makeRecordingMiddleware = Effect.fnUntraced(function* (
-  binding: RunBinding,
-): Effect.fn.Return<
-  ChatMiddleware,
-  never,
-  Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
-> {
-  const run = runNativeEffectWith(
-    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient>(),
-  );
-  const sql = yield* SqlClient.SqlClient;
-  const nodes = yield* Nodes;
-  const recorder = yield* recorderFor(binding);
-  const outcomes = MutableHashMap.empty<string, ToolOutcome>();
-
-  return {
-    name: "memory-agent/record",
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onIteration(ctx) {
-      return run(
-        Effect.gen(function* () {
-          // Results the client wrote itself (a declined approval) never pass a server tool phase.
-          const written = ctx.messages.flatMap((message) => {
-            if (message.role !== "tool" || !isTruthy(message.toolCallId)) return [];
-            const text = Array.isArray(message.content)
-              ? message.content
-                  .flatMap((part) => (part.type === "text" ? [part.content] : []))
-                  .join("")
-              : (message.content ?? "");
-            return [{ toolCallId: message.toolCallId, text }];
-          });
-          const hidden = yield* Effect.forEach(written, (entry) => recorder.hide(entry.text), {
-            concurrency: "unbounded",
-          });
-          const permissions = yield* Effect.forEach(written, ({ toolCallId }) =>
-            recorder.permissionOf(toolCallId),
-          );
-          yield* Effect.forEach(written, ({ toolCallId, text }, index) =>
-            Effect.gen(function* () {
-              const call = yield* nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
-              if (
-                !isTruthy(call) ||
-                isTruthy(yield* nodes.toolNode(binding.sessionId, "tool_result", toolCallId))
-              )
-                return;
-              const parsed = Option.getOrUndefined(decodeJson(text));
-              yield* nodes.append({
-                projectId: binding.projectId,
-                sessionId: binding.sessionId,
-                runId: call.runId ?? binding.runId,
-                kind: "tool_result",
-                text: hidden[index] ?? "",
-                detail: {
-                  toolName: call.detail.toolName,
-                  toolCallId,
-                  ok: !isErrorResult(parsed),
-                  permission: permissions[index],
-                },
-                links: [{ kind: "returns", nodeId: call.id }],
-              });
-            }).pipe(sql.withTransaction),
-          );
-        }),
-      );
-    },
-
-    onAfterToolCall(_ctx, info) {
-      const outcome: ToolOutcome = { ok: info.ok };
-      if (!info.ok) outcome.error = failureText(info);
-      MutableHashMap.set(outcomes, info.toolCallId, outcome);
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onToolPhaseComplete(ctx, info) {
-      // Asking for a lazy tool's schema is not part of the work, so it is not remembered.
-      const toolCalls = info.toolCalls.filter((call) => !isDiscoveryCall(call.function.name));
-      // A declined approval fires no after-call hook, and a call skipped by middleware reports
-      // ok; the result itself says whether the tool really ran.
-      const calls = toolCalls.map((call): RecordedCall => {
-        const result = info.results.find((entry) => entry.toolCallId === call.id);
-        if (!isTruthy(result)) return { ...recordedCallOf(call), result: Option.none() };
-        const reported = Option.getOrUndefined(MutableHashMap.get(outcomes, call.id));
-        const ok = (reported?.ok ?? true) && !isErrorResult(result.result);
-        // A failure is recorded as its error message when there is one.
-        const text = ok ? resultText(result) : (reported?.error ?? resultText(result));
-        return { ...recordedCallOf(call), result: Option.some({ ok, text }) };
-      });
-      MutableHashMap.clear(outcomes);
-      return run(recorder.recordStep(ctx.accumulatedContent, calls));
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onFinish(_ctx, info) {
-      return run(recorder.recordAnswer(info.content));
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onAbort(ctx, info) {
-      return run(
-        recorder.recordPartial(ctx.accumulatedContent, Effect.succeed(info.reason ?? "aborted")),
-      );
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onError(ctx, info) {
-      return run(recorder.recordPartial(ctx.accumulatedContent, recorder.hide(failureText(info))));
-    },
-  };
-});
-
 /**
- * The same recording for the Effect AI loop. A step's calls are recorded when the step ends, with
+ * The recording of an Effect AI run. A step's calls are recorded when the step ends, with
  * the results of those that do not wait for the user; a resumed step adds the results of the calls
  * an earlier run recorded.
  */
@@ -445,12 +306,6 @@ const make = Effect.gen(function* () {
     yield* Effect.context<Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient>(),
   );
   return {
-    /** Implementation-only seam; provide the current central Context for each invocation. */
-    factory: makeRecordingMiddleware,
-    /** Synchronous SDK compatibility boundary, not a Goal's implementation-only authority. */
-    forRun(binding: RunBinding): ChatMiddleware {
-      return run(makeRecordingMiddleware(binding));
-    },
     /** The recording of one Effect AI run. */
     hookForRun(binding: RunBinding): RunHook {
       return run(makeRecordingHook(binding));
