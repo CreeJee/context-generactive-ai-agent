@@ -11,14 +11,15 @@ import type { AgUiEvent } from "../../src/loop/chunks.ts";
 import type { ResumeEntry } from "../../src/loop/resume.ts";
 import { RunFailed, runChat, type RunSpec } from "../../src/loop/run.ts";
 import { RunStore } from "../../src/loop/store.ts";
+import { providerTools } from "../../src/providers/provider-tools.ts";
 import { scriptedModel, type ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 
 /**
  * The run loop's order and bookkeeping (docs/effect-ai-migration.md step 4), which types cannot
  * check: a call waiting for approval does not hold the others back, the resume runs only the calls
- * that had no answer and keeps results in call order, a refused resume starts nothing, and a cut
- * run keeps what it wrote.
+ * that had no answer and keeps results in call order, a refused resume starts nothing, a cut run
+ * keeps what it wrote, and every step offers the provider's own tools.
  */
 
 const database = Effect.acquireRelease(
@@ -83,6 +84,7 @@ const harness = Effect.fnUntraced(function* (
         handler: record("write"),
       }),
     ],
+    providerTools: [providerTools["openai:image_generation"]({})],
     hooks: [],
     modelFailure: () => RunFailed.make({ message: "The model failed." }),
   };
@@ -138,7 +140,10 @@ describe("run loop", () => {
           thread.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
         ).toEqual(["w1", "r1"]);
         expect(thread.at(-1)).toMatchObject({ role: "assistant", content: "done" });
-        expect((yield* invocations).length).toBe(2);
+        expect((yield* invocations).map(({ toolNames }) => toolNames)).toEqual([
+          ["read_file", "write_file", "image_generation"],
+          ["read_file", "write_file", "image_generation"],
+        ]);
         expect(yield* runs).toEqual([
           { run_id: "run-1", status: "interrupted", error: null },
           { run_id: "run-2", status: "completed", error: null },

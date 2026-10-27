@@ -158,6 +158,8 @@ export interface RunSpec<R> {
   readonly source: Source;
   readonly system: ReadonlyArray<string>;
   readonly tools: ReadonlyArray<RunTool>;
+  /** Tools the provider runs itself, such as image generation; every step offers them. */
+  readonly providerTools?: ReadonlyArray<Tool.Any>;
   readonly hooks: ReadonlyArray<RunHook<R>>;
   /** A failed model call as the user sees it, which never shows a provider's text. */
   readonly modelFailure: (error: AiError.AiError | Schema.SchemaError) => RunFailed;
@@ -468,10 +470,10 @@ type ListedTool = Tool.Tool<
  * The toolkit a step offers. It only lists the tools to the provider: the loop resolves no call
  * through it, so none of the services `Tool.Any` leaves open is ever asked for.
  */
-const toolkitOf = (tools: ReadonlyArray<RunTool>) =>
+const toolkitOf = (tools: ReadonlyArray<RunTool>, providerTools: ReadonlyArray<Tool.Any>) =>
   Toolkit.make(
     // SAFETY: with `disableToolCallResolution` no handler runs and no arguments are encoded.
-    ...tools.map(({ tool }) => tool as ListedTool),
+    ...[...tools.map(({ tool }) => tool), ...providerTools].map((tool) => tool as ListedTool),
   );
 
 const isRunFailed = Schema.is(RunFailed);
@@ -796,7 +798,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       yield* spec.model
         .streamText({
           prompt: toPrompt(request.history, request.system),
-          toolkit: toolkitOf(offeredTools),
+          toolkit: toolkitOf(offeredTools, spec.providerTools ?? []),
           disableToolCallResolution: true,
           toolCallValidation: "deferred",
         })

@@ -64,9 +64,6 @@ const Conflict = refusal(409, [
   "image_direct_workflow_required",
   "notification_followup_deferred",
   "workflow_followup_deferred",
-  "goal_image_tool_unavailable",
-  // The Effect AI loop has no provider image tool yet.
-  "image_tool_unavailable",
 ]);
 const PreconditionFailed = refusal(412, ["model_selection_required"]);
 const Unprocessable = refusal(422, [

@@ -2298,16 +2298,36 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             }),
           );
 
-        // Only the Effect AI loop keeps a Goal's ledger, and it has no provider image tool yet.
+        // Only the Effect AI loop keeps a Goal's ledger.
         const goalRun = newGoalRun !== null || isTruthy(boundRun);
-        if (goalRun && injectImageProviderTool)
-          return refused({ error: "goal_image_tool_unavailable" });
-        if (deliveredTo === "api" && injectImageProviderTool)
-          return refused({ error: "image_tool_unavailable" });
-        if (
-          (chatLoop === "effect-ai" || goalRun || deliveredTo === "api") &&
-          !injectImageProviderTool
-        ) {
+        const providerTools = injectImageProviderTool
+          ? Option.getOrElse(
+              yield* providerToolRuntime
+                .compose(
+                  {
+                    provider: selection.provider,
+                    model: selection.model,
+                    accountToolKinds: ["image_generation"],
+                    app: {
+                      enabledToolIds: ["openai:image_generation"],
+                      allowHighRisk: true,
+                    },
+                    user: {
+                      enabledToolIds: ["openai:image_generation"],
+                      allowHighRisk: true,
+                    },
+                    route: `chat:${selection.provider}:${selection.model}`,
+                  },
+                  [{ id: "openai:image_generation", config: {} }],
+                )
+                .pipe(
+                  Effect.asSome,
+                  fallbackLogged("Provider image tool unavailable", Option.none),
+                ),
+              () => [],
+            )
+          : [];
+        if (chatLoop === "effect-ai" || goalRun || deliveredTo === "api") {
           const answers = {
             projectId,
             sessionId,
@@ -2416,6 +2436,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...(!workflowReadOnly && mcp.tools.length > 0
               ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
               : []),
+            ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
             concurrentCallsInstructions,
           ];
           const situation = yield* runContext(skills, delegation.instructions);
@@ -2597,6 +2618,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ...(!workflowReadOnly ? [subagentInstructions] : []),
               ]),
               tools: runTools.value,
+              providerTools: providerTools.map(({ modelTool }) => modelTool),
               hooks,
               modelFailure: modelFailureOf(runModel.shownFailure),
             },
@@ -2902,33 +2924,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           }),
           runtime.runMiddleware(),
         );
-        const providerTools = injectImageProviderTool
-          ? Option.getOrElse(
-              yield* providerToolRuntime
-                .compose(
-                  {
-                    provider: selection.provider,
-                    model: selection.model,
-                    accountToolKinds: ["image_generation"],
-                    app: {
-                      enabledToolIds: ["openai:image_generation"],
-                      allowHighRisk: true,
-                    },
-                    user: {
-                      enabledToolIds: ["openai:image_generation"],
-                      allowHighRisk: true,
-                    },
-                    route: `chat:${selection.provider}:${selection.model}`,
-                  },
-                  [{ id: "openai:image_generation", config: {} }],
-                )
-                .pipe(
-                  Effect.asSome,
-                  fallbackLogged("Provider image tool unavailable", Option.none),
-                ),
-              () => [],
-            )
-          : [];
         // SAFETY: ProviderToolRuntime only returns tools created by TanStack's installed Provider
         // Tool factories; those satisfy chat's server-tool contract but retain provider-specific types.
         const tools: AnyServerTool[] =
