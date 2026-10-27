@@ -1,12 +1,9 @@
 import { it } from "@effect/vitest";
-import { chat, toolDefinition, validateJsonSchema } from "@tanstack/ai";
-import { Cause, Effect, type JsonSchema, Option, Schema } from "effect";
+import { Effect, type JsonSchema, Option, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { JsonValue } from "../../src/json.ts";
-import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { jsonSchemaIssues, prepareRepaired } from "../../src/tools/input-repair.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
-import { definitionOf } from "../../src/tools/schema.ts";
 
 const countItems = {
   name: "count_items",
@@ -21,31 +18,6 @@ const countItems = {
 } as const;
 
 const refused = "refused";
-
-/** What TanStack handed the tool when the model sent `args`. */
-const tanstackInput = (args: string) =>
-  Effect.gen(function* () {
-    let received: JsonValue = refused;
-    const tool = toolDefinition(definitionOf(countItems)).server((input) => {
-      received = input;
-      return "ok";
-    });
-    yield* Effect.tryPromise({
-      try: () =>
-        chat({
-          threadId: "thread",
-          adapter: new ScriptedTextAdapter([
-            { toolCalls: [{ id: "call-1", name: countItems.name, arguments: args }] },
-            { text: "done" },
-          ]),
-          messages: [{ role: "user", content: "count" }],
-          tools: [tool],
-          stream: false,
-        }),
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
-    return received;
-  });
 
 const decodeArgs = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonValue));
 
@@ -68,22 +40,44 @@ describe("tool input repair", () => {
       required: ["count"],
       additionalProperties: false,
     };
-    const cases: ReadonlyArray<readonly [JsonSchema.JsonSchema, JsonValue]> = [
-      [counted, { count: 2 }],
-      [counted, { count: "2", extra: true }],
-      [counted, { tags: 1 }],
-      [{ type: "object", properties: { at: { $ref: "#/$defs/missing" } } }, { at: 1 }],
-      [{ type: "string", nullable: true, minLength: 2 }, null],
+    // Each schema and value with the issues TanStack's validator reported for them.
+    const cases: ReadonlyArray<
+      readonly [JsonSchema.JsonSchema, JsonValue, ReadonlyArray<string> | undefined]
+    > = [
+      [counted, { count: 2 }, undefined],
+      [
+        counted,
+        { count: "2", extra: true },
+        [
+          '#/count: Instance type "string" is invalid. Expected "integer".',
+          '#: Property "count" does not match additional properties schema.',
+          "#/count: False boolean schema.",
+          '#: Property "extra" does not match additional properties schema.',
+          "#/extra: False boolean schema.",
+        ],
+      ],
+      [
+        counted,
+        { tags: 1 },
+        [
+          '#: Instance does not have required property "count".',
+          '#/tags: Instance type "number" is invalid. Expected "array".',
+          '#: Property "tags" does not match additional properties schema.',
+          "#/tags: False boolean schema.",
+        ],
+      ],
+      [
+        { type: "object", properties: { at: { $ref: "#/$defs/missing" } } },
+        { at: 1 },
+        ['Unresolved $ref "#/$defs/missing".'],
+      ],
+      [{ type: "string", nullable: true, minLength: 2 }, null, undefined],
     ];
-    for (const [schema, value] of cases) {
-      const tanstack = validateJsonSchema(schema, value);
-      expect(Option.getOrUndefined(jsonSchemaIssues({ schema, value }))).toEqual(
-        tanstack.issues?.map((issue) => issue.message),
-      );
-    }
+    for (const [schema, value, issues] of cases)
+      expect(Option.getOrUndefined(jsonSchemaIssues({ schema, value }))).toEqual(issues);
   });
 
-  it.live("repairs and refuses the arguments TanStack did", () =>
+  it.effect("repairs and refuses the arguments TanStack did", () =>
     Effect.gen(function* () {
       const cases = [
         '{"count":5}',
@@ -98,9 +92,8 @@ describe("tool input repair", () => {
         '{"count":"five"}',
         '{"count":5.5}',
       ];
-      const tanstack = yield* Effect.forEach(cases, tanstackInput);
-      expect(yield* Effect.forEach(cases, effectInput)).toEqual(tanstack);
-      expect(tanstack).toEqual([
+      // What TanStack handed the tool for each.
+      expect(yield* Effect.forEach(cases, effectInput)).toEqual([
         { count: 5 },
         { count: 5 },
         { count: 5, exact: true },

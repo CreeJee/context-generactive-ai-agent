@@ -9,7 +9,7 @@ import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { randomUUID } from "../../src/runtime/synchronous-crypto.ts";
-import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedResponder } from "../../src/testing/scripted-model.ts";
 import { btwApi } from "../support/chat-api.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -40,7 +40,7 @@ const count = (sql: string, ...values: string[]) =>
 
 /** Calls the tool its question names (`promote` asks for a write), then answers. */
 const responder: ScriptedResponder = (invocation) => {
-  const last = invocation.messages.at(-1);
+  const last = invocation.history.at(-1);
   if (last?.role === "tool") return { text: "BTW answer" };
   const wantsWrite = JSON.stringify(last).includes("promote");
   const [name, args] = wantsWrite
@@ -76,9 +76,9 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
       const { provider } = yield* TestEnv;
       const thread = yield* (yield* BtwChat).create(yield* freshSession);
       yield* ask(thread.id, "promote it");
-      const [first, second] = provider!.adapter.invocations.slice(-2);
+      const [first, second] = provider!.invocations.slice(-2);
       expect(first!.toolNames.toSorted()).toEqual([...btwToolNames].toSorted());
-      expect(second!.messages.at(-1)).toMatchObject({
+      expect(second!.history.at(-1)).toMatchObject({
         content: expect.stringContaining("Unknown tool: promote_memory_candidate"),
       });
       expect(yield* count("SELECT count(*) AS count FROM memory_candidates")).toBe(0);
@@ -152,9 +152,9 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
 
         const thread = yield* (yield* BtwChat).create(env.session.id);
         expect(yield* ask(thread.id, "btw-question-only-here")).toContain("BTW answer");
-        const [first, second] = env.provider!.adapter.invocations.slice(-2);
-        expect(first!.systemPrompts.join("\n")).toContain("저장소는 SQLite로 결정했다.");
-        expect(second!.messages.at(-1)).toMatchObject({
+        const [first, second] = env.provider!.invocations.slice(-2);
+        expect(first!.system.join("\n")).toContain("저장소는 SQLite로 결정했다.");
+        expect(second!.history.at(-1)).toMatchObject({
           content: expect.stringContaining("SQLite"),
         });
 

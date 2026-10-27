@@ -27,7 +27,7 @@ import {
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { optionalProperty } from "../../src/optional-property.ts";
 import { chatApi } from "./chat-api.ts";
-import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { defaultTestResponder } from "./provider.ts";
 
 /**
@@ -41,25 +41,23 @@ export const scopedCallId: {
 } = EffectFunction.dual(2, (id: string, sessionId: string) => `${id}@${sessionId}`);
 
 export const sessionScopedResponder: ScriptedResponder = (invocation) => {
-  const sessionId = invocation.threadId ?? "";
+  const sessionId = invocation.run.threadId;
   const suffix = scopedCallId("", sessionId);
-  const messages = invocation.messages.map((message) =>
-    message.role === "tool" && message.toolCallId?.endsWith(suffix) === true
+  const history = invocation.history.map((message) =>
+    message.role === "tool" && message.toolCallId.endsWith(suffix)
       ? { ...message, toolCallId: message.toolCallId.slice(0, -suffix.length) }
       : message,
   );
-  return Promise.resolve(defaultTestResponder({ ...invocation, messages })).then(
-    (turn): ScriptedTurn =>
-      turn.toolCalls === undefined
-        ? turn
-        : {
-            ...turn,
-            toolCalls: turn.toolCalls.map((call) => ({
-              ...call,
-              id: scopedCallId(call.id, sessionId),
-            })),
-          },
-  );
+  const turn: ScriptedTurn = defaultTestResponder({ ...invocation, history });
+  return turn.toolCalls === undefined
+    ? turn
+    : {
+        ...turn,
+        toolCalls: turn.toolCalls.map((call) => ({
+          ...call,
+          id: scopedCallId(call.id, sessionId),
+        })),
+      };
 };
 
 /** An approval a session waits for, as the page lists it. */

@@ -376,7 +376,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(
         session
           .invocations()[1]
-          ?.messages.some(
+          ?.history.some(
             (message) => message.role === "user" && message.content === "look in the tests folder",
           ),
       ).toBe(true);
@@ -411,7 +411,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
 
       // The slow answer is never released: the cut ends it, then each message is a turn.
       yield* until(() => session.invocations().length === 3, "both steered turns");
-      expect(session.invocations().map((invocation) => invocation.messages.at(-1))).toMatchObject([
+      expect(session.invocations().map((invocation) => invocation.history.at(-1))).toMatchObject([
         { role: "user", content: "please be slow" },
         { role: "user", content: "and the tests" },
         { role: "user", content: "shorter please" },
@@ -478,7 +478,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(
         session
           .invocations()[1]
-          ?.messages.some(
+          ?.history.some(
             (message) => message.role === "user" && message.content === "hello, freshly edited",
           ),
       ).toBe(true);
@@ -536,7 +536,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(
         session
           .invocations()[0]
-          ?.messages.some(
+          ?.history.some(
             (message) => message.role === "user" && message.content === "edited on server",
           ),
       ).toBe(true);

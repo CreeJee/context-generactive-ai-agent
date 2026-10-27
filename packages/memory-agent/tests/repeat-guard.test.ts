@@ -2,7 +2,7 @@ import { Cause, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { AgUiEvent } from "../src/loop/chunks.ts";
-import type { ScriptedResponder } from "../src/testing/scripted-adapter.ts";
+import type { ScriptedResponder } from "../src/testing/scripted-model.ts";
 import { runTurn } from "./support/chat-client.ts";
 import { selectTestModel } from "./support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "./support/test-env.ts";
@@ -33,12 +33,12 @@ testAgent({ testProvider: { responder } })("repeat guard", (it) => {
       yield* selectTestModel();
       const session = yield* freshSession;
       const events = yield* runTurn(session, `${session}:loop`, "list the files");
-      const invocations = (provider?.adapter.invocations ?? []).filter(
-        (invocation) => invocation.threadId === session,
+      const invocations = (provider?.invocations ?? []).filter(
+        (invocation) => invocation.run.threadId === session,
       );
       // Three runs of the call, the refusal the model reads, and the repeat that ends the run.
       expect(invocations).toHaveLength(5);
-      const results = (invocations.at(-1)?.messages ?? []).filter(
+      const results = (invocations.at(-1)?.history ?? []).filter(
         (message) => message.role === "tool",
       );
       expect(results).toHaveLength(4);

@@ -177,22 +177,22 @@ testAgent({ testProvider: {} })("chat runs", (it) => {
       expect((yield* attachments.forNode(user?.id ?? "")).map((stored) => stored.id)).toEqual([
         attachment.id,
       ]);
-      expect(
-        invocations()[0]?.messages.find((message) => message.role === "user")?.content,
-      ).toEqual([{ type: "text", content: "look at #1 please" }, inlineImage]);
-      expect(invocations()[0]?.systemPrompts.join("\n")).toContain(attachmentInstructions);
+      expect(invocations()[0]?.history.find((message) => message.role === "user")?.content).toEqual(
+        [{ type: "text", content: "look at #1 please" }, inlineImage],
+      );
+      expect(invocations()[0]?.system.join("\n")).toContain(attachmentInstructions);
 
       // A later turn replays the earlier image as inline data the provider can read.
       yield* page.send("look at it again");
       expect(invocations()).toHaveLength(2);
       expect(
-        invocations()[1]?.messages.flatMap((message) =>
+        invocations()[1]?.history.flatMap((message) =>
           Array.isArray(message.content)
             ? message.content.filter((content) => content.type === "image")
             : [],
         ),
       ).toEqual([inlineImage]);
-      expect(invocations()[1]?.systemPrompts.join("\n")).toContain(attachmentInstructions);
+      expect(invocations()[1]?.system.join("\n")).toContain(attachmentInstructions);
 
       // The stored transcript shows the image again after a reload.
       const session = yield* nodes.session(sessionId);
@@ -213,7 +213,7 @@ testAgent({ testProvider: {} })("chat runs", (it) => {
       const sessionId = yield* freshSession;
       const invocations = yield* invocationsOf(sessionId);
       yield* eventsOf(yield* post(sessionId, "hi"));
-      expect(invocations()[0]?.systemPrompts.join("\n")).not.toContain(attachmentInstructions);
+      expect(invocations()[0]?.system.join("\n")).not.toContain(attachmentInstructions);
     }),
   );
 

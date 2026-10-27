@@ -57,7 +57,7 @@ const send = (sessionId: string, runId: string, text: string) =>
 const lastInvocation = Effect.map(TestEnv, ({ provider }) =>
   provider === undefined
     ? expect.unreachable("the block has a test provider")
-    : provider.adapter.invocations.at(-1)!.messages,
+    : provider.invocations.at(-1)!.history,
 );
 
 /** A recorded conversation, saved as the session's thread. */
@@ -219,15 +219,16 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
 // The responder reports a cache hit only on the provider's first request, so it needs its own agent.
 testAgent({
   testProvider: {
-    responder: (invocation) => ({
-      text: "ok",
-      usage: {
-        promptTokens: 120,
-        completionTokens: 5,
-        totalTokens: 125,
-        promptTokensDetails: { cachedTokens: invocation.index === 0 ? 30 : 0 },
-      },
-    }),
+    responder: (invocation) => {
+      const cacheRead = invocation.index === 0 ? 30 : 0;
+      return {
+        text: "ok",
+        usage: {
+          inputTokens: { uncached: 120 - cacheRead, total: 120, cacheRead },
+          outputTokens: { total: 5 },
+        },
+      };
+    },
   },
 })("context usage reporting", (it) => {
   it.effect("reports prompt cache usage across consecutive requests and distinguishes zero", () =>

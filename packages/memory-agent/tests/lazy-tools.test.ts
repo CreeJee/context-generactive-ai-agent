@@ -1,13 +1,14 @@
-import { DISCOVERY_TOOL_NAME, type ModelMessage } from "@tanstack/ai";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Nodes } from "../src/memory/nodes.ts";
-import type { ScriptedResponder } from "../src/testing/scripted-adapter.ts";
+import type { StoredMessage } from "../src/chat-store/schema.ts";
+import type { ScriptedResponder } from "../src/testing/scripted-model.ts";
+import { discoveryToolName } from "../src/tools/discovery.ts";
 import { runTurn, toolResults } from "./support/chat-client.ts";
 import { selectTestModel } from "./support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "./support/test-env.ts";
 
-const textOf = (message: ModelMessage | undefined) =>
+const textOf = (message: StoredMessage | undefined) =>
   Schema.is(Schema.String)(message?.content)
     ? message.content
     : (message?.content ?? [])
@@ -16,14 +17,14 @@ const textOf = (message: ModelMessage | undefined) =>
 
 /** Asks for read_outside_file, reads the file the user names, then answers with its text. */
 const responder: ScriptedResponder = (invocation) => {
-  const results = invocation.messages.filter((message) => message.role === "tool");
-  const path = /(\/\S+\.txt)/.exec(textOf(invocation.messages.findLast((m) => m.role === "user")));
+  const results = invocation.history.filter((message) => message.role === "tool");
+  const path = /(\/\S+\.txt)/.exec(textOf(invocation.history.findLast((m) => m.role === "user")));
   if (results.length === 0)
     return {
       toolCalls: [
         {
           id: "call-discover",
-          name: DISCOVERY_TOOL_NAME,
+          name: discoveryToolName,
           arguments: JSON.stringify({ toolNames: ["read_outside_file"] }),
         },
       ],
@@ -52,10 +53,10 @@ testAgent({ testProvider: { responder } })("lazy tools", (it) => {
       yield* selectTestModel();
       const session = yield* freshSession;
       const events = yield* runTurn(session, `${session}:read`, `read ${file}`);
-      const invocations = (provider?.adapter.invocations ?? []).filter(
-        (invocation) => invocation.threadId === session,
+      const invocations = (provider?.invocations ?? []).filter(
+        (invocation) => invocation.run.threadId === session,
       );
-      expect(invocations[0]?.toolNames).toContain(DISCOVERY_TOOL_NAME);
+      expect(invocations[0]?.toolNames).toContain(discoveryToolName);
       expect(invocations[0]?.toolNames).not.toContain("read_outside_file");
       expect(invocations[1]?.toolNames).toContain("read_outside_file");
       expect(toolResults(events).join("\n")).toContain("OUTSIDE CONTENT");

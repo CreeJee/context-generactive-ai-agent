@@ -32,7 +32,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
   it.effect("saving a code skill waits for approval, then resumes the durable app run", () =>
     Effect.gen(function* () {
       const { provider } = yield* TestEnv;
-      const invocations = provider!.adapter.invocations;
+      const invocations = provider!.invocations;
       const before = invocations.length;
       const nodes = yield* Nodes;
       const { sessionId, page } = yield* pendingApproval();
@@ -69,7 +69,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       // The model asks for save_code_skill; the run that resumes it sends the approved tool result
       // in a new model invocation.
       expect(invocations.length - before).toBe(2);
-      expect(invocations.at(-1)?.messages.at(-1)?.role).toBe("tool");
+      expect(invocations.at(-1)?.history.at(-1)?.role).toBe("tool");
     }),
   );
 

@@ -1,10 +1,10 @@
 import { Deferred, Effect, Option, Schema } from "effect";
-import type { ModelMessage } from "@tanstack/ai";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import type {
   ScriptedResponder,
   ScriptedToolCall,
   ScriptedTurn,
-} from "../../src/testing/scripted-adapter.ts";
+} from "../../src/testing/scripted-model.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { scopedCallId } from "../support/chat-client.ts";
 import { defaultTestResponder } from "../support/provider.ts";
@@ -61,11 +61,8 @@ const saveSkill = (id: string, script: string) =>
 
 /** Provider usage with every detail, so the run's stored usage shows each of them. */
 const usage = (input: number) => ({
-  promptTokens: input,
-  completionTokens: 12,
-  totalTokens: input + 12,
-  promptTokensDetails: { cachedTokens: 60, cacheWriteTokens: 20 },
-  completionTokensDetails: { reasoningTokens: 4 },
+  inputTokens: { uncached: input - 80, total: input, cacheRead: 60, cacheWrite: 20 },
+  outputTokens: { total: 12, reasoning: 4 },
 });
 
 const scripts = {
@@ -197,7 +194,7 @@ const decodeScenario = Schema.decodeUnknownOption(Scenario);
 
 const isString = Schema.is(Schema.String);
 
-const userText = (message: ModelMessage | undefined) =>
+const userText = (message: StoredMessage | undefined) =>
   message?.role !== "user"
     ? ""
     : isString(message.content)
@@ -211,27 +208,26 @@ const userText = (message: ModelMessage | undefined) =>
  * make more than once, so each carries the run that made it.
  */
 const sharedModel: ScriptedResponder = (invocation) => {
-  const scope = invocation.runId ?? invocation.threadId ?? "";
-  const messages = invocation.messages.map((message) =>
-    message.role === "tool" && message.toolCallId !== undefined
+  const scope = invocation.run.runId;
+  const history = invocation.history.map((message) =>
+    message.role === "tool"
       ? { ...message, toolCallId: message.toolCallId.replace(/@.*$/, "") }
       : message,
   );
-  const child = invocation.systemPrompts.some((prompt) => prompt.includes("You are a subagent"));
-  return Promise.resolve(defaultTestResponder({ ...invocation, messages })).then((turn) => {
-    const scoped =
-      turn.toolCalls === undefined
-        ? turn
-        : {
-            ...turn,
-            toolCalls: turn.toolCalls.map((tool) => ({ ...tool, id: `${tool.id}@${scope}` })),
-          };
-    return child ? { ...scoped, waitFor: children.waits } : scoped;
-  });
+  const child = invocation.system.some((prompt) => prompt.includes("You are a subagent"));
+  const turn = defaultTestResponder({ ...invocation, history });
+  const scoped =
+    turn.toolCalls === undefined
+      ? turn
+      : {
+          ...turn,
+          toolCalls: turn.toolCalls.map((tool) => ({ ...tool, id: `${tool.id}@${scope}` })),
+        };
+  return child ? { ...scoped, waitFor: children.waits } : scoped;
 };
 
 export const goldenResponder: ScriptedResponder = (invocation) => {
-  const messages = invocation.messages;
+  const messages = invocation.history;
   const lastUser = messages.findLastIndex((message) => message.role === "user");
   const scenario = decodeScenario(/^golden:(\S+)$/.exec(userText(messages[lastUser]))?.[1]);
   if (Option.isNone(scenario)) return sharedModel(invocation);
@@ -242,7 +238,7 @@ export const goldenResponder: ScriptedResponder = (invocation) => {
   const script: ReadonlyArray<ScriptedTurn> = scripts[scenario.value];
   const turn = script[step];
   if (turn === undefined) return sharedModel(invocation);
-  const sessionId = invocation.threadId ?? "";
+  const sessionId = invocation.run.threadId;
   return turn.toolCalls === undefined
     ? turn
     : {

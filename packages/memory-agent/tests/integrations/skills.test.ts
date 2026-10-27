@@ -183,11 +183,11 @@ testAgent({ skillsBuiltin: builtinSkillsDirectory() })("the skills this app ship
 /** Sends one user turn: its run's tool results, and the model's first invocation in it. */
 const send = Effect.fnUntraced(function* (session: string, runId: string, text: string) {
   const { provider } = yield* TestEnv;
-  const invocationIndex = provider?.adapter.invocations.length ?? 0;
+  const invocationIndex = provider?.invocations.length ?? 0;
   const events = yield* runTurn(session, runId, text);
   return {
     results: toolResults(events),
-    invocation: provider?.adapter.invocations[invocationIndex],
+    invocation: provider?.invocations[invocationIndex],
   };
 });
 
@@ -231,7 +231,7 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
           'call read_skill {"name":"greet"}',
         );
         expect(withSkill.invocation?.toolNames).toContain("read_skill");
-        expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
+        expect(withSkill.invocation?.system.join("\n")).toContain(
           "- greet (project): Greet warmly.",
         );
         expect(withSkill.results.join("\n")).toContain("Say hello in Korean.");

@@ -175,7 +175,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                 });
                 const rejected = yield* post(context.session.id, "incompatible", "other-contract");
                 expect(rejected.status).toBe(409);
-                expect(context.provider!.adapter.invocations).toHaveLength(0);
+                expect(context.provider!.invocations).toHaveLength(0);
                 const first = yield* post(context.session.id, "run-a");
                 expect(first.status).toBe(200);
                 const firstStream = yield* first.text;
@@ -195,7 +195,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                   backendUrl,
                 );
                 expect(direct.status).toBe(409);
-                const calls = context.provider!.adapter.invocations.length;
+                const calls = context.provider!.invocations.length;
                 const duplicate = yield* post(context.session.id, "run-a", boundary.buildId);
                 expect(duplicate.status).toBe(409);
                 yield* duplicate.text;
@@ -213,7 +213,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                 const resumedIds = [...resumed.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
                 expect(resumedIds).toEqual(ids.slice(1));
                 expect(EffectArray.dedupe(resumedIds).length).toBe(resumedIds.length);
-                expect(context.provider!.adapter.invocations).toHaveLength(calls);
+                expect(context.provider!.invocations).toHaveLength(calls);
                 expect(
                   yield* sqlAll(
                     "SELECT run_id, session_id FROM workflow_run_bindings ORDER BY run_id",

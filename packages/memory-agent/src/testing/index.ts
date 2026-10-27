@@ -1,9 +1,9 @@
 export { fakeEmbedderLayer, fakeVector } from "./fake-embedder.ts";
 export {
-  ScriptedTextAdapter,
-  type AdapterInvocation,
+  scriptedModel,
+  type ScriptedInvocation,
   type ScriptedResponder,
   type ScriptedToolCall,
   type ScriptedTurn,
-} from "./scripted-adapter.ts";
+} from "./scripted-model.ts";
 export { fakeMorphLayer, fakeTerms } from "./fake-morph.ts";

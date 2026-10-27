@@ -131,7 +131,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       const sending = yield* Effect.forkChild(deliver(text));
       yield* waitUntil(
         Effect.sync(
-          () => provider?.adapter.invocations.some((call) => call.threadId === sessionId) ?? false,
+          () => provider?.invocations.some((call) => call.run.threadId === sessionId) ?? false,
         ),
         "the model to be asked",
         6_000,

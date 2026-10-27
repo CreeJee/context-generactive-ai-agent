@@ -230,17 +230,17 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
       yield* selectTestModel();
       const session = (yield* (yield* Sessions).create(project.id)).id;
       const send = Effect.fnUntraced(function* (runId: string, text: string) {
-        const invocationIndex = provider?.adapter.invocations.length ?? 0;
+        const invocationIndex = provider?.invocations.length ?? 0;
         const events = yield* wireOf(yield* runTurn(session, runId, text));
-        return { events, invocation: provider?.adapter.invocations[invocationIndex] };
+        return { events, invocation: provider?.invocations[invocationIndex] };
       });
       const off = yield* send(`${session}:off`, "hello");
       expect(off.invocation?.toolNames).not.toContain("kagi_search");
-      expect(off.invocation?.systemPrompts.join("\n")).not.toContain("Kagi web search is enabled");
+      expect(off.invocation?.system.join("\n")).not.toContain("Kagi web search is enabled");
       yield* enable;
       const on = yield* send(`${session}:on`, 'call kagi_search {"query":"effect schema"}');
       expect(on.invocation?.toolNames).toContain("kagi_search");
-      expect(on.invocation?.systemPrompts.join("\n")).toContain("Kagi web search is enabled");
+      expect(on.invocation?.system.join("\n")).toContain("Kagi web search is enabled");
       expect(on.events).toContain("summary of A");
       expect(on.events).not.toContain("sk-test-key");
     }),

@@ -18,7 +18,7 @@ import type {
   ScriptedResponder,
   ScriptedToolCall,
   ScriptedTurn,
-} from "../../src/testing/scripted-adapter.ts";
+} from "../../src/testing/scripted-model.ts";
 import { WorkflowExecution, WorkflowExecutionState } from "../../src/workflow/execution.ts";
 import {
   type UpdatePlan,
@@ -90,7 +90,7 @@ const scripts = MutableHashMap.empty<string, Script>();
 
 const responder: ScriptedResponder = (invocation) =>
   Effect.gen(function* () {
-    const threadId = invocation.threadId ?? "";
+    const threadId = invocation.run.threadId;
     const script = Option.getOrUndefined(MutableHashMap.get(scripts, threadId));
     const [turn, ...rest] = script?.turns ?? [];
     if (script === undefined || turn === undefined)
@@ -195,7 +195,7 @@ const executing = Effect.fnUntraced(function* (
   );
   return {
     id,
-    invocations: () => env.provider!.adapter.invocations.filter((turn) => turn.threadId === id),
+    invocations: () => env.provider!.invocations.filter((turn) => turn.run.threadId === id),
     run: (runId = "initial") => runTurn(id, `${id}-${runId}`, "Execute the approved Plan"),
     cancel: Effect.flatMap(agent, (chat) => chat.cancel(id, null)),
     status,
@@ -240,11 +240,11 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       yield* completesGoal(session);
       const invocations = session.invocations();
       expect(invocations).toHaveLength(5);
-      expect(EffectArray.dedupe(invocations.map((turn) => turn.runId))).toHaveLength(3);
-      expect(invocations[1]?.systemPrompts.join("\n")).toContain(
+      expect(EffectArray.dedupe(invocations.map((turn) => turn.run.runId))).toHaveLength(3);
+      expect(invocations[1]?.system.join("\n")).toContain(
         "automatic continuation of the already approved Plan",
       );
-      expect(invocations[3]?.systemPrompts.join("\n")).toContain("Workflow phase: verify");
+      expect(invocations[3]?.system.join("\n")).toContain("Workflow phase: verify");
       expect(
         (yield* (yield* Nodes).session(session.id)).filter((node) => node.kind === "user"),
       ).toHaveLength(1);
@@ -380,7 +380,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       });
       const invocations = session.invocations();
       expect(invocations).toHaveLength(4);
-      expect(invocations[2]?.systemPrompts.join("\n")).toContain(
+      expect(invocations[2]?.system.join("\n")).toContain(
         "Ready steps (pending with every dependency completed): p3.",
       );
     }),
@@ -442,8 +442,8 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       yield* session.run();
       yield* completesGoal(session);
       const invocations = session.invocations();
-      expect(invocations[4]?.systemPrompts.join("\n")).toContain("Workflow phase: execute");
-      expect(invocations[6]?.systemPrompts.join("\n")).toContain("Workflow phase: verify");
+      expect(invocations[4]?.system.join("\n")).toContain("Workflow phase: execute");
+      expect(invocations[6]?.system.join("\n")).toContain("Workflow phase: verify");
     }),
   );
 

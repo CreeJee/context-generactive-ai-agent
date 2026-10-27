@@ -31,7 +31,7 @@ const question = (text: string) => ({
 testAgent({
   testProvider: {
     responder: (invocation) =>
-      invocation.messages.at(-1)?.role === "tool"
+      invocation.history.at(-1)?.role === "tool"
         ? { text: "BTW answer" }
         : {
             toolCalls: [
@@ -83,8 +83,8 @@ testAgent({
       expect(yield* answer("side question one")).toContain("BTW answer");
       yield* mainNode("second main message, written after the BTW opened");
       expect(yield* answer("side question two")).toContain("BTW answer");
-      const latest = env.provider!.adapter.invocations.at(-2)!;
-      expect(latest.systemPrompts.join("\n")).toContain("second main message");
+      const latest = env.provider!.invocations.at(-2)!;
+      expect(latest.system.join("\n")).toContain("second main message");
       expect((yield* nodes.session(session)).map((node) => node.text)).toEqual([
         "first main message",
         "second main message, written after the BTW opened",

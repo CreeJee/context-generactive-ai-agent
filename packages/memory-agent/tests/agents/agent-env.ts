@@ -12,7 +12,7 @@ import { messageText } from "../../src/agent/compaction.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { type PermissionMode, Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import type { AdapterInvocation } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedInvocation } from "../../src/testing/scripted-model.ts";
 import { runTurn, streamedText } from "../support/chat-client.ts";
 import { defaultTestResponder } from "../support/provider.ts";
 import { sqlGet } from "../support/sql.ts";
@@ -138,12 +138,12 @@ const releaseWhere = Effect.fnUntraced(function* (matches: (entry: Delayed) => b
 });
 
 /** The default model, except that a turn it would delay waits for the test instead of a timer. */
-export const heldDefaultTurn = Effect.fnUntraced(function* (invocation: AdapterInvocation) {
+export const heldDefaultTurn = Effect.fnUntraced(function* (invocation: ScriptedInvocation) {
   const turn = yield* sdk(() => defaultTestResponder(invocation));
   if (turn.delayMs === undefined) return turn;
   const { delayMs: _delayMs, ...ready } = turn;
   const gate = yield* Deferred.make<void>();
-  const user = invocation.messages.findLast((message) => message.role === "user");
+  const user = invocation.history.findLast((message) => message.role === "user");
   delayed.push({ user: user === undefined ? "" : messageText(user), gate });
   return { ...ready, waitFor: Deferred.await(gate) };
 });

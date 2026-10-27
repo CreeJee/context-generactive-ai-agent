@@ -46,11 +46,11 @@ goldenAgent()("parallel tools in a Goal run", (it) => {
         });
 
         const { provider } = yield* TestEnv;
-        const last = provider?.adapter.invocations
-          .filter((invocation) => invocation.threadId === chat.sessionId)
+        const last = provider?.invocations
+          .filter((invocation) => invocation.run.threadId === chat.sessionId)
           .at(-1);
-        const results = (last?.messages ?? []).flatMap((message) =>
-          message.role === "tool" && message.toolCallId !== undefined
+        const results = (last?.history ?? []).flatMap((message) =>
+          message.role === "tool"
             ? [{ call: scripted(message.toolCallId), content: JSON.stringify(message.content) }]
             : [],
         );

@@ -7,7 +7,7 @@ import { StepEnded } from "../../src/loop/run.ts";
 import { RunEnd } from "../../src/loop/store.ts";
 import { messageText } from "../../src/agent/compaction.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
-import type { AdapterInvocation, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedInvocation, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -66,15 +66,15 @@ const followUpPrompt = "This is an automatic task completion follow-up";
 
 /** The parent's own scripted moves for the asynchronous contract; everything else is default. */
 const asyncTurn = Effect.fnUntraced(
-  function* (invocation: AdapterInvocation) {
+  function* (invocation: ScriptedInvocation) {
     const user = messageText(
-      invocation.messages.findLast((message) => message.role === "user") ?? {
+      invocation.history.findLast((message) => message.role === "user") ?? {
         role: "user",
         content: "",
       },
     );
-    const internal = invocation.systemPrompts.some((prompt) => prompt.includes(followUpPrompt));
-    const last = invocation.messages.at(-1);
+    const internal = invocation.system.some((prompt) => prompt.includes(followUpPrompt));
+    const last = invocation.history.at(-1);
     const lastTool = last?.role === "tool" ? last.toolCallId : undefined;
     if (!internal && user.startsWith("review-batch ")) {
       switch (lastTool) {
@@ -177,10 +177,10 @@ const userNodes = (sessionId: string) =>
 const followedUp = Effect.fnUntraced(function* (sessionId: string) {
   const { provider } = yield* TestEnv;
   return () =>
-    provider!.adapter.invocations.some(
+    provider!.invocations.some(
       (invocation) =>
-        invocation.threadId === sessionId &&
-        invocation.systemPrompts.some((prompt) => prompt.includes(followUpPrompt)),
+        invocation.run.threadId === sessionId &&
+        invocation.system.some((prompt) => prompt.includes(followUpPrompt)),
     );
 });
 
@@ -222,10 +222,10 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         );
         expect((yield* children.list(sessionId))[0]?.status).toBe("running");
         expect(
-          provider!.adapter.invocations.some(
+          provider!.invocations.some(
             (invocation) =>
-              invocation.threadId === sessionId &&
-              invocation.messages.some(
+              invocation.run.threadId === sessionId &&
+              invocation.history.some(
                 (message) =>
                   message.role === "tool" && message.toolCallId === "call-independent-work",
               ),

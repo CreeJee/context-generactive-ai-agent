@@ -178,7 +178,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })("ACP cancella
         const { agent, newSession } = yield* editor();
         const sessionId = yield* newSession;
         const invocations = () =>
-          provider!.adapter.invocations.filter((invocation) => invocation.threadId === sessionId);
+          provider!.invocations.filter((invocation) => invocation.run.threadId === sessionId);
         const prompt = agent.request(acp.methods.agent.session.prompt, {
           sessionId,
           prompt: [{ type: "text", text: "slow" }],

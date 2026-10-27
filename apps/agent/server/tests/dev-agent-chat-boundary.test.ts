@@ -91,7 +91,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           yield* request(context.session.id, "missing-holder", null, "http://localhost"),
         );
         expect(missingHolder.status).toBe(423);
-        expect(context.provider!.adapter.invocations).toHaveLength(0);
+        expect(context.provider!.invocations).toHaveLength(0);
         for (const table of ["workflow_run_bindings", "chat_runs", "nodes"])
           expect(yield* sqlGet(`SELECT count(*) AS n FROM ${table}`)).toEqual({ n: 0 });
         const valid = yield* serve(
@@ -181,7 +181,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           value.headers.set("Sec-Fetch-Site", headers.site);
           expect((yield* serve(value)).status).toBe(403);
         }
-        expect(context.provider!.adapter.invocations).toHaveLength(0);
+        expect(context.provider!.invocations).toHaveLength(0);
         expect(yield* snapshot).toEqual(before);
       }),
     20000,
@@ -239,13 +239,13 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           sqlAll(`SELECT * FROM ${table} ORDER BY rowid`),
         );
         const before = yield* snapshot;
-        const calls = context.provider!.adapter.invocations.length;
+        const calls = context.provider!.invocations.length;
         expect((yield* serve(yield* native(second.id, "missing-holder", null))).status).toBe(423);
         expect((yield* serve(yield* native(second.id, "wrong-holder", "page-a"))).status).toBe(423);
         expect((yield* serve(yield* native(second.id, "session-a-run", "page-b"))).status).toBe(
           409,
         );
-        expect(context.provider!.adapter.invocations).toHaveLength(calls);
+        expect(context.provider!.invocations).toHaveLength(calls);
         expect(yield* snapshot).toEqual(before);
         leases.release(second.id, "page-b");
         const allowed = yield* serve(yield* native(second.id, "session-b-run", null));

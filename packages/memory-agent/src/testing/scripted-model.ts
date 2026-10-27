@@ -22,8 +22,8 @@ import { discoveryToolName } from "../tools/discovery.ts";
 import { isTruthy } from "../truthy.ts";
 
 /**
- * Provider-free Effect AI model for tests, as `ScriptedTextAdapter` is for TanStack: the agent
- * loop, tools and persistence still run; only the model's turns are scripted.
+ * Provider-free Effect AI model for tests: the agent loop, tools and persistence still run; only
+ * the model's turns are scripted.
  */
 
 export interface ScriptedToolCall {

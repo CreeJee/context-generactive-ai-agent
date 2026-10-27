@@ -84,20 +84,16 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           status: "completed",
           lastTask: "list what matters",
         });
-        const invocations = provider!.adapter.invocations;
-        const parentStart = invocations.find((invocation) => invocation.threadId === sessionId);
+        const invocations = provider!.invocations;
+        const parentStart = invocations.find((invocation) => invocation.run.threadId === sessionId);
         const childStart = invocations.find(
-          (invocation) => invocation.threadId === subagentThreadId(child!.id),
+          (invocation) => invocation.run.threadId === subagentThreadId(child!.id),
         );
-        expect(parentStart?.systemPrompts.join("\n")).toContain(
-          "You can delegate with run_subagent",
-        );
-        expect(childStart?.systemPrompts.join("\n")).toContain("You are a subagent");
+        expect(parentStart?.system.join("\n")).toContain("You can delegate with run_subagent");
+        expect(childStart?.system.join("\n")).toContain("You are a subagent");
         expect(parentStart?.toolNames).toContain("run_subagent");
-        expect(parentStart?.systemPrompts.join("\n")).toContain(
-          "ROOT INSTRUCTIONS FOR EVERY AGENT",
-        );
-        expect(childStart?.systemPrompts.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
+        expect(parentStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
+        expect(childStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
         // No nesting, and nothing the parent does not have.
         for (const tool of [
           "run_subagent",
@@ -108,9 +104,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           "delegate_to_agent",
         ])
           expect(childStart?.toolNames).not.toContain(tool);
-        expect(
-          childStart?.systemPrompts.some((prompt) => prompt.includes("Current workflow")),
-        ).toBe(false);
+        expect(childStart?.system.some((prompt) => prompt.includes("Current workflow"))).toBe(
+          false,
+        );
         expect(childStart?.toolNames).toContain("read_subagent_tool_result");
         // The only child-specific tool reads bounded pages of that child's own persisted results.
         expect(
@@ -120,7 +116,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         ).toBe(true);
         // The parent's conversation is not copied into the child.
         expect(
-          childStart?.messages.some(
+          childStart?.history.some(
             (message) =>
               message.role === "user" &&
               Schema.is(Schema.String)(message.content) &&

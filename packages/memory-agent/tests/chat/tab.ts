@@ -2,7 +2,7 @@ import { Cause, Deferred, Effect, MutableHashMap, Option } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedResponder } from "../../src/testing/scripted-model.ts";
 import { defaultTestResponder } from "../support/provider.ts";
 import { TestEnv } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
@@ -45,7 +45,7 @@ export const userTexts = (sessionId: string) =>
 export const invocationsOf = Effect.fnUntraced(function* (sessionId: string) {
   const { provider } = yield* TestEnv;
   return () =>
-    (provider?.adapter.invocations ?? []).filter((invocation) => invocation.threadId === sessionId);
+    (provider?.invocations ?? []).filter((invocation) => invocation.run.threadId === sessionId);
 });
 
 const gates = MutableHashMap.empty<string, Deferred.Deferred<void>>();
@@ -54,7 +54,7 @@ const gates = MutableHashMap.empty<string, Deferred.Deferred<void>>();
 export const gatedResponder: ScriptedResponder = (invocation) =>
   Effect.gen(function* () {
     const turn = yield* sdk(() => defaultTestResponder(invocation));
-    const gate = MutableHashMap.get(gates, invocation.threadId ?? "");
+    const gate = MutableHashMap.get(gates, invocation.run.threadId);
     if (turn.delayMs === undefined || Option.isNone(gate)) return turn;
     const { delayMs: _delayMs, ...gated } = turn;
     return { ...gated, waitFor: Deferred.await(gate.value) };
