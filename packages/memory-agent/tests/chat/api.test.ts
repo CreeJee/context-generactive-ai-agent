@@ -24,7 +24,7 @@ const chatApi = Effect.gen(function* () {
   return (yield* HttpApiTest.groups(ChatApi, ["chat"]).pipe(Effect.provideContext(handlers))).chat;
 });
 
-const message = (content: string) => ({ id: "m-1", role: "user" as const, content });
+const message = (content: string, id = "m-1") => ({ id, role: "user" as const, content });
 
 testAgent({ testProvider: {} })("chat API", (it) => {
   it.effect("a run's event ids are offsets a join resumes after", () =>
@@ -50,6 +50,50 @@ testAgent({ testProvider: {} })("chat API", (it) => {
         .join({ params: { session, run }, query: { after: events[1]!.id } })
         .pipe(Effect.flatMap(Stream.runCollect));
       expect(rest).toEqual(events.slice(2));
+    }),
+  );
+
+  it.effect("a snapshot pages the conversation and holds the approvals a run waits for", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const session = yield* freshSession;
+      const api = yield* chatApi;
+      const send = (runId: string, text: string, id: string) =>
+        api
+          .run({
+            params: { session },
+            headers: {},
+            payload: { runId, messages: [message(text, id)] },
+          })
+          .pipe(Effect.flatMap(Stream.runDrain));
+
+      yield* send(`${session}-1`, "hi", "m-1");
+      yield* send(`${session}-2`, "please use the shell", "m-2");
+      const all = yield* api.snapshot({ params: { session }, query: { limit: 500 } });
+      expect(all.older).toBeNull();
+      expect(all.messages.filter((shown) => shown.role === "user")).toEqual([
+        { id: "m-1", role: "user", parts: [{ type: "text", content: "hi" }] },
+        { id: "m-2", role: "user", parts: [{ type: "text", content: "please use the shell" }] },
+      ]);
+      expect(all.interrupts).toMatchObject({ runId: `${session}-2` });
+      // Parts the page does not show are left out; the call waiting for approval is kept.
+      const waiting = all.interrupts?.pending[0];
+      expect(waiting?.reason).toBe("tool_call");
+      expect(all.messages.flatMap((shown) => shown.parts)).toContainEqual(
+        expect.objectContaining({
+          type: "tool-call",
+          id: waiting?.reason === "tool_call" ? waiting.toolCallId : null,
+        }),
+      );
+
+      const newest = yield* api.snapshot({ params: { session }, query: { limit: 2 } });
+      expect(newest.messages).toEqual(all.messages.slice(-2));
+      const older = yield* api.snapshot({
+        params: { session },
+        query: { limit: 500, before: newest.older! },
+      });
+      expect(older.messages).toEqual(all.messages.slice(0, -2));
+      expect(older.older).toBeNull();
     }),
   );
 

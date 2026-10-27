@@ -13,6 +13,8 @@ import { Attachments } from "../attachments/attachments.ts";
 import { messageText } from "../messages/text.ts";
 import { SqlClient } from "effect/sql";
 import { Nodes } from "../memory/nodes.ts";
+import { optionalProperty } from "../optional-property.ts";
+import { decodeSnapshot } from "./snapshot.ts";
 import {
   interruptContinuationLostCode,
   serverRestartedCode,
@@ -133,6 +135,23 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * The `GET` a reloaded page hydrates from: transcript, a still-running run to rejoin, and
+   * pending approvals to show again. Only the session's own thread may be read.
+   */
+  const hydrate = (request: Request, sessionId: string) =>
+    Effect.gen(function* () {
+      // Imports may create sessions after this service's startup migration has already run.
+      if (yield* migrateMissingChatThread(sessionId, fallbackThread))
+        yield* persistence.prepareThread(sessionId);
+      return yield* nativePromise(() =>
+        reconstructChat(hydrationPersistence, request, {
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          authorize: (threadId) => Promise.resolve(threadId === sessionId),
+        }),
+      );
+    }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+
   return {
     persistence,
 
@@ -164,22 +183,26 @@ const make = Effect.gen(function* () {
       },
     ],
 
+    hydrate,
+
     /**
-     * The `GET` a reloaded page hydrates from: transcript, a still-running run to rejoin, and
-     * pending approvals to show again. Only the session's own thread may be read.
+     * The newest `limit` messages of the session, or those before `before`, with its running run
+     * and pending approvals: the chat API's `snapshot`, read from what `hydrate` answers.
      */
-    hydrate: (request: Request, sessionId: string) =>
-      Effect.gen(function* () {
-        // Imports may create sessions after this service's startup migration has already run.
-        if (yield* migrateMissingChatThread(sessionId, fallbackThread))
-          yield* persistence.prepareThread(sessionId);
-        return yield* nativePromise(() =>
-          reconstructChat(hydrationPersistence, request, {
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            authorize: (threadId) => Promise.resolve(threadId === sessionId),
-          }),
-        );
-      }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+    snapshot: (sessionId: string, limit: number, before: string | undefined) =>
+      hydrate(
+        new Request(
+          `http://memory-agent/api/chat?${new URLSearchParams({
+            threadId: sessionId,
+            limit: `${limit}`,
+            ...optionalProperty("before", before),
+          }).toString()}`,
+        ),
+        sessionId,
+      ).pipe(
+        Effect.flatMap((response) => nativePromise(() => response.text())),
+        Effect.flatMap(decodeSnapshot),
+      ),
 
     /** The run record, when it belongs to the session. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.

@@ -26,15 +26,15 @@ const runEvents = ({ log, after }: { readonly log: StreamDurability; readonly af
     ),
   );
 
-/**
- * The API's answer to a run it started or follows: the run's events, or the refusal. A failure no
- * refusal names is a defect, answered 500 as the page's route answers it.
- */
+/** A failure no refusal names is a defect, answered 500 as the page's route answers it. */
+const orDefect = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.catch(effect, (error) =>
+    Effect.andThen(logDefect("route_defect")(Cause.fail(error)), Effect.die(error)),
+  );
+
+/** The API's answer to a run it started or follows: the run's events, or the refusal. */
 const answered = <E>(start: Effect.Effect<ChatStart, E>) =>
-  start.pipe(
-    Effect.catch((error) =>
-      Effect.andThen(logDefect("route_defect")(Cause.fail(error)), Effect.die(error)),
-    ),
+  orDefect(start).pipe(
     Effect.flatMap(
       ChatStart.$match({
         Refused: ({ refusal }) => Effect.fail(refusal),
@@ -57,6 +57,15 @@ export const ChatApiHandlers = HttpApiBuilder.group(
   Effect.fn(function* (handlers) {
     const chat = yield* AgentChat;
     return handlers.handleAll({
+      snapshot: ({ params, query }) =>
+        chat.snapshot(params.session, query.limit, query.before).pipe(
+          Effect.map(Result.succeed),
+          Effect.catchTag("SessionNotFound", () =>
+            Effect.succeed(Result.fail({ error: "session_not_found" } as const)),
+          ),
+          orDefect,
+          Effect.flatMap(Effect.fromResult),
+        ),
       run: ({ params, headers, payload }) =>
         chat
           .start(

@@ -2945,6 +2945,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     follow: (sessionId: string, runId: string, after: string) =>
       Effect.andThen(sessions.get(sessionId), followRun(sessionId, runId, after)),
 
+    /** The chat API's `snapshot`: a page of the session's messages, its run and its approvals. */
+    snapshot: (sessionId: string, limit: number, before: string | undefined) =>
+      Effect.andThen(sessions.get(sessionId), chatState.snapshot(sessionId, limit, before)),
+
     /**
      * Explicit cancel of the session's running run. The intent is recorded on the run first, then
      * the run is aborted; the answer says whether it actually stopped within a few seconds.

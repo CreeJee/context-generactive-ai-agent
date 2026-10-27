@@ -11,8 +11,8 @@ import { PermissionReviewPayload } from "../tools/definitions.ts";
 /** An ISO 8601 time, as `JSON.stringify` writes a `Date`. */
 const IsoTime = Schema.String;
 
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), content: Schema.String });
-const ImagePart = Schema.Struct({
+export const TextPart = Schema.Struct({ type: Schema.Literal("text"), content: Schema.String });
+export const ImagePart = Schema.Struct({
   type: Schema.Literal("image"),
   source: Schema.Union([
     Schema.Struct({ type: Schema.Literal("data"), value: Schema.String, mimeType: Schema.String }),

@@ -6,7 +6,12 @@ import {
   HttpApiMiddleware,
   HttpApiSchema,
 } from "effect/http-api";
-import { StoredUserMessage } from "../chat-store/schema.ts";
+import {
+  ImagePart,
+  StoredInterruptPayload,
+  StoredUserMessage,
+  TextPart,
+} from "../chat-store/schema.ts";
 import { JsonValue } from "../json.ts";
 import { AgUiEvent } from "../loop/chunks.ts";
 import type { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -162,10 +167,87 @@ export const RunEventsLost = Schema.Struct({ error: Schema.Literal("run_events_u
 
 const RunEvents = HttpApiSchema.StreamSse({ events: RunEvent, error: RunEventsLost });
 
+/** A tool call as the page shows it; the states are those the stored transcript has. */
+const ToolCallPart = Schema.Struct({
+  type: Schema.Literal("tool-call"),
+  id: Schema.String,
+  name: Schema.String,
+  /** The arguments as the model wrote them: JSON text, or text that does not parse. */
+  arguments: Schema.String,
+  state: Schema.Literals([
+    "awaiting-input",
+    "input-streaming",
+    "input-complete",
+    "approval-requested",
+    "approval-responded",
+    "complete",
+    "error",
+  ]),
+});
+
+const ToolResultPart = Schema.Struct({
+  type: Schema.Literal("tool-result"),
+  toolCallId: Schema.String,
+  /** The result as the model read it. */
+  content: Schema.String,
+  state: Schema.Literals(["streaming", "complete", "error"]),
+});
+
+/** One part of a message, in the order the page shows them. */
+export const MessagePart = Schema.Union([
+  TextPart,
+  Schema.Struct({ type: Schema.Literal("thinking"), content: Schema.String }),
+  ImagePart,
+  ToolCallPart,
+  ToolResultPart,
+]).pipe(Schema.toTaggedUnion("type"));
+export type MessagePart = typeof MessagePart.Type;
+
+/** A message of the conversation. An assistant message holds one run's text and tool calls. */
+export const ChatMessage = Schema.Struct({
+  id: Schema.String,
+  role: Schema.Literals(["user", "assistant"]),
+  parts: Schema.Array(MessagePart),
+});
+export type ChatMessage = typeof ChatMessage.Type;
+
+/** The approvals a run waits for; the next run answers them with `resume`. */
+export const PendingInterrupts = Schema.Struct({
+  runId: Schema.String,
+  pending: Schema.NonEmptyArray(StoredInterruptPayload),
+});
+export type PendingInterrupts = typeof PendingInterrupts.Type;
+
+/** What a page opens a session with, or an older page of its messages. */
+export const ChatSnapshot = Schema.Struct({
+  /** Oldest first. */
+  messages: Schema.Array(ChatMessage),
+  /** `before` for the page of messages older than these, or null when there are none. */
+  older: Schema.NullOr(Schema.String),
+  /** The run still going, which `join` follows. */
+  activeRun: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
+  interrupts: Schema.NullOr(PendingInterrupts),
+});
+export type ChatSnapshot = typeof ChatSnapshot.Type;
+
+/** How many messages a page of the conversation holds at most. */
+export const maxPageSize = 500;
+
+const PageSize = Schema.FiniteFromString.pipe(
+  Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: maxPageSize })),
+);
+
 /** The header a page sends with every change it makes to a session, as the server reads it. */
 const holderHeader = "x-session-holder" satisfies Lowercase<typeof sessionHolderHeader>;
 
 export class ChatGroup extends HttpApiGroup.make("chat").add(
+  /** The newest `limit` messages, or those before `before`, with the run and approvals pending. */
+  HttpApiEndpoint.get("snapshot", "/api/sessions/:session/messages", {
+    params: { session: Schema.String },
+    query: { limit: PageSize, before: Schema.optional(Schema.String) },
+    success: ChatSnapshot,
+    error: refusals,
+  }),
   /** Starts a run and streams its events from the start. */
   HttpApiEndpoint.post("run", "/api/sessions/:session/runs", {
     params: { session: Schema.String },
