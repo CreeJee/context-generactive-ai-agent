@@ -1,9 +1,14 @@
 import { Function as EffectFunction } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Cause, Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { ChildProcessSpawner } from "effect/process";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
-import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
+import {
+  BackgroundOperationFailed,
+  BackgroundTasks,
+  type BackgroundBinding,
+} from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { temporaryDirectory } from "../runtime/host-system.ts";
 import {
@@ -126,6 +131,7 @@ const make = Effect.gen(function* () {
   const background = yield* BackgroundTasks;
   const codeSkills = yield* CodeSkills;
   const fileSystem = yield* FileSystem.FileSystem;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   /** The approved tools' calls for `project`, each failing with what the model reads. */
   const callsFor = (project: Fenced<Project>, binding?: BackgroundBinding) => ({
@@ -163,15 +169,13 @@ const make = Effect.gen(function* () {
             Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
             maxTimeoutSeconds,
           );
-          const runLine = (signal: AbortSignal | undefined) => (line: string) =>
-            Effect.tryPromise(() =>
-              runCommand(line, {
-                cwd: directory.absolute,
-                timeoutSeconds: seconds,
-                signal,
-                env: process.env,
-              }),
-            );
+          const runLine = (line: string) =>
+            runCommand({
+              command: line,
+              cwd: directory.absolute,
+              timeoutSeconds: seconds,
+              env: process.env,
+            });
           const setup = {
             command,
             commandId: toolCallId,
@@ -183,22 +187,22 @@ const make = Effect.gen(function* () {
           };
           // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
           // falls back to running the script as it is.
-          const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-          const execute = (signal: AbortSignal | undefined) =>
-            runPromise(
-              runSandboxed(setup, runLine(signal)).pipe(
-                Effect.catchTag(
-                  "SandboxUnavailable",
-                  (
-                    unavailable,
-                  ): Effect.Effect<CommandResult, SandboxUnavailable | Cause.UnknownError> =>
-                    project.permissionMode === "full"
-                      ? runLine(signal)(command)
-                      : Effect.fail(unavailable),
-                ),
-                Effect.provideService(FileSystem.FileSystem, fileSystem),
-              ),
-            );
+          type LineRun = ReturnType<typeof runLine>;
+          const execute = runSandboxed(setup, runLine).pipe(
+            Effect.catchTag(
+              "SandboxUnavailable",
+              (
+                unavailable,
+              ): Effect.Effect<
+                CommandResult,
+                SandboxUnavailable | Effect.Error<LineRun>,
+                Effect.Services<LineRun>
+              > =>
+                project.permissionMode === "full" ? runLine(command) : Effect.fail(unavailable),
+            ),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
           const inBackground = (bound: BackgroundBinding) =>
             Effect.gen(function* () {
               const receipt = yield* background.start(
@@ -206,7 +210,8 @@ const make = Effect.gen(function* () {
                 toolCallId,
                 "shell",
                 label,
-                backgroundOperation(execute).pipe(
+                execute.pipe(
+                  Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
                   Effect.map((result) => ({
                     report: JSON.stringify({
                       workdir: directory.relative,
@@ -235,7 +240,7 @@ const make = Effect.gen(function* () {
                   ),
               });
             });
-          const inline = Effect.map(Effect.tryPromise(execute), (result) => ({
+          const inline = Effect.map(execute, (result) => ({
             workdir: directory.relative,
             ...result,
             command: label,

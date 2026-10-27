@@ -1,4 +1,3 @@
-import { Function as EffectFunction } from "effect";
 import {
   Clock,
   Data,
@@ -14,7 +13,6 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect";
-import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
 import { shellInvocation } from "../runtime/host.ts";
 
 /** Output bytes kept from the start of each stream once it is too long. */
@@ -54,7 +52,7 @@ export function stopAllCommands(force = false) {
 }
 
 // The app installs graceful signal handlers. Its eventual process.exit reaches this final,
-// synchronous safety net even if runtime disposal did not propagate an AbortSignal to a tool.
+// synchronous safety net even if runtime disposal did not interrupt a running command.
 if (!shellProcessState.exitListenerInstalled) {
   shellProcessState.exitListenerInstalled = true;
   process.once("exit", () => stopAllCommands(true));
@@ -142,20 +140,12 @@ export interface CommandResult {
 }
 
 export interface CommandOptions {
+  readonly command: string;
   readonly cwd: string;
   readonly timeoutSeconds: number;
-  readonly signal: AbortSignal | undefined;
   readonly env: NodeJS.ProcessEnv;
 }
 
-/**
- * Runs one command line on the host, in its own process group on POSIX. Timeout and cancellation
- * stop everything it started (SIGTERM, then SIGKILL; the whole tree at once on Windows). This is
- * host execution: path rules do not sandbox it.
- */
-export const runCommand: {
-  (options: CommandOptions): (command: string) => ReturnType<typeof runCommandBody>;
-} & typeof runCommandBody = EffectFunction.dual(2, runCommandBody);
 const SpawnFailed = Schema.TaggedStruct("SpawnFailed", {});
 
 export class CommandStartFailed extends Schema.TaggedError<CommandStartFailed>()(
@@ -170,23 +160,12 @@ type CommandOutcome = Data.TaggedEnum<{
 }>;
 const CommandOutcome = Data.taggedEnum<CommandOutcome>();
 
-function runCommandBody(command: string, options: CommandOptions): Promise<CommandResult> {
-  // Register the request before asynchronous runtime/host-shell resolution so shutdown cannot miss it.
-  const pending = new AbortController();
-  const entry: ActiveCommand = { cancel: () => pending.abort(), force: () => pending.abort() };
-  MutableHashSet.add(activeCommands, entry);
-  const signal =
-    options.signal === undefined
-      ? pending.signal
-      : AbortSignal.any([pending.signal, options.signal]);
-  return runOAuthNodeEffect(runCommandEffect({ command, ...options, signal })).finally(() => {
-    MutableHashSet.remove(activeCommands, entry);
-  });
-}
-
-const isAborted = (signal: AbortSignal | undefined) => signal?.aborted === true;
-
-export const runCommandEffect = (options: CommandOptions & { readonly command: string }) =>
+/**
+ * Runs one command line on the host, in its own process group on POSIX. Timeout, interruption and
+ * `stopAllCommands` stop everything it started (SIGTERM, then SIGKILL; the whole tree at once on
+ * Windows). This is host execution: path rules do not sandbox it.
+ */
+export const runCommand = (options: CommandOptions) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { command } = options;
@@ -216,8 +195,6 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
           stderrTruncated: err.truncated,
         };
       };
-      if (isAborted(options.signal)) return { ...result("cancelled", null, null), durationMs: 0 };
-
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const handle = yield* spawner
         .spawn(
@@ -253,14 +230,6 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
         Effect.sync(() => MutableHashSet.add(activeCommands, active)),
         () => Effect.sync(() => MutableHashSet.remove(activeCommands, active)),
       );
-      const onAbort = () => active.cancel();
-      yield* Effect.acquireRelease(
-        Effect.sync(() => options.signal?.addEventListener("abort", onAbort, { once: true })),
-        () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
-      );
-      // Close the abort-listener registration race after the child is tracked.
-      yield* Effect.when(Effect.sync(onAbort), Effect.succeed(isAborted(options.signal)));
-
       const drain = (
         output: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
         capture: typeof stdout,

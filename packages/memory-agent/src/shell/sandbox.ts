@@ -114,18 +114,25 @@ const finishTimeout = Duration.seconds(5);
  * sandbox blocked to stderr. The worker and its scratch folder end with the scope, whether the
  * command finished, failed or was interrupted.
  */
-type Sandboxed<E> = Effect.Effect<CommandResult, E | SandboxUnavailable, FileSystem.FileSystem>;
+type Sandboxed<E, R> = Effect.Effect<
+  CommandResult,
+  E | SandboxUnavailable,
+  FileSystem.FileSystem | R
+>;
 
 export const runSandboxed: {
-  <E>(
-    run: (command: string) => Effect.Effect<CommandResult, E>,
-  ): (setup: SandboxSetup) => Sandboxed<E>;
-  <E>(setup: SandboxSetup, run: (command: string) => Effect.Effect<CommandResult, E>): Sandboxed<E>;
+  <E, R>(
+    run: (command: string) => Effect.Effect<CommandResult, E, R>,
+  ): (setup: SandboxSetup) => Sandboxed<E, R>;
+  <E, R>(
+    setup: SandboxSetup,
+    run: (command: string) => Effect.Effect<CommandResult, E, R>,
+  ): Sandboxed<E, R>;
 } = EffectFunction.dual(2, runSandboxedBody);
-function runSandboxedBody<E>(
+function runSandboxedBody<E, R>(
   setup: SandboxSetup,
-  run: (command: string) => Effect.Effect<CommandResult, E>,
-): Sandboxed<E> {
+  run: (command: string) => Effect.Effect<CommandResult, E, R>,
+): Sandboxed<E, R> {
   return Effect.scoped(
     Effect.gen(function* () {
       const unavailable = (detail: string) =>
