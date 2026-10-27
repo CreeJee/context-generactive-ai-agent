@@ -18,6 +18,7 @@ import { modelFailureOf, runChat, type RunHook } from "../loop/run.ts";
 import { ResumeEntry } from "../loop/resume.ts";
 import { tanstackMetadata } from "../chat-store/metadata.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
+import { chatSnapshot } from "../chat-state/snapshot.ts";
 import { projectInstructions, projectInstructionsHook } from "./project-instructions.ts";
 import { pageTurns, withPageTurns } from "./page-turns.ts";
 import { aborted } from "../runtime/aborted.ts";
@@ -3037,7 +3038,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
     /** The chat API's `snapshot`: a page of the session's messages, its run and its approvals. */
     snapshot: (sessionId: string, limit: number, before: string | undefined) =>
-      Effect.andThen(sessions.get(sessionId), chatState.snapshot(sessionId, limit, before)),
+      sessions
+        .get(sessionId)
+        .pipe(
+          Effect.andThen(chatState.prepare(sessionId)),
+          Effect.andThen(chatSnapshot(sessionId, limit, before)),
+          Effect.provideService(RunStore, runStore),
+        ),
 
     /**
      * Explicit cancel of the session's running run. The intent is recorded on the run first, then

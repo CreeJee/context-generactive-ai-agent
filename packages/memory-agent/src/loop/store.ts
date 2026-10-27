@@ -8,6 +8,7 @@ import {
   StoredUsage,
 } from "../chat-store/schema.ts";
 import { historyProjection } from "../chat-state/history-projection-native.ts";
+import { HistoryProjectionReader } from "../chat-state/history-projection-reader.ts";
 import { JsonValue } from "../json.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 
@@ -90,6 +91,35 @@ const make = Effect.gen(function* () {
       storedThread(threadId),
       Option.match({ onNone: () => [], onSome: (row) => row.messages }),
     );
+
+  const threadRow = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: Schema.Struct({ present: Schema.Literals([0, 1]) }),
+    execute: (threadId) =>
+      sql`SELECT EXISTS(SELECT 1 FROM chat_threads WHERE thread_id = ${threadId}) AS present`,
+  });
+
+  /** Whether the thread was ever saved. */
+  const threadSaved = (threadId: string) =>
+    Effect.map(threadRow(threadId), ({ present }) => present === 1);
+
+  const runningRow = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ run_id: Schema.String }),
+    execute: (threadId) => sql`
+      SELECT run_id FROM chat_runs WHERE thread_id = ${threadId} AND status = 'running'
+      ORDER BY started_at DESC LIMIT 1`,
+  });
+
+  /** The thread's run that is still going. */
+  const activeRun = (threadId: string) =>
+    Effect.map(
+      runningRow(threadId),
+      Option.map((row) => row.run_id),
+    );
+
+  /** A page of the history projection: one group of messages per message the page shows. */
+  const history = yield* HistoryProjectionReader;
 
   /** Replaces the thread and its history groups together. Empty user text is never kept. */
   const saveThread = Effect.fn("RunStore.saveThread")(function* (
@@ -299,6 +329,9 @@ const make = Effect.gen(function* () {
 
   return {
     thread,
+    threadSaved,
+    historyPage: history.read,
+    activeRun,
     saveThread,
     startRun,
     endRun,
@@ -314,5 +347,7 @@ const make = Effect.gen(function* () {
 export class RunStore extends Context.Service<RunStore, Effect.Success<typeof make>>()(
   "memory-agent/loop/store/RunStore",
 ) {
-  static readonly layer = Layer.effect(RunStore, make);
+  static readonly layer = Layer.effect(RunStore, make).pipe(
+    Layer.provide(HistoryProjectionReader.layer),
+  );
 }
